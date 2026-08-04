@@ -408,9 +408,11 @@ struct System::Impl {
       if (found != boundary_plans_.end())
         boundary_plan = found->second;
     }
+    const Geometry boundary_geometry =
+        polar_ ? Geometry{dom, pgeom_.r_min, pgeom_.r_max, Real(0), PolarGeometry::kTwoPi} : geom;
     GridContext context{dom,
                         bc_,
-                        geom,
+                        boundary_geometry,
                         &aux,
                         &domain_mask_,
                         &eb_inverse_volume_fraction_,
@@ -512,7 +514,15 @@ struct System::Impl {
 
   // POLAR grid context (ring pgeom_ + r/theta BC + aux) for the polar block closures
   // (block_builder_polar.hpp). Counterpart of grid_ctx(); never called in Cartesian.
-  PolarGridContext grid_ctx_polar() { return PolarGridContext{dom, bc_, pgeom_, &aux}; }
+  PolarGridContext grid_ctx_polar(const std::string& block_name = {}) {
+    std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+    if (!block_name.empty()) {
+      const auto found = boundary_plans_.find(block_name);
+      if (found != boundary_plans_.end())
+        boundary_plan = found->second;
+    }
+    return PolarGridContext{dom, bc_, pgeom_, &aux, std::move(boundary_plan)};
+  }
 
   // ensure_elliptic_polar / solve_fields_polar / solve_fields (body) EXTRACTED into fields_
   // (SystemFieldSolver, Batch B). Pure delegation: the Cartesian/polar dispatch, the device_fence and
@@ -616,6 +626,11 @@ struct System::Impl {
     double cadence_clock_restore_accepted_time;
     int cadence_clock_restore_macro_step;
     std::map<std::string, Real> program_diagnostics;
+    std::map<std::string, Real> step_balance_terms;
+    std::map<pops::runtime::program::AutomaticBalanceKey, Real> automatic_balance_terms;
+    bool automatic_balance_due;
+    bool balance_step_completed;
+    bool balance_program_was_due;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
     pops::runtime::program::Profiler profiler;
@@ -639,6 +654,11 @@ struct System::Impl {
           cadence_clock_restore_accepted_time(impl.program_.cadence_clock_restore_accepted_time_),
           cadence_clock_restore_macro_step(impl.program_.cadence_clock_restore_macro_step_),
           program_diagnostics(impl.program_.diagnostics_),
+          step_balance_terms(impl.program_.step_balance_terms_),
+          automatic_balance_terms(impl.program_.automatic_balance_terms_),
+          automatic_balance_due(impl.program_.automatic_balance_due_),
+          balance_step_completed(impl.program_.balance_step_completed_),
+          balance_program_was_due(impl.program_.balance_program_was_due_),
           cache(impl.program_.cache_),
           history(impl.program_.hist_),
           profiler(impl.program_.profiler_),
@@ -670,6 +690,11 @@ struct System::Impl {
       impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       impl.program_.diagnostics_ = program_diagnostics;
+      impl.program_.step_balance_terms_ = step_balance_terms;
+      impl.program_.automatic_balance_terms_ = automatic_balance_terms;
+      impl.program_.automatic_balance_due_ = automatic_balance_due;
+      impl.program_.balance_step_completed_ = balance_step_completed;
+      impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;

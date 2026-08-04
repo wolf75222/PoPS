@@ -164,7 +164,7 @@ def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():
                 "%s must consume the authenticated central native-loader manifest" % (route,))
     assert routes == {
         ("python/pops/codegen/_compile_drivers.py", "compile_native"),
-        ("python/pops/codegen/_compile_drivers.py", "compile_problem"),
+        ("python/pops/codegen/_compile_drivers.py", "_compile_problem_impl"),
         ("python/pops/external/compiler.py", "compile_component"),
     }
 

@@ -1,7 +1,7 @@
 {
   "catalog_schema_version": 1,
   "component_manifest_schema_version": 2,
-  "route_registry_version": 2,
+  "route_registry_version": 3,
   "capability_vocabulary_version": 4,
   "interface_vocabulary": [
     {
@@ -159,6 +159,16 @@
       "operations": ["apply"]
     },
     {
+      "id": 6,
+      "name": "reflux",
+      "uri": "pops://interfaces/reflux",
+      "version": 1,
+      "cpp_table": "PopsRefluxApiV1",
+      "hot_path": true,
+      "facets": ["stencil", "lowering", "effects"],
+      "operations": ["apply_interface_batch"]
+    },
+    {
       "id": 7,
       "name": "field_solver",
       "uri": "pops://interfaces/field-solver",
@@ -187,6 +197,16 @@
       "hot_path": false,
       "facets": ["provider", "report"],
       "operations": ["prepare_topology"]
+    },
+    {
+      "id": 10,
+      "name": "boundary_flux",
+      "uri": "pops://interfaces/boundary-flux",
+      "version": 1,
+      "cpp_table": "PopsBoundaryFluxApiV1",
+      "hot_path": true,
+      "facets": ["provider", "lowering", "fallible_evaluation"],
+      "operations": ["transform_faces"]
     }
   ],
   "boundary_handle_native_routes": {
@@ -205,6 +225,10 @@
     "conservative_flux": {
       "interface": "numerical_flux",
       "operation": "evaluate_faces"
+    },
+    "boundary_flux_provider": {
+      "interface": "boundary_flux",
+      "operation": "transform_faces"
     },
     "residual_operator": {
       "interface": "field_boundary_closure",
@@ -478,15 +502,13 @@
             "contact_speed",
             "hllc_star_state"
           ],
-          "limitations": [
-            "polar metric provider not wired; requires exact HasHLLCStructure capability"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {
             "needs_wave_speeds": false,
             "needs_hllc_struct": true,
             "needs_roe_diss": false,
-            "polar_ok": false
+            "polar_ok": true
           }
         },
         {
@@ -500,12 +522,34 @@
             "stability_bound",
             "roe_dissipation"
           ],
-          "limitations": [
-            "polar metric provider not wired; requires exact HasRoeDissipation capability"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {
             "needs_wave_speeds": false,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": true,
+            "polar_ok": true
+          }
+        },
+        {
+          "token": "roe_hll_rusanov_recovery",
+          "wire_id": 4,
+          "cpp_id": "kRoeHllRusanovRecovery",
+          "native_entry": "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>",
+          "requirements": [
+            "physical_flux",
+            "provider_pack",
+            "stability_bound",
+            "wave_speeds",
+            "roe_dissipation"
+          ],
+          "limitations": [
+            "fixed ordered policy Roe -> HLL -> Rusanov -> reject",
+            "annular polar route unavailable"
+          ],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": true,
             "needs_hllc_struct": false,
             "needs_roe_diss": true,
             "polar_ok": false
@@ -574,6 +618,34 @@
           "n_ghost": 3,
           "formal_order": 5,
           "muscl_compatible": false
+          }
+        },
+        {
+          "token": "mc",
+          "wire_id": 4,
+          "cpp_id": "kMc",
+          "native_entry": "pops::MC",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 2,
+            "formal_order": 2,
+            "muscl_compatible": true
+          }
+        },
+        {
+          "token": "superbee",
+          "wire_id": 5,
+          "cpp_id": "kSuperbee",
+          "native_entry": "pops::Superbee",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 2,
+            "formal_order": 2,
+            "muscl_compatible": true
           }
         }
       ]

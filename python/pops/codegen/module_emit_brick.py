@@ -48,6 +48,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     type inside Kokkos kernels; no host-vtable execution path is emitted."""
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
+    if len(model.prim_state) != model.n_vars:
+        raise ValueError(
+            "emit_cpp_brick : primitive and conservative states must have equal arity "
+            "(got %d primitive and %d conservative components)"
+            % (len(model.prim_state), model.n_vars)
+        )
     if model.cons_from is None or len(model.cons_from) != model.n_vars:
         raise ValueError("emit_cpp_brick : set_conservative_from([...]) expected (%d expressions)"
                          % model.n_vars)
@@ -71,11 +77,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
+        return model._flux_provider_locals_lines()
 
-    # Aux parameter named 'a' only if a formula reads an auxiliary field (canonical OR
-    # named ; otherwise anonymous, so as not to trigger an unused-parameter warning).
-    aux_param = "const Aux& a" if model._reads_aux() else "const Aux&"
+    # Physical laws consume the exact provider-read protocol. The parameter remains generic so
+    # direct pointwise callers may pass Aux while the FV route passes BoundFluxProviders<Model>
+    # without reconstructing the process-wide POD.
+    aux_param = "const auto& a" if model._reads_aux() else "const auto&"
 
     def eig_reduce(cpps: Any, ind: Any) -> list:
         # cpps : C++ already generated (possibly CSE) for the eigenvalues. Internal names suffixed
@@ -241,8 +248,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             contract["representation"], contract["centering"], contract["unit"] or "",
             contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
         ]
-        S.append("    {%s, %d}," %
-                 (", ".join(json.dumps(value) for value in values), provider["slot"]))
+        availability = "true" if provider["availability"] else "false"
+        S.append("    {%s, %s, %d}," %
+                 (", ".join(json.dumps(value) for value in values),
+                  availability, provider["slot"]))
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
@@ -269,11 +278,11 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S += ["      F[%d] = %s;" % (i, fcpps[nc + i]) for i in range(nc)]
     S += ["    }", "    return F;", "  }", ""]
 
-    # in 'fd' jacobian mode WITHOUT eigenvalues, max_wave_speed calls flux(U, a, dir) : the
-    # Aux parameter must be named even if no formula reads an aux.
+    # In finite-difference Jacobian mode max_wave_speed calls flux(U, a, dir), so the provider
+    # parameter must be named even if no formula reads a provider directly.
     ws_jac: Any = model._ws_jacobian
     jac_fd = model._ws_jacobian is not None and model._ws_jacobian["eig"] == "fd"
-    mws_aux_param = "const Aux& a" if (jac_fd and not model._eig) else aux_param
+    mws_aux_param = "const auto& a" if (jac_fd and not model._eig) else aux_param
     S.append("  POPS_HD pops::Real max_wave_speed(const State& U, %s, int dir) const {"
              % mws_aux_param)
     if model._eig:
@@ -387,7 +396,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         # flux ; extremes per sub-block via pops::real_eig_minmax. Non-convergence and non-real or
         # non-finite spectra invalidate the provider; the diagnostic Gershgorin enclosure is never
         # consumed as an HLL speed.)
-        ws_aux = aux_param if model._ws_jacobian["eig"] != "fd" else "const Aux& a"
+        ws_aux = aux_param if model._ws_jacobian["eig"] != "fd" else "const auto& a"
         S.append("  POPS_HD void wave_speeds(const State& U, %s, int dir, pops::Real& smin, "
                  "pops::Real& smax) const {" % ws_aux)
         ws_drv = [] if model._ws_jacobian["eig"] == "fd" else _jac_entries(model)
@@ -467,6 +476,26 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S.append("    State Up{};")
         S += ["    Up[%d] = %s;" % (i, c) for i, c in enumerate(pcpps)]
         S += ["    return Up;", "  }", ""]
+
+    recovery_constraints = getattr(model, "_recovery_admissibility", {})
+    if recovery_constraints:
+        S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
+        S += ["    const pops::Real %s = P[%d];" % (name, index)
+              for index, name in enumerate(model.prim_state)]
+        for component, name in enumerate(model.prim_state):
+            predicate = recovery_constraints.get(name)
+            if predicate is None:
+                continue
+            S.append("    if (!(%s)) {" % predicate.to_cpp())
+            S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
+            S.append("      return false;")
+            S.append("    }")
+        S += [
+            "    if (failing_component_ != nullptr) *failing_component_ = -1;",
+            "    return true;",
+            "  }",
+            "",
+        ]
 
     S.append("  POPS_HD Prim to_primitive(const State& U) const {")
     S += cons_locals() + prim_locals(_live_prims(model, [], seed=model.prim_state))

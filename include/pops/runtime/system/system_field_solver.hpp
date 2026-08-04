@@ -313,6 +313,8 @@ class SystemFieldSolver {
     RuntimeDiagnosticsReport diagnostics;
     std::map<std::string, MultiFab> named_potentials;
     std::vector<std::string> named_unbuilt;
+    std::map<std::string, std::vector<runtime::field::FieldTopologyReportRow>>
+        named_topology_reports;
   };
 
   [[nodiscard]] static bool same_publication_layout(const MultiFab& lhs,
@@ -333,6 +335,7 @@ class SystemFieldSolver {
     if (phi_src_polar_)
       out.polar_source = *phi_src_polar_;
     for (auto& item : named_fields_) {
+      out.named_topology_reports.emplace(item.first, item.second.published_topology_report);
       if (!item.second.backend) {
         out.named_unbuilt.push_back(item.first);
         continue;
@@ -362,9 +365,13 @@ class SystemFieldSolver {
     }
     phi_src_polar_ = snapshot.polar_source;
     for (auto& item : named_fields_) {
+      const auto topology = snapshot.named_topology_reports.find(item.first);
+      if (topology == snapshot.named_topology_reports.end())
+        throw std::logic_error("System field snapshot lost accepted topology evidence");
       if (std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), item.first) !=
           snapshot.named_unbuilt.end()) {
         invalidate_named_backend_(item.second);
+        item.second.published_topology_report = topology->second;
         continue;
       }
       const auto saved = snapshot.named_potentials.find(item.first);
@@ -373,6 +380,7 @@ class SystemFieldSolver {
           ensure_named_backend(item.second, item.first);
         item.second.backend->restore(saved->second);
       }
+      item.second.published_topology_report = topology->second;
     }
     diagnostics_ = snapshot.diagnostics;
   }
@@ -418,6 +426,8 @@ class SystemFieldSolver {
     if (snapshot.named_potentials.size() + snapshot.named_unbuilt.size() != named_fields_.size())
       return false;
     for (const auto& [name, field] : named_fields_) {
+      if (snapshot.named_topology_reports.find(name) == snapshot.named_topology_reports.end())
+        return false;
       const auto saved = snapshot.named_potentials.find(name);
       const bool was_unbuilt =
           std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), name) !=
@@ -448,6 +458,10 @@ class SystemFieldSolver {
       const auto saved = snapshot.named_potentials.find(name);
       if (saved != snapshot.named_potentials.end())
         PureFieldAlgebra::copy_allocated(field.backend->phi(), saved->second);
+      const auto topology = snapshot.named_topology_reports.find(name);
+      if (topology == snapshot.named_topology_reports.end())
+        std::terminate();
+      field.published_topology_report.swap(topology->second);
     }
     std::swap(diagnostics_.schema_version, snapshot.diagnostics.schema_version);
     diagnostics_.source.swap(snapshot.diagnostics.source);
@@ -816,7 +830,11 @@ class SystemFieldSolver {
       return FieldDistribution::Distributed;
     }
     [[nodiscard]] MultiFab snapshot() override { return MultiFab(phi_); }
-    void restore(const MultiFab& value) override { phi_ = value; }
+    void restore(const MultiFab& value) override {
+      // The prepared FieldSolver request borrows phi_'s stable storage. Rollback restores values
+      // without replacing that allocation, so the cached ABI views remain valid for an exact retry.
+      PureFieldAlgebra::copy_allocated(phi_, value);
+    }
     void configure_boundary(FieldSolveConfig& plan) override {
       if (plan.has_boundary_kernel)
         throw std::runtime_error(
@@ -1525,6 +1543,7 @@ class SystemFieldSolver {
     FieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
     std::unique_ptr<NamedFieldBackend> backend;
+    std::vector<runtime::field::FieldTopologyReportRow> published_topology_report;
     std::optional<MultiFab> contribution_scratch;
     std::optional<MultiFab> published_phi_scratch;
     std::optional<MultiFab> published_aux_scratch;
@@ -1646,9 +1665,7 @@ class SystemFieldSolver {
         throw std::logic_error("System Program-install rollback lost a named field");
       field.has_plan = saved->second.has_plan;
       field.plan = std::move(saved->second.plan);
-      field.backend.reset();
-      field.nullspace_ready = false;
-      field.nullspace_workspace.reset();
+      invalidate_named_backend_(field);
     }
     program_boundary_baselines_ = std::move(snapshot.boundary_baselines);
     candidate_program_boundary_slots_ = std::move(snapshot.candidate_boundary_slots);
@@ -1658,6 +1675,7 @@ class SystemFieldSolver {
 
   static void invalidate_named_backend_(NamedField& field) {
     field.backend.reset();
+    field.published_topology_report.clear();
     field.nullspace_ready = false;
     field.nullspace_workspace.reset();
   }
@@ -1680,8 +1698,6 @@ class SystemFieldSolver {
       program_boundary_baselines_;
   std::set<std::string> candidate_program_boundary_slots_;
   bool program_boundary_install_active_ = false;
-  std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
-      external_field_components_;
   EllipticBackendRegistry elliptic_registry_;
   std::shared_ptr<FieldNullspaceProviderRegistry> nullspace_provider_registry_;
 
@@ -1942,7 +1958,6 @@ class SystemFieldSolver {
     auto component = std::make_shared<runtime::field::PreparedFieldSolverComponent>(
         std::move(spec), std::move(topology), std::move(solver));
     register_elliptic_provider(slot, std::make_unique<ExternalComponentBackendProvider>(component));
-    external_field_components_[slot] = component;
     if (found == named_field_plans_.end())
       return std::string(component->provider_identity());
     found->second.backend_provider_identity = slot;
@@ -1961,14 +1976,22 @@ class SystemFieldSolver {
   std::vector<runtime::field::FieldTopologyReportRow> topology_report(
       const std::string& slot) const {
     auto field = named_fields_.find(slot);
-    if (field != named_fields_.end() && field->second.backend)
-      return field->second.backend->topology_report();
-    auto external = external_field_components_.find(slot);
-    if (external != external_field_components_.end())
-      return external->second->topology_report();
-    if (named_field_plans_.find(slot) == named_field_plans_.end())
+    if (field == named_fields_.end() && named_field_plans_.find(slot) == named_field_plans_.end())
       throw std::runtime_error("unknown qualified field provider slot");
-    return {};
+    return field == named_fields_.end() ? std::vector<runtime::field::FieldTopologyReportRow>{}
+                                        : field->second.published_topology_report;
+  }
+
+  /// Stage live backend topology as candidate publication evidence. The surrounding
+  /// FieldPublicationSnapshot restores the previously accepted rows until SolveOutcome::accept(),
+  /// so a failed solve may retain a private warm cache without making it observable.
+  void stage_named_topology_reports() {
+    for (auto& [name, field] : named_fields_) {
+      (void)name;
+      field.published_topology_report = field.backend
+                                            ? field.backend->topology_report()
+                                            : std::vector<runtime::field::FieldTopologyReportRow>{};
+    }
   }
 
   template <class StageForBlock>
@@ -2957,15 +2980,21 @@ class SystemFieldSolver {
 
   template <class Phase>
   void require_collective_named_phase_(std::string_view phase, Phase&& action) const {
-    bool failed = false;
+    std::exception_ptr local_failure;
     try {
       std::forward<Phase>(action)();
     } catch (...) {
-      failed = true;
+      local_failure = std::current_exception();
     }
-    if (all_reduce_max(failed ? 1L : 0L) != 0)
+    if (all_reduce_max(local_failure ? 1L : 0L) != 0) {
+      // A singleton execution has no remote failure to hide. Preserve the provider's exact
+      // diagnostic instead of replacing it with a collective summary; multi-rank execution still
+      // reports one rank-independent error after every participant reaches the reduction.
+      if (n_ranks() == 1 && local_failure)
+        std::rethrow_exception(local_failure);
       throw std::runtime_error("System: named field " + std::string(phase) +
                                " failed on at least one communicator rank");
+    }
   }
 
   void require_collective_field_providers_(NamedField& field) {

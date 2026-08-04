@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import pops
+from pops.diagnostics import Integral
 from pops.fields import (
     CellCenteredSecondOrder,
     ConstantNullspace,
@@ -115,6 +116,9 @@ class RuntimeSnapshot:
     states: dict[str, np.ndarray]
     fields: dict[str, np.ndarray]
     histories: dict[str, tuple[np.ndarray, ...]]
+    bind_identity: str
+    layout_plan_identity: str
+    layout_identities: tuple[str, ...]
     program_hash: str
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
@@ -129,6 +133,7 @@ class ExecutionEvidence:
     checkpoint_path: Path
     hdf5_identity: str
     paraview_identity: str
+    missing_mapping_refusal: str
     accepted: RuntimeSnapshot
     restored: RuntimeSnapshot
     continuous: RuntimeSnapshot
@@ -348,6 +353,36 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
     if output_mode is None:
         output_mode = ParallelMode.SERIAL
 
+    end_schedule = on_end(clock=program.clock)
+    # The field RHS is -ne + ni, so these owner-qualified density integrals publish
+    # the two signed charge contributions with the same exact coefficients.
+    # Momentum is likewise selected by typed physical role, never by component name.
+    end_diagnostics = (
+        Integral(
+            block=electron_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=-1.0,
+        ),
+        Integral(
+            block=ion_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=1.0,
+        ),
+        Integral(
+            block=electron_block,
+            role=Momentum(axis=x_axis),
+            cadence=end_schedule,
+        ),
+        Integral(
+            block=electron_block,
+            role=Momentum(axis=y_axis),
+            cadence=end_schedule,
+        ),
+        Integral(block=ion_block, role=Momentum(axis=x_axis), cadence=end_schedule),
+        Integral(block=ion_block, role=Momentum(axis=y_axis), cadence=end_schedule),
+    )
     case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
             format=ParaView(mode=output_mode),
@@ -357,8 +392,9 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
         ),
         ScientificOutput(
             format=HDF5(mode=output_mode),
-            schedule=on_end(clock=program.clock),
+            schedule=end_schedule,
             fields=(electron_state, ion_state),
+            diagnostics=end_diagnostics,
             target="state/two_fluid",
         ),
         Checkpoint(
@@ -417,6 +453,79 @@ def build_final_case(
         builder.assign_field(field, layout)
     plan = builder.resolve(**subjects.to_dict())
     return FinalMultiphysicsCase(authoring, plan, layout, provider)
+
+
+def require_missing_mapping_provider_refusal(
+    *, cells: int = DEFAULT_CELLS, publication_root: Any = None,
+) -> str:
+    """Prove that a cross-layout ion-to-field read cannot resolve without its provider."""
+
+    if isinstance(cells, bool) or not isinstance(cells, int) or cells < 4:
+        raise ValueError("cells must be an integer >= 4")
+    root = None if publication_root is None else Path(publication_root)
+    if root is not None and root.exists() and any(
+        path.is_file() for path in root.rglob("*")
+    ):
+        raise ValueError("the missing-mapping refusal root must not contain prior artifacts")
+    from pops.layouts import Uniform
+    from pops.mesh import (
+        CartesianGrid,
+        LayoutMappingOperation,
+        LayoutPlanBuilder,
+        LayoutRepresentation,
+        LayoutSynchronization,
+        PeriodicAxes,
+    )
+
+    authoring = build_authoring()
+    pops.validate(authoring.case)
+    subjects = authoring.case.layout_subjects()
+    blocks = {block.local_id: block for block in subjects.blocks}
+    states = {state.block_ref.local_id: state for state in subjects.states}
+    frame = authoring.model.frame
+
+    def descriptor() -> Any:
+        return Uniform(CartesianGrid(
+            frame=frame,
+            cells=(cells, cells),
+            periodic=PeriodicAxes(frame.axes),
+        ))
+
+    builder = LayoutPlanBuilder(authoring.case.owner_path.canonical())
+    electron_layout = builder.layout("electrons", descriptor())
+    ion_layout = builder.layout("ions", descriptor())
+    builder.assign_block(blocks["electrons"], electron_layout)
+    builder.assign_state(states["electrons"], electron_layout)
+    builder.assign_block(blocks["ions"], ion_layout)
+    builder.assign_state(states["ions"], ion_layout)
+    (field_subject,) = subjects.fields
+    builder.assign_field(field_subject, electron_layout)
+    builder.require_mapping(
+        ion_layout,
+        electron_layout,
+        source=states["ions"],
+        target=field_subject,
+        operation=LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1,
+        synchronization=LayoutSynchronization.BEFORE_STEP_V1,
+        source_representation=LayoutRepresentation.CELL_AVERAGE_V1,
+        target_representation=LayoutRepresentation.CELL_AVERAGE_V1,
+    )
+    try:
+        builder.resolve(**subjects.to_dict())
+    except ValueError as error:
+        reason = str(error)
+        if "missing mapping provider" not in reason:
+            raise RuntimeError(
+                "the invalid multiphysics layout failed outside provider resolution"
+            ) from error
+        if root is not None and root.exists() and any(
+            path.is_file() for path in root.rglob("*")
+        ):
+            raise RuntimeError(
+                "missing mapping/provider refusal published an artifact"
+            ) from error
+        return reason
+    raise RuntimeError("a cross-layout multiphysics plan resolved without a mapping provider")
 
 
 def build_initial_state(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
@@ -478,12 +587,20 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
         )
         for name in simulation.history_names()
     }
+    bound = simulation.bound_snapshot.to_dict()
+    layout_plan = bound["layout"]
     return RuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
         states=states,
         fields=fields,
         histories=histories,
+        bind_identity=simulation.bind_identity.token,
+        layout_plan_identity=str(layout_plan["qualified_id"]),
+        layout_identities=tuple(
+            str(layout["handle"]["qualified_id"])
+            for layout in layout_plan["layouts"]
+        ),
         program_hash=str(simulation.installed_program_hash()),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
@@ -496,6 +613,10 @@ def _require_same_snapshot(left: RuntimeSnapshot, right: RuntimeSnapshot, *, whe
     scalar_pairs = {
         "time": (left.time, right.time),
         "macro_step": (left.macro_step, right.macro_step),
+        "bind_identity": (left.bind_identity, right.bind_identity),
+        "layout_plan_identity": (
+            left.layout_plan_identity, right.layout_plan_identity),
+        "layout_identities": (left.layout_identities, right.layout_identities),
         "program_hash": (left.program_hash, right.program_hash),
         "consumer_graph_identity": (
             left.consumer_graph_identity, right.consumer_graph_identity),
@@ -528,6 +649,10 @@ def run_and_restart(
     from pops.output import HDF5, ParaView
 
     root = Path(output_dir)
+    refusal_root = root / "refused_missing_mapping"
+    missing_mapping_refusal = require_missing_mapping_provider_refusal(
+        cells=cells, publication_root=refusal_root,
+    )
     root.mkdir(parents=True, exist_ok=True)
     _target, artifact = compile_final_case(cells=cells)
     simulation = _bind_artifact(
@@ -583,6 +708,7 @@ def run_and_restart(
         checkpoint_path=checkpoint_path,
         hdf5_identity=hdf5.output_identity.token,
         paraview_identity=paraview.output_identity.token,
+        missing_mapping_refusal=missing_mapping_refusal,
         accepted=accepted,
         restored=restored,
         continuous=continuous,
@@ -605,6 +731,8 @@ def main() -> None:
     print("  HDF5: %s" % evidence.hdf5_identity)
     print("  ParaView: %s" % evidence.paraview_identity)
     print("  checkpoint: %s" % evidence.checkpoint_path)
+    print("  layout: %s" % evidence.restarted.layout_plan_identity)
+    print("  missing mapping refusal: %s" % evidence.missing_mapping_refusal)
     print("  bit-identical restart: step %d" % evidence.restarted.macro_step)
 
 

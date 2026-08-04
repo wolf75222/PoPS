@@ -287,6 +287,16 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     layout = layout_runtime.get("layout", "system")
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
+    artifact = getattr(compiled, "artifact", compiled)
+    selected_dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(selected_dimension, bool) or not isinstance(selected_dimension, int):
+        raise TypeError("compiled artifact report requires one exact resolved_dimension")
+    runtime["dimension"] = selected_dimension
+    platform_manifest = getattr(artifact, "platform_manifest", None)
+    if platform_manifest is not None:
+        runtime["supported_dimensions"] = list(
+            platform_manifest.capabilities["supported_dimensions"].require(
+                "compiled.platform.supported_dimensions"))
 
     so_path, so_paths = _qualified_executable_values(compiled, "so_path")
     abi_key, abi_keys = _qualified_executable_values(compiled, "abi_key")

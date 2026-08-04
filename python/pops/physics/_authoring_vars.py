@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._ir import Var, _wrap
 
-from .aux import AUX_CANONICAL, AUX_NAMED_MAX, aux_total_n_aux
+from .aux import AUX_CANONICAL, AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -93,6 +93,26 @@ class _VariablesMixin(_HyperbolicModel):
         lines = ["    const pops::Real %s = a.%s;" % (n, n) for n in self.aux_names]
         lines += ["    const pops::Real %s = a.extra_field(%d);" % (n, k)
                   for k, n in enumerate(self.aux_extra_names)]
+        return lines
+
+    def _flux_provider_locals_lines(self) -> Any:
+        """C++ locals read from the exact physical-flux provider protocol.
+
+        Unlike ``_aux_locals_lines`` this emits no field access on the global ``pops::Aux`` POD.
+        Both ``pops::Aux`` (for non-FV pointwise callers) and ``BoundFluxProviders<Model>``
+        implement ``flux_provider<Component>()``, so generated physical laws keep one formula and
+        the finite-volume route consumes only its resolved model-qualified pack.
+        """
+        lines = [
+            "    const pops::Real %s = a.template flux_provider<%d>();"
+            % (name, AUX_CANONICAL[name])
+            for name in self.aux_names
+        ]
+        lines += [
+            "    const pops::Real %s = a.template flux_provider<%d>();"
+            % (name, AUX_NAMED_BASE + index)
+            for index, name in enumerate(self.aux_extra_names)
+        ]
         return lines
 
     def _reads_aux(self) -> bool:

@@ -35,7 +35,10 @@ jobs:
     name: Validate the exact published wheel
     needs: wheel
     runs-on: macos-14
-    timeout-minutes: 40
+    # The complete source suite is already the parallel ``full-source-matrix`` dependency. This
+    # wheel lane runs the bounded M4/final-example ledger once, then CTest and artifact/restart
+    # proofs against the exact retained wheel. Keep enough room for an uncached native build.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,7 +64,12 @@ jobs:
           wheels=("$RUNNER_TEMP"/wheelhouse/pops-*.whl)
           test "${#wheels[@]}" -eq 1
           evidence="$RUNNER_TEMP/pops-final-evidence.json"
+          public_api_evidence="$RUNNER_TEMP/pops-final-evidence-public-api.json"
           python scripts/run_final_gate.py --wheel "${wheels[0]}" --evidence "$evidence"
+          python scripts/prove_public_api_parity.py \
+            --wheel "${wheels[0]}" \
+            --installed \
+            --evidence "$public_api_evidence"
           python - <<'PY'
           from pops.runtime_environment import runtime_environment_report
           report = runtime_environment_report()
@@ -69,7 +77,8 @@ jobs:
           assert report["mpi_compiled"] is False, report
           PY
           python scripts/release_preflight.py \
-            --release --tag "$GITHUB_REF_NAME" --installed --evidence "$evidence"
+            --release --tag "$GITHUB_REF_NAME" --installed --evidence "$evidence" \
+            --public-api-evidence "$public_api_evidence"
 
       - name: Retain authenticated release evidence
         uses: actions/upload-artifact@v7

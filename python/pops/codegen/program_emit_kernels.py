@@ -73,6 +73,7 @@ _ALLOWED_OPS = frozenset(
         "fill_boundary",
         "project",
         "record_scalar",
+        "record_balance_term",
         "cell_compare",
         "where",
         "rhs_jacvec",
@@ -483,6 +484,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
 #include <pops/numerics/linalg/dense_eig.hpp>   // pops::detail::mat_inverse (local dense solve)
+#include <pops/numerics/nonlinear/local_nonlinear_collective.hpp>  // exact failure location
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>  // one prepared local solver
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>

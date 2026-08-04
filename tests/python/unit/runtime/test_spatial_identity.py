@@ -7,7 +7,7 @@ import pytest
 import pops.runtime._engine_descriptors as engine
 from pops.numerics.reconstruction import WENO5
 from pops.numerics.reconstruction.limiters import Minmod
-from pops.numerics.riemann import HLL
+from pops.numerics.riemann import HLL, Recovery, Roe, Rusanov
 from pops.numerics.riemann.waves import ExplicitPair
 from pops.numerics.variables import Primitive
 from pops.problem._detached import detached_frozen
@@ -65,6 +65,36 @@ def test_spatial_identity_distinguishes_routes_and_exact_numeric_domains():
     assert len({rational.identity(), decimal.identity(), binary64.identity()}) == 3
     assert rational != engine.Spatial(limiter=Minmod(), flux=HLL(),
                                     positivity_floor=Fraction(1, 10))
+
+
+def test_spatial_identity_lowers_the_fixed_riemann_recovery_route():
+    spatial = engine.Spatial(
+        limiter=Minmod(),
+        flux=Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov())),
+    )
+
+    assert spatial.flux.token == "roe_hll_rusanov_recovery"
+    assert spatial.flux.native_entry == (
+        "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,"
+        "pops::RusanovFlux,pops::RejectRiemannRecovery>"
+    )
+    assert spatial.to_data()["riemann"] == {
+        "route": "roe_hll_rusanov_recovery",
+        "external_id": None,
+        "capability_contract": {
+            "required_capabilities": [
+                "physical_flux", "provider_pack", "roe_dissipation", "stability_bound",
+                "wave_speeds",
+            ],
+            "wave_speed_provider": None,
+        },
+    }
+
+    with pytest.raises(ValueError, match="wave_speed_cache requires flux=riemann.HLL"):
+        engine.Spatial(
+            flux=Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov())),
+            wave_speed_cache=True,
+        )
 
 
 def test_external_riemann_identity_includes_the_registered_brick_id():

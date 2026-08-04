@@ -104,7 +104,8 @@ def proved_platform(plan: Any) -> tuple[Any, Any, tuple[str, ...], dict[str, Any
             "compute": platform.precision.compute.require("platform.precision.compute"),
             "accumulation": platform.precision.accumulation.require("platform.precision.accumulation"),
             "reduction": platform.precision.reduction.require("platform.precision.reduction"),
-            "dimensions": platform.capabilities["dimensions"].require("platform.capabilities.dimensions"),
+            "supported_dimensions": platform.capabilities["supported_dimensions"].require(
+                "platform.capabilities.supported_dimensions"),
         }
         spaces = platform.memory_spaces.require("platform.memory_spaces")
     except (KeyError, TypeError, ValueError) as exc:
@@ -113,11 +114,22 @@ def proved_platform(plan: Any) -> tuple[Any, Any, tuple[str, ...], dict[str, Any
     if not isinstance(spaces, tuple) or not spaces or any(not isinstance(item, str) or not item for item in spaces) or len(spaces) != len(set(spaces)):
         refuse("invalid_memory_spaces", "platform.memory_spaces",
                "platform memory spaces must be a unique non-empty tuple", evidence=spaces)
-    dimensions = facts["dimensions"]
-    if not isinstance(dimensions, tuple) or len(dimensions) != 1 or isinstance(dimensions[0], bool) or not isinstance(dimensions[0], int):
-        refuse("ambiguous_platform_dimension", "platform.capabilities.dimensions",
-               "runtime planning requires exactly one selected dimension", evidence=dimensions)
-    facts["dimension"] = dimensions[0]
+    dimensions = facts["supported_dimensions"]
+    if not isinstance(dimensions, tuple) or not dimensions \
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in dimensions) \
+            or len(dimensions) != len(set(dimensions)):
+        refuse("invalid_supported_dimensions", "platform.capabilities.supported_dimensions",
+               "platform dimensions must be a unique non-empty tuple", evidence=dimensions)
+    selected = getattr(plan.artifact.plan, "resolved_dimension", None)
+    if isinstance(selected, bool) or not isinstance(selected, int):
+        refuse("missing_resolved_dimension", "artifact.plan.resolved_dimension",
+               "runtime planning requires one exact layout-derived dimension", evidence=selected)
+    if selected not in dimensions:
+        refuse("unsupported_resolved_dimension", "artifact.plan.resolved_dimension",
+               "resolved layout dimension is not supported by the selected platform",
+               evidence={"resolved_dimension": selected,
+                         "supported_dimensions": list(dimensions)})
+    facts["dimension"] = selected
     return platform, context, spaces, facts
 
 

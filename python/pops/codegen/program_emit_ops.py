@@ -169,25 +169,24 @@ def _append_local_nonlinear_report(
             lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
         else:
             lines.append("const pops::Real %s = %s;" % (token, expression))
-    encoded = "%s_failure_location" % report
+    location = "%s_failure_location" % report
     failed_count = "%s_failed_count" % report
     failed_i = "%s_failed_i" % report
     failed_j = "%s_failed_j" % report
     failed_component = "%s_failed_component" % report
-    encoded_priority = "%s_encoded_priority" % report
     lines += [
-        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
         "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
-        "int %s = 0;" % encoded_priority,
-        "int %s = -1;" % failed_i,
-        "int %s = -1;" % failed_j,
-        "int %s = -1;" % failed_component,
+        "pops::LocalNonlinearFailureLocation %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
-        "  pops::detail::decode_ranked_local_nonlinear_failure("
-        "%s, %s, %s, %s, %s);" % (encoded, encoded_priority, failed_i, failed_j, failed_component),
-        "if (%s > pops::Real(0) && %s != %s)" % (failed_count, encoded_priority, priority),
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
+        % (location, status, priority),
+        "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
+        % (failed_count, location, location, priority),
         "  throw std::runtime_error("
         '"local nonlinear collective status/location precedence mismatch");',
+        "const int %s = %s.i;" % (failed_i, location),
+        "const int %s = %s.j;" % (failed_j, location),
+        "const int %s = %s.component;" % (failed_component, location),
     ]
     lines.append(
         "pops::SolveReport %s = pops::local_nonlinear_solve_report("
@@ -220,7 +219,8 @@ def _append_local_nonlinear_report(
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
-             field_plans: Any = None) -> None:
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -318,19 +318,26 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
         # first stage state == U^n == the context's current state). Multi-block:
-        # solve_fields_from_state(idx, U_stage) is a genuinely COUPLED solve -- the Poisson RHS is
-        # Sum_s elliptic_rhs_s(U_s), block idx at its stage state, every other block contributing
-        # its live state into the shared phi/aux.
+        # solve_fields_from_state_at(point, provider, idx, U_stage) is a genuinely COUPLED solve --
+        # the Poisson RHS is Sum_s elliptic_rhs_s(U_s), block idx at its exact active level/stage
+        # state, every other block contributing its live state into the shared phi/aux.
         (state_in,) = v.inputs  # solve_fields inputs = (state,)
         field_ref = v.attrs.get("field")
         if field_ref is None:
             raise ValueError("solve_fields node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
+        boundary_point = "field_boundary_point_%d" % v.id
+        lines.append(
+            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            % (boundary_point, v.id)
+        )
         report = "field_report_%d" % v.id
-        solve_stmt = ('pops::SolveOutcome %s = '
-                      'ctx.solve_fields_from_state(%s, %d, %s);'
-                      % (report, json.dumps(field), bidx, var[state_in.id]))
+        solve_stmt = (
+            "pops::SolveOutcome %s = "
+            "ctx.solve_fields_from_state_at(%s, %s, %d, %s);"
+            % (report, boundary_point, json.dumps(field), bidx, var[state_in.id])
+        )
         lines.append(solve_stmt)
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         var[v.id] = var[state_in.id]
@@ -355,10 +362,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
+        boundary_point = "field_boundary_point_%d" % v.id
+        lines.append(
+            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            % (boundary_point, v.id)
+        )
         report = "field_report_%d" % v.id
         lines.append(
-            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
-            % (report, int(v.id), json.dumps(field), ", ".join(overrides)))
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            % (
+                report,
+                boundary_point,
+                int(v.id),
+                json.dumps(field),
+                ", ".join(overrides),
+            )
+        )
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
@@ -547,6 +566,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (scalar_in,) = v.inputs
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
+        var[v.id] = var[scalar_in.id]
+    elif v.op == "record_balance_term":
+        # Dedicated, non-bindable sink for a validated Program.record_balance term. Ordinary
+        # record_scalar names cannot enter the reserved native attempt mailbox.
+        from pops.codegen.program_balance_due import balance_record_due_expression
+
+        (scalar_in,) = v.inputs
+        due = balance_record_due_expression(var, v.id)
+        if due != "false":
+            lines.append(
+                "if (%s) { ctx.record_balance_term(%s, %s, %s); }"
+                % (
+                    due,
+                    json.dumps(v.attrs["route"]),
+                    json.dumps(v.attrs["term"]),
+                    var[scalar_in.id],
+                )
+            )
         var[v.id] = var[scalar_in.id]
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
@@ -739,7 +776,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
         # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
         _emit_matrix_free_operator(
-            program, v, var, prelude, lines, field_plans=field_plans)
+            program, v, var, prelude, lines, field_plans=field_plans, target=target,
+            has_shared_interface_implicit_jacvec=(
+                has_shared_interface_implicit_jacvec
+            ))
     elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
         # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
         # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
@@ -770,12 +810,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
         if kind == "norm2":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm2(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm2(%d, %s)" % (owner, var[u.id])
         elif kind == "norm_inf":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm_inf(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
         elif kind in ("sum", "max", "min", "abs_sum"):
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
@@ -785,12 +823,25 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "min": "min_component",
                 "abs_sum": "abs_sum_component",
             }[kind]
-            lines.append("const pops::Real %s = ctx.%s(%d, %s, %d);"
-                         % (var[v.id], context_op, owner, var[u.id], comp))
+            reduction = "ctx.%s(%d, %s, %d)" % (
+                context_op,
+                owner,
+                var[u.id],
+                comp,
+            )
         else:  # dot
             a, b = v.inputs
-            lines.append("const pops::Real %s = ctx.dot(%d, %s, %s);"
-                         % (var[v.id], owner, var[a.id], var[b.id]))
+            reduction = "ctx.dot(%d, %s, %s)" % (
+                owner,
+                var[a.id],
+                var[b.id],
+            )
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            reduction = "(%s) ? (%s) : pops::Real(0)" % (due, reduction)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
     elif v.op == "cfl":
         # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
@@ -819,8 +870,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             else:  # a literal constant
                 toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
-        lines.append("const pops::Real %s = (%s %s %s);"
-                     % (var[v.id], toks[0], cppop, toks[1]))
+        expression = "(%s %s %s)" % (toks[0], cppop, toks[1])
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
     elif v.op == "compare":
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).

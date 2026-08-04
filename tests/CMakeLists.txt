@@ -435,6 +435,17 @@ set(POPS_CPP_STANDARD_TESTS
   test_fab2d
   test_box_array
   test_multifab
+  test_nd_boundary_schedule
+  test_nd_cluster
+  test_nd_distribution
+  test_nd_execution
+  test_nd_flux_ledger
+  test_nd_hierarchy_plan
+  test_nd_layout
+  test_nd_tag_mask
+  test_nd_topology
+  test_nd_transfer
+  test_nd_translation_schedule
   test_multiblock_interface_scheduler
   test_sync_residence
   test_reduce
@@ -448,7 +459,10 @@ set(POPS_CPP_STANDARD_TESTS
   test_copy_schedule_cache
   test_physical_bc
   test_prepared_boundary_plan
+  test_prepared_stream_executor
   test_geometry
+  test_nd_metric_provider
+  test_nd_finite_volume
   test_refinement
   test_ref_ratio
   test_amr_hierarchy
@@ -506,6 +520,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_scheme_dispatch
   test_model_registry
   test_spatial_discretisation
+  test_spatial_provider_matrix
   test_primitive_recon
   test_system_abstraction
   test_system_coupler
@@ -556,6 +571,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_roe_flux
   test_riemann_capabilities
   test_newton_robustness
+  test_variable_recovery_chain
+  test_prepared_cartesian_nd
+  test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace
   test_field_context
@@ -692,6 +710,15 @@ pops_add_gtest_suite(
 pops_test_source(_src test_program_reflux_ledger)
 pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_temporal_partition_restart)
+pops_add_gtest_suite(NAME test_temporal_partition_restart SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_cell_temporal_partition_executor)
+pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_cell_temporal_program_route)
+pops_add_gtest_suite(NAME test_cell_temporal_program_route SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -769,6 +796,10 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 
 if(POPS_HAS_MPI)
   pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
+  pops_add_mpi_standalone_suite(test_mpi_nd_translation_completion_failstop RANKS 1)
+  set_tests_properties(test_mpi_nd_translation_completion_failstop_np1 PROPERTIES
+    PASS_REGULAR_EXPRESSION "POPS_ND_COMPLETION_FAILSTOP_OBSERVED"
+    TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
@@ -778,9 +809,12 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
+  set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
+  set(POPS_MPI_RANKS_test_mpi_amr_prepared_boundary_cf 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
@@ -794,6 +828,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
+  set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
@@ -820,9 +855,12 @@ if(POPS_HAS_MPI)
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
     test_mpi_amr_program_reflux
+    test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
+    test_mpi_cell_temporal_program_refusal
+    test_mpi_amr_prepared_boundary_cf
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_system_analytic_level_set
@@ -836,6 +874,7 @@ if(POPS_HAS_MPI)
     test_mpi_load_balance_authority
     test_mpi_array_reduce
     test_mpi_multiblock_interface_scheduler
+    test_mpi_nd_translation_exchange
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary

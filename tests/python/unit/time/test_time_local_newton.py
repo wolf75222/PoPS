@@ -71,8 +71,7 @@ def reaction_model(name, k):
 
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
+    m.primitive_vars(rho)
     m.conservative_from([rho])
     m.flux(x=[0.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
@@ -114,8 +113,7 @@ def fault_model(name):
 
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
+    m.primitive_vars(rho)
     m.conservative_from([rho])
     m.flux(x=[0.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
@@ -272,7 +270,7 @@ def section_a(t):
         "ctx.pointwise_active_mask(0,",
         "pops::reduce_max(ln_status_",
         "pops::local_nonlinear_status_from_priority(",
-        "pops::detail::decode_ranked_local_nonlinear_failure(",
+        "pops::collective_first_local_nonlinear_failure(",
         "collective status/location precedence mismatch",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)

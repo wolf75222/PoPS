@@ -271,11 +271,14 @@ RIEMANN_RUSANOV = _REGISTRY["riemann"]["rusanov"]
 RIEMANN_HLL = _REGISTRY["riemann"]["hll"]
 RIEMANN_HLLC = _REGISTRY["riemann"]["hllc"]
 RIEMANN_ROE = _REGISTRY["riemann"]["roe"]
+RIEMANN_ROE_HLL_RUSANOV_RECOVERY = _REGISTRY["riemann"]["roe_hll_rusanov_recovery"]
 
 LIMITER_NONE = _REGISTRY["limiter"]["none"]
 LIMITER_MINMOD = _REGISTRY["limiter"]["minmod"]
 LIMITER_VANLEER = _REGISTRY["limiter"]["vanleer"]
 LIMITER_WENO5 = _REGISTRY["limiter"]["weno5"]
+LIMITER_MC = _REGISTRY["limiter"]["mc"]
+LIMITER_SUPERBEE = _REGISTRY["limiter"]["superbee"]
 
 RECON_CONSERVATIVE = _REGISTRY["recon"]["conservative"]
 RECON_PRIMITIVE = _REGISTRY["recon"]["primitive"]
@@ -299,6 +302,22 @@ class _ModelRequirementPredicate:
     refusal: str
 
 
+def _has_exact_riemann_provider(model: Any, capability: str) -> bool:
+    """Fail closed unless the model exposes authenticated provider evidence."""
+
+    from pops.numerics.riemann.providers import provider_evidence_of
+
+    try:
+        evidence = provider_evidence_of(model)
+    except (TypeError, ValueError):
+        return False
+    if capability == "hllc":
+        return evidence.hllc_provider is not None
+    if capability == "roe":
+        return evidence.roe_provider is not None
+    raise ValueError("unknown Riemann provider capability %r" % capability)
+
+
 _RIEMANN_MODEL_REQUIREMENT_PREDICATES = MappingProxyType({
     "wave_speeds": _ModelRequirementPredicate(
         lambda model: bool(getattr(model, "has_wave_speeds", False)),
@@ -306,12 +325,12 @@ _RIEMANN_MODEL_REQUIREMENT_PREDICATES = MappingProxyType({
         "typed axis (without pressure), or a primitive 'p' (m.primitive('p', ...))",
     ),
     "hllc_star_state": _ModelRequirementPredicate(
-        lambda model: bool(getattr(model, "has_hllc", False)),
+        lambda model: _has_exact_riemann_provider(model, "hllc"),
         "requires model capability 'hllc_star_state': call m.enable_hllc() on a generic model "
         "with fluid roles and primitive 'p'",
     ),
     "roe_dissipation": _ModelRequirementPredicate(
-        lambda model: bool(getattr(model, "has_roe", False)),
+        lambda model: _has_exact_riemann_provider(model, "roe"),
         "requires model capability 'roe_dissipation': call m.enable_roe(), "
         "m.roe_dissipation(...), or m.roe_from_jacobian(...) on the model",
     ),

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.analytic import angle, between, param, radius, sin, where, x
+from pops.analytic import angle, between, param, radius, sin, time, where, x
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.model import BindSchema
@@ -131,6 +131,30 @@ def test_parameter_lowering_rejects_a_foreign_authenticated_schema() -> None:
     with pytest.raises(ValueError, match="not authenticated"):
         lower_analytic_components(
             [expression.to_data()], frame_id=frame.canonical_id, bindings=bindings)
+
+
+def test_time_lowers_only_for_the_exact_consuming_clock() -> None:
+    frame = Rectangle("time-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    program = pops.Program("analytic-lowering-time")
+    expression = x(frame) + 2.0 * time(program.clock)
+
+    ((opcodes, literals),) = lower_analytic_components(
+        [expression.to_data()],
+        frame_id=frame.canonical_id,
+        time_clock_id=program.clock.qualified_id,
+    )
+    assert opcodes == ("x", "constant", "input", "mul", "add")
+    assert literals[2] == 0.0
+
+    with pytest.raises(NotImplementedError, match="exact physical-time Clock"):
+        lower_analytic_components([expression.to_data()], frame_id=frame.canonical_id)
+    other = pops.Program("analytic-lowering-other-time")
+    with pytest.raises(ValueError, match="another logical Clock"):
+        lower_analytic_components(
+            [expression.to_data()],
+            frame_id=frame.canonical_id,
+            time_clock_id=other.clock.qualified_id,
+        )
 
 
 @pytest.mark.parametrize(

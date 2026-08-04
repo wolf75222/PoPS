@@ -122,7 +122,8 @@ static void install_multirate_forward_euler_program(AmrSystem& system, std::vect
   context->install(
       [context, substeps = std::move(substeps), strides = std::move(strides)](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, &substeps, &strides](double level_dt) {
-          (void)consume_solve_outcome(context->solve_fields());
+          if (context->level() == 0)
+            (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
           for (int block = 0; block < context->n_blocks(); ++block) {
             const auto index = static_cast<std::size_t>(block);
             if ((context->macro_step() + 1) % strides[index] != 0)
@@ -177,8 +178,8 @@ struct TemporalContractModel {
   static constexpr int n_vars = 1;
   int mode = 0;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State& u, const Aux&, int) const {
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int) const {
     return mode == 1 ? (u[0] < Real(0) ? -u[0] : u[0]) : Real(0);
   }
   POPS_HD State source(const State& u, const Aux&) const { return State{u[0]}; }
@@ -291,12 +292,14 @@ TEST(test_amr_multiblock_substeps, Runs) {
         context->advance_hierarchy(macro_dt, [context, per_stage](double) {
           if (!per_stage) {
             context->set_stage_time(0, 1);
-            (void)consume_solve_outcome(context->solve_fields());
+            if (context->level() == 0)
+              (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
             return;
           }
           for (int stage = 0; stage < 4; ++stage) {
             context->set_stage_time(stage, 4);
-            (void)consume_solve_outcome(context->solve_fields());
+            if (context->level() == 0)
+              (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
           }
         });
       });

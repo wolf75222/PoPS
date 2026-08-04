@@ -321,8 +321,7 @@ def test_multispecies_lowers_to_a_multiblock_module():
     assert not hasattr(m, "compile"), "physics.Model must not expose a direct compile()"
     module = m.lower()
     assert isinstance(module, _model_pkg.Module), "physics.Model.lower() returns a pops.model.Module"
-    assert isinstance(m.to_module(), _model_pkg.Module), "to_module() returns a Module too"
-    assert type(m).to_module is type(m).lower, "to_module() is the lower() alias"
+    assert not hasattr(m, "to_module"), "lower() is the sole explicit Module projection"
 
 
 def test_multispecies_check_rejects_an_undeclared_coupled_coordinate():
@@ -464,7 +463,7 @@ def test_local_transform_promotion_preserves_the_first_species_declaration():
     electrons = m.species("electrons", state=["ne"])
     transform = m.local_transform(
         "repair_electrons", (electrons["ne"] + 1.0,), on=electrons)
-    ions = m.species("ions", state=["ni"])
+    m.species("ions", state=["ni"])
     module = m.module
     electron_space = module.state_spaces()["electrons"]
     ion_space = module.state_spaces()["ions"]

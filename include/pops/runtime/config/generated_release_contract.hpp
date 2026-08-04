@@ -3,19 +3,21 @@
 // clang-format off
 namespace pops::release_contract {
 inline constexpr const char* kPackageVersion = "1.0.0";
-inline constexpr int kReleaseContractSchemaVersion = 1;
+inline constexpr int kReleaseContractSchemaVersion = 2;
 inline constexpr int kPublicApiVersion = 1;
 inline constexpr int kSemanticIrVersion = 1;
 inline constexpr int kNormalizationVersion = 1;
 inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kReleaseComponentManifestSchemaVersion = 2;
-inline constexpr int kComponentRegistryVersion = 2;
+inline constexpr int kComponentRegistryVersion = 3;
 inline constexpr int kReleaseCapabilityVocabularyVersion = 4;
 inline constexpr int kComponentInterfaceAbiVersion = 1;
 inline constexpr int kReleaseNativeAbiVersion = 3;
 inline constexpr int kCheckpointEnvelopeSchemaVersion = 1;
 inline constexpr int kUniformCheckpointPayloadVersion = 5;
 inline constexpr int kAmrCheckpointPayloadVersion = 7;
-inline constexpr const char* kContractSha256 = "677cc4279df230eeedcf0d657b558a1c42479bc41d0e7e1cc8cbdf0e7560a3da";
+inline constexpr const char* kComponentCatalogSha256 = "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3";
+inline constexpr const char* kContractSha256 = "c3f532c08e06c5fdeceeff5f5ee92ac0f737bd345d9f0fc4f06ae0c9600643a2";
 }  // namespace pops::release_contract
 // clang-format on

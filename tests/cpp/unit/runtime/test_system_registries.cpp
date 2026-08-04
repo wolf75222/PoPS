@@ -294,6 +294,24 @@ TEST(SystemDomain, LayoutReportReflectsCartesianConstruction) {
   EXPECT_GE(rep.aux_ncomp, 3) << "the shared aux channel is at least 3 wide";
 }
 
+TEST(SystemDomain, PolarLayoutPublishesPhysicalRadialAndPeriodicAzimuthalTopology) {
+  pops::SystemConfig config;
+  config.geometry = "polar";
+  config.nr = 12;
+  config.ntheta = 24;
+  config.r_min = 0.25;
+  config.r_max = 1.0;
+  pops::runtime::system::SystemDomain domain(config);
+  const auto report = domain.layout_report();
+  EXPECT_TRUE(report.polar);
+  EXPECT_FALSE(report.periodic_x);
+  EXPECT_TRUE(report.periodic_y);
+  EXPECT_EQ(domain.bc_.xlo, pops::BCType::Foextrap);
+  EXPECT_EQ(domain.bc_.xhi, pops::BCType::Foextrap);
+  EXPECT_EQ(domain.bc_.ylo, pops::BCType::Periodic);
+  EXPECT_EQ(domain.bc_.yhi, pops::BCType::Periodic);
+}
+
 TEST(SystemEllipticBackendRegistry, OpaqueCapabilitiesDoNotCloseTheExtensionSet) {
   EllipticRegistryHarness::EllipticBackendRegistry registry;
   registry.add("probe", std::make_unique<ProbeEllipticProvider>(std::vector<std::string>{

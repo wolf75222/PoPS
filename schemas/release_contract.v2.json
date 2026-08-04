@@ -1,17 +1,19 @@
 {
-  "release_contract_schema_version": 1,
+  "release_contract_schema_version": 2,
   "public_api_version": 1,
   "semantic_ir_version": 1,
   "normalization_version": 1,
   "component_catalog_schema_version": 1,
   "component_manifest_schema_version": 2,
-  "component_registry_version": 2,
+  "component_registry_version": 3,
   "capability_vocabulary_version": 4,
   "component_interface_abi_version": 1,
   "native_abi_version": 3,
   "checkpoint_envelope_schema_version": 1,
   "uniform_checkpoint_payload_version": 5,
   "amr_checkpoint_payload_version": 7,
+  "component_catalog_sha256": "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66",
+  "component_catalog_semantic_sha256": "b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3",
   "supported_matrix": {
     "language": {
       "python": ["3.12"],

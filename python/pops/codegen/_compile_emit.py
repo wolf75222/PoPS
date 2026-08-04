@@ -93,6 +93,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     parts.append("prim_state=%s" % ",".join(m.prim_state))
     parts.append("proles=%s" % ",".join(_roles_for(m.prim_state, m.prim_roles)))
     parts.append("prim=%s" % ";".join("%s=%r" % (k, m.prim_defs[k]) for k in m.prim_defs))
+    recovery_constraints = getattr(m, "_recovery_admissibility", None)
+    if recovery_constraints:
+        parts.append("recovery_admissibility=%s" % ";".join(
+            "%s=%r" % (name, recovery_constraints[name])
+            for name in m.prim_state if name in recovery_constraints))
     for d in ("x", "y"):
         parts.append("flux_%s=%s" % (d, ";".join(repr(e) for e in m._flux.get(d, []))))
         parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in m._eig.get(d, []))))
@@ -135,16 +140,29 @@ def model_hash(model: Any, params: Any = None) -> str:
                                  if m._src_jac is not None else ""))
     if getattr(m, "_proj", None) is not None:
         parts.append("proj=%s" % ";".join(repr(e) for e in m._proj))
+    from pops.numerics.riemann.providers import authoring_provider_evidence
+
+    riemann_evidence = authoring_provider_evidence(m)
     parts.append("hllc=%d" % (1 if m._hllc else 0))
+    if riemann_evidence.hllc_provider is not None:
+        parts.append("hllc_provider=%s" % riemann_evidence.hllc_provider)
     forms = getattr(m, "_riemann_hook_forms", None)
     if forms:
         parts.append("riemann_hooks=%s" % ";".join(
             "%s=%r" % (k, forms[k]) for k in sorted(forms)))
     parts.append("roe=%d" % (1 if getattr(m, "_roe", False) else 0))
+    if riemann_evidence.roe_provider is not None:
+        parts.append("roe_provider=%s" % riemann_evidence.roe_provider)
+        parts.append("roe_entropy_policy=%s" % riemann_evidence.roe_entropy_policy)
+        if riemann_evidence.roe_entropy_delta is not None:
+            parts.append("roe_entropy_delta=%s" % riemann_evidence.roe_entropy_delta)
     if getattr(m, "_roe_rows", None) is not None:
         parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
                                               for e in m._roe_rows[k]))
     if getattr(m, "_roe_jacobian", None) is not None:
+        from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
+        if has_characteristic_no_inflow_provider(m):
+            parts.append("characteristic_no_inflow=flux_jacobian_v1")
         parts.append("roe_jac=%s" % ";".join(repr(e) for k in ("x", "y")
                                              for row in m._roe_jacobian[k] for e in row))
         entropy_fix = m._roe_jacobian.get("entropy_fix")

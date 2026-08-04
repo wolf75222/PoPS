@@ -4,7 +4,9 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pops
@@ -12,6 +14,7 @@ import pytest
 
 from pops import interfaces
 from pops.external import build_source_package_manifest, compile_component, load
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.mesh import CartesianGrid
 from pops.mesh.boundaries import (
     BlockInterfaceSide,
@@ -20,8 +23,10 @@ from pops.mesh.boundaries import (
 from pops.model import ComponentManifest
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.numerics.terms import Flux
 from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
-from pops.time import FixedDt, StagePoint, TimePoint, every
+from pops.solvers import GMRES
+from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -37,7 +42,8 @@ def _load_example():
     return module
 
 
-def _flux_component(tmp_path: Path):
+def _flux_source_component(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     interface = interfaces.NumericalFlux
     manifest = ComponentManifest(
         uri="pops://external.test/shared-interface/average",
@@ -134,9 +140,15 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
         components={"average": manifest}, payloads={source_name: ("source", source)})
     package_path = tmp_path / "shared-average.pops.json"
     package_path.write_text(json.dumps(package), encoding="utf-8")
-    component = load(package_path).require(
+    return load(package_path).require(
         "average", interface=interfaces.NumericalFlux)()
-    return compile_component(component, include=str(ROOT / "include"))
+
+
+def _flux_component(tmp_path: Path):
+    return compile_component(
+        _flux_source_component(tmp_path),
+        include=str(ROOT / "include"),
+    )
 
 
 def _program(left_state, right_state, rate):
@@ -186,6 +198,51 @@ def _ssprk2_program(left_state, right_state, rate):
         right.n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1,
         at=right.next.point,
     )
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+def _implicit_pair_program(left_state, right_state, rate, packed_state=None):
+    del rate
+    program = pops.Program("shared_interface_implicit_pair")
+    left = program.state(left_state)
+    right = program.state(right_state)
+    stage = StagePoint("shared_implicit_stage", {"main": TimePoint(program.clock, 0)})
+    left_iterate = program.value("left_iterate", left.n, at=stage)
+    right_iterate = program.value("right_iterate", right.n, at=stage)
+    left_r0 = program.rhs("left_r0", state=left_iterate, terms=(Flux(),))
+    right_r0 = program.rhs("right_r0", state=right_iterate, terms=(Flux(),))
+    operator = program.matrix_free_operator(
+        "shared_interface_jacobian", domain="state", range_="state", ncomp=2
+    )
+
+    def apply(builder, out, direction):
+        builder.rhs_jacvec(
+            out, direction, iterate=left_iterate, r0=left_r0, c_dt=builder.dt,
+            sources=(), field_coupled=False,
+        )
+        return builder.rhs_jacvec(
+            out, direction, iterate=right_iterate, r0=right_r0, c_dt=builder.dt,
+            sources=(), field_coupled=False,
+        )
+
+    program.set_apply(operator, apply)
+    if packed_state is not None:
+        packed = program.state(packed_state)
+        program.solve(
+            LinearProblem(
+                operator,
+                packed.n,
+                properties=LinearOperatorProperties.general(),
+                nullspace=None,
+            ),
+            solver=GMRES(max_iter=8, restart=4, rel_tol=1.0e-12),
+            name="shared_interface_correction",
+        ).consume(action=FailRun())
+    left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
+    right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
     program.step_strategy(FixedDt(1.0e-3))
@@ -338,12 +395,16 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+def _shared_interface_amr_authoring(
+    tmp_path,
+    *,
+    component_root=None,
+    component=None,
+    program_factory=_ssprk2_program,
+    with_checkpoint=True,
+    with_implicit_solve=False,
+):
     from pops.amr import (
-        AMRClockRelation,
-        AMRExecution,
-        AMRHierarchy,
-        AMRRegrid,
         AMRTagging,
         AMRTransfer,
         Buffer,
@@ -355,11 +416,12 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     from pops.boundary import TransportBoundarySet
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
-    from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
     from pops.lib.initial import BindArray
-    from pops.math import ValueExpr
+    from pops.math import ValueExpr, ddt, div
     from pops.projection import ConservativeCellAverage
+    from pops.representations import Conservative
+    from pops.spaces import CellState
 
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
@@ -386,7 +448,10 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
 
     left_numerics = numerics(core.tracer_state)
     right_numerics = numerics(right_state)
-    component = _flux_component(tmp_path)
+    component_root = tmp_path if component_root is None else Path(component_root)
+    component_root.mkdir(parents=True, exist_ok=True)
+    if component is None:
+        component = _flux_component(component_root)
     ConservativeInterface(
         "tracer_to_right",
         left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
@@ -407,23 +472,86 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         value=BindArray(),
         projection=ConservativeCellAverage(),
     ))
-    program = _ssprk2_program(core.tracer_state, right_state, core.rate)
+    packed_state = None
+    packed_initial = None
+    if with_implicit_solve:
+        packed_model = pops.Model("shared_interface_packed_vector", frame=core.frame)
+        packed = packed_model.state(
+            "U",
+            components=("left_direction", "right_direction"),
+            representation=Conservative(),
+            space=CellState(frame=core.frame),
+        )
+        left_direction, right_direction = packed
+        zero_flux = packed_model.flux(
+            "zero_packed_transport",
+            frame=core.frame,
+            state=packed,
+            components={
+                axis: (0.0 * left_direction, 0.0 * right_direction)
+                for axis in core.frame.axes
+            },
+            waves={axis: (0.0, 0.0) for axis in core.frame.axes},
+        )
+        packed_rate = packed_model.rate(
+            "zero_packed_rate", equation=ddt(packed) == -div(zero_flux)
+        )
+        packed_block = core.case.block(
+            "implicit_vector", model=packed_model, states=(packed,)
+        )
+        packed_state = packed_block[packed]
+        packed_numerics = DiscretizationPlan()
+        packed_numerics.rates.add(
+            packed_rate,
+            FiniteVolume(
+                flux=zero_flux,
+                variables=variables.Conservative(packed),
+                reconstruction=reconstruction.FirstOrder(),
+                riemann=riemann.Rusanov(),
+            ),
+        )
+        packed_numerics.boundaries.add(TransportBoundarySet({
+            boundary: Outflow(state=packed_state)
+            for boundary in (
+                boundaries.x_min,
+                boundaries.x_max,
+                boundaries.y_min,
+                boundaries.y_max,
+            )
+        }))
+        core.case.numerics(packed_numerics, block=packed_block)
+        core.case.initials.add(InitialCondition(
+            state=packed_state,
+            value=BindArray(),
+            projection=ConservativeCellAverage(),
+        ))
+        packed_initial = np.empty((2, 8, 8), dtype=np.float64)
+        packed_initial[0, :, :] = 0.25
+        packed_initial[1, :, :] = -0.125
+        program = program_factory(
+            core.tracer_state, right_state, core.rate, packed_state
+        )
+    else:
+        program = program_factory(core.tracer_state, right_state, core.rate)
     core.case.program(program)
-    core.case.consumers(
-        ConsumerGraph.from_consumers(
-            (
-                Checkpoint(
-                    schedule=every(10_000, clock=program.clock),
-                    target="unused/shared-interface-restart",
-                    hierarchy=RegridOnRestart(),
-                ),
+    if with_checkpoint:
+        core.case.consumers(
+            ConsumerGraph.from_consumers(
+                (
+                    Checkpoint(
+                        schedule=every(10_000, clock=program.clock),
+                        target="unused/shared-interface-restart",
+                        hierarchy=RegridOnRestart(),
+                    ),
+                )
             )
         )
-    )
 
     transfer = AMRTransfer()
     transfer.state(core.tracer_state, StateTransfer())
     transfer.state(right_state, StateTransfer())
+    if packed_state is not None:
+        transfer.state(packed_state, StateTransfer())
     tagging = AMRTagging(
         rules=(
             Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
@@ -433,23 +561,6 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
-    resolved = pops.resolve(
-        pops.validate(core.case),
-        layout=AMR(
-            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
-            hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
-            tagging=tagging,
-            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
-            transfer=transfer,
-            execution=AMRExecution.subcycled((
-                AMRClockRelation(0, 1, 2),
-                AMRClockRelation(1, 2, 2),
-            )),
-        ),
-        components=(component,),
-        compile_options={"include": str(ROOT / "include")},
-    )
-    artifact = pops.compile(resolved)
     left_initial = np.zeros((1, 8, 8), dtype=np.float64)
     right_initial = np.zeros((1, 8, 8), dtype=np.float64)
     # The first public refined route requires an already matched fine interface: refine one
@@ -458,7 +569,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     # implied by this proof.
     left_initial[0, :, -1:] = 1.0
     # Keep the two traces distinct: the shared component must publish its average flux to both
-    # consumers.  Equal traces would let a one-sided publication pass by coincidence.
+    # consumers. Equal traces would let a one-sided publication pass by coincidence.
     right_initial[0, :, :1] = 3.0
     params = {
         core.case.resolve(handle, block=block): value
@@ -474,7 +585,154 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         core.case.resolve(core.refine_threshold): 0.10,
         core.case.resolve(core.coarsen_threshold): 0.04,
     })
+    return SimpleNamespace(
+        example=example,
+        core=core,
+        right=right,
+        right_state=right_state,
+        component=component,
+        program=program,
+        transfer=transfer,
+        tagging=tagging,
+        left_initial=left_initial,
+        right_initial=right_initial,
+        packed_state=packed_state,
+        packed_initial=packed_initial,
+        params=params,
+    )
+
+
+def _resolve_shared_interface_amr(
+    authoring, *, max_levels, patch_layout=None, frozen=False
+):
+    from pops.amr import (
+        AMRClockRelation,
+        AMRExecution,
+        AMRHierarchy,
+        AMRRegrid,
+    )
+    from pops.layouts import AMR
+
+    if not isinstance(max_levels, int) or max_levels < 2:
+        raise ValueError("shared-interface AMR proof requires at least two levels")
+    return pops.resolve(
+        pops.validate(authoring.core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=authoring.core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(
+                max_levels=max_levels,
+                ratios=tuple(2 for _ in range(max_levels - 1)),
+            ),
+            tagging=authoring.tagging,
+            regrid=(
+                AMRRegrid.frozen() if frozen else
+                AMRRegrid(schedule=every(100, clock=authoring.program.clock))
+            ),
+            transfer=authoring.transfer,
+            execution=AMRExecution.subcycled(
+                tuple(
+                    AMRClockRelation(level, level + 1, 2)
+                    for level in range(max_levels - 1)
+                )
+            ),
+            patch_layout=patch_layout,
+        ),
+        components=(authoring.component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+
+
+def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path,
+        program_factory=_implicit_pair_program,
+        with_checkpoint=False,
+    )
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    assert resolved.resolved_hierarchy.plan.level_count == 2
+    assert resolved.capabilities["shared_interfaces"] == {
+        "implicit_jacvec_pair": True,
+    }
+    from pops.codegen._shared_interface_evidence import (
+        _ResolvedSharedInterfaceCodegenEvidence,
+        _issue_shared_interface_codegen_evidence,
+    )
+
+    with pytest.raises(
+        TypeError, match="issued only from an exact resolved plan"
+    ):
+        _ResolvedSharedInterfaceCodegenEvidence()
+    evidence = _issue_shared_interface_codegen_evidence(resolved)
+    assert type(evidence) is _ResolvedSharedInterfaceCodegenEvidence
+    with pytest.raises(ValueError, match="belongs to another Program graph"):
+        evidence.require(pops.Program("foreign_program"), target="amr_system")
+
+    artifact = pops.compile(resolved)
+
+    assert artifact.target == "amr_system"
+    assert artifact.program is not None
+    generated_path = artifact.program.dump_cpp(tmp_path / "implicit_pair.cpp")
+    source = Path(generated_path).read_text(encoding="utf-8")
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert source.count("ctx.copy_component_span(") >= 7
+    assert "ctx.rhs_core_into_at(" not in source
+    assert "PreparedOperatorConcurrency::Exclusive" in source
+    group_identity = re.search(r"ctx\.rhs_group\((\d+),", source)
+    assert group_identity is not None
+    left_r0 = next(
+        value for value in resolved.time._values if value.name == "left_r0"
+    )
+    from pops.codegen.program_emit_solve import _rhs_evaluation_identity
+
+    assert str(_rhs_evaluation_identity(resolved.time, left_r0)) == group_identity.group(1)
+
+
+def test_frozen_two_level_generated_program_executes_shared_interface_implicit_pair(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path,
+        program_factory=_implicit_pair_program,
+        with_checkpoint=False,
+        with_implicit_solve=True,
+    )
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
     interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    runtime = authoring.example._bind_artifact(
+        artifact,
+        initial_values={
+            authoring.core.tracer_state: authoring.left_initial,
+            authoring.right_state: authoring.right_initial,
+            authoring.packed_state: authoring.packed_initial,
+        },
+        params=authoring.params,
+    )
+
+    assert runtime.n_levels() == 2
+    initial_packed = np.asarray(runtime.get_state("implicit_vector")).copy()
+    report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+
+    assert report.accepted_steps == 1
+    for level in range(2):
+        assert runtime._executor._s._interface_evaluation_count(
+            interface.qualified_id, level
+        ) > 1
+    solved_packed = np.asarray(runtime.get_state("implicit_vector"))
+    assert np.isfinite(solved_packed).all()
+    np.testing.assert_array_equal(solved_packed, initial_packed)
+
+
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+    authoring = _shared_interface_amr_authoring(tmp_path)
+    example = authoring.example
+    core = authoring.core
+    right_state = authoring.right_state
+    left_initial = authoring.left_initial
+    right_initial = authoring.right_initial
+    params = authoring.params
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=3)
+    artifact = pops.compile(resolved)
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+
     # Dynamic shared interfaces cannot create a missing route after bind: the complete configured
     # prefix must already be materialized by the authenticated bootstrap transaction.
     with pytest.raises(
@@ -491,7 +749,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
 
     # A shared hierarchy does not imply that one endpoint's boundary tags are mirrored to its peer.
     # With only the left x-high band tagged, the materialized L1 layout cannot tile the right x-low
-    # face.  The incremental finalizer must reject that incomplete pair before bind freezes.
+    # face. The incremental finalizer must reject that incomplete pair before bind freezes.
     with pytest.raises(ValueError, match="does not tile its declared physical face"):
         example._bind_artifact(
             artifact,
@@ -551,19 +809,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     # The three-level route above proves arbitrary-depth execution. Use the independently compiled
     # two-level route for the restart transaction: replacing its only fine transition is the exact
     # dynamic topology capability currently authenticated by the interface scheduler.
-    restart_resolved = pops.resolve(
-        pops.validate(core.case),
-        layout=AMR(
-            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
-            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=tagging,
-            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
-            transfer=transfer,
-            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
-        ),
-        components=(component,),
-        compile_options={"include": str(ROOT / "include")},
-    )
+    restart_resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
     restart_artifact = pops.compile(restart_resolved)
     restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
     restart_source = example._bind_artifact(
@@ -601,9 +847,9 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     )
     checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
 
-    # RegridOnRestart must enter the serial native tag/cluster/regrid boundary; a deliberately
-    # rejected post-transform validation must restore the fresh runtime exactly before the same
-    # restart is retried and committed.
+    # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
+    # post-transform validation must restore the fresh runtime exactly before the same restart is
+    # retried and committed.
     restarted = example._bind_artifact(
         restart_artifact,
         initial_values={

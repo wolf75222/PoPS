@@ -6,6 +6,7 @@
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + resolve_implicit_components + ModelSpec
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,8 +39,13 @@ struct BuiltBlock {
   BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
-  std::function<Real(const MultiFab&)> src_freq, stab_dt;  // optional step bounds (model traits)
-  std::function<void(const double*, double*)> prim_to_cons, cons_to_prim;  // System::CellConvert
+  std::function<Real(const MultiFab&)> src_freq, stab_dt;    // optional step bounds (model traits)
+  std::function<void(const double*, double*)> prim_to_cons;  // System::CellConvert
+  std::function<RecoveryReport(const double*, double*)> cons_to_prim;  // System::CellRecovery
+  UniformCellRecovery batch_cons_to_prim;  // generation-qualified host/Uniform materialization
+  /// Compatibility-only plan lowered once while building a native polar block. System publishes
+  /// this same shared object before installation; the generated closures already capture it.
+  std::shared_ptr<PreparedBoundaryPlan> synthesized_boundary_plan;
   int aux_width =
       0;  // aux_comps<Model>() (Cartesian); unused on the polar path (no ensure_aux_width)
 };
@@ -90,12 +96,13 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
     auto conv = make_cell_convert(m);
     out.prim_to_cons = std::move(conv.first);
     out.cons_to_prim = std::move(conv.second);
+    out.batch_cons_to_prim = make_uniform_recovery_consumer(m);
   });
   return out;
 }
 
 /// Per-transport seam body: the full make_block dispatcher (all fluxes). Used by transports that are NOT
-/// flux-subdivided (exb -- only rusanov reachable via the capability guards; isothermal -- rusanov+hll).
+/// flux-subdivided (exb -- only rusanov reachable via the capability guards).
 template <class TR>
 BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& a) {
   return build_block_for_make(std::move(tr), model, a, [](auto m, const BlockBuildArgs& aa) {
@@ -109,14 +116,19 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
 // IsothermalFlux{cs2, vacuum_floor}).
 BuiltBlock build_block_exb(const ModelSpec& model, const BlockBuildArgs& a);
 
-// Isothermal (3-var fluid) carries two reachable fluxes (rusanov + hll; hllc/roe need 4-var + pressure)
-// x 4 limiters x 15 models -- the post-split long pole -- so it is FLUX-SUBDIVIDED like compressible
-// (ADC-342): one .cpp per reachable flux. System dispatches on the riemann string; an unsupported flux
-// (incl. hllc/roe) is caught by the shared validate_riemann + the registry throw.
+// Isothermal (3-var fluid) carries all four single-solver providers plus the fixed recovery policy
+// through its exact physical
+// capabilities. It stays FLUX-SUBDIVIDED like compressible (ADC-342): one generated .cpp per
+// reachable flux, with no alternate Euler-specific builder.
 BuiltBlock build_block_isothermal_rusanov(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_isothermal_hll(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_hllc(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_roe(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_roe_hll_rusanov_recovery(const ModelSpec& model,
+                                                           const BlockBuildArgs& a);
 
-// Compressible (Euler, 4-var + pressure) is the heaviest transport: all four fluxes are valid, so it is
+// Compressible (Euler, 4-var + pressure) is the heaviest transport: all four single-solver fluxes
+// plus the fixed recovery policy are valid, so it is
 // FLUX-SUBDIVIDED into one .cpp per flux (ADC-335) -- each instantiates only its flux's build_block
 // leaves, so they compile in parallel. System dispatches on the riemann string to the right one (every
 // flux is valid for Euler, so no capability rejection to reproduce; an unknown flux is caught by the
@@ -125,10 +137,13 @@ BuiltBlock build_block_compressible_rusanov(const ModelSpec& model, const BlockB
 BuiltBlock build_block_compressible_hll(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_compressible_hllc(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_compressible_roe(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_compressible_roe_hll_rusanov_recovery(const ModelSpec& model,
+                                                             const BlockBuildArgs& a);
 
 // Polar (ring) seam: VERBATIM polar visitor body (make_block_polar + polar makers). IMEX is rejected on
 // the ring by add_block before this is called. @p aux is &System::Impl::aux (the polar makers read it).
-BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
+BuiltBlock build_block_polar(const ModelSpec& model, const std::string& name,
+                             const std::string& state_identity, const std::string& limiter,
                              const std::string& riemann, const PolarGridContext& pctx,
                              bool recon_prim, Real positivity_floor, const MultiFab* aux);
 

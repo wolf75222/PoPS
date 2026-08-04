@@ -166,9 +166,27 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_cell_temporal_program_refusal"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program_refusal.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
+name = "test_mpi_amr_prepared_boundary_cf"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_amr_rebalance_migration"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_rebalance_migration.cpp"]
+labels = ["backend", "mpi", "amr", "medium"]
 mpi_nproc = [2, 4]
 
 [[cpp.suite]]
@@ -808,6 +826,11 @@ sources = ["tests/cpp/unit/mesh/test_geometry.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_metric_provider"
+sources = ["tests/cpp/unit/mesh/test_nd_metric_provider.cpp"]
+labels = ["unit", "mesh", "geometry", "fast"]
+
+[[cpp.suite]]
 name = "test_load_balance"
 sources = ["tests/cpp/unit/mesh/test_load_balance.cpp"]
 labels = ["unit", "mesh", "fast"]
@@ -816,6 +839,78 @@ labels = ["unit", "mesh", "fast"]
 name = "test_multifab"
 sources = ["tests/cpp/unit/mesh/test_multifab.cpp"]
 labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_boundary_schedule"
+sources = ["tests/cpp/unit/mesh/test_nd_boundary_schedule.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_cluster"
+sources = ["tests/cpp/unit/mesh/test_nd_cluster.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_distribution"
+sources = ["tests/cpp/unit/mesh/test_nd_distribution.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_execution"
+sources = ["tests/cpp/unit/mesh/test_nd_execution.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_finite_volume"
+sources = ["tests/cpp/unit/numerics/test_nd_finite_volume.cpp"]
+labels = ["unit", "numerics", "spatial", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_flux_ledger"
+sources = ["tests/cpp/unit/amr/test_nd_flux_ledger.cpp"]
+labels = ["unit", "amr", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_hierarchy_plan"
+sources = ["tests/cpp/unit/mesh/test_nd_hierarchy_plan.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_layout"
+sources = ["tests/cpp/unit/mesh/test_nd_layout.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_tag_mask"
+sources = ["tests/cpp/unit/mesh/test_nd_tag_mask.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_topology"
+sources = ["tests/cpp/unit/mesh/test_nd_topology.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_transfer"
+sources = ["tests/cpp/unit/amr/test_nd_transfer.cpp"]
+labels = ["unit", "amr", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_translation_schedule"
+sources = ["tests/cpp/unit/mesh/test_nd_translation_schedule.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_mpi_nd_translation_completion_failstop"
+sources = ["tests/cpp/integration/mpi/test_mpi_nd_translation_completion_failstop.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1]
+
+[[cpp.suite]]
+name = "test_mpi_nd_translation_exchange"
+sources = ["tests/cpp/integration/mpi/test_mpi_nd_translation_exchange.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_patch_range"
@@ -883,6 +978,16 @@ sources = ["tests/cpp/unit/numerics/test_positivity_floor.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_cartesian_nd"
+sources = ["tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_prepared_numerics_gate"
+sources = ["tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_primitive_recon"
 sources = ["tests/cpp/unit/numerics/test_primitive_recon.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -898,8 +1003,18 @@ sources = ["tests/cpp/unit/numerics/test_roe_flux.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_spatial_provider_matrix"
+sources = ["tests/cpp/unit/numerics/test_spatial_provider_matrix.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_splitting"
 sources = ["tests/cpp/unit/numerics/test_splitting.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_variable_recovery_chain"
+sources = ["tests/cpp/unit/numerics/test_variable_recovery_chain.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
@@ -1130,9 +1245,29 @@ sources = ["tests/cpp/unit/mesh/test_prepared_boundary_plan.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_stream_executor"
+sources = ["tests/cpp/unit/runtime/test_prepared_stream_executor.cpp"]
+labels = ["unit", "runtime", "accelerator", "fast"]
+
+[[cpp.suite]]
 name = "test_program_reflux_ledger"
 sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
 labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_temporal_partition_restart"
+sources = ["tests/cpp/integration/amr/test_temporal_partition_restart.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_cell_temporal_partition_executor"
+sources = ["tests/cpp/integration/amr/test_cell_temporal_partition_executor.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_cell_temporal_program_route"
+sources = ["tests/cpp/integration/amr/test_cell_temporal_program_route.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
 
 [[cpp.suite]]
 name = "test_residual_operator"
@@ -1181,6 +1316,8 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_async_balance_cadence_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
 ]

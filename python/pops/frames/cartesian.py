@@ -17,10 +17,15 @@ _SCHEMA_VERSION = 1
 
 
 class CartesianDirection(Enum):
-    """Closed set of directions carried by :class:`Cartesian2D`."""
+    """Closed physical x/y/z component directions.
+
+    :class:`Cartesian2D` carries only x/y as mesh axes; z remains available to type transverse
+    polar components and out-of-plane axial components in a 2.5D model.
+    """
 
     X = "x"
     Y = "y"
+    Z = "z"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +40,11 @@ class CartesianAxis:
 
     @property
     def index(self) -> int:
-        return 0 if self.direction is CartesianDirection.X else 1
+        return {
+            CartesianDirection.X: 0,
+            CartesianDirection.Y: 1,
+            CartesianDirection.Z: 2,
+        }[self.direction]
 
     @property
     def name(self) -> str:
@@ -61,7 +70,7 @@ class CartesianAxis:
         try:
             result = cls(CartesianDirection(data["direction"]))
         except (TypeError, ValueError) as exc:
-            raise ValueError("CartesianAxis direction must be 'x' or 'y'") from exc
+            raise ValueError("CartesianAxis direction must be 'x', 'y', or 'z'") from exc
         if result.to_dict() != dict(data):
             raise ValueError("CartesianAxis data is not canonical")
         return result
@@ -69,6 +78,7 @@ class CartesianAxis:
 
 X_AXIS = CartesianAxis(CartesianDirection.X)
 Y_AXIS = CartesianAxis(CartesianDirection.Y)
+Z_AXIS = CartesianAxis(CartesianDirection.Z)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,5 +137,10 @@ class Cartesian2D:
 
 
 __all__ = [
-    "Cartesian2D", "CartesianAxis", "CartesianDirection", "X_AXIS", "Y_AXIS",
+    "Cartesian2D",
+    "CartesianAxis",
+    "CartesianDirection",
+    "X_AXIS",
+    "Y_AXIS",
+    "Z_AXIS",
 ]

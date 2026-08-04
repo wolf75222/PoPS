@@ -9,6 +9,7 @@
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -21,7 +22,6 @@
 
 namespace pops {
 
-inline constexpr int kNativeDimension = 2;
 inline constexpr int kNativeAmrRefinementRatio = kAmrRefRatio;
 
 struct RuntimeEnvironmentReport {

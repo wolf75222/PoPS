@@ -77,13 +77,16 @@ testable = false
 [docs."docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md"]
 owner = "Romain"
 mode = "warning"
-reviewed = "53db73d068939b24ffdc9dbf2369df86a630374f"
+reviewed = "a82c3aef84fb14e69c836383683584a5085abf0c"
 depends_on = [
   "python/pops/__init__.py",
   "python/pops/_api.py",
   "python/pops/physics/board.py",
   "python/pops/problem/problem.py",
   "python/pops/time/_program/api.py",
+  "scripts/prove_public_api_parity.py",
+  "scripts/release_preflight.py",
+  ".github/workflows/release.yml",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
   "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py",
@@ -91,6 +94,7 @@ depends_on = [
 ]
 tested_by = [
   "tests/python/architecture/test_final_public_api.py",
+  "tests/python/architecture/test_public_api_parity_proof.py",
   "tests/python/architecture/test_release_contract.py",
 ]
 testable = true

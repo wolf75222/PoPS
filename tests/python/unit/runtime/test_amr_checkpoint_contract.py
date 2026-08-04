@@ -16,6 +16,7 @@ from pops._generated_release_contract import (
 )
 from pops.output._checkpoint_collective import restore_checkpoint_payload
 from pops.runtime._amr_checkpoint_contract import (
+    checkpoint_temporal_partition_kind,
     contract_for,
     encode_contract,
     preflight_contract,
@@ -102,6 +103,19 @@ class _Sim:
     def program_clock_manifest(self):
         return [["level", "0", "4", "0", "1", "0.4"], ["logical", "clock.macro", "4"]]
 
+    def program_temporal_partition_manifest(self):
+        return [
+            [
+                "summary",
+                "global",
+                "pops.temporal-partition.global@1",
+                "0",
+                "0",
+                "1",
+                "0",
+            ]
+        ]
+
     def program_flux_ledger_manifest(self):
         return [
             [
@@ -176,7 +190,7 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 4
+    assert contract["schema_version"] == 5
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
@@ -210,6 +224,10 @@ def test_contract_names_guarantee_relations_qualified_histories_and_transfer_pla
     ]
     assert contract["transfer_routes"][0][2:5] == ["route.u", "provider.u", "kernel.linear"]
     assert contract["clocks"][1] == ["logical", "clock.macro", "4"]
+    assert contract["temporal_partition"][0][1:3] == [
+        "global",
+        "pops.temporal-partition.global@1",
+    ]
     assert [row[3] for row in contract["synchronization"]] == ["reflux", "average_down"]
 
 
@@ -217,6 +235,25 @@ def test_preflight_returns_exact_native_payload_and_counters():
     state, regrids, epoch = preflight_contract(_Sim(), _payload())
     assert state == b"\x01\x02\x03"
     assert (regrids, epoch) == (4, 7)
+
+
+def test_checkpoint_temporal_partition_kind_is_strict_and_data_only():
+    payload = _payload()
+    assert checkpoint_temporal_partition_kind(payload) == "global"
+
+    data = json.loads(str(payload["amr_accepted_contract"]))
+    data["temporal_partition"] = [
+        ["summary", "cell_local", "test.partition@1", "7", "8", "16", "2"],
+        ["rung", "0", "1"],
+        ["rung", "1", "1"],
+    ]
+    payload["amr_accepted_contract"] = np.array(json.dumps(data))
+    assert checkpoint_temporal_partition_kind(payload) == "cell_local"
+
+    data["temporal_partition"].append(["not-a-rung"])
+    payload["amr_accepted_contract"] = np.array(json.dumps(data))
+    with pytest.raises(ValueError, match="invalid rung row"):
+        checkpoint_temporal_partition_kind(payload)
 
 
 @pytest.mark.parametrize("mutation", ["ratio", "route", "guarantee"])
@@ -241,6 +278,7 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
         "clocks",
         "ledger",
         "interface_ledger",
+        "temporal_partition",
         "synchronization",
     ],
 )
@@ -251,6 +289,8 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
         data[section][0][1] = "program.block.1"
     elif section in {"ledger", "interface_ledger"}:
         data[section]["accepted_entries"] += 1
+    elif section == "temporal_partition":
+        data[section][0][1] = "cell_local"
     else:
         data[section].append(["tampered"])
     payload["amr_accepted_contract"] = np.array(json.dumps(data))
@@ -344,8 +384,7 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     }
 
     assert (
-        receipt["history_consensus_identity_before"]
-        != receipt["history_consensus_identity_after"]
+        receipt["history_consensus_identity_before"] != receipt["history_consensus_identity_after"]
     )
     # Phase-local all-rank consensus is the contract: interpolation may legitimately change the
     # dense history image while conserved solution components are checked independently.
@@ -437,14 +476,19 @@ def test_incomplete_v5_level_envelope_is_an_offline_migration_input():
     ],
 )
 def test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars(
-    runtime_kind, key, expected,
+    runtime_kind,
+    key,
+    expected,
 ):
-    assert require_exact_payload_version(
-        {key: np.array(expected, dtype=np.int64)},
-        key=key,
-        expected=expected,
-        runtime_kind=runtime_kind,
-    ) == expected
+    assert (
+        require_exact_payload_version(
+            {key: np.array(expected, dtype=np.int64)},
+            key=key,
+            expected=expected,
+            runtime_kind=runtime_kind,
+        )
+        == expected
+    )
 
     for incompatible in (
         np.array(True),
@@ -487,7 +531,9 @@ def test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars(
     ],
 )
 def test_historical_version_refusal_happens_before_restart_transaction(
-    runtime_kind, key, expected,
+    runtime_kind,
+    key,
+    expected,
 ):
     calls = []
 

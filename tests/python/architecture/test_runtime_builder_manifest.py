@@ -32,12 +32,14 @@ GENERATED_CATALOG = (
     REPO_ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
 )
 
-# The 13 (transport, flux) leaf TUs that USED to be hand-written and are now generated. They must NOT
-# reappear as tracked source files; regenerating them into the source tree would defeat the manifest.
+# The historical leaf TUs plus the capability-driven isothermal HLLC/Roe leaves are generated. They
+# must not reappear as tracked source files; generating them into the source tree defeats the manifest.
 GENERATED_LEAF_PATHS = (
     "system/base/system_exb.cpp",
     "system/isothermal/system_isothermal_rusanov.cpp",
     "system/isothermal/system_isothermal_hll.cpp",
+    "system/isothermal/system_isothermal_hllc.cpp",
+    "system/isothermal/system_isothermal_roe.cpp",
     "system/compressible/system_compressible_rusanov.cpp",
     "system/compressible/system_compressible_hll.cpp",
     "system/compressible/system_compressible_hllc.cpp",

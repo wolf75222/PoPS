@@ -37,6 +37,7 @@ class SourcePackageRegistry:
     def register(self, package: SourceComponentPackage) -> SourceComponentPackage:
         if type(package) is not SourceComponentPackage:
             raise TypeError("SourcePackageRegistry accepts exact SourceComponentPackage values")
+        package.verify()
         incoming = []
         for component_id in package.exports.values():
             manifest = package.manifest(component_id)

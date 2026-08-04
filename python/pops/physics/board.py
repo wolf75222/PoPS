@@ -60,7 +60,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
-        "roe_from_jacobian",
+        "roe_from_jacobian", "recovery_admissibility",
     })
 
     def __init__(self, name: Any, *, frame: Any = None) -> None:
@@ -515,6 +515,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._dsl._invalidate_authoring_views()
         self._invalidate_authoring_views()
 
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare physical constraints for native primitive-recovery candidates.
+
+        Each keyword names a component of the model's primitive coordinate system and maps it to a
+        symbolic Boolean expression over that coordinate system.  The single-state native route
+        compiles these predicates into the prepared recovery plan; multi-state recovery policies
+        require a species-qualified provider and are therefore rejected here.
+        """
+        if self._multi_module is not None:
+            raise ValueError(
+                "recovery_admissibility requires a single-state model; multi-species policies "
+                "must be supplied by a species-qualified recovery provider"
+            )
+        self._dsl.recovery_admissibility(
+            **{name: self._to_expr(predicate) for name, predicate in constraints.items()}
+        )
+        self._invalidate_authoring_views()
+
     def scalar(self, name: Any, expr: Any) -> Any:
         """Define a named derived scalar (e.g. pressure, sound speed)."""
         value = self._dsl.primitive(require_name(name, "scalar name"), expr)
@@ -890,7 +908,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._invalidate_authoring_views()
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
-        """Install the generic dense-Jacobian Roe provider, with an optional Harten fix."""
+        """Install dense-Jacobian Roe with a typed Harten/NoEntropyFix policy."""
         self._dsl.roe_from_jacobian(entropy_fix=entropy_fix)
         self._invalidate_authoring_views()
 
@@ -1162,13 +1180,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             compiled = pops.compile(resolved)
 
         ``pops.compile`` captures the operator-first Module and validates ONCE internally; ``lower``
-        (and its ``to_module`` alias) stay ADVANCED / inspection-only. Identical to :pyattr:`module`."""
+        stays ADVANCED / inspection-only and is identical to :pyattr:`module`."""
         return self.module
-
-    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). ADVANCED / inspection only
-    # (ADC-557): the standard case.block(model=m) -> pops.compile flow captures the Module itself;
-    # neither is REQUIRED (pops.compile does the lowering once, internally).
-    to_module = lower
 
     # --- introspection ---
 

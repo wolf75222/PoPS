@@ -213,6 +213,12 @@ class _ProgramSerialization(_ProgramBase):
         transaction = self.transaction_plan()
         if transaction is not None:
             result["step_transaction"] = transaction.to_data()
+        cadence = self.cadence_contract()
+        if not cadence.is_default:
+            result["cadence"] = cadence.to_data()
+        cell_local_time = self.cell_local_time_contract()
+        if cell_local_time is not None:
+            result["cell_local_time"] = cell_local_time.to_data()
         if self._histories:
             result["histories"] = [
                 {

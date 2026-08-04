@@ -115,6 +115,110 @@ TEST(test_program_reflux_ledger, prepared_transition_does_not_skip_right_or_top_
       << "every rejected preflight leaves the parent untouched";
 }
 
+TEST(test_program_reflux_ledger, prepared_local_kernel_routes_exact_face_corrections) {
+  const Box2D coarse_domain{{0, 0}, {7, 7}};
+  const BoxArray coarse_boxes(std::vector<Box2D>{coarse_domain});
+  const BoxArray fine_boxes(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  const DistributionMapping coarse_mapping(coarse_boxes.size(), n_ranks());
+  const DistributionMapping fine_mapping(fine_boxes.size(), n_ranks());
+  AmrLevelMP coarse{MultiFab(coarse_boxes, coarse_mapping, 1, 0), nullptr, Real(0.5), Real(0.5)};
+  AmrLevelMP fine{MultiFab(fine_boxes, fine_mapping, 1, 0), nullptr, Real(0.25), Real(0.25)};
+  coarse.U.set_val(Real(0));
+  fine.U.set_val(Real(0));
+
+  int calls = 0;
+  const auto kernel = [&calls](const PreparedAmrRefluxLocalRequest& request) {
+    ++calls;
+    EXPECT_EQ(*request.transition_identity, "pops://test/reflux");
+    EXPECT_EQ(*request.patch_identity, "pops://test/reflux/patch=0");
+    EXPECT_EQ(request.parent_level, 0);
+    EXPECT_EQ(request.child_level, 1);
+    EXPECT_EQ(request.global_child, 0u);
+    EXPECT_EQ(request.logical_time, (amr::ClockStamp{0, 3, amr::Rational(0, 1), 0.3}));
+    const auto x_size =
+        static_cast<std::size_t>(request.correction.J1 - request.correction.J0 + 1) *
+        static_cast<std::size_t>(request.correction.components);
+    const auto y_size =
+        static_cast<std::size_t>(request.correction.I1 - request.correction.I0 + 1) *
+        static_cast<std::size_t>(request.correction.components);
+    std::fill_n(request.correction.x_low, x_size, Real(3));
+    std::fill_n(request.correction.x_high, x_size, Real(4));
+    std::fill_n(request.correction.y_low, y_size, Real(5));
+    std::fill_n(request.correction.y_high, y_size, Real(6));
+  };
+  auto transition = PreparedAmrProgramRefluxTransition::prepare_with_local_kernel(
+      coarse, fine, coarse_domain, Periodicity{false, false}, 0, "pops://test/reflux", kernel,
+      world_communicator_view());
+
+  EdgeStrip coarse_role = make_strip(2, 5, 2, 5, 1);
+  EdgeStrip fine_role = make_strip(2, 5, 2, 5, 1);
+  coarse_role.cL.assign(4, Real(1));
+  coarse_role.cR.assign(4, Real(1));
+  coarse_role.cB.assign(4, Real(1));
+  coarse_role.cT.assign(4, Real(1));
+  fine_role.fL.assign(4, Real(2));
+  fine_role.fR.assign(4, Real(2));
+  fine_role.fB.assign(4, Real(2));
+  fine_role.fT.assign(4, Real(2));
+  const amr::ClockStamp logical_time{0, 3, amr::Rational(0, 1), 0.3};
+  transition.synchronize_integrated(
+      coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>{coarse_role},
+      std::vector<EdgeStrip>{fine_role}, world_communicator_view(), &logical_time);
+
+  EXPECT_EQ(calls, 1);
+  ASSERT_EQ(coarse.U.local_size(), 1);
+  EXPECT_EQ(coarse.U.fab(0)(1, 3, 0), Real(3));
+  EXPECT_EQ(coarse.U.fab(0)(6, 3, 0), Real(4));
+  EXPECT_EQ(coarse.U.fab(0)(3, 1, 0), Real(5));
+  EXPECT_EQ(coarse.U.fab(0)(3, 6, 0), Real(6));
+  EXPECT_EQ(coarse.U.fab(0)(2, 2, 0), Real(0))
+      << "covered parent cells remain outside the sparse correction";
+}
+
+TEST(test_program_reflux_ledger, prepared_local_kernel_rejects_unwritten_output_atomically) {
+  const Box2D coarse_domain{{0, 0}, {7, 7}};
+  const BoxArray coarse_boxes(std::vector<Box2D>{coarse_domain});
+  const BoxArray fine_boxes(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  const DistributionMapping coarse_mapping(coarse_boxes.size(), n_ranks());
+  const DistributionMapping fine_mapping(fine_boxes.size(), n_ranks());
+  AmrLevelMP coarse{MultiFab(coarse_boxes, coarse_mapping, 1, 0), nullptr, Real(0.5), Real(0.5)};
+  AmrLevelMP fine{MultiFab(fine_boxes, fine_mapping, 1, 0), nullptr, Real(0.25), Real(0.25)};
+  coarse.U.set_val(Real(0));
+  fine.U.set_val(Real(0));
+
+  const auto incomplete = [](const PreparedAmrRefluxLocalRequest& request) {
+    const auto x_size =
+        static_cast<std::size_t>(request.correction.J1 - request.correction.J0 + 1) *
+        static_cast<std::size_t>(request.correction.components);
+    std::fill_n(request.correction.x_low, x_size, Real(1));
+  };
+  auto transition = PreparedAmrProgramRefluxTransition::prepare_with_local_kernel(
+      coarse, fine, coarse_domain, Periodicity{false, false}, 0, "pops://test/reflux", incomplete,
+      world_communicator_view());
+
+  EdgeStrip coarse_role = make_strip(2, 5, 2, 5, 1);
+  EdgeStrip fine_role = make_strip(2, 5, 2, 5, 1);
+  coarse_role.cL.assign(4, Real(1));
+  coarse_role.cR.assign(4, Real(1));
+  coarse_role.cB.assign(4, Real(1));
+  coarse_role.cT.assign(4, Real(1));
+  fine_role.fL.assign(4, Real(2));
+  fine_role.fR.assign(4, Real(2));
+  fine_role.fB.assign(4, Real(2));
+  fine_role.fT.assign(4, Real(2));
+  const amr::ClockStamp logical_time{0, 3, amr::Rational(0, 1), 0.3};
+  EXPECT_THROW(transition.synchronize_integrated(
+                   coarse.U, coarse.dx, coarse.dy, std::vector<EdgeStrip>{coarse_role},
+                   std::vector<EdgeStrip>{fine_role}, world_communicator_view(), &logical_time),
+               std::runtime_error);
+
+  ASSERT_EQ(coarse.U.local_size(), 1);
+  EXPECT_EQ(coarse.U.fab(0)(1, 3, 0), Real(0));
+  EXPECT_EQ(coarse.U.fab(0)(6, 3, 0), Real(0));
+  EXPECT_EQ(coarse.U.fab(0)(3, 1, 0), Real(0));
+  EXPECT_EQ(coarse.U.fab(0)(3, 6, 0), Real(0));
+}
+
 TEST(test_program_reflux_ledger, edge_flux_axpy_rejects_shifted_equal_width_footprints) {
   EdgeFlux destination;
   destination.fine.push_back(make_strip(2, 5, 2, 5, 1));

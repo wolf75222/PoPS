@@ -35,7 +35,9 @@ interprets package JSON.
 The JSON package schema is strict and versioned. It contains the complete `ComponentManifest` data,
 explicit exports, payload digests, protocol ABI and a package digest. Paths are canonical relative
 POSIX paths; absolute paths, traversal and resolved escapes are rejected. Payload bytes are read and
-retained at load time, so compilation does not trust a later mutable source path.
+retained at load time, so compilation does not trust a later mutable source path. The retained
+manifest, package identity and every source/header/IR digest are re-authenticated when authoring,
+registering and immediately before compilation; the Python value's type alone is never authority.
 
 Source registration compares the complete component-manifest digest and source-package digest.
 Compiled registration compares the component, exact platform identity, artifact identity and binary
@@ -57,8 +59,9 @@ are reused only when their bytes authenticate to the same binary identity.
 table layouts, plus the version of the common request/value ABI. The complete declaration feeds the
 catalog digest. The generator emits `pops.interfaces`, the Python route data and
 `generated_component_abi.hpp` together; `--check` makes any hand-edited drift fail CI. The current
-protocol includes separate tables for numerical flux, ghost boundary, field-boundary closure,
-tagging, clustering, transfer, reflux, field solve, writer and field topology. Adding an
+protocol includes separate tables for numerical flux, ghost boundary, post-Riemann boundary-flux
+transformation, field-boundary closure, tagging, clustering, transfer, reflux, field solve, writer
+and field topology. Adding an
 implementation requires no central scientific switch.
 
 The installed CPU route proves 2D, `float64`, host execution. It supports source/header payloads and
@@ -88,4 +91,10 @@ artifacts on the declared failure path.
 
 Other devices, scalar types and dimensions remain unavailable until a target variant and every
 interface operation prove them. The wheel ships the exact signed PoPS header tree under
-`pops/include`, so AOT compilation does not depend on a source checkout.
+`pops/include`, so AOT compilation does not depend on a source checkout. The release gate proves
+this independently of the ordinary source conformance lane: it clears `POPS_INCLUDE`, imports the
+retained installed wheel with an empty `PYTHONPATH`, requires `pops_include()` to resolve exactly to
+that wheel's `pops/include`, and rejects a stub or mocked native route before compiling, installing,
+loading and invoking the external numerical-flux component. The one exact pytest node produces an
+all-pass JUnit report; release preflight reauthenticates its node ID, command, wheel-header authority
+and report digest, and refuses skips, xfails, duplicate execution or a checkout header override.

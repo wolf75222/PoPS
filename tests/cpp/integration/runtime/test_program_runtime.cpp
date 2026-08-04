@@ -15,7 +15,8 @@
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/program/program_context.hpp>      // ProgramContext (the seam under test)
+#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
@@ -63,6 +64,16 @@ struct UnitDensitySource {
 };
 using SourcedGasModel = CompositeModel<Euler, UnitDensitySource, NoEll>;
 
+struct DrainingDensitySource {
+  template <class State>
+  POPS_HD State apply(const State&, const Aux&) const {
+    State source{};
+    source[0] = Real(-1);
+    return source;
+  }
+};
+using DrainingGasModel = CompositeModel<Euler, DrainingDensitySource, NoEll>;
+
 struct ProjectingEuler : Euler {
   POPS_HD State project(const State& input, const Aux&) const {
     State output = input;
@@ -104,6 +115,12 @@ static void add_sourced_gas(System& system, double gamma) {
                      "none", "rusanov", "conservative", "explicit", gamma);
 }
 
+static void add_draining_gas(System& system, const std::string& name, double gamma) {
+  add_compiled_model(
+      system, name, DrainingGasModel{Euler{gamma}, DrainingDensitySource{}, NoEll{}}, "none",
+      "rusanov", "conservative", "explicit", gamma);
+}
+
 static void add_projecting_gas(System& system, double gamma) {
   ProjectingEuler transport;
   transport.gamma = gamma;
@@ -115,6 +132,109 @@ static void add_diffusive_gas(System& system, double gamma) {
   DiffusiveGasModel model;
   model.hyp.gamma = gamma;
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
+}
+
+TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '1');
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
+
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+  state.run_balance_due_window(2, "test", [&] {
+    EXPECT_TRUE(state.balance_consumer_is_due(contract, route, 3, "test"));
+    EXPECT_FALSE(state.balance_consumer_is_due(contract, route, 2, "test"));
+    EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 0, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW((void)state.balance_consumer_is_due("forged", route, 3, "test"),
+                 std::invalid_argument);
+  });
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+
+  EXPECT_THROW(
+      state.run_balance_due_window(3, "test", [] { throw std::runtime_error("attempt rejected"); }),
+      std::runtime_error);
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 4, "test"), std::logic_error);
+}
+
+TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe) {
+  runtime::program::ProgramRuntimeState state;
+
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+  EXPECT_THROW(state.note_automatic_balance_capture_due(true, "test"), std::logic_error);
+  state.run_balance_due_window(0, "test", [&] {
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_FALSE(state.automatic_balance_capture_due());
+    state.note_automatic_balance_capture_due(true, "test");
+    EXPECT_TRUE(state.automatic_balance_capture_due());
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_TRUE(state.automatic_balance_capture_due());
+  });
+  EXPECT_TRUE(state.automatic_balance_capture_due());
+
+  state.begin_step_projection_report();
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+  state.run_balance_replay("test", [&] {
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_FALSE(state.automatic_balance_capture_due());
+    EXPECT_THROW(state.note_automatic_balance_capture_due(true, "test"), std::logic_error);
+  });
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+}
+
+TEST(ProgramRuntime, SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '5');
+  state.begin_step_projection_report();
+  state.run_balance_due_window(0, "test", [&] {
+    state.note_automatic_balance_capture_due(true, "test");
+    state.record_balance_term(route, "storage_change", 1.0, "test");
+    state.record_balance_term(route, "outward_boundary_flux", 2.0, "test");
+    state.record_balance_term(route, "sources", 3.0, "test");
+    state.record_automatic_balance_term(2, 0, 1, "projection", 0.25, "test");
+    state.record_automatic_balance_term(2, 1, 1, "projection", 0.75, "test");
+    state.record_automatic_balance_term(2, 0, 1, "reflux", 0.5, "test");
+  });
+  state.complete_balance_step(true);
+
+  const auto selected =
+      state.selected_accepted_balance_terms(route, 2, 1, {0, 1}, {"projection", "reflux"}, "test");
+  EXPECT_EQ(selected.at("storage_change"), 1.0);
+  EXPECT_EQ(selected.at("outward_boundary_flux"), 2.0);
+  EXPECT_EQ(selected.at("sources"), 3.0);
+  EXPECT_EQ(selected.at("projection"), 1.0);
+  EXPECT_EQ(selected.at("reflux"), 0.5);
+
+  EXPECT_THROW((void)state.selected_accepted_balance_terms(route, 2, 1, {0, 1, 2},
+                                                           {"projection", "reflux"}, "test"),
+               std::runtime_error);
+  EXPECT_THROW((void)state.selected_accepted_balance_terms(route, 2, 1, {0, 2},
+                                                           {"projection", "reflux"}, "test"),
+               std::invalid_argument);
+}
+
+TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '3');
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '4');
+
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
+  state.run_balance_replay("test", [&] {
+    EXPECT_FALSE(state.balance_consumer_is_due(contract, route, 2, "test"));
+    EXPECT_THROW((void)state.balance_consumer_is_due("forged", route, 2, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 0, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW(state.run_balance_replay("nested", [] {}), std::logic_error);
+    EXPECT_THROW(state.run_balance_due_window(1, "nested", [] {}), std::logic_error);
+  });
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
+  state.run_balance_due_window(1, "test", [&] {
+    EXPECT_THROW(state.run_balance_replay("window", [] {}), std::logic_error);
+  });
+
+  EXPECT_THROW(state.run_balance_replay("test", [] { throw std::runtime_error("replay failed"); }),
+               std::runtime_error);
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
 }
 
 TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
@@ -310,6 +430,65 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.0);
   EXPECT_EQ(catchup.program_cadence_window_steps(), 0);
   EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  runtime::program::ProgramContext context(&system);
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '7');
+  const std::array<std::pair<const char*, double>, 5> records{{
+      {"storage_change", 1.0},
+      {"outward_boundary_flux", 2.0},
+      {"sources", 3.0},
+      {"reflux", 4.0},
+      {"projection", 5.0},
+  }};
+  context.install([&](double) {
+    for (const auto& [name, value] : records)
+      context.record_balance_term(route, name, value);
+  });
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/3);
+
+  const auto step_and_read = [&]() {
+    system.begin_step_transaction();
+    system.step(0.1);
+    const auto balance = system.accepted_balance_terms(route);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+    return balance;
+  };
+
+  for (int held = 0; held < 2; ++held) {
+    const auto balance = step_and_read();
+    ASSERT_EQ(balance.size(), records.size());
+    for (const auto& [name, _value] : records)
+      EXPECT_DOUBLE_EQ(balance.at(name), 0.0);
+  }
+
+  system.begin_step_transaction();
+  system.step(0.1);
+  const auto rejected_due = system.accepted_balance_terms(route);
+  for (const auto& [name, value] : records)
+    EXPECT_DOUBLE_EQ(rejected_due.at(name), value);
+  system.rollback_step_transaction();
+  system.begin_step_transaction();
+  const auto restored_held = system.accepted_balance_terms(route);
+  for (const auto& [name, _value] : records)
+    EXPECT_DOUBLE_EQ(restored_held.at(name), 0.0);
+  system.rollback_step_transaction();
+
+  const auto due = step_and_read();
+  ASSERT_EQ(due.size(), records.size());
+  for (const auto& [name, value] : records)
+    EXPECT_DOUBLE_EQ(due.at(name), value);
 }
 
 TEST(ProgramRuntime,
@@ -805,6 +984,101 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   }
   EXPECT_GT(active_cells, 0);
   EXPECT_GT(inactive_cells, 0);
+}
+
+TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System system(cfg);
+  add_draining_gas(system, "gas", gamma);
+  std::vector<double> initial(4 * cells);
+  fill_ic(initial, n, gamma);
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.source-recovery");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& live = context.state(0);
+    MultiFab& source = context.rhs_scratch(920001, 0, live);
+    MultiFab& candidate = context.scratch_state(920002, 0, live);
+    context.source_default_into(0, live, source);
+    context.lincomb(candidate, Real(1), live, Real(0), live);
+    context.axpy(candidate, Real(step), source);
+    context.commit_many({{&live, &candidate}});
+  });
+  system.set_program_block_map({0});
+
+  system.step(0.25);
+  const std::vector<double> accepted = system.get_state("gas");
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    EXPECT_DOUBLE_EQ(accepted[cell], 0.75);
+  EXPECT_DOUBLE_EQ(system.time(), 0.25);
+  EXPECT_EQ(system.macro_step(), 1);
+}
+
+TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System system(cfg);
+  add_draining_gas(system, "first", gamma);
+  add_draining_gas(system, "second", gamma);
+  std::vector<double> initial(4 * cells);
+  fill_ic(initial, n, gamma);
+  system.set_state("first", initial);
+  system.set_state("second", initial);
+  system.set_program_block_map({0, 1});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.source-recovery-multiblock");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& first = context.state(0);
+    MultiFab& second = context.state(1);
+    MultiFab& first_source = context.rhs_scratch(920011, 0, first);
+    MultiFab& second_source = context.rhs_scratch(920012, 1, second);
+    MultiFab& first_candidate = context.scratch_state(920013, 0, first);
+    MultiFab& second_candidate = context.scratch_state(920014, 1, second);
+    context.source_default_into(0, first, first_source);
+    context.source_default_into(1, second, second_source);
+    context.lincomb(first_candidate, Real(1), first, Real(0), first);
+    context.lincomb(second_candidate, Real(1), second, Real(0), second);
+    context.axpy(first_candidate, Real(step), first_source);
+    context.axpy(second_candidate, Real(2) * Real(step), second_source);
+    context.commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
+  });
+  system.set_program_block_map({0, 1});
+
+  // The first block reaches rho=0.5 and is valid, while the second reaches rho=0.  If commit_many
+  // copied as it iterated, the first live state would leak before the second recovery refusal.
+  try {
+    system.step(0.5);
+    FAIL() << "an unrecoverable multi-block model-source endpoint must not publish";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(system.get_state("first"), initial);
+  EXPECT_EQ(system.get_state("second"), initial);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
 }
 
 TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells) {
@@ -1338,6 +1612,83 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
   };
   expect_metric_rejection([&] { context.boundary_residual_into_at(point, 0, state, output); });
   expect_metric_rejection([&] { context.boundary_jvp_into_at(point, 0, state, output, output); });
+}
+
+TEST(ProgramRuntime, AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  ModelSpec scalar;
+  scalar.transport = "exb";
+  scalar.source = "none";
+  scalar.elliptic = "charge";
+  system.add_block("tracer", scalar);
+
+  const std::vector<double> accepted(static_cast<std::size_t>(n) * n, 0.25);
+  system.set_state("tracer", accepted);
+  system.set_block_conversion(
+      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
+      [](const double* in, double* out) {
+        RecoveryReport report;
+        if (!std::isfinite(in[0]) || in[0] > 0.75) {
+          report.status = RecoveryStatus::kRejected;
+          report.cause = RecoveryCause::kInadmissibleCandidate;
+          report.failing_component = 0;
+          return report;
+        }
+        out[0] = in[0];
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+
+  EXPECT_THROW(system.set_analytic_expression_state(
+                   "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{1.0}}),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_THROW(system.set_analytic_mapped_state("tracer", {{"input", "constant", "add"}},
+                                                {{0.0, 1.0, 0.0}}, {"state:0"}),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_THROW(system.set_analytic_gaussian_state("tracer", 0.5, 0.5, 1.0, 0.0, 16.0),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_EQ(system.set_analytic_expression_state(
+                "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.5}}),
+            static_cast<std::int64_t>(n) * n);
+  EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
+}
+
+TEST(ProgramRuntime, AnalyticInitialStatePublishesWhenPreparedRecoveryAcceptsEveryCell) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  ModelSpec scalar;
+  scalar.transport = "exb";
+  scalar.source = "none";
+  scalar.elliptic = "charge";
+  system.add_block("tracer", scalar);
+  system.set_block_conversion(
+      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
+      [](const double* in, double* out) {
+        RecoveryReport report;
+        out[0] = in[0];
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+
+  EXPECT_EQ(system.set_analytic_expression_state(
+                "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.5}}),
+            static_cast<std::int64_t>(n) * n);
+  EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
 }
 
 TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock) {

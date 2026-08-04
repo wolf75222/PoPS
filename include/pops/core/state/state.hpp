@@ -103,6 +103,12 @@ POPS_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 // on the DSL side (python/pops/dsl.py) if more than four named fields per model are wanted.
 inline constexpr int kAuxMaxExtra = 4;
 
+// Width of the base provider channel and first model-named provider component.  These constants
+// precede Aux because both the legacy source-term carrier and the exact physical-flux provider pack
+// implement the same compile-time read protocol.
+inline constexpr int kAuxBaseComps = 3;
+inline constexpr int kAuxNamedBase = kAuxBaseComps + 2;  // = 5 (after B_z=3, T_e=4)
+
 /// @brief POINTWISE auxiliary fields shared with the physics: single coupling channel.
 ///
 /// Role: carry to the point the outputs of the elliptic solver and the fields provided by the system,
@@ -146,18 +152,32 @@ struct Aux {
     assert(k >= 0 && k < kAuxMaxExtra);
     return (k >= 0 && k < kAuxMaxExtra) ? extra[k] : std::numeric_limits<Real>::quiet_NaN();
   }
-};
 
-// Width of the aux channel of the base contract (phi, grad phi). A model reading additional
-// fields declares a larger n_aux; cf. aux_comps()/load_aux().
-inline constexpr int kAuxBaseComps = 3;
+  /// Compile-time provider read used by pointwise physical laws.  Source/implicit routes may still
+  /// carry Aux, while finite-volume fluxes pass the exact model-qualified pack; the law therefore
+  /// depends on this narrow read protocol rather than on either storage representation.
+  template <int Component>
+  POPS_HD Real flux_provider() const {
+    static_assert(Component >= 0 && Component < kAuxNamedBase + kAuxMaxExtra,
+                  "physical flux provider component is outside the declared native capability");
+    if constexpr (Component == 0)
+      return phi;
+    else if constexpr (Component == 1)
+      return grad_x;
+    else if constexpr (Component == 2)
+      return grad_y;
+#define POPS_AUX_PROVIDER_READ(name, index) else if constexpr (Component == index) return name;
+    POPS_AUX_FIELDS(POPS_AUX_PROVIDER_READ)
+#undef POPS_AUX_PROVIDER_READ
+    else return extra[Component - kAuxNamedBase];
+  }
+};
 
 // First component of the NAMED aux fields (ADC-70 phase 1): right AFTER the canonical fields
 // B_z (3) and T_e (4), so index 5. A model declaring K named fields sets n_aux = kAuxNamedBase +
 // K; extra[k] is component (kAuxNamedBase + k). Placed AFTER the canonical channel so that user
 // names never encroach on B_z / T_e (which keep their dedicated paths
 // set_magnetic_field / set_electron_temperature_from). Python MIRROR: AUX_NAMED_BASE (dsl.py).
-inline constexpr int kAuxNamedBase = kAuxBaseComps + 2;  // = 5 (after B_z=3, T_e=4)
 
 // Safeguard: the base of the named fields must be STRICTLY beyond the last canonical extra
 // field (the largest index of POPS_AUX_FIELDS + 1). If a canonical field is added beyond T_e,

@@ -15,14 +15,77 @@ from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 
 
+_EXTERNAL_PROVIDER_ID = "pops.fields.external-field-solver"
+_EXTERNAL_PROVIDER_VERSION = 2
+_EXTERNAL_PROVIDER_INTERFACE = "pops.prepared-field-solver-provider@1"
+_EXTERNAL_RESOLVER_ID = "pops.fields.external-field-solver.resolve@3"
+_EXTERNAL_INSTALLER_ID = "pops.fields.external-field-solver.install@3"
+_EXTERNAL_USE_POLICY_ID = "pops.fields.external-field-solver.use"
+_EXTERNAL_USE_POLICY_VERSION = 4
+_EXTERNAL_ADAPTER_ID = "pops.fields.external-field-solver.system-amr-host@2"
+_EXTERNAL_LEVEL_LOCAL_POLICY = {
+    "policy_id": "pops.field-hierarchy.level-local",
+    "interface_version": 1,
+    "option_schema": "pops.field-hierarchy.options.empty@1",
+    "options": {},
+}
+_EXTERNAL_COMPOSITE_POLICY = {
+    "policy_id": "pops.field-hierarchy.composite",
+    "interface_version": 1,
+    "option_schema": "pops.field-hierarchy.options.empty@1",
+    "options": {},
+}
+
+
+def _external_adapter_capabilities() -> dict[str, Any]:
+    """Return the exact proved adapter envelope, detached for public inspection."""
+    return {
+        "provider_id": _EXTERNAL_PROVIDER_ID,
+        "provider_version": _EXTERNAL_PROVIDER_VERSION,
+        "adapter_identity": _EXTERNAL_ADAPTER_ID,
+        "targets": ["system", "amr_system"],
+        "layout_kinds": ["uniform", "amr"],
+        "max_levels": None,
+        "refinement_ratios": [2],
+        "hierarchy_policies": [
+            _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
+            _EXTERNAL_COMPOSITE_POLICY["policy_id"],
+        ],
+        "abi_patch_level_metadata": True,
+        "hierarchy_materialization": True,
+        "amr_provider_bridge": True,
+        "binary_coarse_fine_coverage": True,
+        "execution": "host-serial-or-declared-mpi-hierarchy-batch",
+        "components": ["FieldTopology@2", "FieldSolver@2"],
+    }
+
+
+def _external_provider_authority() -> dict[str, Any]:
+    """Project the provider authority without capturing the process-local registry object."""
+    return {
+        "schema_version": 1,
+        "interface": _EXTERNAL_PROVIDER_INTERFACE,
+        "provider_id": _EXTERNAL_PROVIDER_ID,
+        "version": _EXTERNAL_PROVIDER_VERSION,
+        "resolver_id": _EXTERNAL_RESOLVER_ID,
+        "installer_id": _EXTERNAL_INSTALLER_ID,
+        "use_policy": {
+            "policy_id": _EXTERNAL_USE_POLICY_ID,
+            "version": _EXTERNAL_USE_POLICY_VERSION,
+            "capabilities": _external_adapter_capabilities(),
+        },
+    }
+
+
 def _declared_execution(component: Any) -> dict[str, bool]:
     variants = [
         row for row in component.component_manifest.target["variants"]
         if row["dimension"] == 2 and row["scalar"] == "float64"
     ]
+    host = [row for row in variants if row["device"] in ("cpu", "host")]
     return {
-        "host": any(row["device"] in ("cpu", "host") for row in variants),
-        "mpi": any("mpi" in row["features"] for row in variants),
+        "host": bool(host),
+        "mpi": any("mpi" in row["features"] for row in host),
         "gpu": any(row["device"] not in ("cpu", "host") for row in variants),
     }
 
@@ -65,8 +128,9 @@ class ExternalFieldSolver(Descriptor):
 
     ``relative_tolerance``, ``absolute_tolerance`` and ``max_iterations`` are request controls of
     the generated ``FieldSolver`` ABI.  Package/component parameters remain owned independently by
-    each :class:`~pops.external.ExternalComponent` and are prepared exactly once by the native
-    loader.
+    each :class:`~pops.external.ExternalComponent`. The uniform adapter prepares one cached state;
+    the AMR adapter prepares one fresh state pair per materialized hierarchy and recreates it after
+    regridding.
     """
 
     category = "field_solver_provider"
@@ -133,13 +197,21 @@ class ExternalFieldSolver(Descriptor):
         }
 
     def to_data(self) -> dict[str, Any]:
-        return {"type": type(self).__name__, "options": self.options()}
+        return {
+            "type": type(self).__name__,
+            "provider": _external_provider_authority(),
+            "options": self.options(),
+        }
 
     def requirements(self) -> RequirementSet:
         return RequirementSet({
             "external_components": True,
             "field_topology": True,
-            "field_topology_contract": "uniform_cartesian_full_material_v1",
+            "field_topology_contract": "cartesian_binary_coverage_hierarchy_v1",
+            "field_hierarchy_policies": (
+                _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
+                _EXTERNAL_COMPOSITE_POLICY["policy_id"],
+            ),
             "host_execution": True,
         })
 
@@ -150,16 +222,22 @@ class ExternalFieldSolver(Descriptor):
             and solver["declared_execution"][name]
             for name in ("host", "mpi", "gpu")
         }
-        adapter = {"host": True, "mpi": False, "gpu": False}
-        # The component pair may declare broader targets, but this concrete adapter intentionally
-        # intersects them with the runtime facts it actually implements.  It passes host views and
-        # does not yet publish an inter-rank topology-consensus proof, hence serial host is the sole
-        # truthful route in v2.
+        adapter = {"host": True, "mpi": True, "gpu": False}
+        provider = _external_provider_authority()
         return CapabilitySet({
+            "provider": provider,
+            "adapter": provider["use_policy"]["capabilities"],
             "external_field_solver_v2": True,
             "topology_provenance": True,
-            "topology_contract": "uniform_cartesian_full_material_v1",
-            "execution_adapter": "host_serial_multi_patch_batch_v1",
+            "topology_contract": "cartesian_binary_coverage_hierarchy_v1",
+            "execution_adapter": "host_serial_or_declared_mpi_hierarchy_batch_v2",
+            "supports_amr": True,
+            "max_levels": None,
+            "refinement_ratios": (2,),
+            "hierarchy_policies": (
+                _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
+                _EXTERNAL_COMPOSITE_POLICY["policy_id"],
+            ),
             "host": declared["host"] and adapter["host"],
             "mpi": declared["mpi"] and adapter["mpi"],
             "gpu": declared["gpu"] and adapter["gpu"],
@@ -214,6 +292,7 @@ class PreparedFieldSolver(Descriptor):
 def _external_resolver(options, facts, where):
     from ._prepared_field_solver_registry import PreparedFieldSolverResolution
 
+    _validate_external_facts(facts, where)
     if not isinstance(options, Mapping) or set(options) != {"topology", "solver", "request"}:
         raise TypeError("%s external field solver options have an invalid shape" % where)
     topology = options["topology"]
@@ -234,6 +313,9 @@ def _external_resolver(options, facts, where):
     return PreparedFieldSolverResolution(
         {
             "schema_identity": "pops.external.field-solver-request@2",
+            "provider_id": _EXTERNAL_PROVIDER_ID,
+            "provider_version": _EXTERNAL_PROVIDER_VERSION,
+            "adapter_identity": _EXTERNAL_ADAPTER_ID,
             "options": {
                 "relative_tolerance": relative,
                 "absolute_tolerance": absolute,
@@ -243,7 +325,13 @@ def _external_resolver(options, facts, where):
         {
             "provider_id": "pops.external.field-topology",
             "version": 1,
+            "adapter_identity": _EXTERNAL_ADAPTER_ID,
             "topology_identity": facts.layout["topology_identity"],
+            "layout": {
+                "kind": facts.layout["kind"],
+                "levels": facts.layout["levels"],
+            },
+            "hierarchy_policy": dict(facts.hierarchy),
             "component": dict(topology),
         },
         (dict(topology), dict(solver)),
@@ -259,17 +347,75 @@ def _finite_nonnegative(value: Any, *, where: str) -> float:
     return result
 
 
-def _validate_external_use(use, where):
-    facts = use.facts
-    if facts.target != "system":
+def _validate_external_facts(facts: Any, where: str) -> None:
+    hierarchy = facts.hierarchy
+    requested_policy = hierarchy.get("policy_id", "<missing>")
+    if facts.target not in ("system", "amr_system"):
         raise ValueError(
-            "%s external FieldSolver@2 requires a hierarchy-aware interface for AMR" % where
+            "%s provider %s supports only system and amr_system, got target=%r, layout=%r, "
+            "levels=%r, hierarchy_policy=%r"
+            % (
+                where,
+                _EXTERNAL_PROVIDER_ID,
+                facts.target,
+                facts.layout.get("kind"),
+                facts.layout.get("levels"),
+                requested_policy,
+            )
         )
-    if facts.layout.get("kind") != "uniform" or facts.layout.get("levels") != 1:
-        raise ValueError("%s external FieldSolver@2 requires one uniform layout" % where)
-    if facts.layout.get("embedded_boundary") or facts.layout.get("adaptive"):
+    policy = (
+        _EXTERNAL_LEVEL_LOCAL_POLICY
+        if facts.target == "system"
+        else _EXTERNAL_COMPOSITE_POLICY
+    )
+    expected_kind = "uniform" if facts.target == "system" else "amr"
+    levels = facts.layout.get("levels")
+    if (
+        facts.layout.get("kind") != expected_kind
+        or type(levels) is not int
+        or levels < 1
+        or (facts.target == "system" and levels != 1)
+    ):
         raise ValueError(
-            "%s external FieldSolver@2 requires a full-material non-adaptive topology" % where
+            "%s provider %s adapter %s requires %s layout, got kind=%r levels=%r"
+            % (
+                where,
+                _EXTERNAL_PROVIDER_ID,
+                _EXTERNAL_ADAPTER_ID,
+                "one uniform level" if facts.target == "system" else "one or more AMR levels",
+                facts.layout.get("kind"),
+                levels,
+            )
+        )
+    transition_ratios = tuple(facts.layout.get("transition_ratios", ()))
+    if facts.target == "amr_system" and (
+        len(transition_ratios) != levels - 1
+        or any(type(ratio) is not int or ratio != 2 for ratio in transition_ratios)
+    ):
+        raise ValueError(
+            "%s provider %s adapter %s requires one ratio-2 transition between each AMR level, "
+            "got %r"
+            % (where, _EXTERNAL_PROVIDER_ID, _EXTERNAL_ADAPTER_ID, transition_ratios)
+        )
+    if (
+        requested_policy != policy["policy_id"]
+        or hierarchy.get("interface_version") != policy["interface_version"]
+        or hierarchy.get("option_schema") != policy["option_schema"]
+        or dict(hierarchy.get("options", {})) != policy["options"]
+    ):
+        raise ValueError(
+            "%s provider %s adapter %s supports only hierarchy policy %s, got %r"
+            % (
+                where,
+                _EXTERNAL_PROVIDER_ID,
+                _EXTERNAL_ADAPTER_ID,
+                policy["policy_id"],
+                requested_policy,
+            )
+        )
+    if facts.layout.get("embedded_boundary"):
+        raise ValueError(
+            "%s external FieldSolver@2 does not carry embedded/cut-cell material geometry" % where
         )
     if facts.operator.get("screened"):
         raise ValueError(
@@ -283,6 +429,11 @@ def _validate_external_use(use, where):
         raise ValueError(
             "%s external FieldSolver@2 has no shared nonlinear iterate/JVP protocol" % where
         )
+
+
+def _validate_external_use(use, where):
+    facts = use.facts
+    _validate_external_facts(facts, where)
     bindings = use.resolution.component_bindings
     if len(bindings) != 2 or any(
         not binding.get("declared_execution", {}).get("host") for binding in bindings
@@ -308,24 +459,21 @@ from ._prepared_field_solver_registry import (  # noqa: E402
 
 
 _EXTERNAL_FIELD_SOLVER_PROVIDER = register(Provider(
-    provider_id="pops.fields.external-field-solver",
-    version=2,
-    resolver_id="pops.fields.external-field-solver.resolve@2",
-    installer_id="pops.fields.external-field-solver.install@2",
+    provider_id=_EXTERNAL_PROVIDER_ID,
+    version=_EXTERNAL_PROVIDER_VERSION,
+    resolver_id=_EXTERNAL_RESOLVER_ID,
+    installer_id=_EXTERNAL_INSTALLER_ID,
     use_policy=UsePolicy(
-        "pops.fields.external-field-solver.use",
-        2,
-        {
-            "targets": ("system",),
-            "topology": "uniform-cartesian-full-material",
-            "execution": "host-serial-multi-patch-batch",
-            "components": ("FieldTopology@2", "FieldSolver@2"),
-        },
+        _EXTERNAL_USE_POLICY_ID,
+        _EXTERNAL_USE_POLICY_VERSION,
+        _external_adapter_capabilities(),
         _validate_external_use,
     ),
     resolver=_external_resolver,
     native_installer=_install_external,
 ))
+if _EXTERNAL_FIELD_SOLVER_PROVIDER.authority() != _external_provider_authority():
+    raise RuntimeError("external field solver provider authority projection is inconsistent")
 
 
 __all__ = [

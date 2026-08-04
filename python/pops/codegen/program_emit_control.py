@@ -171,7 +171,8 @@ def _emit_contiguous_rhs_group(
 
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
-               field_plans: Any = None) -> tuple:
+               field_plans: Any = None, balance_due_contract: Any = None,
+               has_shared_interface_implicit_jacvec: bool = False) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -243,6 +244,18 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                           -1 if owner_index is None else int(owner_index),
                           json.dumps(state_identity), json.dumps(space_identity),
                           json.dumps(row["clock"]), json.dumps(interpolation)))
+    from pops.codegen.program_balance_due import (
+        emit_balance_due_guards,
+        prepare_balance_due_lowering,
+    )
+    if balance_due_contract is None:
+        from pops._balance_due_contract import BalanceDueContract
+        balance_due_contract = BalanceDueContract.from_consumer_graph(None)
+    emit_balance_due_guards(
+        prepare_balance_due_lowering(program, balance_due_contract),
+        var,
+        lines,
+    )
     values = list(program._values)
     index = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
@@ -270,7 +283,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
-                 target=target, field_plans=field_plans)
+                 target=target, field_plans=field_plans,
+                 has_shared_interface_implicit_jacvec=(
+                     has_shared_interface_implicit_jacvec
+                 ))
         index += 1
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
@@ -292,7 +308,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     return prelude_src, body_src, authorities
 
 def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
-                               field_plans: Any = None) -> tuple | None:
+                               field_plans: Any = None, *,
+                               has_shared_interface_implicit_jacvec: bool) -> tuple | None:
     """Emit gather / solve-once / publish regions for one hierarchy-scoped linear solve.
 
     The transform keys only on the generic solve scope.  It does not recognize a physical scheme.
@@ -301,6 +318,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
 
+    if type(has_shared_interface_implicit_jacvec) is not bool:
+        raise TypeError(
+            "AMR hierarchy lowering requires exact shared-interface JVP evidence"
+        )
     solves = [v for v in all_ops(program) if v.op == "solve_linear"]
     scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"]
     if not scoped:
@@ -407,7 +428,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             ignored_prelude = []
             _emit_op(program, value, bases.get(value.block), committed_ids, var, model, emitted,
                      ignored_prelude, block_idx, target="amr_system",
-                     field_plans=field_plans or {})
+                     field_plans=field_plans or {},
+                     has_shared_interface_implicit_jacvec=(
+                         has_shared_interface_implicit_jacvec
+                     ))
             if phase == "gather":
                 keep = index < split
             elif phase == "solve":

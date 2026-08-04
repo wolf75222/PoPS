@@ -36,6 +36,8 @@ REQUIRED_GHOST_DEPTH = MappingProxyType({
     "none": 1,
     "minmod": 2,
     "vanleer": 2,
+    "mc": 2,
+    "superbee": 2,
     "weno5": 3,
 })
 
@@ -48,7 +50,7 @@ REQUIRED_GHOST_DEPTH = MappingProxyType({
 #: halo a caller passes), never against this assumption -- rejecting WENO5 by default would be a
 #: FALSE POSITIVE that breaks a working problem.
 INSPECT_GHOST_DEPTH_ASSUMPTION = max(
-    REQUIRED_GHOST_DEPTH[token] for token in ("minmod", "vanleer")
+    REQUIRED_GHOST_DEPTH[token] for token in ("minmod", "vanleer", "mc", "superbee")
 )
 
 
@@ -124,7 +126,8 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
 
     ``None`` (the default) keeps the native ``kWenoEpsilon`` literal -- the descriptor options are
     unchanged (omit-when-default) and the emitted stencil is bit-identical. A finite positive value
-    is carried in the descriptor options and threaded to the native ``Weno5::eps`` by ``add_block``.
+    is carried in the descriptor options and threaded to the native ``Weno5::eps`` by the
+    private ``add_equation`` installation seam.
     On AMR, descriptor availability is conditional on the resolved coarse/fine authority: it must
     certify order 5 and ghost depth 3. The builtin capability family selects its conservative
     order-5 route from that resolved requirement; an insufficient external provider is refused
@@ -156,7 +159,8 @@ def _muscl(limiter: Any = None) -> Any:
     selected = Minmod() if limiter is None else limiter
     if isinstance(selected, str) or getattr(selected, "category", None) != "limiter":
         raise TypeError(
-            "MUSCL(limiter=) requires a typed limiter descriptor such as Minmod() or VanLeer()"
+            "MUSCL(limiter=) requires a typed limiter descriptor such as Minmod(), VanLeer(), "
+            "MC(), or Superbee()"
         )
     route = authenticated_reconstruction_route(selected, require_muscl_limiter=True)
     return _native_reconstruction_descriptor(
@@ -205,7 +209,8 @@ def required_ghost_depth(reconstruction_or_token: Any) -> Any:
     """The ghost depth a reconstruction NEEDS (Spec 5 sec.7 / criterion 11).
 
     Accepts an authenticated native reconstruction descriptor or a canonical lowered scheme token
-    (``"none"`` / ``"minmod"`` / ``"vanleer"`` / ``"weno5"``). Returns ``None`` when the
+    (``"none"`` / ``"minmod"`` / ``"vanleer"`` / ``"mc"`` / ``"superbee"`` /
+    ``"weno5"``). Returns ``None`` when the
     requirement is not declared/known -- the caller then does NOT reject (a missing requirement is
     not a known incompatibility; no false positive).
     """

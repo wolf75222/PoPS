@@ -1,5 +1,4 @@
-"""Chantier POLAIRE (audit 2026-06, section 3) : flux HLL cable sur l'anneau pour le fluide
-isotherme polaire (IsothermalFluxPolar).
+"""Pipeline Riemann capability-driven sur l'anneau isotherme.
 
 CE QUE VERROUILLE CE TEST :
   T1 - DEFAUT BIT-IDENTIQUE : un run polaire isotherme avec riemann='rusanov' (le defaut) est
@@ -7,23 +6,21 @@ CE QUE VERROUILLE CE TEST :
        non-regression vis-a-vis d'avant le patch (impossible dans un seul process), mais le patch ne
        touche PAS la branche rusanov de make_block_polar (ajout d'une branche 'hll' SEPAREE) : le
        defaut reste strictement l'historique.
-  T2 - HLL TOURNE FINI : le meme run avec riemann='hll' avance sans NaN/Inf (le flux signe
-       assemble_rhs_polar<Limiter, HLLFlux> est device-clean, REUTILISE verbatim depuis le cartesien).
-  T3 - HLL DIFFERE DE RUSANOV : HLL est moins diffusif que Rusanov (dissipation ~ |sR - sL| signee au
-       lieu de 2 max|v| symetrique) -> l'etat final differe au-dela du bruit FP. C'est la preuve que
-       le flux injecte est REELLEMENT HLL (et non un alias silencieux de Rusanov).
+  T2 - HLL tourne fini par sa feuille distincte.
+  T3 - HLLC/Roe tournent finis et diffèrent de Rusanov : aucun alias/fallback silencieux.
+  T4 - un transport ExB sans les capacités exactes refuse HLLC/Roe au lieu de changer de solveur.
 
 Le fluide isotherme polaire expose model.wave_speeds (herite d'IsothermalFlux) : c'est la condition
-du gate 'hll' (identique au cartesien block_builder.hpp). Un transport ExB SCALAIRE ne la fournit pas
--> rejet, couvert par test_polar_rejections.test_polar_rejects_hll_on_scalar_exb.
+du gate 'hll' (identique au cartesien block_builder.hpp). Un transport ExB SCALAIRE ne fournit pas
+les capacités HLLC/Roe et le test de refus ci-dessous verrouille l'absence de fallback.
 """
-from pops.numerics.variables import Conservative
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.numerics.riemann import Rusanov, HLL
 import math
 
 import numpy as np
 
+from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
+from pops.numerics.variables import Conservative
 import pops.runtime._engine_descriptors as engine
 from pops.mesh import PolarMesh
 from pops.runtime._engine_descriptors import Dirichlet
@@ -90,6 +87,29 @@ def _state3(sim, nr, nth):
     return np.array(sim.get_state("ions")).reshape(3, nth, nr)
 
 
+def _assert_scalar_rejected(flux, capability):
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=8, ntheta=8))
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
+    model = engine.Model(
+        state=engine.Scalar(),
+        transport=engine.ExB(B0=1.0),
+        source=engine.NoSource(),
+        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+    )
+    try:
+        sim.add_equation(
+            "density",
+            model=model,
+            spatial=engine.Spatial(limiter=Minmod(), flux=flux, recon=Conservative()),
+            time=engine.Explicit(),
+        )
+    except (RuntimeError, ValueError) as error:
+        message = str(error)
+        assert capability in message and "fallback" in message.lower(), message
+        return
+    raise AssertionError("scalar ExB accepted %r without %s" % (flux, capability))
+
+
 def _run(sim, nr, nth, n_steps, dt):
     for _ in range(n_steps):
         sim.step(dt)
@@ -108,18 +128,35 @@ def test_polar_hll():
     s_rus_b = _run(_build(nr, nth, Rusanov(), cs2), nr, nth, n_steps, dt)
     assert np.array_equal(s_rus_a, s_rus_b), "rusanov polaire : non reproductible (T1)"
 
-    # T2 : hll tourne fini.
-    s_hll = _run(_build(nr, nth, HLL(), cs2), nr, nth, n_steps, dt)
-    assert np.all(np.isfinite(s_hll)), "hll polaire : etat non fini (T2)"
+    state = _run(_build(nr, nth, HLL(), cs2), nr, nth, n_steps, dt)
+    assert np.all(np.isfinite(state)), "hll polaire : etat non fini (T2)"
+    diff = float(np.max(np.abs(state - s_rus_a)))
+    assert diff > 1e-8, "hll polaire est un alias/fallback Rusanov (diff=%.3e)" % diff
 
-    # T3 : hll differe de rusanov (au-dela du bruit FP) -> le flux injecte est bien HLL.
-    diff = float(np.max(np.abs(s_hll - s_rus_a)))
-    assert diff > 1e-8, (
-        "hll polaire ne differe pas de rusanov (diff=%.3e) : le flux injecte serait un alias "
-        "silencieux de Rusanov (T3)" % diff
-    )
+
+def test_polar_isothermal_hllc_and_roe_use_requested_provider():
+    nr, nth = 24, 24
+    cs2 = 1.0
+    h = min((RMAX - RMIN) / nr, RMIN * (2.0 * math.pi / nth))
+    dt = 0.2 * h / math.sqrt(cs2)
+    reference = _run(_build(nr, nth, Rusanov(), cs2), nr, nth, 8, dt)
+    for name, provider in (("hllc", HLLC()), ("roe", Roe())):
+        state = _run(_build(nr, nth, provider, cs2), nr, nth, 8, dt)
+        assert np.all(np.isfinite(state)), "%s polaire : etat non fini (T3)" % name
+        diff = float(np.max(np.abs(state - reference)))
+        assert diff > 1e-8, (
+            "%s polaire ne differe pas de rusanov (diff=%.3e) : alias/fallback silencieux (T3)"
+            % (name, diff)
+        )
+
+
+def test_polar_exb_refuses_missing_hllc_and_roe_capabilities():
+    _assert_scalar_rejected(HLLC(), "HasHLLCStructure")
+    _assert_scalar_rejected(Roe(), "HasRoeDissipation")
 
 
 if __name__ == "__main__":
     test_polar_hll()
-    print("test_polar_hll : OK (rusanov reproductible, hll fini et distinct)")
+    test_polar_isothermal_hllc_and_roe_use_requested_provider()
+    test_polar_exb_refuses_missing_hllc_and_roe_capabilities()
+    print("test_polar_hll : OK (HLL/HLLC/Roe finis, distincts et capability-gated)")

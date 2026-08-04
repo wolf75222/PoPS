@@ -46,10 +46,14 @@ struct ScalarCharge {
   using State = StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
+};
+
+struct NeverTag {
+  POPS_HD bool operator()(ConstArray4, int, int) const { return false; }
 };
 
 // Pose U(i,j,0) = f_rhs(x_cell, y_cell) sur les cellules valides (selon la geometrie @p g du niveau).
@@ -112,7 +116,7 @@ TEST(test_amr_composite_poisson, Runs) {
   levels.push_back({std::move(Uf), nullptr, dxf, dxf});
 
   ScalarCharge model;
-  AmrCouplerMP<ScalarCharge> cpl(model, g, bac, bc, std::move(levels), {},
+  AmrCouplerMP<ScalarCharge> cpl(model, g, bac, bc, Periodicity{true, true}, std::move(levels), {},
                                  /*replicated_coarse=*/true, load_balance);
   set_state_f(cpl.coarse(), g);
   set_state_f(cpl.levels()[1].U, gf);
@@ -143,7 +147,8 @@ TEST(test_amr_composite_poisson, Runs) {
     std::vector<AmrLevelMP> lv2;
     lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
     lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
-    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, std::move(lv2), {}, true, load_balance);
+    AmrCouplerMP<ScalarCharge> ref(model, g, bac, bc, Periodicity{true, true}, std::move(lv2), {},
+                                   true, load_balance);
     set_state_f(ref.coarse(), g);
     set_state_f(ref.levels()[1].U, gf);
     ref.compute_aux();  // Option A (composite OFF par defaut)
@@ -151,6 +156,22 @@ TEST(test_amr_composite_poisson, Runs) {
     EXPECT_TRUE(std::fabs(e_ref - e_optA) < 1e-12)
         << "(non-regression) Option A inchange (composite OFF par defaut): e_ref=" << e_ref
         << " e_optA=" << e_optA;
+  }
+
+  // The elliptic descriptor and transport topology are distinct authorities. A legacy direct
+  // coupler may still solve a non-periodic elliptic problem with periodic transport, but it must
+  // fail closed before remapping a non-periodic transport hierarchy without a prepared boundary
+  // plan that proves physical ghost support.
+  {
+    MultiFab Uc2(bac, dm, 1, 1);
+    MultiFab Uf2(baf, dm, 1, 1);
+    std::vector<AmrLevelMP> lv2;
+    lv2.push_back({std::move(Uc2), nullptr, dxc, dxc});
+    lv2.push_back({std::move(Uf2), nullptr, dxf, dxf});
+    AmrCouplerMP<ScalarCharge> nonperiodic(model, g, bac, bc, Periodicity{false, false},
+                                           std::move(lv2), {}, true, load_balance);
+    EXPECT_THROW(nonperiodic.set_hierarchy({fb}), std::logic_error);
+    EXPECT_THROW(nonperiodic.regrid(NeverTag{}), std::logic_error);
   }
 
   comm_finalize();

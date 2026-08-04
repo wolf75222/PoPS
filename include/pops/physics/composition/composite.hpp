@@ -52,9 +52,13 @@ struct CompositeModel {
   Source src{};
   Elliptic ell{};
 
-  POPS_HD State flux(const State& u, const Aux& a, int dir) const { return hyp.flux(u, a, dir); }
-  POPS_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
-    return hyp.max_wave_speed(u, a, dir);
+  template <class Providers>
+  POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
+    return hyp.flux(u, providers, dir);
+  }
+  template <class Providers>
+  POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {
+    return hyp.max_wave_speed(u, providers, dir);
   }
   POPS_HD State source(const State& u, const Aux& a) const { return src.apply(u, a); }
   POPS_HD Real elliptic_rhs(const State& u) const { return ell.rhs(u); }
@@ -63,17 +67,29 @@ struct CompositeModel {
   static VariableSet conservative_vars() { return Hyperbolic::conservative_vars(); }
   static VariableSet primitive_vars() { return Hyperbolic::primitive_vars(); }
 
+  /// Optional primitive-recovery admissibility, forwarded from the hyperbolic brick.  Keeping the
+  /// method concept-gated preserves the historical finite-only recovery path for every brick that
+  /// does not declare a physical policy.
+  POPS_HD bool recovery_admissible(const Prim& p, int* failing_component) const
+    requires requires(const Hyperbolic h, const Prim q, int* component) {
+      { h.recovery_admissible(q, component) } -> std::same_as<bool>;
+    }
+  {
+    return hyp.recovery_admissible(p, failing_component);
+  }
+
   POPS_HD Real pressure(const State& u) const
     requires requires(const Hyperbolic h, const State s) { h.pressure(s); }
   {
     return hyp.pressure(u);
   }
-  POPS_HD void wave_speeds(const State& u, const Aux& a, int dir, Real& smin, Real& smax) const
-    requires requires(const Hyperbolic h, const State s, const Aux aa, int d, Real& lo, Real& hi) {
-      h.wave_speeds(s, aa, d, lo, hi);
-    }
+  template <class Providers>
+  POPS_HD void wave_speeds(const State& u, const Providers& providers, int dir, Real& smin,
+                           Real& smax) const
+    requires requires(const Hyperbolic h, const State s, const Providers& p, int d, Real& lo,
+                      Real& hi) { h.wave_speeds(s, p, d, lo, hi); }
   {
-    hyp.wave_speeds(u, a, dir, smin, smax);
+    hyp.wave_speeds(u, providers, dir, smin, smax);
   }
 
   /// Riemann CAPABILITIES (audit wave 3): HLLC hooks (contact_speed + hllc_star_state) and Roe
@@ -95,12 +111,22 @@ struct CompositeModel {
   {
     return hyp.hllc_star_state(u, p, s, sStar, dir);
   }
-  POPS_HD State roe_dissipation(const State& ul, const Aux& al, const State& ur, const Aux& ar,
+  template <class LeftProviders, class RightProviders>
+  POPS_HD State roe_dissipation(const State& ul, const LeftProviders& left_providers,
+                                const State& ur, const RightProviders& right_providers,
                                 int dir) const
-    requires requires(const Hyperbolic h, const State a_, const Aux x_, const State b_,
-                      const Aux y_, int d) { h.roe_dissipation(a_, x_, b_, y_, d); }
+    requires requires(const Hyperbolic h, const State a_, const LeftProviders& x_, const State b_,
+                      const RightProviders& y_, int d) { h.roe_dissipation(a_, x_, b_, y_, d); }
   {
-    return hyp.roe_dissipation(ul, al, ur, ar, dir);
+    return hyp.roe_dissipation(ul, left_providers, ur, right_providers, dir);
+  }
+
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int dir,
+                                        int outward_sign, State& ghost) const
+    requires requires(const Hyperbolic h, const State a_, const State b_, int d, int side,
+                      State& out) { h.characteristic_no_inflow(a_, b_, d, side, out); }
+  {
+    return hyp.characteristic_no_inflow(interior, reference, dir, outward_sign, ghost);
   }
 
   /// GEOMETRIC source term of polar curvature, delegated to the hyperbolic brick when it

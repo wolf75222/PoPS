@@ -15,9 +15,11 @@ _SEQUENCE_FIELDS = (
     "state_spaces",
 )
 _SCALAR_FIELDS = (
-    "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target",
+    "has_hllc", "has_roe", "has_wave_speeds", "has_characteristic_no_inflow",
+    "so_path", "backend", "target",
     "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
-    "wave_speed_provider",
+    "wave_speed_provider", "hllc_provider", "roe_provider", "roe_entropy_policy",
+    "roe_entropy_delta",
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",
@@ -75,6 +77,9 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
         raise ValueError(
             "CompiledModel without wave speeds cannot retain wave_speed_provider"
         )
+    from pops.numerics.riemann.providers import compiled_provider_evidence
+
+    compiled_provider_evidence(compiled)
     _data_mapping(_core_value(compiled, "caps"), where="caps")
     identity = _core_value(compiled, "definition_identity")
     if identity is not None:

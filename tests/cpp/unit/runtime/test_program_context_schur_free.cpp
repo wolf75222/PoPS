@@ -22,6 +22,7 @@
 
 #include <bit>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -55,6 +56,94 @@ TEST(ProgramContextSchurFree, HeaderIsSelfContainedAndBuilds) {
   SUCCEED() << "program_context.hpp builds without any coupling/schur/** dependency";
 }
 
+TEST(ProgramRuntimeStateCadence, SharedDispatcherOwnsHoldSubstepAndCursorCommit) {
+  pops::runtime::program::ProgramRuntimeState state;
+  struct Dispatch {
+    double start = 0.0;
+    double dt = 0.0;
+    int macro_step = -1;
+  };
+  std::vector<Dispatch> dispatches;
+  double physical_time = 2.0;
+  int macro_step = 4;
+  state.install_unverified_step(
+      [&](double dt) { dispatches.push_back({physical_time, dt, macro_step}); });
+  state.set_cadence(/*substeps=*/2, /*stride=*/2, "Fixture");
+
+  state.dispatch_cadence_step(physical_time, macro_step, 0.1, "Fixture");
+  EXPECT_TRUE(dispatches.empty());
+  EXPECT_DOUBLE_EQ(physical_time, 2.1);
+  EXPECT_EQ(macro_step, 5);
+  EXPECT_DOUBLE_EQ(state.cadence_window_dt_, 0.1);
+  EXPECT_EQ(state.cadence_window_steps_, 1);
+  EXPECT_DOUBLE_EQ(state.cadence_window_start_time_, 2.0);
+
+  state.dispatch_cadence_step(physical_time, macro_step, 0.3, "Fixture");
+  ASSERT_EQ(dispatches.size(), 2);
+  EXPECT_DOUBLE_EQ(dispatches[0].start, 2.0);
+  EXPECT_EQ(dispatches[0].macro_step, 4);
+  EXPECT_DOUBLE_EQ(dispatches[1].start, dispatches[0].start + dispatches[0].dt);
+  EXPECT_EQ(dispatches[1].macro_step, 4);
+  EXPECT_DOUBLE_EQ(physical_time, dispatches[1].start + dispatches[1].dt);
+  EXPECT_EQ(macro_step, 6);
+  EXPECT_DOUBLE_EQ(state.last_dt_, dispatches[1].dt);
+  EXPECT_DOUBLE_EQ(state.cadence_window_dt_, 0.0);
+  EXPECT_EQ(state.cadence_window_steps_, 0);
+  EXPECT_DOUBLE_EQ(state.cadence_window_start_time_, 0.0);
+}
+
+TEST(ProgramRuntimeStateCadence, DispatchFailureRestoresCursorWindowAndReentrancyLease) {
+  pops::runtime::program::ProgramRuntimeState state;
+  double physical_time = 1.0;
+  int macro_step = 0;
+  int calls = 0;
+  bool fail_second_substep = true;
+  state.install_unverified_step([&](double) {
+    ++calls;
+    if (fail_second_substep && calls == 2)
+      throw std::runtime_error("injected cadence substep failure");
+  });
+  state.set_cadence(/*substeps=*/2, /*stride=*/1, "Fixture");
+
+  EXPECT_THROW(state.dispatch_cadence_step(physical_time, macro_step, 0.4, "Fixture"),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(physical_time, 1.0);
+  EXPECT_EQ(macro_step, 0);
+  EXPECT_DOUBLE_EQ(state.cadence_window_dt_, 0.0);
+  EXPECT_EQ(state.cadence_window_steps_, 0);
+  EXPECT_FALSE(state.cadence_dispatch_active_);
+
+  calls = 0;
+  fail_second_substep = false;
+  EXPECT_NO_THROW(state.dispatch_cadence_step(physical_time, macro_step, 0.4, "Fixture"));
+  EXPECT_EQ(calls, 2);
+  EXPECT_DOUBLE_EQ(physical_time, 1.4);
+  EXPECT_EQ(macro_step, 1);
+
+  state.install_unverified_step(
+      [&](double) { state.dispatch_cadence_step(physical_time, macro_step, 0.1, "Fixture"); });
+  EXPECT_THROW(state.dispatch_cadence_step(physical_time, macro_step, 0.1, "Fixture"),
+               std::logic_error);
+  EXPECT_DOUBLE_EQ(physical_time, 1.4);
+  EXPECT_EQ(macro_step, 1);
+  EXPECT_FALSE(state.cadence_dispatch_active_);
+}
+
+TEST(ProgramRuntimeStateCadence, MacroStepOverflowFailsBeforeProgramDispatch) {
+  pops::runtime::program::ProgramRuntimeState state;
+  double physical_time = 0.0;
+  int macro_step = std::numeric_limits<int>::max();
+  int calls = 0;
+  state.install_unverified_step([&](double) { ++calls; });
+
+  EXPECT_THROW(state.dispatch_cadence_step(physical_time, macro_step, 0.1, "Fixture"),
+               std::overflow_error);
+  EXPECT_EQ(calls, 0);
+  EXPECT_DOUBLE_EQ(physical_time, 0.0);
+  EXPECT_EQ(macro_step, std::numeric_limits<int>::max());
+  EXPECT_FALSE(state.cadence_dispatch_active_);
+}
+
 namespace {
 
 template <bool Amr>
@@ -74,6 +163,7 @@ class ExecutionServicesFixture
     return program_runtime_state_.diagnostic(name, "ExecutionServicesFixture");
   }
   double logical_dt() const { return logical_dt_; }
+  void set_untracked_logical_dt(double value) { logical_dt_ = value; }
   void fail_next_logical_apply() { fail_logical_apply_ = true; }
   int rhs_group_identity() const { return rhs_group_identity_; }
   const std::vector<int>& rhs_group_program_blocks() const { return rhs_group_program_blocks_; }
@@ -91,6 +181,16 @@ class ExecutionServicesFixture
   bool history_initialized() const { return history_initialized_; }
   pops::Real history_outgoing_dt() const { return history_outgoing_dt_; }
   const std::string& history_rotation_clock() const { return history_rotation_clock_; }
+  int resource_level() const { return resource_level_; }
+  int resource_level_query_count() const { return resource_level_query_count_; }
+  int resource_levels() const { return resource_levels_; }
+  void set_scratch_resource_identity(std::uint64_t epoch, std::uint64_t generation, int levels,
+                                     int level) {
+    resource_topology_epoch_ = epoch;
+    resource_materialization_generation_ = generation;
+    resource_levels_ = levels;
+    resource_level_ = level;
+  }
   int boundary_program_block() const { return boundary_program_block_; }
   int assembly_target_count() const { return assembly_target_count_; }
   int assembly_source_count() const { return assembly_source_count_; }
@@ -110,6 +210,22 @@ class ExecutionServicesFixture
     return static_cast<int>(field_solve_dispatches_.size());
   }
   const std::vector<std::string>& field_solve_dispatches() const { return field_solve_dispatches_; }
+  int generated_field_dispatch_count() const { return generated_field_dispatch_count_; }
+  const std::string& generated_field_identity() const { return generated_field_identity_; }
+  const std::vector<const pops::MultiFab*>& generated_runtime_stages() const {
+    return generated_runtime_stages_;
+  }
+  pops::MultiFab& runtime_state(int runtime_block) const {
+    return runtime_states_.at(static_cast<std::size_t>(runtime_block));
+  }
+  void set_program_block_map(std::vector<int> block_map) {
+    program_runtime_state_.block_map_ = std::move(block_map);
+  }
+  void fail_next_generated_field_dispatch() { fail_generated_field_dispatch_ = true; }
+  void reenter_next_generated_field_dispatch(std::int64_t value_id) {
+    reenter_generated_field_dispatch_ = true;
+    reentrant_generated_value_id_ = value_id;
+  }
   void run_installed_step(double dt) const {
     if (!installed_step_)
       throw std::logic_error("fixture has no installed Program step");
@@ -130,6 +246,21 @@ class ExecutionServicesFixture
 
   struct LogicalRollback {
     double dt = 0.0;
+  };
+
+  struct FieldFacade {
+    int* update_count = nullptr;
+
+    void set_field_logical_timepoint(const std::string&, const pops::FieldLogicalTimePoint&) const {
+      ++*update_count;
+    }
+    void set_field_boundary_parameters(const std::string&, const std::vector<double>&) const {
+      ++*update_count;
+    }
+    void set_field_boundary_kernel(const std::string&,
+                                   const pops::CompiledFieldBoundaryKernel&) const {
+      ++*update_count;
+    }
   };
 
   double program_execution_logical_parent_dt_() const noexcept { return logical_dt_; }
@@ -156,21 +287,26 @@ class ExecutionServicesFixture
         program_execution_field_solve_from_state_at_outcome_(point, provider_slot, block, state);
     return outcome.consume(pops::SolveConsumption::kAccept);
   }
-  pops::SolveOutcome program_execution_solve_named_field_from_state_outcome_(
-      const std::string&, int, pops::MultiFab&) const {
-    return solved_field_outcome_("named-state");
-  }
   pops::SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
       const std::vector<const pops::MultiFab*>&) const {
     return solved_field_outcome_("default-blocks");
   }
-  pops::SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
-      const std::string&, const std::vector<const pops::MultiFab*>&) const {
-    return solved_field_outcome_("named-blocks");
-  }
   pops::SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      std::int64_t, std::string_view,
-      std::initializer_list<typename SharedServices::FieldStageOverride>) const {
+      const pops::runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const pops::MultiFab*>& runtime_stages) const {
+    ++generated_field_dispatch_count_;
+    generated_field_identity_ = field;
+    generated_runtime_stages_ = runtime_stages;
+    if (fail_generated_field_dispatch_) {
+      fail_generated_field_dispatch_ = false;
+      throw std::runtime_error("injected generated field provider failure");
+    }
+    if (reenter_generated_field_dispatch_) {
+      reenter_generated_field_dispatch_ = false;
+      this->solve_fields_from_blocks_at(
+          point, reentrant_generated_value_id_, field,
+          {{0, runtime_stages.at(static_cast<std::size_t>(this->sys_block(0)))}});
+    }
     return solved_field_outcome_("generated-blocks");
   }
   LogicalRollback program_execution_capture_logical_evaluation_() const noexcept {
@@ -305,21 +441,13 @@ class ExecutionServicesFixture
   pops::runtime::program::ProgramRuntimeState& program_execution_runtime_state_() const {
     return program_runtime_state_;
   }
+  pops::MultiFab& program_execution_state_(int runtime_block) const {
+    return runtime_states_.at(static_cast<std::size_t>(runtime_block));
+  }
   typename SharedServices::ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {pops::Real(3.5), 4, active_level_};
   }
-  void program_execution_set_field_timepoint_(const std::string&,
-                                              const pops::FieldLogicalTimePoint&) const {
-    ++field_update_count_;
-  }
-  void program_execution_set_field_parameters_(const std::string&,
-                                               const std::vector<double>&) const {
-    ++field_update_count_;
-  }
-  void program_execution_set_field_kernel_(const std::string&,
-                                           const pops::CompiledFieldBoundaryKernel&) const {
-    ++field_update_count_;
-  }
+  FieldFacade& program_execution_field_facade_() const { return field_facade_; }
   void program_execution_register_history_storage_(
       const typename SharedServices::HistoryRegistration& registration) const {
     ++history_register_count_;
@@ -365,9 +493,12 @@ class ExecutionServicesFixture
   }
   typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
       const noexcept {
-    return {11, 17, Amr ? 3 : 1, 2};
+    return {resource_topology_epoch_, resource_materialization_generation_, resource_levels_, 2};
   }
-  int program_execution_resource_level_() const noexcept { return resource_level_; }
+  int program_execution_resource_level_() const noexcept {
+    ++resource_level_query_count_;
+    return resource_level_;
+  }
   void program_execution_select_resource_level_(int selected) const noexcept {
     resource_level_ = selected;
   }
@@ -389,8 +520,14 @@ class ExecutionServicesFixture
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
+  mutable int resource_level_query_count_ = 0;
+  mutable std::uint64_t resource_topology_epoch_ = 11;
+  mutable std::uint64_t resource_materialization_generation_ = 17;
+  mutable int resource_levels_ = Amr ? 3 : 1;
   mutable pops::runtime::program::ProgramRuntimeState program_runtime_state_;
+  mutable std::vector<pops::MultiFab> runtime_states_ = std::vector<pops::MultiFab>(2);
   mutable int field_update_count_ = 0;
+  mutable FieldFacade field_facade_{&field_update_count_};
   mutable int history_register_count_ = 0;
   mutable int history_read_count_ = 0;
   mutable int history_store_count_ = 0;
@@ -427,6 +564,12 @@ class ExecutionServicesFixture
   mutable int install_count_ = 0;
   mutable std::function<void(double)> installed_step_;
   mutable std::vector<std::string> field_solve_dispatches_;
+  mutable int generated_field_dispatch_count_ = 0;
+  mutable std::string generated_field_identity_;
+  mutable std::vector<const pops::MultiFab*> generated_runtime_stages_;
+  mutable bool fail_generated_field_dispatch_ = false;
+  mutable bool reenter_generated_field_dispatch_ = false;
+  mutable std::int64_t reentrant_generated_value_id_ = -1;
   mutable bool exclusive_workspace_in_use_ = false;
 };
 
@@ -570,9 +713,10 @@ void expect_shared_install_and_field_services(Context& context) {
   EXPECT_DOUBLE_EQ(installed_dt, 0.125);
 
   pops::MultiFab state;
+  pops::MultiFab state_b;
   const std::vector<const pops::MultiFab*> states{&state};
-  pops::runtime::multiblock::BoundaryEvaluationPoint point{};
-  point.level = context.level();
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "fixture.clock", 4, context.level(), 0, 3, pops::amr::Rational(1, 2), 0.125, 3.5};
   auto accept = [](pops::SolveOutcome outcome) {
     return outcome.consume(pops::SolveConsumption::kAccept);
   };
@@ -580,14 +724,135 @@ void expect_shared_install_and_field_services(Context& context) {
   EXPECT_TRUE(accept(context.solve_fields()).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_state(0, state)).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_state_at(point, "field", 0, state)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_state("field", 0, state)).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_blocks(states)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_blocks("field", states)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_blocks(17, "field", {{0, &state}})).solved());
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}})).solved());
+  EXPECT_EQ(context.generated_field_identity(), "field");
+  ASSERT_EQ(context.generated_runtime_stages().size(), 2);
+  EXPECT_EQ(context.generated_runtime_stages()[0], nullptr);
+  EXPECT_EQ(context.generated_runtime_stages()[1], &state)
+      << "Program block 0 must be materialized once into runtime slot 1";
+  EXPECT_EQ(context.field_solve_dispatches(),
+            std::vector<std::string>({"default", "default-state", "qualified-state-at",
+                                      "default-blocks", "generated-blocks"}));
+
+  int evaluated_bodies = 0;
+  context.evaluate_with_field_state_at(point, "field", 0, state, state,
+                                       [&]() { ++evaluated_bodies; });
+  EXPECT_EQ(evaluated_bodies, 1);
   EXPECT_EQ(
       context.field_solve_dispatches(),
-      std::vector<std::string>({"default", "default-state", "qualified-state-at", "named-state",
-                                "default-blocks", "named-blocks", "generated-blocks"}));
+      std::vector<std::string>({"default", "default-state", "qualified-state-at", "default-blocks",
+                                "generated-blocks", "qualified-state-at", "qualified-state-at"}));
+
+  int generated_calls = context.generated_field_dispatch_count();
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, -1, "field", {{0, &state}}),
+               std::invalid_argument);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "invalid generated IR identity must fail before provider dispatch";
+
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 17, "other-field", {{0, &state}}),
+               std::logic_error);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "a generated value cannot silently drift to another field";
+
+  EXPECT_THROW(
+      (void)context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}, {1, &state_b}}),
+      std::logic_error);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "the compiled block pack must be checked before provider dispatch";
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "a failed preparation must release the persistent workspace";
+
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 18, "field", {{1, &state_b}})).solved());
+  ++generated_calls;
+  ASSERT_EQ(context.generated_runtime_stages().size(), 2);
+  EXPECT_EQ(context.generated_runtime_stages()[0], &state_b);
+  EXPECT_EQ(context.generated_runtime_stages()[1], nullptr)
+      << "a distinct generated value owns an independent ordered block pack";
+
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 19, "field", {{0, &state}, {1, &state_b}}))
+          .solved());
+  ++generated_calls;
+  EXPECT_THROW(
+      (void)context.solve_fields_from_blocks_at(point, 19, "field", {{1, &state_b}, {0, &state}}),
+      std::logic_error);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "the ordered block pack is part of the generated value identity";
+
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 20, "field",
+                                                         {{0, &context.runtime_state(0)}}),
+               std::invalid_argument);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "a stage cannot alias another runtime block's live state";
+
+  const pops::Box2D wrong_domain = pops::Box2D::from_extents(2, 2);
+  const pops::BoxArray wrong_boxes(std::vector<pops::Box2D>{wrong_domain});
+  const pops::DistributionMapping wrong_mapping(std::vector<int>{0});
+  pops::MultiFab wrong_layout(wrong_boxes, wrong_mapping, 1, 0);
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 21, "field", {{0, &wrong_layout}}),
+               std::invalid_argument);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "layout validation must precede provider dispatch";
+
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 22, "field", {{0, nullptr}}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      (void)context.solve_fields_from_blocks_at(point, 23, "field", {{0, &state}, {0, &state_b}}),
+      std::invalid_argument);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "null and duplicate overrides must fail before provider dispatch";
+
+  context.fail_next_generated_field_dispatch();
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}}),
+               std::runtime_error);
+  ++generated_calls;
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls);
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "a provider exception must release the generated workspace";
+
+  context.reenter_next_generated_field_dispatch(17);
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}}),
+               std::logic_error);
+  ++generated_calls;
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "nested use must be rejected before a second provider dispatch";
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "a nested-use rejection must release the outer workspace";
+
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 24, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  context.set_program_block_map({0, 1});
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 24, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  ASSERT_EQ(context.generated_runtime_stages().size(), 2);
+  EXPECT_EQ(context.generated_runtime_stages()[0], &state);
+  EXPECT_EQ(context.generated_runtime_stages()[1], nullptr);
+  EXPECT_THROW((void)context.solve_fields_from_blocks_at(point, 24, "field", {{1, &state_b}}),
+               std::logic_error);
+  EXPECT_EQ(context.generated_field_dispatch_count(), generated_calls)
+      << "runtime re-slotting must not reteach an existing value its Program block pack";
+  context.set_program_block_map({1, 0});
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 24, "field", {{0, &state}})).solved());
+  ++generated_calls;
+  ASSERT_EQ(context.generated_runtime_stages().size(), 2);
+  EXPECT_EQ(context.generated_runtime_stages()[0], nullptr);
+  EXPECT_EQ(context.generated_runtime_stages()[1], &state)
+      << "the same immutable Program pack rematerializes after a topology map change";
 
   auto mismatched_point = point;
   ++mismatched_point.level;
@@ -607,6 +872,32 @@ void expect_shared_install_and_field_services(Context& context) {
                std::invalid_argument);
   EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_provider)
       << "shared provider identity validation must run before topology dispatch";
+
+  auto expect_invalid_point_before_dispatch = [&](const auto& invalid_point) {
+    const int calls_before_invalid_point = context.field_solve_dispatch_count();
+    const int level_queries_before_invalid_point = context.resource_level_query_count();
+    EXPECT_THROW((void)context.solve_fields_from_state_at(invalid_point, "field", 0, state),
+                 std::invalid_argument);
+    EXPECT_THROW(
+        (void)context.solve_fields_from_blocks_at(invalid_point, 17, "field", {{0, &state}}),
+        std::invalid_argument);
+    EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_point)
+        << "shared point validation must run before every topology provider hook";
+    EXPECT_EQ(context.resource_level_query_count(), level_queries_before_invalid_point)
+        << "invalid topology-independent point data must fail before querying the provider level";
+  };
+  auto invalid_point = point;
+  invalid_point.clock.clear();
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.dt = 0.0;
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.stage = -1;
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.stage_fraction = pops::amr::Rational(3, 2);
+  expect_invalid_point_before_dispatch(invalid_point);
 
   EXPECT_THROW(context.exercise_exclusive_workspace(true, false), std::logic_error);
   EXPECT_FALSE(context.exclusive_workspace_in_use())
@@ -828,6 +1119,64 @@ void expect_shared_operator_snapshot_services(Context& context, std::uint64_t to
   EXPECT_EQ(reminted_parent.revision, 3u);
   EXPECT_DOUBLE_EQ(std::bit_cast<double>(reminted_parent.dt_bits), 0.4);
   EXPECT_EQ(context.operator_topology_count(), 3);
+
+  context.set_untracked_logical_dt(0.3);
+  const auto stale_after_provider_clock_change = context.probe_operator_evaluation(
+      authority, reminted_parent.topology, resources, reminted_parent.revision);
+  EXPECT_EQ(stale_after_provider_clock_change.revision, 0u);
+  EXPECT_FALSE(stale_after_provider_clock_change.valid())
+      << "a provider clock transition must invalidate the complete shared capability";
+  context.set_untracked_logical_dt(0.4);
+  EXPECT_EQ(context
+                .probe_operator_evaluation(authority, reminted_parent.topology, resources,
+                                           reminted_parent.revision)
+                .revision,
+            0u)
+      << "restoring matching scalar coordinates must not resurrect an invalidated capability";
+}
+
+template <class Context>
+void expect_shared_persistent_scratch_services(Context& context) {
+  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+  const pops::BoxArray boxes(std::vector<pops::Box2D>{domain});
+  const pops::DistributionMapping mapping(std::vector<int>{0});
+  pops::MultiFab prototype(boxes, mapping, 2, 1);
+
+  context.profiler().enable();
+  pops::MultiFab& first = context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(first.ncomp(), 2);
+  EXPECT_EQ(first.n_grow(), 1);
+  first.set_val(pops::Real(9));
+  const std::int64_t allocations_after_first = context.profiler().counter("scratch_allocs");
+
+  pops::MultiFab& reused = context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(&reused, &first);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first);
+  if (reused.local_size() > 0) {
+    const auto cell = reused.box(0).lo;
+    EXPECT_EQ(reused.fab(0).const_array()(cell[0], cell[1], 0), pops::Real(0))
+        << "a shared persistent slot must clear provisional bytes before reuse";
+  }
+
+  pops::MultiFab& other_kind = context.scratch_state(41, 0, prototype);
+  pops::MultiFab& other_subslot = context.rhs_scratch(41, 1, prototype);
+  EXPECT_NE(&other_kind, &reused);
+  EXPECT_NE(&other_subslot, &reused);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first + 2);
+
+  const int level = context.resource_level();
+  const int levels = context.resource_levels();
+  context.set_scratch_resource_identity(11, 18, levels, level);
+  (void)context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first + 3)
+      << "a process-local materialization change must invalidate every shared scratch slot";
+
+  EXPECT_THROW((void)context.rhs_scratch(-1, 0, prototype), std::invalid_argument);
+  EXPECT_THROW((void)context.rhs_scratch(41, -1, prototype), std::invalid_argument);
+  context.set_scratch_resource_identity(12, 19, 0, 0);
+  EXPECT_THROW((void)context.rhs_scratch(41, 0, prototype), std::runtime_error);
+  context.set_scratch_resource_identity(12, 19, levels, levels);
+  EXPECT_THROW((void)context.rhs_scratch(41, 0, prototype), std::out_of_range);
 }
 
 }  // namespace
@@ -872,4 +1221,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameOperatorSnapshotF
   ExecutionServicesFixture<true> amr(1);
   expect_shared_operator_snapshot_services(uniform, 1);
   expect_shared_operator_snapshot_services(amr, 17);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSamePersistentScratchFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_persistent_scratch_services(uniform);
+  expect_shared_persistent_scratch_services(amr);
 }

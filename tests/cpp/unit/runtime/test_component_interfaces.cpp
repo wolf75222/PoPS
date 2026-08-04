@@ -54,6 +54,12 @@ struct TransferComponent {
   std::string restart() const { return "stateless"; }
 };
 
+struct RefluxComponent {
+  int stencil() const { return 1; }
+  std::string lower(Context&) const { return "integrated-interface-correction"; }
+  std::vector<std::string> effects() const { return {"local-correction"}; }
+};
+
 struct SolverComponent {
   pops::component::EvaluationOutcome<int> evaluate(Context&) const {
     return pops::component::EvaluationOutcome<int>::reject("non-converged");
@@ -90,6 +96,9 @@ static_assert(pops::component::Lowering<ClusteringComponent, Context>);
 static_assert(pops::component::Effects<ClusteringComponent>);
 static_assert(pops::component::Stencil<TransferComponent>);
 static_assert(pops::component::Restart<TransferComponent>);
+static_assert(pops::component::Stencil<RefluxComponent>);
+static_assert(pops::component::Lowering<RefluxComponent, Context>);
+static_assert(pops::component::Effects<RefluxComponent>);
 static_assert(pops::component::FallibleEvaluation<SolverComponent, Context&>);
 static_assert(pops::component::Restart<SolverComponent>);
 static_assert(pops::component::Format<WriterComponent, double>);
@@ -580,6 +589,66 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::apply_ghost_boundary(ghost_api, nullptr, invalid_region, status),
                std::invalid_argument);
 
+  std::array<double, 2> transformed_outward_flux{};
+  const std::array<double, 2> lower_outward_normal{-1.0, 0.0};
+  const std::array<double, 1> face_measure{0.5};
+  PopsComponentActionV1 boundary_flux_action = POPS_COMPONENT_ABORT_RUN_V1;
+  PopsBoundaryFluxApiV1 boundary_flux_api{
+      abi_header(sizeof(PopsBoundaryFluxApiV1), POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1),
+      +[](void*, const PopsBoundaryFluxRequestV1* request, PopsBoundaryFluxResultV1* result) {
+        if (request->region.kind != POPS_BOUNDARY_FACE_V1 ||
+            request->outward_normals.component_count != 2 ||
+            values(request->outward_normals)[0] != -1.0 || request->face_measures[0] != 0.5)
+          return 12;
+        const auto* base = values(request->base_outward_normal_flux);
+        auto* output = values(result->outward_normal_flux);
+        for (std::size_t component = 0;
+             component < request->base_outward_normal_flux.component_count; ++component)
+          output[component] = base[component] + 3.0;
+        result->actions[0] = POPS_COMPONENT_CONTINUE_V1;
+        result->status = ok_status();
+        return 0;
+      }};
+  auto base_outward_flux_view = abi::const_field_view(left.data(), 1, 1, 2);
+  base_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_outward_flux_view.centering_axes = 1u;
+  auto transformed_outward_flux_view = abi::field_view(transformed_outward_flux.data(), 1, 1, 2);
+  transformed_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  transformed_outward_flux_view.centering_axes = 1u;
+  PopsBoundaryFluxRequestV1 boundary_flux_request{
+      sizeof(PopsBoundaryFluxRequestV1),
+      "case::boundary-flux-provider",
+      "case::state",
+      base_outward_flux_view,
+      abi::const_field_view(normal.data(), 1, 1, 2),
+      abi::const_field_view(lower_outward_normal.data(), 1, 1, 2),
+      face_measure.data(),
+      face_region,
+      0,
+      nullptr,
+      0,
+      nullptr,
+      abi::logical_time(),
+      execution};
+  PopsBoundaryFluxResultV1 boundary_flux_result{
+      sizeof(PopsBoundaryFluxResultV1), transformed_outward_flux_view, &boundary_flux_action, {}};
+  EXPECT_EQ(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                     boundary_flux_request, boundary_flux_result),
+            0);
+  EXPECT_EQ(transformed_outward_flux, (std::array<double, 2>{5.0, 7.0}));
+  EXPECT_EQ(boundary_flux_action, POPS_COMPONENT_CONTINUE_V1);
+  const std::array<double, 2> wrong_lower_normal{1.0, 0.0};
+  auto wrong_orientation = boundary_flux_request;
+  wrong_orientation.outward_normals = abi::const_field_view(wrong_lower_normal.data(), 1, 1, 2);
+  EXPECT_THROW(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                        wrong_orientation, boundary_flux_result),
+               std::invalid_argument);
+  auto mismatched_flux_output = boundary_flux_result;
+  mismatched_flux_output.outward_normal_flux.component_count = 1;
+  EXPECT_THROW(pops::component::transform_boundary_flux(
+                   boundary_flux_api, nullptr, boundary_flux_request, mismatched_flux_output),
+               std::invalid_argument);
+
   std::array<double, 2> direction{1.0, 2.0}, boundary_output{};
   const auto field_eval =
       +[](void*, const PopsFieldBoundaryRequestV1* request, PopsComponentStatusV1* result) {
@@ -776,6 +845,78 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   wrong_transfer_shape.destination.extents[1] = 2;
   EXPECT_THROW(pops::component::apply_transfer(transfer_api, nullptr, wrong_transfer_shape, status),
                std::invalid_argument);
+
+  std::array<double, 2> coarse_integrated_flux{1.0, 2.0};
+  std::array<double, 2> fine_integrated_flux{3.0, 6.0};
+  std::array<double, 2> reflux_correction{};
+  PopsRefluxApiV1 reflux_api{
+      abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result) {
+        for (std::size_t face_index = 0; face_index < request->face_count; ++face_index) {
+          const auto& face = request->faces[face_index];
+          const auto* coarse = static_cast<const double*>(face.coarse_integrated_flux.data);
+          const auto* fine = static_cast<const double*>(face.fine_integrated_flux.data);
+          auto* correction = static_cast<double*>(face.correction.data);
+          const std::size_t points =
+              pops::component::field_point_count(face.coarse_integrated_flux);
+          for (std::size_t point = 0; point < points; ++point)
+            correction[point] = static_cast<double>(face.side) * (fine[point] - coarse[point]) *
+                                face.inverse_coarse_cell_spacing;
+        }
+        *result = ok_status();
+        return 0;
+      }};
+  auto coarse_face = abi::const_field_view(coarse_integrated_flux.data(), 1, 2, 1, "parent::layout",
+                                           "parent::patch");
+  coarse_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  coarse_face.centering_axes = 1u;
+  auto fine_face =
+      abi::const_field_view(fine_integrated_flux.data(), 1, 2, 1, "child::layout", "child::patch");
+  fine_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  fine_face.centering_axes = 1u;
+  PopsRefluxFaceV1 reflux_face{
+      sizeof(PopsRefluxFaceV1),
+      "transition::0-to-1/x-low",
+      0,
+      POPS_REFLUX_FACE_LOW_V1,
+      2.0,
+      coarse_face,
+      fine_face,
+      abi::field_view(reflux_correction.data(), 1, 2, 1, "parent::layout", "parent::patch")};
+  PopsRefluxRequestV1 reflux_request{sizeof(PopsRefluxRequestV1),
+                                     "transition::0-to-1",
+                                     0,
+                                     1,
+                                     1,
+                                     &reflux_face,
+                                     abi::logical_time(),
+                                     abi::noncollective_host_execution_context()};
+  EXPECT_TRUE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &reflux_api, sizeof(reflux_api)));
+  EXPECT_EQ(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, reflux_request, status),
+      0);
+  EXPECT_EQ(reflux_correction, (std::array<double, 2>{-4.0, -8.0}));
+
+  auto incomplete_reflux_api = reflux_api;
+  incomplete_reflux_api.apply_interface_batch = nullptr;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &incomplete_reflux_api, sizeof(incomplete_reflux_api)));
+  EXPECT_THROW(pops::component::apply_reflux_interface_batch(incomplete_reflux_api, nullptr,
+                                                             reflux_request, status),
+               std::runtime_error);
+  auto collective_reflux = reflux_request;
+  collective_reflux.execution = execution;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, collective_reflux, status),
+      std::invalid_argument);
+  auto malformed_reflux = reflux_request;
+  auto malformed_face = reflux_face;
+  malformed_face.correction.layout_identity = "other::parent-layout";
+  malformed_reflux.faces = &malformed_face;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, malformed_reflux, status),
+      std::invalid_argument);
 
   auto overflowing_ghosts = abi::const_field_view(tag_values.data(), 2, 2);
   overflowing_ghosts.ghost_lower[0] = std::numeric_limits<std::size_t>::max();
@@ -1286,6 +1427,145 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::publish_output(writer_api, &writer_state, writer_request, receipt),
                std::runtime_error);
   EXPECT_EQ(writer_state.publish_count, 1);
+}
+
+TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) {
+  const PopsExecutionContextV1 execution = abi::host_execution_context();
+  static constexpr PopsTopologyLabelV2 labels[] = {
+      {sizeof(PopsTopologyLabelV2), 1, "composite-material", "multilevel-test"}};
+  std::array<std::string, 2> patch_identities{"coarse-patch", "fine-patch"};
+  std::array<PopsFieldPatchMetadataV1, 2> metadata{};
+  for (std::size_t index = 0; index < metadata.size(); ++index) {
+    metadata[index] = {sizeof(PopsFieldPatchMetadataV1),
+                       index,
+                       0,
+                       static_cast<std::int32_t>(index),
+                       2,
+                       {},
+                       {},
+                       {},
+                       {},
+                       POPS_FIELD_CENTERING_CELL_V1,
+                       0,
+                       "multilevel-layout",
+                       patch_identities[index].c_str()};
+    metadata[index].lower[0] = static_cast<std::int64_t>(2 * index);
+    metadata[index].upper[0] = static_cast<std::int64_t>(2 * index + 1);
+    metadata[index].lower[1] = metadata[index].upper[1] = 0;
+    metadata[index].cell_spacing[0] = metadata[index].cell_spacing[1] = index == 0 ? 1.0 : 0.5;
+  }
+  PopsFieldGlobalTopologyV1 global{sizeof(PopsFieldGlobalTopologyV1),
+                                   "multilevel-recipe",
+                                   "multilevel-layout",
+                                   "multilevel-materialization",
+                                   2,
+                                   {},
+                                   {},
+                                   0,
+                                   metadata.size(),
+                                   metadata.data()};
+  global.domain_upper[0] = 3;
+  std::array<std::uint8_t, 2> coarse_coverage{1, 0};
+  std::array<std::uint8_t, 2> fine_coverage{1, 1};
+  const std::vector<pops::component::FieldTopologyPatchInputV2> inputs{
+      {0,
+       POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1,
+       {sizeof(PopsConstByteViewV1), coarse_coverage.data(), coarse_coverage.size()},
+       {},
+       {}},
+      {1,
+       POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1,
+       {sizeof(PopsConstByteViewV1), fine_coverage.data(), fine_coverage.size()},
+       {},
+       {}},
+  };
+  struct Calls {
+    int topology = 0;
+    int solver = 0;
+  } calls;
+  PopsFieldTopologyApiV2 topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2), POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void* raw, const PopsFieldTopologyRequestV2* request, PopsFieldTopologyResultV2* result) {
+        auto& state = *static_cast<Calls*>(raw);
+        ++state.topology;
+        if (request->topology.patch_count != 2 || request->local_patch_count != 2 ||
+            request->topology.patches[0].level != 0 || request->topology.patches[1].level != 1)
+          return 7;
+        for (std::size_t index = 0; index < request->local_patch_count; ++index) {
+          const auto& patch = request->local_patches[index];
+          if (patch.material_representation != POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1 ||
+              patch.material_coverage.size != 2)
+            return 8;
+          std::copy(patch.material_coverage.data,
+                    patch.material_coverage.data + patch.material_coverage.size,
+                    patch.material_mask.data);
+          for (std::size_t point = 0; point < patch.component_labels.size; ++point)
+            patch.component_labels.data[point] = patch.material_mask.data[point] == 1 ? 1 : 0;
+        }
+        result->label_count = 1;
+        result->labels = labels;
+        result->provenance = "multilevel-test";
+        result->topology_digest = "multilevel-topology-digest";
+        result->status = ok_status();
+        return 0;
+      }};
+  const auto topology =
+      pops::component::prepare_field_topology(topology_api, &calls, global, inputs, execution);
+  ASSERT_EQ(topology.local_patches().size(), 2u);
+  EXPECT_EQ(topology.local_patches()[0].material_mask, (std::vector<std::uint8_t>{1, 0}));
+  EXPECT_EQ(topology.local_patches()[1].material_mask, (std::vector<std::uint8_t>{1, 1}));
+
+  std::array<double, 2> coarse_rhs{2.0, 99.0}, fine_rhs{3.0, 4.0};
+  std::array<double, 2> coarse_solution{}, fine_solution{};
+  const auto& owned = topology.global_patches();
+  const std::vector<pops::component::FieldSolverPatchBindingV2> bindings{
+      {0,
+       abi::const_field_view(coarse_rhs.data(), 2, 1, 1, owned[0].layout_identity,
+                             owned[0].patch_identity),
+       abi::field_view(coarse_solution.data(), 2, 1, 1, owned[0].layout_identity,
+                       owned[0].patch_identity),
+       {}},
+      {1,
+       abi::const_field_view(fine_rhs.data(), 2, 1, 1, owned[1].layout_identity,
+                             owned[1].patch_identity),
+       abi::field_view(fine_solution.data(), 2, 1, 1, owned[1].layout_identity,
+                       owned[1].patch_identity),
+       {}},
+  };
+  const auto request = pops::component::bind_field_solver_request(
+      topology, bindings, execution, "{\"identity\":\"multilevel-boundary\"}", 1e-8, 0.0, 10);
+  PopsFieldSolverApiV2 solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void* raw, const PopsFieldSolverRequestV2* request, PopsSolveReportV2* report) {
+        auto& state = *static_cast<Calls*>(raw);
+        ++state.solver;
+        if (request->topology.patch_count != 2 || request->local_patch_count != 2 ||
+            request->topology.patches[0].level != 0 || request->topology.patches[1].level != 1 ||
+            request->local_patches[0].material_mask.data[1] != 0 ||
+            request->local_patches[1].material_mask.data[1] != 1)
+          return 9;
+        for (std::size_t patch = 0; patch < request->local_patch_count; ++patch) {
+          const auto* rhs = static_cast<const double*>(request->local_patches[patch].rhs.data);
+          auto* solution = static_cast<double*>(request->local_patches[patch].solution.data);
+          for (std::size_t point = 0; point < 2; ++point)
+            if (request->local_patches[patch].material_mask.data[point] == 1)
+              solution[point] = rhs[point];
+        }
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 0.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 0.0;
+        report->reason = "multilevel batch solved";
+        return 0;
+      }};
+  PopsSolveReportV2 report{};
+  EXPECT_EQ(pops::component::solve_field(solver_api, &calls, request, report), 0);
+  EXPECT_EQ(calls.topology, 1);
+  EXPECT_EQ(calls.solver, 1);
+  EXPECT_EQ(coarse_solution, (std::array<double, 2>{2.0, 0.0}));
+  EXPECT_EQ(fine_solution, fine_rhs);
 }
 
 TEST(ComponentInterfaces, PreparedExecutionContextBindsExactExecutionLaneAuthority) {

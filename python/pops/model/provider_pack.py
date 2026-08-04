@@ -256,6 +256,50 @@ class ProviderPack:
                 (owner_qid, sorted(missing)))
         return self.select(keys)
 
+    def select_components(
+        self,
+        *,
+        owner_qid: str,
+        spaces: Iterable[tuple[str, str]],
+        components: Iterable[str],
+    ) -> ProviderPack:
+        """Select exact components from declared spaces without a bare-name fallback.
+
+        Component spelling is only a filter inside the already-qualified owner/space set.  A
+        missing component or the same spelling in two selected spaces is rejected rather than
+        guessed, so an operator that needs one of two homonymous fields must qualify its input
+        space more narrowly.
+        """
+        _non_empty(owner_qid, "ProviderPack selection owner_qid")
+        requested_spaces = set(spaces)
+        requested_components = tuple(components)
+        if any(not isinstance(name, str) or not name for name in requested_components):
+            raise TypeError(
+                "ProviderPack components must contain non-empty strings"
+            )
+        if len(set(requested_components)) != len(requested_components):
+            raise ValueError("ProviderPack components contains a duplicate")
+        candidates = [
+            key for key in self
+            if key.owner_qid == owner_qid
+            and (key.space_kind, key.space_name) in requested_spaces
+        ]
+        selected = []
+        for component in requested_components:
+            matches = [key for key in candidates if key.component == component]
+            if not matches:
+                raise MissingInputProvider(
+                    "missing component %r in qualified provider spaces %r for owner %r"
+                    % (component, sorted(requested_spaces), owner_qid)
+                )
+            if len(matches) != 1:
+                raise MissingInputProvider(
+                    "ambiguous component %r in qualified provider spaces %r for owner %r"
+                    % (component, sorted(requested_spaces), owner_qid)
+                )
+            selected.append(matches[0])
+        return self.select(selected)
+
     def to_data(self) -> dict[str, Any]:
         rows = []
         for key in sorted(self._entries):
@@ -363,7 +407,16 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
             spaces.append(("field", input_space.name))
     if not spaces:
         return ProviderPack(capacity=full.capacity)
-    return full.select_spaces(owner_qid=str(module.owner_path.canonical()), spaces=spaces)
+    owner_qid = str(module.owner_path.canonical())
+    requirements = getattr(operator, "requirements", {})
+    required_components = requirements.get("aux", ())
+    if required_components:
+        return full.select_components(
+            owner_qid=owner_qid,
+            spaces=spaces,
+            components=required_components,
+        )
+    return full.select_spaces(owner_qid=owner_qid, spaces=spaces)
 
 
 __all__ = ["ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",

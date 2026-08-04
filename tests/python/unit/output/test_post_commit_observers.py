@@ -1,4 +1,5 @@
 """Isolated contract tests for bounded post-commit observers and optional Catalyst 2."""
+
 from __future__ import annotations
 
 import threading
@@ -9,7 +10,7 @@ import numpy as np
 import pytest
 
 from pops._geometry_contracts import POLAR_ANNULUS_2D_COORDINATES
-from pops.identity import make_identity
+from pops.identity import Identity, make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
 from pops.output._catalyst_backend import CatalystPythonProvider
 from pops.output._consumer_contracts import ParallelMode
@@ -30,6 +31,7 @@ from pops.output.observers import (
     ObserverFrame,
     ObserverReceipt,
     ObserverRun,
+    ObserverWorkerCollectiveLost,
     detach_observer_frame,
 )
 from pops.time import AcceptedStep, Clock, Every, Schedule
@@ -46,14 +48,62 @@ def _identity(domain: str, name: str):
     return make_identity(domain, {"name": name})
 
 
+def _close_worker_for_test(worker: PostCommitObserverWorker) -> None:
+    """Guarantee that a fail-once close test cannot leak its non-daemon thread."""
+
+    failure = None
+    for _attempt in range(2):
+        if worker.close_succeeded:
+            return
+        try:
+            worker.close()
+        except RuntimeError as error:
+            failure = error
+    if not worker.close_succeeded:
+        raise RuntimeError("test cleanup could not close post-commit worker") from failure
+
+
+def _cancel_prepared_queue_calls_for_test(queue: PostCommitObserverQueue) -> None:
+    """Release every unarmed lifecycle gate before its shared worker is joined."""
+
+    cleanup_error = RuntimeError("test cleanup cancelled an unresolved lifecycle call")
+    queue.cancel_initialize(cleanup_error)
+    queue.cancel_complete_close(cleanup_error)
+    queue.cancel_complete_abort_close(cleanup_error)
+
+
+def _close_private_queue_for_test(
+    queue: PostCommitObserverQueue,
+    *,
+    abort: bool = False,
+) -> None:
+    """Retry the deliberately fail-once private queue cleanup used by these tests."""
+
+    failure = None
+    close = queue.abort_close if abort else queue.close
+    for _attempt in range(2):
+        if queue.close_succeeded:
+            return
+        try:
+            close()
+        except RuntimeError as error:
+            failure = error
+    if not queue.close_succeeded:
+        raise RuntimeError("test cleanup could not close private observer queue") from failure
+
+
 def test_observer_report_has_an_exact_byte_free_collective_projection():
     from pops._native_collectives import decode_value, encode_value
 
     frame = _frame()
-    receipt = ObserverReceipt(frame.identity, "test.observer", {
-        "opaque": b"\x00\xff",
-        "nested": {"values": [b"abc", 7, True, None]},
-    })
+    receipt = ObserverReceipt(
+        frame.identity,
+        "test.observer",
+        {
+            "opaque": b"\x00\xff",
+            "nested": {"values": [b"abc", 7, True, None]},
+        },
+    )
     report = ObserverDeliveryReport(
         "test-consumer",
         frame.snapshot.provenance.run_identity,
@@ -72,7 +122,10 @@ def test_observer_report_has_an_exact_byte_free_collective_projection():
 
 
 def _frame(
-    *, mode: ParallelMode = ParallelMode.SERIAL, centering: str = "cell",
+    *,
+    run_identity: Identity | None = None,
+    mode: ParallelMode = ParallelMode.SERIAL,
+    centering: str = "cell",
     native_geometry_arrays=None,
     coordinate_system: str = "pops://coordinates/cartesian-2d@1",
     origin=(0.0, 0.0),
@@ -112,19 +165,19 @@ def _frame(
         (0, 0),
         spatial_shape,
         np.arange(1, 1 + spatial_shape[0] * spatial_shape[1], dtype=np.float64).reshape(
-            (1,) + spatial_shape),
+            (1,) + spatial_shape
+        ),
         0,
         0,
         False,
     )
-    field = FieldPayload(
-        key, centering, "K", component_names, spatial_shape, (piece,))
+    field = FieldPayload(key, centering, "K", component_names, spatial_shape, (piece,))
     snapshot = OutputSnapshot(
         OutputClock.at("macro", 0.25, 4, stage="accepted"),
         OutputProvenance(
             _identity("resolved-plan", "plan"),
             _identity("bind", "bind"),
-            _identity("run", "run"),
+            _identity("run", "run") if run_identity is None else run_identity,
             "accepted-step-transaction",
         ),
         (geometry,),
@@ -132,7 +185,8 @@ def _frame(
         {"test": "post-commit-observer"},
     )
     request = OutputRequest(
-        "live-temperature", (key,), mode, rank=0, size=(1 if mode is ParallelMode.SERIAL else 2))
+        "live-temperature", (key,), mode, rank=0, size=(1 if mode is ParallelMode.SERIAL else 2)
+    )
     return ObserverFrame(snapshot, request)
 
 
@@ -223,6 +277,12 @@ class _PartiallyFailingInitializeCatalyst(_CatalystModule):
         raise RuntimeError("Catalyst allocated state then failed")
 
 
+class _FailingFinalizeCatalyst(_CatalystModule):
+    def finalize(self, node):
+        self.operations.append(("finalize", node))
+        raise RuntimeError("injected Catalyst finalize failure")
+
+
 class _BlueprintMesh:
     def __init__(self):
         self.verified_domains = []
@@ -230,10 +290,10 @@ class _BlueprintMesh:
     def verify(self, domain, _info):
         self.verified_domains.append(domain.prefix)
         paths = domain.values
-        return all(any(
-            candidate.startswith(domain.prefix + suffix)
-            for candidate in paths
-        ) for suffix in ("/coordsets/", "/topologies/", "/fields/"))
+        return all(
+            any(candidate.startswith(domain.prefix + suffix) for candidate in paths)
+            for suffix in ("/coordsets/", "/topologies/", "/fields/")
+        )
 
 
 class _ConduitModule:
@@ -263,8 +323,7 @@ def _collective_context(
 ):
     import pops._native_collectives as native_collectives
 
-    world = SimpleNamespace(
-        identity="MPI_COMM_WORLD", active=True, rank=0, size=world_size)
+    world = SimpleNamespace(identity="MPI_COMM_WORLD", active=True, rank=0, size=world_size)
     lane = SimpleNamespace(
         identity="MPI_COMM_WORLD/observer/catalyst-test",
         active=True,
@@ -289,11 +348,13 @@ def _collective_context(
         rows = [dict(value, rank=owner) for owner in range(lane.size)]
         if peer_error is not None and len(rows) > 1 and "error" in rows[1]:
             rows[1]["error"] = peer_error
-        if divergent_initialize_authority and len(rows) > 1 \
-                and isinstance(rows[1].get("value"), dict) \
-                and "pipeline_sha256" in rows[1]["value"]:
-            rows[1]["value"] = dict(
-                rows[1]["value"], pipeline_sha256="0" * 64)
+        if (
+            divergent_initialize_authority
+            and len(rows) > 1
+            and isinstance(rows[1].get("value"), dict)
+            and "pipeline_sha256" in rows[1]["value"]
+        ):
+            rows[1]["value"] = dict(rows[1]["value"], pipeline_sha256="0" * 64)
         return tuple(rows)
 
     monkeypatch.setattr(native_collectives, "require_world", require_world)
@@ -302,8 +363,7 @@ def _collective_context(
     monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
     monkeypatch.setattr(native_collectives, "allgather_value", allgather_value)
     return (
-        SimpleNamespace(communicator=SimpleNamespace(
-            identity="MPI_COMM_WORLD", handle=world)),
+        SimpleNamespace(communicator=SimpleNamespace(identity="MPI_COMM_WORLD", handle=world)),
         lane,
         agreements,
     )
@@ -387,26 +447,30 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
     frame = _frame()
     run = ObserverRun(frame.snapshot.provenance.run_identity, {"case": "heat"})
 
-    with PostCommitObserverQueue(
-            session, run, consumer_id="live-temperature") as dispatcher:
+    with PostCommitObserverQueue(session, run, consumer_id="live-temperature") as dispatcher:
         assert dispatcher.submit(frame) == 0
         reports = dispatcher.flush()
 
     assert len(reports) == 1
     assert reports[0].status == "delivered"
     assert [operation for operation, _ in catalyst_module.operations] == [
-        "initialize", "execute", "finalize"]
+        "initialize",
+        "execute",
+        "finalize",
+    ]
     assert catalyst_module.operations[0][1].values["catalyst/async/enabled"] == 0
-    assert catalyst_module.operations[0][1].values[
-        "catalyst_load/implementation"] == "paraview"
-    assert catalyst_module.operations[0][1].values[
-        "catalyst_load/search_paths"] == [str(tmp_path.resolve())]
-    assert catalyst_module.operations[0][1].values[
-        "catalyst/scripts/pops/args"] == ["--extract=volume"]
+    assert catalyst_module.operations[0][1].values["catalyst_load/implementation"] == "paraview"
+    assert catalyst_module.operations[0][1].values["catalyst_load/search_paths"] == [
+        str(tmp_path.resolve())
+    ]
+    assert catalyst_module.operations[0][1].values["catalyst/scripts/pops/args"] == [
+        "--extract=volume"
+    ]
     execute_node = catalyst_module.operations[1][1]
     paths = execute_node.values
     temperature_prefixes = [
-        path.removesuffix("/display_name") for path, value in paths.items()
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
         if path.endswith("/display_name") and value == "temperature"
     ]
     assert len(temperature_prefixes) == 1
@@ -415,23 +479,25 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
         np.asarray([1.0, 2.0, 3.0, 4.0]),
     )
     assert any(
-        path.endswith("/display_name") and value == "vtkGhostType"
-        for path, value in paths.items())
+        path.endswith("/display_name") and value == "vtkGhostType" for path, value in paths.items()
+    )
     level_prefix = next(
-        path.removesuffix("/display_name") for path, value in paths.items()
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
         if path.endswith("/display_name") and value == "pops_level"
     )
     layout_prefix = next(
-        path.removesuffix("/display_name") for path, value in paths.items()
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
         if path.endswith("/display_name") and value == "pops_layout"
     )
     assert np.array_equal(paths[level_prefix + "/values"], np.zeros(4, dtype=np.int32))
     assert np.array_equal(paths[layout_prefix + "/values"], np.zeros(4, dtype=np.int32))
     assert paths["catalyst/channels/mesh/type"] == "multimesh"
     ghost_metadata = [
-        value for path, value in paths.items()
-        if "/state/metadata/vtk_fields/" in path
-        and path.endswith("/attribute_type")
+        value
+        for path, value in paths.items()
+        if "/state/metadata/vtk_fields/" in path and path.endswith("/attribute_type")
     ]
     assert ghost_metadata == ["Ghosts"]
     assert len(conduit_module.blueprint.mesh.verified_domains) == 1
@@ -454,9 +520,11 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
     )
     execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
     session = Catalyst(
-        pipeline=str(pipeline), provider=provider,
+        pipeline=str(pipeline),
+        provider=provider,
     ).open_runtime_session(
-        {"worker_communicator": worker_lane}, execution_context,
+        {"worker_communicator": worker_lane},
+        execution_context,
     )
 
     frame = _without_local_pieces(_frame(mode=ParallelMode.COLLECTIVE))
@@ -469,13 +537,17 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
     data_path = "catalyst/channels/mesh/data"
     assert execute_node.fetched == [data_path]
     child_paths = {
-        path: value for path, value in execute_node.values.items()
+        path: value
+        for path, value in execute_node.values.items()
         if path.startswith(data_path + "/")
     }
-    assert any(path.endswith("/topologies/mesh_000000/type") and value == "uniform"
-               for path, value in child_paths.items())
+    assert any(
+        path.endswith("/topologies/mesh_000000/type") and value == "uniform"
+        for path, value in child_paths.items()
+    )
     empty_arrays = [
-        value for path, value in child_paths.items()
+        value
+        for path, value in child_paths.items()
         if "/fields/" in path and path.endswith("/values")
     ]
     assert len(empty_arrays) == 6
@@ -494,14 +566,18 @@ def test_collective_catalyst_rejects_unproved_polar_empty_peer(
     )
     execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
     session = Catalyst(
-        pipeline=str(pipeline), provider=provider,
+        pipeline=str(pipeline),
+        provider=provider,
     ).open_runtime_session(
-        {"worker_communicator": worker_lane}, execution_context,
+        {"worker_communicator": worker_lane},
+        execution_context,
     )
-    frame = _without_local_pieces(_frame(
-        mode=ParallelMode.COLLECTIVE,
-        coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
-    ))
+    frame = _without_local_pieces(
+        _frame(
+            mode=ParallelMode.COLLECTIVE,
+            coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+        )
+    )
 
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     with pytest.raises(
@@ -544,7 +620,7 @@ def test_catalyst_rejects_environment_loader_precedence(tmp_path: Path, monkeypa
         declaration.open_session(_serial_context())
 
 
-def test_catalyst_partial_initialize_is_finalized_exactly_once(tmp_path: Path):
+def test_catalyst_partial_initialize_defers_finalize_to_explicit_abort(tmp_path: Path):
     pipeline = tmp_path / "partial_initialize.py"
     pipeline.write_text("# partial initialize cleanup\n")
     catalyst_module = _PartiallyFailingInitializeCatalyst()
@@ -563,8 +639,39 @@ def test_catalyst_partial_initialize_is_finalized_exactly_once(tmp_path: Path):
             consumer_id="partial-catalyst-initialize",
         )
 
+    assert [operation for operation, _node in catalyst_module.operations] == ["initialize"]
+
+    session.abort()
     assert [operation for operation, _node in catalyst_module.operations] == [
-        "initialize", "finalize"]
+        "initialize",
+        "finalize",
+    ]
+
+
+def test_catalyst_abort_never_reports_success_after_finalize_backend_failure(
+    tmp_path: Path,
+):
+    pipeline = tmp_path / "abort_finalize_failure.py"
+    pipeline.write_text("# abort must retain failed Catalyst finalization\n")
+    catalyst_module = _FailingFinalizeCatalyst()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    session.initialize(ObserverRun(_identity("run", "catalyst-abort-finalize-failure")))
+
+    with pytest.raises(RuntimeError, match="injected Catalyst finalize failure"):
+        session.abort()
+    with pytest.raises(RuntimeError, match="cannot retry failed finalization"):
+        session.abort()
+
+    assert [operation for operation, _node in catalyst_module.operations] == [
+        "initialize",
+        "finalize",
+    ]
 
 
 def test_catalyst_rejects_stub_implementation_acknowledgement(tmp_path: Path):
@@ -586,8 +693,13 @@ def test_catalyst_rejects_stub_implementation_acknowledgement(tmp_path: Path):
             consumer_id="stub-rejected",
         )
 
+    assert [operation for operation, _node in catalyst_module.operations] == ["initialize"]
+
+    session.abort()
     assert [operation for operation, _node in catalyst_module.operations] == [
-        "initialize", "finalize"]
+        "initialize",
+        "finalize",
+    ]
 
 
 def test_catalyst_maps_polar_annulus_to_explicit_cartesian_quads(tmp_path: Path):
@@ -613,16 +725,22 @@ def test_catalyst_maps_polar_annulus_to_explicit_cartesian_quads(tmp_path: Path)
 
     paths = catalyst_module.operations[1][1].values
     topology_types = [
-        value for path, value in paths.items()
-        if "/topologies/" in path and path.endswith("/type")
+        value for path, value in paths.items() if "/topologies/" in path and path.endswith("/type")
     ]
     assert topology_types == ["unstructured"]
-    x = next(value for path, value in paths.items()
-             if "/coordsets/" in path and path.endswith("/values/x"))
-    y = next(value for path, value in paths.items()
-             if "/coordsets/" in path and path.endswith("/values/y"))
-    connectivity = next(value for path, value in paths.items()
-                        if path.endswith("/elements/connectivity"))
+    x = next(
+        value
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/values/x")
+    )
+    y = next(
+        value
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/values/y")
+    )
+    connectivity = next(
+        value for path, value in paths.items() if path.endswith("/elements/connectivity")
+    )
     assert np.allclose(x[:3], [1.0, 1.5, 2.0])
     assert np.allclose(y[:3], [0.0, 0.0, 0.0])
     assert np.array_equal(connectivity[:4], [0, 1, 4, 3])
@@ -644,21 +762,25 @@ def test_catalyst_uses_same_block_disambiguated_names_as_paraview_files(tmp_path
             "accepted",
         )
         keys.append(key)
-        fields.append(FieldPayload(
-            key,
-            "cell",
-            "kg/m3",
-            ("rho",),
-            geometry.cell_shape,
-            (ArrayPiece(
-                (0, 0),
-                (2, 2),
-                np.full((1, 2, 2), index + 1.0),
-                0,
-                0,
-                False,
-            ),),
-        ))
+        fields.append(
+            FieldPayload(
+                key,
+                "cell",
+                "kg/m3",
+                ("rho",),
+                geometry.cell_shape,
+                (
+                    ArrayPiece(
+                        (0, 0),
+                        (2, 2),
+                        np.full((1, 2, 2), index + 1.0),
+                        0,
+                        0,
+                        False,
+                    ),
+                ),
+            )
+        )
     snapshot = OutputSnapshot(
         base_frame.snapshot.clock,
         base_frame.snapshot.provenance,
@@ -686,7 +808,8 @@ def test_catalyst_uses_same_block_disambiguated_names_as_paraview_files(tmp_path
 
     paths = catalyst_module.operations[1][1].values
     display_names = {
-        value for path, value in paths.items()
+        value
+        for path, value in paths.items()
         if "/fields/" in path and path.endswith("/display_name")
     }
     assert {"fluid.rho", "radiation.rho"}.issubset(display_names)
@@ -736,11 +859,13 @@ def test_live_observer_session_provider_must_match_authenticated_manifest():
     descriptor = LiveVisualization(
         observer=_DeclaredProvider(),
         schedule=Schedule(Every(AcceptedStep(Clock("provider-authority")), 1)),
-        fields=(Handle(
-            "temperature",
-            kind="state",
-            owner=OwnerPath.model("provider-authority"),
-        ),),
+        fields=(
+            Handle(
+                "temperature",
+                kind="state",
+                owner=OwnerPath.model("provider-authority"),
+            ),
+        ),
     )
     operation = descriptor.consumer_authoring()[0].operation
 
@@ -762,8 +887,7 @@ def test_catalyst_session_provider_must_match_authenticated_backend(tmp_path: Pa
 
     pipeline = tmp_path / "provider_identity.py"
     pipeline.write_text("# provider identity test\n")
-    declaration = Catalyst(
-        pipeline=str(pipeline), provider=_DeclaredCatalystBackend())
+    declaration = Catalyst(pipeline=str(pipeline), provider=_DeclaredCatalystBackend())
 
     with pytest.raises(ValueError, match="provider_id differs from its authenticated provider"):
         declaration.open_session(_serial_context())
@@ -771,10 +895,15 @@ def test_catalyst_session_provider_must_match_authenticated_backend(tmp_path: Pa
 
 def test_bounded_dispatcher_retries_then_reports_without_compensation():
     session = _RetrySession()
+    run_identity = _identity("run", "retry")
     dispatcher = PostCommitObserverQueue(
-        session, ObserverRun(_identity("run", "retry")),
-        consumer_id="retry-observer", capacity=1, max_attempts=2)
-    dispatcher.submit(_frame())
+        session,
+        ObserverRun(run_identity),
+        consumer_id="retry-observer",
+        capacity=1,
+        max_attempts=2,
+    )
+    dispatcher.submit(_frame(run_identity=run_identity))
     reports = dispatcher.close()
 
     assert dispatcher.capacity == 1
@@ -785,10 +914,15 @@ def test_bounded_dispatcher_retries_then_reports_without_compensation():
 
 def test_bounded_dispatcher_reports_exhausted_frame_as_skipped():
     session = _RetrySession(always_fail=True)
+    run_identity = _identity("run", "skip")
     dispatcher = PostCommitObserverQueue(
-        session, ObserverRun(_identity("run", "skip")),
-        consumer_id="skip-observer", capacity=1, max_attempts=2)
-    dispatcher.submit(_frame())
+        session,
+        ObserverRun(run_identity),
+        consumer_id="skip-observer",
+        capacity=1,
+        max_attempts=2,
+    )
+    dispatcher.submit(_frame(run_identity=run_identity))
     reports = dispatcher.close()
 
     assert reports[0].status == "skipped"
@@ -801,9 +935,9 @@ def test_serial_catalyst_rejects_unproved_centering_and_distributed_frame(tmp_pa
     pipeline = tmp_path / "pipeline.py"
     pipeline.write_text("# injected Catalyst pipeline\n")
     provider = CatalystPythonProvider(
-        catalyst_module=_CatalystModule(), conduit_module=_ConduitModule())
-    session = Catalyst(
-        pipeline=str(pipeline), provider=provider).open_session(_serial_context())
+        catalyst_module=_CatalystModule(), conduit_module=_ConduitModule()
+    )
+    session = Catalyst(pipeline=str(pipeline), provider=provider).open_session(_serial_context())
     frame = _frame(centering="node")
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     with pytest.raises(NotImplementedError, match="cell-centered"):
@@ -826,8 +960,7 @@ def test_catalyst_rejects_an_mpi_execution_context_before_loading_modules(
             conduit_module=_ConduitModule(),
         ),
     )
-    mpi_context = SimpleNamespace(
-        communicator=SimpleNamespace(identity="MPI_COMM_WORLD"))
+    mpi_context = SimpleNamespace(communicator=SimpleNamespace(identity="MPI_COMM_WORLD"))
 
     with pytest.raises(ValueError, match="exact duplicated MPI_COMM_WORLD observer lane"):
         declaration.open_session(mpi_context)
@@ -851,8 +984,7 @@ def test_catalyst_collective_session_authenticates_lane_and_passes_mpi_comm(
     )
     mpi_context, lane, agreements = _collective_context(monkeypatch)
 
-    session = declaration.open_runtime_session(
-        {"worker_communicator": lane}, mpi_context)
+    session = declaration.open_runtime_session({"worker_communicator": lane}, mpi_context)
     assert session.authority == {
         "schema_version": 1,
         "provider_id": "pops.output.catalyst-python.v1",
@@ -868,13 +1000,15 @@ def test_catalyst_collective_session_authenticates_lane_and_passes_mpi_comm(
 
     assert receipt.frame_identity == frame.identity
     assert [operation for operation, _node in catalyst_module.operations] == [
-        "initialize", "execute", "finalize"]
+        "initialize",
+        "execute",
+        "finalize",
+    ]
     assert catalyst_module.operations[0][1].values["catalyst/mpi_comm"] == 73
     assert agreements
     assert all(
-        row == {"rank": 0, "error": None}
-        or set(row) == {"rank", "value"}
-        for row in agreements)
+        row == {"rank": 0, "error": None} or set(row) == {"rank", "value"} for row in agreements
+    )
 
 
 def test_catalyst_rejects_a_worker_lane_with_different_world_topology(
@@ -891,12 +1025,10 @@ def test_catalyst_rejects_a_worker_lane_with_different_world_topology(
             conduit_module=_ConduitModule(),
         ),
     )
-    mpi_context, lane, _agreements = _collective_context(
-        monkeypatch, world_size=3, lane_size=2)
+    mpi_context, lane, _agreements = _collective_context(monkeypatch, world_size=3, lane_size=2)
 
     with pytest.raises(ValueError, match="lane topology differs from MPI_COMM_WORLD"):
-        declaration.open_runtime_session(
-            {"worker_communicator": lane}, mpi_context)
+        declaration.open_runtime_session({"worker_communicator": lane}, mpi_context)
 
     assert catalyst_module.operations == []
 
@@ -916,13 +1048,13 @@ def test_catalyst_collective_agreement_propagates_a_peer_initialize_error(
         ),
     )
     mpi_context, lane, agreements = _collective_context(
-        monkeypatch, peer_error="ValueError: rank-one pipeline failure")
-    session = declaration.open_runtime_session(
-        {"worker_communicator": lane}, mpi_context)
+        monkeypatch, peer_error="ValueError: rank-one pipeline failure"
+    )
+    session = declaration.open_runtime_session({"worker_communicator": lane}, mpi_context)
 
     with pytest.raises(
-            RuntimeError,
-            match="Catalyst initialize failed collectively:.*rank 1:.*pipeline failure"):
+        RuntimeError, match="Catalyst initialize failed collectively:.*rank 1:.*pipeline failure"
+    ):
         session.initialize(ObserverRun(_identity("run", "peer-initialize-failure")))
 
     assert agreements == [{"rank": 0, "error": None}]
@@ -944,12 +1076,11 @@ def test_catalyst_collective_rejects_rank_divergent_initialize_authority(
         ),
     )
     mpi_context, lane, _agreements = _collective_context(
-        monkeypatch, divergent_initialize_authority=True)
-    session = declaration.open_runtime_session(
-        {"worker_communicator": lane}, mpi_context)
+        monkeypatch, divergent_initialize_authority=True
+    )
+    session = declaration.open_runtime_session({"worker_communicator": lane}, mpi_context)
 
-    with pytest.raises(
-            RuntimeError, match="Catalyst initialize authority differs across ranks: 1"):
+    with pytest.raises(RuntimeError, match="Catalyst initialize authority differs across ranks: 1"):
         session.initialize(ObserverRun(_identity("run", "divergent-authority")))
 
     assert catalyst_module.operations == []
@@ -970,8 +1101,7 @@ def test_catalyst_collective_rejects_a_frame_from_another_lane_topology(
         ),
     )
     mpi_context, lane, _agreements = _collective_context(monkeypatch)
-    session = declaration.open_runtime_session(
-        {"worker_communicator": lane}, mpi_context)
+    session = declaration.open_runtime_session({"worker_communicator": lane}, mpi_context)
     frame = _frame(mode=ParallelMode.COLLECTIVE)
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     mismatched = ObserverFrame(
@@ -986,13 +1116,15 @@ def test_catalyst_collective_rejects_a_frame_from_another_lane_topology(
     )
 
     with pytest.raises(
-            RuntimeError,
-            match="Catalyst execute failed collectively:.*exact worker MPI lane topology"):
+        RuntimeError, match="Catalyst execute failed collectively:.*exact worker MPI lane topology"
+    ):
         session.execute(mismatched)
 
     session.finalize()
     assert [operation for operation, _node in catalyst_module.operations] == [
-        "initialize", "finalize"]
+        "initialize",
+        "finalize",
+    ]
 
 
 def test_catalyst_conduit_import_prefers_paraview_name_then_external_fallback(monkeypatch):
@@ -1060,15 +1192,17 @@ def test_real_catalyst_conduit_blueprint_when_available(tmp_path: Path):
     session.finalize()
 
     assert [name for name, _node in catalyst_module.operations] == [
-        "initialize", "execute", "finalize"]
+        "initialize",
+        "execute",
+        "finalize",
+    ]
 
 
 def test_scalar_tutorial_pipeline_executes_with_real_catalyst_when_available():
     pytest.importorskip("catalyst")
     pytest.importorskip("catalyst_conduit")
     pipeline = (
-        Path(__file__).resolve().parents[4]
-        / "docs/tuto/scalar_advection/catalyst_pipeline.py"
+        Path(__file__).resolve().parents[4] / "docs/tuto/scalar_advection/catalyst_pipeline.py"
     )
     session = Catalyst(pipeline=str(pipeline)).open_session(_serial_context())
     frame = _frame(field_name="U", component_names=("rho",))
@@ -1109,7 +1243,8 @@ def test_background_dispatcher_rejects_worker_mpi_without_a_duplicate_lane():
     )
     with pytest.raises(ValueError, match="explicit duplicated worker lane"):
         PostCommitObserverQueue(
-            session, ObserverRun(_identity("run", "mpi")), consumer_id="mpi-observer")
+            session, ObserverRun(_identity("run", "mpi")), consumer_id="mpi-observer"
+        )
 
 
 def test_background_dispatcher_rejects_a_worker_lane_for_a_serial_session(
@@ -1142,6 +1277,7 @@ def test_background_dispatcher_rejects_a_worker_lane_for_a_serial_session(
 
 def test_background_dispatcher_accepts_a_collective_session_with_duplicate_lane(
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ):
     import pops._native_collectives as native_collectives
 
@@ -1178,19 +1314,33 @@ def test_background_dispatcher_accepts_a_collective_session_with_duplicate_lane(
     monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
     monkeypatch.setattr(native_collectives, "allgather_value", allgather_value)
     monkeypatch.setattr(
-        native_collectives, "barrier", lambda communicator: barriers.append(communicator))
+        native_collectives, "barrier", lambda communicator: barriers.append(communicator)
+    )
 
     session = _CollectiveSession()
-    worker = PostCommitObserverWorker(thread_name="test-collective-observer-worker")
+    run_identity = _identity("run", "collective-queue")
+    worker = PostCommitObserverWorker(
+        thread_name="test-collective-observer-worker",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
     queue = PostCommitObserverQueue(
         session,
-        ObserverRun(_identity("run", "collective-queue")),
+        ObserverRun(run_identity),
         consumer_id="collective-observer",
         worker_communicator=lane,
         shared_worker=worker,
+        defer_initialize=True,
     )
-    queue.submit(_frame(mode=ParallelMode.COLLECTIVE))
-    reports = queue.close()
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue.submit(_frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE))
+    queue.prepare_close()
+    queue.prepare_complete_close()
+    queue.arm_complete_close()
+    reports = queue.complete_close()
     worker.close()
 
     assert len(reports) == 1
@@ -1200,7 +1350,721 @@ def test_background_dispatcher_accepts_a_collective_session_with_duplicate_lane(
     assert barriers == [lane]
 
 
-def test_shared_post_commit_worker_preserves_cross_consumer_fifo_on_one_thread():
+def test_collective_initialization_barrier_loss_seals_lane_without_agreement(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/barrier-loss",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    agreement_calls = 0
+
+    def fail_barrier(communicator):
+        assert communicator is lane
+        raise RuntimeError("injected initialization barrier loss")
+
+    def forbidden_agreement(_communicator, _value):
+        nonlocal agreement_calls
+        agreement_calls += 1
+        raise AssertionError("a lost initialization barrier seals the worker lane")
+
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", fail_barrier)
+    monkeypatch.setattr(native_collectives, "allgather_value", forbidden_agreement)
+
+    run_identity = _identity("run", "collective-initialization-barrier-loss")
+    worker = PostCommitObserverWorker(
+        thread_name="test-collective-initialization-barrier-loss",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        _CollectiveSession(),
+        ObserverRun(run_identity),
+        consumer_id="collective-initialization-barrier-loss",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    with pytest.raises(RuntimeError, match="initialization barrier lost"):
+        queue.complete_initialize()
+
+    assert queue.worker_collective_lost is True
+    assert agreement_calls == 0
+
+
+def test_local_seal_cancels_deferred_frame_without_provider_reentry_and_joins_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.initialize_calls = 0
+            self.finalize_calls = 0
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            self.initialize_calls += 1
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+        def abort(self):
+            self.abort_calls += 1
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/local-seal",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+    monkeypatch.setattr(
+        native_collectives,
+        "allgather_value",
+        lambda _communicator, value: (value, dict(value, rank=1)),
+    )
+
+    run_identity = _identity("run", "collective-local-seal")
+    session = _CollectiveSession()
+    worker = PostCommitObserverWorker(
+        thread_name="test-collective-local-seal",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="collective-local-seal",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue._prepare_detached(
+        observer_runtime._detach_owned_observer_frame(
+            _frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE)
+        )
+    )
+
+    lost = RuntimeError("WORLD observer collective lost")
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+
+    assert session.initialize_calls == 1
+    assert session.calls == 0
+    assert session.finalize_calls == 0
+    assert session.abort_calls == 0
+    assert queue.pending == 0
+    assert len(queue.reports) == 1
+    assert queue.reports[0].status == "skipped"
+    assert queue.worker_collective_lost is True
+    assert worker.close_succeeded is True
+
+
+@pytest.mark.parametrize("phase", ("initialize", "execute", "finalize"))
+@pytest.mark.parametrize("failure", ("transport", "malformed"))
+def test_catalyst_worker_collective_loss_seals_queue_without_a_second_lane_probe(
+    phase: str,
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    pipeline = tmp_path / ("lost-%s-%s.py" % (phase, failure))
+    pipeline.write_text("# worker collective loss\n")
+    catalyst_module = _CatalystModule()
+    context, lane, _agreements = _collective_context(monkeypatch)
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_runtime_session({"worker_communicator": lane}, context)
+    run_identity = _identity("run", "catalyst-%s-%s-loss" % (phase, failure))
+    frame = _frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE)
+    run = ObserverRun(run_identity)
+    worker = PostCommitObserverWorker(
+        thread_name="test-catalyst-%s-%s-loss" % (phase, failure),
+        run_identity=run.run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        run,
+        consumer_id="collective-catalyst-loss",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+
+    loss_armed = False
+    lost_collective_calls = 0
+
+    def gathered(communicator, value):
+        nonlocal lost_collective_calls
+        assert communicator is lane
+        if loss_armed and set(value) == {"rank", "error"}:
+            lost_collective_calls += 1
+            if failure == "transport":
+                raise RuntimeError("injected Catalyst worker-lane transport loss")
+            return (dict(value, rank=0),)
+        return tuple(dict(value, rank=owner) for owner in range(lane.size))
+
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    captured = None
+    if phase == "initialize":
+        loss_armed = True
+        queue.prepare_initialize()
+        queue.arm_initialize()
+        with pytest.raises(RuntimeError, match="provider worker collective") as captured:
+            queue.complete_initialize()
+    else:
+        queue.prepare_initialize()
+        queue.arm_initialize()
+        queue.complete_initialize()
+        loss_armed = True
+        if phase == "execute":
+            queue.submit(frame)
+            with pytest.raises(RuntimeError, match="provider worker collective") as captured:
+                queue.flush()
+        else:
+            queue.prepare_close()
+            queue.prepare_complete_close()
+            queue.arm_complete_close()
+            with pytest.raises(RuntimeError, match="provider worker collective") as captured:
+                queue.complete_close()
+
+    assert captured is not None
+    causes = []
+    error = captured.value
+    while error is not None and error not in causes:
+        causes.append(error)
+        error = error.__cause__
+    assert any(isinstance(cause, ObserverWorkerCollectiveLost) for cause in causes)
+    assert lost_collective_calls == 1
+    assert queue.worker_collective_lost is True
+    worker.close()
+
+
+def test_abort_collective_loss_marker_poisoned_queue_refuses_retry_and_seals_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+            raise ObserverWorkerCollectiveLost("injected abort worker-lane loss")
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/abort-marker-loss",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    agreement_calls = 0
+
+    def gathered(_communicator, value):
+        nonlocal agreement_calls
+        agreement_calls += 1
+        return value, dict(value, rank=1)
+
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    run_identity = _identity("run", "abort-marker-loss")
+    session = _CollectiveSession()
+    worker = PostCommitObserverWorker(
+        thread_name="test-abort-marker-loss",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="abort-marker-loss",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue.prepare_abort_close()
+    queue.prepare_complete_abort_close()
+    queue.arm_complete_abort_close()
+
+    with pytest.raises(RuntimeError, match="provider worker collective"):
+        queue.complete_abort_close()
+    with pytest.raises(RuntimeError, match="worker collective is lost"):
+        queue.prepare_complete_abort_close()
+
+    assert session.abort_calls == 1
+    assert agreement_calls == 1
+    assert queue.worker_collective_lost is True
+    assert queue.abort_required is False
+
+    lost = RuntimeError("WORLD observer collective lost after abort")
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+    assert worker.close_succeeded is True
+
+
+def test_collective_frame_gate_reports_local_serialization_failure_before_provider_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/frame-gate-failure",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    frame_gates = []
+
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+
+    def gathered(_communicator, value):
+        peer = dict(value, rank=1)
+        if set(value) == {"rank", "error", "gate"}:
+            frame_gates.append(value)
+            peer["error"] = None
+            peer["gate"] = {"peer": "valid-frame-authority"}
+        return value, peer
+
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    session = _CollectiveSession()
+    run_identity = _identity("run", "frame-gate-serialization-failure")
+    worker = PostCommitObserverWorker(
+        thread_name="test-frame-gate-serialization-failure",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    dispatcher = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="collective-observer",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(dispatcher))
+    dispatcher.prepare_initialize()
+    dispatcher.arm_initialize()
+    dispatcher.complete_initialize()
+    frame = _frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE)
+    owned = observer_runtime._detach_owned_observer_frame(frame)
+
+    def fail_to_data(_request):
+        raise RuntimeError("rank-local request serialization failure")
+
+    monkeypatch.setattr(OutputRequest, "to_data", fail_to_data)
+    dispatcher._submit_detached(owned)
+    dispatcher.prepare_close()
+    dispatcher.prepare_complete_close()
+    dispatcher.arm_complete_close()
+    reports = dispatcher.complete_close()
+    worker.close()
+
+    assert len(frame_gates) == 1
+    assert frame_gates[0]["gate"] is None
+    assert "rank-local request serialization failure" in frame_gates[0]["error"]
+    assert reports[0].status == "skipped"
+    assert "authority construction failed collectively" in reports[0].reason
+    assert session.calls == 0
+
+
+def test_collective_frame_gate_truncated_proof_poisoned_lane_refuses_provider_abort(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def abort(self):
+            self.abort_calls += 1
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/truncated-frame-gate",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    execute_gates = []
+
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+
+    def gathered(communicator, value):
+        if set(value) == {"rank", "error", "gate"}:
+            execute_gates.append(value)
+            return (value,)
+        return tuple(dict(value, rank=owner) for owner in range(communicator.size))
+
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    session = _CollectiveSession()
+    run_identity = _identity("run", "truncated-frame-gate")
+    worker = PostCommitObserverWorker(
+        thread_name="test-truncated-frame-gate",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="collective-observer",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue.submit(_frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE))
+    with pytest.raises(RuntimeError, match="malformed rank evidence"):
+        queue.flush()
+    with pytest.raises(RuntimeError, match="worker collective is lost"):
+        queue.prepare_abort_close()
+    reports = queue.reports
+    worker.close()
+
+    assert len(execute_gates) == 1
+    assert len(reports) == 1
+    assert reports[0].status == "skipped"
+    assert "malformed rank evidence" in reports[0].reason
+    assert session.calls == 0
+    assert session.abort_calls == 0
+    assert queue.worker_collective_lost is True
+    assert queue.abort_required is False
+    assert queue.abort_succeeded is False
+    assert queue.close_succeeded is False
+    assert worker.close_succeeded is True
+
+
+@pytest.mark.parametrize("lost_phase", ("execute", "journal"))
+def test_collective_transport_loss_poisoned_lane_never_reenters_provider(
+    lost_phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+):
+    import pops._native_collectives as native_collectives
+    from pops.output._durable_journal import DurableJournal
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def abort(self):
+            self.abort_calls += 1
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/lost-%s" % lost_phase,
+        active=True,
+        rank=0,
+        size=2,
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+
+    status_collectives = 0
+
+    def gathered(_communicator, value):
+        nonlocal status_collectives
+        if set(value) == {"rank", "error", "gate"}:
+            return value, dict(value, rank=1)
+        assert set(value) == {"rank", "error"}
+        status_collectives += 1
+        lost_at = 2 if lost_phase == "execute" else 3
+        if status_collectives == lost_at:
+            raise RuntimeError("injected %s transport loss" % lost_phase)
+        return value, dict(value, rank=1)
+
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    session = _CollectiveSession()
+    run_identity = _identity("run", "lost-%s-transport" % lost_phase)
+    worker = PostCommitObserverWorker(
+        thread_name="test-lost-%s-transport" % lost_phase,
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="collective-observer",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+
+    frame = _frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE)
+    if lost_phase == "journal":
+        journal = DurableJournal(tmp_path / "journal", sync="none")
+        record = journal.commit(journal.prepare(frame))
+        queue.submit(frame, journal=journal, journal_record=record)
+    else:
+        queue.submit(frame)
+
+    with pytest.raises(RuntimeError, match="lost its collective proof"):
+        queue.flush()
+    with pytest.raises(RuntimeError, match="lost its collective proof"):
+        queue.flush()
+    with pytest.raises(RuntimeError, match="worker collective is lost"):
+        queue.prepare_abort_close()
+    worker.close()
+
+    assert session.calls == 1
+    assert session.abort_calls == 0
+    assert queue.worker_collective_lost is True
+    assert queue.abort_required is False
+    assert queue.abort_succeeded is False
+    assert queue.close_succeeded is False
+    assert worker.close_succeeded is True
+
+
+def test_collective_lifecycle_tasks_enter_provider_only_after_explicit_arm(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _LifecycleSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.initialize_calls = 0
+            self.finalize_calls = 0
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            self.initialize_calls += 1
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+        def abort(self):
+            self.abort_calls += 1
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/lifecycle-gate",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+    monkeypatch.setattr(
+        native_collectives,
+        "allgather_value",
+        lambda _communicator, value: (value, dict(value, rank=1)),
+    )
+
+    run_identity = _identity("run", "collective-lifecycle-gate")
+    worker = PostCommitObserverWorker(
+        thread_name="test-collective-lifecycle-gate",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    finalized = _LifecycleSession()
+    queue = PostCommitObserverQueue(
+        finalized,
+        ObserverRun(run_identity),
+        consumer_id="collective-finalize",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.cancel_initialize(RuntimeError("peer refused initialization enqueue"))
+    assert finalized.initialize_calls == 0
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    assert finalized.initialize_calls == 1
+
+    queue.prepare_close()
+    queue.prepare_complete_close()
+    queue.cancel_complete_close(RuntimeError("peer refused finalization enqueue"))
+    assert finalized.finalize_calls == 0
+    queue.prepare_complete_close()
+    queue.arm_complete_close()
+    queue.complete_close()
+    assert finalized.finalize_calls == 1
+
+    aborted = _LifecycleSession()
+    abort_queue = PostCommitObserverQueue(
+        aborted,
+        ObserverRun(run_identity),
+        consumer_id="collective-abort",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(abort_queue))
+    abort_queue.prepare_abort_close()
+    abort_queue.prepare_complete_abort_close()
+    abort_queue.cancel_complete_abort_close(RuntimeError("peer refused abort enqueue"))
+    assert aborted.abort_calls == 0
+    abort_queue.prepare_complete_abort_close()
+    abort_queue.arm_complete_abort_close()
+    abort_queue.complete_abort_close()
+    assert aborted.abort_calls == 1
+    worker.close()
+
+
+def test_shared_post_commit_worker_preserves_cross_consumer_fifo_on_one_thread(
+    request: pytest.FixtureRequest,
+):
     events = []
 
     class _OrderedSession(_RetrySession):
@@ -1218,15 +2082,23 @@ def test_shared_post_commit_worker_preserves_cross_consumer_fifo_on_one_thread()
         def finalize(self):
             events.append(("finalize", self.name, threading.get_ident()))
 
-    worker = PostCommitObserverWorker(thread_name="test-shared-post-commit-fifo")
     run = ObserverRun(_identity("run", "shared-fifo"))
+    worker = PostCommitObserverWorker(
+        thread_name="test-shared-post-commit-fifo",
+        run_identity=run.run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
     first = PostCommitObserverQueue(
-        _OrderedSession("first"), run, consumer_id="first", shared_worker=worker)
+        _OrderedSession("first"), run, consumer_id="first", shared_worker=worker
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(first))
     second = PostCommitObserverQueue(
-        _OrderedSession("second"), run, consumer_id="second", shared_worker=worker)
+        _OrderedSession("second"), run, consumer_id="second", shared_worker=worker
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(second))
 
-    second.submit(_frame())
-    first.submit(_frame())
+    second.submit(_frame(run_identity=run.run_identity))
+    first.submit(_frame(run_identity=run.run_identity))
     first.close()
     second.close()
     worker.close()
@@ -1242,7 +2114,265 @@ def test_shared_post_commit_worker_preserves_cross_consumer_fifo_on_one_thread()
     assert len({thread for _phase, _name, thread in events}) == 1
 
 
-def test_observer_initialization_failure_aborts_partial_session_once():
+def test_observer_queue_rejects_shared_worker_owned_by_another_run(
+    request: pytest.FixtureRequest,
+):
+    expected_run = _identity("run", "expected-worker-owner")
+    worker = PostCommitObserverWorker(
+        thread_name="test-wrong-run-worker",
+        run_identity=_identity("run", "wrong-worker-owner"),
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+
+    with pytest.raises(ValueError, match="shared_worker belongs to a different run"):
+        PostCommitObserverQueue(
+            _RetrySession(),
+            ObserverRun(expected_run),
+            consumer_id="wrong-run-worker",
+            shared_worker=worker,
+        )
+
+    worker.close()
+    assert worker.close_succeeded is True
+
+
+def test_shared_observer_close_retries_finalize_without_republishing_reports(
+    request: pytest.FixtureRequest,
+):
+    class _FailOnceFinalizeSession(_RetrySession):
+        def __init__(self):
+            super().__init__()
+            self.finalize_calls = 0
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def finalize(self):
+            self.finalize_calls += 1
+            if self.finalize_calls == 1:
+                raise RuntimeError("transient finalize failure")
+
+    session = _FailOnceFinalizeSession()
+    run_identity = _identity("run", "shared-close-retry")
+    worker = PostCommitObserverWorker(
+        thread_name="test-shared-close-retry",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    dispatcher = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="shared-close-retry",
+        shared_worker=worker,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(dispatcher))
+    dispatcher.submit(_frame(run_identity=run_identity))
+
+    with pytest.raises(RuntimeError, match="transient finalize failure"):
+        dispatcher.close()
+
+    reports_after_failure = dispatcher.reports
+    assert dispatcher.close_requested
+    assert not dispatcher.close_succeeded
+    assert not dispatcher.closed
+    assert len(reports_after_failure) == 1
+    assert session.calls == 1
+    with pytest.raises(RuntimeError, match="observer queue is closed"):
+        dispatcher.submit(_frame(run_identity=run_identity))
+
+    assert dispatcher.close() == reports_after_failure
+    assert dispatcher.close_succeeded
+    assert dispatcher.closed
+    assert session.calls == 1
+    assert session.finalize_calls == 2
+    worker.close()
+
+
+def test_private_observer_close_retries_finalize_on_original_worker_thread(
+    request: pytest.FixtureRequest,
+):
+    class _FailOnceFinalizeSession(_RetrySession):
+        def __init__(self):
+            super().__init__()
+            self.execute_threads = []
+            self.finalize_threads = []
+
+        def execute(self, frame):
+            self.calls += 1
+            self.execute_threads.append(threading.get_ident())
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def finalize(self):
+            self.finalize_threads.append(threading.get_ident())
+            if len(self.finalize_threads) == 1:
+                raise RuntimeError("transient private finalize failure")
+
+    session = _FailOnceFinalizeSession()
+    run_identity = _identity("run", "private-close-retry")
+    dispatcher = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="private-close-retry",
+    )
+    request.addfinalizer(lambda: _close_private_queue_for_test(dispatcher))
+    dispatcher.submit(_frame(run_identity=run_identity))
+
+    with pytest.raises(RuntimeError, match="transient private finalize failure"):
+        dispatcher.close()
+
+    reports_after_failure = dispatcher.reports
+    assert dispatcher.close_requested
+    assert not dispatcher.close_succeeded
+    assert dispatcher.close() == reports_after_failure
+    assert dispatcher.close_succeeded
+    assert session.calls == 1
+    assert len(session.finalize_threads) == 2
+    assert len(set(session.execute_threads + session.finalize_threads)) == 1
+
+
+def test_observer_close_retries_preparation_before_finalizing(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    class _CountingFinalizeSession(_RetrySession):
+        def __init__(self):
+            super().__init__()
+            self.finalize_calls = 0
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+    session = _CountingFinalizeSession()
+    run_identity = _identity("run", "flush-close-retry")
+    worker = PostCommitObserverWorker(
+        thread_name="test-flush-close-retry",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    dispatcher = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="flush-close-retry",
+        shared_worker=worker,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(dispatcher))
+    dispatcher.submit(_frame(run_identity=run_identity))
+    original_prepare = dispatcher.prepare_close
+    prepare_calls = 0
+
+    def fail_once():
+        nonlocal prepare_calls
+        prepare_calls += 1
+        if prepare_calls == 1:
+            raise RuntimeError("transient preparation failure")
+        return original_prepare()
+
+    monkeypatch.setattr(dispatcher, "prepare_close", fail_once)
+
+    with pytest.raises(RuntimeError, match="transient preparation failure"):
+        dispatcher.close()
+
+    assert not dispatcher.close_requested
+    assert not dispatcher.close_succeeded
+    assert session.finalize_calls == 0
+    reports = dispatcher.close()
+    assert len(reports) == 1
+    assert dispatcher.close_succeeded
+    assert prepare_calls == 2
+    assert session.finalize_calls == 1
+    worker.close()
+
+
+def test_post_commit_worker_close_retries_join_without_second_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    worker = PostCommitObserverWorker(thread_name="test-worker-close-retry")
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    original_put = worker._jobs.put
+    original_join = worker._thread.join
+    close_items = []
+    join_calls = 0
+
+    def record_put(item, *args, **kwargs):
+        close_items.append(item)
+        return original_put(item, *args, **kwargs)
+
+    def fail_join_once(*args, **kwargs):
+        nonlocal join_calls
+        join_calls += 1
+        if join_calls == 1:
+            raise RuntimeError("transient join failure")
+        return original_join(*args, **kwargs)
+
+    monkeypatch.setattr(worker._jobs, "put", record_put)
+    monkeypatch.setattr(worker._thread, "join", fail_join_once)
+
+    with pytest.raises(RuntimeError, match="transient join failure"):
+        worker.close()
+
+    assert worker.close_requested
+    assert not worker.close_succeeded
+    assert not worker.closed
+    with pytest.raises(RuntimeError, match="post-commit worker is closed"):
+        worker.submit(lambda: None, lambda _error: None)
+
+    worker.close()
+    assert worker.close_succeeded
+    assert worker.closed
+    assert join_calls == 2
+    assert len(close_items) == 1
+
+
+def test_failed_open_queue_aborts_without_finalizing_and_retries_local_failure(
+    request: pytest.FixtureRequest,
+):
+    class _AbortSession(_RetrySession):
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+            self.finalize_calls = 0
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+        def abort(self):
+            self.abort_calls += 1
+            if self.abort_calls == 1:
+                raise RuntimeError("transient abort failure")
+
+    session = _AbortSession()
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(_identity("run", "failed-open-abort")),
+        consumer_id="failed-open-abort",
+    )
+    request.addfinalizer(lambda: _close_private_queue_for_test(queue, abort=True))
+
+    with pytest.raises(RuntimeError, match="transient abort failure"):
+        queue.abort_close()
+
+    assert queue.close_requested
+    assert not queue.close_succeeded
+    assert not queue.abort_succeeded
+    assert session.finalize_calls == 0
+
+    assert queue.abort_close() == ()
+    assert queue.close_succeeded
+    assert queue.abort_succeeded
+    assert session.abort_calls == 2
+    assert session.finalize_calls == 0
+
+    assert queue.abort_close() == ()
+    assert session.abort_calls == 2
+
+
+def test_observer_initialization_failure_does_not_abort_inline():
     class _PartialInitializeSession(_RetrySession):
         def __init__(self):
             super().__init__()
@@ -1263,7 +2393,7 @@ def test_observer_initialization_failure_aborts_partial_session_once():
             consumer_id="partial-initialize",
         )
 
-    assert session.abort_calls == 1
+    assert session.abort_calls == 0
 
 
 def test_observer_receipt_must_match_authenticated_session_provider():
@@ -1272,12 +2402,13 @@ def test_observer_receipt_must_match_authenticated_session_provider():
             self.calls += 1
             return ObserverReceipt(frame.identity, "another.observer")
 
+    run_identity = _identity("run", "wrong-receipt-provider")
     dispatcher = PostCommitObserverQueue(
         _WrongProviderReceiptSession(),
-        ObserverRun(_identity("run", "wrong-receipt-provider")),
+        ObserverRun(run_identity),
         consumer_id="wrong-receipt-provider",
     )
-    dispatcher.submit(_frame())
+    dispatcher.submit(_frame(run_identity=run_identity))
     (report,) = dispatcher.close()
 
     assert report.status == "skipped"
@@ -1288,7 +2419,11 @@ def test_runtime_owned_submission_detaches_once_and_keeps_no_native_sharing(monk
     valid = np.ones((2, 2), dtype=np.bool_)
     coverage = np.asarray([[False, True], [False, False]])
     volumes = np.full((2, 2), 0.125)
-    source = _frame(native_geometry_arrays=(valid, coverage, volumes))
+    run_identity = _identity("run", "single-detach")
+    source = _frame(
+        run_identity=run_identity,
+        native_geometry_arrays=(valid, coverage, volumes),
+    )
     real_detach = observer_runtime.detach_observer_frame
     calls = []
 
@@ -1311,7 +2446,7 @@ def test_runtime_owned_submission_detaches_once_and_keeps_no_native_sharing(monk
     session = _CaptureSession()
     dispatcher = PostCommitObserverQueue(
         session,
-        ObserverRun(_identity("run", "single-detach")),
+        ObserverRun(run_identity),
         consumer_id="single-detach",
     )
     dispatcher._submit_detached(owned)
@@ -1325,7 +2460,8 @@ def test_runtime_owned_submission_detaches_once_and_keeps_no_native_sharing(monk
 
 @pytest.mark.parametrize("rank", (0, 1))
 def test_root_provider_preflight_reaches_one_consensus_before_local_failure(
-    monkeypatch, rank,
+    monkeypatch,
+    rank,
 ):
     calls = []
 
@@ -1377,8 +2513,9 @@ def test_root_provider_preflight_reaches_one_consensus_before_local_failure(
             "RuntimeError: rank-zero preopen failed",
             "RuntimeError: rank-one preflight failed",
         )
-        return tuple({"rank": owner_rank, "error": error}
-                     for owner_rank, error in enumerate(errors))
+        return tuple(
+            {"rank": owner_rank, "error": error} for owner_rank, error in enumerate(errors)
+        )
 
     monkeypatch.setattr(runtime_consumers, "allgather_value", gathered)
 
@@ -1392,14 +2529,17 @@ def test_root_provider_preflight_reaches_one_consensus_before_local_failure(
 
 @pytest.mark.parametrize("rank", (0, 1))
 def test_root_frame_detach_failure_is_collective_before_prepare_returns(
-    monkeypatch, rank,
+    monkeypatch,
+    rank,
 ):
     frame = _frame(mode=ParallelMode.ROOT)
     communicator = object()
     publisher = runtime_consumers.RuntimeConsumerPublisher.__new__(
-        runtime_consumers.RuntimeConsumerPublisher)
+        runtime_consumers.RuntimeConsumerPublisher
+    )
     publisher._owner = SimpleNamespace(
-        _output_snapshot=lambda _manifest: (frame.snapshot, frame.request))
+        _output_snapshot=lambda _manifest: (frame.snapshot, frame.request)
+    )
     publisher._rank = rank
     publisher._size = 2
     publisher._communicator = communicator
@@ -1410,8 +2550,7 @@ def test_root_frame_detach_failure_is_collective_before_prepare_returns(
             raise RuntimeError("rank-zero detach failed")
         raise AssertionError("non-root must not detach")
 
-    monkeypatch.setattr(
-        runtime_consumers, "_detach_owned_observer_frame", detached)
+    monkeypatch.setattr(runtime_consumers, "_detach_owned_observer_frame", detached)
 
     def gathered(actual_communicator, value):
         assert actual_communicator is communicator
@@ -1441,8 +2580,8 @@ def test_collective_live_delivery_drains_before_returning_to_solver(monkeypatch)
         qualified_id="monitor/collective-live",
     )
     raw_frame = SimpleNamespace(
-        snapshot=SimpleNamespace(
-            provenance=SimpleNamespace(run_identity=run_identity)))
+        snapshot=SimpleNamespace(provenance=SimpleNamespace(run_identity=run_identity))
+    )
     events = []
 
     class Submission:
@@ -1467,15 +2606,15 @@ def test_collective_live_delivery_drains_before_returning_to_solver(monkeypatch)
     detached = object()
     queue = Queue()
     publisher = runtime_consumers.RuntimeConsumerPublisher.__new__(
-        runtime_consumers.RuntimeConsumerPublisher)
+        runtime_consumers.RuntimeConsumerPublisher
+    )
     publisher._owner = SimpleNamespace(last_run_identity=run_identity)
     publisher._rank = 0
     publisher._size = 2
     publisher._communicator = object()
     publisher._manifest = lambda _effect: manifest
     publisher._observer_queue = lambda _manifest, _run_identity: queue
-    publisher._record_observer_failure = (
-        lambda *_args: events.append("unexpected-failure"))
+    publisher._record_observer_failure = lambda *_args: events.append("unexpected-failure")
     monkeypatch.setattr(
         runtime_consumers,
         "_authenticated_detached_frame",
@@ -1498,6 +2637,80 @@ def test_collective_live_delivery_drains_before_returning_to_solver(monkeypatch)
         "flush",
         "consensus:collective live delivery",
     ]
+
+
+def test_collective_live_delivery_rejects_truncated_world_envelope(monkeypatch):
+    run_identity = _identity("run", "collective-live-truncated-world")
+    manifest = SimpleNamespace(
+        parallel_mode=ParallelMode.COLLECTIVE,
+        qualified_id="monitor/collective-live-truncated-world",
+    )
+    raw_frame = SimpleNamespace(
+        snapshot=SimpleNamespace(provenance=SimpleNamespace(run_identity=run_identity))
+    )
+    events = []
+
+    class Submission:
+        def arm(self):
+            events.append("arm")
+
+        def cancel(self, error):
+            raise AssertionError("accepted submission must not be cancelled") from error
+
+    class Queue:
+        def _prepare_detached(self, frame, *, journal, journal_record):
+            assert frame is detached
+            assert journal is None
+            assert journal_record is None
+            events.append("prepare")
+            return Submission()
+
+        def flush(self):
+            events.append("flush")
+            return ()
+
+    detached = object()
+    queue = Queue()
+    world = object()
+    publisher = runtime_consumers.RuntimeConsumerPublisher.__new__(
+        runtime_consumers.RuntimeConsumerPublisher
+    )
+    publisher._owner = SimpleNamespace(last_run_identity=run_identity)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = world
+    publisher._manifest = lambda _effect: manifest
+    publisher._observer_queue = lambda _manifest, _run_identity: queue
+    publisher._record_observer_failure = lambda *_args: events.append("report-only")
+    monkeypatch.setattr(
+        runtime_consumers,
+        "_authenticated_detached_frame",
+        lambda frame: raw_frame if frame is detached else None,
+    )
+
+    gathers = []
+
+    def gathered(communicator, value):
+        assert communicator is world
+        gathers.append(value)
+        if len(gathers) == 1:
+            return (
+                {"rank": 0, "error": None},
+                {"rank": 1, "error": None},
+            )
+        assert len(gathers) == 2
+        return (value,)
+
+    monkeypatch.setattr(runtime_consumers, "allgather_value", gathered)
+
+    with pytest.raises(
+        runtime_consumers._ObserverCollectiveLost,
+        match="collective live delivery returned a malformed envelope",
+    ):
+        publisher._submit_live_visualization(SimpleNamespace(), detached)
+
+    assert len(gathers) == 2
+    assert events == ["prepare", "arm", "flush"]
 
 
 def test_detached_frame_does_not_borrow_runtime_geometry_buffers():

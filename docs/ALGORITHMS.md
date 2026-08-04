@@ -145,6 +145,17 @@ global auxiliary slot, or provider outside its resolved pack. It returns `FluxDe
 applied exactly once by the spatial layer. A fallible evaluation maps explicitly to retry, reject or
 abort transaction actions.
 
+Primitive face reconstruction is a fallible numerical operation, not an unchecked model callback.
+Every conservative-to-primitive stencil sample is evaluated through
+`PreparedVariableRecovery` and returned as a `ReconstructedFaceState` carrying both the candidate
+and its `RecoveryReport`. Cartesian, cached-HLL, masked, polar and embedded-boundary kernels consume
+that report before calling the numerical flux. A refused candidate therefore writes only finite
+transactional scratch, joins the same device/MPI failure reduction as a fallible flux, and cannot be
+published. The type-erased report preserves the selected and last-attempted method kinds in addition
+to their chain indices; diagnostics can therefore name the actual closed-form, nonlinear, bracketed,
+repair, or custom route without reconstructing policy from an erased plan. The pointwise route is
+fixed-size, `POPS_HD`, allocation-free and callback-free.
+
 **Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min(\Delta x,\Delta y)}{\max|\lambda|}$,
 where $\lambda$ is the local wave speed and $C \le 1$ at order 1; `max_wave_speed_mf` provides
 $\max|\lambda|$. A model without transport ($\max|\lambda| = 0$) does not constrain the step
@@ -220,10 +231,27 @@ requires `m.wave_speeds`). `HLLCFlux` requires `HasHLLCStructure` (`pressure`, `
 `hllc_star_state`) and `RoeFlux` requires `HasRoeDissipation` (`roe_dissipation`). Euler conforms
 through those same capabilities. A missing capability is rejected during route resolution; there
 is no component-count inference and no implicit HLL/Rusanov substitution. The
-compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to `RusanovFlux{}` for serial
-references. The flux is passed by template: `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
-`assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
-independently of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
+four built-ins return the common device-copyable `FluxEvaluation`. Built-in rejection reasons use
+the typed `RiemannFailureCause` vocabulary before device/MPI reduction. In particular, Roe rejects
+a non-finite dissipation or final candidate flux, while HLLC attributes non-finite physical flux,
+pressure, contact speed, star state, and final candidate flux separately. Neither policy publishes a
+successful NaN result; the runtime rolls the owning step transaction back without selecting another
+solver. Every production result also carries typed requested, used and last-attempted solver
+identities plus the attempt count. The typed public
+`riemann.Recovery(primary=riemann.Roe(), fallbacks=(riemann.HLL(), riemann.Rusanov()))`
+descriptor lowers exactly to
+`PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux, RejectRiemannRecovery>` on Cartesian
+Uniform and AMR routes. Other orders, duplicate candidates, candidate options, external descriptors,
+and untyped values are refused during authoring; annular polar geometry is explicitly unavailable.
+Only `kReject` advances to the next candidate, and the first recovery cause remains observable when
+a fallback succeeds. The policy is an empty, trivially-copyable template value instantiated directly
+in the face kernel: no per-face allocation, string dispatch, callback, exception or host round trip
+is introduced.
+The compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to
+`RusanovFlux{}` for serial references. The flux is passed by template:
+`compute_face_fluxes<Limiter, NumericalFlux, Model>` and
+`assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen independently
+of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
 `pressure`, `wave_speeds`, and the optional HLLC/Roe structural hooks only when the wrapped model
 exposes them (`requires` clauses), so the explicit half-step keeps the selected Riemann provider.
 A moment hierarchy (no fluid roles, no primitive `p`) can also
@@ -231,8 +259,14 @@ drive a dense Roe-type dissipation via the DSL emitter `m.roe_from_jacobian()` (
 `pops::roe_abs_apply`
 ([`include/pops/numerics/linalg/dense_eig.hpp`](../include/pops/numerics/linalg/dense_eig.hpp)) behind a real-spectrum
 gate. A real singular Jacobian uses the native zero-mode projector. A complex or non-converged
-spectrum is rejected; the provider never substitutes another Riemann solver. Passing
-`entropy_fix=delta` applies the Harten spectral function directly to the dense Jacobian. This provider
+spectrum is rejected; the provider never substitutes another Riemann solver. Passing the typed
+`entropy_fix=riemann.Harten(delta)` policy applies the Harten spectral function directly to the
+dense Jacobian; `riemann.NoEntropyFix()` (the default for `roe_from_jacobian`) selects the matrix
+absolute value. Role-generated Roe keeps its historical `riemann.Harten(0.1)` default and also
+accepts `riemann.NoEntropyFix()` explicitly. Bare entropy scalars are rejected during authoring.
+The detached artifact records `fluid_roles_v1`, `direct_action_v1`, or `flux_jacobian_v1` together
+with the exact canonical entropy option. Runtime availability and inspection consume that evidence;
+they never reconstruct a provider from `has_roe=True`. This provider
 evaluates the flux Jacobian at the arithmetic midpoint $(U_L+U_R)/2$. It is therefore a Roe-type
 linearization for a general nonlinear flux, not a claim that the resulting matrix satisfies the exact
 Roe secant identity $F_R-F_L=A(U_R-U_L)$.
@@ -369,8 +403,8 @@ function weno5z(vm2, vm1, v0, vp1, vp2):        # face entre v0 et vp1
 
 **Code.** Pointwise `Limiter` policies in
 [`include/pops/numerics/fv/reconstruction.hpp`](../include/pops/numerics/fv/reconstruction.hpp): `NoSlope`
-(`n_ghost = 1`, `operator()` returns `Real(0)`), `Minmod` and `VanLeer` (`n_ghost = 2`, `operator()(a,b)`
-returns the limited slope, absolute value coded by hand to stay device-safe without `<cmath>`), `Weno5`
+(`n_ghost = 1`, piecewise-constant face value), `Minmod`, `VanLeer`, `MC` and `Superbee`
+(`n_ghost = 2`, `limited_slope(a,b)` returns the limited slope with device-safe scalar arithmetic), `Weno5`
 (`n_ghost = 3`, a tag whose `operator()` is a no-op that just satisfies the `Limiter` concept). The
 order-5 reconstruction lives in the free function `weno5z(vm2, vm1, v0, vp1, vp2)` of the same header:
 it returns the value at the face between `v0` and `vp1`, and for the opposite face one passes it the
@@ -378,12 +412,18 @@ reversed stencil. All are `POPS_HD` (device-callable, static polymorphism: the l
 parameter of `assemble_rhs` / `compute_face_fluxes`, inlined on device). The mesh stencil access and the
 routing by `n_ghost` are in `reconstruct` of `numerics/spatial_operator.hpp`; the policy itself
 loops over no grid. The reconstruction can act on the conserved or primitive variables
-(`rho, u, p`) depending on the block.
+(`rho, u, p`) depending on the block. Production kernels use the typed
+`reconstruct_recovered`/`reconstruct_pp_recovered` entry points and consume their `RecoveryReport`
+before any face flux; the value-only wrappers remain low-level compatibility helpers.
 
 **Constraints / remarks.** The reconstruction does not change the hyperbolic stability condition: the
 step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits and pitfalls:
 - `Minmod` is strictly TVD but falls back to local order 1 at extrema (it erases smooth peaks);
   for the Diocotron growth modes one prefers `VanLeer`, less dissipative at extrema.
+- `MC` uses $\operatorname{minmod}((a+b)/2,2a,2b)$ and is a less diffusive TVD compromise;
+  `Superbee` uses $\operatorname{maxmod}(\operatorname{minmod}(2a,b),
+  \operatorname{minmod}(a,2b))$ and is the most compressive builtin MUSCL limiter. Their
+  implementations avoid overflowing intermediate doubled slopes for finite inputs.
 - `weno5z` is smooth (no branch on the sign: the $\beta_k$ and $\tau_5$ are squares so
   always $\ge 0$, and only $|\beta_0-\beta_2|$ goes through a ternary), which makes it fully
   device-callable; the floor `eps = 1e-40` avoids division by zero on a constant stencil.
@@ -391,10 +431,29 @@ step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits a
   (the reconstructed states can leave the admissible domain on the conserved side).
 - The ghost cost drives the halo width to exchange: 1 (NoSlope), 2 (MUSCL), 3 (WENO5).
 
+For a Python-authored model, finite primitive recovery can be strengthened with explicit physical
+constraints after declaring the primitive layout:
+
+```python
+# after model.primitive_state(rho, u, v, p, conservative=(...))
+model.recovery_admissibility(rho=rho > 0, p=p > 0)
+```
+
+Each keyword identifies the primitive component reported on failure; its value is a symbolic Boolean
+expression over the primitive state.  Code generation emits a device-callable
+`recovery_admissible(Prim, failing_component)` method.  `CompositeModel` forwards that optional
+contract and `prepare_model_variable_recovery` installs it in the same ordered recovery plan as the
+conversion method.  A finite candidate that violates a predicate is therefore not published: the
+chain proceeds to its next declared method, or finishes with `inadmissible_candidate` when no method
+remains.  Models that declare no policy retain the finite-only path and emit no extra method.
+
 **Validation.** `test_weno_convergence` (the face reconstruction of a smooth function reaches order 5),
 `test_primitive_recon` (conserved <-> primitive conversions and their use in the reconstruction),
 `test_spatial_discretisation` (the reconstruction x numerical flux pair is a named type, exercised end
-to end).
+to end), and `test_weno_convergence` (MC/Superbee reference formulas, symmetry, homogeneity, TVD
+bounds and finite extreme inputs in addition to WENO convergence), and
+`test_variable_recovery_chain` (a model-declared physical predicate blocks publication
+and preserves the typed failing component).
 
 
 ---
@@ -597,6 +656,11 @@ central runtime policy (`abs_tol=1e-12`, `rel_tol=1e-10`, 25 iterations) into th
 controls. Singular pivots, exhausted budgets, NaN/Inf, inadmissible candidates, safeguard failures
 and unsupported Jacobian capabilities remain distinct outcomes. Collective priority is independent
 of status numbering, so a fatal cell or MPI-rank failure cannot be hidden by a recoverable rejection.
+Once that priority is known, the first failing location is selected by exact staged integer
+collectives (`min(j)`, then `min(i)`, then `min(component)` at that cell). Coordinates are never
+packed into a floating-point mantissa, so negative and large global `Box2D` indices keep the same
+diagnostic and MPI ordering on double- and single-precision builds. These extra collectives execute
+only on the failure path.
 There is no warning-only or unchecked publication policy.
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
@@ -609,7 +673,9 @@ runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
 `test_imex_partial` (a 2-variable model, only one implicit),
-`test_imex_transport` (the transport of an IMEX block is indeed advanced explicitly).
+`test_imex_transport` (the transport of an IMEX block is indeed advanced explicitly), and
+`test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
+large signed indices, including fatal-over-recoverable precedence between ranks).
 
 
 ---
@@ -1540,8 +1606,9 @@ $S_g$ is the geometric curvature source ($-\rho v_\theta^2/r$ etc.), not capture
 divergence in a rotating local basis; it is carried per cell (null for a scalar ExB brick
 -> bit-identical to the historical polar ExB transport). The weight $r_{i+1/2}$ of an interior face is
 shared by the two neighboring cells, so the radial term telescopes; the azimuthal term telescopes
-exactly (periodic). With `wall_radial`, the radial flux is forced to zero at the two physical boundary
-faces -> mass $\sum n_{ij}\, r_i\, dr\, d\theta$ conserved to the machine whatever $v_r$.
+exactly (periodic). When the immutable `PreparedBoundaryPlan` assigns `NoFlux` to the two radial
+faces, their evaluated numerical flux is forced to zero -> mass
+$\sum n_{ij}\, r_i\, dr\, d\theta$ conserved to the machine whatever $v_r$.
 
 **Formula / discretization (Poisson, FFT-in-theta + tridiag-in-r).** We solve
 $\tfrac{1}{r}\partial_r(r\,\partial_r\phi) + \tfrac{1}{r^2}\partial_\theta^2\phi = f$ directly
@@ -1591,8 +1658,8 @@ the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thom
 opt-in via the advanced `pops.mesh.PolarMesh`; `cfg.geometry == "polar"` on the
 [`src/runtime/system/system.cpp`](../src/runtime/system/system.cpp) side). Transport:
 [`include/pops/numerics/spatial/operators/polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp)`::assemble_rhs_polar<Limiter, NumericalFlux>`
-(`recon_prim`, `wall_radial`), via the named functors `detail::PolarFaceFluxRKernel` (radial flux
-weighted by `r_face`, optional wall at the boundary faces), `PolarFaceFluxThetaKernel`,
+(`PreparedBoundaryPlan`, `recon_prim`), via the named functors `detail::PolarFaceFluxRKernel` (radial
+flux weighted by `r_face`, with `NoFlux` derived from the prepared face laws), `PolarFaceFluxThetaKernel`,
 `PolarAssembleRhsKernel`; the physical source and the geometric source are routed by the concepts
 `PolarHasSource` / `PolarHasGeomSource` (`if constexpr`: zero codegen for a scalar brick,
 ExB path bit-identical). Instantiated via `runtime/block_builder_polar.hpp`, wired in

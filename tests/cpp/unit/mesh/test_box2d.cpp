@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/index/real_vector.hpp>
 
 #include <limits>
 #include <type_traits>
@@ -13,6 +15,33 @@ using namespace pops;
 
 static_assert(std::is_aggregate_v<Box2D>);
 static_assert(std::is_trivially_copyable_v<Box2D>);
+static_assert(Index<1>::rank == 1 && Index<2>::rank == 2 && Index<3>::rank == 3);
+static_assert(Extent<1>::rank == 1 && Extent<2>::rank == 2 && Extent<3>::rank == 3);
+static_assert(RealVector<1>::rank == 1 && RealVector<2>::rank == 2 && RealVector<3>::rank == 3);
+static_assert(std::is_trivially_copyable_v<Index<1>> && std::is_trivially_copyable_v<Index<2>> &&
+              std::is_trivially_copyable_v<Index<3>>);
+static_assert(std::is_standard_layout_v<Index<1>> && std::is_standard_layout_v<Index<2>> &&
+              std::is_standard_layout_v<Index<3>>);
+static_assert(std::is_trivially_copyable_v<Extent<1>> && std::is_trivially_copyable_v<Extent<2>> &&
+              std::is_trivially_copyable_v<Extent<3>>);
+static_assert(std::is_standard_layout_v<Extent<1>> && std::is_standard_layout_v<Extent<2>> &&
+              std::is_standard_layout_v<Extent<3>>);
+static_assert(std::is_trivially_copyable_v<RealVector<1>> &&
+              std::is_trivially_copyable_v<RealVector<2>> &&
+              std::is_trivially_copyable_v<RealVector<3>>);
+static_assert(std::is_standard_layout_v<RealVector<1>> &&
+              std::is_standard_layout_v<RealVector<2>> && std::is_standard_layout_v<RealVector<3>>);
+static_assert(std::is_constructible_v<Index<2>, int, int>);
+static_assert(!std::is_constructible_v<Index<1>, long long>);
+static_assert(std::is_constructible_v<Extent<2>, int, unsigned int>);
+static_assert(!std::is_constructible_v<Extent<1>, unsigned long long>);
+static_assert(std::is_constructible_v<RealVector<2>, float, int>);
+static_assert(!std::is_constructible_v<RealVector<1>, long long>);
+static_assert(
+    std::is_constructible_v<RealVector<1>, long double> ==
+    (std::numeric_limits<long double>::digits <= std::numeric_limits<double>::digits &&
+     std::numeric_limits<long double>::max_exponent <= std::numeric_limits<double>::max_exponent &&
+     std::numeric_limits<long double>::min_exponent >= std::numeric_limits<double>::min_exponent));
 
 TEST(test_box2d, extents_and_contains) {
   Box2D b = Box2D::from_extents(4, 3);  // [0..3] x [0..2]
@@ -92,4 +121,60 @@ TEST(test_box2d, floor_div_rejects_undefined_integer_cases) {
   EXPECT_THROW((void)floor_div(1, 0), std::invalid_argument);
   EXPECT_THROW((void)floor_div(lo, -1), std::overflow_error);
   EXPECT_EQ(floor_div(lo, 2), lo / 2);
+}
+
+TEST(test_box2d, compile_time_ranked_boxes_cover_1d_2d_and_3d) {
+  const Box<1> line = Box<1>::from_extents(Extent<1>{7});
+  EXPECT_FALSE(line.empty());
+  EXPECT_EQ(line.extent()[0], 7);
+  EXPECT_EQ(line.numPts(), 7);
+  EXPECT_TRUE(line.contains(Index<1>{6}));
+
+  const Box<2> plane{Index<2>{-3, 4}, Index<2>{2, 6}};
+  EXPECT_EQ(plane.extent()[0], 6);
+  EXPECT_EQ(plane.extent()[1], 3);
+  EXPECT_EQ(plane.numPts(), 18);
+  EXPECT_TRUE(plane.contains(Index<2>{-3, 4}));
+  EXPECT_FALSE(plane.contains(Index<2>{3, 4}));
+  EXPECT_EQ(plane.grow(1).lo[0], -4);
+  EXPECT_EQ(plane.refine(2).coarsen(2), plane);
+
+  const Box<3> volume{Index<3>{-2, 5, 9}, Index<3>{1, 6, 11}};
+  EXPECT_EQ(volume.extent()[0], 4);
+  EXPECT_EQ(volume.extent()[1], 2);
+  EXPECT_EQ(volume.extent()[2], 3);
+  EXPECT_EQ(volume.numPts(), 24);
+  EXPECT_EQ(volume.intersect(Box<3>{Index<3>{0, 4, 10}, Index<3>{4, 8, 10}}).numPts(), 4);
+
+  const RealVector<3> point{1.25, -2.5, 0.75};
+  EXPECT_DOUBLE_EQ(point[0], 1.25);
+  EXPECT_DOUBLE_EQ(point[1], -2.5);
+  EXPECT_DOUBLE_EQ(point[2], 0.75);
+}
+
+TEST(test_box2d, compile_time_ranked_box_empty_and_overflow_contracts) {
+  const Box<3> empty{};
+  EXPECT_TRUE(empty.empty());
+  EXPECT_EQ(empty.numPts(), 0);
+  EXPECT_FALSE(empty.contains(Index<3>{0, 0, 0}));
+
+  const Box<2> full_width{Index<2>{std::numeric_limits<int>::min(), 0},
+                          Index<2>{std::numeric_limits<int>::max(), 0}};
+  EXPECT_EQ(full_width.extent()[0], std::int64_t{1} << 32);
+  EXPECT_EQ(full_width.numPts(), std::int64_t{1} << 32);
+  EXPECT_THROW((void)Box<1>::from_extents(Extent<1>{-1}), std::invalid_argument);
+  EXPECT_THROW((void)full_width.grow(1), std::overflow_error);
+}
+
+TEST(test_box2d, ranked_box_shift_is_checked_and_preserves_empty_boxes) {
+  const Box<2> box{Index<2>{-3, 4}, Index<2>{1, 7}};
+  EXPECT_EQ(box.shift(Index<2>{5, -2}), (Box<2>{Index<2>{2, 2}, Index<2>{6, 5}}));
+  EXPECT_EQ(Box<3>{}.shift(Index<3>{1, 2, 3}), Box<3>{});
+
+  const Box<1> at_max{Index<1>{std::numeric_limits<int>::max()},
+                      Index<1>{std::numeric_limits<int>::max()}};
+  const Box<1> at_min{Index<1>{std::numeric_limits<int>::min()},
+                      Index<1>{std::numeric_limits<int>::min()}};
+  EXPECT_THROW((void)at_max.shift(Index<1>{1}), std::overflow_error);
+  EXPECT_THROW((void)at_min.shift(Index<1>{-1}), std::overflow_error);
 }

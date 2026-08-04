@@ -7,6 +7,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
@@ -44,6 +45,7 @@ struct PreparedFieldSolverSpec {
   double relative_tolerance = 0.0;
   double absolute_tolerance = 0.0;
   std::int32_t max_iterations = 0;
+  bool component_pair_declares_mpi = false;
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
 
@@ -63,8 +65,8 @@ struct FieldTopologyReportRow {
 /// materialized once from replicated patch metadata and reused for every solve.  A solve sends every
 /// local patch view in one request and calls the component exactly once on every participating rank,
 /// including ranks with zero local patches.  The currently proven System route is host-resident,
-/// serial, Cartesian, cell-centered and full-material; unsupported execution/layout facts are
-/// rejected before either component can mutate the solution.
+/// serial or singleton-MPI, Cartesian, cell-centered and full-material; unsupported
+/// execution/layout facts are rejected before either component can mutate the solution.
 class PreparedFieldSolverComponent final {
  public:
   PreparedFieldSolverComponent(PreparedFieldSolverSpec spec,
@@ -159,7 +161,7 @@ class PreparedFieldSolverComponent final {
   void prepare_provider_contract_() {
     ExactContractBuilder contract;
     contract.text("pops.runtime.external-field-solver-provider")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(spec_.provider_slot)
         .text(spec_.topology_component_id)
         .text(spec_.topology_manifest_identity)
@@ -175,6 +177,7 @@ class PreparedFieldSolverComponent final {
         .scalar(spec_.relative_tolerance)
         .scalar(spec_.absolute_tolerance)
         .scalar(spec_.max_iterations)
+        .scalar(spec_.component_pair_declares_mpi)
         .text(spec_.execution->identity());
     collective_contract_ = std::move(contract).release();
     provider_identity_ = hashed_identity_("external-field-solver-provider", collective_contract_);
@@ -438,7 +441,7 @@ class PreparedFieldSolverComponent final {
               geometry.ylo + static_cast<double>(box.lo[1]) * geometry.dy() ||
           patch.cell_spacing[0] != geometry.dx() || patch.cell_spacing[1] != geometry.dy() ||
           patch.layout_identity == nullptr || patch.patch_identity == nullptr ||
-          materialized_layout_identity_ != patch.layout_identity ||
+          spec_.source_layout_identity != patch.layout_identity ||
           patch_identities_[index] != patch.patch_identity)
         throw std::runtime_error(
             "prepared external field topology cannot be reused after a layout change");
@@ -566,10 +569,21 @@ class PreparedFieldSolverComponent final {
       throw std::invalid_argument("prepared external field solver specification is incomplete");
     const auto execution = spec_.execution->view();
     component::validate_execution_context(execution);
+    const std::string communicator_identity(execution.communicator_identity);
+    bool singleton_mpi = false;
+#ifdef POPS_HAS_MPI
+    if (communicator_identity == "MPI_COMM_WORLD") {
+      const CommunicatorView communicator{
+          MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle))};
+      singleton_mpi = communicator.active() && communicator.size() == 1;
+    }
+#endif
     if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-        std::string(execution.communicator_identity) != "serial")
+        (communicator_identity != "serial" &&
+         (!singleton_mpi || !spec_.component_pair_declares_mpi)))
       throw std::invalid_argument(
-          "external FieldSolver v2 System adapter currently proves host/serial execution only");
+          "external FieldSolver v2 System adapter currently proves host serial or declared "
+          "singleton-MPI execution only");
     const auto& topology_api = topology_component_->api();
     const auto& solver_api = solver_component_->api();
     if (topology_api.component_id == nullptr || topology_api.manifest_identity == nullptr ||

@@ -5,21 +5,62 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from pops import interfaces
 from pops import _generated_component_interfaces as generated
+from pops.model import ComponentManifest
 
 
 def test_all_required_native_families_are_generated_data_only_contracts():
     expected = {
-        "numerical_flux", "ghost_boundary", "field_boundary_closure", "tagger",
-        "clustering", "transfer", "field_solver", "writer", "field_topology",
+        "numerical_flux", "ghost_boundary", "boundary_flux", "field_boundary_closure", "tagger",
+        "clustering", "transfer", "reflux", "field_solver", "writer", "field_topology",
     }
     resolved = {name: interfaces.resolve(name) for name in expected}
     assert set(resolved) == expected
     assert len({value.abi_id for value in resolved.values()}) == len(expected)
+    assert {name: value.abi_id for name, value in resolved.items()} == {
+        "numerical_flux": 0,
+        "ghost_boundary": 1,
+        "field_boundary_closure": 2,
+        "tagger": 3,
+        "clustering": 4,
+        "transfer": 5,
+        "reflux": 6,
+        "field_solver": 7,
+        "writer": 8,
+        "field_topology": 9,
+        "boundary_flux": 10,
+    }
     assert all(value.table_symbol == "pops_component_interface_v1"
                for value in resolved.values())
     assert all(value.operations for value in resolved.values())
+
+
+def test_reflux_is_exact_generated_id_6_and_incomplete_conformer_is_refused():
+    interface = interfaces.Reflux
+    assert interface.abi_id == 6
+    assert interface.uri == "pops://interfaces/reflux"
+    assert interface.cpp_table == "PopsRefluxApiV1"
+    assert interface.operations == ("apply_interface_batch",)
+
+    incomplete_signature = interface.signature_declaration()
+    incomplete_signature["operations"] = ()
+    manifest = ComponentManifest(
+        uri="pops://external.test/reflux/incomplete",
+        component_type="reflux",
+        version="1.0.0",
+        facets=interface.facets,
+        signature={"native_interface": incomplete_signature},
+        interfaces=interface.manifest_declarations(),
+        target={"variants": [{
+            "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
+        }]},
+        entry_points={"interface_table": "pops_component_interface_v1"},
+    )
+    with pytest.raises(ValueError, match="does not carry the generated native interface identity"):
+        interface.require_manifest(manifest)
 
 
 def test_python_native_component_boundary_has_no_ffi_or_test_owned_backend():
@@ -95,6 +136,7 @@ def test_boundary_handle_native_routes_are_generated_from_exact_interfaces():
         "corner_resolver": ("ghost_boundary", "apply_region_batch"),
         "numerical_closure": ("ghost_boundary", "apply_region_batch"),
         "conservative_flux": ("numerical_flux", "evaluate_faces"),
+        "boundary_flux_provider": ("boundary_flux", "transform_faces"),
         "residual_operator": ("field_boundary_closure", "residual"),
         "linearization_operator": ("field_boundary_closure", "jvp"),
     }

@@ -23,8 +23,12 @@
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 
+#include <array>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <string>
+#include <vector>
 
 using namespace pops;
 
@@ -147,4 +151,108 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   };
   EXPECT_TRUE(refused_with("hllc", "capability"))
       << "isotherme + hllc refuse (nomme la capability)";
+}
+
+TEST(test_block_builder, prepared_no_flux_zeroes_only_its_evaluated_face_flux) {
+  const Box2D dom = Box2D::from_extents(4, 3);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray cells = BoxArray::from_domain(dom, 4);
+  const DistributionMapping dm(cells.size(), n_ranks());
+  BCRec bc;
+  MultiFab aux(cells, dm, 3, 1);
+  aux.set_val(0.0);
+
+  GridContext ctx{dom, bc, geom, &aux};
+  ctx.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::closed::plan", 1,
+      prepare_hyperbolic_boundary<2>(
+          {"no_flux", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+          {"case::closed::xlo", "case::closed::xhi", "case::closed::ylo", "case::closed::yhi"},
+          std::vector<std::string>{"Scalar"}));
+
+  MultiFab fx(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 1, 0);
+  MultiFab fy(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 1, 0);
+  fx.set_val(3.0);
+  fy.set_val(5.0);
+  detail::zero_prepared_boundary_fluxes(fx, fy, ctx);
+  fx.sync_host();
+  fy.sync_host();
+
+  for (int local = 0; local < fx.local_size(); ++local) {
+    const Fab2D& values = fx.fab(local);
+    const Box2D box = fx.box(local);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_DOUBLE_EQ(values(i, j, 0), i == dom.lo[0] ? 0.0 : 3.0);
+  }
+  for (int local = 0; local < fy.local_size(); ++local) {
+    const Fab2D& values = fy.fab(local);
+    const Box2D box = fy.box(local);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_DOUBLE_EQ(values(i, j, 0), 5.0);
+  }
+}
+
+TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_outcome) {
+  const Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
+  const auto conversion = make_cell_convert(model);
+
+  // rho=1, (u,v)=(0.2,-0.1), p=1 -> E=p/(gamma-1)+rho*(u^2+v^2)/2=2.525.
+  const std::array<double, 4> conservative{1.0, 0.2, -0.1, 2.525};
+  const std::array<double, 4> authored_primitive{1.0, 0.2, -0.1, 1.0};
+  std::array<double, 4> forward_candidate{-9.0, -9.0, -9.0, -9.0};
+  EXPECT_NO_THROW(conversion.first(authored_primitive.data(), forward_candidate.data()));
+  for (std::size_t component = 0; component < conservative.size(); ++component)
+    EXPECT_NEAR(forward_candidate[component], conservative[component], 1e-14);
+
+  // Forward conversion is also a candidate transaction: the conservative result must survive the
+  // same prepared inverse authority before any output component is published.
+  const std::array<double, 4> invalid_primitive{0.0, 0.0, 0.0, 1.0};
+  const std::array<double, 4> forward_sentinel{1.25, -2.5, 3.75, -5.0};
+  forward_candidate = forward_sentinel;
+  EXPECT_THROW(conversion.first(invalid_primitive.data(), forward_candidate.data()),
+               std::runtime_error);
+  EXPECT_EQ(forward_candidate, forward_sentinel);
+
+  std::array<double, 4> primitive{-9.0, -9.0, -9.0, -9.0};
+  const RecoveryReport success = conversion.second(conservative.data(), primitive.data());
+  EXPECT_TRUE(success.recovered());
+  EXPECT_EQ(success.status, RecoveryStatus::kRecovered);
+  EXPECT_EQ(success.cause, RecoveryCause::kNone);
+  EXPECT_EQ(success.attempted_methods, 1);
+  EXPECT_EQ(success.selected_method, 0);
+  EXPECT_EQ(success.selected_method_kind, RecoveryMethodKind::kClosedForm);
+  EXPECT_EQ(success.last_method_kind, RecoveryMethodKind::kClosedForm);
+  EXPECT_DOUBLE_EQ(primitive[0], 1.0);
+  EXPECT_DOUBLE_EQ(primitive[1], 0.2);
+  EXPECT_DOUBLE_EQ(primitive[2], -0.1);
+  EXPECT_NEAR(primitive[3], 1.0, 1e-14);
+
+  // The Euler closed form produces non-finite velocity/pressure for rho=0. The common prepared
+  // authority rejects that candidate and the type-erased closure must leave output byte-exact.
+  const std::array<double, 4> invalid_conservative{0.0, 0.0, 0.0, 0.0};
+  const std::array<double, 4> sentinel{1.25, -2.5, 3.75, -5.0};
+  primitive = sentinel;
+  const RecoveryReport failure = conversion.second(invalid_conservative.data(), primitive.data());
+  EXPECT_FALSE(failure.publication_permitted());
+  EXPECT_EQ(failure.status, RecoveryStatus::kInvalidContract);
+  EXPECT_EQ(failure.cause, RecoveryCause::kNonFiniteCandidate);
+  EXPECT_EQ(failure.attempted_methods, 1);
+  EXPECT_EQ(failure.selected_method_kind, RecoveryMethodKind::kUnknown);
+  EXPECT_EQ(failure.last_method_kind, RecoveryMethodKind::kClosedForm);
+  EXPECT_GE(failure.failing_component, 1);
+  EXPECT_EQ(primitive, sentinel);
+}
+
+TEST(test_block_builder, primitive_to_conservative_publication_roundtrips_before_commit) {
+  const Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
+  const auto conversion = make_cell_convert(model);
+
+  const std::array<double, 4> authored_primitive{1.0, 0.2, -0.1, 1.0};
+  const std::array<double, 4> expected_conservative{1.0, 0.2, -0.1, 2.525};
+  std::array<double, 4> published{-9.0, -9.0, -9.0, -9.0};
+  EXPECT_NO_THROW(conversion.first(authored_primitive.data(), published.data()));
+  for (std::size_t component = 0; component < published.size(); ++component)
+    EXPECT_NEAR(published[component], expected_conservative[component], 1e-14);
 }

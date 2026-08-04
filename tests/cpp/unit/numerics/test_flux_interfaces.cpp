@@ -3,11 +3,16 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/numerics/spatial_operator.hpp>
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
 #include <limits>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -17,25 +22,127 @@ struct Advect {
   static constexpr int n_vars = 1;
   pops::Real speed = pops::Real(2);
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return State{state[0] * speed}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const {
+  POPS_HD State flux(const State& state, const auto&, int) const { return State{state[0] * speed}; }
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const {
     return speed < pops::Real(0) ? -speed : speed;
   }
 };
 
 struct OtherAdvect : Advect {};
 
+struct NonFiniteRoeAdvect : Advect {
+  POPS_HD State roe_dissipation(const State&, const auto&, const State&, const auto&, int) const {
+    return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+  }
+};
+
+struct NonFiniteRoeFluxAdvect : Advect {
+  POPS_HD State flux(const State&, const auto&, int) const {
+    return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+  }
+  POPS_HD State roe_dissipation(const State&, const auto&, const State&, const auto&, int) const {
+    return State{};
+  }
+};
+
+enum class RiemannPolicyCase : std::uint8_t { kRequestedSucceeds, kFallbackSucceeds, kRejects };
+
+struct RiemannPolicyAdvect : Advect {
+  RiemannPolicyCase policy_case = RiemannPolicyCase::kRequestedSucceeds;
+
+  RiemannPolicyAdvect() = default;
+  POPS_HD explicit RiemannPolicyAdvect(RiemannPolicyCase selected) : policy_case(selected) {}
+
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const {
+    return policy_case == RiemannPolicyCase::kRejects ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                      : pops::Real(2);
+  }
+  POPS_HD void wave_speeds(const State&, const auto&, int, pops::Real& lower,
+                           pops::Real& upper) const {
+    if (policy_case == RiemannPolicyCase::kRejects) {
+      lower = upper = std::numeric_limits<pops::Real>::quiet_NaN();
+      return;
+    }
+    lower = pops::Real(-1);
+    upper = pops::Real(3);
+  }
+  POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                int) const {
+    if (policy_case == RiemannPolicyCase::kFallbackSucceeds)
+      return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+    return State{pops::Real(2) * (right[0] - left[0])};
+  }
+};
+
+using PreparedRoeRecovery =
+    pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                        pops::RejectRiemannRecovery>;
+
+struct DeviceRiemannRecoveryProbe {
+  POPS_HD void operator()(int, int, std::uint64_t& encoded) const {
+    pops::FluxProviderValues<RiemannPolicyAdvect> values{};
+    const auto bound = pops::bind_flux_providers<RiemannPolicyAdvect>(values);
+    const auto evaluation = pops::evaluate_numerical_flux(
+        PreparedRoeRecovery{}, RiemannPolicyAdvect{RiemannPolicyCase::kFallbackSucceeds},
+        RiemannPolicyAdvect::State{pops::Real(1)}, bound, RiemannPolicyAdvect::State{pops::Real(2)},
+        bound, pops::FaceContext::axis_aligned(0));
+    encoded = (static_cast<std::uint64_t>(evaluation.used_solver) << 8) |
+              static_cast<std::uint64_t>(evaluation.attempt_count);
+  }
+};
+
+enum class HllcFailureSite { kPhysicalFlux, kPressure, kContact, kStarState, kFinalFlux };
+
+struct SelectiveInvalidHllc {
+  using State = pops::StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  HllcFailureSite failure_site;
+
+  POPS_HD State flux(const State& state, const auto&, int) const {
+    return failure_site == HllcFailureSite::kPhysicalFlux
+               ? State{std::numeric_limits<pops::Real>::quiet_NaN()}
+               : state;
+  }
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
+  POPS_HD void wave_speeds(const State&, const auto&, int, pops::Real& lower,
+                           pops::Real& upper) const {
+    const pops::Real magnitude = failure_site == HllcFailureSite::kFinalFlux
+                                     ? std::numeric_limits<pops::Real>::max()
+                                     : pops::Real(1);
+    lower = -magnitude;
+    upper = magnitude;
+  }
+  POPS_HD pops::Real pressure(const State&) const {
+    return failure_site == HllcFailureSite::kPressure ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                      : pops::Real(1);
+  }
+  POPS_HD pops::Real contact_speed(const State&, const State&, pops::Real, pops::Real, pops::Real,
+                                   pops::Real, int) const {
+    return failure_site == HllcFailureSite::kContact ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                     : pops::Real(0);
+  }
+  POPS_HD State hllc_star_state(const State& state, pops::Real, pops::Real, pops::Real, int) const {
+    if (failure_site == HllcFailureSite::kStarState)
+      return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+    if (failure_site == HllcFailureSite::kFinalFlux)
+      return State{std::numeric_limits<pops::Real>::max()};
+    return state;
+  }
+};
+
 struct SelectiveInvalidAdvect {
   using State = pops::StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return State{state[0]}; }
-  POPS_HD pops::Real max_wave_speed(const State& state, const Aux&, int) const {
+  POPS_HD State flux(const State& state, const auto&, int) const { return State{state[0]}; }
+  POPS_HD pops::Real max_wave_speed(const State& state, const auto&, int) const {
     return state[0] == pops::Real(-1) ? std::numeric_limits<pops::Real>::quiet_NaN()
                                       : pops::Real(2);
   }
-  POPS_HD void wave_speeds(const State& state, const Aux&, int, pops::Real& lower,
+  POPS_HD void wave_speeds(const State& state, const auto&, int, pops::Real& lower,
                            pops::Real& upper) const {
     if (state[0] == pops::Real(-2)) {
       lower = upper = std::numeric_limits<pops::Real>::quiet_NaN();
@@ -52,11 +159,12 @@ struct ProviderAdvect {
   static constexpr int n_vars = 1;
   static constexpr int n_aux = 3;
 
-  POPS_HD State flux(const State& state, const Aux& providers, int) const {
-    return State{state[0] * providers.grad_x};
+  POPS_HD State flux(const State& state, const auto& providers, int) const {
+    return State{state[0] * providers.template flux_provider<1>()};
   }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux& providers, int) const {
-    return providers.grad_x < pops::Real(0) ? -providers.grad_x : providers.grad_x;
+  POPS_HD pops::Real max_wave_speed(const State&, const auto& providers, int) const {
+    const pops::Real gradient = providers.template flux_provider<1>();
+    return gradient < pops::Real(0) ? -gradient : gradient;
   }
 };
 
@@ -65,6 +173,49 @@ struct ProviderStorage {
 
   POPS_HD pops::Real operator()(int, int, int component) const {
     return component == 1 ? gradient : pops::Real(0);
+  }
+};
+
+struct QualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 1>
+      flux_provider_requirements{{
+          {"model::qualified", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", true, 1},
+      }};
+};
+
+struct UnavailableQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 1>
+      flux_provider_requirements{{
+          {"model::unavailable", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", false, 1},
+      }};
+};
+
+struct IncompleteQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+};
+
+struct DuplicateQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 2;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 2>
+      flux_provider_requirements{{
+          {"model::duplicate", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", true, 1},
+          {"model::duplicate", "field", "magnetic", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::magnetic", true, 1},
+      }};
+};
+
+struct CountingProviderStorage {
+  pops::Real values[3]{pops::Real(11), pops::Real(4), pops::Real(13)};
+  mutable int reads[3]{};
+
+  POPS_HD pops::Real operator()(int, int, int component) const {
+    ++reads[component];
+    return values[component];
   }
 };
 
@@ -109,6 +260,22 @@ struct RecordFatalFluxFailures {
   }
 };
 
+struct NonFinitePrimitiveModel {
+  using State = pops::StateVec<1>;
+  using Prim = pops::StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  POPS_HD State flux(const State& state, const auto&, int) const { return state; }
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
+  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+  POPS_HD Prim to_primitive(const State&) const {
+    return Prim{std::numeric_limits<pops::Real>::quiet_NaN()};
+  }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
+};
+
 }  // namespace
 
 TEST(test_flux_interfaces, equal_state_consistency_and_declared_stability) {
@@ -124,6 +291,76 @@ TEST(test_flux_interfaces, equal_state_consistency_and_declared_stability) {
   EXPECT_DOUBLE_EQ(evaluation.stability.value, physical.speed);
   EXPECT_EQ(evaluation.stability.unit, pops::StabilityUnit::kLengthPerTime);
   EXPECT_EQ(evaluation.stability.convention, pops::StabilityConvention::kNormalSpectralRadius);
+  EXPECT_EQ(evaluation.requested_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.used_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.last_attempted_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.attempt_count, 1);
+  EXPECT_FALSE(evaluation.used_fallback());
+}
+
+TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device_copyable) {
+  static_assert(std::is_trivially_copyable_v<PreparedRoeRecovery>);
+  static_assert(std::is_empty_v<PreparedRoeRecovery>);
+  static_assert(PreparedRoeRecovery::candidate_count == 3);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[0] == pops::RiemannSolverId::kRoe);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[1] == pops::RiemannSolverId::kHll);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[2] == pops::RiemannSolverId::kRusanov);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[3] == pops::RiemannSolverId::kReject);
+
+  const auto evaluate = [](RiemannPolicyCase policy_case) {
+    const RiemannPolicyAdvect physical{policy_case};
+    const auto bound = providers<RiemannPolicyAdvect>();
+    return pops::evaluate_numerical_flux(
+        pops::prepare_riemann_recovery_policy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                              pops::RejectRiemannRecovery>(),
+        physical, RiemannPolicyAdvect::State{pops::Real(1)}, bound,
+        RiemannPolicyAdvect::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+  };
+
+  const auto requested = evaluate(RiemannPolicyCase::kRequestedSucceeds);
+  ASSERT_TRUE(requested.succeeded());
+  EXPECT_EQ(requested.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.used_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.last_attempted_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.attempt_count, 1);
+  EXPECT_EQ(requested.recovery_reason_code, 0u);
+  EXPECT_FALSE(requested.used_fallback());
+
+  const auto recovered = evaluate(RiemannPolicyCase::kFallbackSucceeds);
+  ASSERT_TRUE(recovered.succeeded());
+  EXPECT_EQ(recovered.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(recovered.used_solver, pops::RiemannSolverId::kHll);
+  EXPECT_EQ(recovered.last_attempted_solver, pops::RiemannSolverId::kHll);
+  EXPECT_EQ(recovered.attempt_count, 2);
+  EXPECT_EQ(recovered.recovery_reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
+  EXPECT_TRUE(recovered.used_fallback());
+
+  const std::uint64_t device_encoded =
+      pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}}, DeviceRiemannRecoveryProbe{});
+  EXPECT_EQ(device_encoded >> 8, static_cast<std::uint64_t>(pops::RiemannSolverId::kHll));
+  EXPECT_EQ(device_encoded & UINT64_C(0xff), UINT64_C(2));
+}
+
+TEST(test_flux_interfaces, prepared_riemann_recovery_exhaustion_is_typed_and_cannot_publish) {
+  const RiemannPolicyAdvect physical{RiemannPolicyCase::kRejects};
+  const auto bound = providers<RiemannPolicyAdvect>();
+  const auto rejected = pops::evaluate_numerical_flux(
+      pops::prepare_riemann_recovery_policy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                            pops::RejectRiemannRecovery>(),
+      physical, RiemannPolicyAdvect::State{pops::Real(1)}, bound,
+      RiemannPolicyAdvect::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+
+  EXPECT_EQ(rejected.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(rejected.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(rejected.used_solver, pops::RiemannSolverId::kReject);
+  EXPECT_EQ(rejected.last_attempted_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(rejected.attempt_count, 3);
+  EXPECT_EQ(rejected.recovery_reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeInvalidStability));
+  EXPECT_EQ(rejected.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRusanovInvalidStability));
+  EXPECT_TRUE(std::isnan(rejected.checked_density().value[0]));
 }
 
 TEST(test_flux_interfaces, orientation_reversal_swaps_traces_and_negates_flux) {
@@ -253,6 +490,30 @@ TEST(test_flux_interfaces, provider_pack_is_model_qualified_and_failure_action_i
             pops::TransactionFailureAction::kAbortRun);
 }
 
+TEST(test_flux_interfaces, generated_provider_requirements_own_native_slot_reads) {
+  static_assert(pops::has_qualified_flux_provider_requirements<QualifiedProviderAdvect>);
+  static_assert(pops::qualified_flux_provider_requirements_valid<QualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<UnavailableQualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<IncompleteQualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<DuplicateQualifiedProviderAdvect>());
+
+  const CountingProviderStorage storage{};
+  const auto bound = pops::bind_flux_providers_at<QualifiedProviderAdvect>(storage, 0, 0);
+  EXPECT_EQ(storage.reads[0], 0);
+  EXPECT_EQ(storage.reads[1], 1);
+  EXPECT_EQ(storage.reads[2], 0);
+
+  const QualifiedProviderAdvect::State state{pops::Real(3)};
+  const auto trace = pops::make_face_trace(state, bound);
+  const auto density =
+      pops::PhysicalFluxView<QualifiedProviderAdvect>{QualifiedProviderAdvect{}}.evaluate(
+          trace, pops::FaceContext::axis_aligned(0));
+  EXPECT_DOUBLE_EQ(density.value[0], pops::Real(12));
+}
+
 TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
   const Advect physical{};
   const Advect::State state{pops::Real(3)};
@@ -264,7 +525,63 @@ TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
   EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
   EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
   EXPECT_EQ(evaluation.reason_code, 0x682u);
+  EXPECT_EQ(evaluation.requested_solver, pops::RiemannSolverId::kExternal);
+  EXPECT_EQ(evaluation.used_solver, pops::RiemannSolverId::kReject);
+  EXPECT_EQ(evaluation.last_attempted_solver, pops::RiemannSolverId::kExternal);
+  EXPECT_EQ(evaluation.attempt_count, 1);
   EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+}
+
+TEST(test_flux_interfaces, roe_rejects_nonfinite_dissipation_with_a_typed_cause) {
+  const NonFiniteRoeAdvect physical{};
+  const NonFiniteRoeAdvect::State left{pops::Real(1)}, right{pops::Real(2)};
+  const auto bound = providers<NonFiniteRoeAdvect>();
+  const auto evaluation = pops::evaluate_numerical_flux(
+      pops::RoeFlux{}, physical, left, bound, right, bound, pops::FaceContext::axis_aligned(0));
+
+  EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
+  EXPECT_EQ(evaluation.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
+  EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+
+  const NonFiniteRoeFluxAdvect invalid_flux{};
+  const auto invalid_flux_bound = providers<NonFiniteRoeFluxAdvect>();
+  const auto flux_evaluation = pops::evaluate_numerical_flux(
+      pops::RoeFlux{}, invalid_flux, NonFiniteRoeFluxAdvect::State{pops::Real(1)},
+      invalid_flux_bound, NonFiniteRoeFluxAdvect::State{pops::Real(2)}, invalid_flux_bound,
+      pops::FaceContext::axis_aligned(0));
+  EXPECT_EQ(flux_evaluation.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(flux_evaluation.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteFlux));
+  EXPECT_TRUE(std::isnan(flux_evaluation.checked_density().value[0]));
+}
+
+TEST(test_flux_interfaces, hllc_rejects_each_nonfinite_provider_stage_with_a_typed_cause) {
+  struct ExpectedFailure {
+    HllcFailureSite site;
+    pops::RiemannFailureCause cause;
+  };
+  const ExpectedFailure expected[] = {
+      {HllcFailureSite::kPhysicalFlux, pops::RiemannFailureCause::kHllcNonFinitePhysicalFlux},
+      {HllcFailureSite::kPressure, pops::RiemannFailureCause::kHllcNonFinitePressure},
+      {HllcFailureSite::kContact, pops::RiemannFailureCause::kHllcNonFiniteContact},
+      {HllcFailureSite::kStarState, pops::RiemannFailureCause::kHllcNonFiniteStarState},
+      {HllcFailureSite::kFinalFlux, pops::RiemannFailureCause::kHllcNonFiniteFlux},
+  };
+
+  for (const auto& failure : expected) {
+    const SelectiveInvalidHllc physical{failure.site};
+    const auto bound = providers<SelectiveInvalidHllc>();
+    const auto evaluation = pops::evaluate_numerical_flux(
+        pops::HLLCFlux{}, physical, SelectiveInvalidHllc::State{pops::Real(1)}, bound,
+        SelectiveInvalidHllc::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+
+    EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
+    EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
+    EXPECT_EQ(evaluation.reason_code, pops::riemann_reason_code(failure.cause));
+    EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+  }
 }
 
 TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_deterministically) {
@@ -295,6 +612,68 @@ TEST(test_flux_interfaces, fatal_flux_failure_remains_typed_and_preserves_reason
     return;
   }
   FAIL() << "fatal device flux failure was not propagated as FluxEvaluationFailure";
+}
+
+TEST(test_flux_interfaces, recovery_report_uses_the_flux_failure_reduction_without_type_erasure) {
+  pops::RecoveryReport recovery;
+  recovery.status = pops::RecoveryStatus::kRejected;
+  recovery.cause = pops::RecoveryCause::kExplicitRejection;
+  recovery.reason_code = 0x755u;
+
+  std::uint64_t packed = 0;
+  pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
+  tracker.recorder().record_recovery(recovery, packed);
+  tracker.merge(packed);
+
+  const pops::FluxFailureReport report = tracker.collective_report();
+  EXPECT_EQ(report.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(report.reason_code, 0x755u);
+  EXPECT_EQ(report.action(), pops::TransactionFailureAction::kRejectStep);
+}
+
+TEST(test_flux_interfaces, face_recovery_refusal_never_reaches_the_numerical_flux) {
+  static_assert(
+      std::is_trivially_copyable_v<pops::ReconstructedFaceState<NonFinitePrimitiveModel>>);
+  static_assert(
+      std::is_trivially_copyable_v<pops::RecoveredFacePrimitive<NonFinitePrimitiveModel>>);
+  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+  const pops::BoxArray cells(std::vector<pops::Box2D>{domain});
+  const pops::DistributionMapping distribution(1, pops::n_ranks());
+  pops::MultiFab state(cells, distribution, 1, 2);
+  pops::MultiFab providers_field(cells, distribution, pops::kAuxBaseComps, 2);
+  state.set_val(pops::Real(1));
+  providers_field.set_val(pops::Real(0));
+
+  const auto local_state = state.fab(0).const_array();
+  const auto reconstructed = pops::reconstruct_pp_recovered<NonFinitePrimitiveModel>(
+      NonFinitePrimitiveModel{}, local_state, domain.lo[0] + 1, domain.lo[1] + 1, 0, pops::Real(1),
+      pops::Minmod{}, true, pops::Real(0), 0);
+  ASSERT_FALSE(reconstructed.publication_permitted());
+  EXPECT_EQ(reconstructed.recovery.status, pops::RecoveryStatus::kInvalidContract);
+  EXPECT_EQ(reconstructed.recovery.cause, pops::RecoveryCause::kNonFiniteCandidate);
+  EXPECT_EQ(reconstructed.value[0], pops::Real(1));
+  const auto value_only = pops::reconstruct_pp<NonFinitePrimitiveModel>(
+      NonFinitePrimitiveModel{}, local_state, domain.lo[0] + 1, domain.lo[1] + 1, 0, pops::Real(1),
+      pops::Minmod{}, true, pops::Real(0), 0);
+  EXPECT_TRUE(std::isnan(value_only[0]));
+
+  std::vector<pops::Box2D> x_faces{pops::xface_box(domain)};
+  std::vector<pops::Box2D> y_faces{pops::yface_box(domain)};
+  pops::MultiFab flux_x(pops::BoxArray(std::move(x_faces)), distribution, 1, 0);
+  pops::MultiFab flux_y(pops::BoxArray(std::move(y_faces)), distribution, 1, 0);
+  try {
+    pops::compute_face_fluxes<pops::Minmod, pops::RusanovFlux>(NonFinitePrimitiveModel{}, state,
+                                                               providers_field, flux_x, flux_y,
+                                                               pops::Real(1), pops::Real(1), true);
+  } catch (const pops::FluxEvaluationFailure& failure) {
+    EXPECT_EQ(failure.status(), pops::EvaluationStatus::kFailed);
+    EXPECT_EQ(failure.reason_code(),
+              pops::detail::kVariableRecoveryReasonBase |
+                  static_cast<std::uint32_t>(pops::RecoveryCause::kNonFiniteCandidate));
+    EXPECT_EQ(failure.phase(), "compute_face_fluxes");
+    return;
+  }
+  FAIL() << "a refused primitive recovery reached or escaped the face-flux path";
 }
 
 TEST(test_flux_interfaces, native_storage_binds_only_the_exact_model_pack) {

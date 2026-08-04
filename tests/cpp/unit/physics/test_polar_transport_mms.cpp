@@ -43,7 +43,10 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>
 
+#include "polar_boundary_plan.hpp"
+
 #include <cmath>
+#include <string>
 #include <vector>
 
 using namespace pops;
@@ -153,7 +156,9 @@ static ErrNorms mms_error(int nr, int nth, bool cv) {
 
   ExBVelocityPolar model;
   model.B0 = kB0;
-  assemble_rhs_polar<Limiter, RusanovFlux>(model, U, aux, g, R);
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(ExBVelocityPolar::n_vars, false, Limiter::n_ghost);
+  assemble_rhs_polar<Limiter, RusanovFlux>(model, U, aux, g, R, *boundary_plan);
 
   // R vient d'etre ecrit par un kernel device : rendre la residence HOTE valide avant la lecture
   // directe ci-dessous (sous Kokkos::Cuda = device_fence ; no-op en serie/OpenMP). Sans cela on lit
@@ -240,12 +245,14 @@ static double run_conservation() {
   const double ds_min = kRmin * g.dtheta();
   const double dt = 0.4 * ds_min / v_th;
   const int nsteps = 40;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(ExBVelocityPolar::n_vars, false, Weno5::n_ghost);
 
   for (int s = 0; s < nsteps; ++s) {
     SSPRK3Step{}.take_step(
         [&](MultiFab& stage, MultiFab& Rr) {
           fill_ghosts(stage, dom, bc);
-          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, Rr);
+          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, Rr, *boundary_plan);
         },
         U, dt);
   }
@@ -306,4 +313,50 @@ TEST(test_polar_transport_mms, DivergenceConvergesOnVariableExBField) {
 TEST(test_polar_transport_mms, MassConservedWithPureAzimuthalField) {
   const double rel = run_conservation();
   EXPECT_TRUE(rel <= 1e-12) << "ecart de masse relatif = " << rel << " > 1e-12";
+}
+
+TEST(test_polar_transport_mms, RejectsPreparedPlanWithoutPolarTopology) {
+  const Box2D dom = Box2D::from_extents(8, 16);
+  const PolarGeometry geometry{dom, kRmin, kRmax};
+  const BoxArray boxes(std::vector<Box2D>{dom});
+  const DistributionMapping distribution(1, n_ranks());
+  MultiFab state(boxes, distribution, ExBVelocityPolar::n_vars, Weno5::n_ghost);
+  MultiFab auxiliary(boxes, distribution, kAuxBaseComps, Weno5::n_ghost);
+  MultiFab residual(boxes, distribution, ExBVelocityPolar::n_vars, 0);
+  state.set_val(Real(1));
+  auxiliary.set_val(Real(0));
+
+  const BCRec all_periodic;
+  const auto invalid_plan =
+      detail::prepare_builtin_boundary_plan("test-polar-invalid-topology", {}, Weno5::n_ghost,
+                                            ExBVelocityPolar::conservative_vars(), all_periodic);
+  try {
+    assemble_rhs_polar<Weno5, RusanovFlux>(ExBVelocityPolar{}, state, auxiliary, geometry, residual,
+                                           *invalid_plan);
+    FAIL() << "an all-periodic plan must not execute on the annular transport path";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string(error.what()).find("non-periodic radial and periodic azimuthal"),
+              std::string::npos);
+  }
+}
+
+TEST(test_polar_transport_mms, RejectsSharedInterfaceFaceOmission) {
+  const Box2D dom = Box2D::from_extents(8, 16);
+  const PolarGeometry geometry{dom, kRmin, kRmax};
+  const BoxArray boxes(std::vector<Box2D>{dom});
+  const DistributionMapping distribution(1, n_ranks());
+  MultiFab state(boxes, distribution, ExBVelocityPolar::n_vars, Weno5::n_ghost);
+  MultiFab auxiliary(boxes, distribution, kAuxBaseComps, Weno5::n_ghost);
+  MultiFab residual(boxes, distribution, ExBVelocityPolar::n_vars, 0);
+  state.set_val(Real(1));
+  auxiliary.set_val(Real(0));
+
+  auto hyperbolic = prepare_hyperbolic_boundary<2>(
+      {"foextrap", "foextrap", "periodic", "periodic"}, std::vector<double>(4, 0.0),
+      {"test-polar-xlo", "test-polar-xhi", "test-polar-ylo", "test-polar-yhi"}, {"Scalar"});
+  PreparedBoundaryPlan omitted("test-polar-omitted-face", Weno5::n_ghost, std::move(hyperbolic),
+                               {0});
+  EXPECT_THROW((assemble_rhs_polar<Weno5, RusanovFlux>(ExBVelocityPolar{}, state, auxiliary,
+                                                       geometry, residual, omitted)),
+               std::invalid_argument);
 }

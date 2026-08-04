@@ -13,6 +13,7 @@ from pops.external import (
     SourcePackageRegistry,
     build_fixed_binary_manifest,
     build_source_package_manifest,
+    compile_component,
     load,
 )
 from pops.model import ComponentManifest
@@ -81,7 +82,7 @@ def test_external_component_parameters_are_deeply_frozen_authorities(tmp_path):
         component.parameters["options"]["policy"]["strict"] = False
 
 
-def test_tampered_manifest_digest_is_rejected(tmp_path):
+def test_tampered_manifest_and_retained_source_are_rejected_at_phase_boundaries(tmp_path):
     path, data = _write_source(tmp_path)
     changed = deepcopy(data)
     changed["exports"] = {"other": _manifest().component_id}
@@ -89,6 +90,26 @@ def test_tampered_manifest_digest_is_rejected(tmp_path):
     with pytest.raises(ComponentPackageError) as error:
         load(path)
     assert error.value.code == "package_digest"
+
+    retained_root = tmp_path / "retained"
+    retained_root.mkdir()
+    retained = load(_write_source(retained_root)[0])
+    component = retained.require("average", interface=interfaces.NumericalFlux)()
+
+    # Frozen values are still part of a hostile extension boundary: prove that even deliberate
+    # in-memory corruption cannot turn the Python type itself into package authority.
+    object.__setattr__(retained.payloads[0], "content", b"tampered-retained-bytes")
+
+    registry = SourcePackageRegistry()
+    with pytest.raises(ComponentPackageError) as registry_error:
+        registry.register(retained)
+    assert registry_error.value.code == "source_digest"
+    assert registry.revision == 0
+
+    # This refusal occurs before toolchain discovery, compilation or native module access.
+    with pytest.raises(ComponentPackageError) as compile_error:
+        compile_component(component)
+    assert compile_error.value.code == "source_digest"
 
 
 def test_source_registry_is_atomic_idempotent_collision_safe_and_frozen(tmp_path):
@@ -119,6 +140,32 @@ def test_fixed_binary_cannot_claim_template_genericity():
             binary_path="average.so", binary=b"not-a-binary",
             symbols=("pops_component_interface_v1",))
     assert error.value.code == "fixed_generic_claim"
+
+
+def test_fixed_binary_bytes_are_authenticated_before_package_use(tmp_path):
+    platform = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++20")
+    component = _manifest(generic=False)
+    binary = b"authenticated-fixed-component"
+    data = build_fixed_binary_manifest(
+        components={"average": component},
+        platform=platform,
+        binary_path="average.so",
+        binary=binary,
+        symbols=("pops_component_interface_v1",),
+    )
+    binary_path = tmp_path / "average.so"
+    manifest_path = tmp_path / "average.pops.json"
+    binary_path.write_bytes(binary)
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    package = load(manifest_path)
+    assert package.binary == binary
+
+    binary_path.write_bytes(binary + b"-tampered")
+    with pytest.raises(ComponentPackageError) as error:
+        load(manifest_path)
+    assert error.value.code == "binary_digest"
 
 
 def test_compiled_registry_refuses_source_values_and_freezes():

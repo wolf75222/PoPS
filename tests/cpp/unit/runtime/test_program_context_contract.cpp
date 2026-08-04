@@ -24,8 +24,10 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/allocator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
@@ -122,6 +124,62 @@ TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilCons
   EXPECT_EQ(sim.consume_step_projections(), std::vector<std::string>({"realizability"}));
   EXPECT_TRUE(sim.consume_step_projections().empty());
   EXPECT_THROW(sim.note_step_projection(""), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 2;
+  cfg.L = 1.0;
+  System sim(cfg);
+  ProgramContext context(&sim);
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
+  const std::array<std::pair<const char*, double>, 5> terms{{
+      {"storage_change", 11.0},
+      {"outward_boundary_flux", 2.0},
+      {"sources", 5.0},
+      {"reflux", 3.0},
+      {"projection", 1.0},
+  }};
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (const auto& [name, value] : terms)
+    context.record_balance_term(route, name, 0.25 * value);
+  for (const auto& [name, value] : terms)
+    context.record_balance_term(route, name, 0.75 * value);
+  const auto accepted = sim.accepted_balance_terms(route);
+  EXPECT_EQ(accepted.size(), terms.size());
+  for (const auto& [name, value] : terms)
+    EXPECT_DOUBLE_EQ(accepted.at(name), value);
+  // Reserved balance evidence is deliberately attempt-local and therefore absent
+  // from the persistent/checkpointed inspection-diagnostic registry.
+  EXPECT_EQ(sim.program_diagnostics().count("pops.balance-term.v1:" + route + ":storage_change"),
+            0u);
+  sim.rollback_step_transaction();
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (std::size_t index = 0; index + 1 < terms.size(); ++index)
+    context.record_balance_term(route, terms[index].first, terms[index].second);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  sim.rollback_step_transaction();
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (const std::string& forged :
+       {"pops.balance-term", "pops.balance-term.v1", "pops.balance-term.v1:forged"}) {
+    EXPECT_THROW(sim.record_program_diagnostic(forged, 1.0), std::invalid_argument);
+    EXPECT_EQ(sim.program_diagnostics().count(forged), 0u);
+  }
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  EXPECT_THROW(
+      context.record_balance_term("pops.balance-ledger-route.v1:sha256:bad", "storage_change", 1.0),
+      std::invalid_argument);
+  EXPECT_THROW(context.record_balance_term(route, "unknown", 1.0), std::invalid_argument);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  sim.rollback_step_transaction();
 }
 
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
@@ -288,9 +346,14 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   sim.install_block_state_route("b", b_state);
   const std::vector<std::string> faces(4, "periodic");
   const std::vector<double> values(4, 0.0);
-  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state,
-                            PreparedBoundaryReadDependencies{{b_state}, {}});
-  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+  const std::vector<std::string> a_faces = {"case::block::a::xlo", "case::block::a::xhi",
+                                            "case::block::a::ylo", "case::block::a::yhi"};
+  const std::vector<std::string> b_faces = {"case::block::b::xlo", "case::block::b::xhi",
+                                            "case::block::b::ylo", "case::block::b::yhi"};
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, a_faces, {"Scalar"},
+                            {}, a_state, PreparedBoundaryReadDependencies{{b_state}, {}});
+  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, b_faces, {"Scalar"},
+                            {}, b_state);
   const auto a_plan = sim.grid_context("a").boundary_plan;
   ASSERT_NE(a_plan, nullptr);
   const auto b_read = a_plan->prepare_state_read(b_state);
@@ -349,6 +412,150 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   EXPECT_THROW(ctx.rhs_group(11, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
                std::invalid_argument)
       << "an atomic group identity must never alias one of its member rate nodes";
+}
+
+TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  sim.install_boundary_plan(
+      "fluid", "case::block::fluid::boundary", 2,
+      {"slip_wall", "slip_wall", "slip_wall", "slip_wall"}, std::vector<double>(20, 0.0),
+      {"case::block::fluid::xlo", "case::block::fluid::xhi", "case::block::fluid::ylo",
+       "case::block::fluid::yhi"},
+      {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"}, {}, state_identity);
+  sim.install_block("fluid", 5, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1, true,
+                    1);
+
+  MultiFab& state = sim.block_state(0);
+  ASSERT_GE(state.n_grow(), 2);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.deep-slip-wall");
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.system-slip", 0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(-2, 2, 1), Real(-2));
+    EXPECT_EQ(values(-2, 2, 2), Real(-5));
+    EXPECT_EQ(values(-2, 2, 4), Real(-4));
+    EXPECT_EQ(values(2, -2, 3), Real(-3));
+    EXPECT_EQ(values(2, -2, 4), Real(-4));
+  }
+}
+
+TEST(ProgramContextContract, SystemPreparesPrimitiveFixedStateWithExactCompiledModelConversion) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0, 4.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  sim.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
+                            {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+                            {"case::block::fluid::xlo", "case::block::fluid::xhi",
+                             "case::block::fluid::ylo", "case::block::fluid::yhi"},
+                            {"Density", "MomentumX", "MomentumY", "Energy"}, {}, state_identity, {},
+                            {}, {"conservative", "primitive", "conservative", "conservative"},
+                            {"", "case::block::fluid::model-p2c", "", ""});
+  ASSERT_TRUE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  add_compiled_model(sim, "fluid", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod",
+                     "rusanov", "conservative", "explicit", kGamma);
+  ASSERT_FALSE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < kNcomp; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.primitive-fixed-state");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-primitive-inflow", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(4, 2, 0), Real(3));
+    EXPECT_EQ(values(4, 2, 1), Real(11));
+    EXPECT_EQ(values(4, 2, 2), Real(-5));
+    EXPECT_NEAR(values(4, 2, 3), Real(39), Real(1e-12));
+  }
+}
+
+TEST(ProgramContextContract, SystemExecutesScalarAxisPermutedPeriodicPlan) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 6;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::scalar::state::U";
+  sim.install_block_state_route("scalar", state_identity);
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  sim.install_boundary_plan(
+      "scalar", "case::block::scalar::boundary", 1,
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::block::scalar::xlo", "case::block::scalar::xhi", "case::block::scalar::ylo",
+       "case::block::scalar::yhi"},
+      {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi});
+  sim.install_block("scalar", 1, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1,
+                    true, 1);
+  sim.mark_bound();
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
+  }
+  const auto lane = ExecutionLane::world("test.system.axis-permuted-periodic");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-axis-permuted", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("scalar"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& field = state.fab(local);
+    const Box2D grown = field.grown_box();
+    for (int j = 0; j < cfg.n; ++j)
+      if (grown.contains(-1, j))
+        EXPECT_EQ(field(-1, j, 0), Real(j + 100 * (cfg.n - 1)));
+    for (int i = 0; i < cfg.n; ++i)
+      if (grown.contains(i, cfg.n))
+        EXPECT_EQ(field(i, cfg.n, 0), Real(100 * i));
+  }
 }
 
 TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
@@ -444,6 +651,9 @@ TEST(ProgramContextContract,
   sim.set_poisson("charge_density", "geometric_mg");
   sim.set_program_block_map({0, 1});
   ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.main");
+  ctx.begin_step(0.01);
+  const auto point = [&](int stage) { return ctx.boundary_evaluation_point(stage); };
 
   MultiFab& live_a = ctx.state(0);
   MultiFab& live_b = ctx.state(1);
@@ -458,8 +668,16 @@ TEST(ProgramContextContract,
   Real* const live_a_storage = live_a.fab(0).array().p;
   Real* const live_b_storage = live_b.fab(0).array().p;
 
+  auto incomplete_point = point(500);
+  incomplete_point.clock.clear();
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(incomplete_point, 500, "missing-provider",
+                                                     {{0, &stage_a}, {1, &stage_b}}),
+               std::invalid_argument)
+      << "the generated route must retain its complete BoundaryEvaluationPoint";
+
   auto missing_field_solve = [&]() {
-    return ctx.solve_fields_from_blocks(501, "missing-provider", {{0, &stage_a}, {1, &stage_b}});
+    return ctx.solve_fields_from_blocks_at(point(501), 501, "missing-provider",
+                                           {{0, &stage_a}, {1, &stage_b}});
   };
   EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
   EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
@@ -479,12 +697,12 @@ TEST(ProgramContextContract,
 
   // The complete request is validated before the first substitution: neither a cross-owner live
   // alias nor one wrong ghost footprint may expose a provisional state.
-  EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(502, "missing-provider", {{0, &live_b}, {1, &stage_b}}),
-      std::invalid_argument);
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(502), 502, "missing-provider",
+                                                     {{0, &live_b}, {1, &stage_b}}),
+               std::invalid_argument);
   MultiFab wrong_layout(stage_b.box_array(), stage_b.dmap(), stage_b.ncomp(), stage_b.n_grow() + 1);
-  EXPECT_THROW((void)ctx.solve_fields_from_blocks(503, "missing-provider",
-                                                  {{0, &stage_a}, {1, &wrong_layout}}),
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(503), 503, "missing-provider",
+                                                     {{0, &stage_a}, {1, &wrong_layout}}),
                std::invalid_argument);
   EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
   EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
@@ -498,11 +716,17 @@ TEST(ProgramContextContract,
   MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                         subset_live.n_grow());
   subset_stage.set_val(Real(11));
-  EXPECT_THROW((void)ctx.solve_fields_from_blocks(505, "missing-subset-provider", {{0, &live_a}}),
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(501), 501, "missing-provider",
+                                                     {{0, &subset_stage}}),
+               std::logic_error)
+      << "a runtime block-map rematerialization must not teach an existing IR value a new pack";
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(505), 505, "missing-subset-provider",
+                                                     {{0, &live_a}}),
                std::invalid_argument)
       << "a subset Program must not borrow an unlisted System block's live state as its stage";
   auto subset_solve = [&]() {
-    return ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &subset_stage}});
+    return ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
+                                           {{0, &subset_stage}});
   };
   EXPECT_THROW((void)subset_solve(), std::runtime_error);
   const AllocationEventStats before_subset_retry = allocation_event_stats();
@@ -520,16 +744,16 @@ TEST(ProgramContextContract,
                          subset_live.n_grow());
   rebound_stage.set_val(Real(13));
   const AllocationEventStats before_layout_change = allocation_event_stats();
-  EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
-      std::runtime_error);
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
+                                                     {{0, &rebound_stage}}),
+               std::runtime_error);
   const AllocationEventStats after_layout_change = allocation_event_stats();
   EXPECT_EQ(after_layout_change.fab_calls, before_layout_change.fab_calls);
   EXPECT_EQ(after_layout_change.communication_calls, before_layout_change.communication_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
-  EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
-      std::runtime_error);
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
+                                                     {{0, &rebound_stage}}),
+               std::runtime_error);
   const AllocationEventStats after_rebound_retry = allocation_event_stats();
   EXPECT_EQ(after_rebound_retry.fab_calls, before_rebound_retry.fab_calls);
   EXPECT_EQ(after_rebound_retry.communication_calls, before_rebound_retry.communication_calls);

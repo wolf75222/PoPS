@@ -68,13 +68,26 @@ TEST(PlatformManifest, UnknownIsMissingProofAndThreeDimensionsRemainRepresentabl
                pops::platform::ContractError);
 }
 
+TEST(PlatformManifest, UnknownCapabilityRefusesBeforeKernel) {
+  auto missing = platform();
+  missing.device = pops::platform::CapabilityProof::unknown();
+  int launches = 0;
+  EXPECT_THROW(pops::platform::launch_checked(missing, context(), {field()},
+                                              [&](const auto&, const auto&) {
+                                                ++launches;
+                                                return 0;
+                                              },
+                                              {field()}),
+               pops::platform::ContractError);
+  EXPECT_EQ(launches, 0);
+}
+
 TEST(PlatformManifest, FieldAndCommunicatorMismatchesRefuseBeforeKernel) {
   int launches = 0;
   auto kernel = [&](const auto&, const auto&) { return ++launches; };
   const auto required = field();
-  for (int variant = 0; variant < 5; ++variant) {
+  for (int variant = 0; variant < 9; ++variant) {
     auto actual = field();
-    auto execution = context();
     if (variant == 0)
       actual.centering = "node";
     else if (variant == 1)
@@ -83,13 +96,71 @@ TEST(PlatformManifest, FieldAndCommunicatorMismatchesRefuseBeforeKernel) {
       actual.extents = {15, 12};
     else if (variant == 3)
       actual.memory_space = "device";
+    else if (variant == 4)
+      actual.strides = {1, 16};
+    else if (variant == 5)
+      actual.ghosts = {{1, 0}, {0, 0}};
+    else if (variant == 6)
+      actual.patch = "patch-1";
+    else if (variant == 7)
+      actual.layout = "left";
     else
-      execution.communicator.identity = "comm:wrong";
+      actual.ownership = "owned";
     EXPECT_THROW(
-        pops::platform::launch_checked(platform(), execution, {actual}, kernel, {required}),
+        pops::platform::launch_checked(platform(), context(), {actual}, kernel, {required}),
         pops::platform::ContractError);
     EXPECT_EQ(launches, 0);
   }
+  auto execution = context();
+  execution.communicator.identity = "comm:wrong";
+  EXPECT_THROW(pops::platform::launch_checked(platform(), execution, {field()}, kernel, {required}),
+               pops::platform::ContractError);
+  EXPECT_EQ(launches, 0);
+}
+
+TEST(PlatformManifest, FieldCapabilitiesAndNamesFailClosed) {
+  int launches = 0;
+  auto kernel = [&](const auto&, const auto&) { return ++launches; };
+
+  auto missing = platform();
+  missing.capabilities.erase("ownership");
+  EXPECT_THROW(pops::platform::launch_checked(missing, context(), {field()}, kernel),
+               pops::platform::ContractError);
+
+  auto unsupported = platform();
+  unsupported.capabilities["layouts"] = pops::platform::prove_text_set({"left"}, "test");
+  auto unsupported_context = context();
+  unsupported_context.backend.capabilities["layouts"] =
+      pops::platform::prove_text_set({"left"}, "test");
+  EXPECT_THROW(pops::platform::launch_checked(unsupported, unsupported_context, {field()}, kernel),
+               pops::platform::ContractError);
+
+  auto disabled = platform();
+  disabled.capabilities["generic_field_view"] = pops::platform::prove_bool(false, "test");
+  auto disabled_context = context();
+  disabled_context.backend.capabilities["generic_field_view"] =
+      pops::platform::prove_bool(false, "test");
+  EXPECT_THROW(pops::platform::launch_checked(disabled, disabled_context, {field()}, kernel),
+               pops::platform::ContractError);
+
+  EXPECT_THROW(pops::platform::launch_checked(platform(), context(), {field(), field()}, kernel),
+               pops::platform::ContractError);
+  EXPECT_THROW(
+      pops::platform::launch_checked(platform(), context(), {field()}, kernel, {field(), field()}),
+      pops::platform::ContractError);
+  EXPECT_EQ(launches, 0);
+}
+
+TEST(PlatformManifest, FieldGhostsMustLeavePositiveInterior) {
+  auto hidden = field();
+  hidden.ghosts = {{16, 0}, {0, 0}};
+  EXPECT_THROW(pops::platform::validate_launch(platform(), context(), {hidden}),
+               pops::platform::ContractError);
+
+  hidden = field();
+  hidden.ghosts = {{8, 8}, {0, 0}};
+  EXPECT_THROW(pops::platform::validate_launch(platform(), context(), {hidden}),
+               pops::platform::ContractError);
 }
 
 TEST(PlatformManifest, GenericTwoDimensionalDoubleRouteLaunches) {

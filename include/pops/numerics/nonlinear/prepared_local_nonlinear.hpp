@@ -224,63 +224,6 @@ struct PreparedLocalNonlinearProblem {
 
 namespace detail {
 
-inline constexpr long long kLocalNonlinearFailureComponentBase = 1024;
-inline constexpr long long kLocalNonlinearFailureCellStride = 1048576;
-inline constexpr long long kLocalNonlinearFailureEncodingCeiling = 4503599627370496LL;
-
-/// Reverse-pack one failing cell and component into an exactly representable binary64 value. A max
-/// reduction then selects the lexicographically first global cell without atomics, and keeps its
-/// component attached to that exact cell.
-POPS_HD inline Real encode_local_nonlinear_failure(int i, int j, int component) {
-  const Real cell = Real(j) * Real(kLocalNonlinearFailureCellStride) + Real(i);
-  return Real(kLocalNonlinearFailureEncodingCeiling) -
-         (cell * Real(kLocalNonlinearFailureComponentBase) + Real(component + 1) + Real(1));
-}
-
-POPS_HD inline void decode_local_nonlinear_failure(Real encoded, int& i, int& j, int& component) {
-  const long long packed =
-      kLocalNonlinearFailureEncodingCeiling - static_cast<long long>(encoded) - 1;
-  component = static_cast<int>(packed % kLocalNonlinearFailureComponentBase) - 1;
-  const long long cell = packed / kLocalNonlinearFailureComponentBase;
-  i = static_cast<int>(cell % kLocalNonlinearFailureCellStride);
-  j = static_cast<int>(cell / kLocalNonlinearFailureCellStride);
-}
-
-/// Pack collective failure precedence together with the exact first cell/component.  Generated
-/// Program kernels reduce a single statistics field, so independently reducing precedence and
-/// location would be able to pair a fatal status with the location of an unrelated recoverable
-/// failure.  Precedence selects a disjoint power-of-two bin while the binary64 significand retains
-/// the complete 52-bit location payload, so this adds no model-size restriction.
-POPS_HD inline Real encode_ranked_local_nonlinear_failure(int priority, int i, int j,
-                                                          int component) {
-  const Real cell = Real(j) * Real(kLocalNonlinearFailureCellStride) + Real(i);
-  const Real packed = cell * Real(kLocalNonlinearFailureComponentBase) + Real(component + 1);
-  const long long location_rank =
-      kLocalNonlinearFailureEncodingCeiling - static_cast<long long>(packed) - 1;
-  Real priority_scale = Real(1);
-  for (int bit = 0; bit < priority; ++bit)
-    priority_scale *= Real(2);
-  return priority_scale *
-         (Real(1) + Real(location_rank) / Real(kLocalNonlinearFailureEncodingCeiling));
-}
-
-POPS_HD inline void decode_ranked_local_nonlinear_failure(Real encoded, int& priority, int& i,
-                                                          int& j, int& component) {
-  priority = 0;
-  Real normalized = encoded;
-  while (normalized >= Real(2)) {
-    normalized *= Real(0.5);
-    ++priority;
-  }
-  const long long location_rank =
-      static_cast<long long>((normalized - Real(1)) * Real(kLocalNonlinearFailureEncodingCeiling));
-  const long long packed = kLocalNonlinearFailureEncodingCeiling - location_rank - 1;
-  component = static_cast<int>(packed % kLocalNonlinearFailureComponentBase) - 1;
-  const long long cell = packed / kLocalNonlinearFailureComponentBase;
-  i = static_cast<int>(cell % kLocalNonlinearFailureCellStride);
-  j = static_cast<int>(cell / kLocalNonlinearFailureCellStride);
-}
-
 POPS_HD inline Real local_abs(Real value) {
   return value < Real(0) ? -value : value;
 }

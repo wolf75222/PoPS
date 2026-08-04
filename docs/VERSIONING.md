@@ -2,7 +2,8 @@
 
 `PoPS` follows [Semantic Versioning 2.0.0](https://semver.org). Package SemVer and the independently
 evolving API, semantic IR, normalization, component registry, native ABI, and checkpoint schema
-revisions are recorded by `schemas/release_contract.v1.json` and generated for Python/C++.
+revisions and the exact full/semantic component-catalog digests are recorded by
+`schemas/release_contract.v2.json` and generated for Python/C++.
 
 ## Single source of the version number
 
@@ -69,7 +70,7 @@ only by an offline migration tool that emits a complete current artifact.
 ## Supported release matrix
 
 The normative matrix is the generated `SUPPORTED_MATRIX` projection of
-`schemas/release_contract.v1.json`. It currently promises Python 3.12, C++20, Kokkos 4.4.01 Serial
+`schemas/release_contract.v2.json`. It currently promises Python 3.12, C++20, Kokkos 4.4.01 Serial
 and OpenMP source builds, a Serial OpenMPI source lane, and a macOS arm64 CPython 3.12 Serial wheel.
 CUDA/HIP, MPI and Windows wheels are explicitly not promised. A release may narrow or extend this
 matrix only by changing the versioned contract and proving every declared lane.

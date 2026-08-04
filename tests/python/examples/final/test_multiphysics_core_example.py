@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -36,7 +37,10 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
 
     assert completed.returncode == 0, completed.stderr
     assert "PoPS final multiphysics acceptance:" in completed.stdout
+    assert "missing mapping refusal: missing mapping provider" in completed.stdout
     assert "bit-identical restart: step 2" in completed.stdout
+    refused = output / "refused_missing_mapping"
+    assert not refused.exists() or not any(path.is_file() for path in refused.rglob("*"))
 
     from pops.output import HDF5, ParaView
 
@@ -45,6 +49,48 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
         output / "accepted" / "visualization" / "two_fluid").latest
     assert hdf5.output_identity.token in completed.stdout
     assert paraview.output_identity.token in completed.stdout
+    example = _load_example()
+    target = example.build_final_case(
+        cells=8,
+        output_mode=example._native_output_mode(),
+    )
+    import pops
+
+    resolved = pops.resolve(
+        target.authoring.case,
+        layout=target.layout_plan,
+        layout_providers={target.layout_handle: target.layout_provider},
+    )
+    diagnostic_output = next(
+        node
+        for node in resolved.consumer_graph.nodes
+        if node.target_uri == "state/two_fluid"
+    )
+    quantities = {
+        quantity.identity.token: quantity
+        for quantity in diagnostic_output.diagnostic_quantities
+    }
+    diagnostic_rows = hdf5.manifest["snapshot"]["diagnostics"]
+    assert len(diagnostic_rows) == 6
+    assert {row["key"]["state_id"] for row in diagnostic_rows} == set(quantities)
+    from pops.identity import Identity
+
+    for row in diagnostic_rows:
+        quantity = quantities[row["key"]["state_id"]]
+        assert row["key"]["reference"] == quantity.reference.canonical_identity()
+        assert row["key"]["reduction"] == "integral"
+        assert row["key"]["level"] == 0
+        assert Identity.from_token(row["key"]["layout_identity"]).domain == "layout"
+        block = quantity.reference.block_ref.local_id
+        role = quantity.execution["role"]
+        coefficient = quantity.execution["operations"][0]["coefficient"]
+        expected_coefficient = -1.0 if (block, role) == ("electrons", "Density") else 1.0
+        assert coefficient == expected_coefficient.hex()
+        if role == "Density":
+            value = float.fromhex(row["value"])
+            assert value < 0.0 if block == "electrons" else value > 0.0
+        # State-space units intentionally fail closed until PoPS has a typed unit protocol.
+        assert row["units"] == "unspecified"
 
     checkpoint = output / "accepted_restart.npz"
     assert checkpoint.is_file()
@@ -56,6 +102,48 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
             "electrons.electrons", "ions.ions"]
         assert "runtime_consumer_graph" in stored
         assert "field_provider_slots" in stored
+
+
+def test_missing_mapping_provider_refuses_before_plan_or_publication(tmp_path) -> None:
+    example = _load_example()
+    refused = tmp_path / "refused_missing_mapping"
+
+    reason = example.require_missing_mapping_provider_refusal(
+        cells=8, publication_root=refused,
+    )
+
+    assert "missing mapping provider" in reason
+    assert not refused.exists() or not any(path.is_file() for path in refused.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    (
+        ("bind_identity", "pops.bind.v1::changed"),
+        ("layout_plan_identity", "pops.layout-plan.v1::changed"),
+        ("layout_identities", ("pops.handle.v1::changed",)),
+    ),
+)
+def test_restart_snapshot_refuses_bind_or_layout_identity_drift(field, changed) -> None:
+    example = _load_example()
+    snapshot = example.RuntimeSnapshot(
+        time=0.0,
+        macro_step=0,
+        states={"electrons": np.zeros((3, 1, 1))},
+        fields={"electrostatic": np.zeros((1, 1))},
+        histories={"electrons.electrons": (np.zeros((3, 1, 1)),)},
+        bind_identity="pops.bind.v1::accepted",
+        layout_plan_identity="pops.layout-plan.v1::accepted",
+        layout_identities=("pops.handle.v1::accepted",),
+        program_hash="program",
+        consumer_graph_identity="consumer-graph",
+        consumer_cursors={},
+    )
+
+    with pytest.raises(RuntimeError, match=field):
+        example._require_same_snapshot(
+            snapshot, replace(snapshot, **{field: changed}), where="strict restart",
+        )
 
 
 def test_program_has_exact_field_context_and_transactional_implicit_join() -> None:
@@ -75,6 +163,16 @@ def test_program_has_exact_field_context_and_transactional_implicit_join() -> No
         (field_token.inputs[0].block, field_token.inputs[0].id),
         (field_token.inputs[1].block, field_token.inputs[1].id),
     )
+    collision_token = next(
+        value for value in values if value.op == "solve_coupled_implicit"
+    )
+    assert collision_token.attrs["operator"] == "implicit_collision"
+    assert collision_token.attrs["problem_kind"] == "coupled_implicit_euler"
+    assert collision_token.attrs["method"] == "newton"
+    assert collision_token.attrs["max_iter"] == 12
+    assert tuple(
+        block.local_id for block in collision_token.attrs["blocks"]
+    ) == ("electrons", "ions")
     solve_actions = {
         value.inputs[0].op: value.attrs["action"].kind
         for value in values if value.op == "solve_outcome"
@@ -145,10 +243,85 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
     assert resolved.consumer_graph.is_resolved
     assert sorted(node.kind.value for node in resolved.consumer_graph.nodes) == [
         "checkpoint", "scientific_output", "scientific_output"]
+    diagnostic_output = next(
+        node
+        for node in resolved.consumer_graph.nodes
+        if node.target_uri == "state/two_fluid"
+    )
+    assert len(diagnostic_output.diagnostics) == 6
+    assert len(diagnostic_output.diagnostic_quantities) == 6
+    expected_diagnostics = {
+        ("electrons", "Density"),
+        ("electrons", "MomentumX"),
+        ("electrons", "MomentumY"),
+        ("ions", "Density"),
+        ("ions", "MomentumX"),
+        ("ions", "MomentumY"),
+    }
+    actual_diagnostics = {
+        (
+            quantity.reference.block_ref.local_id,
+            quantity.execution["role"],
+        )
+        for quantity in diagnostic_output.diagnostic_quantities
+    }
+    assert actual_diagnostics == expected_diagnostics
+    assert {
+        quantity.layout_id
+        for quantity in diagnostic_output.diagnostic_quantities
+    } == {target.layout_handle.qualified_id}
+    assert all(
+        quantity.levels == (0,)
+        and quantity.execution["operations"] == (
+            {
+                "name": "integral",
+                "reduction": "sum",
+                "transform": "identity",
+                "metric_weighted": True,
+                "coefficient": (
+                    -1.0
+                    if quantity.reference.block_ref.local_id == "electrons"
+                    and quantity.execution["role"] == "Density"
+                    else 1.0
+                ).hex(),
+            },
+        )
+        for quantity in diagnostic_output.diagnostic_quantities
+    )
     provider_pack = resolved.field_plans["electrostatic"].native_options["provider_pack"]
     assert [row["owner_block"] for row in provider_pack] == ["electrons", "ions"]
     assert [row["key"] for row in provider_pack] == ["electron_charge", "ion_charge"]
     field_plan = resolved.field_plans["electrostatic"]
+    native_options = field_plan.native_options
+    assert native_options["rhs"] == "composite"
+    assert native_options["method"] == {
+        "native_method": "cell_centered_second_order",
+        "order": 2,
+        "ghost_depth": 1,
+    }
+    assert native_options["bc"] == "explicit"
+    solver_provider = native_options["solver_provider"]
+    assert solver_provider["provider"]["provider_id"] == "pops.field-solver.geometric-mg"
+    assert {
+        face["type"]
+        for face in solver_provider["facts"]["boundary"]["faces"]
+    } == {"periodic"}
+    nullspace_provider = native_options["nullspace_provider"]
+    assert (
+        nullspace_provider["provider"]["provider_id"]
+        == "pops.field-nullspace.constant"
+    )
+    assert nullspace_provider["resolution"]["singular"] is True
+    assert (
+        nullspace_provider["resolution"]["native_contract"]["options"]["gauge.value"]
+        == 0.0
+    )
+    equation = field_plan.operator.inspect()["physics"]["equation"]["equation"]
+    assert (
+        equation["lhs"]["field_expression"]["type"]
+        == "pops._ir.expr.Laplacian"
+    )
+    assert equation["rhs"]["protocol"] == "pops.expr.dag.v1"
     output_route = field_plan.native_options["output_route"]
     assert output_route["owner_block"] == "electrons"
     assert output_route["key"] == "electrostatic"

@@ -103,13 +103,130 @@ def _jacvec_location(value: Any, path: tuple[str, ...]) -> str:
         getattr(value, "name", "<unnamed>"), _block_name(value.inputs[2]), location)
 
 
+def _state_component_count(value: Any, *, where: str) -> int:
+    components = getattr(getattr(value, "space", None), "components", None)
+    if not isinstance(components, tuple) or not components:
+        raise TypeError("%s requires a registry-issued non-empty StateSpace" % where)
+    return len(components)
+
+
+def _validate_shared_interface_jacvec_pairs(
+        program: Any, *, target: str, hierarchy: Any, neighbours: dict[str, set[str]],
+        interface_count: int, coherence: Any) -> set[int]:
+    """Prove the deliberately narrow packed two-block implicit interface route.
+
+    One matrix-free apply owns one packed Krylov vector.  Its two rhs_jacvec nodes consume
+    disjoint component spans in apply-block order, but perturb both endpoint states before one
+    atomic shared-flux evaluation.  Anything that cannot establish that exact shape is rejected at
+    resolve rather than degrading to two one-sided derivatives.
+    """
+    participants = frozenset(neighbours)
+    all_jacvec = [
+        value for value in _nested_values(program._values)
+        if getattr(value, "op", None) == "rhs_jacvec"
+        and _block_name(value.inputs[2]) in participants
+    ]
+    if not all_jacvec:
+        return set()
+    if target != "amr_system":
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is available only on a frozen two-level AMR "
+            "hierarchy")
+
+    from pops.mesh._amr import FrozenHierarchy
+
+    if type(hierarchy.regrid) is not FrozenHierarchy or hierarchy.level_count != 2:
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP requires exactly one frozen two-level AMR "
+            "hierarchy")
+    # Unrelated blocks may carry the packed Krylov RHS or other independently authored state.
+    # The native pair is qualified by its two exact endpoint block identities, so only the
+    # participating interface graph must remain the proved one-edge bijection.
+    if (interface_count != 1 or len(participants) != 2 or
+            any(len(neighbours[name]) != 1 for name in participants)):
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP supports exactly one two-block interface")
+
+    rhs_round: dict[int, Any] = {}
+    for round_ in coherence.rounds:
+        for value in round_.values:
+            rhs_round[value.id] = round_
+
+    proved: set[int] = set()
+    for operator in program._values:
+        if getattr(operator, "op", None) != "matrix_free_operator":
+            continue
+        apply_block = operator.attrs.get("apply_block") or ()
+        pair = [
+            value for value in apply_block
+            if getattr(value, "op", None) == "rhs_jacvec"
+            and _block_name(value.inputs[2]) in participants
+        ]
+        if not pair:
+            continue
+        unsupported = [
+            value.op for value in apply_block
+            if value.op not in {"apply_in", "apply_out", "rhs_jacvec"}
+        ]
+        if unsupported:
+            raise NotImplementedError(
+                "shared NumericalFlux rhs_jacvec apply cannot mix operators %s"
+                % sorted(set(unsupported)))
+        if len(pair) != 2:
+            raise NotImplementedError(
+                "shared NumericalFlux matrix-free apply requires exactly two rhs_jacvec nodes")
+        if any(value.attrs.get("field_coupled") is not False for value in pair):
+            raise NotImplementedError(
+                "shared NumericalFlux implicit JVP requires field_coupled=False")
+        if pair[0].inputs[0] is not pair[1].inputs[0] or pair[0].inputs[1] is not pair[1].inputs[1]:
+            raise ValueError(
+                "shared NumericalFlux rhs_jacvec pair must share the exact packed apply in/out")
+        blocks = tuple(_block_name(value.inputs[2]) for value in pair)
+        if None in blocks or len(set(blocks)) != 2 or set(blocks) != set(participants):
+            raise ValueError(
+                "shared NumericalFlux rhs_jacvec pair must cover both interface endpoints once")
+        first, second = pair
+        exact_attrs = ("c_dt", "eps", "flux", "sources", "field_coupled")
+        changed = [name for name in exact_attrs if first.attrs.get(name) != second.attrs.get(name)]
+        if changed or first.point != second.point:
+            raise ValueError(
+                "shared NumericalFlux rhs_jacvec pair must preserve one point and coefficient "
+                "contract; changed %s" % sorted(changed))
+        widths = tuple(
+            _state_component_count(value.inputs[2], where=_jacvec_location(value, ()))
+            for value in pair
+        )
+        if operator.attrs.get("ncomp") != sum(widths):
+            raise ValueError(
+                "shared NumericalFlux packed operator component count must equal the sum of its "
+                "two endpoint StateSpaces")
+        rounds = [rhs_round.get(value.inputs[3].id) for value in pair]
+        if rounds[0] is None or rounds[0] is not rounds[1]:
+            raise ValueError(
+                "shared NumericalFlux rhs_jacvec bases must come from one atomic top-level RHS "
+                "coherence round")
+        base_blocks = {_block_name(value) for value in rounds[0].values}
+        if not set(participants).issubset(base_blocks):
+            raise ValueError(
+                "shared NumericalFlux rhs_jacvec base coherence round is missing one endpoint")
+        proved.update(value.id for value in pair)
+
+    missing = sorted(value.name for value in all_jacvec if value.id not in proved)
+    if missing:
+        raise NotImplementedError(
+            "shared NumericalFlux rhs_jacvec nodes require one paired matrix-free apply: %s"
+            % missing)
+    return proved
+
+
 def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> None:
     """Fail closed when an external boundary JVP cannot execute the authored ``rhs_jacvec``.
 
     The current matrix-free runtime supplies one direction for the owning conservative state and
-    one mutable output.  It can keep solved fields frozen, but it has no tangent-field materializer
-    for a field-coupled total derivative.  Validate those facts at resolve rather than after the
-    first Krylov matvec.
+    one mutable output.  A field-coupled apply re-solves its exact prepared field-provider closure
+    from the perturbed state and finite-differences the complete boundary residual while that
+    perturbed field publication is active.  Validate the remaining single-block direction/output
+    facts at resolve rather than after the first Krylov matvec.
     """
     if program is None:
         return
@@ -180,20 +297,15 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
                     "%s supports exactly one mutable external boundary output per residual/JVP; "
                     "got residual=%d, jvp=%d"
                     % (where, len(residual_outputs), len(jvp_outputs)))
-            fields = _qualified_table(residual, "fields")
+            _qualified_table(residual, "fields")
             field_coupled = value.attrs.get("field_coupled")
             if not isinstance(field_coupled, bool):
                 raise TypeError("%s requires a boolean field_coupled contract" % where)
-            if field_coupled and fields:
-                raise NotImplementedError(
-                    "%s reads solved boundary field(s) %s, but the native matrix-free runtime "
-                    "has no field-tangent materializer for field_coupled=True"
-                    % (where, list(fields)))
 
 
 def validate_shared_interface_program(
         blocks: tuple[Any, ...], layout_plan: Any, program: Any, *,
-        target: str, resolved_hierarchy: Any = None) -> bool:
+        target: str, resolved_hierarchy: Any = None) -> tuple[bool, bool]:
     """Prove that every interface is installed and evaluated as one atomic RHS group.
 
     This runs during resolve, before code generation or engine construction.  The runtime
@@ -223,7 +335,7 @@ def validate_shared_interface_program(
                     if side.boundary in owned_boundaries:
                         endpoint_owners[identity][side_name].add(block.name)
     if not declarations:
-        return False
+        return False, False
     if program is None:
         raise ValueError("shared block interfaces require one explicit whole-system Program")
 
@@ -285,6 +397,13 @@ def validate_shared_interface_program(
                 "requires at least two configured levels and the complete prefix active at bind"
             )
 
+    values = list(program._values)
+    coherence = plan_rhs_coherence(program, values, block_key=_block_name)
+    hierarchy = None if resolved_hierarchy is None else resolved_hierarchy.plan
+    implicit_jacvec_ids = _validate_shared_interface_jacvec_pairs(
+        program, target=target, hierarchy=hierarchy, neighbours=neighbours,
+        interface_count=len(declarations), coherence=coherence)
+
     participant_names = frozenset(neighbours)
     for value, path in _nested_control_values(program._values):
         block = _block_name(value)
@@ -296,15 +415,6 @@ def validate_shared_interface_program(
                 "StagePoint."
                 % (value.name, block, " -> ".join(path))
             )
-    for value in _nested_values(program._values):
-        if getattr(value, "op", None) == "rhs_jacvec" \
-                and _block_name(value.inputs[2]) in participant_names:
-            raise NotImplementedError(
-                "shared NumericalFlux implicit JVP requires a coupled two-sided trace "
-                "linearization; the current NumericalFlux scheduler is explicit-only"
-            )
-
-    values = list(program._values)
     covered: set[int] = set()
     for value in values:
         block = _block_name(value)
@@ -315,7 +425,6 @@ def validate_shared_interface_program(
                 "source work; split the named source into a separate Program node"
                 % (value.name, block))
 
-    coherence = plan_rhs_coherence(program, values, block_key=_block_name)
     for round_ in coherence.rounds:
         group = round_.values
         names = [_block_name(row) for row in group]
@@ -341,7 +450,7 @@ def validate_shared_interface_program(
         raise ValueError(
             "shared interface default-flux evaluations were not proved simultaneous: %s"
             % sorted(ungrouped))
-    return True
+    return True, bool(implicit_jacvec_ids)
 
 
 __all__ = ["validate_prepared_boundary_jacvec", "validate_shared_interface_program"]

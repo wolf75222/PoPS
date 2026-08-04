@@ -115,7 +115,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers
         that alias a caller-allocated input buffer (schur_rhs, laplacian, gradient, divergence,
         schur_*), the side-effecting ops (solve_fields, project, fill_boundary, store_history,
-        record_scalar), solve_linear, and the sub-block-owning ops (while/if/range,
+        record_scalar, record_balance_term), solve_linear, and the sub-block-owning ops (while/if/range,
         matrix_free_operator, solve_local_nonlinear) -- is treated as LIVE even when its result looks
         unconsumed, so an unknown/new op is NEVER wrongly dropped. The live set is reverse-reachability
         from the commits plus those non-removable nodes. The surviving nodes are renumbered to

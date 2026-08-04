@@ -21,6 +21,9 @@ class _BuiltinLoadBalance:
     option_schema_identity: ClassVar[str]
     consumes_weights: ClassVar[bool]
 
+    def _native_options(self) -> dict[str, Any]:
+        return {}
+
     def load_balance_provider_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {
             "schema_version": 1,
@@ -28,7 +31,7 @@ class _BuiltinLoadBalance:
             "provider_id": self.provider_id,
             "native_route": self.native_route,
             "option_schema_identity": self.option_schema_identity,
-            "options": {},
+            "options": self._native_options(),
             "weight_capability": {
                 "authenticated": True,
                 "consumed": self.consumes_weights,
@@ -62,6 +65,56 @@ class Knapsack(_BuiltinLoadBalance):
     native_route: ClassVar[str] = "knapsack"
     option_schema_identity: ClassVar[str] = "pops.amr.load-balance.knapsack@1"
     consumes_weights: ClassVar[bool] = True
+
+
+@dataclass(frozen=True, slots=True)
+class MeasuredKnapsack(_BuiltinLoadBalance):
+    """Knapsack plus a measured, migration-aware net-benefit decision policy."""
+
+    minimum_improvement_ppm: int = 50_000
+    amortization_steps: int = 20
+    migration_bandwidth_bytes_per_second: int = 1_000_000_000
+    per_patch_migration_latency_nanoseconds: int = 0
+
+    provider_id: ClassVar[str] = "pops.lib.amr::measured_knapsack"
+    native_route: ClassVar[str] = "measured_knapsack"
+    option_schema_identity: ClassVar[str] = "pops.amr.load-balance.measured-knapsack@1"
+    consumes_weights: ClassVar[bool] = True
+
+    def __post_init__(self) -> None:
+        values = {
+            "minimum_improvement_ppm": self.minimum_improvement_ppm,
+            "amortization_steps": self.amortization_steps,
+            "migration_bandwidth_bytes_per_second": (self.migration_bandwidth_bytes_per_second),
+            "per_patch_migration_latency_nanoseconds": (
+                self.per_patch_migration_latency_nanoseconds
+            ),
+        }
+        for name, value in values.items():
+            if type(value) is not int:
+                raise TypeError("MeasuredKnapsack.%s must be an exact integer" % name)
+        if not 0 <= self.minimum_improvement_ppm < 1_000_000:
+            raise ValueError("MeasuredKnapsack.minimum_improvement_ppm must be in [0, 1000000)")
+        if self.amortization_steps < 1:
+            raise ValueError("MeasuredKnapsack.amortization_steps must be positive")
+        if self.migration_bandwidth_bytes_per_second < 1:
+            raise ValueError(
+                "MeasuredKnapsack.migration_bandwidth_bytes_per_second must be positive"
+            )
+        if self.per_patch_migration_latency_nanoseconds < 0:
+            raise ValueError(
+                "MeasuredKnapsack.per_patch_migration_latency_nanoseconds must be non-negative"
+            )
+
+    def _native_options(self) -> dict[str, Any]:
+        return {
+            "minimum_improvement_ppm": self.minimum_improvement_ppm,
+            "amortization_steps": self.amortization_steps,
+            "migration_bandwidth_bytes_per_second": (self.migration_bandwidth_bytes_per_second),
+            "per_patch_migration_latency_nanoseconds": (
+                self.per_patch_migration_latency_nanoseconds
+            ),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +427,58 @@ class SymbolicTagger:
 
 
 @dataclass(frozen=True, slots=True)
+class FluxRegisterReflux:
+    """Builtin conservative flux-register correction through the Reflux provider protocol."""
+
+    __pops_ir_immutable__: ClassVar[bool] = True
+
+    def resolve_references(self, resolver: Any) -> FluxRegisterReflux:
+        if not callable(resolver):
+            raise TypeError("FluxRegisterReflux.resolve_references requires a callable resolver")
+        return self
+
+    def require_component_inputs(self, components: Any) -> None:
+        del components
+
+    def lower_amr_provider(self, context: Any) -> Any:
+        from pops.amr.providers import (
+            AMRProviderLoweringContext,
+            ResolvedAMRProviderBinding,
+            amr_provider_binding_identity,
+        )
+
+        if type(context) is not AMRProviderLoweringContext:
+            raise TypeError("FluxRegisterReflux requires an AMRProviderLoweringContext")
+        self.require_component_inputs(context.components)
+        data = {
+            **self.runtime_binding_data(),
+            "layout_identity": context.layout_identity,
+            "clock_identity": context.clock_identity,
+        }
+        data["provider_identity"] = amr_provider_binding_identity("reflux", data)
+        return ResolvedAMRProviderBinding("reflux", data)
+
+    def runtime_binding_data(self) -> dict[str, Any]:
+        from pops import interfaces
+
+        data = {
+            "schema_version": 1,
+            "provider_type": "builtin_amr_reflux",
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "builtin",
+            },
+            "provider_id": "pops.lib.amr::flux_register_reflux",
+            "native_interface": interfaces.Reflux.to_data(),
+        }
+        data["provider_identity"] = make_identity("amr-reflux-provider", data).token
+        return data
+
+    inspect = runtime_binding_data
+    canonical_identity = runtime_binding_data
+
+
+@dataclass(frozen=True, slots=True)
 class BergerRigoutsos:
     """Builtin clustering provider with intrinsic validated algorithm controls."""
 
@@ -459,8 +564,10 @@ __all__ = [
     "DivergencePreservingFace",
     "EllipticRecompute",
     "FaceTransfer",
+    "FluxRegisterReflux",
     "LinearTimeInterpolation",
     "Knapsack",
+    "MeasuredKnapsack",
     "NodeTransfer",
     "PatchTopologyRebuild",
     "StateTransfer",

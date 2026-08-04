@@ -68,6 +68,8 @@
 #include <pops/numerics/spatial/operators/polar_operator.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 
+#include "polar_boundary_plan.hpp"
+
 #include <cmath>
 #include <vector>
 
@@ -130,15 +132,17 @@ struct MmsTransportPolar {
   static constexpr int n_aux = 4;  // lit phi, grad_r, grad_theta (0..2) + S au canal extra 3 (B_z)
   using State = StateVec<1>;
   Real B0 = 1;
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& a, int dir) const {
     StateVec<1> f{};
     f[0] = u[0] * velocity(a, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& a, int dir) const {
     const Real d = velocity(a, dir);
     return d < 0 ? -d : d;
   }
@@ -252,6 +256,8 @@ static double run_mms(int nr, int nth) {
   const double dt = 0.3 * ds_min / v_max;
   const int nsteps = static_cast<int>(std::ceil(kTfinal / dt));
   const double dt_eff = kTfinal / nsteps;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(MmsTransportPolar::n_vars, false, Limiter::n_ghost);
 
   for (int s = 0; s < nsteps; ++s) {
     SSPRK3Step{}.take_step(
@@ -259,7 +265,7 @@ static double run_mms(int nr, int nth) {
           fill_ghosts(stage, dom, bc);  // ghosts azimutaux periodiques
           fill_radial_ghosts_exact(stage, g,
                                    dom);  // ghosts radiaux Dirichlet-MMS (exact, stationnaire)
-          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R);
+          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R, *boundary_plan);
         },
         U, static_cast<Real>(dt_eff));
   }

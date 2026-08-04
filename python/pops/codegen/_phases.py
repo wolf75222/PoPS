@@ -96,6 +96,9 @@ def resolve(
                          "qualified mapping lowering" % present),
             )
     resolved_layouts = layout_authority.require_runtime()
+    from pops.codegen._layout_resolution import resolve_native_spatial_layouts
+
+    native_layouts = resolve_native_spatial_layouts(layout_plan)
     validate_layout_mapping_components(layout_plan, components)
     if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
         _refuse_runtime(
@@ -243,9 +246,11 @@ def resolve(
     )
 
     validate_prepared_boundary_jacvec(blocks, resolved_time)
-    has_shared_interfaces = validate_shared_interface_program(
-        blocks, layout_plan, resolved_time, target=target,
-        resolved_hierarchy=resolved_hierarchy,
+    has_shared_interfaces, has_shared_interface_implicit_jacvec = (
+        validate_shared_interface_program(
+            blocks, layout_plan, resolved_time, target=target,
+            resolved_hierarchy=resolved_hierarchy,
+        )
     )
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
@@ -293,9 +298,25 @@ def resolve(
     )
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
+    lowering_coverage = layout_lowering_coverage(layout_plan)
+    if bootstrap_plan is not None:
+        from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
+        from pops.codegen.lowering_coverage import LoweringCoverageReport
+
+        amr_coverage = amr_lowering_coverage(
+            resolved_hierarchy=resolved_hierarchy,
+            transfer=amr_transfer,
+            bootstrap=bootstrap_plan,
+            execution=amr_execution,
+        )
+        lowering_coverage = LoweringCoverageReport((
+            *lowering_coverage.rows,
+            *amr_coverage.rows,
+        ))
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
+        native_layouts=native_layouts,
         layout_targets={
             row.handle.qualified_id: ("amr_system" if row.adaptive else "system")
             for row in layout_plan.layouts
@@ -309,8 +330,11 @@ def resolve(
                       "amr_resources": amr_requirements},
         capabilities={"resolution": evidence,
                       "layout_plan": layout_plan.capability_evidence(),
-                      "amr_bootstrap": amr_capabilities},
-        lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
+                      "amr_bootstrap": amr_capabilities,
+                      "shared_interfaces": {
+                          "implicit_jacvec_pair": has_shared_interface_implicit_jacvec,
+                      }},
+        lowering_coverage=lowering_coverage, compile_options=options,
         component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
@@ -324,24 +348,15 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
-    from pops.codegen._orchestration_compile import (
-        build_program_model_graph,
-        compile_install_models,
-    )
+    from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)
-    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen._compile_drivers import _compile_resolved_problem, compile_problem
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
-    from pops.codegen.program_models import ProgramModelGraph
 
     program = None
-    options = dict(plan.compile_options)
-    options["libraries"] = plan.libraries
     if len(plan.layout_plan.layouts) == 1:
-        model_graph = build_program_model_graph(plan)
-        program = compile_problem(
-            time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
-            problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
+        program = _compile_resolved_problem(plan)
         program._discard_authoring()
         row = plan.layout_plan.layouts[0]
         layout_programs = (CompiledLayoutProgram(
@@ -350,6 +365,14 @@ def compile(plan: Any) -> Any:
     else:
         from pathlib import Path
         from pops.codegen.program_slicing import slice_program
+        from pops.codegen.program_models import ProgramModelGraph
+        from pops.codegen.program_balance_due import validate_balance_due_contract
+        from pops._balance_due_contract import BalanceDueContract
+
+        options = dict(plan.compile_options)
+        options["libraries"] = plan.libraries
+        balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
+        validate_balance_due_contract(plan.time, balance_due_contract)
 
         block_layouts = {
             assignment.subject.local_id: assignment.layout.qualified_id
@@ -376,6 +399,7 @@ def compile(plan: Any) -> Any:
                 target=plan.layout_targets[layout_id],
                 problem_snapshot=plan.snapshot,
                 field_plans={},
+                balance_due_contract=balance_due_contract,
                 **slice_options,
             )
             compiled_program._discard_authoring()

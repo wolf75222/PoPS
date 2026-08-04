@@ -99,6 +99,27 @@ class PolarMesh(MeshDescriptor):
             cells=(self.nr, self.ntheta),
         )
 
+    def native_spatial_data(self) -> dict[str, Any]:
+        """Exact annular periodicity and authored azimuthal-band decomposition."""
+        band = self.ntheta // self.theta_boxes
+        return {
+            "schema_version": 1,
+            "periodicity": [False, True],
+            "centering": "cell",
+            "decomposition": {
+                "schema_version": 1,
+                "kind": "axis_bands",
+                "axis": 1,
+                "boxes": [
+                    {
+                        "lower": [0, index * band],
+                        "upper_exclusive": [self.nr, (index + 1) * band],
+                    }
+                    for index in range(self.theta_boxes)
+                ],
+            },
+        }
+
     def _apply_system_config(self, config: Any) -> None:
         """Lower this advanced descriptor through the private native-config protocol."""
         config.geometry = "polar"

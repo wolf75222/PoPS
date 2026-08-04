@@ -37,6 +37,8 @@ from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 _LAYOUT = Uniform(cartesian_grid(n=16, periodic=False))
 _ONE_LEVEL_AMR_LAYOUT = final_amr_layout(
     cartesian_grid(n=16, periodic=False), max_levels=1)
+_MULTILEVEL_AMR_LAYOUT = final_amr_layout(
+    cartesian_grid(n=16, periodic=False), max_levels=2)
 
 
 class ExternalFieldPlan(Descriptor):
@@ -435,6 +437,218 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
     )
     assert "state0(i, j, 0)" in source
     assert "context.point.time" in source
+
+
+def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> None:
+    model = Model("amr-level-boundary-model")
+    state = model.state("U", components=["rho", "momentum"])
+    rho, _ = state
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+    problem = Case(name="amr-level-boundary-case")
+    block = problem.block("material", model)
+    prepared_rho = boundary_value(block[state], "rho")
+    problem.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(
+            AllPhysicalBoundaries(),
+            Dirichlet(prepared_rho + logical_time("time") + logical_time("stage")),
+        ),),
+        solver=GeometricMG(),
+        hierarchy_policy=LevelByLevelSolve(),
+    ))
+
+    plan = capture_field_plans(
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_MULTILEVEL_AMR_LAYOUT,
+    )["potential"]
+
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.level-local"
+    )
+    dependencies = plan.native_options["boundary_dependencies"]
+    assert [(row["owner_block"], row["component"])
+            for row in dependencies["states"]] == [("material", 0)]
+    assert dependencies["logical_time"] == ("stage", "time")
+    dependency_evidence = [
+        output
+        for row in plan.coverage
+        if "boundary-dependency" in row.source
+        for output in row.targets
+    ]
+    assert dependency_evidence == [
+        "field-install:potential:boundary-buffer:states:level-qualified"
+    ]
+    from pops.fields._prepared_field_solver_registry import (
+        prepared_field_solver_binding_from_data,
+    )
+
+    solver_binding = prepared_field_solver_binding_from_data(
+        plan.native_options["solver_provider"]
+    )
+    assert solver_binding.facts.boundary["state_dependent"] is True
+    assert solver_binding.provider["use_policy"]["capabilities"][
+        "amr_boundary_dependencies"
+    ] == (
+        "level-qualified-state@1",
+        "level-qualified-field@1",
+        "logical-timepoint@1",
+    )
+
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
+    source = emit_field_boundaries(None, None, {"potential": plan}, "amr_system")
+    assert "context.states[0]->local_index_of(iterate.global_index(li))" in source
+    assert "context.point.time" in source
+    assert "context.point.stage_slot" in source
+
+
+def test_multilevel_amr_composite_boundary_state_has_exact_level_route() -> None:
+    model = Model("amr-composite-boundary-model")
+    state = model.state("U", components=["rho"])
+    (rho,) = state
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+    problem = Case(name="amr-composite-boundary-case")
+    block = problem.block("material", model)
+    problem.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(
+            AllPhysicalBoundaries(),
+            Dirichlet(boundary_value(block[state], "rho")),
+        ),),
+        solver=GeometricMG(fac=CompositeFAC()),
+        hierarchy_policy=CompositeHierarchySolve(),
+    ))
+
+    plan = capture_field_plans(
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_MULTILEVEL_AMR_LAYOUT,
+    )["potential"]
+
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    dependencies = plan.native_options["boundary_dependencies"]
+    assert [(row["owner_block"], row["component"])
+            for row in dependencies["states"]] == [("material", 0)]
+    dependency_evidence = [
+        output
+        for row in plan.coverage
+        if "boundary-dependency" in row.source
+        for output in row.targets
+    ]
+    assert dependency_evidence == [
+        "field-install:potential:boundary-buffer:states:level-qualified"
+    ]
+
+
+def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> None:
+    model = Model("amr-field-boundary-model")
+    state = model.state("U", components=["rho"])
+    (rho,) = state
+    driver = model.field("driver")
+    potential = model.field("potential")
+    driver_operator = model.field_operator(
+        "driver", unknown=driver, equation=(-laplacian(driver) == rho),
+        outputs=(FieldOutput("driver", driver),),
+    )
+    potential_operator = model.field_operator(
+        "potential", unknown=potential, equation=(-laplacian(potential) == rho),
+        outputs=(FieldOutput("potential", potential),),
+    )
+    problem = Case(name="amr-field-boundary-case")
+    problem.block("material", model)
+    problem.field(driver_operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(
+            AllPhysicalBoundaries(), Dirichlet(0.0),
+        ),),
+        solver=GeometricMG(),
+        hierarchy_policy=LevelByLevelSolve(),
+    ))
+    problem.field(potential_operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(
+            AllPhysicalBoundaries(), Dirichlet(boundary_value(driver)),
+        ),),
+        solver=GeometricMG(),
+        hierarchy_policy=LevelByLevelSolve(),
+    ))
+
+    plan = capture_field_plans(
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_MULTILEVEL_AMR_LAYOUT,
+    )["potential"]
+
+    dependencies = plan.native_options["boundary_dependencies"]
+    assert [
+        (row["owner_block"], row["output_key"], row["component"])
+        for row in dependencies["fields"]
+    ] == [("material", "driver", 0)]
+    dependency_evidence = [
+        output
+        for row in plan.coverage
+        if "boundary-dependency" in row.source
+        for output in row.targets
+    ]
+    assert dependency_evidence == [
+        "field-install:potential:boundary-buffer:fields:level-qualified"
+    ]
+
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
+    source = emit_field_boundaries(None, None, {"potential": plan}, "amr_system")
+    assert "context.fields[0]->local_index_of(iterate.global_index(li))" in source
+    assert "field0(i, j, 0)" in source
+
+
+def test_multilevel_amr_level_local_nonlinear_boundary_fails_closed() -> None:
+    from pops.math import ValueExpr
+    from pops.solvers.nonlinear import Newton
+
+    model = Model("amr-level-nonlinear-boundary-model")
+    (rho,) = model.state("U", components=["rho"])
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+    problem = Case(name="amr-level-nonlinear-boundary-case")
+    problem.block("material", model)
+    problem.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(
+            AllPhysicalBoundaries(),
+            Mixed(alpha=1.0, beta=1.0, value=ValueExpr(unknown) ** 2),
+        ),),
+        solver=GeometricMG(),
+        nonlinear=Newton(),
+        hierarchy_policy=LevelByLevelSolve(),
+    ))
+
+    with pytest.raises(
+        LoweringRejection,
+        match="no qualified nonlinear transaction",
+    ):
+        capture_field_plans(
+            problem,
+            lambda value: value,
+            target="amr_system",
+            layout=_MULTILEVEL_AMR_LAYOUT,
+        )
 
 
 def test_boundary_state_value_requires_explicit_component_contract() -> None:

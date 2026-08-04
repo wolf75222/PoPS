@@ -257,6 +257,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
             "patch_rectangles",
             "post_commit_diagnostics",
             "post_commit_reports",
+            "program_accepted_state",
             "program_report",
         "restart",
         "restore_consumer_recovery",
@@ -325,8 +326,8 @@ def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 
     assert physics.__all__ == [
-        "Model", "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
-        "Temperature", "Velocity",
+        "Model", "Axial", "ComponentRole", "Density", "Energy", "Momentum", "Pressure",
+        "Scalar", "Temperature", "Velocity",
     ]
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
@@ -334,6 +335,7 @@ def test_physics_has_no_competing_model_facade() -> None:
     model = pops.Model("single_public_model")
     assert not hasattr(model, "dsl")
     assert not hasattr(model, "compile")
+    assert not hasattr(model, "to_module")
     for retired_module in (
         "pops.physics.facade",
         "pops.physics.model",
@@ -344,3 +346,11 @@ def test_physics_has_no_competing_model_facade() -> None:
     ):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(retired_module)
+
+
+def test_moment_model_has_one_model_construction_route() -> None:
+    from pops import moments
+
+    specification = moments.CartesianVelocityMoments(order=2)
+    assert callable(specification.build)
+    assert not hasattr(specification, "check")

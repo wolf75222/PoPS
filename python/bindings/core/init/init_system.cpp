@@ -1,5 +1,5 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -146,8 +146,8 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton. newton_diagnostics=True enables the report
-          // (newton_report(name)).
+          // Options of the implicit IMEX source Newton. The Program-only System runtime rejects
+          // newton_diagnostics=True until a typed consumer actually publishes that report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -169,19 +169,34 @@ void bind_system_assembly(py::class_<System>& cls) {
           "_install_boundary_plan",
           [](System& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
-             const std::vector<double>& face_values, int ncomp,
+             const std::vector<double>& face_values,
+             const std::vector<std::string>& face_identities,
+             const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-             const std::vector<std::array<int, 6>>& periodic_identifications) {
+             const std::vector<std::array<int, 6>>& periodic_identifications,
+             const std::vector<std::string>& face_representations,
+             const std::vector<std::string>& face_converter_identities,
+             const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+             const std::vector<std::vector<double>>& face_analytic_literals,
+             const std::vector<std::string>& face_analytic_clocks) {
             system.install_boundary_plan(
-                name, identity, required_depth, face_types, face_values, ncomp,
-                omitted_interface_faces, state_identity, PreparedBoundaryReadDependencies{},
-                decode_periodic_identification_rows(periodic_identifications));
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, omitted_interface_faces, state_identity,
+                PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications), face_representations,
+                face_converter_identities, face_analytic_opcodes, face_analytic_literals,
+                face_analytic_clocks);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
           py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
+          py::arg("face_representations") = std::vector<std::string>{},
+          py::arg("face_converter_identities") = std::vector<std::string>{},
+          py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
+          py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
+          py::arg("face_analytic_clocks") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
@@ -198,6 +213,20 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::string& parameters_json, const std::string& target_json,
              const py::dict& execution) {
             system.install_ghost_boundary_component(
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_boundary_flux_component",
+          [](System& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
+            system.install_boundary_flux_component(
                 name,
                 pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
                                                                           target_json, execution),
@@ -253,9 +282,7 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("level") = 0)
       .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
-      // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
-      // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
+      // Compatibility query for a Newton report published by a typed implicit Program consumer.
       .def(
           "newton_report",
           [](const System& s, const std::string& name) {
@@ -339,6 +366,18 @@ void bind_system_program(py::class_<System>& cls) {
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
+      // Exact Program-index -> System-index map established by name during install_program.  The
+      // structured runtime report consumes this owned native fact; an empty Python-side fallback
+      // must never be mistaken for an identity map in a sliced multi-layout Program.
+      .def("program_block_map", &System::program_block_map)
+      // Metadata-only parameter occupancy for ProgramRuntimeReport.  Keep the fixed-size values
+      // private while exposing the native count that proves every compiled carrier was installed.
+      .def(
+          "program_param_count",
+          [](const System& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       // ADC-592: runtime freeze lifecycle. mark_bound() (called LAST by the Python bind flow) freezes
       // the composition -> every structural setter then rejects; lifecycle_state() reports
       // assembling / bound / running (running derived from macro_step()).
@@ -354,6 +393,10 @@ void bind_system_program(py::class_<System>& cls) {
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
+      .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &System::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
@@ -921,28 +964,27 @@ void bind_system_data(py::class_<System>& cls) {
           "Exact compact valid-cell field pieces owned by this rank.")
       .def(
           "output_state_root_pieces",
-          [](const System& s, const WorldCommunicator& world, const std::string& block, int level) {
+          [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_state_root_pieces(world, block, level);
+              pieces = s.output_state_root_pieces(lane, block, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("block"), py::arg("level"),
+          py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "output_field_root_pieces",
-          [](System& s, const WorldCommunicator& world, const std::string& provider_slot,
-             int level) {
+          [](System& s, const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_field_root_pieces(world, provider_slot, level);
+              pieces = s.output_field_root_pieces(lane, provider_slot, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",

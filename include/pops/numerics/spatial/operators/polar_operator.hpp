@@ -2,6 +2,7 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -106,8 +107,8 @@ POPS_HD inline typename Model::State polar_geom_source(const Model& m,
 /// PolarFaceFluxRKernel: device kernel of the flux at the radial face i (weighting by r_face(i)).
 ///
 /// Stores r_face(i) * Fr at the face between i-1 and i, so the discrete divergence is a simple
-/// difference (cf. formula in @file). If wall_radial == true, forces the flux to zero at the
-/// physical boundary faces (no-penetration wall, mass conservation to machine precision).
+/// difference (cf. formula in @file). The two radial closure bits are derived by the host caller
+/// from one PreparedBoundaryPlan and force only its authored NoFlux faces to zero.
 /// Named functor, device-clean cross-TU. POPS_HD.
 template <class Limiter, class NumericalFlux, class Model>
 struct PolarFaceFluxRKernel {
@@ -119,21 +120,15 @@ struct PolarFaceFluxRKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
-  // Optional RADIAL WALL (no-penetration). wall_radial == false (default): no effect, boundary flux
-  // computed like the interior (BIT-IDENTICAL to the history: MMS, azimuthal conservation). true:
-  // the radial flux at BOTH physical boundary faces (i = i_lo_face = lo, i = i_hi_face = hi+1) is
-  // forced to ZERO -> the radial term telescopes EXACTLY (each interior face is shared, the
-  // boundaries no longer count) -> mass Sum n r dr dtheta conserved to machine precision, whatever
-  // v_r (solid wall).
-  bool wall_radial;
-  int i_lo_face,
-      i_hi_face;  // FACE indices of physical boundaries (lo and hi+1); ignored if !wall_radial
+  bool close_low_radial_flux;
+  bool close_high_radial_flux;
+  int i_lo_face, i_hi_face;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
     const Real rf = r_min + (Real(i) - Real(radial_index_origin)) * dr;
-    if (wall_radial && (i == i_lo_face || i == i_hi_face)) {
+    if ((close_low_radial_flux && i == i_lo_face) || (close_high_radial_flux && i == i_hi_face)) {
       for (int c = 0; c < Model::n_vars; ++c)
         fr(i, j, c) = Real(0);  // wall: zero radial flux
       return;
@@ -141,13 +136,18 @@ struct PolarFaceFluxRKernel {
     // Reconstructed states on either side of the radial face i (REUSES Cartesian reconstruct_pp<>,
     // dir == 0). L = extrapolation from cell i-1 toward its + face; R = from cell i toward its
     // - face.
-    const auto L =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fr(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(0, rf);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i - 1, j, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       for (int c = 0; c < Model::n_vars; ++c)
@@ -180,13 +180,18 @@ struct PolarFaceFluxThetaKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto L =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        ft(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(1);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i, j - 1, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       for (int c = 0; c < Model::n_vars; ++c)
@@ -250,15 +255,14 @@ struct PolarAssembleRhsKernel {
 /// BOUNDARY CONDITIONS: theta PERIODIC (the caller fills the azimuthal ghosts via periodic
 /// fill_boundary). r PHYSICAL: the caller fills the radial ghosts (wall / outflow). The radial
 /// fluxes at the r_min (i = lo) and r_max (i = hi+1) faces are computed from the ghost states (free
-/// outflow), EXCEPT if @p wall_radial == true: then the radial flux at both physical boundary faces
-/// is forced to ZERO (SOLID no-penetration WALL), which makes the mass Sum n r dr dtheta conserved
-/// TO MACHINE precision whatever v_r (the radial term telescopes exactly). @p wall_radial == false
-/// (default) reproduces EXACTLY the history (MMS, azimuthal conservation -- cf.
-/// test_polar_transport_mms).
+/// outflow), except on faces whose immutable PreparedBoundaryPlan law is NoFlux. Those already
+/// evaluated numerical fluxes are forced to zero before divergence, so the radial term telescopes
+/// exactly while outflow faces retain their ordinary Riemann flux.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& aux,
-                        const PolarGeometry& geom, MultiFab& R, bool recon_prim = false,
-                        bool wall_radial = false, Real pos_floor = Real(0)) {
+                        const PolarGeometry& geom, MultiFab& R,
+                        const PreparedBoundaryPlan& boundary_plan, bool recon_prim = false,
+                        Real pos_floor = Real(0)) {
   // STATE-GHOST WIDTH: exactly Limiter::n_ghost, like the Cartesian operator. The polar face kernels
   // (PolarFaceFluxRKernel / PolarFaceFluxThetaKernel) reuse reconstruct_pp<> VERBATIM at the SAME
   // i-1/i (radial) and j-1/j (azimuthal) offsets over the SAME face boxes (xface_box/yface_box, up
@@ -267,6 +271,19 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
   // INDICES, never read from U, so it adds NO state-ghost width; aux is read at i+-1 only (1 ghost,
   // narrower). HOST-only guard, BEFORE the pass-1/pass-2 loops -- never inside a kernel.
   detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
+  if (boundary_plan.ncomp() != U.ncomp())
+    throw std::invalid_argument(
+        "polar boundary plan component count differs from the transport state");
+  if (boundary_plan.has_component_boundaries() || boundary_plan.has_omitted_faces())
+    throw std::invalid_argument(
+        "polar transport does not yet support native boundary components or shared-interface "
+        "face omission");
+  const auto periodicity = boundary_plan.axis_aligned_periodicity();
+  if (!periodicity || periodicity->x || !periodicity->y)
+    throw std::invalid_argument(
+        "polar transport requires non-periodic radial and periodic azimuthal prepared faces");
+  const bool close_low_radial_flux = boundary_plan.zeroes_face(0, -1);
+  const bool close_high_radial_flux = boundary_plan.zeroes_face(0, 1);
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   const Real r_min = geom.r_min, dr = geom.dr(), dtheta = geom.dtheta();
   // Physical radial boundary faces (wall): r_min at the lo face of the index domain, r_max at the
@@ -297,10 +314,10 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
     const Box2D v = R.box(li);
     // Radial faces: i in [lo..hi+1], j in [lo..hi] (cf. xface_box).
     failures.merge(reduce_max_uint64_cell(
-        xface_box(v),
-        detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
-            model, u, ax, fr, r_min, dr, geom.domain.lo[0], lim, nflux, recon_prim, wall_radial,
-            i_lo_face, i_hi_face, pos_floor, pos_comp, failures.recorder()}));
+        xface_box(v), detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
+                          model, u, ax, fr, r_min, dr, geom.domain.lo[0], lim, nflux, recon_prim,
+                          close_low_radial_flux, close_high_radial_flux, i_lo_face, i_hi_face,
+                          pos_floor, pos_comp, failures.recorder()}));
     // Azimuthal faces: i in [lo..hi], j in [lo..hi+1] (cf. yface_box).
     failures.merge(reduce_max_uint64_cell(
         yface_box(v),

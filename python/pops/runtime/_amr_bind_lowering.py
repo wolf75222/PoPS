@@ -44,21 +44,27 @@ def _regrid_every(data: dict[str, Any]) -> int:
 
 
 def _native_amr_grid_values(
-    data: Any,
+    native_layout: Any,
 ) -> tuple[
     tuple[int, int], tuple[float, float], tuple[float, float], tuple[bool, bool]
 ]:
-    """Authenticate one Cartesian grid without collapsing its axis topology."""
-    from pops.mesh.grid import CartesianGrid
+    """Authenticate the exact layout-derived geometry before allocating ``AmrSystemConfig``."""
+    from pops.mesh import NativeSpatialLayout
+    from pops.mesh._layout_plan_contracts import CARTESIAN_2D_COORDINATES
 
-    grid = CartesianGrid.from_dict(data)
-    periodic_axes = grid.topology.periodic_axes
-    periodic_indices = {axis.index for axis in periodic_axes}
+    if type(native_layout) is not NativeSpatialLayout:
+        raise TypeError("native AMR lowering requires an exact NativeSpatialLayout")
+    if native_layout.dimension != 2 \
+            or native_layout.coordinate_system != CARTESIAN_2D_COORDINATES \
+            or native_layout.centering != "cell" \
+            or native_layout.decomposition.get("kind") != "adaptive":
+        raise NotImplementedError(
+            "native AmrSystemConfig currently supports only 2D cell-centered Cartesian AMR")
     return (
-        grid.cells,
-        grid.frame.lower,
-        grid.frame.upper,
-        (0 in periodic_indices, 1 in periodic_indices),
+        native_layout.shape,
+        native_layout.lower,
+        native_layout.upper,
+        native_layout.periodicity,
     )
 
 
@@ -134,13 +140,18 @@ def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
+def amr_config_from_layout(
+    layout: Any,
+    *,
+    hierarchy: Any = None,
+    native_layout: Any,
+) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
     from pops.mesh._amr import ResolvedHierarchy
 
     data = _runtime_data(layout)
-    cells, lower, upper, periodicity = _native_amr_grid_values(data["grid"])
+    cells, lower, upper, periodicity = _native_amr_grid_values(native_layout)
     lengths = (upper[0] - lower[0], upper[1] - lower[1])
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")

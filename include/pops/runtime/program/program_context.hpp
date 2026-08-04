@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -107,25 +108,14 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int b, MultiFab& u_stage) const {
     count_kernel();
+    if (provider_slot.empty())
+      throw std::invalid_argument(
+          "System::solve_fields_from_state_at requires an exact provider slot");
     sys_->prepare_named_field_publication_storage_(provider_slot);
     return run_field_solve_transaction_([&]() {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
                                                         u_stage);
     });
-  }
-  /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
-  /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
-  /// components (distinct from the shared phi/grad the default solve_fields fills). Forwards to
-  /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
-  /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
-  /// above, byte-identical.
-  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
-                                                                       int b,
-                                                                       MultiFab& u_stage) const {
-    count_kernel();
-    sys_->prepare_named_field_publication_storage_(field);
-    return run_field_solve_transaction_(
-        [&]() { return sys_->solve_fields_from_state_in_place_(field, sys_block(b), u_stage); });
   }
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
   /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
@@ -166,27 +156,16 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
         [&]() { return solve_default_field_workspace_(workspace); });
   }
 
-  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
-      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
-    count_kernel();
-    FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
-    fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
-    sys_->prepare_named_field_publication_storage_(field);
-    return run_field_solve_transaction_(
-        [&]() { return solve_named_field_workspace_(field, workspace); });
-  }
-
-  /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
-  /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
-  /// old vector overloads above remain available for manual C++ callers.
+  /// Allocation-free generated route. The shared Program service already authenticated the exact IR
+  /// identity, provider field, ordered block pack and runtime layouts; Uniform owns only publication
+  /// storage and terminal System dispatch.
   SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const MultiFab*>& runtime_stages) const {
     count_kernel();
-    FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
-    sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
+    sys_->prepare_named_field_publication_storage_(field);
     return run_field_solve_transaction_([&]() {
-      return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
+      return sys_->solve_fields_from_blocks_at_in_place_(point, field, runtime_stages);
     });
   }
 
@@ -194,10 +173,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     std::vector<int> program_to_system;
     std::vector<const MultiFab*> program_stages;
     std::vector<const MultiFab*> system_stages;
-    std::vector<int> expected_program_blocks;
-    std::string generated_field_identity;
-    bool expected_program_blocks_initialized = false;
-    bool in_use = false;
   };
 
   struct FieldPublicationTransaction {
@@ -239,8 +214,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   struct FieldSolveWorkspaceRegistry {
     FieldSolveWorkspace manual_default;
-    std::map<std::string, FieldSolveWorkspace, std::less<>> manual_named;
-    std::map<std::int64_t, FieldSolveWorkspace> generated;
     FieldPublicationTransaction publication;
   };
 
@@ -373,8 +346,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     workspace.program_to_system.assign(block_map.begin(), block_map.end());
     workspace.program_stages.assign(block_map.size(), nullptr);
     workspace.system_stages.assign(system_blocks, nullptr);
-    workspace.expected_program_blocks.clear();
-    workspace.expected_program_blocks_initialized = false;
   }
 
   void require_program_stage_layout_(int program_block, const MultiFab& stage) const {
@@ -419,78 +390,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return workspace;
   }
 
-  FieldSolveWorkspace& manual_named_field_solve_workspace_(const std::string& field) const {
-    if (field.empty())
-      throw std::invalid_argument(
-          "Program named simultaneous field solve requires a field identity");
-    if (!field_solve_workspace_registry_)
-      throw std::logic_error("Program field-solve workspace registry is unavailable");
-    auto& workspaces = field_solve_workspace_registry_->manual_named;
-    auto found = workspaces.find(field);
-    if (found == workspaces.end())
-      found = workspaces.try_emplace(field).first;
-    prepare_field_solve_structure_(found->second);
-    return found->second;
-  }
-
-  FieldSolveWorkspace& generated_field_solve_workspace_(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
-    if (value_id < 0)
-      throw std::invalid_argument(
-          "generated simultaneous field solve requires a non-negative IR identity");
-    if (field.empty())
-      throw std::invalid_argument("generated simultaneous field solve requires a field identity");
-    if (overrides.size() == 0)
-      throw std::invalid_argument(
-          "generated simultaneous field solve requires at least one stage override");
-    if (!field_solve_workspace_registry_)
-      throw std::logic_error("Program field-solve workspace registry is unavailable");
-
-    auto [entry, inserted] = field_solve_workspace_registry_->generated.try_emplace(value_id);
-    FieldSolveWorkspace& workspace = entry->second;
-    if (inserted)
-      workspace.generated_field_identity.assign(field.data(), field.size());
-    else if (std::string_view(workspace.generated_field_identity) != field)
-      throw std::logic_error(
-          "generated simultaneous field solve IR identity was reused for a different field");
-    prepare_field_solve_structure_(workspace);
-
-    const bool learn_blocks = !workspace.expected_program_blocks_initialized;
-    if (learn_blocks) {
-      workspace.expected_program_blocks.clear();
-      workspace.expected_program_blocks.reserve(overrides.size());
-    } else if (workspace.expected_program_blocks.size() != overrides.size()) {
-      throw std::logic_error(
-          "generated simultaneous field solve IR identity changed its block pack");
-    }
-    std::fill(workspace.program_stages.begin(), workspace.program_stages.end(), nullptr);
-    std::size_t ordinal = 0;
-    for (const FieldStageOverride& override_value : overrides) {
-      if (override_value.program_block < 0 ||
-          static_cast<std::size_t>(override_value.program_block) >= workspace.program_stages.size())
-        throw std::out_of_range("generated simultaneous field solve Program block is out of range");
-      if (override_value.state == nullptr)
-        throw std::invalid_argument(
-            "generated simultaneous field solve stage override cannot be null");
-      if (workspace.program_stages[static_cast<std::size_t>(override_value.program_block)] !=
-          nullptr)
-        throw std::invalid_argument(
-            "generated simultaneous field solve contains a duplicate Program block");
-      if (learn_blocks)
-        workspace.expected_program_blocks.push_back(override_value.program_block);
-      else if (workspace.expected_program_blocks[ordinal] != override_value.program_block)
-        throw std::logic_error(
-            "generated simultaneous field solve IR identity changed its ordered block pack");
-      require_program_stage_layout_(override_value.program_block, *override_value.state);
-      workspace.program_stages[static_cast<std::size_t>(override_value.program_block)] =
-          override_value.state;
-      ++ordinal;
-    }
-    workspace.expected_program_blocks_initialized = true;
-    return workspace;
-  }
-
   SolveReport solve_default_field_workspace_(FieldSolveWorkspace& workspace) const {
     std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
     for (std::size_t p = 0; p < workspace.program_to_system.size(); ++p) {
@@ -500,62 +399,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(workspace.system_stages);
   }
 
-  SolveReport solve_named_field_workspace_(const std::string& field,
-                                           FieldSolveWorkspace& workspace) const {
-    ExclusiveUseGuard use(workspace.in_use,
-                          "Program simultaneous field-solve workspace is already in use");
-    std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
-    bool has_override = false;
-    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
-      if (workspace.program_stages[p] == nullptr)
-        continue;
-      workspace.system_stages[static_cast<std::size_t>(workspace.program_to_system[p])] =
-          workspace.program_stages[p];
-      has_override = true;
-    }
-    if (!has_override)
-      throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
-    return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
-  }
-
-  struct ScratchKey {
-    ScratchKind kind = ScratchKind::Rhs;
-    std::int64_t value_id = -1;
-    int subslot = -1;
-
-    friend bool operator<(const ScratchKey& lhs, const ScratchKey& rhs) noexcept {
-      if (lhs.kind != rhs.kind)
-        return lhs.kind < rhs.kind;
-      if (lhs.value_id != rhs.value_id)
-        return lhs.value_id < rhs.value_id;
-      return lhs.subslot < rhs.subslot;
-    }
-  };
-
-  struct ScratchRegistry {
-    std::map<ScratchKey, MultiFab> fields;
-  };
-
-  MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                 const MultiFab& prototype, int n_comp, int n_ghost) const {
-    if (value_id < 0 || subslot < 0)
-      throw std::invalid_argument(
-          "Program persistent scratch requires non-negative IR value and sub-slot identities");
-    if (!scratch_registry_)
-      throw std::logic_error("Program persistent scratch registry is unavailable");
-    const ScratchKey key{kind, value_id, subslot};
-    auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
-    MultiFab& field = entry->second;
-    if (inserted || !field_layout_matches_(field, prototype, n_comp, n_ghost)) {
-      field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
-      count_scratch(field);
-    }
-    field.set_val(Real(0));
-    return field;
-  }
-
-  runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
@@ -577,13 +421,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->install_program_step(std::move(step));
   }
 
-  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
-      int stage_id) const {
-    return boundary_point_(stage_id);
-  }
   void program_execution_rhs_into_(int /*program_block*/, int runtime_block, MultiFab& state,
                                    MultiFab& rhs, int rate_id) const {
-    sys_->block_rhs_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+    sys_->block_rhs_into_at(program_execution_boundary_point_(rate_id), runtime_block, state, rhs);
   }
   bool program_execution_has_boundary_linearization_(int runtime_block) const {
     return sys_->block_has_boundary_linearization(runtime_block);
@@ -620,7 +460,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   void program_execution_neg_div_flux_default_into_(int /*program_block*/, int runtime_block,
                                                     MultiFab& state, MultiFab& rhs,
                                                     int rate_id) const {
-    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+    sys_->block_neg_div_flux_into_at(program_execution_boundary_point_(rate_id), runtime_block,
+                                     state, rhs);
   }
   void program_execution_neg_div_named_flux_into_(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
                                                   MultiFab& divergence_scratch,
@@ -650,8 +491,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
-    sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,
-                          batch.rhs, batch.flux_only);
+    sys_->block_rhs_group(program_execution_boundary_point_(batch.group_id), batch.runtime_blocks,
+                          batch.states, batch.rhs, batch.flux_only);
   }
   void program_execution_source_default_into_(int runtime_block, MultiFab& state,
                                               MultiFab& rhs) const {
@@ -659,6 +500,29 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
     sys_->block_project(runtime_block, state);
+  }
+  std::optional<std::vector<Real>> program_execution_projection_balance_integrals_(
+      int runtime_block, const MultiFab& state) const {
+    // The public polar diagnostic path has no exact per-cell volume provider yet. Keep automatic
+    // evidence absent instead of relabelling Cartesian dx*dy as a polar measure; authored balance
+    // terms remain available and the future selector must fail closed on this missing producer.
+    if (sys_->program_is_polar())
+      return std::nullopt;
+    const GridContext context = sys_->grid_context(runtime_block);
+    const Real cell_measure = context.geom.dx() * context.geom.dy();
+    if (!std::isfinite(static_cast<double>(cell_measure)) || cell_measure <= Real(0))
+      throw std::runtime_error(
+          "Uniform Program projection balance requires a positive finite cell measure");
+    RelativeCellMeasure measure;
+    if (context.domain_mask != nullptr) {
+      measure.active_cells = context.domain_mask;
+      measure.inverse_volume_fraction = context.eb_inverse_volume_fraction;
+    }
+    std::vector<Real> result(static_cast<std::size_t>(state.ncomp()), Real(0));
+    for (int component = 0; component < state.ncomp(); ++component)
+      result[static_cast<std::size_t>(component)] =
+          cell_measure * pops::reduce_sum(state, component, measure);
+    return result;
   }
   Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
@@ -781,8 +645,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const HistoryRegistration& registration) const {
     return sys_->history_initialized(registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return sys_->history_slot_dt(registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
@@ -869,34 +733,31 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_span_ = rollback.phase_span;
     logical_physical_time_offset_ = rollback.physical_time_offset;
   }
-  SolveReport program_execution_solve_fields_from_state_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int block, MultiFab& state) const {
-    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
-  }
-  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
-    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
-  }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
+  void program_execution_validate_commit_candidates_(
+      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    for (const auto& [target, candidate] : commits)
+      for (int block = 0; block < sys_->n_blocks(); ++block)
+        if (target == &sys_->block_state(block)) {
+          sys_->validate_program_state_publication_candidate(block, *candidate);
+          break;
+        }
+  }
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return sys_->program_runtime_state_();
   }
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
   }
-  void program_execution_set_field_timepoint_(const std::string& field,
-                                              const FieldLogicalTimePoint& point) const {
-    sys_->set_field_logical_timepoint(field, point);
+  void program_execution_record_balance_term_(const std::string& route, const std::string& term,
+                                              Real value) const {
+    sys_->record_program_balance_term(route, term, value);
   }
-  void program_execution_set_field_parameters_(const std::string& field,
-                                               const std::vector<double>& parameters) const {
-    sys_->set_field_boundary_parameters(field, parameters);
+  bool program_execution_balance_consumer_is_due_(const std::string& contract,
+                                                  const std::string& route, int every_n) const {
+    return sys_->program_balance_consumer_is_due(contract, route, every_n);
   }
-  void program_execution_set_field_kernel_(const std::string& field,
-                                           const CompiledFieldBoundaryKernel& kernel) const {
-    sys_->set_field_boundary_kernel(field, kernel);
-  }
+  System& program_execution_field_facade_() const { return *sys_; }
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
@@ -905,7 +766,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
       std::make_shared<FieldSolveWorkspaceRegistry>();
-  mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
 };
 

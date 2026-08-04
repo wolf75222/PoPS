@@ -1,7 +1,7 @@
 """pops.numerics.riemann -- the Riemann-flux brick catalog (Spec 3 / Spec 5).
 
-Native numerical fluxes (Rusanov/HLL/HLLC/Roe) plus a ``User`` selector for an
-external C++ flux brick. The capability-hook selectors (``riemann.speeds`` /
+Native numerical fluxes (Rusanov/HLL/HLLC/Roe), the closed typed ``Recovery`` policy, plus a
+``User`` selector for an external C++ flux brick. The capability-hook selectors (``riemann.speeds`` /
 ``riemann.hllc``) are attached from :mod:`pops.numerics.riemann.capabilities`.
 
 Spec 5 (sec.4 / sec.5.4) homes the discretisation descriptors in ``pops.numerics``;
@@ -13,14 +13,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pops.descriptors import _native, _external_descriptor
-from . import waves
+from pops.descriptors import BrickDescriptor, _native, _external_descriptor
+from . import providers, waves
+from .providers import Harten, NoEntropyFix, RiemannProviderEvidence, RoeEntropyPolicy
 from .waves import (WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure,
                     Einfeldt, Davis, MaxWaveSpeed, provider_of)
 
 
-def _riemann(name: Any, native_id: Any, caps: Any) -> Any:
-    return _native(name, native_id, name, category="riemann", caps=caps)
+def _riemann(name: Any, native_id: Any, caps: Any, **options: Any) -> Any:
+    return _native(name, native_id, name, category="riemann", caps=caps, **options)
 
 
 def _scalar_upwind(*, velocity: Any) -> Any:
@@ -78,6 +79,100 @@ def _hll(waves: Any = None) -> Any:
     return desc
 
 
+_RECOVERY_NATIVE_ID = (
+    "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,"
+    "pops::RusanovFlux,pops::RejectRiemannRecovery>"
+)
+_RECOVERY_SEQUENCE = (
+    ("roe", "pops::RoeFlux"),
+    ("hll", "pops::HLLFlux"),
+    ("rusanov", "pops::RusanovFlux"),
+)
+
+
+def _canonical_recovery_candidates() -> tuple[BrickDescriptor, ...]:
+    return (
+        _riemann(
+            "roe",
+            "pops::RoeFlux",
+            ["physical_flux", "provider_pack", "stability_bound", "roe_dissipation"],
+        ),
+        _hll(),
+        _riemann(
+            "rusanov",
+            "pops::RusanovFlux",
+            ["physical_flux", "provider_pack", "stability_bound"],
+        ),
+    )
+
+
+def _recovery(*, primary: Any, fallbacks: Any) -> Any:
+    """Fixed fail-closed Roe -> HLL -> Rusanov recovery policy.
+
+    The policy is deliberately a closed typed value, not a general Python list lowered into an
+    arbitrary C++ template. Only the one native policy instantiated by PoPS is accepted; every
+    mismatch is refused while authoring, before compile or bind.
+    """
+    if not isinstance(fallbacks, tuple):
+        raise TypeError(
+            "riemann.Recovery(fallbacks=) requires a tuple of typed built-in descriptors; "
+            "use fallbacks=(riemann.HLL(), riemann.Rusanov())"
+        )
+    authored = (primary, *fallbacks)
+    labels = ("primary", *("fallbacks[%d]" % index for index in range(len(fallbacks))))
+    actual: list[tuple[str, str]] = []
+    for label, candidate in zip(labels, authored, strict=True):
+        if not isinstance(candidate, BrickDescriptor) or candidate.category != "riemann":
+            raise TypeError(
+                "riemann.Recovery(%s) requires a typed built-in Riemann descriptor; got %s"
+                % (label, type(candidate).__name__)
+            )
+        if candidate.brick_type != "native" or candidate.scheme == "user":
+            raise ValueError(
+                "riemann.Recovery(%s) refuses external/non-native descriptor %r; prepared "
+                "recovery candidates must be compiled device-copyable built-ins"
+                % (label, candidate.name)
+            )
+        if candidate.options:
+            raise ValueError(
+                "riemann.Recovery(%s=%r) carries candidate options that the fixed native policy "
+                "does not transport; use the option-free built-in descriptor"
+                % (label, candidate.name)
+            )
+        actual.append((str(candidate.scheme), candidate.native_id))
+
+    schemes = tuple(scheme for scheme, _ in actual)
+    duplicates = tuple(sorted({scheme for scheme in schemes if schemes.count(scheme) > 1}))
+    if duplicates:
+        raise ValueError(
+            "riemann.Recovery candidates must be unique; duplicates=%s"
+            % ",".join(duplicates)
+        )
+    if tuple(actual) != _RECOVERY_SEQUENCE:
+        raise ValueError(
+            "riemann.Recovery supports exactly primary=Roe(), "
+            "fallbacks=(HLL(), Rusanov()); requested order=%s"
+            % " -> ".join(schemes)
+        )
+    constructors = ("Roe", "HLL", "Rusanov")
+    for label, candidate, canonical, constructor in zip(
+        labels, authored, _canonical_recovery_candidates(), constructors, strict=True
+    ):
+        if candidate != canonical:
+            raise ValueError(
+                "riemann.Recovery(%s=%r) is not the catalog-authenticated option-free built-in; "
+                "construct it with riemann.%s()"
+                % (label, candidate.name, constructor)
+            )
+    return _riemann(
+        "roe_hll_rusanov_recovery",
+        _RECOVERY_NATIVE_ID,
+        ["physical_flux", "provider_pack", "stability_bound", "wave_speeds",
+         "roe_dissipation"],
+        recovery_order=("roe", "hll", "rusanov", "reject"),
+    )
+
+
 riemann = SimpleNamespace(
     Rusanov=lambda: _riemann(
         "rusanov", "pops::RusanovFlux", ["physical_flux", "provider_pack", "stability_bound"]),
@@ -89,6 +184,7 @@ riemann = SimpleNamespace(
     Roe=lambda: _riemann(
         "roe", "pops::RoeFlux",
         ["physical_flux", "provider_pack", "stability_bound", "roe_dissipation"]),
+    Recovery=_recovery,
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="riemann"),
 )
 
@@ -100,6 +196,11 @@ _attach_capabilities(riemann)
 # The typed wave-speed provider layer (ADC-552): reachable as ``riemann.waves.ExplicitPair()``
 # (the real submodule exposes the factories) so ``HLL(waves=riemann.waves.ExplicitPair())`` works.
 riemann.waves = waves
+# Exact model-side provider policies.  They configure the existing generic Roe route; they do not
+# select a second solver implementation.
+riemann.providers = providers
+riemann.Harten = Harten
+riemann.NoEntropyFix = NoEntropyFix
 
 # Pre-runtime capability refusals (ADC-533): the model-aware available/validate that surface the
 # HLL/HLLC/Roe/Euler route refusals through the descriptor surface. They DELEGATE to the exact
@@ -117,8 +218,10 @@ ScalarUpwind = riemann.ScalarUpwind
 HLL = riemann.HLL
 HLLC = riemann.HLLC
 Roe = riemann.Roe
+Recovery = riemann.Recovery
 User = riemann.User
 
-__all__ = ["riemann", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe",
-           "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
-           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "available", "validate"]
+__all__ = ["riemann", "providers", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe",
+           "Recovery", "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
+           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "Harten", "NoEntropyFix",
+           "RoeEntropyPolicy", "RiemannProviderEvidence", "available", "validate"]

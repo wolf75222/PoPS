@@ -1,7 +1,7 @@
-"""System install mixin (Spec-4 PR-F): block/equation/coupling installation.
+"""System install mixin (Spec-4 PR-F): equation/coupling installation.
 
-Holds the densest part of :class:`pops.runtime._system.System`: ``add_block`` /
-``add_equation`` (direct native versus compiled production-package installation),
+Holds the densest part of :class:`pops.runtime._system.System`: ``add_equation``
+(direct native versus compiled production-package installation),
 ``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
 inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
 """
@@ -41,61 +41,25 @@ else:
     _System = object
 
 
+def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
+    if getattr(time, "newton_diagnostics", False):
+        raise ValueError(
+            f"{where}: newton_diagnostics=True is unavailable on the Program-only System "
+            "runtime because no typed implicit Program consumer publishes that report"
+        )
+
+
 class _SystemInstall(_System):
-    """Block/equation/coupling installation methods of System."""
-
-    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
-                  evolve: bool = True) -> Any:
-        """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
-
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly passed through ``pops.resolve`` / ``pops.compile``
-        and wired by ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
-        the native/AMR runtime, and the tests.
-
-        Installs a private ``ModelSpec`` composed from native bricks. Public ``pops.Model``
-        authoring enters through ``pops.Case`` and the lifecycle. For a compiled production model
-        or automatic dispatch on the engine value type, use add_equation. Arguments reach the C++ facade
-        (System::add_block), which validates the block (names / roles / implicit mask) against the model.
-
-        @param name unique block name; indexes set_density(name) / mass(name) / density(name).
-        @param model private ``ModelSpec`` engine value.
-        @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
-            (default minmod + rusanov + conservative). Carries the limiter (none / minmod /
-            vanleer / weno5 --
-            weno5 is exposed ONLY by this native path), the Riemann flux (rusanov / hll / hllc /
-            roe) and the reconstructed variables (conservative / primitive). positivity_floor is read
-            here (Zhang-Shu positivity limiter).
-        @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
-            ``pops.lib.time`` factory. The lowered policy carries cadence, any implicit mask and
-            local Newton options; these values are forwarded as-is to C++.
-        @param evolve True (default) = block advances; False = frozen field (background) which still
-            contributes to the right-hand side of the system Poisson.
-        """
-        _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
-        spatial = spatial if spatial is not None else Spatial()
-        time = time if time is not None else Explicit()
-        # Native ABI conversion happens here; descriptors above this seam stay exact.
-        rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
-            time, spatial, where="System.add_block")
-        self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-                          getattr(time, "substeps", 1), evolve, getattr(time, "stride", 1),
-                          getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
-                          getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                          rel_tol, abs_tol, fd_eps,
-                          getattr(time, "newton_diagnostics", False),
-                          damping,
-                          positivity_floor,
-                          getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
+    """Equation/coupling installation methods of System."""
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, names: Any = None, evolve: bool = True,
                      stride: Any = None, _bind_params: Any = None) -> Any:
         """Install a native model or one compiled production package.
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
+        Sole Python block-installation seam below ``pops.bind``. The documented PUBLIC path is the typed
         ``pops.Case(...).block(...)`` assembly passed through ``pops.resolve`` / ``pops.compile``
-        and wired by ``pops.bind``; ``add_equation`` stays private to the native/AMR runtime.
+        and wired by ``pops.bind``; ``add_equation`` stays private to the native runtime.
 
         A ``ModelSpec`` uses the direct native brick path. A ``CompiledModel`` must be a
         production package; its complete resolved BindSchema vector is provided privately by
@@ -117,6 +81,7 @@ class _SystemInstall(_System):
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
+        _reject_unpublished_newton_diagnostics(time, where="System.add_equation")
         nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
         nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
 
@@ -267,9 +232,10 @@ class _SystemInstall(_System):
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
-        later, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False) then
-        set_density (freeze ADC-592 enforced by the delegated, guarded add_block)."""
-        self.add_block(name, model, spatial=spatial, evolve=False)
+        later, to coupled sources). density: n*n array. Uses the same type-dispatched
+        ``add_equation(evolve=False)`` installation seam as evolved blocks, then sets density.
+        """
+        self.add_equation(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = None,

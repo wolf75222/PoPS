@@ -193,7 +193,7 @@ def _block(m):
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.primitive_vars(rho=rho, u=u, v=v)
     m.conservative_from([rho, rho * u, rho * v])
     cs = sqrt(cs2)
     m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
@@ -250,20 +250,22 @@ def _emit(program, *, model=None):
         program, model=model, field_plans=codegen_field_plans(program))
 
 
-# default solve_fields lowers to the 2-arg ctx call (historical), named to the 3-arg ctx call.
+# Every single-state solve lowers through the same point/provider-qualified route.
 default_codegen_model = default_model()
 src_default = _emit(_prog("me_def_prog", model=default_codegen_model),
     model=default_codegen_model)
-chk('ctx.solve_fields_from_state("potential", 0, ' in src_default,
-    "default solve_fields lowers to its qualified potential provider")
-chk('ctx.solve_fields_from_state("phi2", 0, ' not in src_default,
+chk('ctx.solve_fields_from_state_at(field_boundary_point_' in src_default
+    and '"potential", 0, ' in src_default,
+    "default solve_fields lowers to its exact point-qualified potential provider")
+chk('"phi2", 0, ' not in src_default,
     "default solve_fields does NOT use the named phi2 overload")
 
 named_codegen_model = named_model()
 src_named = _emit(_prog("me_nam_prog", field="phi2", model=named_codegen_model),
     model=named_codegen_model)
-chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named,
-    "named solve_fields lowers to ctx.solve_fields_from_state(\"phi2\", 0, ...)")
+chk('ctx.solve_fields_from_state_at(field_boundary_point_' in src_named
+    and '"phi2", 0, ' in src_named,
+    "named solve_fields lowers to the exact point-qualified phi2 provider")
 
 # The named brick + registration land in the native loader (production backend).
 loader = named_model("me_nam_loader")._m.emit_cpp_native_loader(target="system")

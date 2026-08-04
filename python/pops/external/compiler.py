@@ -51,6 +51,8 @@ def compile_component(
     """Instantiate, compile, link and audit one source component for the proved CPU target."""
     if type(component) is not ExternalComponent:
         raise TypeError("compile_component requires an exact ExternalComponent")
+    package = component.component_type.package
+    package.verify()
     from pops.codegen._compile_platform import require_shared_library_compile_platform
     require_shared_library_compile_platform("compile_component", windows_supported=False)
 
@@ -67,7 +69,6 @@ def compile_component(
 
     interface = component.component_type.interface
     target = interface.resolve_native_target(component)
-    package = component.component_type.package
     include = include or pops_include()
     signature = _check_headers_match_module(include)
     compiler, cflags, lflags = pops_loader_build_flags(cxx)

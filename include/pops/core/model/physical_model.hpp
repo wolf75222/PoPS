@@ -76,6 +76,8 @@ POPS_HD constexpr int aux_comps() {
 /// Requires: State, Aux == pops::Aux, n_vars, flux(u,a,dir), max_wave_speed(u,a,dir),
 /// source(u,a), elliptic_rhs(u). All these methods must be POPS_HD if called
 /// in kernels (not checked by the concept; responsibility of the author).
+/// Finite-volume execution additionally instantiates the hyperbolic methods with the exact
+/// BoundFluxProviders<Model> protocol; Aux remains the pointwise source/implicit carrier.
 /// Do not confuse with HyperbolicPhysicalModel which adds the variables and conversions.
 template <class M>
 concept PhysicalModel =
@@ -169,6 +171,19 @@ concept HasPrimitiveVars =
       typename M::Prim;
       { m.to_primitive(u) } -> std::same_as<typename M::Prim>;
       { m.to_conservative(p) } -> std::same_as<typename M::State>;
+    };
+
+/// OPTIONAL physical admissibility contract for conservative-to-primitive recovery.
+///
+/// The conversion formula and the admissibility policy are deliberately separate: a finite
+/// primitive candidate may still be physically invalid (for example non-positive density or
+/// pressure).  When present, the prepared recovery service invokes this device-callable predicate
+/// before publication.  `failing_component` identifies the primitive component whose declared
+/// constraint failed; implementations set it to -1 on success.
+template <class M>
+concept HasRecoveryAdmissibility =
+    HasPrimitiveVars<M> && requires(const M m, const typename M::Prim p, int* failing_component) {
+      { m.recovery_admissible(p, failing_component) } -> std::same_as<bool>;
     };
 
 /// Hyperbolic brick of a model: flux + wave speed + variables + cons<->prim conversions.

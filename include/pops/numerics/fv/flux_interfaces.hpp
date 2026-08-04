@@ -10,9 +10,11 @@
 #include <pops/core/state/state.hpp>
 
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 namespace pops {
 
@@ -96,11 +98,53 @@ struct QualifiedProviderRequirement {
   const char* layout;
   const char* value_kind;
   const char* producer;
+  bool available;
   int storage_slot;
 };
 
 enum class EvaluationStatus : std::uint8_t { kOk, kRetry, kReject, kFailed };
 enum class TransactionFailureAction : std::uint8_t { kNone, kRetryStep, kRejectStep, kAbortRun };
+
+/// Stable identity of a numerical Riemann candidate.
+///
+/// The value is carried by every production face result, so a successful declared fallback can
+/// never be reported as if the requested solver had produced the flux.  `kReject` is a terminal
+/// policy action rather than an evaluated numerical solver; `kExternal` identifies a statically
+/// installed user flux whose component identity remains owned by the external-brick manifest.
+enum class RiemannSolverId : std::uint8_t {
+  kUnspecified = 0,
+  kRusanov = 1,
+  kHll = 2,
+  kHllc = 3,
+  kRoe = 4,
+  kExternal = 254,
+  kReject = 255,
+};
+
+/// Stable, device-copyable causes emitted by the built-in Riemann candidates.
+///
+/// External numerical-flux providers may retain their own qualified reason codes.  Built-ins use
+/// this enum instead of scattering untyped literals through face kernels, so one rejected candidate
+/// remains attributable after device/MPI reduction and step-transaction rollback.
+enum class RiemannFailureCause : std::uint32_t {
+  kRusanovInvalidStability = UINT32_C(0x53544201),
+  kHllInvalidWaveInterval = UINT32_C(0x484c4c01),
+  kHllInvalidStability = UINT32_C(0x53544202),
+  kHllcInvalidWaveInterval = UINT32_C(0x484c4c02),
+  kHllcInvalidStability = UINT32_C(0x53544203),
+  kHllcNonFinitePhysicalFlux = UINT32_C(0x484c4301),
+  kHllcNonFinitePressure = UINT32_C(0x484c4302),
+  kHllcNonFiniteContact = UINT32_C(0x484c4303),
+  kHllcNonFiniteStarState = UINT32_C(0x484c4304),
+  kHllcNonFiniteFlux = UINT32_C(0x484c4305),
+  kRoeInvalidStability = UINT32_C(0x53544204),
+  kRoeNonFiniteDissipation = UINT32_C(0x524f4501),
+  kRoeNonFiniteFlux = UINT32_C(0x524f4502),
+};
+
+POPS_HD constexpr std::uint32_t riemann_reason_code(RiemannFailureCause cause) {
+  return static_cast<std::uint32_t>(cause);
+}
 
 POPS_HD constexpr TransactionFailureAction transaction_action(EvaluationStatus status) {
   switch (status) {
@@ -126,6 +170,46 @@ inline constexpr int flux_provider_count = [] {
   return kAuxBaseComps;
 }();
 
+template <class Model>
+inline constexpr bool has_qualified_flux_provider_requirements = requires {
+  Model::n_flux_providers;
+  Model::flux_provider_requirements;
+};
+
+/// Authenticate the generated logical provider ABI before a device pack can be instantiated.
+///
+/// Hand-written C++ test models may omit both members. Generated models must provide both, and
+/// every selected provider must be available, fully qualified, and backed by one in-range native
+/// storage slot. The binder consumes exactly these rows; they are not inspection-only metadata.
+template <class Model>
+consteval bool qualified_flux_provider_requirements_valid() {
+  constexpr bool has_count = requires { Model::n_flux_providers; };
+  constexpr bool has_rows = requires { Model::flux_provider_requirements; };
+  if constexpr (has_count != has_rows) {
+    return false;
+  } else if constexpr (!has_count) {
+    return true;
+  } else {
+    if (Model::n_flux_providers < 0 || static_cast<std::size_t>(Model::n_flux_providers) !=
+                                           Model::flux_provider_requirements.size())
+      return false;
+    const auto nonempty = [](const char* value) { return value != nullptr && value[0] != '\0'; };
+    for (std::size_t index = 0; index < Model::flux_provider_requirements.size(); ++index) {
+      const auto& row = Model::flux_provider_requirements[index];
+      if (!row.available || row.storage_slot < 0 ||
+          row.storage_slot >= flux_provider_count<Model> || !nonempty(row.owner_qid) ||
+          !nonempty(row.space_kind) || !nonempty(row.space_name) || !nonempty(row.component) ||
+          !nonempty(row.representation) || !nonempty(row.centering) || !nonempty(row.layout) ||
+          !nonempty(row.producer))
+        return false;
+      for (std::size_t previous = 0; previous < index; ++previous)
+        if (Model::flux_provider_requirements[previous].storage_slot == row.storage_slot)
+          return false;
+    }
+    return true;
+  }
+}
+
 /// Exact, model-qualified values before they are sealed into a bound device pack.
 ///
 /// Unlike the historical global Aux object this type has exactly the width requested by Model.
@@ -135,6 +219,8 @@ inline constexpr int flux_provider_count = [] {
 template <class Model>
 struct FluxProviderValues {
   static constexpr int size = flux_provider_count<Model>;
+  static_assert(qualified_flux_provider_requirements_valid<Model>(),
+                "generated physical flux provider requirements are invalid");
   static_assert(size >= kAuxBaseComps,
                 "physical flux provider packs must declare the required base providers");
   static_assert(size <= kAuxMaxComps,
@@ -161,6 +247,13 @@ class BoundFluxProviders {
   POPS_HD BoundFluxProviders(const BoundFluxProviders&) = default;
   BoundFluxProviders& operator=(const BoundFluxProviders&) = delete;
 
+  template <int Component>
+  POPS_HD Real flux_provider() const {
+    static_assert(Component >= 0 && Component < value_count,
+                  "physical law requested a provider outside its exact qualified pack");
+    return values_[Component];
+  }
+
  private:
   FluxProviderValues<Model> values_;
 
@@ -175,15 +268,43 @@ POPS_HD BoundFluxProviders<Model> bind_flux_providers(const FluxProviderValues<M
   return BoundFluxProviders<Model>(values);
 }
 
+namespace detail {
+
+template <class Model, std::size_t Index>
+inline constexpr int qualified_flux_provider_storage_slot =
+    Model::flux_provider_requirements[Index].storage_slot;
+
+template <class Model, class Storage, std::size_t... Indices>
+POPS_HD BoundFluxProviders<Model> bind_qualified_flux_providers_at(
+    const Storage& storage, int i, int j, std::index_sequence<Indices...>) {
+  FluxProviderValues<Model> values{};
+  ((values[qualified_flux_provider_storage_slot<Model, Indices>] =
+        storage(i, j, qualified_flux_provider_storage_slot<Model, Indices>)),
+   ...);
+  return bind_flux_providers<Model>(values);
+}
+
+}  // namespace detail
+
 /// Bind one exact provider pack directly from native field storage.  The caller supplies a
 /// model-qualified component count at compile time; there is no global Aux object, truncation, or
 /// zero-on-missing branch on this path.
 template <class Model, class Storage>
 POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage, int i, int j) {
-  FluxProviderValues<Model> values{};
-  for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
-    values[component] = storage(i, j, component);
-  return bind_flux_providers<Model>(values);
+  if constexpr (has_qualified_flux_provider_requirements<Model>) {
+    static_assert(qualified_flux_provider_requirements_valid<Model>(),
+                  "generated physical flux provider requirements are invalid");
+    constexpr std::size_t count = qualified_flux_provider_requirements_valid<Model>()
+                                      ? static_cast<std::size_t>(Model::n_flux_providers)
+                                      : 0;
+    return detail::bind_qualified_flux_providers_at<Model>(storage, i, j,
+                                                           std::make_index_sequence<count>{});
+  } else {
+    FluxProviderValues<Model> values{};
+    for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
+      values[component] = storage(i, j, component);
+    return bind_flux_providers<Model>(values);
+  }
 }
 
 template <class State, class ProviderPack>
@@ -219,6 +340,11 @@ struct FluxEvaluation {
   EvaluationStatus status = EvaluationStatus::kFailed;
   StabilityBound stability{};
   std::uint32_t reason_code = 0;
+  RiemannSolverId requested_solver = RiemannSolverId::kUnspecified;
+  RiemannSolverId used_solver = RiemannSolverId::kUnspecified;
+  RiemannSolverId last_attempted_solver = RiemannSolverId::kUnspecified;
+  std::uint32_t recovery_reason_code = 0;
+  std::uint8_t attempt_count = 0;
 
   POPS_HD static FluxEvaluation ok(const State& value, StabilityBound bound) {
     return FluxEvaluation(EvaluationStatus::kOk, bound, 0, FluxDensity<State>{value});
@@ -229,12 +355,47 @@ struct FluxEvaluation {
   POPS_HD static FluxEvaluation reject(std::uint32_t reason) {
     return FluxEvaluation(EvaluationStatus::kReject, {}, reason, invalid_density());
   }
+  POPS_HD static FluxEvaluation reject(RiemannFailureCause cause) {
+    return reject(riemann_reason_code(cause));
+  }
   POPS_HD static FluxEvaluation failed(std::uint32_t reason) {
     return FluxEvaluation(EvaluationStatus::kFailed, {}, reason, invalid_density());
   }
 
   POPS_HD bool succeeded() const { return status == EvaluationStatus::kOk; }
   POPS_HD TransactionFailureAction failure_action() const { return transaction_action(status); }
+  POPS_HD bool used_fallback() const {
+    return succeeded() && requested_solver != RiemannSolverId::kUnspecified &&
+           used_solver != requested_solver;
+  }
+
+  /// Complete provenance for one explicitly selected solver.  External policies retain their
+  /// own qualified reason codes; the common evaluator supplies `kExternal` when they do not expose
+  /// a native built-in identity.  A refusal has no flux-producing solver and therefore records
+  /// `kReject` as the used policy action.
+  POPS_HD FluxEvaluation with_single_solver(RiemannSolverId solver) const {
+    FluxEvaluation result = *this;
+    result.requested_solver = solver;
+    result.used_solver = succeeded() ? solver : RiemannSolverId::kReject;
+    result.last_attempted_solver = solver;
+    result.recovery_reason_code = 0;
+    result.attempt_count = 1;
+    return result;
+  }
+
+  /// Complete provenance after an explicit prepared recovery chain has run.
+  POPS_HD FluxEvaluation with_recovery_provenance(RiemannSolverId requested, RiemannSolverId used,
+                                                  RiemannSolverId last_attempted,
+                                                  std::uint32_t first_recovery_reason,
+                                                  std::uint8_t attempts) const {
+    FluxEvaluation result = *this;
+    result.requested_solver = requested;
+    result.used_solver = used;
+    result.last_attempted_solver = last_attempted;
+    result.recovery_reason_code = first_recovery_reason;
+    result.attempt_count = attempts;
+    return result;
+  }
 
   /// Sole access to a flux density.  A failed evaluator can never smuggle a plausible value into
   /// a spatial kernel: every non-success status produces an invalid density independently of the
@@ -267,6 +428,11 @@ struct FluxEvaluation {
   }
 };
 
+/// Final numerical vocabulary: retain the established FluxEvaluation spelling while exposing the
+/// Riemann-specific name used by prepared recovery policies.
+template <class State>
+using RiemannResult = FluxEvaluation<State>;
+
 /// The only operation which accepts a FluxDensity and a geometric measure.  Its distinct return
 /// type has no overload here, so an IntegratedFaceFlux cannot accidentally be integrated twice.
 template <class State>
@@ -279,9 +445,8 @@ POPS_HD IntegratedFaceFlux<State> apply_face_measure(const FluxDensity<State>& d
 }
 
 /// Narrow physical constitutive interface over a bound provider pack.  Numerical-flux policies see
-/// this value, never the complete runtime Model.  The current native formulas still use Aux
-/// internally; that storage representation is sealed behind BoundFluxProviders and cannot leak
-/// into a numerical-flux signature.
+/// this value, never the complete runtime Model. Physical laws consume BoundFluxProviders directly;
+/// no global Aux value is reconstructed on the finite-volume path.
 template <class Model>
 struct PhysicalFluxView {
   using State = typename Model::State;
@@ -291,31 +456,8 @@ struct PhysicalFluxView {
 
   Model physical;
 
- private:
-  POPS_HD static Aux physical_providers(const ProviderPack& providers) {
-    Aux result{};
-    if constexpr (ProviderPack::value_count > 0)
-      result.phi = providers.values_[0];
-    if constexpr (ProviderPack::value_count > 1)
-      result.grad_x = providers.values_[1];
-    if constexpr (ProviderPack::value_count > 2)
-      result.grad_y = providers.values_[2];
-#define POPS_FLUX_PROVIDER_ASSIGN(name, index)     \
-  if constexpr (ProviderPack::value_count > index) \
-    result.name = providers.values_[index];
-    POPS_AUX_FIELDS(POPS_FLUX_PROVIDER_ASSIGN)
-#undef POPS_FLUX_PROVIDER_ASSIGN
-    if constexpr (ProviderPack::value_count > kAuxNamedBase) {
-      for (int component = kAuxNamedBase; component < ProviderPack::value_count; ++component)
-        result.extra[component - kAuxNamedBase] = providers.values_[component];
-    }
-    return result;
-  }
-
- public:
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
-    const Aux providers = physical_providers(trace.providers);
-    State result = physical.flux(trace.state, providers, face.axis);
+    State result = physical.flux(trace.state, trace.providers, face.axis);
     const Real sign = face.orientation_sign();
     if (sign < Real(0)) {
       for (int component = 0; component < n_vars; ++component)
@@ -325,18 +467,17 @@ struct PhysicalFluxView {
   }
 
   POPS_HD StabilityBound stability(const Trace& trace, const FaceContext& face) const {
-    const Aux providers = physical_providers(trace.providers);
-    return {physical.max_wave_speed(trace.state, providers, face.axis),
+    return {physical.max_wave_speed(trace.state, trace.providers, face.axis),
             StabilityUnit::kLengthPerTime, StabilityConvention::kNormalSpectralRadius};
   }
 
   POPS_HD void signed_wave_speeds(const Trace& trace, const FaceContext& face, Real& lower,
                                   Real& upper) const
-    requires requires(const Model& model, const State& state, const Aux& providers, int axis,
-                      Real& lo, Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
+    requires requires(const Model& model, const State& state, const ProviderPack& providers,
+                      int axis, Real& lo,
+                      Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
   {
-    const Aux providers = physical_providers(trace.providers);
-    physical.wave_speeds(trace.state, providers, face.axis, lower, upper);
+    physical.wave_speeds(trace.state, trace.providers, face.axis, lower, upper);
     if (face.orientation == FaceOrientation::kNegative) {
       const Real old_lower = lower;
       lower = -upper;
@@ -371,12 +512,12 @@ struct PhysicalFluxView {
 
   POPS_HD State roe_dissipation(const Trace& left, const Trace& right,
                                 const FaceContext& face) const
-    requires requires(const Model& model, const State& l, const Aux& lp, const State& r,
-                      const Aux& rp, int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
+    requires requires(const Model& model, const State& l, const ProviderPack& lp, const State& r,
+                      const ProviderPack& rp,
+                      int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
   {
-    const Aux left_values = physical_providers(left.providers);
-    const Aux right_values = physical_providers(right.providers);
-    return physical.roe_dissipation(left.state, left_values, right.state, right_values, face.axis);
+    return physical.roe_dissipation(left.state, left.providers, right.state, right.providers,
+                                    face.axis);
   }
 };
 
@@ -403,9 +544,9 @@ concept NumericalFlux =
 /// Constitutive capability gates used only during route resolution.  NumericalFlux policies do not
 /// receive these Models; installation wraps a conforming value in the narrow PhysicalFluxView.
 template <class Model>
-concept HasHLLCStructure = requires(const Model& model, const typename Model::State& state,
-                                    const typename Model::State& other, const Aux& providers,
-                                    Real scalar, int axis, Real& lower, Real& upper) {
+concept HasHLLCStructure = requires(
+    const Model& model, const typename Model::State& state, const typename Model::State& other,
+    const BoundFluxProviders<Model>& providers, Real scalar, int axis, Real& lower, Real& upper) {
   { model.pressure(state) } -> std::convertible_to<Real>;
   model.wave_speeds(state, providers, axis, lower, upper);
   {
@@ -418,8 +559,9 @@ concept HasHLLCStructure = requires(const Model& model, const typename Model::St
 
 template <class Model>
 concept HasRoeDissipation =
-    requires(const Model& model, const typename Model::State& left, const Aux& left_providers,
-             const typename Model::State& right, const Aux& right_providers, int axis) {
+    requires(const Model& model, const typename Model::State& left,
+             const BoundFluxProviders<Model>& left_providers, const typename Model::State& right,
+             const BoundFluxProviders<Model>& right_providers, int axis) {
       {
         model.roe_dissipation(left, left_providers, right, right_providers, axis)
       } -> std::same_as<typename Model::State>;
@@ -435,7 +577,15 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
   const auto right = make_face_trace<Model>(right_state, right_providers);
   static_assert(NumericalFlux<Numerical, PhysicalFluxView<Model>>,
                 "numerical flux does not satisfy the typed two-trace contract");
-  return numerical(physical, left, right, face);
+  auto result = numerical(physical, left, right, face);
+  if (result.requested_solver != RiemannSolverId::kUnspecified)
+    return result;
+  constexpr RiemannSolverId solver = [] {
+    if constexpr (requires { Numerical::solver_id; })
+      return static_cast<RiemannSolverId>(Numerical::solver_id);
+    return RiemannSolverId::kExternal;
+  }();
+  return result.with_single_solver(solver);
 }
 
 template <class Numerical, class Model, class Storage>

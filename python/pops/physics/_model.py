@@ -22,6 +22,7 @@ from typing import Any
 from pops.model.ownership import OwnerKind, OwnerPath
 
 from ._authoring_vars import _VariablesMixin
+from ._authoring_recovery import _RecoveryMixin
 from ._authoring_flux import _FluxMixin
 from ._authoring_sources import _SourceMixin
 from ._authoring_riemann import _RiemannMixin
@@ -32,7 +33,8 @@ from ._authoring_codegen import _CodegenMixin
 from ._freeze import PhysicsFreezable
 
 
-class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
+class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMixin, _SourceMixin,
+                      _RiemannMixin,
                       _OperatorViewMixin, _EvalMixin, _RuntimeParamsMixin, _CodegenMixin):
     """Hyperbolic model written as FORMULAS: conservative variables, primitives (defined by
     expressions), flux, eigenvalues, source, elliptic contribution. cf. module docstring.
@@ -42,6 +44,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
 
     _physics_mutators = frozenset({
         "cons", "conservative_vars", "primitive", "aux", "aux_field",
+        "recovery_admissibility",
         "set_primitive_state", "set_conservative_from", "set_flux", "set_eigenvalues",
         "flux_term", "set_wave_speeds", "set_wave_speeds_from_jacobian", "set_gamma",
         "set_source", "set_elliptic_rhs", "elliptic_field", "source_term", "linear_source",
@@ -111,6 +114,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         }
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
+        self._recovery_admissibility = {}  # primitive component -> symbolic Boolean predicate
         self.aux_names = []      # CANONICAL aux fields read (phi/grad/B_z/T_e), cf. AUX_CANONICAL
         self.aux_extra_names = []  # NAMED aux fields (aux_field): order = index AUX_NAMED_BASE + k
         self._flux = {}         # "x" / "y" -> list of Expr (one per conservative component)
@@ -155,6 +159,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         self._roe_rows = None    # {"x": [Expr], "y": [Expr]}: roe_dissipation PROVIDED (outside roles)
         self._roe_jacobian = None  # {"x"/"y": [[Expr]], "entropy_fix": exact scalar | None}:
                                    # generic dense-Jacobian Roe provider.
+        self._roe_entropy_policy = None  # exact immutable riemann.RoeEntropyPolicy selected by
+                                         # enable_roe / roe_from_jacobian; direct rows own theirs.
         self.prim_state = []    # ordered names of the primitive state (Prim layout); for the codegen
         self.cons_from = None   # list of Expr: conservative in terms of the primitives (to_conservative)
         self.cons_roles = None  # explicit override of the conservative roles (otherwise canonical mapping)

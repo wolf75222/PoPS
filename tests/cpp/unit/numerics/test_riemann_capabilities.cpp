@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
 #include <cmath>
@@ -48,7 +49,7 @@ struct HookedEuler : pops::Euler {
     Us[3] = fac * (U[3] / r + (sStar - un) * (sStar + p / (r * (s - un))));
     return Us;
   }
-  POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
+  POPS_HD State roe_dissipation(const State& UL, const auto&, const State& UR, const auto&,
                                 int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
@@ -101,13 +102,13 @@ struct PermutedEuler {
     return State{value[3], value[2], value[0], value[1]};
   }
   POPS_HD Real pressure(const State& value) const { return canonical.pressure(unpack(value)); }
-  POPS_HD State flux(const State& value, const Aux& aux, int axis) const {
+  POPS_HD State flux(const State& value, const auto& aux, int axis) const {
     return pack(canonical.flux(unpack(value), aux, axis));
   }
-  POPS_HD Real max_wave_speed(const State& value, const Aux& aux, int axis) const {
+  POPS_HD Real max_wave_speed(const State& value, const auto& aux, int axis) const {
     return canonical.max_wave_speed(unpack(value), aux, axis);
   }
-  POPS_HD void wave_speeds(const State& value, const Aux& aux, int axis, Real& lower,
+  POPS_HD void wave_speeds(const State& value, const auto& aux, int axis, Real& lower,
                            Real& upper) const {
     canonical.wave_speeds(unpack(value), aux, axis, lower, upper);
   }
@@ -120,8 +121,8 @@ struct PermutedEuler {
                                 int axis) const {
     return pack(canonical.hllc_star_state(unpack(value), pressure_value, speed, contact, axis));
   }
-  POPS_HD State roe_dissipation(const State& left, const Aux& left_aux, const State& right,
-                                const Aux& right_aux, int axis) const {
+  POPS_HD State roe_dissipation(const State& left, const auto& left_aux, const State& right,
+                                const auto& right_aux, int axis) const {
     return pack(canonical.roe_dissipation(unpack(left), left_aux, unpack(right), right_aux, axis));
   }
 };
@@ -136,7 +137,7 @@ struct IsoHLLC {
   static constexpr int n_vars = 5;
   Real cs2 = 0.5;
 
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
     const Real un = u[in] / u[0];
@@ -148,14 +149,14 @@ struct IsoHLLC {
     F[4] = u[4] * un;
     return F;
   }
-  POPS_HD Real max_wave_speed(const State& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real un = u[in] / u[0];
     const Real c = std::sqrt(cs2);
     const Real a = un < 0 ? -un : un;
     return a + c;
   }
-  POPS_HD void wave_speeds(const State& u, const Aux&, int dir, Real& smin, Real& smax) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& smin, Real& smax) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real un = u[in] / u[0];
     const Real c = std::sqrt(cs2);
@@ -197,7 +198,7 @@ struct DimensionalIsoHLLC {
   static constexpr int tracer_component = Dimension + 1;
   Real cs2 = Real(0.5);
 
-  POPS_HD State flux(const State& value, const Aux&, int axis) const {
+  POPS_HD State flux(const State& value, const auto&, int axis) const {
     const int normal = axis + 1;
     const Real normal_velocity = value[normal] / value[0];
     State result{};
@@ -209,13 +210,13 @@ struct DimensionalIsoHLLC {
     return result;
   }
 
-  POPS_HD Real max_wave_speed(const State& value, const Aux&, int axis) const {
+  POPS_HD Real max_wave_speed(const State& value, const auto&, int axis) const {
     const Real normal_velocity = value[axis + 1] / value[0];
     const Real absolute_velocity = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
     return absolute_velocity + std::sqrt(cs2);
   }
 
-  POPS_HD void wave_speeds(const State& value, const Aux&, int axis, Real& lower,
+  POPS_HD void wave_speeds(const State& value, const auto&, int axis, Real& lower,
                            Real& upper) const {
     const Real normal_velocity = value[axis + 1] / value[0];
     const Real sound_speed = std::sqrt(cs2);
@@ -310,6 +311,10 @@ TEST(test_riemann_capabilities, compile_time_detection) {
   static_assert(pops::HasHLLCStructure<PermutedEuler>);
   static_assert(pops::HasRoeDissipation<PermutedEuler>);
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFlux>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFlux>);
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFluxPolar>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFluxPolar>);
   static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<1>>);
   static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<3>>);
   SUCCEED() << "detection des capabilities (Euler a-capabilites, Hooked/Iso capability)";
@@ -408,6 +413,40 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
     const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
   }
+}
+
+TEST(test_riemann_capabilities, native_isothermal_provider_serves_hllc_and_roe) {
+  pops::IsothermalFlux model;
+  model.cs2 = Real(0.5);
+  const Aux providers{};
+  const pops::IsothermalFlux::State value{Real(1.3), Real(0.4), Real(-0.7)};
+
+  for (int axis = 0; axis < 2; ++axis) {
+    const auto physical = model.flux(value, providers, axis);
+    const auto hllc = face_density(pops::HLLCFlux{}, model, value, providers, value, providers,
+                                   axis);
+    const auto roe =
+        face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
+    EXPECT_LE(maxdiff(hllc, physical), 1e-13);
+    EXPECT_LE(maxdiff(roe, physical), 1e-13);
+  }
+}
+
+TEST(test_riemann_capabilities, native_isothermal_contact_is_not_replaced_by_hll) {
+  pops::IsothermalFlux model;
+  model.cs2 = Real(0.5);
+  const Aux providers{};
+  pops::IsothermalFlux::State left{Real(1), Real(0), Real(2)};
+  pops::IsothermalFlux::State right{Real(1), Real(0), Real(-3)};
+
+  const auto hllc =
+      face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
+  const auto roe = face_density(pops::RoeFlux{}, model, left, providers, right, providers, 0);
+  const auto hll = face_density(pops::HLLFlux{}, model, left, providers, right, providers, 0);
+  EXPECT_LE(std::fabs(hllc[2]), 1e-14);
+  EXPECT_LE(std::fabs(roe[2]), 1e-14);
+  EXPECT_GE(std::fabs(hll[2]), 1e-2)
+      << "a hidden HLL fallback would make the contact-resolving providers diffusive";
 }
 
 TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent) {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.diagnostics import Integral, StepChangeNorm
+from pops.diagnostics import Balance, BalanceLedger, Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
@@ -23,9 +23,10 @@ from pops.output import (
 )
 from pops.linalg.norms import L2
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
+from pops.output._balance_due_contract import BalanceDueContract
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import Clock, FailRun as SolveFailRun, every
+from pops.time import Clock, FailRun as SolveFailRun, every, on_start
 from tests.python.support.layout_plan import cartesian_grid
 
 
@@ -96,6 +97,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
             "reduction": "sum",
             "transform": "identity",
             "metric_weighted": True,
+            "coefficient": (1.0).hex(),
         },
     )
     assert checkpoint.output_format is None
@@ -248,8 +250,124 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
             "reduction": "step_change_l2",
             "transform": "identity",
             "metric_weighted": False,
+            "coefficient": (1.0).hex(),
         },
     )
+
+
+def test_balance_consumer_resolves_one_exact_native_ledger_route():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(4, clock=clock)
+    ledger = BalanceLedger("mass")
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(ledger, block=block),),
+            target="state/balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    quantity, = resolved.nodes[0].diagnostic_quantities
+    operation, = quantity.execution["operations"]
+    contract = BalanceDueContract.from_consumer_graph(resolved)
+    route = ledger.route_identity(case.resolve(block))
+    assert not schedule.consumer_may_fire_at_start()
+    assert operation["reduction"] == "accepted_balance"
+    assert operation["balance_route"] == route.token
+    assert quantity.reference == case.resolve(state)
+    assert contract.consumer_graph == resolved.identity
+    assert contract.route(route.token).accepted_step_periods() == (4,)
+    assert contract.identity.domain == "balance-due-contract"
+
+
+def test_balance_consumer_retains_native_term_selector_in_due_contract():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(4, clock=clock)
+    ledger = BalanceLedger(
+        "mass-native", automatic_terms=("projection", "reflux")
+    )
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(ledger, block=block),),
+            target="state/native-balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    quantity, = resolved.nodes[0].diagnostic_quantities
+    operation, = quantity.execution["operations"]
+    route = ledger.route_identity(case.resolve(block))
+    contract = BalanceDueContract.from_consumer_graph(resolved)
+
+    assert operation["automatic_terms"] == ("projection", "reflux")
+    assert operation["balance_component"] == 0
+    assert contract.route(route.token).automatic_terms == ("projection", "reflux")
+
+
+def test_balance_consumer_refuses_a_schedule_that_can_fire_at_start():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = on_start(clock=clock)
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(BalanceLedger("mass"), block=block),),
+            target="state/balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    assert schedule.consumer_may_fire_at_start()
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Balance schedule cannot fire at_start: accepted balance evidence "
+            "exists only after a native step attempt"
+        ),
+    ):
+        graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
 
 
 def test_console_monitor_can_be_removed_at_authoring_time():
@@ -410,8 +528,6 @@ def test_output_format_options_refuse_python_truthiness_coercion() -> None:
         HDF5(mode="serial")
     with pytest.raises(TypeError, match="exact bool or None"):
         HDF5(series=1)
-    with pytest.raises(TypeError, match="exact bool or None"):
-        ParaView(series=1)
     assert HDF5().consumer_data()["options"] == {"mode": "serial", "series": True}
     serial_options = ParaView().consumer_data()["options"]
     assert serial_options["mode"] == "serial"

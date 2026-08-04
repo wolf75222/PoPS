@@ -269,6 +269,46 @@ def test_case_has_one_registration_spelling_per_authority() -> None:
     assert hasattr(case, "consumers") and not hasattr(case, "output")
 
 
+def test_native_runtime_wrappers_do_not_restore_add_block_through_passthrough() -> None:
+    from pops.runtime._lifecycle import RETIRED_NATIVE_PASSTHROUGH
+
+    assert RETIRED_NATIVE_PASSTHROUGH == frozenset({"add_block"})
+
+    for relative in (
+        "runtime/_system_install.py",
+        "runtime/_amr_system.py",
+        "runtime/_system_contract.py",
+        "runtime/_amr_system_contract.py",
+    ):
+        source = (PACKAGE / relative).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=relative)
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "add_block"
+            for node in ast.walk(tree)
+        ), relative
+
+    for relative in ("runtime/_system.py", "runtime/_amr_system.py"):
+        source = (PACKAGE / relative).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=relative)
+        passthrough = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "__getattr__"
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "_RETIRED_NATIVE_PASSTHROUGH"
+            for node in ast.walk(passthrough)
+        ), relative
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "AttributeError"
+            for node in ast.walk(passthrough)
+        ), relative
+
+
 def test_amr_has_one_checkpoint_output_and_tagging_authority_path() -> None:
     from pops import amr as authoring_amr
     import pops.mesh as public_mesh

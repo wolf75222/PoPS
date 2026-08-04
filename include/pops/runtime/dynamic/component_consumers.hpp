@@ -360,6 +360,76 @@ inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
   return api.apply_region_batch(state, &request, &status);
 }
 
+inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state,
+                                   const PopsBoundaryFluxRequestV1& request,
+                                   PopsBoundaryFluxResultV1& result) {
+  require_operation(api.transform_faces != nullptr, "transform_faces");
+  validate_execution_context(request.execution);
+  validate_logical_time(request.logical_time);
+  validate_boundary_region(request.region);
+  if (request.struct_size < sizeof(PopsBoundaryFluxRequestV1) ||
+      result.struct_size < sizeof(PopsBoundaryFluxResultV1) ||
+      !component_text(request.provider_identity) || !component_text(request.state_identity) ||
+      request.face_measures == nullptr || result.actions == nullptr ||
+      request.region.kind != POPS_BOUNDARY_FACE_V1 || request.region.codimension != 1 ||
+      request.region.axis_count != 1)
+    throw std::invalid_argument("boundary flux transformation request is incomplete");
+  validate_execution_field(request.execution, request.base_outward_normal_flux,
+                           "boundary base outward flux");
+  validate_execution_field(request.execution, request.coordinates, "boundary flux coordinates");
+  validate_execution_field(request.execution, request.outward_normals, "boundary outward normals");
+  validate_execution_field(request.execution, result.outward_normal_flux,
+                           "boundary transformed outward flux");
+  if (!same_field_domain(request.base_outward_normal_flux, result.outward_normal_flux) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.coordinates) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.outward_normals) ||
+      request.coordinates.component_count != static_cast<std::size_t>(request.region.dimension) ||
+      request.outward_normals.component_count != static_cast<std::size_t>(request.region.dimension))
+    throw std::invalid_argument("boundary flux field descriptors disagree");
+  const std::uint32_t normal_axis = 1u << static_cast<unsigned>(request.region.axes[0]);
+  if (request.base_outward_normal_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+      request.base_outward_normal_flux.centering_axes != normal_axis)
+    throw std::invalid_argument(
+        "boundary base outward flux is not centered on its authenticated face axis");
+  const std::size_t point_count = field_point_count(request.base_outward_normal_flux);
+  const auto* coordinates = static_cast<const double*>(request.coordinates.data);
+  const auto* normals = static_cast<const double*>(request.outward_normals.data);
+  for (std::size_t point = 0; point < point_count; ++point)
+    if (!std::isfinite(request.face_measures[point]) || request.face_measures[point] <= 0.0)
+      throw std::invalid_argument("boundary flux face measure is not positive and finite");
+  for (std::size_t j = 0; j < request.coordinates.extents[1]; ++j)
+    for (std::size_t i = 0; i < request.coordinates.extents[0]; ++i)
+      for (std::size_t component = 0; component < request.coordinates.component_count;
+           ++component) {
+        const auto coordinate_offset =
+            static_cast<std::ptrdiff_t>(i) * request.coordinates.axis_strides[0] +
+            static_cast<std::ptrdiff_t>(j) * request.coordinates.axis_strides[1] +
+            static_cast<std::ptrdiff_t>(component) * request.coordinates.component_stride;
+        const auto normal_offset =
+            static_cast<std::ptrdiff_t>(i) * request.outward_normals.axis_strides[0] +
+            static_cast<std::ptrdiff_t>(j) * request.outward_normals.axis_strides[1] +
+            static_cast<std::ptrdiff_t>(component) * request.outward_normals.component_stride;
+        const double expected = component == static_cast<std::size_t>(request.region.axes[0])
+                                    ? static_cast<double>(request.region.sides[0])
+                                    : 0.0;
+        if (!std::isfinite(coordinates[coordinate_offset]) ||
+            !std::isfinite(normals[normal_offset]) || normals[normal_offset] != expected)
+          throw std::invalid_argument(
+              "boundary flux coordinates or outward normal disagree with the oriented face");
+      }
+  validate_const_fields(request.dependencies, request.dependency_count,
+                        "boundary flux dependencies");
+  for (std::size_t index = 0; index < request.dependency_count; ++index) {
+    validate_execution_field(request.execution, request.dependencies[index].values,
+                             "boundary flux dependency");
+    if (!same_spatial_domain(request.base_outward_normal_flux, request.dependencies[index].values))
+      throw std::invalid_argument(
+          "boundary flux dependency does not cover the transformed face points");
+  }
+  validate_scalars(request.parameters, request.parameter_count, "boundary flux parameters");
+  return api.transform_faces(state, &request, &result);
+}
+
 inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, void* state,
                                    const PopsFieldBoundaryRequestV1& request,
                                    PopsComponentStatusV1& status, bool jvp) {
@@ -594,6 +664,81 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
       throw std::invalid_argument("transfer refinement ratio must be positive");
   }
   return api.apply(state, &request, &status);
+}
+
+template <class Left, class Right>
+inline bool same_reflux_face_shape(const Left& left, const Right& right) {
+  if (left.dimension != right.dimension || left.component_count != right.component_count ||
+      left.scalar_type != right.scalar_type || left.memory_space != right.memory_space)
+    return false;
+  for (std::int32_t axis = 0; axis < 3; ++axis)
+    if (left.extents[axis] != right.extents[axis] ||
+        left.ghost_lower[axis] != right.ghost_lower[axis] ||
+        left.ghost_upper[axis] != right.ghost_upper[axis])
+      return false;
+  return true;
+}
+
+inline int apply_reflux_interface_batch(const PopsRefluxApiV1& api, void* state,
+                                        const PopsRefluxRequestV1& request,
+                                        PopsComponentStatusV1& status) {
+  require_operation(api.apply_interface_batch != nullptr, "apply_interface_batch");
+  if (request.struct_size < sizeof(PopsRefluxRequestV1) ||
+      !component_text(request.transition_identity) || request.parent_level < 0 ||
+      request.child_level != request.parent_level + 1 || request.face_count == 0 ||
+      request.faces == nullptr || request.logical_time.level != request.parent_level)
+    throw std::invalid_argument("reflux request is incomplete");
+  validate_logical_time(request.logical_time);
+  validate_noncollective_execution_context(request.execution);
+
+  std::unordered_set<std::string> identities;
+  for (std::size_t index = 0; index < request.face_count; ++index) {
+    const auto& face = request.faces[index];
+    if (face.struct_size < sizeof(PopsRefluxFaceV1) || !component_text(face.interface_identity) ||
+        !identities.insert(face.interface_identity).second || face.axis < 0 || face.axis >= 2 ||
+        (face.side != POPS_REFLUX_FACE_LOW_V1 && face.side != POPS_REFLUX_FACE_HIGH_V1) ||
+        !std::isfinite(face.inverse_coarse_cell_spacing) || face.inverse_coarse_cell_spacing <= 0.0)
+      throw std::invalid_argument("reflux face descriptor is incomplete");
+
+    validate_execution_field(request.execution, face.coarse_integrated_flux,
+                             "reflux coarse integrated flux");
+    validate_execution_field(request.execution, face.fine_integrated_flux,
+                             "reflux fine integrated flux");
+    validate_execution_field(request.execution, face.correction, "reflux correction");
+    const auto centering_axis = 1u << static_cast<unsigned>(face.axis);
+    if (face.coarse_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.fine_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.coarse_integrated_flux.centering_axes != centering_axis ||
+        face.fine_integrated_flux.centering_axes != centering_axis ||
+        face.correction.centering != POPS_FIELD_CENTERING_CELL_V1 ||
+        face.correction.centering_axes != 0 ||
+        face.coarse_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.fine_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.correction.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.fine_integrated_flux) ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.correction) ||
+        face.coarse_integrated_flux.extents[face.axis] != 1 ||
+        std::string(face.coarse_integrated_flux.layout_identity) !=
+            face.correction.layout_identity ||
+        std::string(face.coarse_integrated_flux.patch_identity) != face.correction.patch_identity)
+      throw std::invalid_argument(
+          "reflux face fluxes and correction disagree on shape, centering or ownership");
+    for (std::int32_t axis = 0; axis < face.coarse_integrated_flux.dimension; ++axis)
+      if (face.coarse_integrated_flux.ghost_lower[axis] != 0 ||
+          face.coarse_integrated_flux.ghost_upper[axis] != 0)
+        throw std::invalid_argument("reflux face views cannot carry ghost cells");
+  }
+
+  status = unwritten_component_status();
+  const int code = api.apply_interface_batch(state, &request, &status);
+  if (!component_status_is_well_formed(status))
+    throw std::runtime_error("native Reflux component returned an invalid status");
+  if ((code == 0) != (status.code == 0) ||
+      (code == 0 && status.action != POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && status.action == POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && !component_text(status.reason)))
+    throw std::runtime_error("native Reflux component returned an inconsistent outcome");
+  return code;
 }
 
 inline std::string writer_geometry_key(const char* layout, std::int32_t level) {

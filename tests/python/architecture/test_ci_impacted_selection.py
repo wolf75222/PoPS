@@ -320,7 +320,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 80
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 90
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -492,6 +492,38 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
         args.targets.pop()
 
 
+def test_cpp_target_label_fence_selects_standalone_with_no_shard_targets(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest.json"
+    inventory.write_text(json.dumps({
+        "tests": [
+            {
+                "name": "Suite.OtherShard",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_other"]},
+                ],
+            },
+            {
+                "name": "test_standalone_contract",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-standalone"]},
+                ],
+            },
+        ],
+    }))
+    standalone_regex = tmp_path / "standalone.regex"
+    args = SimpleNamespace(
+        ctest_json=str(inventory),
+        targets=[],
+        standalone_regex_file=str(standalone_regex),
+    )
+
+    assert sel.verify_cpp_target_labels(args) == 0
+    assert re.fullmatch(
+        standalone_regex.read_text().strip(), "test_standalone_contract"
+    )
+
+
 def test_cpp_target_label_fence_ignores_other_shards_but_rejects_ambiguous_owners(
     tmp_path,
 ):
@@ -621,6 +653,16 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_async_balance_cadence_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_scientific_output_mpi.py",
             "nproc": 2,
         },
@@ -673,6 +715,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py",
+        "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
+        "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
         "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
     ]
@@ -685,8 +729,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "8"
-    assert outputs["python_mpi_entrypoint_count"] == "7"
+    assert outputs["python_mpi_count"] == "10"
+    assert outputs["python_mpi_entrypoint_count"] == "9"
     assert outputs["python_mpi_orchestrator_count"] == "1"
 
 
@@ -828,7 +872,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # GATE C++", 1)[0]
     cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
         "\n  # Check historique", 1)[0]
-    assert "timeout-minutes: 22" in cpp_prewarm_block
+    assert "timeout-minutes: 30" in cpp_prewarm_block
     assert (
         "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in cpp_prewarm_block
@@ -836,12 +880,18 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
     assert "--contract-file" in cpp_prewarm_block
     assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in cpp_prewarm_block
+    assert "system)" in cpp_prewarm_block
+    assert "lane_watchdog=24m" in cpp_prewarm_block
     assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in cpp_prewarm_block
-    assert 'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m' in cpp_prewarm_block
+    assert (
+        'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" "$lane_watchdog"'
+        in cpp_prewarm_block
+    )
     assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
     assert "--standalone-regex-file" in cpp_shards_block
+    assert 'if [ "${{ matrix.shard }}" -eq 0 ]; then' in cpp_shards_block
     assert "name: Standalone CTest contracts" in cpp_shards_block
     assert 'standalone_regex=$(<"$standalone_regex_file")' in cpp_shards_block
     assert '-R "$standalone_regex"' in cpp_shards_block
@@ -886,7 +936,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # Agregation REQUISE", 1
     )[0]
     assert "runs-on: ubuntu-24.04" in mpi_prewarm_block
-    assert "timeout-minutes: 40" in mpi_prewarm_block
+    assert "timeout-minutes: 50" in mpi_prewarm_block
     assert "needs: [set-mode, changes]" in mpi_prewarm_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
     assert (
@@ -896,7 +946,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "cmake --preset ci-mpi" in mpi_prewarm_block
     assert "scripts/ci_python_module_objects.py" in mpi_prewarm_block
     assert "--contract-file" in mpi_prewarm_block
-    assert 'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m' in mpi_prewarm_block
+    assert "system)" in mpi_prewarm_block
+    assert "lane_watchdog=24m" in mpi_prewarm_block
+    assert (
+        'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" "$lane_watchdog"'
+        in mpi_prewarm_block
+    )
     assert "compression-level: 0" in mpi_prewarm_block
 
     mpi_block = workflow.split("\n  mpi:\n", 1)[1].split(
@@ -949,7 +1004,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
     assert "ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error" in mpi_block
-    assert "timeout-minutes: 70" in mpi_block
+    # The complete M4 installed-package gate now runs after the native MPI,
+    # Python MPI and collective-HDF5 matrices in this same required job.  Keep
+    # the outer watchdog aligned with that complete sequential contract.
+    assert "timeout-minutes: 180" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
     assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
@@ -1213,7 +1271,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         not in python_prewarm_block
     assert "lane: [system, amr-base, amr-block-base, amr-compressible]" \
         in python_prewarm_block
-    assert "timeout-minutes: 22" in python_prewarm_block
+    assert "timeout-minutes: 30" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
     assert "scripts/ci_python_module_objects.py" in python_prewarm_block
     assert "--contract-file" in python_prewarm_block
@@ -1221,10 +1279,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
     assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
     assert python_prewarm_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
+    assert (
+        'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" "$lane_watchdog"'
         in python_prewarm_block
+    )
     assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
     assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in python_prewarm_block
+    assert "system)" in python_prewarm_block
+    assert "lane_watchdog=24m" in python_prewarm_block
     assert 'lane_parallelism=2' in python_prewarm_block
     assert '--parallel "$lane_parallelism"' in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
@@ -1273,6 +1335,20 @@ def test_openmp_native_scripts_share_the_fail_closed_requirement_policy(relative
     assert "require_native_or_skip" in source
     assert "if not cxx or not os.path.isdir(INCLUDE)" not in source
     assert "OK (rien a compiler)" not in source
+
+
+def test_quality_manifest_coverage_is_fail_closed():
+    workflow = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+    manifest_gate = workflow.split(
+        "      - name: Couverture manifest de tests (test_manifest.toml, bloquante)\n",
+        1,
+    )[1].split("\n  # --- Prewarm natif", 1)[0]
+
+    assert "python3 docs/gen_test_counts.py --check-matrix" in manifest_gate
+    assert 'echo "::error::tests/test_manifest.toml' in manifest_gate
+    assert 'exit "$rc"' in manifest_gate
+    assert "::warning::tests/test_manifest.toml" not in manifest_gate
+    assert "_Informatif" not in manifest_gate
 
 
 def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():

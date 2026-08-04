@@ -88,6 +88,11 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // recompiled against this header (ABI key verified) carries them too.
   auto conv = make_cell_convert(model);
   sys.set_block_conversion(name, std::move(conv.first), std::move(conv.second));
+  if (ctx.boundary_plan && ctx.boundary_plan->requires_characteristic_no_inflow())
+    sys.set_block_characteristic_no_inflow(
+        name, detail::make_characteristic_no_inflow_fill(model,
+                                                         ctx.boundary_plan->hyperbolic_boundary()));
+  sys.set_block_batch_recovery(name, make_uniform_recovery_consumer(model));
   // OPTIONAL step bounds of the model (HasSourceFrequency / HasStabilityDt traits, see
   // core/physical_model.hpp): compiled here like flux/source (a DSL model declaring
   // m.source_frequency(...) / m.stability_dt(...) carries them down to the System's step_cfl).
@@ -97,7 +102,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // Scheme GHOSTS: WENO5 reads a 5-point stencil (3 ghosts) > the 2 allocated by install_block.
   // We reallocate the block state with block_n_ghost(limiter) -- SAME mechanism as add_block (PR #88) --
   // so that fill_boundary + assemble_rhs do not read out of bounds on the System's real MultiFab.
-  // none/minmod/vanleer (<= 2 ghosts): no-op, allocation and result bit-identical to before.
+  // Any catalogue limiter requiring <= 2 ghosts (none/MUSCL family): no-op; allocation and result
+  // stay bit-identical to the prepared route.
   sys.set_block_ghosts(name, block_n_ghost(limiter));
 }
 

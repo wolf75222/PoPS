@@ -325,10 +325,11 @@ chk(
 pc_plan = _resolved_case("pc_public", "predictor_corrector")
 pc_src = _emit_resolved(pc_plan)
 chk(
-    pc_src.count("ctx.solve_fields_from_state(") == 2
+    pc_src.count("ctx.solve_fields_from_state_at(") == 2
+    and pc_src.count("const auto field_boundary_point_") == 2
     and ", 0, u0);" in pc_src
     and ", 0, u7);" in pc_src,
-    "predictor and corrector re-solve fields from their own stage states",
+    "predictor and corrector re-solve exact providers from their own level/stage states",
 )
 chk(
     bool(pc_src),

@@ -32,6 +32,7 @@ class _HyperbolicModel:
     prim_defs: Any
     prim_roles: Any
     prim_state: Any
+    _recovery_admissibility: Any
     aux_names: Any
     aux_extra_names: Any
     gamma: Any
@@ -52,6 +53,7 @@ class _HyperbolicModel:
     _roe: Any
     _roe_rows: Any
     _roe_jacobian: Any
+    _roe_entropy_policy: Any
     _riemann_hook_forms: Any
     _hllc: Any
     _src_freq: Any

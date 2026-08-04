@@ -14,6 +14,7 @@
 #include <pops/parallel/comm.hpp>          // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
+#include <pops/runtime/builders/block/prepared_boundary_defaults.hpp>
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann)
 #include <pops/runtime/context/grid_context.hpp>  // BlockClosures (light header)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_source / dispatch_elliptic (REUSED)
@@ -21,6 +22,7 @@
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -54,6 +56,21 @@ struct PolarGridContext {
   BCRec bc;                 ///< BC: r (xlo/xhi) physical, theta (ylo/yhi) periodic
   PolarGeometry geom;       ///< ring (r_min, r_max, dr, dtheta)
   MultiFab* aux = nullptr;  ///< System's aux (phi, grad_r, grad_theta); NOT owned
+  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+
+  Geometry boundary_geometry() const {
+    return Geometry{dom, geom.r_min, geom.r_max, Real(0), PolarGeometry::kTwoPi};
+  }
+
+  GridContext boundary_context() const {
+    GridContext context;
+    context.dom = dom;
+    context.bc = bc;
+    context.geom = boundary_geometry();
+    context.aux = aux;
+    context.boundary_plan = boundary_plan;
+    return context;
+  }
 };
 
 namespace detail {
@@ -122,42 +139,18 @@ void dispatch_model_polar(const ModelSpec& m, Visitor&& visitor) {
   });
 }
 
-/// Fills the ghosts of a MultiFab on the polar grid (theta periodic + r physical). fill_ghosts
-/// already routes periodic vs physical by BCRec (xlo/xhi physical, ylo/yhi periodic): we call it
-/// VERBATIM. This is the analogue of the cartesian fill_ghosts(U, dom, bc) of BlockRhsEval.
-inline void fill_ghosts_polar(MultiFab& U, const Box2D& dom, const BCRec& bc) {
-  fill_ghosts(U, dom, bc);
-}
-
-/// Polar residual functor R = -div_polar F + S (fill_ghosts then assemble_rhs_polar). NAMED FUNCTOR
-/// (counterpart of cartesian detail::BlockRhsEval): this is what take_step receives, triggering the
-/// instantiation of assemble_rhs_polar<Limiter, Flux> and its device kernels. @c wall_radial: solid
-/// radial wall (no-penetration) -> mass conserved to machine precision (see assemble_rhs_polar).
-template <class Limiter, class Flux, class Model>
-struct PolarBlockRhsEval {
-  Model model;
-  const PolarGridContext* ctx;
-  bool recon_prim;
-  bool wall_radial;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  void operator()(MultiFab& U, MultiFab& R) const {
-    fill_ghosts_polar(U, ctx->dom, ctx->bc);
-    assemble_rhs_polar<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, wall_radial,
-                                      pos_floor);
-  }
-};
-
 /// Frozen polar residual (fill_ghosts + assemble_rhs_polar) installed as the block's rhs_into (eval_rhs).
 template <class Limiter, class Flux, class Model>
 struct PolarRhsInto {
   Model m;
   PolarGridContext ctx;
   bool recon_prim;
-  bool wall_radial;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_ghosts_polar(U, ctx.dom, ctx.bc);
-    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim, wall_radial,
+    if (!ctx.boundary_plan)
+      throw std::runtime_error("polar transport has no prepared boundary plan");
+    ctx.boundary_plan->fill_same_level_and_physical(U, ctx.boundary_geometry());
+    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, *ctx.boundary_plan, recon_prim,
                                       pos_floor);
   }
   void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
@@ -165,7 +158,64 @@ struct PolarRhsInto {
     if (point.level != 0)
       throw std::invalid_argument(
           "uniform polar Program residual requires BoundaryEvaluationPoint.level == 0");
-    (*this)(U, R);
+    if (!ctx.boundary_plan)
+      throw std::runtime_error("polar transport has no prepared boundary plan");
+    auto lane = ExecutionLane::world(ctx.boundary_plan->identity(), "::polar-boundary-control");
+    auto session = ctx.boundary_plan->make_session(lane);
+    session.prepare_trace_recovery_workspace(U);
+    session.fill_same_level_and_physical(U, ctx.boundary_geometry(), point);
+    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, *ctx.boundary_plan, recon_prim,
+                                      pos_floor);
+  }
+};
+
+/// Point-qualified polar transport core. The persistent overload consumes the exact System-owned
+/// PreparedGridBoundarySession selected at bind; neither overload reconstructs a BCRec authority.
+template <class Limiter, class Flux, class Model>
+struct PolarRhsCoreInto {
+  Model m;
+  PolarGridContext ctx;
+  bool recon_prim;
+  Real pos_floor = Real(0);
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor}(point, U, R);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    if (point.level != 0)
+      throw std::invalid_argument(
+          "uniform polar Program residual requires BoundaryEvaluationPoint.level == 0");
+    fill_grid_ghosts(U, boundary, point);
+    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, *ctx.boundary_plan, recon_prim,
+                                      pos_floor);
+  }
+};
+
+struct PolarBoundaryResidualInto {
+  GridContext ctx;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    add_grid_boundary_residual(U, R, ctx, point);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
+    add_grid_boundary_residual(U, R, boundary, point);
+  }
+};
+
+struct PolarBoundaryJvpInto {
+  GridContext ctx;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  const MultiFab& V, MultiFab& J) const {
+    apply_grid_boundary_jvp(U, V, J, ctx, point);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  const MultiFab& V, MultiFab& J,
+                  const PreparedGridBoundarySession& boundary) const {
+    apply_grid_boundary_jvp(U, V, J, boundary, point);
   }
 };
 
@@ -246,54 +296,77 @@ inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeom
 }
 
 /// Spatial closures of a POLAR block for a frozen scheme (Limiter x Flux). Counterpart of Cartesian
-/// build_block. @p wall_radial: solid radial wall (no-penetration) -> mass conservation to machine
-/// precision.
+/// build_block. Ghost production and radial flux closure are both selected by the same immutable
+/// PreparedBoundaryPlan captured in the context.
 template <class Limiter, class Flux, class Model>
 BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, bool recon_prim,
-                                bool wall_radial, Real pos_floor = Real(0)) {
+                                Real pos_floor = Real(0)) {
+  if (!ctx.boundary_plan)
+    throw std::invalid_argument("build_block_polar requires a prepared boundary plan");
+  if (ctx.boundary_plan->has_component_boundaries() || ctx.boundary_plan->has_omitted_faces())
+    throw std::invalid_argument(
+        "polar transport does not yet support native boundary components or shared-interface "
+        "face omission");
   BlockClosures bc;
-  bc.rhs_into =
-      detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
+  bc.base_spatial_geometry = SpatialProviderGeometry::Polar;
+  bc.spatial_provider = make_polar_spatial_provider(kNativeDimension);
+  bc.rhs_into = detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor};
   // A polar Program owns the same exact stage/clock identity as a Cartesian Program even though
   // the current radial-wall/theta-periodic ghost producer is time independent.  Install a genuine
   // point-qualified polar residual instead of falling back to an unqualified spatial route.
-  bc.rhs_at_point =
-      detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
+  bc.rhs_at_point = detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor};
+  bc.rhs_flux_only = detail::PolarRhsInto<Limiter, Flux, SourceFreeModel<Model>>{
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor};
+  bc.rhs_flux_only_at_point = detail::PolarRhsInto<Limiter, Flux, SourceFreeModel<Model>>{
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor};
+  bc.rhs_core_at_point =
+      detail::PolarRhsCoreInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor};
+  bc.rhs_flux_only_core_at_point = detail::PolarRhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor};
+  const GridContext boundary_context = ctx.boundary_context();
+  bc.boundary_residual_at_point = detail::PolarBoundaryResidualInto{boundary_context};
+  bc.boundary_jvp_at_point = detail::PolarBoundaryJvpInto{boundary_context};
+  bc.rhs_core_at_point_prepared =
+      detail::PolarRhsCoreInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor};
+  bc.rhs_flux_only_core_at_point_prepared =
+      detail::PolarRhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{SourceFreeModel<Model>{m},
+                                                                      ctx, recon_prim, pos_floor};
+  bc.boundary_residual_at_point_prepared = detail::PolarBoundaryResidualInto{boundary_context};
+  bc.boundary_jvp_at_point_prepared = detail::PolarBoundaryJvpInto{boundary_context};
   return bc;
 }
 
 /// Dispatch of the spatial scheme (frozen limiter, Riemann flux) -> compiled polar closures.
-/// Two fluxes wired in polar, SAME template injection point as the cartesian one (build_block_polar
-/// carries the Flux parameter down to assemble_rhs_polar<Limiter, Flux>):
+/// Four fluxes wired in polar through the SAME template injection point as the Cartesian one
+/// (build_block_polar carries the Flux parameter down to assemble_rhs_polar<Limiter, Flux>):
 ///   - "rusanov": RusanovFlux, requires only max_wave_speed (valid for scalar ExB AND the
 ///                 isothermal fluid) -- DEFAULT, strictly bit-identical to history;
 ///   - "hll": HLLFlux (signed waves), GATE identical to the cartesian one (make_block) on the
 ///                 presence of model.wave_speeds. The polar isothermal fluid (IsothermalFluxPolar:
 ///                 inherits IsothermalFlux::wave_speeds) is eligible -> HLL less diffusive than Rusanov
 ///                 on the ring. The scalar ExB (ExBVelocityPolar, no wave_speeds) -> CLEAR rejection.
-/// HLLC/Roe stay NOT wired in polar because no oriented metric provider supplies their contact/Roe
-/// capability yet -> explicit rejection. "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction
-/// (3 ghosts) like the cartesian one. @p wall_radial: solid radial wall (mass conservation to machine
-/// precision; see build_block_polar).
+///   - "hllc" / "roe": exactly the same HasHLLCStructure / HasRoeDissipation gates as Cartesian.
+///     The annular operator supplies the oriented FaceContext and metric measure; the physical
+///     model supplies its contact/star or Roe action. A missing capability is rejected explicitly
+///     and never selects HLL or Rusanov.
+/// "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction (3 ghosts) like the
+/// Cartesian one. Radial wall/outflow selection is carried exclusively by @p ctx.boundary_plan.
 template <class Model>
 BlockClosures make_block_polar(const Model& m, const std::string& lim, const std::string& riem,
-                               const PolarGridContext& ctx, bool recon_prim, bool wall_radial,
+                               const PolarGridContext& ctx, bool recon_prim,
                                Real pos_floor = Real(0)) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: in polar, rusanov AND
-  // hll are wired (hll since the rest of the audit); HLLC/Roe and unknown tags raise the polar
-  // message of the registry. The CAPABILITY GUARD (hll requires model.wave_speeds) stays an
-  // `if constexpr` PER MODEL below, with its dedicated "requires ..." message.
+  // all public providers are wired. Their CAPABILITY GUARDS stay `if constexpr` PER MODEL below,
+  // with dedicated "requires ..." messages and no numerical fallback.
   validate_riemann(riem, /*polar=*/true, "System (polar)");
   validate_limiter(lim, "System (polar)");
-  // Parse the validated tag ONCE (ADC-641): only rusanov / hll are wired in polar, so the switch has two
-  // arms plus a default. The default keeps the "valid tag, not wired in polar" path for HLLC/Roe,
-  // already rejected by validate_riemann(polar=true), and suppresses -Wswitch on the partial switch.
+  // Parse the validated tag ONCE (ADC-641). Every public provider has one capability-gated leaf.
   switch (parse_riemann_route(riem, "System (polar)")) {
     case RiemannRouteId::kRusanov:
       return dispatch_limiter(
           parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
             using L = typename decltype(tag)::type;
-            return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+            return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, pos_floor);
           });
     case RiemannRouteId::kHll:
       // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is
@@ -308,7 +381,7 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
         return dispatch_limiter(
             parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
               using L = typename decltype(tag)::type;
-              return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+              return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, pos_floor);
             });
       } else {
         throw std::runtime_error(
@@ -316,6 +389,30 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
             "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal "
             "fluid "
             "(transport='isothermal') declares them and accepts 'hll'.");
+      }
+    case RiemannRouteId::kHllc:
+      if constexpr (HasHLLCStructure<Model>) {
+        return dispatch_limiter(
+            parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+              using L = typename decltype(tag)::type;
+              return build_block_polar<L, HLLCFlux>(m, ctx, recon_prim, pos_floor);
+            });
+      } else {
+        throw std::runtime_error(
+            "System (polar): flux 'hllc' requires the model's exact HasHLLCStructure "
+            "capability (pressure + wave_speeds + contact_speed + hllc_star_state); no fallback");
+      }
+    case RiemannRouteId::kRoe:
+      if constexpr (HasRoeDissipation<Model>) {
+        return dispatch_limiter(
+            parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+              using L = typename decltype(tag)::type;
+              return build_block_polar<L, RoeFlux>(m, ctx, recon_prim, pos_floor);
+            });
+      } else {
+        throw std::runtime_error(
+            "System (polar): flux 'roe' requires the model's exact HasRoeDissipation capability "
+            "(roe_dissipation); no fallback");
       }
     default:
       throw_registry_dispatch_mismatch("System (polar)", "Riemann flux", riem);

@@ -9,6 +9,7 @@ PoPS imports Catalyst and Conduit only when a live session opens.  :class:`Catal
 shipped optional Python backend by default, while extensions and tests can inject another provider
 with the same four-method session protocol.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -22,7 +23,11 @@ from pops.descriptors import Descriptor
 from pops.identity import Identity, canonical_bytes, make_identity
 from pops.model import Handle
 from pops.output.data import (
-    ArrayPiece, FieldPayload, LevelGeometry, OutputRequest, OutputSnapshot,
+    ArrayPiece,
+    FieldPayload,
+    LevelGeometry,
+    OutputRequest,
+    OutputSnapshot,
 )
 from pops.time import Schedule
 
@@ -69,19 +74,24 @@ def _collective_semantic_data(value: Any, *, where: str) -> list[Any]:
     if isinstance(value, bytes):
         return ["bytes", value.hex()]
     if isinstance(value, (list, tuple)):
-        return ["list", [
-            _collective_semantic_data(item, where="%s[%d]" % (where, index))
-            for index, item in enumerate(value)
-        ]]
+        return [
+            "list",
+            [
+                _collective_semantic_data(item, where="%s[%d]" % (where, index))
+                for index, item in enumerate(value)
+            ],
+        ]
     if isinstance(value, Mapping):
         rows = []
         for key in sorted(value):
             if not isinstance(key, str) or not key:
                 raise TypeError("%s requires non-empty string keys" % where)
-            rows.append([
-                key,
-                _collective_semantic_data(value[key], where="%s.%s" % (where, key)),
-            ])
+            rows.append(
+                [
+                    key,
+                    _collective_semantic_data(value[key], where="%s.%s" % (where, key)),
+                ]
+            )
         return ["map", rows]
     raise TypeError("%s contains unsupported %s" % (where, type(value).__name__))
 
@@ -117,15 +127,18 @@ def _semantic_data_from_collective(node: Any, *, where: str) -> Any:
         result = {}
         previous = None
         for index, row in enumerate(node[1]):
-            if not isinstance(row, list) or len(row) != 2 \
-                    or not isinstance(row[0], str) or not row[0]:
+            if (
+                not isinstance(row, list)
+                or len(row) != 2
+                or not isinstance(row[0], str)
+                or not row[0]
+            ):
                 raise TypeError("%s map row %d is invalid" % (where, index))
             key = row[0]
             if previous is not None and key <= previous:
                 raise ValueError("%s map keys are not canonical" % where)
             previous = key
-            result[key] = _semantic_data_from_collective(
-                row[1], where="%s.%s" % (where, key))
+            result[key] = _semantic_data_from_collective(row[1], where="%s.%s" % (where, key))
         return result
     raise ValueError("%s has an unsupported collective semantic tag" % where)
 
@@ -145,11 +158,11 @@ class ObserverRun:
         metadata = _canonical_mapping(dict(self.metadata), "ObserverRun.metadata")
         recovery = tuple(self.recovery_run_identities)
         if any(type(item) is not Identity or item.domain != "run" for item in recovery):
-            raise TypeError(
-                "ObserverRun.recovery_run_identities must contain exact run Identities")
+            raise TypeError("ObserverRun.recovery_run_identities must contain exact run Identities")
         if self.run_identity in recovery or len(set(recovery)) != len(recovery):
             raise ValueError(
-                "ObserverRun recovery identities must be unique and exclude the active run")
+                "ObserverRun recovery identities must be unique and exclude the active run"
+            )
         recovery = tuple(sorted(recovery, key=lambda item: item.token))
         object.__setattr__(self, "metadata", metadata)
         object.__setattr__(self, "recovery_run_identities", recovery)
@@ -165,9 +178,7 @@ class ObserverRun:
         return {
             "run_identity": self.run_identity.to_data(),
             "metadata": thaw_data(self.metadata),
-            "recovery_run_identities": [
-                item.to_data() for item in self.recovery_run_identities
-            ],
+            "recovery_run_identities": [item.to_data() for item in self.recovery_run_identities],
         }
 
 
@@ -192,8 +203,11 @@ class ObserverFrame:
         # OutputSnapshot/ArrayPiece own read-only copies of field data.  Hashing the canonical
         # projection both authenticates the callback and makes accidental frame substitution
         # visible to the completion receipt.
-        object.__setattr__(self, "identity", make_identity(
-            "post-commit-observer-frame", self.snapshot.to_data(self.request)))
+        object.__setattr__(
+            self,
+            "identity",
+            make_identity("post-commit-observer-frame", self.snapshot.to_data(self.request)),
+        )
 
     @property
     def physical_time(self) -> float:
@@ -209,39 +223,47 @@ def detach_observer_frame(frame: ObserverFrame) -> ObserverFrame:
 
     if type(frame) is not ObserverFrame:
         raise TypeError("detach_observer_frame requires an exact ObserverFrame")
-    geometries = tuple(LevelGeometry(
-        geometry.layout_identity,
-        geometry.layout_kind,
-        geometry.level,
-        geometry.origin,
-        geometry.spacing,
-        geometry.cell_shape,
-        geometry.boxes,
-        geometry.coverage,
-        geometry.cell_volumes,
-        coordinate_system=geometry.coordinate_system,
-        cell_measure=geometry.cell_measure,
-        axis_names=geometry.axis_names,
-    ) for geometry in frame.snapshot.geometries)
+    geometries = tuple(
+        LevelGeometry(
+            geometry.layout_identity,
+            geometry.layout_kind,
+            geometry.level,
+            geometry.origin,
+            geometry.spacing,
+            geometry.cell_shape,
+            geometry.boxes,
+            geometry.coverage,
+            geometry.cell_volumes,
+            coordinate_system=geometry.coordinate_system,
+            cell_measure=geometry.cell_measure,
+            axis_names=geometry.axis_names,
+        )
+        for geometry in frame.snapshot.geometries
+    )
     fields = []
     for field_value in frame.snapshot.fields:
-        pieces = tuple(ArrayPiece(
-            piece.lower,
-            piece.upper,
-            piece.values,
-            piece.global_box_index,
-            piece.owner_rank,
-            piece.replicated,
-        ) for piece in field_value.pieces)
-        fields.append(FieldPayload(
-            field_value.key,
-            field_value.centering,
-            field_value.units,
-            field_value.component_names,
-            field_value.global_shape,
-            pieces,
-            dtype=field_value.array_dtype,
-        ))
+        pieces = tuple(
+            ArrayPiece(
+                piece.lower,
+                piece.upper,
+                piece.values,
+                piece.global_box_index,
+                piece.owner_rank,
+                piece.replicated,
+            )
+            for piece in field_value.pieces
+        )
+        fields.append(
+            FieldPayload(
+                field_value.key,
+                field_value.centering,
+                field_value.units,
+                field_value.component_names,
+                field_value.global_shape,
+                pieces,
+                dtype=field_value.array_dtype,
+            )
+        )
     snapshot = OutputSnapshot(
         frame.snapshot.clock,
         frame.snapshot.provenance,
@@ -266,13 +288,17 @@ class ObserverReceipt:
     detail: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if type(self.frame_identity) is not Identity \
-                or self.frame_identity.domain != "post-commit-observer-frame":
+        if (
+            type(self.frame_identity) is not Identity
+            or self.frame_identity.domain != "post-commit-observer-frame"
+        ):
             raise TypeError("ObserverReceipt.frame_identity has the wrong identity domain")
-        object.__setattr__(self, "provider_id", _text(
-            self.provider_id, "ObserverReceipt.provider_id"))
-        object.__setattr__(self, "detail", _canonical_mapping(
-            dict(self.detail), "ObserverReceipt.detail"))
+        object.__setattr__(
+            self, "provider_id", _text(self.provider_id, "ObserverReceipt.provider_id")
+        )
+        object.__setattr__(
+            self, "detail", _canonical_mapping(dict(self.detail), "ObserverReceipt.detail")
+        )
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -288,13 +314,17 @@ class ObserverReceipt:
             "frame_identity": self.frame_identity.token,
             "provider_id": self.provider_id,
             "detail": _collective_semantic_data(
-                thaw_data(self.detail), where="ObserverReceipt.detail"),
+                thaw_data(self.detail), where="ObserverReceipt.detail"
+            ),
         }
 
     @classmethod
     def from_data(cls, data: Any) -> ObserverReceipt:
         if not isinstance(data, Mapping) or set(data) != {
-                "frame_identity", "provider_id", "detail"}:
+            "frame_identity",
+            "provider_id",
+            "detail",
+        }:
             raise TypeError("ObserverReceipt data has an unsupported schema")
         result = cls(
             Identity.from_data(data["frame_identity"]),
@@ -308,17 +338,28 @@ class ObserverReceipt:
     @classmethod
     def from_collective_data(cls, data: Any) -> ObserverReceipt:
         if not isinstance(data, Mapping) or set(data) != {
-                "frame_identity", "provider_id", "detail"}:
+            "frame_identity",
+            "provider_id",
+            "detail",
+        }:
             raise TypeError("ObserverReceipt collective data has an unsupported schema")
         result = cls(
             Identity.from_token(data["frame_identity"]),
             data["provider_id"],
-            _semantic_data_from_collective(
-                data["detail"], where="ObserverReceipt.detail"),
+            _semantic_data_from_collective(data["detail"], where="ObserverReceipt.detail"),
         )
         if result.to_collective_data() != dict(data):
             raise ValueError("ObserverReceipt collective data is not canonical")
         return result
+
+
+class ObserverWorkerCollectiveLost(RuntimeError):
+    """Signal that an observer provider lost rank-complete proof on its worker lane.
+
+    A session raises this only after transport failure or malformed evidence from one of its own
+    collectives.  The owning runtime must seal the lane immediately; attempting another agreement
+    on the same communicator is unsafe.
+    """
 
 
 class ObserverSession(Protocol):
@@ -347,13 +388,21 @@ class ObserverProvider(Protocol):
     def consumer_data(self) -> dict[str, Any]: ...
 
     def open_session(
-        self, configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> ObserverSession: ...
 
 
-_SESSION_AUTHORITY_KEYS = frozenset({
-    "schema_version", "provider_id", "delivery", "threading", "worker_mpi",
-})
+_SESSION_AUTHORITY_KEYS = frozenset(
+    {
+        "schema_version",
+        "provider_id",
+        "delivery",
+        "threading",
+        "worker_mpi",
+    }
+)
 
 
 def authenticate_observer_session(session: Any) -> dict[str, Any]:
@@ -372,12 +421,12 @@ def authenticate_observer_session(session: Any) -> dict[str, Any]:
         raise ValueError("observer session must declare irreversible post_commit delivery")
     if first["threading"] not in {"dedicated_serial", "dedicated_collective"}:
         raise ValueError(
-            "observer session threading must be dedicated_serial or dedicated_collective")
+            "observer session threading must be dedicated_serial or dedicated_collective"
+        )
     if type(first["worker_mpi"]) is not bool:
         raise TypeError("observer session worker_mpi must be an exact bool")
     if first["worker_mpi"] != (first["threading"] == "dedicated_collective"):
-        raise ValueError(
-            "observer session worker_mpi and threading authority disagree")
+        raise ValueError("observer session worker_mpi and threading authority disagree")
     canonical_bytes(first)
     return dict(first)
 
@@ -393,8 +442,13 @@ class Catalyst:
 
     __pops_ir_immutable__ = True
     __slots__ = (
-        "_provider", "_provider_data", "pipeline", "pipeline_sha256", "implementation",
-        "search_paths", "args",
+        "_provider",
+        "_provider_data",
+        "pipeline",
+        "pipeline_sha256",
+        "implementation",
+        "search_paths",
+        "args",
     )
 
     def __init__(
@@ -416,8 +470,7 @@ class Catalyst:
         data_method = getattr(provider, "consumer_data", None)
         open_method = getattr(provider, "open_session", None)
         if not callable(data_method) or not callable(open_method):
-            raise TypeError(
-                "Catalyst provider must implement consumer_data() and open_session()")
+            raise TypeError("Catalyst provider must implement consumer_data() and open_session()")
         first, second = data_method(), data_method()
         if type(first) is not dict or type(second) is not dict or first != second:
             raise TypeError("Catalyst provider consumer_data() must be deterministic")
@@ -426,16 +479,17 @@ class Catalyst:
         _text(first.get("provider_id"), "Catalyst provider_id")
         canonical_bytes(first)
         object.__setattr__(self, "_provider", provider)
-        object.__setattr__(self, "_provider_data", _canonical_mapping(
-            first, "Catalyst provider data"))
+        object.__setattr__(
+            self, "_provider_data", _canonical_mapping(first, "Catalyst provider data")
+        )
         pipeline_path = Path(_text(pipeline, "Catalyst.pipeline")).expanduser().resolve()
         if not pipeline_path.is_file():
             raise FileNotFoundError("Catalyst pipeline does not exist: %s" % pipeline_path)
         object.__setattr__(self, "pipeline", pipeline_path.as_posix())
-        object.__setattr__(self, "pipeline_sha256", hashlib.sha256(
-            pipeline_path.read_bytes()).hexdigest())
-        object.__setattr__(self, "implementation", _text(
-            implementation, "Catalyst.implementation"))
+        object.__setattr__(
+            self, "pipeline_sha256", hashlib.sha256(pipeline_path.read_bytes()).hexdigest()
+        )
+        object.__setattr__(self, "implementation", _text(implementation, "Catalyst.implementation"))
         paths = tuple(search_paths)
         if any(not isinstance(value, str) for value in paths):
             raise TypeError("Catalyst.search_paths must contain path strings")
@@ -444,12 +498,12 @@ class Catalyst:
             for value in paths
         )
         if any(not value.is_dir() for value in resolved_paths):
-            raise NotADirectoryError(
-                "Catalyst.search_paths must contain existing directories")
+            raise NotADirectoryError("Catalyst.search_paths must contain existing directories")
         if len(set(resolved_paths)) != len(resolved_paths):
             raise ValueError("Catalyst.search_paths must be unique")
-        object.__setattr__(self, "search_paths", tuple(
-            value.as_posix() for value in resolved_paths))
+        object.__setattr__(
+            self, "search_paths", tuple(value.as_posix() for value in resolved_paths)
+        )
         script_args = tuple(args)
         if any(not isinstance(value, str) for value in script_args):
             raise TypeError("Catalyst.args must contain strings")
@@ -477,7 +531,9 @@ class Catalyst:
         return self._open_session(self.consumer_data(), execution_context)
 
     def open_runtime_session(
-        self, runtime_configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        runtime_configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> ObserverSession:
         if not isinstance(runtime_configuration, Mapping):
             raise TypeError("Catalyst runtime configuration must be a mapping")
@@ -491,7 +547,9 @@ class Catalyst:
         return self._open_session(configuration, execution_context)
 
     def _open_session(
-        self, configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> ObserverSession:
         current = self._provider.consumer_data()
         if type(current) is not dict or current != thaw_data(self._provider_data):
@@ -555,8 +613,7 @@ class _LiveObserverOperation:
         from ._durable_journal import DurableJournal
 
         if self.durability is not None and type(self.durability) is not DurableJournal:
-            raise TypeError(
-                "live observer durability must be an exact DurableJournal or None")
+            raise TypeError("live observer durability must be an exact DurableJournal or None")
         first, second = self.observer.consumer_data(), self.observer.consumer_data()
         if type(first) is not dict or type(second) is not dict or first != second:
             raise TypeError("live observer consumer_data() must return one deterministic dict")
@@ -565,30 +622,36 @@ class _LiveObserverOperation:
         if observer_kind == "catalyst":
             if self.parallel_mode not in (ParallelMode.SERIAL, ParallelMode.COLLECTIVE):
                 raise ValueError(
-                    "Catalyst live visualization supports only SERIAL or COLLECTIVE mode")
-        elif observer_kind != "async_scientific_output" \
-                and self.parallel_mode is not ParallelMode.SERIAL:
-            raise ValueError(
-                "this live observer supports only ParallelMode.SERIAL")
+                    "Catalyst live visualization supports only SERIAL or COLLECTIVE mode"
+                )
+        elif (
+            observer_kind != "async_scientific_output"
+            and self.parallel_mode is not ParallelMode.SERIAL
+        ):
+            raise ValueError("this live observer supports only ParallelMode.SERIAL")
         expected_provider = first.get("provider_id")
         if first.get("observer_kind") == "catalyst":
             provider = first.get("provider")
             if not isinstance(provider, Mapping):
                 raise TypeError(
-                    "Catalyst observer data must carry its authenticated provider mapping")
+                    "Catalyst observer data must carry its authenticated provider mapping"
+                )
             expected_provider = provider.get("provider_id")
-        expected_provider = _text(
-            expected_provider, "live observer session provider_id")
-        object.__setattr__(self, "_observer_data", _canonical_mapping(
-            first, "live observer consumer_data"))
+        expected_provider = _text(expected_provider, "live observer session provider_id")
+        object.__setattr__(
+            self, "_observer_data", _canonical_mapping(first, "live observer consumer_data")
+        )
         object.__setattr__(self, "_session_provider_id", expected_provider)
 
     def _authenticate_observer(self) -> None:
         first, second = self.observer.consumer_data(), self.observer.consumer_data()
-        if type(first) is not dict or type(second) is not dict or first != second \
-                or first != thaw_data(self._observer_data):
-            raise RuntimeError(
-                "live observer changed after its declaration was authenticated")
+        if (
+            type(first) is not dict
+            or type(second) is not dict
+            or first != second
+            or first != thaw_data(self._observer_data)
+        ):
+            raise RuntimeError("live observer changed after its declaration was authenticated")
 
     def consumer_data(self) -> dict[str, Any]:
         return {
@@ -598,8 +661,7 @@ class _LiveObserverOperation:
             "queue_capacity": self.queue_capacity,
             "max_attempts": self.max_attempts,
             "on_failure": self.on_failure.to_data(),
-            "durability": (
-                None if self.durability is None else self.durability.to_data()),
+            "durability": (None if self.durability is None else self.durability.to_data()),
             "observer": thaw_data(self._observer_data),
         }
 
@@ -608,8 +670,7 @@ class _LiveObserverOperation:
         if authority["provider_id"] != self._session_provider_id:
             raise ValueError(
                 "live observer session provider_id differs from its authenticated manifest: "
-                "%r != %r"
-                % (authority["provider_id"], self._session_provider_id)
+                "%r != %r" % (authority["provider_id"], self._session_provider_id)
             )
         return cast(ObserverSession, session)
 
@@ -619,13 +680,16 @@ class _LiveObserverOperation:
         return self._authenticate_session(session)
 
     def open_runtime_session(
-        self, runtime_configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        runtime_configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> ObserverSession:
         self._authenticate_observer()
         provider = getattr(self.observer, "open_runtime_session", None)
         session = (
             provider(runtime_configuration, execution_context)
-            if callable(provider) else self.observer.open_session(execution_context)
+            if callable(provider)
+            else self.observer.open_session(execution_context)
         )
         return self._authenticate_session(session)
 
@@ -655,15 +719,18 @@ class _AsyncScientificWriterObserver:
     def __init__(self, format_provider: Any) -> None:
         from .provider import consumer_format_data
 
-        data = consumer_format_data(
-            format_provider, where="AsyncScientificOutput.format")
+        data = consumer_format_data(format_provider, where="AsyncScientificOutput.format")
         if data["provider_id"] == "pops.output.external-writer.v1":
             raise ValueError(
                 "AsyncScientificOutput does not accept ExternalWriter: installed native Writers "
-                "have no dedicated post-commit worker session route")
+                "have no dedicated post-commit worker session route"
+            )
         object.__setattr__(self, "_format", format_provider)
-        object.__setattr__(self, "_format_data", _canonical_mapping(
-            data, "AsyncScientificOutput.format.consumer_data"))
+        object.__setattr__(
+            self,
+            "_format_data",
+            _canonical_mapping(data, "AsyncScientificOutput.format.consumer_data"),
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
         del name, value
@@ -680,11 +747,11 @@ class _AsyncScientificWriterObserver:
     def _authenticate_format(self) -> None:
         from .provider import consumer_format_data
 
-        current = consumer_format_data(
-            self._format, where="AsyncScientificOutput.format")
+        current = consumer_format_data(self._format, where="AsyncScientificOutput.format")
         if current != thaw_data(self._format_data):
             raise RuntimeError(
-                "AsyncScientificOutput format changed after its declaration was authenticated")
+                "AsyncScientificOutput format changed after its declaration was authenticated"
+            )
 
     def preflight(self, execution_context: Any) -> dict[str, Any]:
         self._authenticate_format()
@@ -692,7 +759,8 @@ class _AsyncScientificWriterObserver:
         callback = getattr(writer, "preflight", None)
         if not callable(callback) or not callable(getattr(writer, "prepare_session", None)):
             raise TypeError(
-                "AsyncScientificOutput writer must implement preflight() and prepare_session()")
+                "AsyncScientificOutput writer must implement preflight() and prepare_session()"
+            )
         result = callback(execution_context)
         if type(result) is not dict:
             raise TypeError("AsyncScientificOutput writer preflight() must return an exact dict")
@@ -706,7 +774,9 @@ class _AsyncScientificWriterObserver:
         return None
 
     def open_runtime_session(
-        self, configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> ObserverSession:
         self._authenticate_format()
         return _AsyncScientificWriterSession(
@@ -718,8 +788,7 @@ class _AsyncScientificWriterObserver:
 
     def open_session(self, execution_context: Any) -> ObserverSession:
         del execution_context
-        raise RuntimeError(
-            "AsyncScientificOutput requires its run-time target configuration")
+        raise RuntimeError("AsyncScientificOutput requires its run-time target configuration")
 
 
 class _AsyncScientificWriterSession:
@@ -734,8 +803,11 @@ class _AsyncScientificWriterSession:
     ) -> None:
         expected = {"target_uri", "output_root", "consumer_id"}
         allowed = expected | {"worker_communicator"}
-        if not isinstance(configuration, Mapping) or not expected.issubset(configuration) \
-                or not set(configuration).issubset(allowed):
+        if (
+            not isinstance(configuration, Mapping)
+            or not expected.issubset(configuration)
+            or not set(configuration).issubset(allowed)
+        ):
             raise TypeError("async scientific writer runtime configuration is not exact")
         target_uri = _text(configuration["target_uri"], "async output target_uri")
         output_root = configuration["output_root"]
@@ -745,8 +817,7 @@ class _AsyncScientificWriterSession:
         self._format_data = dict(format_data)
         self._target_uri = target_uri
         self._output_root = output_root
-        self._consumer_id = _text(
-            configuration["consumer_id"], "async output consumer_id")
+        self._consumer_id = _text(configuration["consumer_id"], "async output consumer_id")
         self._communicator = configuration.get("worker_communicator")
         self._execution_context = execution_context
         self._initialized = False
@@ -793,36 +864,47 @@ class _AsyncScientificWriterSession:
         )
 
     def _phase_evidence(
-        self, phase: str, error: BaseException | None, state: str,
+        self,
+        phase: str,
+        error: BaseException | None,
+        state: str,
     ) -> tuple[BaseException | None, tuple[str, ...]]:
         rendered = None if error is None else "%s: %s" % (type(error).__name__, error)
         if self._communicator is None:
             return error, (state,)
         from pops._native_collectives import allgather_value, rank, size
 
-        rows = allgather_value(self._communicator, {
-            "rank": rank(self._communicator),
-            "error": rendered,
-            "state": state,
-        })
+        rows = allgather_value(
+            self._communicator,
+            {
+                "rank": rank(self._communicator),
+                "error": rendered,
+                "state": state,
+            },
+        )
         if len(rows) != size(self._communicator) or any(
-                not isinstance(row, dict)
-                or set(row) != {"rank", "error", "state"}
-                or row["rank"] != owner
-                or (row["error"] is not None and not isinstance(row["error"], str))
-                or not isinstance(row["state"], str)
-                for owner, row in enumerate(rows)):
+            not isinstance(row, dict)
+            or set(row) != {"rank", "error", "state"}
+            or row["rank"] != owner
+            or (row["error"] is not None and not isinstance(row["error"], str))
+            or not isinstance(row["state"], str)
+            for owner, row in enumerate(rows)
+        ):
             return RuntimeError(
-                "async scientific writer %s returned malformed rank evidence" % phase), ()
+                "async scientific writer %s returned malformed rank evidence" % phase
+            ), ()
         failures = [
             "rank %d: %s" % (owner, row["error"])
-            for owner, row in enumerate(rows) if row["error"] is not None
+            for owner, row in enumerate(rows)
+            if row["error"] is not None
         ]
         states = tuple(row["state"] for row in rows)
         return (
-            None if not failures else RuntimeError(
-                "async scientific writer %s failed collectively: %s"
-                % (phase, "; ".join(failures))),
+            None
+            if not failures
+            else RuntimeError(
+                "async scientific writer %s failed collectively: %s" % (phase, "; ".join(failures))
+            ),
             states,
         )
 
@@ -837,13 +919,13 @@ class _AsyncScientificWriterSession:
             raise TypeError("async scientific writer requires an exact ObserverFrame")
         if frame.snapshot.provenance.run_identity not in self._accepted_run_identities:
             raise ValueError(
-                "async scientific output frame is outside the active/recovery run authority")
+                "async scientific output frame is outside the active/recovery run authority"
+            )
         mode = ParallelMode(self._format_data["parallel_mode"])
         if frame.request.parallel_mode is not mode:
             raise ValueError("async scientific output frame mode differs from its format")
         if mode is ParallelMode.SERIAL:
-            if (frame.request.rank, frame.request.size) != (0, 1) \
-                    or self._communicator is not None:
+            if (frame.request.rank, frame.request.size) != (0, 1) or self._communicator is not None:
                 raise ValueError("SERIAL async scientific output has invalid topology")
         elif mode is ParallelMode.ROOT:
             if frame.request.rank != 0 or self._communicator is not None:
@@ -851,13 +933,15 @@ class _AsyncScientificWriterSession:
         else:
             from pops._native_collectives import rank, size
 
-            if self._communicator is None \
-                    or frame.request.rank != rank(self._communicator) \
-                    or frame.request.size != size(self._communicator):
+            if (
+                self._communicator is None
+                or frame.request.rank != rank(self._communicator)
+                or frame.request.size != size(self._communicator)
+            ):
                 raise ValueError(
-                    "distributed async scientific output requires its exact worker MPI lane")
-        current = consumer_format_data(
-            self._format, where="AsyncScientificOutput.format")
+                    "distributed async scientific output requires its exact worker MPI lane"
+                )
+        current = consumer_format_data(self._format, where="AsyncScientificOutput.format")
         if current != self._format_data:
             raise RuntimeError("async scientific output format changed during the run")
         writer = self._format.writer()
@@ -866,7 +950,8 @@ class _AsyncScientificWriterSession:
             raise TypeError("async scientific writer preflight contract changed during the run")
         target = self._target(frame)
         session = writer.prepare_session(
-            frame.snapshot, frame.request, target, communicator=self._communicator)
+            frame.snapshot, frame.request, target, communicator=self._communicator
+        )
         authority = authenticate_writer_session(session)
         writer_format = getattr(writer, "format", None)
         if not isinstance(writer_format, str) or not writer_format:
@@ -886,8 +971,8 @@ class _AsyncScientificWriterSession:
         }
         if mismatches:
             raise ValueError(
-                "async writer session authority differs from its exact request: %r"
-                % mismatches)
+                "async writer session authority differs from its exact request: %r" % mismatches
+            )
         return mode, target, session
 
     def execute(self, frame: ObserverFrame) -> ObserverReceipt:
@@ -902,12 +987,10 @@ class _AsyncScientificWriterSession:
             mode, target, session = self._prepare_output_session(frame)
         except BaseException as error:
             preparation_error = error
-        target_state = (
-            "missing" if target is None
-            else target.expanduser().resolve().as_posix()
-        )
+        target_state = "missing" if target is None else target.expanduser().resolve().as_posix()
         failure, states = self._phase_evidence(
-            "session preparation", preparation_error,
+            "session preparation",
+            preparation_error,
             target_state,
         )
         if failure is not None:
@@ -915,15 +998,16 @@ class _AsyncScientificWriterSession:
         if session is None or target is None:
             raise RuntimeError("async writer preparation lost its local session authority")
         if mode is ParallelMode.COLLECTIVE and len(set(states)) != 1:
-            mismatch = RuntimeError(
-                "COLLECTIVE async writer ranks resolved different target paths")
+            mismatch = RuntimeError("COLLECTIVE async writer ranks resolved different target paths")
             try:
                 if session.abort_prepare() is not None:
                     raise TypeError("scientific writer abort_prepare() must return None")
             except BaseException as cleanup_error:
-                _add_exception_note(mismatch,
+                _add_exception_note(
+                    mismatch,
                     "async writer target-mismatch cleanup also failed: %s: %s"
-                    % (type(cleanup_error).__name__, cleanup_error))
+                    % (type(cleanup_error).__name__, cleanup_error),
+                )
             raise mismatch
 
         staged = False
@@ -936,7 +1020,8 @@ class _AsyncScientificWriterSession:
         except BaseException as error:
             stage_error = error
         failure, states = self._phase_evidence(
-            "stage", stage_error, "staged" if staged else "unstaged")
+            "stage", stage_error, "staged" if staged else "unstaged"
+        )
         if failure is not None:
             cleanup_error = None
             # A split stage state means the backend violated its collective contract.  Entering
@@ -950,11 +1035,14 @@ class _AsyncScientificWriterSession:
                     cleanup_error = error
             else:
                 cleanup_error = RuntimeError(
-                    "writer stage state differs across ranks; collective cleanup was not entered")
+                    "writer stage state differs across ranks; collective cleanup was not entered"
+                )
             if cleanup_error is not None:
-                _add_exception_note(failure,
+                _add_exception_note(
+                    failure,
                     "async scientific writer cleanup also failed: %s: %s"
-                    % (type(cleanup_error).__name__, cleanup_error))
+                    % (type(cleanup_error).__name__, cleanup_error),
+                )
             raise failure
 
         receipt = None
@@ -968,16 +1056,17 @@ class _AsyncScientificWriterSession:
             if receipt.selection_identity != frame.request.publication_identity:
                 raise ValueError("async writer receipt authenticates another selection")
             if receipt.format != self._format_data["format_name"]:
-                raise ValueError(
-                    "async writer receipt format differs from its canonical provider")
+                raise ValueError("async writer receipt format differs from its canonical provider")
             expected_parent = target.expanduser().resolve().parent
             if Path(receipt.path).expanduser().resolve().parent != expected_parent:
                 raise ValueError(
-                    "async writer primary receipt escaped its authenticated target directory")
+                    "async writer primary receipt escaped its authenticated target directory"
+                )
         except BaseException as error:
             publish_error = error
         failure, _states = self._phase_evidence(
-            "publish", publish_error, "published" if published else "unpublished")
+            "publish", publish_error, "published" if published else "unpublished"
+        )
         if failure is not None:
             cleanup_error = None
             try:
@@ -986,9 +1075,11 @@ class _AsyncScientificWriterSession:
             except BaseException as error:
                 cleanup_error = error
             if cleanup_error is not None:
-                _add_exception_note(failure,
+                _add_exception_note(
+                    failure,
                     "async scientific writer rollback also failed: %s: %s"
-                    % (type(cleanup_error).__name__, cleanup_error))
+                    % (type(cleanup_error).__name__, cleanup_error),
+                )
             raise failure
         if type(receipt) is not OutputPublicationReceipt:
             raise RuntimeError("async writer publication lost its authenticated receipt")
@@ -1001,13 +1092,17 @@ class _AsyncScientificWriterSession:
                 raise TypeError("scientific writer finalize() must return None")
         except BaseException as error:
             finalize_error = "%s: %s" % (type(error).__name__, error)
-        return ObserverReceipt(frame.identity, self.authority["provider_id"], {
-            "path": Path(receipt.path).resolve().as_posix(),
-            "format": receipt.format,
-            "output_identity": receipt.output_identity.token,
-            "selection_identity": receipt.selection_identity.token,
-            "writer_finalize_error": finalize_error,
-        })
+        return ObserverReceipt(
+            frame.identity,
+            self.authority["provider_id"],
+            {
+                "path": Path(receipt.path).resolve().as_posix(),
+                "format": receipt.format,
+                "output_identity": receipt.output_identity.token,
+                "selection_identity": receipt.selection_identity.token,
+                "writer_finalize_error": finalize_error,
+            },
+        )
 
     def finalize(self) -> None:
         if self._finalized:
@@ -1030,7 +1125,8 @@ def _relative_target(value: Any, *, where: str) -> str:
     if PurePosixPath(result).suffix:
         raise ValueError(
             "%s is a logical target and must not contain a file suffix; "
-            "the selected provider owns its extension" % where)
+            "the selected provider owns its extension" % where
+        )
     return result
 
 
@@ -1040,7 +1136,8 @@ class AsyncScientificOutput(Descriptor):
     SERIAL and gathered ROOT writers need no worker MPI.  PER_RANK and COLLECTIVE writers execute
     on one duplicated MPI lane per consumer, isolated from numerical collectives.  The default
     queue is process-lifetime only; a ``DurableJournal`` policy adds the explicit crash-replay
-    handoff.
+    handoff. Fields and diagnostic reductions share one exact schedule; diagnostics are reduced
+    before the immutable accepted snapshot is handed to the worker.
     """
 
     category = "async_scientific_output"
@@ -1050,7 +1147,8 @@ class AsyncScientificOutput(Descriptor):
         *,
         format: Any,
         schedule: Any,
-        fields: Any,
+        fields: Any = (),
+        diagnostics: Any = (),
         levels: Any = None,
         target: Any,
         queue_capacity: Any = 1,
@@ -1066,38 +1164,57 @@ class AsyncScientificOutput(Descriptor):
         if type(schedule) is not Schedule:
             raise TypeError("AsyncScientificOutput.schedule must be an exact pops.time.Schedule")
         field_rows = tuple(fields)
-        if not field_rows:
-            raise ValueError("AsyncScientificOutput requires at least one field")
         if any(not isinstance(reference, Handle) for reference in field_rows):
             raise TypeError("AsyncScientificOutput fields must contain declaration Handles")
         if any(reference.kind not in _LIVE_FIELD_KINDS for reference in field_rows):
             raise TypeError("AsyncScientificOutput fields accept only state, field, or aux Handles")
         if len(set(field_rows)) != len(field_rows):
             raise ValueError("AsyncScientificOutput fields must be unique")
+        diagnostic_rows = tuple(diagnostics)
+        for index, diagnostic in enumerate(diagnostic_rows):
+            where = "AsyncScientificOutput diagnostics[%d]" % index
+            for method in (
+                "declaration_references",
+                "resolve_references",
+                "consumer_data",
+                "freeze",
+            ):
+                if not callable(getattr(diagnostic, method, None)):
+                    raise TypeError("%s must implement %s()" % (where, method))
+            cadence = getattr(diagnostic, "cadence", None)
+            if cadence is not None and cadence != schedule:
+                raise ValueError(
+                    "a diagnostic embedded in AsyncScientificOutput must use the same schedule"
+                )
+        if not field_rows and not diagnostic_rows:
+            raise ValueError("AsyncScientificOutput requires at least one field or diagnostic")
         selected_levels = AllLevels() if levels is None else levels
         if not isinstance(selected_levels, LevelSelection):
             raise TypeError("AsyncScientificOutput levels must be a typed LevelSelection")
-        if isinstance(queue_capacity, bool) or type(queue_capacity) is not int \
-                or queue_capacity < 1:
+        if (
+            isinstance(queue_capacity, bool)
+            or type(queue_capacity) is not int
+            or queue_capacity < 1
+        ):
             raise ValueError("AsyncScientificOutput.queue_capacity must be an integer >= 1")
-        if isinstance(max_attempts, bool) or type(max_attempts) is not int \
-                or max_attempts < 1:
+        if isinstance(max_attempts, bool) or type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("AsyncScientificOutput.max_attempts must be an integer >= 1")
-        if selected_mode in (ParallelMode.PER_RANK, ParallelMode.COLLECTIVE) \
-                and max_attempts != 1:
+        if selected_mode in (ParallelMode.PER_RANK, ParallelMode.COLLECTIVE) and max_attempts != 1:
             raise ValueError(
                 "MPI async scientific output requires max_attempts=1; retrying an entered "
-                "collective publication is not safe")
+                "collective publication is not safe"
+            )
         selected_failure = RaiseOnFlush() if on_failure is None else on_failure
         if type(selected_failure) not in _LIVE_FAILURE_POLICIES:
             raise TypeError(
-                "AsyncScientificOutput.on_failure must be RaiseOnFlush() or ReportOnly()")
+                "AsyncScientificOutput.on_failure must be RaiseOnFlush() or ReportOnly()"
+            )
         if durability is not None and type(durability) is not DurableJournal:
-            raise TypeError(
-                "AsyncScientificOutput.durability must be DurableJournal() or None")
+            raise TypeError("AsyncScientificOutput.durability must be DurableJournal() or None")
         self.format = format
         self.schedule = schedule
         self.fields = field_rows
+        self.diagnostics = diagnostic_rows
         self.levels = selected_levels
         self.target = _relative_target(target, where="AsyncScientificOutput.target")
         self.queue_capacity = queue_capacity
@@ -1114,37 +1231,53 @@ class AsyncScientificOutput(Descriptor):
         )
 
     def declaration_references(self) -> tuple[Handle, ...]:
-        return self.fields
+        result = list(self.fields)
+        for index, diagnostic in enumerate(self.diagnostics):
+            references = diagnostic.declaration_references()
+            if not isinstance(references, tuple) or any(
+                not isinstance(reference, Handle) for reference in references
+            ):
+                raise TypeError(
+                    "AsyncScientificOutput diagnostics[%d].declaration_references() "
+                    "must return a tuple of Handles" % index
+                )
+            for reference in references:
+                if reference not in result:
+                    result.append(reference)
+        return tuple(result)
 
     def consumer_authoring(self) -> tuple[Any, ...]:
         from ._consumer_authoring import ConsumerAuthoringNode
         from ._consumer_contracts import ConsumerKind, FailRun
 
-        return (ConsumerAuthoringNode(
-            label="async-scientific-output-%s" % self.target.replace("/", "-"),
-            kind=ConsumerKind.MONITOR,
-            references=self.fields,
-            schedule=self.schedule,
-            target_uri=self.target,
-            output_format=None,
-            parallel_mode=self._operation.parallel_mode,
-            levels=self.levels,
-            operation=self._operation,
-            failure_action=FailRun(),
-        ),)
+        return (
+            ConsumerAuthoringNode(
+                label="async-scientific-output-%s" % self.target.replace("/", "-"),
+                kind=ConsumerKind.MONITOR,
+                references=self.fields,
+                schedule=self.schedule,
+                target_uri=self.target,
+                output_format=None,
+                parallel_mode=self._operation.parallel_mode,
+                levels=self.levels,
+                operation=self._operation,
+                diagnostics=self.diagnostics,
+                failure_action=FailRun(),
+            ),
+        )
 
     def options(self) -> dict[str, Any]:
         return {
             "format": self._operation.consumer_data()["observer"]["format"],
             "schedule": self.schedule.to_data(),
             "fields": [reference.inspect() for reference in self.fields],
+            "n_diagnostics": len(self.diagnostics),
             "levels": self.levels.to_data(),
             "target": self.target,
             "queue_capacity": self.queue_capacity,
             "max_attempts": self.max_attempts,
             "on_failure": self.on_failure.to_data(),
-            "durability": (
-                None if self.durability is None else self.durability.to_data()),
+            "durability": (None if self.durability is None else self.durability.to_data()),
         }
 
 
@@ -1176,10 +1309,12 @@ class LiveVisualization(Descriptor):
         from ._consumer_contracts import ParallelMode
         from ._durable_journal import DurableJournal
 
-        if not callable(getattr(observer, "consumer_data", None)) \
-                or not callable(getattr(observer, "open_session", None)):
+        if not callable(getattr(observer, "consumer_data", None)) or not callable(
+            getattr(observer, "open_session", None)
+        ):
             raise TypeError(
-                "LiveVisualization observer must implement consumer_data() and open_session()")
+                "LiveVisualization observer must implement consumer_data() and open_session()"
+            )
         first, second = observer.consumer_data(), observer.consumer_data()
         if type(first) is not dict or type(second) is not dict or first != second:
             raise TypeError("LiveVisualization observer data must be one deterministic dict")
@@ -1203,31 +1338,30 @@ class LiveVisualization(Descriptor):
             raise TypeError("LiveVisualization.mode must be an exact ParallelMode")
         observer_kind = first.get("observer_kind")
         if selected_mode in (ParallelMode.ROOT, ParallelMode.PER_RANK):
-            raise ValueError(
-                "LiveVisualization supports only SERIAL or COLLECTIVE mode")
+            raise ValueError("LiveVisualization supports only SERIAL or COLLECTIVE mode")
         if selected_mode is ParallelMode.COLLECTIVE and observer_kind != "catalyst":
-            raise ValueError(
-                "COLLECTIVE LiveVisualization requires the built-in Catalyst observer")
-        if isinstance(queue_capacity, bool) or type(queue_capacity) is not int \
-                or queue_capacity < 1:
+            raise ValueError("COLLECTIVE LiveVisualization requires the built-in Catalyst observer")
+        if (
+            isinstance(queue_capacity, bool)
+            or type(queue_capacity) is not int
+            or queue_capacity < 1
+        ):
             raise ValueError("LiveVisualization.queue_capacity must be an integer >= 1")
-        if isinstance(max_attempts, bool) or type(max_attempts) is not int \
-                or max_attempts < 1:
+        if isinstance(max_attempts, bool) or type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("LiveVisualization.max_attempts must be an integer >= 1")
         if selected_mode is ParallelMode.COLLECTIVE and max_attempts != 1:
             raise ValueError(
                 "MPI Catalyst live visualization requires max_attempts=1; retrying an "
-                "entered collective is not safe")
+                "entered collective is not safe"
+            )
         selected_failure = RaiseOnFlush() if on_failure is None else on_failure
         if type(selected_failure) not in _LIVE_FAILURE_POLICIES:
-            raise TypeError(
-                "LiveVisualization.on_failure must be RaiseOnFlush() or ReportOnly()")
+            raise TypeError("LiveVisualization.on_failure must be RaiseOnFlush() or ReportOnly()")
         if durability is not None and type(durability) is not DurableJournal:
-            raise TypeError(
-                "LiveVisualization.durability must be DurableJournal() or None")
+            raise TypeError("LiveVisualization.durability must be DurableJournal() or None")
         operation = _LiveObserverOperation(
-            observer, selected_mode, queue_capacity, max_attempts, selected_failure,
-            durability)
+            observer, selected_mode, queue_capacity, max_attempts, selected_failure, durability
+        )
         operation_data = operation.consumer_data()
         digest = make_identity("live-visualization-declaration", operation_data).hexdigest[:16]
         self.observer = observer
@@ -1249,18 +1383,20 @@ class LiveVisualization(Descriptor):
         from ._consumer_authoring import ConsumerAuthoringNode
         from ._consumer_contracts import ConsumerKind, FailRun
 
-        return (ConsumerAuthoringNode(
-            label="live-visualization-%s" % self._target.rsplit("/", 1)[-1],
-            kind=ConsumerKind.MONITOR,
-            references=self.fields,
-            schedule=self.schedule,
-            target_uri=self._target,
-            output_format=None,
-            parallel_mode=self.mode,
-            levels=self.levels,
-            operation=self._operation,
-            failure_action=FailRun(),
-        ),)
+        return (
+            ConsumerAuthoringNode(
+                label="live-visualization-%s" % self._target.rsplit("/", 1)[-1],
+                kind=ConsumerKind.MONITOR,
+                references=self.fields,
+                schedule=self.schedule,
+                target_uri=self._target,
+                output_format=None,
+                parallel_mode=self.mode,
+                levels=self.levels,
+                operation=self._operation,
+                failure_action=FailRun(),
+            ),
+        )
 
     def options(self) -> dict[str, Any]:
         return {
@@ -1272,13 +1408,23 @@ class LiveVisualization(Descriptor):
             "queue_capacity": self.queue_capacity,
             "max_attempts": self.max_attempts,
             "on_failure": self.on_failure.to_data(),
-            "durability": (
-                None if self.durability is None else self.durability.to_data()),
+            "durability": (None if self.durability is None else self.durability.to_data()),
         }
 
 
 __all__ = [
-    "AsyncScientificOutput", "Catalyst", "LiveFailurePolicy", "LiveVisualization", "ObserverFrame",
-    "ObserverProvider", "ObserverReceipt", "ObserverRun", "ObserverSession", "RaiseOnFlush",
-    "ReportOnly", "authenticate_observer_session", "detach_observer_frame",
+    "AsyncScientificOutput",
+    "Catalyst",
+    "LiveFailurePolicy",
+    "LiveVisualization",
+    "ObserverFrame",
+    "ObserverProvider",
+    "ObserverReceipt",
+    "ObserverRun",
+    "ObserverSession",
+    "ObserverWorkerCollectiveLost",
+    "RaiseOnFlush",
+    "ReportOnly",
+    "authenticate_observer_session",
+    "detach_observer_frame",
 ]

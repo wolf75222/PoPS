@@ -17,14 +17,7 @@ from pops.runtime._threading import has_kokkos
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
 _RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
-_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
-# Riemann fluxes wired on the polar geometry: rusanov (any model) + hll (isothermal fluid declares
-# wave_speeds). hllc/roe have no polar energy-flux brick (make_block_polar rejects them), so the
-# polar row is the catalog intersected with this allow-list -- a removed flux cannot leave a phantom
-# polar token, and an added flux is not silently advertised as polar-capable.
-_POLAR_RIEMANN = ("rusanov", "hll")
-
-
+_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5", "mc", "superbee")
 def _ordered(tokens: Any, order: Any) -> Any:
     """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
     present = set(tokens)
@@ -40,12 +33,14 @@ def _descriptor_tokens() -> Any:
     the internal descriptor catalog report walks (riemann / limiter / reconstruction /
     elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
     from the introspectable capability matrix. Only descriptors that declare themselves available
-    are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
-    ``_pops`` import, no numeric loop.
+    are reported; MC and Superbee are ordinary native limiter descriptors and therefore appear
+    through this same path without a doctor-specific allowlist. Pure: no ``_pops`` import, no
+    numeric loop.
     """
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.riemann import riemann
+    from pops.runtime._generated_component_routes import ROUTE_METADATA
     from pops.solvers.elliptic import FFT, GeometricMG
 
     def _available(namespace: Any) -> Any:
@@ -81,7 +76,10 @@ def _descriptor_tokens() -> Any:
 
     return {
         "riemann": riemann_tokens,
-        "riemann_polar": [t for t in riemann_tokens if t in _POLAR_RIEMANN],
+        "riemann_polar": [
+            token for token in riemann_tokens
+            if ROUTE_METADATA["riemann"].get(token, {}).get("polar_ok", False)
+        ],
         "dsl_limiters": dsl_limiters,
         "poisson": poisson,
     }
@@ -305,7 +303,8 @@ def capabilities() -> Any:
                 "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
                 "hllc": "model capability HasHLLCStructure required -- "
                 "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
-                "Euler, passive advected scalars) ; the native Euler brick provides it. "
+                "Euler, passive advected scalars) ; native Euler and isothermal bricks provide it, "
+                "including the annular polar isothermal route. "
                 "No component-count/layout inference and no fallback.",
                 "roe": "model capability HasRoeDissipation required "
                 "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
@@ -313,9 +312,9 @@ def capabilities() -> Any:
                 "c=sqrt(p/rho) Roe average, passive scalars on the entropy wave) ; (b) "
                 "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
                 "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
-                "exclusive (a single provider of the hook). has_roe covers both ; the native "
-                "Euler brick provides the hook. No component-count/layout inference and no "
-                "fallback.",
+                "exclusive (a single provider of the hook). has_roe covers both ; native Euler "
+                "and isothermal bricks provide the hook, including the annular polar route. "
+                "No component-count/layout inference and no fallback.",
             },
         },
         "time": {

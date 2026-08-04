@@ -167,50 +167,7 @@ class SystemProgramDriver {
   /// collapses the loop to one call with h == dt.
   void run_program_cadence(double dt) {
     Impl* P = owner_;
-    const double accepted_time = P->t;
-    const auto cadence =
-        P->program_.prepare_cadence_step(accepted_time, P->macro_step_, dt, "System");
-    if (P->macro_step_ == std::numeric_limits<int>::max())
-      throw std::overflow_error("System Program cadence macro-step counter overflow");
-    if (cadence.due) {
-      const int n = P->program_.substeps_;
-      P->program_.validate_cadence_partition(cadence, n, "System");
-      const int accepted_macro_step = P->macro_step_;
-      const int held_before_due = cadence.window_steps - 1;
-      if (accepted_macro_step < held_before_due)
-        throw std::logic_error("System Program cadence window starts before macro-step zero");
-      const int window_start_macro_step = accepted_macro_step - held_before_due;
-      try {
-        for (int sub = 0; sub < n; ++sub) {
-          const auto partition = P->program_.prepare_cadence_substep(cadence, sub, n, "System");
-          // Publish the exact accepted start of this Program substep. ProgramContext derives every
-          // stage/boundary physical coordinate from System::time(); leaving the facade at the outer
-          // macro-step start would stamp every substep with the same time and would start a stride
-          // catch-up window one held step too late.
-          P->t = partition.start;
-          // A due stride is one logical public window, irrespective of the number of internal
-          // substeps. Publish its accepted start tick for every Program invocation; schedules and
-          // contexts must not mistake internal calls for additional public macro-steps.
-          P->macro_step_ = window_start_macro_step;
-          // Record the dt handed to the program BEFORE the call so the runtime's store_history can tag
-          // the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by step() and
-          // step_cfl() (both route here), so no call site is missed. A plain data assignment.
-          P->program_.last_dt_ = static_cast<Real>(partition.dt);
-          P->program_.step_(partition.dt);
-          P->t = partition.end;
-        }
-      } catch (...) {
-        P->t = accepted_time;
-        P->macro_step_ = accepted_macro_step;
-        throw;
-      }
-      P->macro_step_ = accepted_macro_step;
-    }
-    P->program_.commit_cadence_step(cadence, "System");
-    // Use the endpoint prepared once from the accepted facade cursor. Recomputing either
-    // accepted_time + dt or window_start + effective_dt here would reintroduce a second authority.
-    P->t = cadence.window_end;  // clock ticks EVERY macro-step (held steps included), like native
-    P->macro_step_++;
+    P->program_.dispatch_cadence_step(P->t, P->macro_step_, dt, "System");
   }
 
   /// One macro-step of length @p dt through the installed whole-system Program.

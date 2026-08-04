@@ -28,22 +28,24 @@ struct ExBVelocity {
   static constexpr int n_vars = 1;
   using State = StateVec<1>;
   Real B0 = 1;
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
     StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
+    f[0] = u[0] * velocity(providers, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
   /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
     StateVec<1> e{};
-    e[0] = velocity(a, dir);
+    e[0] = velocity(providers, dir);
     return e;
   }
   // Scalar: primitive variables = conservative (transported density).
@@ -83,22 +85,24 @@ struct ExBVelocityPolar {
   using State = StateVec<1>;
   Real B0 = 1;
   /// PHYSICAL component of the drift velocity in direction index dir (0 = r, 1 = theta).
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
     StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
+    f[0] = u[0] * velocity(providers, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
   /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
     StateVec<1> e{};
-    e[0] = velocity(a, dir);
+    e[0] = velocity(providers, dir);
     return e;
   }
   // Scalar: primitive variables = conservative (transported density).
@@ -141,7 +145,7 @@ struct IsothermalFlux {
   POPS_HD Real velocity_rho(Real rho) const {
     return (vacuum_floor > Real(0) && rho < vacuum_floor) ? vacuum_floor : rho;
   }
-  POPS_HD StateVec<3> flux(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD StateVec<3> flux(const StateVec<3>& u, const auto&, int dir) const {
     const Real rho = u[0];
     const Real vn = (dir == 0 ? u[1] : u[2]) / velocity_rho(rho);
     const Real p = cs2 * rho;
@@ -169,14 +173,14 @@ struct IsothermalFlux {
     u[2] = p[0] * p[2];
     return u;
   }
-  POPS_HD Real max_wave_speed(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const StateVec<3>& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real a = vn < 0 ? -vn : vn;
     return a + std::sqrt(cs2);
   }
   /// Full spectrum: (v_dir - c, v_dir, v_dir + c), c = sqrt(cs2).
-  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(cs2);
@@ -187,13 +191,100 @@ struct IsothermalFlux {
     return e;
   }
   /// Signed speeds (HLL/HLLC): v_dir -+ c_s.
-  POPS_HD void wave_speeds(const StateVec<3>& u, const Aux&, int dir, Real& smin,
+  POPS_HD void wave_speeds(const StateVec<3>& u, const auto&, int dir, Real& smin,
                            Real& smax) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(cs2);
     smin = vn - c;
     smax = vn + c;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // RIEMANN CAPABILITIES: the isothermal closure owns its contact construction and Roe action.
+  // HLLCFlux / RoeFlux remain layout-blind and consume these hooks through the same
+  // HasHLLCStructure / HasRoeDissipation contracts as every other physical provider.
+  // -------------------------------------------------------------------------------------------
+
+  /// Barotropic pressure p = c_s^2 rho used by the HLLC physical provider.
+  POPS_HD Real pressure(const State& u) const { return cs2 * u[0]; }
+
+  /// Contact-wave speed for the isothermal Euler closure.
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real lower, Real upper, int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    return (pressure_right - pressure_left +
+            density_left * velocity_left * (lower - velocity_left) -
+            density_right * velocity_right * (upper - velocity_right)) /
+           (density_left * (lower - velocity_left) -
+            density_right * (upper - velocity_right));
+  }
+
+  /// HLLC star state for a barotropic state (rho, rho u, rho v).
+  POPS_HD State hllc_star_state(const State& value, Real, Real speed, Real contact,
+                                int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const int tangent = dir == 0 ? 2 : 1;
+    const Real density = value[0];
+    const Real normal_velocity = value[normal] / velocity_rho(density);
+    const Real star_density = density * (speed - normal_velocity) / (speed - contact);
+    State result{};
+    result[0] = star_density;
+    result[normal] = star_density * contact;
+    result[tangent] = star_density * (value[tangent] / velocity_rho(density));
+    return result;
+  }
+
+  /// Roe action |A_roe| dU for the isothermal Euler closure.
+  POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const int tangent = dir == 0 ? 2 : 1;
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    const Real tangent_left = left[tangent] / velocity_rho(density_left);
+    const Real tangent_right = right[tangent] / velocity_rho(density_right);
+
+    const Real root_left = std::sqrt(density_left);
+    const Real root_right = std::sqrt(density_right);
+    const Real denominator = root_left + root_right;
+    const Real normal_velocity =
+        (root_left * velocity_left + root_right * velocity_right) / denominator;
+    const Real tangent_velocity =
+        (root_left * tangent_left + root_right * tangent_right) / denominator;
+    const Real roe_density = root_left * root_right;
+    const Real sound_speed = std::sqrt(cs2);
+
+    const Real density_jump = density_right - density_left;
+    const Real normal_jump = velocity_right - velocity_left;
+    const Real tangent_jump = tangent_right - tangent_left;
+    const Real acoustic_minus =
+        (cs2 * density_jump - roe_density * sound_speed * normal_jump) /
+        (Real(2) * cs2);
+    const Real acoustic_plus =
+        (cs2 * density_jump + roe_density * sound_speed * normal_jump) /
+        (Real(2) * cs2);
+    const Real shear = roe_density * tangent_jump;
+
+    const HartenEntropyFix entropy_fix{Real(0.1)};
+    const Real lambda_minus = entropy_fix(normal_velocity - sound_speed, sound_speed);
+    const Real lambda_shear = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
+    const Real lambda_plus = entropy_fix(normal_velocity + sound_speed, sound_speed);
+
+    State result{};
+    result[0] = lambda_minus * acoustic_minus + lambda_plus * acoustic_plus;
+    result[normal] = lambda_minus * acoustic_minus * (normal_velocity - sound_speed) +
+                     lambda_plus * acoustic_plus * (normal_velocity + sound_speed);
+    result[tangent] = lambda_minus * acoustic_minus * tangent_velocity +
+                      lambda_shear * shear +
+                      lambda_plus * acoustic_plus * tangent_velocity;
+    return result;
   }
   static VariableSet conservative_vars() {
     return {VariableKind::Conservative,

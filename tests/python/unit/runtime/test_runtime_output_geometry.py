@@ -258,6 +258,7 @@ def test_runtime_output_refuses_unknown_extension_cell_measure():
             "pops://cell-measures/extension-area@1",
             ("a", "b"), (0.0, 0.0), (1.0, 1.0), (4, 4),
         ),
+        native_spatial_layout=None,
     )
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
@@ -282,7 +283,8 @@ def test_normalized_geometry_is_rank_generic_but_current_output_provider_refuses
         Uniform(CartesianGrid(frame=frame, cells=(4, 6))),
         owner=OwnerPath.case("rank-gate"),
     )
-    layout = replace(plan.layouts[0], geometry=geometry)
+    layout = replace(
+        plan.layouts[0], geometry=geometry, native_spatial_layout=None)
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
         _executor_for_layout=lambda layout_id: _Engine(nx=4, ny=6),

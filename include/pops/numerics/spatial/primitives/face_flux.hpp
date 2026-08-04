@@ -22,9 +22,11 @@
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/numerics/spatial/primitives/positivity.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
+#include <limits>
 #include <stdexcept>  // require_reconstruction_ghosts: state without the stencil width -> clear error
 
 namespace pops {
@@ -75,6 +77,77 @@ struct CachedPrimitiveComponentSampler {
 
 }  // namespace detail
 
+/// Typed result of one face-state reconstruction.
+///
+/// `value` is consumable only when `recovery.publication_permitted()` is true.  On a recovery
+/// refusal it contains the conservative source-cell average solely so a device kernel can keep its
+/// scratch finite while the report travels through the transport reduction.  Production kernels
+/// must consume the report before evaluating a numerical flux.
+template <class Model>
+struct ReconstructedFaceState {
+  typename Model::State value{};
+  RecoveryReport recovery{};
+
+  POPS_HD bool publication_permitted() const { return recovery.publication_permitted(); }
+};
+
+template <HasPrimitiveVars Model>
+struct RecoveredFacePrimitive {
+  typename Model::Prim value{};
+  RecoveryReport recovery{};
+};
+
+template <class... Reconstructed>
+POPS_HD inline bool record_reconstruction_recoveries(const FluxEvaluationRecorder& failures,
+                                                     std::uint64_t& failure,
+                                                     const Reconstructed&... reconstructed) {
+  (failures.record_recovery(reconstructed.recovery, failure), ...);
+  return (reconstructed.publication_permitted() && ...);
+}
+
+template <class Model>
+POPS_HD inline ReconstructedFaceState<Model> recovered_face_state(
+    const typename Model::State& value) {
+  RecoveryReport report;
+  report.status = RecoveryStatus::kRecovered;
+  report.cause = RecoveryCause::kNone;
+  return {value, report};
+}
+
+template <class Model>
+POPS_HD inline typename Model::State value_only_face_state(
+    const ReconstructedFaceState<Model>& reconstructed) {
+  if (reconstructed.publication_permitted())
+    return reconstructed.value;
+  typename Model::State invalid{};
+  for (int component = 0; component < Model::n_vars; ++component)
+    invalid[component] = std::numeric_limits<Real>::quiet_NaN();
+  return invalid;
+}
+
+template <HasPrimitiveVars Model>
+POPS_HD inline auto recover_face_primitive(const Model& model,
+                                           const typename Model::State& conservative) {
+  constexpr int N = Model::n_vars;
+  Real conserved[N] = {};
+  Real initial_guess[N] = {};
+  for (int component = 0; component < N; ++component)
+    conserved[component] = initial_guess[component] = conservative[component];
+
+  // This compatibility plan is a fixed-size aggregate.  Construction and execution are both
+  // device-inline, allocation-free and callback-free.  Model-specific prepared chains can replace
+  // this plan without changing the reconstruction protocol.
+  const auto plan = prepare_model_variable_recovery(model);
+  const RecoveryOutcome<N> outcome = recover_prepared_variable(plan, conserved, initial_guess);
+
+  RecoveredFacePrimitive<Model> result;
+  result.recovery = recovery_report(outcome);
+  if (outcome.publication_permitted())
+    for (int component = 0; component < N; ++component)
+      result.value[component] = outcome.value[component];
+  return result;
+}
+
 /// reconstruct<Model,Limiter>: face value at (i,j) extrapolated in direction dir.
 ///
 /// sgn = +1 -> +dir face of (i,j); sgn = -1 -> -dir face. Reconstructs in PRIMITIVE
@@ -84,9 +157,10 @@ struct CachedPrimitiveComponentSampler {
 /// n_ghost is used only to validate the storage envelope.
 /// INVARIANT: POINTWISE function, does NOT loop over the grid. POPS_HD.
 template <class Model, class Limiter>
-POPS_HD inline typename Model::State reconstruct(const Model& model, const ConstArray4& u, int i,
-                                                 int j, int dir, Real sgn, const Limiter& lim,
-                                                 bool prim) {
+POPS_HD inline ReconstructedFaceState<Model> reconstruct_recovered(const Model& model,
+                                                                   const ConstArray4& u, int i,
+                                                                   int j, int dir, Real sgn,
+                                                                   const Limiter& lim, bool prim) {
   static_assert(
       ReconstructionPolicy<Limiter>,
       "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
@@ -98,13 +172,21 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
       using Prim = typename Model::Prim;
       Prim Pf{};
       if constexpr (SlopeReconstruction<Limiter>) {
-        const Prim P0 = model.to_primitive(load_state<Model>(u, i, j));
-        const Prim Pm =
-            model.to_primitive(load_state<Model>(u, dir == 0 ? i - 1 : i, dir == 0 ? j : j - 1));
-        const Prim Pp =
-            model.to_primitive(load_state<Model>(u, dir == 0 ? i + 1 : i, dir == 0 ? j : j + 1));
+        const auto P0 = recover_face_primitive<Model>(model, load_state<Model>(u, i, j));
+        if (!P0.recovery.publication_permitted())
+          return {load_state<Model>(u, i, j), P0.recovery};
+        const auto Pm = recover_face_primitive<Model>(
+            model, load_state<Model>(u, dir == 0 ? i - 1 : i, dir == 0 ? j : j - 1));
+        if (!Pm.recovery.publication_permitted())
+          return {load_state<Model>(u, i, j), Pm.recovery};
+        const auto Pp = recover_face_primitive<Model>(
+            model, load_state<Model>(u, dir == 0 ? i + 1 : i, dir == 0 ? j : j + 1));
+        if (!Pp.recovery.publication_permitted())
+          return {load_state<Model>(u, i, j), Pp.recovery};
         for (int c = 0; c < Model::n_vars; ++c)
-          Pf[c] = P0[c] + sgn * Real(0.5) * lim.limited_slope(P0[c] - Pm[c], Pp[c] - P0[c]);
+          Pf[c] = P0.value[c] +
+                  sgn * Real(0.5) *
+                      lim.limited_slope(P0.value[c] - Pm.value[c], Pp.value[c] - P0.value[c]);
       } else if constexpr (StencilReconstruction<Limiter>) {
         const int orientation = (sgn > Real(0)) ? 1 : -1;
         detail::PrimitiveStencilCache<Model, Limiter> cache{};
@@ -113,14 +195,17 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
           const int displacement = orientation * offset;
           const auto state = load_state<Model>(u, dir == 0 ? i + displacement : i,
                                                dir == 0 ? j : j + displacement);
-          cache.at(offset) = model.to_primitive(state);
+          const auto primitive = recover_face_primitive<Model>(model, state);
+          if (!primitive.recovery.publication_permitted())
+            return {load_state<Model>(u, i, j), primitive.recovery};
+          cache.at(offset) = primitive.value;
         }
         for (int c = 0; c < Model::n_vars; ++c) {
           const detail::CachedPrimitiveComponentSampler<Model, Limiter> sample{&cache, c};
           Pf[c] = lim.stencil_face_value(sample);
         }
       }
-      return model.to_conservative(Pf);
+      return recovered_face_state<Model>(model.to_conservative(Pf));
     }
   }
   (void)model;
@@ -145,7 +230,19 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
       s[c] = lim.stencil_face_value(sample);
     }
   }
-  return s;
+  return recovered_face_state<Model>(s);
+}
+
+/// Compatibility value-only entry point.  Production spatial kernels use
+/// reconstruct_recovered() and consume its RecoveryReport before any flux evaluation.  This
+/// wrapper preserves the low-level API for callers that only need conservative reconstruction and
+/// returns an explicit non-finite sentinel if a primitive recovery is refused; it never exposes the
+/// finite transactional scratch as a valid candidate.
+template <class Model, class Limiter>
+POPS_HD inline typename Model::State reconstruct(const Model& model, const ConstArray4& u, int i,
+                                                 int j, int dir, Real sgn, const Limiter& lim,
+                                                 bool prim) {
+  return value_only_face_state(reconstruct_recovered<Model>(model, u, i, j, dir, sgn, lim, prim));
 }
 
 /// reconstruct_pp: reconstruct + zhang_shu_scale positivity limiter on the returned state.
@@ -153,12 +250,21 @@ POPS_HD inline typename Model::State reconstruct(const Model& model, const Const
 /// (i, j) is the SOURCE cell of the reconstruction: it is to ITS average that the face state is
 /// brought back. pos_floor <= 0 -> strictly identical to reconstruct (short-circuit). POPS_HD.
 template <class Model, class Limiter>
+POPS_HD inline ReconstructedFaceState<Model> reconstruct_pp_recovered(
+    const Model& model, const ConstArray4& u, int i, int j, int dir, Real sgn, const Limiter& lim,
+    bool prim, Real pos_floor, int pos_comp) {
+  auto reconstructed = reconstruct_recovered<Model>(model, u, i, j, dir, sgn, lim, prim);
+  if (reconstructed.publication_permitted())
+    zhang_shu_scale<Model>(reconstructed.value, u, i, j, pos_floor, pos_comp);
+  return reconstructed;
+}
+
+template <class Model, class Limiter>
 POPS_HD inline typename Model::State reconstruct_pp(const Model& model, const ConstArray4& u, int i,
                                                     int j, int dir, Real sgn, const Limiter& lim,
                                                     bool prim, Real pos_floor, int pos_comp) {
-  typename Model::State s = reconstruct<Model>(model, u, i, j, dir, sgn, lim, prim);
-  zhang_shu_scale<Model>(s, u, i, j, pos_floor, pos_comp);
-  return s;
+  return value_only_face_state(
+      reconstruct_pp_recovered<Model>(model, u, i, j, dir, sgn, lim, prim, pos_floor, pos_comp));
 }
 
 namespace detail {
@@ -218,13 +324,20 @@ struct FaceFluxXKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto L =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    failures.record_recovery(L.recovery, failure);
+    failures.record_recovery(Rr.recovery, failure);
+    if (!L.publication_permitted() || !Rr.publication_permitted()) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fx(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(0);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i - 1, j, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
@@ -255,13 +368,20 @@ struct FaceFluxYKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto L =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    failures.record_recovery(L.recovery, failure);
+    failures.record_recovery(Rr.recovery, failure);
+    if (!L.publication_permitted() || !Rr.publication_permitted()) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fy(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(1);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i, j - 1, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)

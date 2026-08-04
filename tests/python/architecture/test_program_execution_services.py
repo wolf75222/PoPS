@@ -10,6 +10,12 @@ SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 PROGRAM_RUNTIME_STATE = PROGRAM_DIR / "program_runtime_state.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+UNIFORM_DRIVER = ROOT / "include" / "pops" / "runtime" / "system" / "system_program_driver.hpp"
+AMR_RUNTIME = ROOT / "src" / "runtime" / "amr" / "amr_system.cpp"
+BINDINGS = (
+    ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
+    ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp",
+)
 PREPARED_AFFINE = (
     ROOT / "include" / "pops" / "numerics" / "elliptic" / "linear" / "prepared_affine_problem.hpp"
 )
@@ -26,6 +32,7 @@ CODEGEN_CONTEXT_ROUTES = (
 
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
+    "struct GeneratedFieldSolveWorkspace",
     "struct CouplingStateOverride",
     "struct RhsGroupRequest",
     "struct RhsGroupBatch",
@@ -40,6 +47,8 @@ SHARED_SIGNATURES = (
     "struct ProgramClockCoordinate",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
+    "void prepare_generated_field_solve_workspace_(",
+    "void require_field_evaluation_point_(",
     "ProgramRuntimeState& program_runtime_state_()",
     "void install(std::function<void(double)> step)",
     "SolveOutcome solve_fields()",
@@ -117,6 +126,8 @@ SHARED_SIGNATURES = (
     "int n_blocks(",
     "Real physical_time(",
     "void record_scalar(",
+    "void record_balance_term(",
+    "bool balance_consumer_is_due(",
     "RuntimeParams program_params(",
     "void set_field_logical_timepoint(",
     "void set_field_boundary_parameters(",
@@ -141,8 +152,8 @@ SHARED_SIGNATURES = (
 )
 
 SHARED_OVERLOAD_COUNTS = {
-    "SolveOutcome solve_fields_from_state(": 2,
-    "SolveOutcome solve_fields_from_blocks(": 3,
+    "SolveOutcome solve_fields_from_state(": 1,
+    "SolveOutcome solve_fields_from_blocks(": 1,
     "void neg_div_flux_into(": 4,
     "void rhs_core_into_at(": 2,
     "void boundary_residual_into_at(": 2,
@@ -187,6 +198,36 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
         r"ProgramExecutionServices<AmrProgramContext>",
         amr,
     )
+
+
+def test_uniform_and_amr_enter_one_shared_cadence_dispatcher():
+    state = _read(PROGRAM_RUNTIME_STATE)
+    uniform_driver = _read(UNIFORM_DRIVER)
+    amr_runtime = _read(AMR_RUNTIME)
+
+    assert state.count("void dispatch_cadence_step(") == 1
+    for operation in (
+        "prepare_cadence_step(",
+        "validate_cadence_partition(",
+        "prepare_cadence_substep(",
+        "run_balance_due_window(",
+        "commit_cadence_step(",
+        "complete_balance_step(",
+    ):
+        assert operation in state
+        assert operation not in uniform_driver
+        assert operation not in amr_runtime
+
+    assert (
+        'P->program_.dispatch_cadence_step(P->t, P->macro_step_, dt, "System");'
+        in uniform_driver
+    )
+    assert 'program_.dispatch_cadence_step(t, macro_step_, dt, "AmrSystem");' in amr_runtime
+
+
+def test_balance_attempt_sink_is_not_python_bound():
+    for binding in BINDINGS:
+        assert "record_program_balance_term" not in _read(binding)
 
 
 def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_dispatch():
@@ -264,13 +305,15 @@ def test_operator_snapshot_revision_state_is_owned_only_by_the_shared_service():
     shared = _read(SHARED)
     declarations = (
         "mutable std::uint64_t operator_snapshot_revision_ = 0;",
-        "mutable std::uint64_t active_operator_snapshot_revision_ = 0;",
+        "mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;",
     )
     for declaration in declarations:
         assert shared.count(declaration) == 1
         assert declaration not in _read(UNIFORM)
         assert declaration not in _read(AMR)
     assert shared.count("void invalidate_active_operator_snapshot_() const noexcept") == 1
+    assert "probe != *active_operator_snapshot_" in shared
+    assert "active_operator_snapshot_revision_" not in shared
     assert "invalidate_active_operator_snapshot_" not in _read(UNIFORM)
     assert "invalidate_active_operator_snapshot_" not in _read(AMR)
 
@@ -305,15 +348,11 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
-            "program_execution_solve_fields_from_state_at_",
             "program_execution_solve_fields_outcome_",
             "program_execution_solve_fields_from_state_outcome_",
             "program_execution_field_solve_from_state_at_outcome_",
-            "program_execution_solve_named_field_from_state_outcome_",
             "program_execution_solve_fields_from_blocks_outcome_",
-            "program_execution_solve_named_field_from_blocks_outcome_",
             "program_execution_solve_generated_field_from_blocks_outcome_",
-            "program_execution_scratch_",
             "program_execution_default_grid_context_",
             "program_execution_block_grid_context_",
             "program_execution_owns_operator_authority_",
@@ -345,15 +384,108 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_publish_lincomb_",
             "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
+            "program_execution_record_balance_term_",
+            "program_execution_balance_consumer_is_due_",
             "program_execution_runtime_state_",
             "program_execution_clock_coordinate_",
-            "program_execution_set_field_timepoint_",
-            "program_execution_set_field_parameters_",
-            "program_execution_set_field_kernel_",
+            "program_execution_field_facade_",
         ):
-            assert source.count(hook) == 1, (
-                "%s must provide exactly one explicit provider hook %s" % (context, hook)
+            definitions = re.findall(rf"(?m)^  \S[^\n;=]*\b{re.escape(hook)}\s*\(", source)
+            assert len(definitions) == 1, "%s must define exactly one explicit provider hook %s" % (
+                context,
+                hook,
             )
+
+
+def test_boundary_point_provider_is_the_topology_primitive_not_a_mirrored_trampoline():
+    for path in (UNIFORM, AMR):
+        source = _read(path)
+        assert "BoundaryEvaluationPoint boundary_point_(" not in source
+        assert "return boundary_point_(stage_id);" not in source
+        assert "BoundaryEvaluationPoint program_execution_boundary_point_(" in source
+
+
+def test_field_state_evaluation_consumes_outcomes_in_the_shared_service():
+    shared = _read(SHARED)
+    providers = (_read(UNIFORM), _read(AMR))
+
+    assert shared.count("consume_field_outcome_(") == 3
+    assert shared.count("solve_fields_from_state_at(point, provider_slot, block,") == 2
+    assert "program_execution_solve_fields_from_state_at_" not in shared
+    assert all(
+        "program_execution_solve_fields_from_state_at_" not in provider for provider in providers
+    )
+
+
+def test_generated_field_stage_workspace_is_one_shared_program_authority():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+
+    for authority in (
+        "struct GeneratedFieldSolveWorkspace",
+        "prepare_generated_field_solve_workspace_",
+        "generated_field_solve_workspaces_",
+        "expected_program_blocks",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+
+    for invariant in (
+        "requires a non-negative IR identity",
+        "requires at least one stage override",
+        "IR identity was reused for a different field",
+        "block map is not injective",
+        "changed its ordered block pack",
+        "contains a duplicate Program block",
+        "generated field-solve stage does not match its exact runtime-block layout",
+        "generated field-solve stage cannot alias another block's live state",
+    ):
+        assert shared.count(invariant) == 1
+        assert invariant not in uniform
+        assert invariant not in amr
+
+    assert "ExclusiveUseGuard use(workspace.in_use," in shared
+    assert "struct WorkspaceUse" not in shared
+    assert "struct WorkspaceUse" not in uniform
+    assert "struct WorkspaceUse" not in amr
+    assert "sys_->solve_fields_from_blocks_at_in_place_(point, field, runtime_stages)" in uniform
+    assert "eng_->solve_named_fields_from_states_at(point, field, runtime_stages)" in amr
+
+
+def test_field_evaluation_point_validation_is_shared_before_provider_dispatch():
+    shared = _read(SHARED)
+    providers = (_read(UNIFORM), _read(AMR))
+    validation = shared.split("void require_field_evaluation_point_(", 1)[1].split("\n public:", 1)[
+        0
+    ]
+
+    assert shared.count("void require_field_evaluation_point_(") == 1
+    for invariant in (
+        "point.clock.empty()",
+        "point.tick < 0",
+        "point.substep < 0",
+        "point.stage < 0",
+        "!(point.dt > 0.0)",
+        "!std::isfinite(point.dt)",
+        "!std::isfinite(point.physical_time)",
+        "point.stage_fraction < amr::Rational(0, 1)",
+        "amr::Rational(1, 1) < point.stage_fraction",
+    ):
+        assert invariant in validation
+        assert validation.index(invariant) < validation.index(
+            "provider_().program_execution_resource_level_()"
+        )
+    assert (
+        shared.count('require_field_evaluation_point_(point, "Program single-state field solve")')
+        == 1
+    )
+    assert (
+        shared.count('require_field_evaluation_point_(point, "Program simultaneous field solve")')
+        == 1
+    )
+    assert all("require_field_evaluation_point_" not in provider for provider in providers)
 
 
 def test_grid_free_program_state_services_are_shared_not_mirrored():
@@ -361,7 +493,7 @@ def test_grid_free_program_state_services_are_shared_not_mirrored():
     runtime_state = _read(PROGRAM_RUNTIME_STATE)
     providers = (_read(UNIFORM), _read(AMR))
 
-    assert shared.count("program_runtime_state_().block_map()") == 2
+    assert shared.count("program_runtime_state_().block_map()") == 3
     assert shared.count("program_runtime_state_().record_diagnostic(name, value)") == 1
     assert shared.count("program_runtime_state_().note_step_projection(name)") == 1
     assert shared.count("program_runtime_state_().params(block)") == 1
@@ -378,6 +510,33 @@ def test_grid_free_program_state_services_are_shared_not_mirrored():
     ):
         assert retired_hook not in shared
         assert all(retired_hook not in provider for provider in providers)
+
+
+def test_field_configuration_uses_one_shared_facade_dispatch():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+
+    for operation in (
+        "set_field_logical_timepoint",
+        "set_field_boundary_parameters",
+        "set_field_boundary_kernel",
+    ):
+        assert shared.count("provider_().program_execution_field_facade_().%s" % operation) == 1
+        assert operation not in uniform
+        assert operation not in amr
+
+    for retired_hook in (
+        "program_execution_set_field_timepoint_",
+        "program_execution_set_field_parameters_",
+        "program_execution_set_field_kernel_",
+    ):
+        assert retired_hook not in shared
+        assert retired_hook not in uniform
+        assert retired_hook not in amr
+
+    assert "System& program_execution_field_facade_() const { return *sys_; }" in uniform
+    assert "AmrSystem& program_execution_field_facade_() const { return *facade_; }" in amr
 
 
 def test_clock_coordinate_is_one_shared_contract_not_three_provider_queries():
@@ -541,12 +700,13 @@ def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_
         assert retired_direct_surface not in uniform
         assert retired_direct_surface not in amr
         assert retired_direct_surface not in emitter
-    for provider_owned_scratch in (
+    for retired_provider_scratch in (
         "program_scratch_topology_epoch_",
         "program_scratch_materialization_generation_",
     ):
-        assert provider_owned_scratch not in shared
-        assert provider_owned_scratch in amr
+        assert retired_provider_scratch not in shared
+        assert retired_provider_scratch not in uniform
+        assert retired_provider_scratch not in amr
     assert "ctx.for_each_program_resource_level(" in emitter
     assert "ctx.with_program_resource_level(" in emitter
     assert "ctx.set_level(" not in emitter
@@ -655,7 +815,17 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
     amr = _read(AMR)
-    assert "program_execution_apply_projection_(sys_block(block), state)" in shared
+    projection = shared.split("void apply_projection(int block, MultiFab& state) const {", 1)[
+        1
+    ].split("\n  }", 1)[0]
+    assert projection.count("const int runtime_block = sys_block(block);") == 1
+    assert "program_execution_apply_projection_(runtime_block, state)" in projection
+    assert "program_execution_apply_projection_(sys_block(block), state)" not in projection
+    assert (
+        projection.count("program_execution_projection_balance_integrals_(runtime_block, state)")
+        == 2
+    )
+    assert "program_execution_projection_balance_integrals_(block, state)" not in projection
     assert "sys_->block_project(runtime_block, state);" in uniform
     assert (
         "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);" in amr
@@ -665,6 +835,10 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
             0
         ]
         assert "sys_block(" not in projection_hook
+        balance_hook = provider.split("program_execution_projection_balance_integrals_", 1)[
+            1
+        ].split("Real program_execution_hmin_", 1)[0]
+        assert "sys_block(" not in balance_hook
 
 
 def test_shared_cfl_dispatch_maps_the_program_block_once_and_leaves_topology_to_providers():
@@ -736,6 +910,8 @@ def test_shared_coupling_owns_workspace_mapping_layout_alias_and_reentrancy():
         "cannot alias accepted live states",
     ):
         assert invariant in shared
+    assert "ExclusiveUseGuard use(coupling_workspace_.in_use," in shared
+    assert "struct WorkspaceUse" not in shared
     assert "program_execution_apply_coupling_(" in shared
     assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
     assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
@@ -754,6 +930,31 @@ def test_logical_subdivision_is_shared_and_provider_rollback_is_opaque():
     assert " / static_cast<double>(count)" not in amr
     assert "amr::Rational(iteration, count)" not in uniform
     assert "amr::Rational(iteration, count)" not in amr
+
+
+def test_persistent_scratch_registry_is_one_shared_resource_service():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for authority in (
+        "struct ProgramScratchKey",
+        "struct ProgramScratchSlot",
+        "struct ProgramScratchRegistry",
+        "MultiFab& persistent_scratch_",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+    assert "program_execution_scratch_" not in shared
+    assert "program_execution_scratch_" not in uniform
+    assert "program_execution_scratch_" not in amr
+    assert "const ProgramResourceTopology topology = program_resource_topology();" in shared
+    assert "const int level = this->level();" in shared
+    for invariant in (
+        "non-negative IR value and sub-slot identities",
+        "persistent scratch level is out of range",
+    ):
+        assert shared.count(invariant) == 1
 
 
 def test_error_schedule_is_shared_not_an_amr_capability_deferral():

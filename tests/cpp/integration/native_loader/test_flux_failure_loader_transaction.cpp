@@ -54,6 +54,7 @@ std::string package_source() {
 #include <pops/runtime/dynamic/abi_key.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -64,8 +65,16 @@ std::string package_source() {
       using Aux = pops::Aux;
       static constexpr int n_vars = 1;
 
-      POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-      POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(1); }
+      POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+      POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
+      POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                    int) const {
+        State result{};
+        if ((left[0] > pops::Real(0.902) && left[0] < pops::Real(0.908)) ||
+            (right[0] > pops::Real(0.902) && right[0] < pops::Real(0.908)))
+          result[0] = std::numeric_limits<pops::Real>::quiet_NaN();
+        return result;
+      }
       POPS_HD State source(const State& state, const Aux&) const { return State{-state[0]}; }
       POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
       POPS_HD Prim to_primitive(const State& state) const { return state; }
@@ -144,6 +153,8 @@ std::string package_source() {
         install_attempt_block<RetryFlux>(system, name, substeps, evolve != 0, stride);
       else if (params[0] == 1.0 && std::string(time) == "explicit")
         install_attempt_block<RejectFlux>(system, name, substeps, evolve != 0, stride);
+      else if (params[0] == 2.0 && std::string(time) == "explicit")
+        install_attempt_block<pops::RoeFlux>(system, name, substeps, evolve != 0, stride);
       else
         throw std::invalid_argument("attempt-control test package received an invalid mode");
     }
@@ -216,6 +227,9 @@ int run_flux_failure_loader_transaction() {
                                0x52545259u);
   failures += exercise_attempt(
       library, 1.0, pops::runtime::program::StepAttemptDisposition::kReject, 0x524a4354u);
+  failures += exercise_attempt(
+      library, 2.0, pops::runtime::program::StepAttemptDisposition::kReject,
+      pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
   std::remove(source.c_str());
   std::remove(library.c_str());
   std::remove((library + ".log").c_str());

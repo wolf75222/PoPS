@@ -1,0 +1,128 @@
+"""Resolve-time native spatial authority derived only from immutable ``LayoutPlan`` rows."""
+from __future__ import annotations
+
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any
+
+
+NATIVE_SUPPORTED_DIMENSIONS = (2,)
+NATIVE_SUPPORTED_CENTERINGS = ("cell",)
+
+
+class NativeSpatialLayoutError(ValueError):
+    """Structured refusal before compilation or native storage allocation."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        layout_id: str | None = None,
+        evidence: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.layout_id = layout_id
+        self.evidence = evidence
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "layout_id": self.layout_id,
+            "message": str(self),
+            "evidence": self.evidence,
+        }
+
+
+def _supported_dimensions(value: Any) -> tuple[int, ...]:
+    if not isinstance(value, tuple) or not value \
+            or any(type(item) is not int or item not in (1, 2, 3) for item in value) \
+            or len(value) != len(set(value)):
+        raise TypeError("supported_dimensions must be a unique non-empty tuple from {1,2,3}")
+    return value
+
+
+def native_spatial_layouts(
+    layout_plan: Any,
+    *,
+    supported_dimensions: tuple[int, ...] = NATIVE_SUPPORTED_DIMENSIONS,
+    supported_centerings: tuple[str, ...] = NATIVE_SUPPORTED_CENTERINGS,
+) -> Mapping[str, Any]:
+    """Return exact per-layout specializations, refusing unsupported routes fail-closed."""
+    from pops.mesh import LayoutPlan, NativeSpatialLayout
+
+    if type(layout_plan) is not LayoutPlan:
+        raise TypeError("native spatial resolution requires an exact LayoutPlan")
+    dimensions = _supported_dimensions(supported_dimensions)
+    if not isinstance(supported_centerings, tuple) or not supported_centerings \
+            or any(not isinstance(item, str) or not item for item in supported_centerings) \
+            or len(supported_centerings) != len(set(supported_centerings)):
+        raise TypeError("supported_centerings must be a unique non-empty tuple of names")
+    rows: dict[str, NativeSpatialLayout] = {}
+    selected_dimensions: set[int] = set()
+    for normalized in layout_plan.layouts:
+        native = normalized.native_spatial_layout
+        if native is None:
+            raise NativeSpatialLayoutError(
+                "native_spatial_layout_unavailable",
+                "layout %s has no authenticated native_spatial_data() projection"
+                % normalized.handle.qualified_id,
+                layout_id=normalized.handle.qualified_id,
+                evidence={"supported_dimensions": list(dimensions)},
+            )
+        if type(native) is not NativeSpatialLayout:
+            raise TypeError("LayoutPlan contains a non-exact NativeSpatialLayout")
+        if native.dimension not in dimensions:
+            raise NativeSpatialLayoutError(
+                "native_dimension_unavailable",
+                "native production supports dimensions %s, not layout %s dimension %d"
+                % (dimensions, native.layout_id, native.dimension),
+                layout_id=native.layout_id,
+                evidence={
+                    "resolved_dimension": native.dimension,
+                    "supported_dimensions": list(dimensions),
+                },
+            )
+        if native.centering not in supported_centerings:
+            raise NativeSpatialLayoutError(
+                "native_centering_unavailable",
+                "native production does not support layout %s centering %r"
+                % (native.layout_id, native.centering),
+                layout_id=native.layout_id,
+                evidence={
+                    "centering": native.centering,
+                    "supported_centerings": list(supported_centerings),
+                },
+            )
+        rows[native.layout_id] = NativeSpatialLayout.from_data(native.to_data())
+        selected_dimensions.add(native.dimension)
+    if len(selected_dimensions) != 1:
+        raise NativeSpatialLayoutError(
+            "mixed_native_dimensions",
+            "one RuntimeInstance cannot combine layouts with different dimensions",
+            evidence={"resolved_dimensions": sorted(selected_dimensions)},
+        )
+    return MappingProxyType(rows)
+
+
+def resolved_dimension(layouts: Mapping[str, Any]) -> int:
+    """Return the one exact rank carried by an authenticated native-layout mapping."""
+    from pops.mesh import NativeSpatialLayout
+
+    if not isinstance(layouts, Mapping) or not layouts:
+        raise TypeError("resolved_dimension requires a non-empty native-layout mapping")
+    rows = tuple(layouts.values())
+    if any(type(row) is not NativeSpatialLayout for row in rows):
+        raise TypeError(
+            "resolved_dimension requires exact NativeSpatialLayout mapping values")
+    dimensions = {row.dimension for row in rows}
+    if len(dimensions) != 1:
+        raise ValueError("native-layout mapping does not carry one exact resolved dimension")
+    return next(iter(dimensions))
+
+
+__all__ = [
+    "NATIVE_SUPPORTED_CENTERINGS", "NATIVE_SUPPORTED_DIMENSIONS",
+    "NativeSpatialLayoutError", "native_spatial_layouts", "resolved_dimension",
+]

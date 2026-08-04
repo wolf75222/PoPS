@@ -5,9 +5,11 @@
 #include <pops/core/state/variables.hpp>   // VariableSet (role descriptor carried by each block)
 #include <pops/mesh/index/box2d.hpp>       // Box2D
 #include <pops/mesh/execution/for_each.hpp>  // device_fence (marshaling synchronizes the device before reading the host)
-#include <pops/mesh/storage/multifab.hpp>         // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/multifab.hpp>  // MultiFab, Array4, ConstArray4
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode + point-qualified geometry residuals
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 
 #include <functional>
 #include <map>
@@ -56,6 +58,8 @@ class SystemBlockStore {
   /// arrays of ncomp doubles. SAME type as System::CellConvert (identical std::function): assignment
   /// from set_block_conversion / native_loader stays a trivial move.
   using CellConvert = std::function<void(const double* in, double* out)>;
+  using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
+  using CellBatchRecovery = UniformCellRecovery;
 
   /// Compiled spatial closures frozen at block add time (composite model + spatial scheme).
   /// Type-erased ONLY at the block list level; the kernel stays compiled.
@@ -97,7 +101,8 @@ class SystemBlockStore {
     // Set at add time (install_block / push_dynamic) from the real model; empty -> identity (the
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
-    CellConvert prim_to_cons, cons_to_prim;
+    CellConvert prim_to_cons;
+    CellRecovery cons_to_prim;
     // dt_hotspot DIAGNOSTIC (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport CFL bound
     // of the block + its speed w = max(wx, wy). ON DEMAND only (System::dt_hotspot):
     // never queried by step/step_cfl (hot path bit-identical). Trailing + empty default.
@@ -189,9 +194,11 @@ class SystemBlockStore {
         boundary_jvp_at_point_prepared;
     PointQualifiedResidualClosures staircase_residuals;
     PointQualifiedResidualClosures cutcell_residuals;
-    // Frozen numerical-provider capability. Kept at the aggregate tail so the positional head used
-    // by install_block remains ABI/source compatible.
-    std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
+    SpatialProviderGeometry base_spatial_geometry = SpatialProviderGeometry::Cartesian;
+    // Frozen numerical-provider matrix. Kept at the aggregate tail so the positional head used by
+    // install_block remains ABI/source compatible.
+    SpatialProviderCapabilities spatial_provider =
+        make_cartesian_spatial_provider(kNativeDimension);
     /// Sequential runtime session materialized once at bind, after block layouts and qualified
     /// storage routes are frozen. Prepared Krylov workspaces own distinct lane-private sessions.
     std::shared_ptr<ExecutionLane> boundary_lane;
@@ -199,6 +206,9 @@ class SystemBlockStore {
     /// Exact owner-qualified state Handle.  Installed from the compiled block plan rather than
     /// inferred from the optional physical-boundary authority.
     std::string state_identity;
+    /// Host/Uniform primitive materializer with per-cell generation-qualified warm starts. Kept at
+    /// the aggregate tail so native/legacy positional construction remains source-compatible.
+    CellBatchRecovery batch_cons_to_prim;
   };
 
   /// ORDERED registry of the blocks (UNIQUE source of truth). PUBLIC: Impl aliases it as `sp` for the
@@ -495,18 +505,29 @@ class SystemBlockStore {
 
  private:
   static void require_geometry_provider(const BlockState& block, GeometryMode mode) {
-    if (!supports_geometry_mode(block.supported_geometry_modes, mode))
+    const SpatialProviderGeometry geometry =
+        mode == GeometryMode::None ? block.base_spatial_geometry : spatial_provider_geometry(mode);
+    const auto supports = [&](SpatialProviderOperation operation) {
+      return block.spatial_provider.supports({kNativeDimension, geometry, operation});
+    };
+    if (!supports(SpatialProviderOperation::Residual))
       throw std::runtime_error("SystemBlockStore block '" + block.name +
                                "' has no numerical provider for geometry policy '" +
                                geometry_token(mode) + "'");
-    if (mode == GeometryMode::None || !block.boundary_session)
+    if (!block.boundary_session)
       return;
     const PreparedBoundaryPlan* plan = block.boundary_session->resolved_plan();
-    if (plan != nullptr && plan->has_component_boundaries())
+    if (plan != nullptr && plan->requires_characteristic_no_inflow() &&
+        !supports(SpatialProviderOperation::CharacteristicNoInflow))
+      throw std::runtime_error("SystemBlockStore block '" + block.name +
+                               "' cannot execute characteristic no-inflow for geometry policy '" +
+                               geometry_token(mode) + "': no qualified spatial provider");
+    if (plan != nullptr && plan->has_component_boundaries() &&
+        !supports(SpatialProviderOperation::BoundaryLinearization))
       throw std::runtime_error(
-          "SystemBlockStore embedded-boundary block '" + block.name +
-          "' cannot execute a native boundary component without an active-cell or cut-cell "
-          "metric provider");
+          "SystemBlockStore block '" + block.name +
+          "' cannot execute a native boundary component for geometry policy '" +
+          geometry_token(mode) + "' without a signed-mask or cut-cell metric contract");
   }
 
   static PointQualifiedResidualClosures& embedded_residuals(BlockState& block, GeometryMode mode) {

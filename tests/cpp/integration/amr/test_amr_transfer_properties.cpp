@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -83,7 +84,9 @@ Real fine_polynomial_average(const Box2D& fine_domain, int i, int j) {
   return degree_four_cell_average(x, x + Real(0.5), y, y + Real(0.5));
 }
 
-AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = false) {
+AmrRuntime bootstrap_runtime(
+    int cells = 8, bool install_prepared_boundary = false,
+    double maximum_recoverable_value = std::numeric_limits<double>::infinity()) {
   AmrBuildParams params;
   params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
   params.mesh.periodicity = Periodicity{true, true};
@@ -97,13 +100,33 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
       exb_model(), "minmod", "rusanov", layout, "transport",
       std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
+  if (std::isfinite(maximum_recoverable_value))
+    blocks.back().cons_to_prim = [maximum_recoverable_value](const double* conserved,
+                                                             double* primitive) {
+      RecoveryReport report;
+      if (!std::isfinite(conserved[0]) || conserved[0] > maximum_recoverable_value) {
+        report.status = RecoveryStatus::kRejected;
+        report.cause = RecoveryCause::kInadmissibleCandidate;
+        report.failing_component = 0;
+        return report;
+      }
+      primitive[0] = conserved[0];
+      report.status = RecoveryStatus::kRecovered;
+      report.cause = RecoveryCause::kNone;
+      return report;
+    };
   if (install_prepared_boundary) {
     auto& block = blocks.front();
     const std::string state_identity = block.state_identity;
     block.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
         "case::bootstrap::transport::boundary", 1,
-        std::vector<BCRec>(static_cast<std::size_t>(block.ncomp), BCRec{}), std::vector<int>{},
-        state_identity);
+        prepare_hyperbolic_boundary<2>(
+            {"periodic", "periodic", "periodic", "periodic"},
+            std::vector<double>(static_cast<std::size_t>(4 * block.ncomp), 0.0),
+            {"case::bootstrap::xlo", "case::bootstrap::xhi", "case::bootstrap::ylo",
+             "case::bootstrap::yhi"},
+            std::vector<std::string>(static_cast<std::size_t>(block.ncomp), "Custom")),
+        std::vector<int>{}, state_identity);
     const PreparedBoundaryPlan* const expected_plan = block.boundary_plan.get();
     block.boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
     block.level_rhs_core_at_point_prepared =
@@ -509,6 +532,102 @@ TEST(test_amr_transfer_properties, NativeSubcyclingGhostFillInterpolatesTimeThen
       std::invalid_argument);
 }
 
+TEST(test_amr_transfer_properties,
+     RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell) {
+  AmrRuntime runtime = bootstrap_runtime();
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-accepted-regrid@1");
+
+  EXPECT_NO_THROW(runtime.regrid());
+  EXPECT_GT(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 1);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RestrictionPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell) {
+  AmrRuntime runtime = bootstrap_runtime();
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-accepted-restriction-bootstrap@1");
+  ASSERT_NO_THROW(runtime.regrid());
+  ASSERT_GT(runtime.nlev(), 1);
+
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
+      "test::recovery-accepted-restriction@1");
+  EXPECT_NO_THROW(runtime.regrid());
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 2);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RegridRecoveryRefusalRollsBackHierarchyStateAndPublicationCounters) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 0.5);
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  const auto boxes_before = runtime.level_state(0, 0).box_array().boxes();
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-rejected-regrid@1");
+
+  try {
+    runtime.regrid();
+    FAIL() << "a rejected regrid candidate was published";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 0);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  EXPECT_EQ(runtime.level_state(0, 0).box_array().boxes(), boxes_before);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RestrictionRecoveryRefusalRollsBackEveryLevelAndHierarchyPublication) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 1.5);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::restriction-recovery-bootstrap@1");
+  ASSERT_NO_THROW(runtime.regrid());
+  ASSERT_GT(runtime.nlev(), 1);
+  for (int level = 1; level < runtime.nlev(); ++level)
+    runtime.level_state(0, level).set_val(Real(2));
+  device_fence();
+
+  std::vector<std::vector<double>> states_before;
+  std::vector<std::vector<Box2D>> boxes_before;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    states_before.push_back(runtime.block_level_state(0, level));
+    boxes_before.push_back(runtime.level_state(0, level).box_array().boxes());
+  }
+  const int levels_before = runtime.nlev();
+  const int regrids_before = runtime.regrid_count();
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
+      "test::recovery-rejected-restriction@1");
+
+  try {
+    runtime.regrid();
+    FAIL() << "a rejected restriction candidate was published";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), levels_before);
+  EXPECT_EQ(runtime.regrid_count(), regrids_before);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(runtime.level_state(0, level).box_array().boxes(), boxes_before[level]);
+    EXPECT_EQ(runtime.block_level_state(0, level), states_before[level]);
+  }
+}
+
 TEST(test_amr_transfer_properties, AnalyticEveryLevelCacheEpochAndL0L1L2Rollback) {
   AmrRuntime runtime = bootstrap_runtime();
   ASSERT_EQ(runtime.nlev(), 1);
@@ -581,4 +700,112 @@ TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionA
     EXPECT_DOUBLE_EQ(
         coarse_rhs.fab(0).const_array()(coarse_rhs.box(0).lo[0], coarse_rhs.box(0).lo[1], 0),
         kPreparedBoundarySentinel);
+}
+
+TEST(test_amr_transfer_properties, BootstrapCommitPublishesRecoveryAcceptedLevels) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::bootstrap-recovery-accepted@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(2));
+  EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {2.0}), 0);
+  EXPECT_NO_THROW(runtime.commit_bootstrap_level());
+  EXPECT_EQ(runtime.nlev(), 2);
+}
+
+TEST(test_amr_transfer_properties, BootstrapRecoveryRefusalKeepsPendingLevelRollbackable) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::bootstrap-recovery-rejected@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(2));
+  EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {7.0}), 0);
+  try {
+    runtime.commit_bootstrap_level();
+    FAIL() << "an inadmissible bootstrap level was committed";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  runtime.rollback_bootstrap_level();
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties, RuntimePreparedSlipWallFillsDeepPhysicalGhosts) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const BoxArray boxes(std::vector<Box2D>{domain});
+  const DistributionMapping distribution(boxes.size(), n_ranks());
+  const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  AmrHierarchyLayout hierarchy{{boxes}, {distribution}, {Real(0.25)}, {Real(0.25)},
+                               {},      load_balance};
+
+  MultiFab state(boxes, distribution, 5, 2);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
+    });
+  }
+  device_fence();
+  auto levels = std::make_shared<std::vector<AmrLevelMP>>();
+  levels->push_back(AmrLevelMP{std::move(state), nullptr, Real(0.25), Real(0.25)});
+
+  AmrRuntimeBlock block;
+  block.name = "fluid";
+  block.state_identity = "case::amr::fluid::state::U";
+  block.ncomp = 5;
+  block.levels = std::move(levels);
+  block.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::amr::fluid::boundary", 2,
+      prepare_hyperbolic_boundary<2>({"slip_wall", "slip_wall", "slip_wall", "slip_wall"},
+                                     std::vector<double>(20, 0.0),
+                                     {"case::amr::fluid::xlo", "case::amr::fluid::xhi",
+                                      "case::amr::fluid::ylo", "case::amr::fluid::yhi"},
+                                     {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"}),
+      std::vector<int>{}, block.state_identity);
+  block.boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
+  block.level_rhs_core_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, const MultiFab&,
+         const Geometry&, MultiFab& R, const PreparedGridBoundarySession& boundary) {
+        boundary.fill_same_level_and_physical(U, point);
+        R.set_val(Real(0));
+      };
+  block.level_boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
+         const Geometry&, MultiFab&, const PreparedGridBoundarySession&) {};
+
+  BCRec poisson_boundary;
+  poisson_boundary.xlo = poisson_boundary.xhi = BCType::Foextrap;
+  poisson_boundary.ylo = poisson_boundary.yhi = BCType::Foextrap;
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(std::move(block));
+  AmrRuntime runtime(geometry, std::move(hierarchy), poisson_boundary, std::move(blocks),
+                     Periodicity{false, false}, true);
+  runtime.install_boundary_storage_routes({});
+
+  MultiFab& live = runtime.level_state(0, 0);
+  MultiFab rhs(live.box_array(), live.dmap(), live.ncomp(), 0);
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.amr-slip",    0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  EXPECT_NO_THROW(runtime.level_rhs_into_at(0, 0, point, live, rhs));
+  device_fence();
+
+  if (live.local_size() > 0) {
+    const ConstArray4 values = live.fab(0).const_array();
+    EXPECT_EQ(values(-2, 2, 1), Real(-2));
+    EXPECT_EQ(values(-2, 2, 2), Real(-5));
+    EXPECT_EQ(values(-2, 2, 4), Real(-4));
+    EXPECT_EQ(values(2, -2, 3), Real(-3));
+    EXPECT_EQ(values(2, -2, 4), Real(-4));
+  }
 }

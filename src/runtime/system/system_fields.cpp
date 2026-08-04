@@ -4,14 +4,128 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/core/identity/prepared_provider.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <exception>
 #include <tuple>
 
 namespace pops {
+namespace {
+
+template <class Species>
+void require_recoverable_system_candidate(const Species& state, const MultiFab& candidate,
+                                          std::string_view operation) {
+  const long missing_recovery = all_reduce_sum(state.cons_to_prim ? 0L : 1L);
+  if (missing_recovery != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": target block has no prepared variable-recovery authority");
+
+  // Candidate kernels may execute asynchronously. The type-erased prepared recovery is a host
+  // closure over one cell, so make the latest device values visible before inspecting storage.
+  candidate.sync_host();
+  std::vector<double> conserved(static_cast<std::size_t>(state.ncomp));
+  std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
+  long local_failures = 0;
+  for (int local = 0; local < candidate.local_size(); ++local) {
+    const ConstArray4 values = candidate.fab(local).const_array();
+    const Box2D valid = candidate.box(local);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        for (int component = 0; component < state.ncomp; ++component)
+          conserved[static_cast<std::size_t>(component)] = values(i, j, component);
+        try {
+          const RecoveryReport report = state.cons_to_prim(conserved.data(), primitive.data());
+          const bool finite_candidate =
+              std::all_of(conserved.begin(), conserved.end(),
+                          [](double value) { return std::isfinite(value); }) &&
+              std::all_of(primitive.begin(), primitive.end(),
+                          [](double value) { return std::isfinite(value); });
+          if (!report.publication_permitted() || !finite_candidate)
+            ++local_failures;
+        } catch (...) {
+          // Do not let a rank-local provider exception strand peers before the collective verdict.
+          ++local_failures;
+        }
+      }
+  }
+
+  const long failures = all_reduce_sum(local_failures);
+  if (failures != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": prepared variable recovery rejected the candidate before "
+                             "publication (failed cells=" +
+                             std::to_string(failures) + ")");
+}
+
+template <class Species>
+void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
+                                         std::string_view operation) {
+  require_recoverable_system_candidate(state, candidate, operation);
+
+  PureFieldAlgebra::copy(state.U, candidate);
+  // candidate is setup-local storage; publication must finish before it is destroyed.
+  device_fence();
+}
+
+void require_exact_field_evaluation_request(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view provider_slot,
+    std::string_view request_kind) {
+  const bool invalid =
+      request_kind.empty() || provider_slot.empty() || point.clock.empty() || point.tick < 0 ||
+      point.level != 0 || point.substep < 0 || point.stage < 0 || !std::isfinite(point.dt) ||
+      point.dt <= 0.0 || !std::isfinite(point.physical_time) ||
+      point.stage_fraction < amr::Rational(0, 1) || amr::Rational(1, 1) < point.stage_fraction;
+  if (all_reduce_max(invalid ? 1L : 0L) != 0)
+    throw std::invalid_argument(
+        "System exact field evaluation requires one complete level-zero point and provider slot");
+
+  ExactContractBuilder request;
+  request.text("pops.system.exact-field-evaluation")
+      .scalar(std::uint32_t{1})
+      .text(request_kind)
+      .text(provider_slot)
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(static_cast<std::int32_t>(point.level))
+      .scalar(static_cast<std::int32_t>(point.substep))
+      .scalar(static_cast<std::int32_t>(point.stage))
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time);
+  const std::string exact_request = std::move(request).release();
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-exact-field-evaluation", exact_request}}))
+    throw std::invalid_argument(
+        "System exact field evaluation point differs between communicator ranks");
+}
+
+}  // namespace
+
+void System::validate_program_state_publication_candidate(int block,
+                                                          const MultiFab& candidate) const {
+  const long invalid_block =
+      all_reduce_sum(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L);
+  if (invalid_block != 0)
+    throw std::out_of_range(
+        "System Program state publication block index differs across communicator ranks");
+  const Impl::Species& state = p_->sp[static_cast<std::size_t>(block)];
+  const bool exact_layout = candidate.box_array().boxes() == state.U.box_array().boxes() &&
+                            candidate.dmap().ranks() == state.U.dmap().ranks() &&
+                            candidate.ncomp() == state.U.ncomp() &&
+                            candidate.n_grow() == state.U.n_grow();
+  if (all_reduce_sum(exact_layout ? 0L : 1L) != 0)
+    throw std::invalid_argument(
+        "System Program state publication candidate differs from its block layout");
+  require_recoverable_system_candidate(
+      state, candidate,
+      "System Program terminal state publication for block '" + state.name + "'");
+}
 
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
@@ -60,10 +174,67 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
 }
 
 POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                              CellConvert cons_to_prim) {
+                                              CellRecovery cons_to_prim) {
   Impl::Species& s = p_->find(name);
+  const auto boundary = p_->boundary_plans_.find(name);
+  if (boundary != p_->boundary_plans_.end()) {
+    if (!cons_to_prim)
+      throw std::runtime_error(
+          "System prepared boundary traces require the block-model variable-recovery authority");
+    if (boundary->second->requires_fixed_state_conversion()) {
+      if (!prim_to_cons)
+        throw std::runtime_error(
+            "System primitive fixed-state boundary requires the block-model conversion");
+      const int ncomp = s.ncomp;
+      boundary->second->prepare_fixed_state_conversion(
+          [prim_to_cons, cons_to_prim, ncomp](const double* primitive, double* conservative) {
+            prim_to_cons(primitive, conservative);
+            std::vector<double> recovered(static_cast<std::size_t>(ncomp));
+            const RecoveryReport report = cons_to_prim(conservative, recovered.data());
+            if (!report.publication_permitted())
+              throw std::runtime_error(
+                  "primitive fixed-state boundary conversion failed prepared variable recovery");
+          });
+    }
+    boundary->second->prepare_trace_recovery(cons_to_prim);
+  }
+  // A replacement pointwise authority must never inherit warm starts produced by the previous
+  // model/provider. The matching batch authority is installed explicitly immediately afterwards
+  // by every supported native and compiled builder. Until then primitive-field materialization
+  // fails closed instead of reviving a second cell-by-cell recovery engine.
+  s.batch_cons_to_prim = {};
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
+}
+
+POPS_EXPORT void System::set_block_characteristic_no_inflow(const std::string& name,
+                                                            CharacteristicNoInflowFill fill) {
+  Impl::Species& block = p_->find(name);
+  const auto boundary = p_->boundary_plans_.find(name);
+  if (boundary == p_->boundary_plans_.end() ||
+      !boundary->second->requires_characteristic_no_inflow())
+    throw std::runtime_error(
+        "System characteristic no-inflow was not requested by the exact block boundary plan");
+  const SpatialProviderGeometry geometry = p_->geometry_mode_ == GeometryMode::None
+                                               ? block.base_spatial_geometry
+                                               : spatial_provider_geometry(p_->geometry_mode_);
+  if (!block.spatial_provider.supports(
+          {kNativeDimension, geometry, SpatialProviderOperation::CharacteristicNoInflow}))
+    throw std::runtime_error(
+        "System characteristic no-inflow has no qualified provider for the active spatial "
+        "geometry");
+  boundary->second->prepare_characteristic_no_inflow(std::move(fill));
+}
+
+POPS_EXPORT void System::set_block_batch_recovery(const std::string& name,
+                                                  CellBatchRecovery batch_cons_to_prim) {
+  Impl::Species& state = p_->find(name);
+  if (!state.cons_to_prim)
+    throw std::runtime_error(
+        "System batch variable recovery requires the pointwise prepared recovery authority");
+  if (!batch_cons_to_prim)
+    throw std::invalid_argument("System batch variable recovery callback must not be empty");
+  state.batch_cons_to_prim = std::move(batch_cons_to_prim);
 }
 
 void System::set_primitive_state(const std::string& name, const std::vector<double>& prim) {
@@ -83,44 +254,76 @@ void System::set_primitive_state(const std::string& name, const std::vector<doub
         "System::set_primitive_state : the model of block '" + name +
         "' does not expose a primitive -> conservative conversion (.so generated before "
         "this project ?) ; use set_state (direct conservative state)");
+  if (!s.cons_to_prim)
+    throw std::runtime_error(
+        "System::set_primitive_state : the model of block '" + name +
+        "' has no prepared variable-recovery authority for validating conservative publication");
   // CELL-BY-CELL conversion via the block model: we read the nc primitives component-major
   // (prim[c*nn + k]) into a small contiguous buffer, convert, and write the conservatives at the
   // same place in an output buffer. Then write_state pushes everything to the MultiFab (set_state
   // path, identical marshaling). Reuses therefore the existing marshaling (copy/write_state).
   std::vector<double> cons(prim.size());
-  std::vector<double> cell_in(static_cast<std::size_t>(nc)), cell_out(static_cast<std::size_t>(nc));
+  std::vector<double> cell_in(static_cast<std::size_t>(nc));
+  std::vector<double> cell_out(static_cast<std::size_t>(nc));
+  std::vector<double> recovered(static_cast<std::size_t>(nc));
+  long local_failures = 0;
   for (std::size_t k = 0; k < nn; ++k) {
     for (int c = 0; c < nc; ++c)
       cell_in[c] = prim[static_cast<std::size_t>(c) * nn + k];
-    s.prim_to_cons(cell_in.data(), cell_out.data());
+    std::fill(cell_out.begin(), cell_out.end(), std::numeric_limits<double>::quiet_NaN());
+    bool accepted = false;
+    try {
+      s.prim_to_cons(cell_in.data(), cell_out.data());
+      const bool finite = std::all_of(cell_out.begin(), cell_out.end(),
+                                      [](double value) { return std::isfinite(value); });
+      if (finite) {
+        const RecoveryReport report = s.cons_to_prim(cell_out.data(), recovered.data());
+        accepted = report.publication_permitted();
+      }
+    } catch (...) {
+      accepted = false;
+    }
+    if (!accepted) {
+      ++local_failures;
+      continue;
+    }
     for (int c = 0; c < nc; ++c)
       cons[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }
+  const long failures = all_reduce_sum(local_failures);
+  if (failures != 0)
+    throw std::runtime_error(
+        "System::set_primitive_state : prepared variable recovery rejected conservative "
+        "publication (failed cells=" +
+        std::to_string(failures) + ")");
   p_->write_state(s.U, nc, cons);
 }
 
 std::vector<double> System::get_primitive_state(const std::string& name) {
   Impl::Species& s = p_->find(name);
   const int nc = s.ncomp;
-  // Number of cells = REAL EXTENTS of the index domain (n*n Cartesian, nr*ntheta polar), NOT
-  // cfg.n*cfg.n: in polar cfg.n = nr, so cfg.n^2 != nr*ntheta -> heap overflow (ntheta<nr) or
-  // partial/wrong content (ntheta>nr). Cartesian bit-identical (dom.nx()==dom.ny()==n).
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->dom.nx()) * static_cast<std::size_t>(p_->dom.ny());
   if (!s.cons_to_prim)
     throw std::runtime_error(
         "System::get_primitive_state : the model of block '" + name +
         "' does not expose a conservative -> primitive conversion (.so generated before "
         "this project ?) ; use get_state (direct conservative state)");
+  if (!s.batch_cons_to_prim)
+    throw std::runtime_error(
+        "System::get_primitive_state : block '" + name +
+        "' has no generation-qualified prepared batch recovery consumer");
   const std::vector<double> cons = p_->copy_state(s.U, nc);  // get_state path (same marshaling)
-  std::vector<double> prim(cons.size());
-  std::vector<double> cell_in(static_cast<std::size_t>(nc)), cell_out(static_cast<std::size_t>(nc));
-  for (std::size_t k = 0; k < nn; ++k) {
-    for (int c = 0; c < nc; ++c)
-      cell_in[c] = cons[static_cast<std::size_t>(c) * nn + k];
-    s.cons_to_prim(cell_in.data(), cell_out.data());
-    for (int c = 0; c < nc; ++c)
-      prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
+  std::vector<double> prim;
+  const UniformRecoveryBatchReport batch = s.batch_cons_to_prim(cons, prim);
+  if (!batch.publication_permitted()) {
+    const RecoveryReport& recovery = batch.recovery;
+    throw std::runtime_error(
+        "System::get_primitive_state : variable recovery failed for block '" + name +
+        "' at local cell " + std::to_string(batch.failed_cell) + " (status=" +
+        recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
+        ", failing_component=" + std::to_string(recovery.failing_component) +
+        ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
+        ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
+        ", last_method_index=" + std::to_string(recovery.last_method) + ")");
   }
   return prim;
 }
@@ -153,11 +356,9 @@ SolveReport System::solve_fields_from_state_in_place_(int block_idx, const Multi
 }
 
 SolveReport System::solve_fields_from_state_at_in_place_(
-    const runtime::multiblock::BoundaryEvaluationPoint& /*point*/, const std::string& provider_slot,
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int block_idx, const MultiFab& U_stage) {
-  if (provider_slot.empty())
-    throw std::invalid_argument(
-        "System::solve_fields_from_state_at requires an exact provider slot");
+  require_exact_field_evaluation_request(point, provider_slot, "single-stage");
   return p_->solve_named_field_from_state(provider_slot, block_idx, U_stage);
 }
 
@@ -192,6 +393,13 @@ POPS_EXPORT SolveReport System::solve_fields_from_state_in_place_(const std::str
 
 POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
     const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+  return p_->solve_named_field_from_blocks(field, U_stages);
+}
+
+POPS_EXPORT SolveReport System::solve_fields_from_blocks_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+    const std::vector<const MultiFab*>& U_stages) {
+  require_exact_field_evaluation_request(point, field, "simultaneous-stages");
   return p_->solve_named_field_from_blocks(field, U_stages);
 }
 
@@ -233,12 +441,11 @@ SolveOutcome System::solve_fields_from_state(const std::string& field, int block
   });
 }
 
-SolveOutcome System::solve_fields_from_blocks(
-    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+SolveOutcome System::solve_fields_from_blocks(const std::string& field,
+                                              const std::vector<const MultiFab*>& U_stages) {
   prepare_named_field_publication_storage_(field);
-  return run_field_publication_outcome_([this, &field, &U_stages]() {
-    return solve_fields_from_blocks_in_place_(field, U_stages);
-  });
+  return run_field_publication_outcome_(
+      [this, &field, &U_stages]() { return solve_fields_from_blocks_in_place_(field, U_stages); });
 }
 
 void System::prepare_default_field_publication_storage_() {
@@ -352,6 +559,7 @@ void System::stage_field_publication_candidate() {
   if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
       p_->field_publication_candidate_ready_)
     throw std::logic_error("System field publication has no unique active candidate slot");
+  p_->fields_.stage_named_topology_reports();
   if (p_->candidate_field_publication_)
     p_->candidate_field_publication_->capture(*p_);
   else
@@ -365,8 +573,7 @@ void System::validate_field_publication_candidate() {
       !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
     throw std::logic_error("System field publication has no staged candidate");
   if (!p_->candidate_field_publication_->publication_layout_matches(*p_))
-    throw std::logic_error(
-        "System field publication snapshot layout changed before Accept");
+    throw std::logic_error("System field publication snapshot layout changed before Accept");
 }
 
 void System::accept_field_publication_candidate() noexcept {
@@ -688,8 +895,13 @@ std::int64_t System::set_analytic_expression_state(
         return std::pair<Impl::Species*, std::vector<analytic::AnalyticProgram>>{
             &state, std::move(programs)};
       });
-  return analytic::materialize_cell_average(prepared.first->U, p_->geom.xlo, p_->geom.ylo,
-                                            p_->geom.dx(), p_->geom.dy(), prepared.second);
+  MultiFab candidate(prepared.first->U.box_array(), prepared.first->U.dmap(),
+                     prepared.first->U.ncomp(), prepared.first->U.n_grow());
+  const std::int64_t materialized = analytic::materialize_cell_average(
+      candidate, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(), prepared.second);
+  publish_recovered_initial_candidate(*prepared.first, candidate,
+                                      "System::set_analytic_expression_state");
+  return materialized;
 }
 std::int64_t System::set_analytic_mapped_state(const std::string& name,
                                                const std::vector<std::vector<std::string>>& opcodes,
@@ -753,9 +965,12 @@ std::int64_t System::set_analytic_mapped_state(const std::string& name,
           dst(i, j, c) = src(i, j, c);
   }
   device_fence();
-  return analytic::materialize_discrete_mapped_state(state->U, seed, p_->aux, p_->geom.xlo,
-                                                     p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
-                                                     programs, bindings);
+  MultiFab candidate(state->U.box_array(), state->U.dmap(), state->U.ncomp(), state->U.n_grow());
+  const std::int64_t materialized = analytic::materialize_discrete_mapped_state(
+      candidate, seed, p_->aux, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(), programs,
+      bindings);
+  publish_recovered_initial_candidate(*state, candidate, "System::set_analytic_mapped_state");
+  return materialized;
 }
 std::int64_t System::set_analytic_gaussian_state(const std::string& name, double center_x,
                                                  double center_y, double background,
@@ -764,10 +979,13 @@ std::int64_t System::set_analytic_gaussian_state(const std::string& name, double
   if (p_->polar_)
     throw std::runtime_error("System::set_analytic_gaussian_state requires a Cartesian frame");
   Impl::Species& state = p_->find(name);
-  return analytic::materialize_gaussian_cell_average(
-      state.U, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
+  MultiFab candidate(state.U.box_array(), state.U.dmap(), state.U.ncomp(), state.U.n_grow());
+  const std::int64_t materialized = analytic::materialize_gaussian_cell_average(
+      candidate, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
       static_cast<Real>(center_x), static_cast<Real>(center_y), static_cast<Real>(background),
       static_cast<Real>(amplitude), static_cast<Real>(inverse_width));
+  publish_recovered_initial_candidate(state, candidate, "System::set_analytic_gaussian_state");
+  return materialized;
 }
 int System::n_vars(const std::string& name) const {
   return p_->find(name).ncomp;
@@ -918,19 +1136,19 @@ std::vector<OutputPiece> System::output_field_local_pieces(const std::string& pr
   return output_local_pieces(field, 0, false);
 }
 
-std::vector<OutputPiece> System::output_state_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> System::output_state_root_pieces(const ObserverMpiLane& lane,
                                                           const std::string& name,
                                                           int level) const {
-  return output_pieces_to_root(world,
+  return output_pieces_to_root(lane,
                                detail::output_collective_identity("System", "state", name, level),
                                [&] { return output_state_local_pieces(name, level); });
 }
 
-std::vector<OutputPiece> System::output_field_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> System::output_field_root_pieces(const ObserverMpiLane& lane,
                                                           const std::string& provider_slot,
                                                           int level) {
   return output_pieces_to_root(
-      world, detail::output_collective_identity("System", "field", provider_slot, level),
+      lane, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
 }
 

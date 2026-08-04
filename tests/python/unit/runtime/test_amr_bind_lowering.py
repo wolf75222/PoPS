@@ -1,6 +1,10 @@
 """AMR bind lowering preserves every authored Cartesian axis topology."""
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
+import pops
 import pytest
 
 from pops.amr import AMRRegrid
@@ -12,6 +16,7 @@ from pops.runtime._amr_bind_lowering import (
     _physical_patch_rectangles,
     _regrid_every,
 )
+from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._runtime_authorities import (
     _materialized_shared_interface_levels,
     _validate_refined_shared_interface_execution,
@@ -71,6 +76,78 @@ def test_dynamic_refined_shared_interface_bind_accepts_serial_and_exact_mpi_worl
     )
 
 
+def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind() -> None:
+    serial = {
+        "communicator_identity": "serial",
+        "device_identity": "host",
+        "memory_space": 1,
+    }
+    _validate_refined_shared_interface_execution(
+        (0,), serial, 1, implicit_jacvec_pair=True, complete_bind=False
+    )
+    _validate_refined_shared_interface_execution(
+        (0, 1), serial, 1, implicit_jacvec_pair=True, complete_bind=True
+    )
+    for levels in ((0,), (0, 1, 2)):
+        with pytest.raises(NotImplementedError, match=r"exactly materialized levels \(L0, L1\)"):
+            _validate_refined_shared_interface_execution(
+                levels, serial, 1, implicit_jacvec_pair=True, complete_bind=True
+            )
+
+
+@pytest.mark.parametrize(
+    ("execution", "ranks"),
+    [
+        ({
+            "communicator_identity": "MPI_COMM_WORLD",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 1),
+        ({
+            "communicator_identity": "MPI_COMM_WORLD",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 2),
+        ({
+            "communicator_identity": "serial",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 2),
+    ],
+)
+def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ranks) -> None:
+    with pytest.raises(NotImplementedError, match="currently serial-only"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), execution, ranks,
+            implicit_jacvec_pair=True, complete_bind=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [
+        {
+            "communicator_identity": "serial",
+            "device_identity": "gpu",
+            "memory_space": 2,
+        },
+        {
+            "communicator_identity": "serial",
+            "device_identity": "cpu",
+            "memory_space": 3,
+        },
+    ],
+)
+def test_implicit_pair_refuses_device_or_managed_memory_before_native_install(
+    execution,
+) -> None:
+    with pytest.raises(NotImplementedError, match="currently host-memory-only"):
+        _validate_refined_shared_interface_execution(
+            (0,), execution, 1,
+            implicit_jacvec_pair=True, complete_bind=False,
+        )
+
+
 def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
     with pytest.raises(ValueError, match="contiguous L0 prefix"):
         _validate_refined_shared_interface_execution((), {}, 1)
@@ -80,9 +157,129 @@ def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> 
         _validate_refined_shared_interface_execution(
             (0, 1), {"communicator_identity": "serial"}, 1, dynamic_regrid=1
         )
+    with pytest.raises(TypeError, match="complete-bind contracts must be exact bools"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "serial"}, 1,
+            implicit_jacvec_pair=True, complete_bind=1,
+        )
     with pytest.raises(TypeError, match="serial or exact MPI_COMM_WORLD"):
         _validate_refined_shared_interface_execution(
             (0, 1), {"communicator_identity": "MPI_COMM_SELF"}, 1)
+
+
+def test_implicit_pair_envelope_precedes_program_and_interface_install(
+    monkeypatch,
+) -> None:
+    import pops.runtime._amr_system_install as amr_install
+    import pops.runtime._bound_snapshot as bound_snapshot
+    import pops.runtime._component_execution_context as component_execution
+    import pops.runtime._install_param_routing as param_routing
+    import pops.runtime._lifecycle as lifecycle
+    import pops.runtime._runtime_authorities as authorities
+
+    events = []
+    bind_schema = object()
+    artifact = SimpleNamespace(
+        bind_schema=bind_schema,
+        so_path="compiled-amr-program.so",
+        plan=SimpleNamespace(
+            field_plans={},
+            capabilities={
+                "shared_interfaces": {"implicit_jacvec_pair": True},
+            },
+        ),
+    )
+    install_plan = SimpleNamespace(
+        artifact=artifact,
+        instances={},
+        params={},
+        aux={},
+        bootstrap_plan=None,
+        amr_transfer=None,
+        execution_context=object(),
+    )
+
+    class Probe(_AmrSystemInstall):
+        def __init__(self) -> None:
+            self._s = SimpleNamespace()
+
+        def _finish_program_install(self, *args, **kwargs) -> None:
+            del args, kwargs
+            events.append("program")
+
+        def _finalize_bind(self, snapshot) -> None:
+            assert snapshot == "snapshot"
+            events.append("freeze")
+
+    monkeypatch.setattr(lifecycle, "guard_assembling", lambda *_: None)
+    monkeypatch.setattr(
+        bound_snapshot,
+        "_require_exact_install_inputs",
+        lambda *_: install_plan,
+    )
+    monkeypatch.setattr(
+        bound_snapshot,
+        "build_amr_snapshot",
+        lambda *args, **kwargs: "snapshot",
+    )
+    monkeypatch.setattr(
+        amr_install,
+        "validate_install_arguments",
+        lambda *args, **kwargs: events.append("arguments"),
+    )
+    monkeypatch.setattr(
+        component_execution,
+        "component_execution_data",
+        lambda _: {
+            "communicator_identity": "serial",
+            "device_identity": "host",
+            "memory_space": 1,
+        },
+    )
+    monkeypatch.setattr(param_routing, "route_block_params", lambda *args: {})
+    native = SimpleNamespace(n_ranks=lambda: 1)
+    monkeypatch.setitem(sys.modules, "pops._pops", native)
+    monkeypatch.setattr(pops, "_pops", native, raising=False)
+    validate_envelope = authorities._validate_shared_interface_implicit_execution_envelope
+
+    def spy_envelope(execution_data, rank_count) -> None:
+        events.append("implicit-envelope")
+        validate_envelope(execution_data, rank_count)
+
+    monkeypatch.setattr(
+        authorities,
+        "_validate_shared_interface_implicit_execution_envelope",
+        spy_envelope,
+    )
+    monkeypatch.setattr(
+        authorities,
+        "finalize_runtime_authorities",
+        lambda engine, plan, *, complete=False: events.append(
+            "interfaces-complete" if complete else "interfaces-incremental"
+        ),
+    )
+
+    Probe()._install_compiled(
+        artifact,
+        instances={},
+        params={},
+        aux={},
+        field_plans={},
+        bind_schema=bind_schema,
+        initial_values=(),
+        bootstrap_plan=None,
+        amr_transfer=None,
+        install_plan=install_plan,
+    )
+
+    assert events == [
+        "arguments",
+        "implicit-envelope",
+        "program",
+        "interfaces-incremental",
+        "interfaces-complete",
+        "freeze",
+    ]
 
 
 def test_native_amr_grid_preserves_none_or_all_periodic_axes() -> None:

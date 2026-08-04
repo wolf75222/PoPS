@@ -18,6 +18,7 @@ from ._layout_plan_contracts import (
     LayoutPlan,
     LayoutRepresentation,
     LayoutSynchronization,
+    NativeSpatialLayout,
     NormalizedGeometry,
     NormalizedGeometryProvider,
     NormalizedLayout,
@@ -89,6 +90,43 @@ def _descriptor_geometry(descriptor: Any) -> NormalizedGeometry:
     return NormalizedGeometry.from_data(first_data)
 
 
+def _descriptor_native_spatial_layout(
+    descriptor: Any,
+    *,
+    handle: LayoutHandle,
+    geometry: NormalizedGeometry,
+) -> NativeSpatialLayout | None:
+    """Capture an optional native specialization without rediscovering geometry.
+
+    Extension layouts may remain algorithm-neutral and omit this protocol.  Such a plan is still
+    inspectable, but the production resolve gate refuses it before compilation.  A provider that
+    opts in supplies only topology/storage/decomposition facts; shape and bounds always come from
+    the already-authenticated ``NormalizedGeometry``.
+    """
+    projection = getattr(descriptor, "native_spatial_data", None)
+    if projection is None:
+        return None
+    if not callable(projection):
+        raise TypeError("layout descriptor native_spatial_data must be callable")
+    first = json_data(projection(), where="layout descriptor native_spatial_data()")
+    second = json_data(projection(), where="layout descriptor native_spatial_data()")
+    if first != second:
+        raise ValueError("layout descriptor native_spatial_data() must be deterministic")
+    required = {"schema_version", "periodicity", "centering", "decomposition"}
+    if not isinstance(first, dict) or set(first) != required:
+        raise TypeError(
+            "layout descriptor native_spatial_data() must expose the exact schema-v1 shape")
+    if first["schema_version"] != 1:
+        raise ValueError("layout descriptor native_spatial_data() uses an unsupported schema")
+    return NativeSpatialLayout.from_geometry(
+        layout=handle,
+        geometry=geometry,
+        periodicity=first["periodicity"],
+        centering=first["centering"],
+        decomposition=first["decomposition"],
+    )
+
+
 def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: Any = None) \
         -> NormalizedLayout:
     """Project any layout-descriptor implementation onto one common hierarchy representation."""
@@ -104,6 +142,8 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
     requirements = _descriptor_map(descriptor, "requirements")
     snapshot = _descriptor_snapshot(descriptor, handle_resolver=handle_resolver)
     geometry = _descriptor_geometry(descriptor)
+    native_spatial_layout = _descriptor_native_spatial_layout(
+        descriptor, handle=handle, geometry=geometry)
     count = capabilities.get("max_levels", capabilities.get("levels", 1))
     adaptive = capabilities.get("supports_amr", False)
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
@@ -138,7 +178,7 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
         transition_ratios=ratios, levels=levels,
         geometry=geometry,
         options=options, capabilities=capabilities, requirements=requirements,
-        descriptor_snapshot=snapshot)
+        descriptor_snapshot=snapshot, native_spatial_layout=native_spatial_layout)
 
 
 class LayoutPlanBuilder:
@@ -319,6 +359,6 @@ __all__ = [
     "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingOperation",
     "LayoutMappingProvider", "LayoutMappingPort", "LayoutMappingRequirement",
     "LayoutRepresentation", "LayoutSynchronization", "LayoutPlan", "LayoutPlanBuilder",
-    "NormalizedGeometry", "NormalizedGeometryProvider", "NormalizedLayout",
+    "NativeSpatialLayout", "NormalizedGeometry", "NormalizedGeometryProvider", "NormalizedLayout",
     "ResolvedLayoutMapping", "normalize_layout", "normalize_layout_plan",
 ]

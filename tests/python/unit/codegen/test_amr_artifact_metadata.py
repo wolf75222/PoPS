@@ -46,6 +46,23 @@ def test_amr_artifact_reports_program_and_every_declared_block():
     assert report_rows == manifest_rows
 
 
+def test_requirements_report_preserves_exact_riemann_provider_options():
+    artifact = artifact_fixture(target="amr_system", block_names=("fluid",))
+    compiled_model = artifact.blocks[0].model
+    compiled_model.has_roe = True
+    compiled_model.hllc_provider = None
+    compiled_model.roe_provider = "flux_jacobian_v1"
+    compiled_model.roe_entropy_policy = "none"
+    compiled_model.roe_entropy_delta = None
+
+    capabilities = artifact.requirements().capabilities
+
+    roe = next(row for row in capabilities if row["capability"] == "roe_dissipation")
+    assert roe["providers"] == [
+        {"kind": "flux_jacobian_v1", "entropy_policy": "none"}
+    ]
+
+
 @pytest.mark.parametrize("target", ["system", "amr_system"])
 def test_single_layout_artifact_cannot_omit_the_compiled_program(target):
     artifact = artifact_fixture(target=target)

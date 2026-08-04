@@ -2,8 +2,8 @@
 """Produce reproducible, integrity-checked evidence for the final PoPS release.
 
 The gate has no success switches.  It first verifies the exact final source
-contract, then builds the installed package, exercises the complete native and
-Python conformance suites, executes every final example, independently reopens
+contract, then builds the installed package, exercises complete native conformance and the exact
+M4/final-example Python release ledger, executes every final example, independently reopens
 their scientific artifacts, checks their restart evidence, and writes an
 attestation outside the checkout.  ``release_preflight.py --release`` verifies
 the attestation again against the live installed extension.
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -28,17 +29,21 @@ import xml.etree.ElementTree as ET
 
 from final_release_contract import (
     FINAL_EXAMPLES,
+    FINAL_EXAMPLE_REQUIRED_TESTS,
+    FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS,
     FINAL_SPECIFICATION,
+    INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
+    required_python_conformance_nodeids,
     require_release_matrix_source_contract,
     require_source_contract,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 7
+EVIDENCE_SCHEMA_VERSION = 11
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -93,7 +98,11 @@ def _outside_checkout(path: Path) -> Path:
     raise FinalGateError("--evidence must be outside the checkout: %s" % resolved)
 
 
-def _conda_command(arguments: Sequence[str]) -> list[str]:
+def _conda_command(
+    arguments: Sequence[str],
+    *,
+    pops_include: Path | None = ROOT / "include",
+) -> list[str]:
     """Run inside the same conda installation selected by the gate process.
 
     A login shell is deliberately forbidden here: user startup files may rewrite ``PATH`` and
@@ -142,7 +151,7 @@ def _conda_command(arguments: Sequence[str]) -> list[str]:
         "PYTHONPATH=",
         "PYTHONNOUSERSITE=1",
         "POPS_REQUIRE_NATIVE_TESTS=1",
-        "POPS_INCLUDE=" + str((ROOT / "include").resolve()),
+        "POPS_INCLUDE=" + ("" if pops_include is None else str(pops_include.resolve())),
         *arguments,
     ]
 
@@ -327,6 +336,36 @@ def _junit_summary(path: Path) -> dict[str, Any]:
     }
 
 
+def _require_junit_nodeids(
+    path: Path,
+    required: Sequence[str],
+) -> list[str]:
+    """Authenticate exact pytest tests inside an already all-pass JUnit lane."""
+
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        raise FinalGateError("invalid JUnit report %s: %s" % (path, exc)) from exc
+    cases = tuple(root.iter("testcase"))
+    authenticated = []
+    for nodeid in required:
+        relative, function_name = nodeid.split("::", 1)
+        expected_class = str(Path(relative).with_suffix("")).replace("/", ".")
+        matches = [
+            case
+            for case in cases
+            if case.attrib.get("name", "").split("[", 1)[0] == function_name
+            and case.attrib.get("classname", "").endswith(expected_class)
+        ]
+        if len(matches) != 1:
+            raise FinalGateError(
+                "required final-example test %s appears %d times in %s"
+                % (nodeid, len(matches), path)
+            )
+        authenticated.append(nodeid)
+    return authenticated
+
+
 def _require_no_hidden_skip(stdout: str) -> None:
     """Reject script-style tests which print a skip reason but return success."""
     matches = [line.strip() for line in stdout.splitlines()
@@ -340,22 +379,88 @@ def _require_no_hidden_skip(stdout: str) -> None:
 def _reopen_outputs(
     output_dir: Path, *, example: Path,
 ) -> tuple[dict[str, Any], tuple[Path, ...], tuple[Path, ...]]:
-    hdf5_paths = sorted(path for path in output_dir.rglob("*.h5") if path.is_file() and path.stat().st_size)
-    npz_paths = sorted(path for path in output_dir.rglob("*.npz") if path.is_file() and path.stat().st_size)
-    paraview_paths = sorted(path for path in output_dir.rglob("*.vtu") if path.is_file() and path.stat().st_size)
-    if not hdf5_paths or not npz_paths or not paraview_paths:
-        raise FinalGateError(
-            "%s did not produce non-empty HDF5, NPZ and ParaView artifacts" % example)
+    expectations = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(example)
+    if expectations is None:
+        raise FinalGateError("%s has no scientific-output release ledger" % example)
+    output_root = output_dir.resolve()
+
+    def roots(format_name: str) -> tuple[Path, ...]:
+        resolved = tuple(
+            (output_dir / expectation["artifact_root"]).resolve()
+            for expectation in expectations[format_name]
+        )
+        if any(not root.is_relative_to(output_root) for root in resolved):
+            raise FinalGateError(
+                "%s has an escaping %s scientific artifact root"
+                % (example, format_name)
+            )
+        return resolved
+
+    def files(format_name: str, suffix: str) -> list[Path]:
+        paths = []
+        for expectation, artifact_root in zip(
+            expectations[format_name], roots(format_name), strict=True,
+        ):
+            matches = sorted(
+                path
+                for path in artifact_root.rglob("*" + suffix)
+                if path.is_file() and path.stat().st_size
+            )
+            if not matches:
+                raise FinalGateError(
+                    "%s did not produce a non-empty %s scientific artifact %s in %s"
+                    % (example, format_name, suffix, expectation["artifact_root"])
+                )
+            paths.extend(matches)
+        return paths
+
+    hdf5_paths = files("hdf5", ".h5")
+    npz_paths = files("npz", ".npz")
+    paraview_vtu_paths = files("paraview", ".vtu")
+    paraview_pvd_paths = files("paraview", ".pvd")
+    paraview_paths = sorted((*paraview_vtu_paths, *paraview_pvd_paths))
     for path in hdf5_paths:
         if path.read_bytes()[:8] != b"\x89HDF\r\n\x1a\n":
             raise FinalGateError("HDF5 artifact has an invalid signature: %s" % path)
-    for path in paraview_paths:
+    for path in paraview_vtu_paths:
         try:
             root = ET.parse(path).getroot()
         except ET.ParseError as exc:
             raise FinalGateError("invalid ParaView XML %s: %s" % (path, exc)) from exc
-        if root.tag != "VTKFile":
-            raise FinalGateError("ParaView artifact is not a VTKFile: %s" % path)
+        if root.tag != "VTKFile" or root.attrib.get("type") != "UnstructuredGrid":
+            raise FinalGateError("ParaView artifact is not an UnstructuredGrid VTKFile: %s" % path)
+    expected_vtu_paths = {path.resolve() for path in paraview_vtu_paths}
+    paraview_roots = roots("paraview")
+    for path in paraview_pvd_paths:
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as exc:
+            raise FinalGateError("invalid ParaView collection XML %s: %s" % (path, exc)) from exc
+        collection = root.find("Collection")
+        datasets = () if collection is None else tuple(collection.findall("DataSet"))
+        if root.tag != "VTKFile" or root.attrib.get("type") != "Collection" or not datasets:
+            raise FinalGateError("ParaView artifact is not a non-empty PVD collection: %s" % path)
+        containing_roots = tuple(
+            artifact_root for artifact_root in paraview_roots
+            if path.resolve().is_relative_to(artifact_root)
+        )
+        if len(containing_roots) != 1:
+            raise FinalGateError("ParaView collection has an ambiguous artifact root: %s" % path)
+        for dataset in datasets:
+            relative = dataset.attrib.get("file")
+            timestep = dataset.attrib.get("timestep")
+            try:
+                time_value = float(timestep) if timestep is not None else float("nan")
+            except ValueError:
+                time_value = float("nan")
+            if not relative or not math.isfinite(time_value):
+                raise FinalGateError("ParaView collection has an invalid DataSet row: %s" % path)
+            referenced = (path.parent / relative).resolve()
+            if not referenced.is_relative_to(containing_roots[0]) \
+                    or referenced not in expected_vtu_paths:
+                raise FinalGateError(
+                    "ParaView collection references an absent or escaping VTU: %s" % referenced
+                )
     for path in npz_paths:
         if path.read_bytes()[:4] != b"PK\x03\x04":
             raise FinalGateError("NPZ artifact has an invalid ZIP signature: %s" % path)
@@ -430,7 +535,8 @@ def _run_examples(
         reopened[example.as_posix()], hdf5_paths, npz_paths = _reopen_outputs(
             destination, example=example)
         _reopen_hdf5_with_installed_runtime(recorder, hdf5_paths)
-        _reopen_npz_with_installed_runtime(recorder, npz_paths)
+        if npz_paths:
+            _reopen_npz_with_installed_runtime(recorder, npz_paths)
         restarted[example.as_posix()] = {
             "checkpoint": str(checkpoint),
             "tree_sha256": _tree_hash(checkpoint),
@@ -557,17 +663,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["native_conformance"]["evidence"] = {
             "required_lane": _junit_summary(native_junit),
         }
-        recorder.run("python_conformance", _conda_command(
-            ["python", "-m", "pytest", "-q"]))
+        python_nodeids = required_python_conformance_nodeids(ROOT)
         python_junit = evidence_root / "reports" / "python-required-conformance.xml"
         required_stdout = recorder.run("python_conformance", _conda_command([
-            "python", "-m", "pytest", "-q", "-s", "-m", PYTHON_REQUIRED_SELECTION,
+            "python", "-m", "pytest", "-q", "-s",
+            "-o", "xfail_strict=true",
+            *python_nodeids,
             "--junitxml", str(python_junit),
         ]))
         _require_no_hidden_skip(required_stdout)
+        authenticated_python_nodeids = _require_junit_nodeids(
+            python_junit, python_nodeids
+        )
+        installed_component_junit = (
+            evidence_root / "reports" / "installed-component-package.xml"
+        )
+        installed_component_stdout = recorder.run(
+            "python_conformance",
+            _conda_command(
+                [
+                    "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+                    "python",
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "-s",
+                    "-o",
+                    "xfail_strict=true",
+                    INSTALLED_COMPONENT_PACKAGE_NODEID,
+                    "--junitxml",
+                    str(installed_component_junit),
+                ],
+                pops_include=None,
+            ),
+        )
+        _require_no_hidden_skip(installed_component_stdout)
         recorder.rows["python_conformance"]["evidence"] = {
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
+            "nodeids": authenticated_python_nodeids,
+            "final_example_nodeids": list(FINAL_EXAMPLE_REQUIRED_TESTS),
+            "installed_component_package": {
+                "nodeid": INSTALLED_COMPONENT_PACKAGE_NODEID,
+                "headers": "installed-wheel",
+                "lane": _junit_summary(installed_component_junit),
+            },
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
             recorder.rows["codesign"]["evidence"],

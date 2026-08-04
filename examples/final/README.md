@@ -2,12 +2,22 @@
 
 [`EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py`](EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 is the final public target, not a migration example. It deliberately contains one authority per
-concern and no fallback to an older or lower-level API.
+concern and no fallback to an older or lower-level API. The executable acceptance reopens its VTU,
+removes covered coarse and replicated cells, and compares the active AMR leaf cells with the exact
+characteristic solution using cell-volume-weighted norms. Its relative L2 error must remain at or
+below `0.10`. The accepted `ProgramReport` must also contain flux contributions from every installed
+level and exact `reflux`, then `average_down`, synchronization for each parent/child relation; strict
+restart and the SSPRK2 factory run must preserve that complete transactional state. The example reads
+`simulation.amr.explain_regrid()` before and after continuation: both the uninterrupted and restarted
+routes must complete a topology-changing regrid, while strict restart preserves `regrid_count` and
+`topology_epoch` exactly. It also refuses checkpoint publication unless
+`simulation.amr.explain_checkpoint()` reports the bound hierarchy as restartable without violations.
 
 [`EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`](EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py)
 extends the same public lifecycle with an explicit additive IMEX tableau, typed field solves,
-two-level subcycled AMR, conservative transfers and accepted-state consumers. Its matching
-contract note is
+two-level subcycled AMR, conservative transfers, globally reported AMR lowering coverage, an
+executed rejected-attempt rollback proof, persistent tagging hysteresis and accepted-state consumers.
+Its matching contract note is
 [`docs/design/final-advection-imex-amr.md`](../../docs/design/final-advection-imex-amr.md).
 
 [`EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py`](EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py)
@@ -18,8 +28,10 @@ matching contract note is
 
 [`EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py`](EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py)
 selects two state spaces of one model into two owner-qualified blocks, couples them through a typed
-elliptic field on the same periodic layout, and proves scientific outputs plus bit-identical restart
-continuation through the public lifecycle.
+elliptic field on the same periodic layout, publishes owner-qualified signed charge-contribution
+and momentum diagnostics, refuses a required cross-layout read when no mapping provider is
+installed, and proves scientific outputs plus bind/layout-exact, bit-identical restart continuation
+through the public lifecycle.
 
 ## Public contract
 

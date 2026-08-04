@@ -81,8 +81,9 @@ def validate_amr_authorities(plan: Any) -> None:
             or plan.bootstrap_plan.initial_identity != plan.initial_condition_plan.identity:
         raise ValueError("ResolvedSimulationPlan bootstrap does not authenticate AMR authorities")
     providers = plan.amr_providers
-    if tuple(providers) != ("clustering", "tagger"):
-        raise ValueError("AMR plan requires exact clustering and tagger provider bindings")
+    if tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError(
+            "AMR plan requires exact clustering, tagger and reflux provider bindings")
     # Component inputs deliberately admit both source authorities and already-compiled
     # artifacts.  Their representations differ, but both expose the same authenticated
     # projection protocol.  Index that projection instead of reaching through the source-only

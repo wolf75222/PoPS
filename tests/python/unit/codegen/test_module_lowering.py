@@ -11,7 +11,7 @@ These checks stay pure Python (no compiler / no ``.so``); they pin:
   1  a raw Module with a bodyless codegen operator raises the SAME error through
      ``lower_and_validate`` as through ``_module_to_model`` (one validation path);
   2  a facade Model resolves to its operator-first Module (``source_module``) with NO manual
-     ``to_module()`` / ``lower()`` and carries a ``module_hash``;
+     ``lower()`` and carries a ``module_hash``;
   3  a facade dependency error is remapped, citing the model name / states / operators;
   4  the emit model of a facade Model is BYTE-IDENTICAL through ``lower_and_validate`` vs direct.
 
@@ -33,7 +33,22 @@ from pops import time as adctime  # noqa: E402
 from pops._ir.expr import Const  # noqa: E402
 from pops.physics._facade import Model  # noqa: E402
 from pops.codegen.module_lowering import (  # noqa: E402
-    _module_to_model, lower_and_validate, remap_lowering_error)
+    _lower_native_role, _module_to_model, lower_and_validate, remap_lowering_error)
+from pops.frames import X_AXIS, Z_AXIS  # noqa: E402
+from pops.physics import Axial, Density, Momentum, Scalar  # noqa: E402
+from pops.physics._coupled_abi import role_canonical  # noqa: E402
+from pops.runtime._bricks_time import Role  # noqa: E402
+
+
+def test_module_role_lowering_preserves_typed_boundary_semantics():
+    assert _lower_native_role(Density()) == "Density"
+    assert _lower_native_role(Momentum(axis=X_AXIS)) == "MomentumX"
+    assert _lower_native_role(Axial(axis=X_AXIS)) == "AxialX"
+    assert _lower_native_role(Axial(axis=Z_AXIS)) == "AxialZ"
+    assert _lower_native_role(Scalar()) == "Scalar"
+    assert _lower_native_role("momentum_y") == "MomentumY"
+    assert _lower_native_role("Custom") is None
+    assert role_canonical("AxialZ") == Role.AxialZ == "axial_z"
 
 
 def _facade_model(name="ep"):
@@ -85,7 +100,7 @@ def test_one_validation_bodyless_operator_same_error():
     assert direct == via_lower, "the SAME error text is raised via both entries (no divergence)"
 
 
-# --- 2: a facade Model resolves to its operator-first Module with no manual to_module -----------
+# --- 2: a facade Model resolves to its operator-first Module with no manual lower() -------------
 
 def test_facade_model_carries_operator_first_module():
     m = _facade_model()

@@ -84,6 +84,55 @@ struct VanLeer {
   }
 };
 
+/// Monotonized-central (MC) limiter: second-order TVD with two ghosts.
+///
+/// For backward/forward differences a,b with the same sign this returns
+/// min((|a|+|b|)/2, 2|a|, 2|b|) with their common sign, and zero otherwise.
+/// The comparisons are arranged so finite inputs cannot overflow while forming either the
+/// centred candidate or the doubled bound.  Stateless, branch-local and POPS_HD.
+struct MC {
+  static constexpr int formal_order = 2;
+  static constexpr int n_ghost = 2;
+  POPS_HD Real limited_slope(Real backward, Real forward) const {
+    const bool positive = backward > Real(0) && forward > Real(0);
+    const bool negative = backward < Real(0) && forward < Real(0);
+    if (!positive && !negative)
+      return Real(0);
+
+    const Real a = positive ? backward : -backward;
+    const Real b = positive ? forward : -forward;
+    const Real centred = Real(0.5) * a + Real(0.5) * b;
+    const Real smaller = a < b ? a : b;
+    // centred <= 2*smaller without forming the potentially overflowing doubled value.
+    const Real magnitude = Real(0.5) * centred <= smaller ? centred : Real(2) * smaller;
+    return positive ? magnitude : -magnitude;
+  }
+};
+
+/// Superbee limiter: compressive second-order TVD reconstruction with two ghosts.
+///
+/// For same-sign differences it evaluates
+/// max(min(2|a|,|b|), min(|a|,2|b|)) with their common sign.  Each doubled candidate is formed
+/// only after proving it is bounded by the other finite difference, so finite inputs remain
+/// finite.  Stateless and POPS_HD; selection remains compile-time through the prepared registry.
+struct Superbee {
+  static constexpr int formal_order = 2;
+  static constexpr int n_ghost = 2;
+  POPS_HD Real limited_slope(Real backward, Real forward) const {
+    const bool positive = backward > Real(0) && forward > Real(0);
+    const bool negative = backward < Real(0) && forward < Real(0);
+    if (!positive && !negative)
+      return Real(0);
+
+    const Real a = positive ? backward : -backward;
+    const Real b = positive ? forward : -forward;
+    const Real twice_a_bounded = a <= Real(0.5) * b ? Real(2) * a : b;
+    const Real twice_b_bounded = b <= Real(0.5) * a ? Real(2) * b : a;
+    const Real magnitude = twice_a_bounded > twice_b_bounded ? twice_a_bounded : twice_b_bounded;
+    return positive ? magnitude : -magnitude;
+  }
+};
+
 /// weno5z: WENO5-Z reconstruction (Borges 2008) at one interface, on a 5-point stencil.
 ///
 /// Returns the reconstructed value at the face BETWEEN v0 and vp1 (face +dir of cell v0).

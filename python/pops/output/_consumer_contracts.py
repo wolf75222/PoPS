@@ -55,6 +55,29 @@ def _nonnegative_binary64_hex(value: Any, where: str) -> str:
     return number.hex()
 
 
+def _finite_binary64_hex(value: Any, where: str) -> str:
+    """Normalize a signed finite binary64 value for identity-bearing manifests."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be a finite number" % where)
+    if isinstance(value, str):
+        try:
+            number = float.fromhex(value)
+        except (OverflowError, ValueError) as exc:
+            raise TypeError("%s must be a canonical float.hex() string" % where) from exc
+        if number.hex() != value:
+            raise ValueError("%s must be a canonical float.hex() string" % where)
+    elif isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except OverflowError as exc:
+            raise ValueError("%s must be a finite number" % where) from exc
+    else:
+        raise TypeError("%s must be a finite number" % where)
+    if not math.isfinite(number):
+        raise ValueError("%s must be a finite number" % where)
+    return number.hex()
+
+
 def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
     if not isinstance(value, Handle) or not value.is_resolved:
         raise TypeError("%s must be a canonical Handle" % where)
@@ -134,6 +157,19 @@ def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     if type(first["observer"]) is not dict:
         raise TypeError("%s observer declaration must be an exact dict" % where)
     return freeze_data(first, "%s.consumer_data" % where)
+
+
+def _is_async_scientific_observer(operation_data: Any) -> bool:
+    """Authenticate the one monitor provider allowed to carry scientific diagnostics."""
+    if not isinstance(operation_data, Mapping):
+        return False
+    observer = operation_data.get("observer")
+    return (
+        isinstance(observer, Mapping)
+        and observer.get("observer_kind") == "async_scientific_output"
+        and observer.get("provider_id")
+        == "pops.output.async-scientific-writer.v1"
+    )
 
 
 def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
@@ -291,6 +327,7 @@ class ConsumerQuantity:
 
 _DIAGNOSTIC_REDUCTIONS = frozenset({
     "sum", "abs_sum", "sum_sq", "min", "max", "abs_max", "step_change_l2",
+    "accepted_balance",
 })
 _DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
 _DIAGNOSTIC_COLLECTIVES = {
@@ -301,6 +338,9 @@ _DIAGNOSTIC_COLLECTIVES = {
     "max": "global_max",
     "abs_max": "global_max",
     "step_change_l2": "global_sum",
+    # The five Program scalars were already reduced while executing the native
+    # accepted attempt. Reading its mailbox adds no second consumer collective.
+    "accepted_balance": None,
 }
 
 
@@ -309,8 +349,8 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
             "schema_version", "role", "operations", "conservation"}:
         raise TypeError("DiagnosticQuantity.execution has an unknown schema")
-    if value["schema_version"] != 1:
-        raise ValueError("DiagnosticQuantity.execution schema_version must be 1")
+    if value["schema_version"] != 2:
+        raise ValueError("DiagnosticQuantity.execution schema_version must be 2")
     role = value["role"]
     if role is not None:
         _text(role, "DiagnosticQuantity.execution.role")
@@ -320,11 +360,24 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     normalized = []
     for index, operation in enumerate(operations):
         where = "DiagnosticQuantity.execution.operations[%d]" % index
-        if not isinstance(operation, Mapping) or set(operation) != {
-                "name", "reduction", "transform", "metric_weighted"}:
+        if not isinstance(operation, Mapping):
+            raise TypeError("%s has an unknown schema" % where)
+        reduction = operation.get("reduction")
+        expected = {
+            "name",
+            "reduction",
+            "transform",
+            "metric_weighted",
+            "coefficient",
+        }
+        if reduction == "accepted_balance":
+            expected.add("balance_route")
+            if "automatic_terms" in operation:
+                expected.add("automatic_terms")
+                expected.add("balance_component")
+        if set(operation) != expected:
             raise TypeError("%s has an unknown schema" % where)
         name = _text(operation["name"], "%s.name" % where)
-        reduction = operation["reduction"]
         if reduction not in _DIAGNOSTIC_REDUCTIONS:
             raise ValueError("%s.reduction is not a supported native reduction" % where)
         transform = operation["transform"]
@@ -335,17 +388,67 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise TypeError("%s.metric_weighted must be an exact bool" % where)
         if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
             raise ValueError("only additive diagnostic reductions may be metric-weighted")
-        normalized.append({
+        coefficient = _finite_binary64_hex(
+            operation["coefficient"], "%s.coefficient" % where)
+        if float.fromhex(coefficient) == 0.0:
+            raise ValueError("%s.coefficient must be nonzero" % where)
+        row = {
             "name": name,
             "reduction": reduction,
             "transform": transform,
             "metric_weighted": weighted,
-        })
+            "coefficient": coefficient,
+        }
+        if reduction == "accepted_balance":
+            if transform != "identity" or weighted or float.fromhex(coefficient) != 1.0:
+                raise ValueError(
+                    "accepted balance evidence cannot apply a scalar transform, metric weight, "
+                    "or coefficient"
+                )
+            route = Identity.from_token(operation["balance_route"])
+            if route.domain != "balance-ledger-route" or route.schema_version != 1:
+                raise ValueError(
+                    "accepted balance route must use the version-1 balance-ledger-route identity"
+                )
+            row["balance_route"] = route.token
+            automatic_terms = operation.get("automatic_terms", ())
+            if not isinstance(automatic_terms, (tuple, list)):
+                raise TypeError("%s.automatic_terms must be a sequence" % where)
+            automatic_terms = tuple(automatic_terms)
+            if automatic_terms != tuple(sorted(set(automatic_terms))):
+                raise ValueError(
+                    "%s.automatic_terms must be sorted and unique" % where
+                )
+            unsupported = set(automatic_terms).difference({"reflux", "projection"})
+            if unsupported:
+                raise ValueError(
+                    "%s.automatic_terms names an unavailable native producer" % where
+                )
+            if automatic_terms:
+                row["automatic_terms"] = list(automatic_terms)
+                component = operation["balance_component"]
+                if type(component) is not int or component < 0:
+                    raise TypeError(
+                        "%s.balance_component must be a non-negative int" % where
+                    )
+                row["balance_component"] = component
+        normalized.append(row)
     if len({row["name"] for row in normalized}) != len(normalized):
         raise ValueError("DiagnosticQuantity execution operation names must be unique")
+    has_accepted_balance = any(
+        row["reduction"] == "accepted_balance" for row in normalized
+    )
+    if has_accepted_balance and len(normalized) != 1:
+        raise ValueError(
+            "accepted balance evidence must be the sole diagnostic execution operation"
+        )
     conservation = value["conservation"]
     normalized_conservation = None
     if conservation is not None:
+        if has_accepted_balance:
+            raise ValueError(
+                "accepted open-domain balance evidence cannot declare an invariant tolerance"
+            )
         if not isinstance(conservation, Mapping) or set(conservation) != {"tolerance"}:
             raise TypeError("DiagnosticQuantity.execution.conservation has an unknown schema")
         tolerance = _nonnegative_binary64_hex(
@@ -354,7 +457,7 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise ValueError("a conservation check requires exactly one scalar operation")
         normalized_conservation = {"tolerance": tolerance}
     return freeze_data({
-        "schema_version": 1,
+        "schema_version": 2,
         "role": role,
         "operations": normalized,
         "conservation": normalized_conservation,
@@ -367,6 +470,7 @@ def diagnostic_collective_operations(execution: Any) -> tuple[str, ...]:
     return tuple(sorted({
         _DIAGNOSTIC_COLLECTIVES[operation["reduction"]]
         for operation in canonical["operations"]
+        if _DIAGNOSTIC_COLLECTIVES[operation["reduction"]] is not None
     }))
 
 
@@ -519,10 +623,16 @@ class ConsumerManifest:
                 "descriptor": first,
                 "references": [value.canonical_identity() for value in resolved_references],
             }, "%s.consumer_data" % where))
+        async_scientific_monitor = (
+            self.kind is ConsumerKind.MONITOR
+            and _is_async_scientific_observer(operation_data)
+        )
         if diagnostic_rows and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can embed diagnostic providers")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.diagnostic_quantities, tuple) or any(
                 type(value) is not DiagnosticQuantity
@@ -539,9 +649,21 @@ class ConsumerManifest:
             raise ValueError(
                 "ConsumerManifest must lower every diagnostic descriptor exactly once")
         if diagnostic_quantities and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can carry diagnostic quantities")
+        has_accepted_balance = any(
+            operation["reduction"] == "accepted_balance"
+            for quantity in diagnostic_quantities
+            for operation in quantity.execution["operations"]
+        )
+        if has_accepted_balance and self.schedule.consumer_may_fire_at_start():
+            raise ValueError(
+                "Balance schedule cannot fire at_start: accepted balance evidence exists "
+                "only after a native step attempt"
+            )
         object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")

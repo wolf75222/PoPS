@@ -9,10 +9,9 @@ documentation update:
 
   T1 - the published top-level keys stay present (the doc and the limitations pages key off
        them; a vanished key means a stale reference).
-  T2 - the Riemann surface matches the dispatch gates: hllc/roe are exposed on the cartesian
-       and AMR facades but NOT on polar (no polar energy-flux brick, make_block_polar rejects
-       them); polar exposes only rusanov + hll (the isothermal fluid declares wave_speeds).
-       Guards the "hllc/roe = 2D Euler only" and "polar = scalar ExB only" doc regressions.
+  T2 - the Riemann surface matches the dispatch gates: all four public providers have one
+       capability-gated Cartesian, polar and AMR route. The native isothermal polar model supplies
+       HLLC/Roe capabilities; scalar ExB still fails at the exact model-capability leaf.
   T3 - backends_dsl MPI/AMR flags agree (truthiness) with the _BACKEND_CAPS table that
        actually drives backend selection; catches drift between the two tables.
   T4 - the polar stability bounds (stability_speed / stability_dt / source_frequency) are
@@ -48,14 +47,12 @@ def test_top_level_keys_present():
 
 
 def test_riemann_surface_matches_dispatch():
-    # ADC-752: each provider has one capability-gated route; polar stays rusanov + hll.
+    # ADC-752: each provider has one capability-gated route on every supported geometry.
     riemann = capabilities()["riemann"]
     expected = ["rusanov", "hll", "hllc", "roe"]
     assert riemann["system_cartesian"] == expected, riemann["system_cartesian"]
     assert riemann["amr"] == expected, riemann["amr"]
-    # Polar has no contact/Roe metric provider: only rusanov + hll are currently wired.
-    assert riemann["system_polar"] == ["rusanov", "hll"], riemann["system_polar"]
-    assert "hllc" not in riemann["system_polar"] and "roe" not in riemann["system_polar"]
+    assert riemann["system_polar"] == expected, riemann["system_polar"]
 
 
 def test_backends_dsl_flags_match_backend_caps():

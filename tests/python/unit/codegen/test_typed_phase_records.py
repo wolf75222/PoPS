@@ -112,6 +112,9 @@ def test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating():
     plan, source_layout = _resolved_plan()
     assert not hasattr(plans, "ResolvedPlan")
     assert plan.plan_identity.domain == "resolved-plan"
+    assert plan.resolved_dimension == 2
+    assert tuple(plan.native_layouts) == tuple(
+        row.handle.qualified_id for row in plan.layout_plan.layouts)
     assert dict(plan.compile_values) == {}
 
     source_layout["mesh"]["shape"].append(32)
@@ -148,6 +151,8 @@ def test_wrong_phase_and_structural_lookalikes_are_rejected():
 def test_compiled_artifact_is_one_exact_wrapper_and_rehashes_binaries(tmp_path):
     artifact, program_path = _artifact(tmp_path)
     assert artifact.so_path == str(program_path)
+    assert artifact.resolved_dimension == 2
+    assert artifact.native_layouts == artifact.plan.native_layouts
     assert artifact.inspect.__func__ is CompiledSimulationArtifact.inspect
     assert artifact.manifest.__func__ is CompiledSimulationArtifact.manifest
     artifact.verify()

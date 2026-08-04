@@ -19,12 +19,33 @@ from typing import Any
 from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
+    _AUX_CANONICAL,
     _codegen_exprs,
     _live_prims,
     _prim_block,
     _roles_for,
 )
 from pops.identity.scalar import scalar_cpp
+
+
+def has_characteristic_no_inflow_provider(model: Any) -> bool:
+    """Whether the generated block can evaluate its characteristic Jacobian locally.
+
+    Boundary kernels receive the conservative cell state and model value parameters, but no
+    auxiliary field pack.  Refuse a Jacobian that transitively reads an auxiliary field instead of
+    emitting a hook with an undeclared dependency or silently freezing that field.
+    """
+    jacobian = getattr(model, "_roe_jacobian", None)
+    requirements = getattr(model, "_aux_requirements", None)
+    if jacobian is None or not callable(requirements):
+        return False
+    expressions = [
+        expression
+        for direction in ("x", "y")
+        for row in jacobian[direction]
+        for expression in row
+    ]
+    return not bool(requirements(expressions).get("aux"))
 
 
 def _certified_roe_blocks(model: Any, jacobians: Any) -> Any:
@@ -127,6 +148,11 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     E line, c = sqrt(p/rho) per side then Roe average (standard generalization). The
     components OUTSIDE the fluid roles are passive scalars carried by the entropy wave
     (tangential line, phi = q/rho). The core (HasRoeDissipation) does F = 1/2(FL+FR) - d/2."""
+    from pops.numerics.riemann.providers import ENTROPY_HARTEN, RoeEntropyPolicy
+
+    policy = getattr(model, "_roe_entropy_policy", None)
+    if type(policy) is not RoeEntropyPolicy:
+        raise ValueError("enable_roe: missing exact typed entropy policy")
     out = []
     roles_l = _roles_for(model.cons_names, model.cons_roles)
     if "p" not in model.prim_defs:
@@ -144,8 +170,8 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     passives = [c for c in range(nc) if c not in (iD, iX, iY, iE)]
     out.append("  // CAPABILITY ROE generee depuis les ROLES (enable_roe) : dissipation")
     out.append("  // |A_roe| dU du coeur generique (HasRoeDissipation), aucun layout fige.")
-    out.append("  POPS_HD State roe_dissipation(const State& UL, const pops::Aux&, "
-               "const State& UR, const pops::Aux&, int dir) const {")
+    out.append("  POPS_HD State roe_dissipation(const State& UL, const auto&, "
+               "const State& UR, const auto&, int dir) const {")
     out.append("    const int in_ = dir == 0 ? %d : %d;" % (iX, iY))
     out.append("    const int it_ = dir == 0 ? %d : %d;" % (iY, iX))
     out.append("    const pops::Real rL = UL[%d], rR = UR[%d];" % (iD, iD))
@@ -178,12 +204,20 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     out.append("    const pops::Real a2 = dr - dp / c2;")
     out.append("    const pops::Real a3 = rho * dut;")
     out.append("    const pops::Real a5 = (dp + rho * c * dun) / (pops::Real(2) * c2);")
-    out.append("    // Politique d'entropie explicite du provider Roe.")
-    out.append("    const pops::HartenEntropyFix entropy_fix{pops::Real(0.1)};")
+    out.append("    // Politique d'entropie explicite du provider Roe (%s)." % policy.kind)
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::HartenEntropyFix entropy_fix{%s};"
+                   % scalar_cpp(policy.delta))
     out.append("    const pops::Real l1r = un - c, l5r = un + c;")
-    out.append("    const pops::Real al1 = entropy_fix(l1r, c);")
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::Real al1 = entropy_fix(l1r, c);")
+    else:
+        out.append("    const pops::Real al1 = l1r < 0 ? -l1r : l1r;")
     out.append("    const pops::Real al2 = un < 0 ? -un : un;")
-    out.append("    const pops::Real al5 = entropy_fix(l5r, c);")
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::Real al5 = entropy_fix(l5r, c);")
+    else:
+        out.append("    const pops::Real al5 = l5r < 0 ? -l5r : l5r;")
     out.append("    State d{};")
     out.append("    d[%d] = al1 * a1 + al2 * a2 + al5 * a5;" % iD)
     out.append("    d[in_] = al1 * a1 * (un - c) + al2 * a2 * un + al5 * a5 * (un + c);")
@@ -212,8 +246,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
     (guard at declaration and in check())."""
     out = []
     has_aux = bool(model.aux_names)  # Aux parameters named aL/aR only if some aux exist
-    aL = "const pops::Aux& aL" if has_aux else "const pops::Aux&"
-    aR = "const pops::Aux& aR" if has_aux else "const pops::Aux&"
+    aL = "const auto& aL" if has_aux else "const auto&"
+    aR = "const auto& aR" if has_aux else "const auto&"
     out.append("  // CAPABILITY ROE FOURNIE (m.roe_dissipation) : dissipation d ecrite par")
     out.append("  // l'utilisateur via left()/right() des deux etats ; hook HasRoeDissipation.")
     out.append("  POPS_HD State roe_dissipation(const State& UL, %s, const State& UR, %s, "
@@ -225,7 +259,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         out += ["    const pops::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
                 for p, e in model.prim_defs.items()]
         if has_aux:
-            out += ["    const pops::Real %s%s = %s.%s;" % (side, n, av, n)
+            out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
+                    % (side, n, av, _AUX_CANONICAL[n])
                     for n in model.aux_names]
     out.append("    State d{};")
     out.append("    if (dir == 0) {")
@@ -260,8 +295,8 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     else:
         out.append("  // Phi_delta(A), delta=%s ; spectre complexe/non converge refuse."
                    % scalar_cpp(entropy_fix))
-    out.append("  POPS_HD State roe_dissipation(const State& UL, const pops::Aux&, "
-               "const State& UR, const pops::Aux&, int dir) const {")
+    out.append("  POPS_HD State roe_dissipation(const State& UL, const auto&, "
+               "const State& UR, const auto&, int dir) const {")
     # conservatives at the ARITHMETIC-MEAN interface state Uavg = 1/2 (UL + UR)
     out += ["    const pops::Real %s = pops::Real(0.5) * (UL[%d] + UR[%d]);" % (c, i, i)
             for i, c in enumerate(model.cons_names)]
@@ -338,4 +373,44 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
             for i in range(nc)]
     out.append("    }")
     out += ["    return d;", "  }", ""]
+    if not has_characteristic_no_inflow_provider(model):
+        return out
+    out.append("  // Prepared characteristic no-inflow: the same complete model Jacobian, oriented")
+    out.append("  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback.")
+    out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
+    out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
+    out += ["    const pops::Real %s = interior[%d];" % (c, i)
+            for i, c in enumerate(model.cons_names)]
+    out += _prim_block(model, live)
+    out.append("    pops::Real A[%d][%d];" % (nc, nc))
+    out.append("    if (dir == 0) {")
+    ctlx, ccppx = _codegen_exprs(
+        model, [Jx[i][j] for i in range(nc) for j in range(nc)], cse, indent="      ")
+    out += ctlx
+    for i in range(nc):
+        out += ["      A[%d][%d] = %s;" % (i, j, ccppx[i * nc + j])
+                for j in range(nc)]
+    out.append("    } else if (dir == 1) {")
+    ctly, ccppy = _codegen_exprs(
+        model, [Jy[i][j] for i in range(nc) for j in range(nc)], cse, indent="      ")
+    out += ctly
+    for i in range(nc):
+        out += ["      A[%d][%d] = %s;" % (i, j, ccppy[i * nc + j])
+                for j in range(nc)]
+    out.append("    } else {")
+    out.append("      return false;")
+    out.append("    }")
+    out.append("    pops::Real jump[%d], incoming[%d];" % (nc, nc))
+    out += ["    jump[%d] = interior[%d] - reference[%d];" % (i, i, i)
+            for i in range(nc)]
+    out.append(
+        "    if (!pops::characteristic_incoming_apply(A, jump, incoming, outward_sign, "
+        "80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d))"
+        % (im_tol_cpp, eig_max_iter_value)
+    )
+    out.append("      return false;")
+    for i in range(nc):
+        out.append("    ghost[%d] = interior[%d] - pops::Real(2) * incoming[%d];" % (i, i, i))
+        out.append("    if (!std::isfinite(ghost[%d])) return false;" % i)
+    out += ["    return true;", "  }", ""]
     return out

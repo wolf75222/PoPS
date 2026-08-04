@@ -24,7 +24,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     """
 
     _physics_mutators = frozenset({
-        "conservative_vars", "primitive", "primitive_vars", "aux", "aux_field",
+        "conservative_vars", "primitive", "primitive_vars", "recovery_admissibility", "aux",
+        "aux_field",
         "conservative_from", "flux", "flux_term", "eigenvalues", "wave_speeds",
         "wave_speeds_from_jacobian", "stability_speed", "stability_dt", "source",
         "source_term", "linear_source", "rate_operator", "rate", "field_solve",
@@ -93,6 +94,16 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         # positional form: fixes the layout from already-defined names/Var.
         self._m.set_primitive_state(*vars, roles=roles)
         return None
+
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare fail-closed physical constraints for primitive recovery candidates.
+
+        Each keyword names one component of the primitive layout and maps it to a symbolic Boolean
+        expression over primitive variables.  Example: ``rho=rho > 0, p=p > 0``.  Finite candidates
+        that violate a declared predicate are rejected by the native prepared recovery chain before
+        any solution or warm-start publication.
+        """
+        self._m.recovery_admissibility(**constraints)
 
     def aux(self, name: Any) -> Any:
         """CANONICAL auxiliary field (must be a key of AUX_CANONICAL: phi/grad_x/grad_y/B_z/T_e)."""
@@ -340,12 +351,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.set_riemann_hooks(**forms)
         return self
 
-    def enable_roe(self) -> None:
+    def enable_roe(self, *, entropy_fix: Any = None) -> None:
         """Emits the ROE capability (roe_dissipation = ``|A_roe| dU`` generated from the ROLES +
         primitive 'p'): riemann='roe' becomes available for this model EVEN outside 4-variable
         Euler (without Energy: c = sqrt(p/rho) averaged Roe-style; components outside the fluid
-        roles = passive scalars on the entropy wave). Delegates to HyperbolicModel.enable_roe."""
-        self._m.enable_roe()
+        roles = passive scalars on the entropy wave). ``entropy_fix`` is a typed
+        ``riemann.Harten(delta)`` or ``riemann.NoEntropyFix()`` policy. Delegates to
+        HyperbolicModel.enable_roe."""
+        self._m.enable_roe(entropy_fix=entropy_fix)
 
     def roe_dissipation(self, x: Any, y: Any) -> None:
         """Roe dissipation PROVIDED by the user (outside the fluid roles): n_vars expressions per
@@ -363,8 +376,9 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
         """Generic moment Roe: emits roe_dissipation = ``|A| (UR-UL)`` with A the flux Jacobian at
-        Uavg = 1/2(UL+UR). ``entropy_fix=delta`` selects the generic Harten spectral function
-        ``Phi_delta(A)``; ``None`` uses the matrix absolute value with a real-singular zero-mode
+        Uavg = 1/2(UL+UR). ``entropy_fix=riemann.Harten(delta)`` selects the generic Harten
+        spectral function ``Phi_delta(A)``; ``riemann.NoEntropyFix()`` (or the omitted default)
+        uses the matrix absolute value with a real-singular zero-mode
         projector. Both refuse complex/non-converged spectra and never substitute Rusanov.
         Roles-free (no Density/Momentum, no 'p'): makes riemann='roe'
         available for a moment hierarchy. Exclusive with enable_roe / roe_dissipation.

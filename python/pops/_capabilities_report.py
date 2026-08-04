@@ -375,6 +375,275 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
+            "boundary:prepared_transport",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
+                "transport boundaries; executable built-ins are periodic, extrapolation, "
+                "constant/RuntimeParam fixed state, conservative device-side analytic "
+                "(x,y,t,params) fixed state, model primitive-to-conservative fixed-state conversion, "
+                "typed-role slip wall, and typed no-flux faces that extrapolate ghosts then zero "
+                "the evaluated numerical flux before divergence/reflux; dynamic AMR regrid keeps internal "
+                "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
+                "double-physical corners explicitly not required by dimension-split FV stencils; "
+                "numerical resolution rejects every descriptor outside this executable envelope"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:characteristic_no_inflow",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "2D Cartesian conservative constant/RuntimeParam fixed-reference no-inflow uses "
+                "the exact compiled "
+                "flux-Jacobian provider emitted by m.roe_from_jacobian() (1..16 components); "
+                "the Kokkos kernel projects only outward-normal incoming modes, treats the "
+                "scale-relative sonic subspace as neutral, preflights the real spectrum "
+                "collectively, and rolls back ghosts on refusal; primitive/analytic references, "
+                "runtime/field-dependent eigenstructure, sonic-error policy, 3D, polar/embedded "
+                "geometry, and qualified MPI/GPU execution remain unavailable"
+            ),
+            requested="characteristic no-inflow/outflow transport boundary",
+            available_route=(
+                "Inflow(state=U, value=U_ref, "
+                "characteristic=model_characteristic_no_inflow(U))"
+            ),
+            alternative=(
+                "use fixed-state inflow/extrapolated outflow outside the qualified envelope"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:representation_conversion",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D fixed-state primitive inflow may use the exact compiled block-model "
+                "to_conservative provider; conservative-to-primitive recovery and arbitrary "
+                "representation converters remain unavailable, and conversion does not invent "
+                "a boundary admissibility projection"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:analytic_xtp",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
+                "programs over typed coordinates, one exact logical Clock, and bound parameters; "
+                "primitive per-point conversion and discrete state/field/input reads remain "
+                "unavailable, analytic ghost depth may not exceed the normal domain extent, and "
+                "axis-permuted periodic coordinates require a prepared coordinate map"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:post_riemann_flux",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "one typed BoundaryFlux component transforms the already evaluated outward-normal "
+                "face flux between the Riemann solve and divergence/reflux through the same "
+                "prepared Uniform/AMR boundary plan; execution is currently a 2D Cartesian "
+                "host-batch route, the ordinary Uniform route materializes face fields when this "
+                "stage is selected, and no device-native or embedded/cut-cell metric ABI or "
+                "high-level TransportBoundarySet convenience exists yet"
+            ),
+            requested="post-Riemann transport-boundary flux provider",
+            available_route="PostRiemannFlux plus one qualified BoundaryFlux component",
+            source=source,
+        ),
+        _row(
+            "riemann:typed_failure_outcome",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Rusanov, HLL, HLLC, and Roe return one device-copyable FluxEvaluation with "
+                "typed status, stability bound, reason code, requested/used/last solver identity, "
+                "and attempt metadata; single-solver routes remain explicit and face failures are "
+                "reduced into the owning transaction, while fallback counters and restart "
+                "publication metadata are not yet wired"
+            ),
+            source=source,
+        ),
+        _row(
+            "riemann:prepared_recovery_policy",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "the typed public riemann.Recovery descriptor lowers one catalog-authenticated "
+                "Roe -> HLL -> Rusanov -> reject PreparedRiemannRecoveryPolicy into Uniform and "
+                "AMR Cartesian face kernels and records requested, used, last-attempted, "
+                "first-cause, and attempt-count provenance; only typed candidate rejection "
+                "advances, while polar geometry is refused and block/team counters, MPI fallback "
+                "reduction, GPU qualification, restart metadata, and a benchmark gate remain"
+            ),
+            requested=(
+                "prepared Riemann recovery chain with requested/used solver diagnostics"
+            ),
+            available_route=(
+                "pops.numerics.riemann.Recovery(primary=Roe(), "
+                "fallbacks=(HLL(), Rusanov()))"
+            ),
+            alternative=(
+                "select one supported Riemann route explicitly and consume rejection through "
+                "the step retry/failure policy"
+            ),
+            source=source,
+        ),
+        _row(
+            "recovery:prepared_variable",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one block-prepared closed-form method returns a device-copyable "
+                "RecoveryOutcome/RecoveryReport retaining selected and last-attempted method "
+                "kinds across type erasure; System conservative-to-primitive and transactional "
+                "analytic initial-state materialization plus Cartesian, polar, masked, and "
+                "embedded-boundary face "
+                "reconstruction consume publication permission before copying or flux "
+                "evaluation; primitive-to-conservative setup conversion publishes only a finite "
+                "candidate accepted by that same prepared inverse authority; accepted AMR "
+                "regrid prolongation and restriction candidates pass the block-prepared inverse "
+                "authority collectively before replacing live hierarchy state; AMR bootstrap "
+                "commits, rematerialized history slots, and physical boundary traces use that "
+                "same publication gate and roll back exactly on refusal; generated Program "
+                "terminal commits validate every Uniform or AMR live-state candidate before the "
+                "first multi-block copy, including endpoints assembled from model-local and "
+                "coupled sources, with no implicit repair or fallback; the host Uniform "
+                "get_primitive_state materializer additionally owns one exact-state and "
+                "generation-qualified warm-start slot per local cell, publishes only complete "
+                "batches, and invalidates every slot after a refused batch"
+            ),
+            source=source,
+        ),
+        _row(
+            "recovery:complete_consumer_cutover",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "manual in-place Program writes, persistent warm starts outside the host Uniform "
+                "diagnostic materializer (spatial kernels and AMR), cache restart, and the "
+                "backend/performance matrix do not yet share one prepared recovery authority"
+            ),
+            requested="complete prepared variable-recovery consumer cutover",
+            available_route=(
+                "prepared closed-form recovery for System conservative-to-primitive and "
+                "transactional analytic initial-state materialization plus spatial face "
+                "reconstruction, fallible primitive-to-conservative setup conversion, and "
+                "transactional AMR regrid prolongation/restriction, bootstrap/history, and "
+                "physical boundary-trace publication, plus generated Program terminal commit "
+                "validation for model-local and coupled-source endpoints, and exact-state "
+                "generation-qualified warm starts for host Uniform primitive materialization"
+            ),
+            alternative=(
+                "use generated Program candidate commits and the delivered recovery consumers, or "
+                "implement the missing in-place-write, AMR/spatial warm-start, and cache/restart "
+                "contracts"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:cell_local_temporal_transport",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "Program.cell_local_time and its generated AmrProgramContext route cover one "
+                "serial host rank, one 2D block, one level, one owned box, one common cell rung, "
+                "transport-only forward Euler and frozen attempt auxiliary fields with built-in "
+                "periodic/Foextrap boundaries; the provider reuses the exact compiled AMR "
+                "residual/face-flux closure "
+                "and commits real conservative state plus four time-integrated face records per "
+                "cell as one accepted transaction at the synchronization barrier; its exact "
+                "contract includes model-owned transport parameters and the limiter/Riemann route; "
+                "same-topology restart restores numerical state and exact clocks but intentionally "
+                "invalidates the last-interval diagnostic flux ledger until another accepted step; "
+                "prepared physical-boundary plans, heterogeneous rungs, multi-box/multilevel and "
+                "coarse/fine ledgers, sources, MPI, GPU, regrid/rank-change rematerialization, "
+                "checkpoint persistence of the diagnostic ledger and performance proof remain "
+                "unavailable"
+            ),
+            requested="prepared cell-local scientific stage and space-time flux transaction",
+            available_route=(
+                "Program.cell_local_time plus the generated AmrProgramContext and native "
+                "PreparedSameLevelTransportEulerStageFluxProvider in their exact bounded "
+                "host/serial same-rung envelope"
+            ),
+            alternative=(
+                "use the synchronous AMR Program route outside that envelope, or implement the "
+                "missing prepared local-time provider family"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:external_field_solver_v2",
+            layout="amr",
+            backend="component",
+            platform="host",
+            mpi=mpi,
+            gpu=False,
+            status="available",
+            limitation=(
+                "host float64 and ratio-2 AMR only; MPI requires both components to declare "
+                "MPI_COMM_WORLD and "
+                "a distributed coarse level; executable MPI qualification currently covers "
+                "exactly two ranks with distributed L0/L1 and regrid rematerialization; "
+                "embedded/cut-cell topology, dynamic boundaries, reaction terms, nonlinear/JVP "
+                "solves and GPU execution remain explicit refusals"
+            ),
+            requested="external FieldSolver@2 on an AMR hierarchy",
+            available_route=(
+                "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
+                "metadata.level, binary coarse/fine coverage, one collective solve, exact "
+                "materialization/report consensus and transactional candidate publication"
+            ),
+            alternative="",
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",
@@ -394,20 +663,54 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             source=source,
         ),
         _row(
+            "amr:shared_interface_implicit_jacvec_pair",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "one generated Program compiles, binds and runs GMRES with the paired "
+                "level_rhs_jacvec_pair matvec on every level of an exactly two-level frozen 2D "
+                "AMR hierarchy in host/serial execution; the two interface participants may use "
+                "one independent packed-vector carrier block, but dynamic hierarchy mutation, "
+                "additional interfaces, mixed apply operators, MPI and GPU remain unavailable"
+            ),
+            available_route=(
+                "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
+                "JVP on a frozen two-level 2D AMR hierarchy"
+            ),
+            alternative=(
+                "use the proved frozen two-level host/serial route, or add explicit execution "
+                "proof for dynamic hierarchies, additional interfaces, MPI or GPU"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:source_implicit_program",
             layout="amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
+            gpu=False,
+            status="partial",
             limitation=(
-                "AMR has no typed local implicit-source/Newton Program primitive; block IMEX "
-                "descriptors are metadata and the spatial runtime has no temporal fallback"
+                "a generated IMEX Program executes one prepared LocalNewton solve over every "
+                "active cell on a synchronous, dynamically regridded two-level 2D hierarchy; "
+                "SolveOutcome/FailRun rollback is exact across covered and uncovered coarse "
+                "cells, fine cells, clocks, topology and MPI ranks, but GPU qualification, "
+                "subcycled local solves, field/global implicit coupling and performance evidence "
+                "remain outside the proved envelope"
             ),
-            requested="local implicit source solve on AMR",
-            available_route="explicit AMR Program primitives",
-            alternative="implement and install the typed AMR implicit-source Program primitive",
+            available_route=(
+                "generated Program local implicit source solve with LocalNewton and a consumed "
+                "SolveOutcome on synchronous two-level 2D AMR"
+            ),
+            alternative=(
+                "use the proved synchronous local-source route, or add an explicit capability "
+                "and execution proof for subcycled, GPU, field-coupled or global implicit solves"
+            ),
             source=source,
         ),
     ]
@@ -592,7 +895,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="requires exact HLLC model capability; polar metric provider unavailable",
+            limitation="requires exact HLLC model capability on the selected geometry",
             source=source,
         ),
         _row(
@@ -602,7 +905,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="requires exact Roe dissipation capability; polar metric provider unavailable",
+            limitation="requires exact Roe dissipation capability on the selected geometry",
             source=source,
         ),
         # ADC-552: the typed wave-speed provider families a model can bind HLL to. Descriptor-level
@@ -679,7 +982,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             "reconstruction:muscl",
             layout="uniform|amr",
             backend="production",
-            limitation="ghost_depth=2; native limiters minmod/vanleer",
+            limitation="ghost_depth=2; native limiters minmod/vanleer/mc/superbee",
             source=source,
         ),
         _row(
@@ -695,23 +998,15 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row(
             "limiter:mc",
             layout="uniform|amr",
-            backend="none",
-            status="unavailable",
-            limitation="catalogued but no native C++ limiter symbol exists",
-            requested="limiter=MC()",
-            available_route="Minmod() or VanLeer()",
-            alternative="use pops.numerics.reconstruction.limiters.Minmod()",
+            backend="production",
+            limitation="native POPS_HD MC slope policy; formal_order=2; ghost_depth=2",
             source=source,
         ),
         _row(
             "limiter:superbee",
             layout="uniform|amr",
-            backend="none",
-            status="unavailable",
-            limitation="catalogued but no native C++ limiter symbol exists",
-            requested="limiter=Superbee()",
-            available_route="Minmod() or VanLeer()",
-            alternative="use pops.numerics.reconstruction.limiters.VanLeer()",
+            backend="production",
+            limitation="native POPS_HD Superbee slope policy; formal_order=2; ghost_depth=2",
             source=source,
         ),
         _row(

@@ -426,6 +426,11 @@ class _SystemUnifiedInstall(_System):
         # NATIVE mode (compiled=None) deliberately installs no temporal authority. The blocks are
         # inspectable spatial carriers, but step/advance fail closed until a Program is installed.
         if so_path is not None:
+            component = getattr(compiled, "program", None)
+            authored = getattr(component, "program", component)
+            from pops.runtime._program_cadence_install import install_program_cadence
+
+            install_program_cadence(self, authored)
             self.install_program(so_path)
             # (5a) HISTORY-PERSISTENCE POLICIES (ADC-626): the compiled Program records a per-ring
             # persistence policy (Dense / Interval / Revolve) on program._history_persistence. Attach the
@@ -441,8 +446,6 @@ class _SystemUnifiedInstall(_System):
             # (5b) Program carriers were emitted with neutral values. Always install the complete
             # BindSchema projection after loading, including declaration defaults.
             self._install_program_params(compiled, bind_schema, params)
-            component = getattr(compiled, "program", None)
-            authored = getattr(component, "program", component)
             self._step_strategy = getattr(authored, "_step_strategy", None)
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)

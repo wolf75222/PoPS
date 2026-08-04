@@ -47,6 +47,8 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel + briques source/hyperbolique/elliptique
 
+#include "polar_boundary_plan.hpp"
+
 #include <cmath>
 #include <vector>
 
@@ -309,6 +311,8 @@ static DiocoResult run_diocotron(double Bz) {
   const double vmax = 1.5 + std::sqrt(kCs2);  // borne large (la qdm grandit)
   const double dt = 0.15 * ds_min / vmax;
   const int nsteps = 60;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(DiocotronModel::n_vars, true, Weno5::n_ghost);
 
   DiocoResult res{};
   // Amplitude apres un court transitoire (laisse la force etablir une reponse), puis a la fin.
@@ -317,10 +321,9 @@ static DiocoResult run_diocotron(double Bz) {
     SSPRK3Step{}.take_step(
         [&](MultiFab& stage, MultiFab& R) {
           fill_ghosts(stage, dom, bc);
-          // wall_radial=true : paroi solide -> masse conservee a la machine (la force de Lorentz
-          // n'agit que sur la qdm, composante 0 nulle).
-          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, /*recon_prim=*/true,
-                                                 /*wall_radial=*/true);
+          // Les faces radiales NoFlux conservent la masse ; la force de Lorentz n'agit que sur la qdm.
+          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, *boundary_plan,
+                                                 /*recon_prim=*/true);
         },
         U, dt);
     if (s + 1 == probe0)

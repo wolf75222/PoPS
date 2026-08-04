@@ -74,6 +74,20 @@ struct ExternalIndexLoadBalance {
   }
 };
 
+ResourceEstimate measured_patch_cost(std::int64_t nanoseconds, std::int64_t resident_bytes = 1024) {
+  return ResourceEstimate{
+      .topology_epoch = 7,
+      .materialization_generation = 3,
+      .samples = 1,
+      .cell_updates = 1,
+      .compute_nanoseconds = nanoseconds,
+      .memory_bytes = 64,
+      .communication_bytes = 0,
+      .communication_nanoseconds = 0,
+      .resident_bytes = resident_bytes,
+  };
+}
+
 }  // namespace
 
 TEST(test_load_balance, morton_key_reference_values) {
@@ -202,5 +216,115 @@ TEST(test_load_balance, third_party_provider_registers_without_core_changes) {
   EXPECT_THROW(prepare_load_balance_authority(
                    "test_external_index", "test.external-index.semantic-identity",
                    PreparedProviderOptions{"pops.test.load-balance.wrong-schema@1", {}}),
+               std::invalid_argument);
+}
+
+TEST(test_load_balance, measured_rebalance_accepts_only_net_benefit_after_migration) {
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 1), 1);
+  const DistributionMapping current(std::vector<int>{0, 0, 1, 1});
+  const DistributionMapping proposed(std::vector<int>{0, 1, 0, 1});
+  const std::vector<ResourceEstimate> estimates{measured_patch_cost(100), measured_patch_cost(100),
+                                                measured_patch_cost(1), measured_patch_cost(1)};
+  const RebalancePolicy profitable{
+      .minimum_improvement_ppm = 50'000,
+      .amortization_steps = 100,
+      .migration_bandwidth_bytes_per_second = 1'000'000'000'000,
+      .per_patch_migration_latency_nanoseconds = 0,
+  };
+  const std::string source_contract = detail::exact_rebalance_source(
+      "test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes, current);
+
+  const RebalanceDecision accepted = make_rebalance_decision(
+      boxes, current, proposed, 2, 7, 3, estimates, profitable, source_contract);
+  EXPECT_TRUE(accepted.accepted);
+  EXPECT_EQ(accepted.reason, RebalanceReason::NetBenefit);
+  EXPECT_EQ(accepted.moved_patches, 2);
+  EXPECT_EQ(accepted.migration_bytes, 2048);
+  EXPECT_LT(accepted.proposed_imbalance, accepted.current_imbalance);
+  EXPECT_GT(accepted.predicted_net_speedup, 1.05);
+  EXPECT_FALSE(accepted.exact_contract.empty());
+
+  RebalancePolicy expensive = profitable;
+  expensive.amortization_steps = 1;
+  expensive.migration_bandwidth_bytes_per_second = 1;
+  const RebalanceDecision refused = make_rebalance_decision(boxes, current, proposed, 2, 7, 3,
+                                                            estimates, expensive, source_contract);
+  EXPECT_FALSE(refused.accepted);
+  EXPECT_EQ(refused.reason, RebalanceReason::InsufficientNetBenefit);
+  EXPECT_LT(refused.predicted_net_speedup, 1.0);
+}
+
+TEST(test_load_balance, measured_rebalance_refuses_stale_or_incomplete_evidence) {
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(2, 1), 1);
+  const DistributionMapping current(std::vector<int>{0, 0});
+  const DistributionMapping proposed(std::vector<int>{0, 1});
+  std::vector<ResourceEstimate> estimates{measured_patch_cost(100), measured_patch_cost(1)};
+  const RebalancePolicy policy{};
+  const std::string source_contract = detail::exact_rebalance_source(
+      "test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes, current);
+
+  estimates[1].topology_epoch = 6;
+  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy,
+                                       source_contract),
+               std::invalid_argument);
+  estimates[1] = measured_patch_cost(1);
+  estimates[1].samples = 0;
+  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy,
+                                       source_contract),
+               std::invalid_argument);
+}
+
+TEST(test_load_balance, measured_rebalance_keeps_an_unchanged_mapping) {
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(2, 1), 1);
+  const DistributionMapping current(std::vector<int>{0, 1});
+  const std::vector<ResourceEstimate> estimates{measured_patch_cost(1), measured_patch_cost(1)};
+
+  const RebalanceDecision decision = make_rebalance_decision(
+      boxes, current, current, 2, 7, 3, estimates, RebalancePolicy{},
+      detail::exact_rebalance_source("test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes,
+                                     current));
+  EXPECT_FALSE(decision.accepted);
+  EXPECT_EQ(decision.reason, RebalanceReason::MappingUnchanged);
+  EXPECT_EQ(decision.moved_patches, 0);
+  EXPECT_EQ(decision.migration_bytes, 0);
+  EXPECT_DOUBLE_EQ(decision.predicted_net_speedup, 1.0);
+}
+
+TEST(test_load_balance, measured_knapsack_provider_owns_exact_default_decision_policy) {
+  const PreparedProviderOptions options{
+      "pops.amr.load-balance.measured-knapsack@1",
+      {
+          {"minimum_improvement_ppm", std::int64_t{125'000}},
+          {"amortization_steps", std::int64_t{40}},
+          {"migration_bandwidth_bytes_per_second", std::int64_t{25'000'000'000}},
+          {"per_patch_migration_latency_nanoseconds", std::int64_t{2'500}},
+      },
+  };
+  const PreparedLoadBalanceAuthority authority = prepare_load_balance_authority(
+      "measured_knapsack", "test.measured-knapsack.identity", options);
+  ASSERT_TRUE(authority.has_default_rebalance_policy());
+  EXPECT_EQ(authority.implementation(), "pops.load_balance.measured_knapsack");
+  const RebalancePolicy& policy = authority.default_rebalance_policy();
+  EXPECT_EQ(policy.minimum_improvement_ppm, 125'000);
+  EXPECT_EQ(policy.amortization_steps, 40);
+  EXPECT_EQ(policy.migration_bandwidth_bytes_per_second, 25'000'000'000);
+  EXPECT_EQ(policy.per_patch_migration_latency_nanoseconds, 2'500);
+
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(2, 1), 1);
+  const DistributionMapping current(std::vector<int>{0, 0});
+  const RebalanceDecision defaulted = authority.decide_rebalance(
+      1, boxes, current, 1, 7, 3,
+      std::vector<ResourceEstimate>{measured_patch_cost(100), measured_patch_cost(1)});
+  EXPECT_FALSE(defaulted.accepted);
+  EXPECT_EQ(defaulted.reason, RebalanceReason::MappingUnchanged);
+  EXPECT_FALSE(defaulted.source_contract.empty());
+
+  PreparedProviderOptions incomplete = options;
+  incomplete.values.erase("amortization_steps");
+  EXPECT_THROW(prepare_load_balance_authority("measured_knapsack", "test.invalid", incomplete),
+               std::invalid_argument);
+  PreparedProviderOptions wrong_type = options;
+  wrong_type.values["amortization_steps"] = std::uint64_t{40};
+  EXPECT_THROW(prepare_load_balance_authority("measured_knapsack", "test.invalid", wrong_type),
                std::invalid_argument);
 }

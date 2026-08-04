@@ -46,6 +46,23 @@
 
 namespace pops::runtime::program {
 
+namespace detail {
+struct ProgramComponentSpanCopyKernel {
+  Array4 destination;
+  ConstArray4 source;
+  int destination_component = 0;
+  int source_component = 0;
+  int component_count = 0;
+
+  POPS_HD void operator()(int i, int j) const {
+    for (int component = 0; component < component_count; ++component)
+      destination(i, j, destination_component + component) =
+          source(i, j, source_component + component);
+  }
+};
+static_assert(std::is_trivially_copyable_v<ProgramComponentSpanCopyKernel>);
+}  // namespace detail
+
 /// Backend-independent Program operations shared by every execution topology.
 ///
 /// The provider owns topology, storage and explicitly qualified non-Cartesian stencil capabilities
@@ -153,9 +170,9 @@ class ProgramExecutionServices {
  protected:
   /// Scope one mutable prepared workspace to a single synchronous Program operation.
   ///
-  /// Uniform and AMR providers own different workspace storage, but they share the same
-  /// fail-before-mutation and release-on-exit policy.  Keeping that policy here prevents a provider
-  /// from silently forgetting the exceptional-exit release path.
+  /// ProgramExecutionServices owns the topology-independent workspace storage and the common
+  /// fail-before-mutation/release-on-exit policy. Providers receive only authenticated packs, so
+  /// exceptional-exit release cannot drift between Uniform and AMR implementations.
   class ExclusiveUseGuard {
    public:
     ExclusiveUseGuard(bool& in_use, std::string_view conflict_message) : in_use_(&in_use) {
@@ -185,8 +202,13 @@ class ProgramExecutionServices {
     return provider_().program_execution_runtime_state_();
   }
 
-  void require_active_field_evaluation_level_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  void require_field_evaluation_point_(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       std::string_view route) const {
+    if (point.clock.empty() || point.tick < 0 || point.substep < 0 || point.stage < 0 ||
+        !(point.dt > 0.0) || !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
+        point.stage_fraction < amr::Rational(0, 1) || amr::Rational(1, 1) < point.stage_fraction)
+      throw std::invalid_argument(std::string(route) +
+                                  " requires a complete exact BoundaryEvaluationPoint");
     const int active_level = provider_().program_execution_resource_level_();
     if (point.level != active_level)
       throw std::invalid_argument(
@@ -215,28 +237,41 @@ class ProgramExecutionServices {
                                           MultiFab& state) const {
     if (provider_slot.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
-    require_active_field_evaluation_level_(point);
+    require_field_evaluation_point_(point, "Program single-state field solve");
     return provider_().program_execution_field_solve_from_state_at_outcome_(point, provider_slot,
                                                                             block, state);
-  }
-
-  SolveOutcome solve_fields_from_state(const std::string& field, int block, MultiFab& state) const {
-    return provider_().program_execution_solve_named_field_from_state_outcome_(field, block, state);
   }
 
   SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& states) const {
     return provider_().program_execution_solve_fields_from_blocks_outcome_(states);
   }
 
-  SolveOutcome solve_fields_from_blocks(const std::string& field,
-                                        const std::vector<const MultiFab*>& states) const {
-    return provider_().program_execution_solve_named_field_from_blocks_outcome_(field, states);
-  }
+  SolveOutcome solve_fields_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
+    if (field.empty())
+      throw std::invalid_argument("Program field solve requires an exact provider slot");
+    require_field_evaluation_point_(point, "Program simultaneous field solve");
+    if (value_id < 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires a non-negative IR identity");
+    if (overrides.size() == 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires at least one stage override");
 
-  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                        std::initializer_list<FieldStageOverride> overrides) const {
-    return provider_().program_execution_solve_generated_field_from_blocks_outcome_(value_id, field,
-                                                                                    overrides);
+    auto [entry, inserted] = generated_field_solve_workspaces_.try_emplace(value_id);
+    GeneratedFieldSolveWorkspace& workspace = entry->second;
+    if (inserted)
+      workspace.field_identity.assign(field.data(), field.size());
+    else if (std::string_view(workspace.field_identity) != field)
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity was reused for a different field");
+
+    ExclusiveUseGuard use(workspace.in_use,
+                          "Program simultaneous field-solve workspace is already in use");
+    prepare_generated_field_solve_workspace_(workspace, overrides);
+    return provider_().program_execution_solve_generated_field_from_blocks_outcome_(
+        point, workspace.field_identity, workspace.runtime_stages);
   }
 
   /// One topology-independent subdivision of the active logical interval.
@@ -333,15 +368,14 @@ class ProgramExecutionServices {
                                     Body&& body) const {
     if (provider_slot.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
-    require_active_field_evaluation_level_(point);
     const auto restore = [&]() {
-      const SolveReport restored = provider_().program_execution_solve_fields_from_state_at_(
-          point, provider_slot, block, restore_state);
+      const SolveReport restored = consume_field_outcome_(
+          solve_fields_from_state_at(point, provider_slot, block, restore_state));
       if (!restored.solved_value_available())
         throw_field_solve_failure_(restored, "restoring the frozen field state");
     };
-    const SolveReport prepared = provider_().program_execution_solve_fields_from_state_at_(
-        point, provider_slot, block, evaluation_state);
+    const SolveReport prepared = consume_field_outcome_(
+        solve_fields_from_state_at(point, provider_slot, block, evaluation_state));
     if (!prepared.solved_value_available()) {
       restore();
       throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
@@ -435,6 +469,46 @@ class ProgramExecutionServices {
                                                     &boundary);
   }
 
+  /// Copy one valid-cell component span between fields with the same distributed layout.
+  /// Generated packed multi-block operators use this allocation-free primitive to gather/scatter
+  /// endpoint vectors without exposing native storage or MPI ownership to Python.
+  void copy_component_span(MultiFab& destination, int destination_component,
+                           const MultiFab& source, int source_component,
+                           int component_count) const {
+    if (component_count <= 0 || destination_component < 0 || source_component < 0 ||
+        destination_component > destination.ncomp() - component_count ||
+        source_component > source.ncomp() - component_count)
+      throw std::invalid_argument("Program component-span copy has an invalid component range");
+    if (destination.box_array().boxes() != source.box_array().boxes() ||
+        destination.dmap().ranks() != source.dmap().ranks() ||
+        destination.local_size() != source.local_size())
+      throw std::invalid_argument(
+          "Program component-span copy requires identical distributed field layouts");
+    for (int local = 0; local < destination.local_size(); ++local) {
+      if (destination.global_index(local) != source.global_index(local))
+        throw std::logic_error("Program component-span copy found inconsistent local ownership");
+      for_each_cell(
+          destination.box(local),
+          detail::ProgramComponentSpanCopyKernel{
+              destination.fab(local).array(), source.fab(local).const_array(),
+              destination_component, source_component, component_count});
+    }
+  }
+
+  /// Execute the two perturbed endpoint residuals in one shared-interface scheduler call.
+  void rhs_jacvec_pair_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int first_block, MultiFab& first_state, MultiFab& first_rhs, bool first_flux_only,
+      int second_block, MultiFab& second_state, MultiFab& second_rhs,
+      bool second_flux_only) const {
+    if (first_block == second_block)
+      throw std::invalid_argument("Program implicit interface JVP requires two distinct blocks");
+    count_kernel(2);
+    provider_().program_execution_rhs_jacvec_pair_into_at_(
+        point, sys_block(first_block), first_state, first_rhs, first_flux_only,
+        sys_block(second_block), second_state, second_rhs, second_flux_only);
+  }
+
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                  int block, MultiFab& state, MultiFab& residual) const {
     count_kernel();
@@ -515,9 +589,33 @@ class ProgramExecutionServices {
   /// Project one candidate state through the exact authored block closure.
   ///
   /// Program-to-runtime block qualification is topology-independent. The provider owns only the
-  /// Uniform or level-qualified native projection call.
+  /// Uniform or level-qualified native projection call. When a generated Balance route is due, the
+  /// provider also supplies exact metric-integrated component values before and after projection;
+  /// their signed delta stays qualified by runtime block/level/component in the attempt mailbox.
   void apply_projection(int block, MultiFab& state) const {
-    provider_().program_execution_apply_projection_(sys_block(block), state);
+    ProgramRuntimeState& runtime = program_runtime_state_();
+    const int runtime_block = sys_block(block);
+    if (!runtime.automatic_balance_capture_due()) {
+      provider_().program_execution_apply_projection_(runtime_block, state);
+      return;
+    }
+    const std::optional<std::vector<Real>> before =
+        provider_().program_execution_projection_balance_integrals_(runtime_block, state);
+    provider_().program_execution_apply_projection_(runtime_block, state);
+    if (!before)
+      return;
+    const std::optional<std::vector<Real>> after =
+        provider_().program_execution_projection_balance_integrals_(runtime_block, state);
+    if (!after || before->size() != after->size() ||
+        before->size() != static_cast<std::size_t>(state.ncomp()))
+      throw std::runtime_error(
+          "Program projection balance provider changed its conservative component width");
+    const int level = program_resource_field_level();
+    for (int component = 0; component < state.ncomp(); ++component)
+      runtime.record_automatic_balance_term(runtime_block, level, component, "projection",
+                                            (*after)[static_cast<std::size_t>(component)] -
+                                                (*before)[static_cast<std::size_t>(component)],
+                                            "ProgramExecutionServices");
   }
 
   /// Minimum physical cell size used by the native CFL authority.
@@ -555,21 +653,20 @@ class ProgramExecutionServices {
   }
 
   MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return provider_().program_execution_scratch_(ScratchKind::Rhs, value_id, subslot, prototype,
-                                                  prototype.ncomp(), prototype.n_grow());
+    return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.n_grow());
   }
 
   MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return provider_().program_execution_scratch_(ScratchKind::State, value_id, subslot, prototype,
-                                                  prototype.ncomp(), prototype.n_grow());
+    return persistent_scratch_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.n_grow());
   }
 
   MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
                            int n_comp = 1, int n_ghost = 1) const {
     if (n_comp < 1 || n_ghost < 0)
       throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return provider_().program_execution_scratch_(ScratchKind::Scalar, value_id, subslot, prototype,
-                                                  n_comp, n_ghost);
+    return persistent_scratch_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
   }
 
   /// Zero-copy access to one authored block's live state through the provider's storage authority.
@@ -651,7 +748,7 @@ class ProgramExecutionServices {
     OperatorEvaluationSnapshot snapshot =
         provider_().program_execution_operator_evaluation_snapshot_(authority, topology, resources,
                                                                     revision);
-    active_operator_snapshot_revision_ = revision;
+    active_operator_snapshot_ = snapshot;
     return snapshot;
   }
 
@@ -663,10 +760,15 @@ class ProgramExecutionServices {
                                                        OperatorFingerprint topology,
                                                        OperatorFingerprint resources,
                                                        std::uint64_t revision) const {
-    const std::uint64_t probe_revision =
-        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
-    return provider_().program_execution_operator_evaluation_snapshot_(authority, topology,
-                                                                       resources, probe_revision);
+    const bool active =
+        active_operator_snapshot_ && revision == active_operator_snapshot_->revision;
+    OperatorEvaluationSnapshot probe = provider_().program_execution_operator_evaluation_snapshot_(
+        authority, topology, resources, active ? revision : UINT64_C(0));
+    if (!active || probe != *active_operator_snapshot_) {
+      invalidate_active_operator_snapshot_();
+      probe.revision = 0;
+    }
+    return probe;
   }
 
   /// Apply the topology-qualified scalar Laplacian.
@@ -894,8 +996,7 @@ class ProgramExecutionServices {
     if (!std::isfinite(static_cast<double>(target_offset)))
       throw std::invalid_argument("linear history interpolation offset must be finite");
 
-    HistoryRegistration registration =
-        history_registration_(name, max_lag, /*ncomp=*/-1, owner);
+    HistoryRegistration registration = history_registration_(name, max_lag, /*ncomp=*/-1, owner);
     if (!provider_().program_execution_history_initialized_storage_(registration))
       throw std::runtime_error(
           "linear history interpolation requires an initialized native history");
@@ -939,13 +1040,11 @@ class ProgramExecutionServices {
     const double logical_fraction = coordinate + static_cast<double>(older_lag);
     const double target_time = older_time + logical_fraction * bracket_dt;
     const double timestamp_fraction = (target_time - older_time) / (newer_time - older_time);
-    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 ||
-        timestamp_fraction > 1.0)
+    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 || timestamp_fraction > 1.0)
       throw std::runtime_error(
           "linear history interpolation target does not bracket native timestamps");
 
-    registration =
-        ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
+    registration = ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
     MultiFab& older = provider_().program_execution_read_history_storage_(
         registration, older_lag, HistoryReadMode::RequireInitialized);
     MultiFab& newer = provider_().program_execution_read_history_storage_(
@@ -1216,6 +1315,12 @@ class ProgramExecutionServices {
                  std::find(targets.begin(), targets.end(), commit.second) != targets.end();
         });
     provider_().program_execution_validate_commit_aliases_(has_aliased_source);
+    // A terminal candidate may combine transport, model-local sources, coupled sources, or an
+    // implicit solve.  The topology provider owns its exact block identity and validates every
+    // live-state publication through that block's prepared variable-recovery authority.  This
+    // read-only preflight runs before the first copy, so refusal cannot expose a partially committed
+    // multi-block endpoint.
+    provider_().program_execution_validate_commit_candidates_(commits);
 
     if (!has_aliased_source) {
       for (const auto& [target, source] : commits)
@@ -1253,14 +1358,9 @@ class ProgramExecutionServices {
                                 std::initializer_list<CouplingStateOverride> candidates) const {
     if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
       throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
-    if (coupling_workspace_.in_use)
-      throw std::logic_error("Program coupling workspace is already in use");
+    ExclusiveUseGuard use(coupling_workspace_.in_use,
+                          "Program coupling workspace is already in use");
     prepare_coupling_workspace_(candidates);
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(coupling_workspace_.in_use);
     const std::size_t applied =
         provider_().program_execution_apply_coupling_(dt, coupling_workspace_.runtime_states);
     count_kernel(static_cast<std::int64_t>(applied));
@@ -1305,6 +1405,11 @@ class ProgramExecutionServices {
     if (node_id < 0)
       throw std::runtime_error("Program schedule decision requires a valid node");
     return profiler().schedule_decision(due, cache_backed);
+  }
+
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route,
+                               int every_n) const {
+    return provider_().program_execution_balance_consumer_is_due_(contract, route, every_n);
   }
 
   /// Scheduler cache semantics shared by every capable Program storage provider.
@@ -1401,6 +1506,14 @@ class ProgramExecutionServices {
     program_runtime_state_().record_diagnostic(name, value);
   }
 
+  void record_balance_term(const std::string& route, const std::string& term, Real value) const {
+    provider_().program_execution_record_balance_term_(route, term, value);
+  }
+
+  void note_automatic_balance_capture_due(bool due) const {
+    program_runtime_state_().note_automatic_balance_capture_due(due, "ProgramExecutionServices");
+  }
+
   void note_step_projection(const std::string& name) const {
     program_runtime_state_().note_step_projection(name);
   }
@@ -1409,17 +1522,17 @@ class ProgramExecutionServices {
 
   void set_field_logical_timepoint(const std::string& field,
                                    const FieldLogicalTimePoint& point) const {
-    provider_().program_execution_set_field_timepoint_(field, point);
+    provider_().program_execution_field_facade_().set_field_logical_timepoint(field, point);
   }
 
   void set_field_boundary_parameters(const std::string& field,
                                      const std::vector<double>& parameters) const {
-    provider_().program_execution_set_field_parameters_(field, parameters);
+    provider_().program_execution_field_facade_().set_field_boundary_parameters(field, parameters);
   }
 
   void set_field_boundary_kernel(const std::string& field,
                                  const CompiledFieldBoundaryKernel& kernel) const {
-    provider_().program_execution_set_field_kernel_(field, kernel);
+    provider_().program_execution_field_facade_().set_field_boundary_kernel(field, kernel);
   }
 
   Profiler& profiler() const { return program_runtime_state_().profiler(); }
@@ -1522,6 +1635,34 @@ class ProgramExecutionServices {
   mutable amr::Rational stage_time_{0, 1};
 
  private:
+  struct ProgramScratchKey {
+    ScratchKind kind = ScratchKind::Rhs;
+    std::int64_t value_id = -1;
+    int subslot = -1;
+    int level = -1;
+
+    friend bool operator<(const ProgramScratchKey& lhs, const ProgramScratchKey& rhs) noexcept {
+      if (lhs.kind != rhs.kind)
+        return lhs.kind < rhs.kind;
+      if (lhs.value_id != rhs.value_id)
+        return lhs.value_id < rhs.value_id;
+      if (lhs.subslot != rhs.subslot)
+        return lhs.subslot < rhs.subslot;
+      return lhs.level < rhs.level;
+    }
+  };
+
+  struct ProgramScratchSlot {
+    MultiFab field;
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  };
+
+  struct ProgramScratchRegistry {
+    std::map<ProgramScratchKey, ProgramScratchSlot> fields;
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  };
+
   struct HistoryBinding {
     int program_owner = -1;
     std::string state_identity;
@@ -1537,11 +1678,55 @@ class ProgramExecutionServices {
     bool in_use = false;
   };
 
+  struct GeneratedFieldSolveWorkspace {
+    std::string field_identity;
+    std::vector<int> program_to_runtime;
+    std::vector<const MultiFab*> runtime_stages;
+    std::vector<int> expected_program_blocks;
+    bool expected_program_blocks_initialized = false;
+    bool in_use = false;
+  };
+
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
 
-  void invalidate_active_operator_snapshot_() const noexcept {
-    active_operator_snapshot_revision_ = 0;
+  /// Acquire one generated persistent field from the common resource registry.
+  ///
+  /// Providers authenticate the active topology and level through the existing resource hooks;
+  /// allocation, invalidation, exact-layout reuse and retry zeroing remain one shared semantic
+  /// operation. The shared owner also preserves Uniform copy semantics without a second context
+  /// implementation.
+  MultiFab& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                const MultiFab& prototype, int n_comp, int n_ghost) const {
+    if (value_id < 0 || subslot < 0)
+      throw std::invalid_argument(
+          "Program persistent scratch requires non-negative IR value and sub-slot identities");
+    const ProgramResourceTopology topology = program_resource_topology();
+    const int level = this->level();
+    if (level < 0 || level >= topology.levels)
+      throw std::out_of_range("Program persistent scratch level is out of range");
+    if (!scratch_registry_)
+      throw std::logic_error("Program persistent scratch registry is unavailable");
+    if (scratch_registry_->topology_epoch != topology.epoch ||
+        scratch_registry_->materialization_generation != topology.generation) {
+      scratch_registry_->fields.clear();
+      scratch_registry_->topology_epoch = topology.epoch;
+      scratch_registry_->materialization_generation = topology.generation;
+    }
+
+    const ProgramScratchKey key{kind, value_id, subslot, level};
+    auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
+    ProgramScratchSlot& slot = entry->second;
+    if (inserted || slot.materialization_generation != topology.generation ||
+        !field_layout_matches_(slot.field, prototype, n_comp, n_ghost)) {
+      slot.field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
+      slot.materialization_generation = topology.generation;
+      count_scratch(slot.field);
+    }
+    slot.field.set_val(Real(0));
+    return slot.field;
   }
+
+  void invalidate_active_operator_snapshot_() const noexcept { active_operator_snapshot_.reset(); }
   void require_lane_or_prepared_laplacian_() const {
     if (provider_().program_execution_is_polar_geometry_())
       throw std::logic_error(
@@ -1673,6 +1858,86 @@ class ProgramExecutionServices {
     provider_().program_execution_select_resource_level_(selected);
   }
 
+  void prepare_generated_field_solve_workspace_(
+      GeneratedFieldSolveWorkspace& workspace,
+      std::initializer_list<FieldStageOverride> overrides) const {
+    const std::vector<int>& block_map = program_runtime_state_().block_map();
+    const std::size_t runtime_blocks = static_cast<std::size_t>(program_resource_topology().blocks);
+    if (block_map.empty())
+      throw block_map_error_(
+          "Program simultaneous field solve has no explicit program-to-runtime block map");
+
+    const bool structure_changed = workspace.program_to_runtime != block_map ||
+                                   workspace.runtime_stages.size() != runtime_blocks;
+    if (structure_changed) {
+      std::vector<int> authenticated_map;
+      authenticated_map.reserve(block_map.size());
+      std::vector<const MultiFab*> authenticated_runtime(runtime_blocks, nullptr);
+      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
+        const int runtime_block = sys_block(static_cast<int>(program_block));
+        const std::size_t runtime_slot = static_cast<std::size_t>(runtime_block);
+        if (authenticated_runtime[runtime_slot] != nullptr)
+          throw block_map_error_("Program simultaneous field solve block map is not injective");
+        authenticated_map.push_back(runtime_block);
+        authenticated_runtime[runtime_slot] = &provider_().program_execution_state_(runtime_block);
+      }
+      workspace.program_to_runtime = std::move(authenticated_map);
+      workspace.runtime_stages.assign(runtime_blocks, nullptr);
+      // The ordered Program pack is part of the compiled IR identity, not of the runtime block
+      // materialization. A map/rank/topology rebuild may replace the runtime slots, but it must
+      // never teach an existing value_id a different Program request.
+    }
+
+    const bool learn_blocks = !workspace.expected_program_blocks_initialized;
+    if (learn_blocks) {
+      workspace.expected_program_blocks.clear();
+      workspace.expected_program_blocks.reserve(overrides.size());
+    } else if (workspace.expected_program_blocks.size() != overrides.size()) {
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity changed its block pack");
+    }
+
+    std::fill(workspace.runtime_stages.begin(), workspace.runtime_stages.end(), nullptr);
+    std::size_t ordinal = 0;
+    for (const FieldStageOverride& override_value : overrides) {
+      if (override_value.program_block < 0 ||
+          static_cast<std::size_t>(override_value.program_block) >=
+              workspace.program_to_runtime.size())
+        throw std::out_of_range("generated simultaneous field solve Program block is out of range");
+      if (override_value.state == nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve stage override cannot be null");
+
+      const std::size_t program_slot = static_cast<std::size_t>(override_value.program_block);
+      const std::size_t runtime_slot =
+          static_cast<std::size_t>(workspace.program_to_runtime[program_slot]);
+      if (workspace.runtime_stages[runtime_slot] != nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve contains a duplicate Program block");
+      if (learn_blocks)
+        workspace.expected_program_blocks.push_back(override_value.program_block);
+      else if (workspace.expected_program_blocks[ordinal] != override_value.program_block)
+        throw std::logic_error(
+            "generated simultaneous field solve IR identity changed its ordered block pack");
+
+      const MultiFab& live =
+          provider_().program_execution_state_(workspace.program_to_runtime[program_slot]);
+      const MultiFab& stage = *override_value.state;
+      if (!field_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
+        throw std::invalid_argument(
+            "generated field-solve stage does not match its exact runtime-block layout");
+      for (std::size_t other = 0; other < runtime_blocks; ++other)
+        if (other != runtime_slot &&
+            &stage == &provider_().program_execution_state_(static_cast<int>(other)))
+          throw std::invalid_argument(
+              "generated field-solve stage cannot alias another block's live state");
+
+      workspace.runtime_stages[runtime_slot] = override_value.state;
+      ++ordinal;
+    }
+    workspace.expected_program_blocks_initialized = true;
+  }
+
   void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = program_runtime_state_().block_map();
     const std::size_t runtime_blocks = static_cast<std::size_t>(program_resource_topology().blocks);
@@ -1751,9 +2016,12 @@ class ProgramExecutionServices {
   }
 
   mutable CouplingWorkspace coupling_workspace_;
+  mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
+  mutable std::shared_ptr<ProgramScratchRegistry> scratch_registry_ =
+      std::make_shared<ProgramScratchRegistry>();
   mutable std::map<std::string, HistoryBinding> history_bindings_;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
-  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never a minted revision
+  mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
 };
 
 /// Compile-time association between a public runtime facade and its topology/storage provider.

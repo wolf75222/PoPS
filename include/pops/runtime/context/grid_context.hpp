@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -7,6 +8,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/numerics/spatial/provider_matrix.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -39,15 +41,26 @@ struct EbThresholds;
 /// residuals. None stays the untouched production path.
 enum class GeometryMode { None, Staircase, CutCell };
 
-constexpr std::uint8_t geometry_mode_flag(GeometryMode mode) {
-  return static_cast<std::uint8_t>(1U << static_cast<unsigned>(mode));
+constexpr SpatialProviderGeometry spatial_provider_geometry(GeometryMode mode) {
+  switch (mode) {
+    case GeometryMode::None:
+      return SpatialProviderGeometry::Cartesian;
+    case GeometryMode::Staircase:
+      return SpatialProviderGeometry::Staircase;
+    case GeometryMode::CutCell:
+      return SpatialProviderGeometry::CutCell;
+  }
+  return SpatialProviderGeometry::Cartesian;
 }
-constexpr std::uint8_t kCartesianGeometrySupport = geometry_mode_flag(GeometryMode::None);
-constexpr std::uint8_t kAllGeometrySupport = geometry_mode_flag(GeometryMode::None) |
-                                             geometry_mode_flag(GeometryMode::Staircase) |
-                                             geometry_mode_flag(GeometryMode::CutCell);
-constexpr bool supports_geometry_mode(std::uint8_t supported_modes, GeometryMode mode) {
-  return (supported_modes & geometry_mode_flag(mode)) != 0;
+
+constexpr bool supports_spatial_operation(const SpatialProviderCapabilities& capabilities,
+                                          GeometryMode mode, SpatialProviderOperation operation) {
+  return capabilities.supports({kNativeDimension, spatial_provider_geometry(mode), operation});
+}
+
+constexpr bool supports_geometry_mode(const SpatialProviderCapabilities& capabilities,
+                                      GeometryMode mode) {
+  return supports_spatial_operation(capabilities, mode, SpatialProviderOperation::Residual);
 }
 
 /// Mesh + transport BC + aux shared by a block closures. @c aux is NOT owned:
@@ -174,6 +187,7 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan)
       return;
     plan_session_.emplace(context_.boundary_plan->make_session(lane));
+    plan_session_->prepare_trace_recovery_workspace(prototype);
     configure_registry_();
     // Resolve every declared read route once while the session is materialized. Subsequent RHS
     // applications only advance the registry epoch and rebind pointers into these stable slots.
@@ -185,6 +199,7 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan->has_component_boundaries())
       return;
     plan_session_->prepare_ghost_executor(prototype, registry_, context_.geom);
+    plan_session_->prepare_flux_executor(prototype, registry_, context_.geom);
     if (!residual_outputs_.empty()) {
       bind_registry_(preparation_point, prototype, nullptr, &prototype);
       plan_session_->prepare_residual_executor(registry_, context_.geom);
@@ -251,7 +266,7 @@ class PreparedGridBoundarySession final {
       return;
     }
     if (!context_.boundary_plan->has_component_boundaries()) {
-      plan_session_->fill_same_level_and_physical(state, context_.geom);
+      plan_session_->fill_same_level_and_physical(state, context_.geom, point);
       return;
     }
     bind_registry_(point, state, nullptr, nullptr);
@@ -264,6 +279,14 @@ class PreparedGridBoundarySession final {
       return;
     bind_registry_(point, state, nullptr, &residual);
     plan_session_->add_residual(point, registry_, context_.geom);
+  }
+
+  void transform_fluxes(MultiFab& state, MultiFab& fx, MultiFab& fy,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!plan_session_ || !context_.boundary_plan->has_flux_transformations())
+      return;
+    bind_registry_(point, state, nullptr, nullptr);
+    plan_session_->transform_fluxes(point, state, registry_, context_.geom, fx, fy);
   }
 
   void apply_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
@@ -430,6 +453,21 @@ inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession&
 inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession& session,
                              const runtime::multiblock::BoundaryEvaluationPoint& point) {
   session.fill(state, point);
+}
+
+inline void transform_grid_boundary_fluxes(
+    MultiFab& state, MultiFab& fx, MultiFab& fy, const GridContext& context,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (context.boundary_plan && context.boundary_plan->has_flux_transformations())
+    context.boundary_plan->transform_fluxes_control(
+        point, state, context.aux, context.geom, fx, fy,
+        ExecutionLane::world(context.boundary_plan->identity(), "::boundary-flux-control"));
+}
+
+inline void transform_grid_boundary_fluxes(
+    MultiFab& state, MultiFab& fx, MultiFab& fy, const PreparedGridBoundarySession& session,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  session.transform_fluxes(state, fx, fy, point);
 }
 
 inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
@@ -661,9 +699,12 @@ struct BlockClosures {
   /// Embedded-boundary twin of @ref project.  Only active cell centres are projected, preserving
   /// the caller-owned state outside the physical domain exactly.
   std::function<void(MultiFab&)> project_masked;
-  /// Explicit provider capability. A mode absent from this bitset is rejected before execution;
-  /// no runtime path may infer support from a non-empty fallback closure.
-  std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
+  /// Geometry selected by the base residual. Embedded-boundary modes replace Cartesian only; a
+  /// polar block therefore retains Polar when GeometryMode is None.
+  SpatialProviderGeometry base_spatial_geometry = SpatialProviderGeometry::Cartesian;
+  /// Exact dimension x geometry x operation provider matrix. A missing cell is rejected before
+  /// execution; no runtime path may infer characteristic or metric support from a residual closure.
+  SpatialProviderCapabilities spatial_provider = make_cartesian_spatial_provider(kNativeDimension);
 };
 
 }  // namespace pops

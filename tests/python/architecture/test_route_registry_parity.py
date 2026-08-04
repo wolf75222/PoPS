@@ -20,6 +20,7 @@ ROUTE_API = ROOT / "include" / "pops" / "runtime" / "config" / "route_ids.hpp"
 DISPATCH_API = ROOT / "include" / "pops" / "runtime" / "config" / "dispatch_tags.hpp"
 MODEL_API = ROOT / "include" / "pops" / "runtime" / "dynamic" / "model_registry.hpp"
 MODULE_CAPABILITIES = ROOT / "include" / "pops" / "runtime" / "module_capabilities.hpp"
+SCHEME_DISPATCH = ROOT / "include" / "pops" / "runtime" / "builders" / "scheme_dispatch.hpp"
 
 
 def _load(path: Path, name: str):
@@ -72,6 +73,31 @@ def test_native_capability_layout_parity_uses_the_generated_route_tokens():
     source = MODULE_CAPABILITIES.read_text(encoding="utf-8")
     assert "kLayoutRouteTokensCsv" in source
     assert '"uniform|amr"' not in source
+
+
+def test_mc_and_superbee_use_the_generated_prepared_limiter_registry() -> None:
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    limiter = next(family for family in catalog["route_families"]
+                   if family["name"] == "limiter")
+    rows = {row["token"]: row for row in limiter["routes"]}
+    dispatch = SCHEME_DISPATCH.read_text(encoding="utf-8")
+    capabilities = MODULE_CAPABILITIES.read_text(encoding="utf-8")
+
+    for token, cpp_id, native_entry, cpp_type in (
+        ("mc", "kMc", "pops::MC", "MC"),
+        ("superbee", "kSuperbee", "pops::Superbee", "Superbee"),
+    ):
+        row = rows[token]
+        assert row["cpp_id"] == cpp_id
+        assert row["native_entry"] == native_entry
+        assert row["metadata"] == {
+            "n_ghost": 2, "formal_order": 2, "muscl_compatible": True,
+        }
+        assert "X(%s, %s)" % (cpp_id, cpp_type) in dispatch
+        assert 'capability_route("limiter:%s", "available"' % token in capabilities
+
+    assert 'capability_route("limiter:mc", "unavailable"' not in capabilities
+    assert 'capability_route("limiter:superbee", "unavailable"' not in capabilities
 
 
 def test_one_catalog_row_generates_both_language_surfaces():

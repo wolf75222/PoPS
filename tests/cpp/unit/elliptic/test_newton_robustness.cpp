@@ -33,8 +33,8 @@ struct StiffModel {
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
   Real k = 200.0;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = -k * (u[0] - u[1] * u[2]);
@@ -67,8 +67,8 @@ struct NanModel {
   using State = pops::StateVec<3>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = -u[0];
@@ -85,8 +85,8 @@ struct SingularModel {
   using State = pops::StateVec<3>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = Real(8) * u[0] + Real(1);
@@ -132,8 +132,8 @@ struct FallibleSourceModel {
   pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
   std::uint32_t reason = 0;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State&, const Aux&) const {
     return State{Real(1e6), Real(1e6), Real(1e6)};
   }
@@ -972,42 +972,54 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
   EXPECT_TRUE(maximum_attempts_result.solved());
   EXPECT_NEAR(maximum_attempts_result.value[0], Real(1), 1e-12);
 
-  int decoded_i = -1;
-  int decoded_j = -1;
-  int decoded_component = -1;
-  pops::detail::decode_local_nonlinear_failure(
-      pops::detail::encode_local_nonlinear_failure(17, 23, 4), decoded_i, decoded_j,
-      decoded_component);
-  EXPECT_EQ(decoded_i, 17);
-  EXPECT_EQ(decoded_j, 23);
-  EXPECT_EQ(decoded_component, 4);
-
-  const pops::Real recoverable = pops::detail::encode_ranked_local_nonlinear_failure(
-      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kEvaluationReject), 1, 1,
-      2);
-  const pops::Real fatal = pops::detail::encode_ranked_local_nonlinear_failure(
-      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation), 7, 9,
-      3);
-  int decoded_priority = 0;
-  pops::detail::decode_ranked_local_nonlinear_failure(
-      std::max(recoverable, fatal), decoded_priority, decoded_i, decoded_j, decoded_component);
-  EXPECT_EQ(decoded_priority,
-            pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation));
-  EXPECT_EQ(decoded_i, 7);
-  EXPECT_EQ(decoded_j, 9);
-  EXPECT_EQ(decoded_component, 3);
-
-  const pops::Real first_fatal =
-      pops::detail::encode_ranked_local_nonlinear_failure(decoded_priority, 0, 0, -1);
-  const pops::Real last_fatal = pops::detail::encode_ranked_local_nonlinear_failure(
-      decoded_priority, (1 << 20) - 1, (1 << 20) - 1, 1022);
-  pops::detail::decode_ranked_local_nonlinear_failure(
-      std::max(first_fatal, last_fatal), decoded_priority, decoded_i, decoded_j, decoded_component);
-  EXPECT_EQ(decoded_i, 0);
-  EXPECT_EQ(decoded_j, 0);
-  EXPECT_EQ(decoded_component, -1);
-
   EXPECT_EQ(initial[0], Real(10));
   EXPECT_EQ(inadmissible_initial[0], Real(-1));
   EXPECT_EQ(safeguard_initial[0], Real(0));
+}
+
+TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographicOrder) {
+  const pops::BoxArray boxes(
+      std::vector<pops::Box2D>{pops::Box2D{{-1000000000, -700000000}, {-1000000000, -700000000}},
+                               pops::Box2D{{1000000000, 700000000}, {1000000000, 700000000}}});
+  const pops::DistributionMapping mapping(boxes.size(), pops::n_ranks());
+  pops::MultiFab statistics(boxes, mapping, 11, 0);
+  statistics.set_val(Real(0));
+  const int recoverable =
+      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kEvaluationReject);
+  const int fatal =
+      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation);
+
+  for (int local = 0; local < statistics.local_size(); ++local) {
+    const pops::Box2D box = statistics.box(local);
+    const pops::Array4 values = statistics.fab(local).array();
+    pops::for_each_cell(box, [=] POPS_HD(int i, int j) {
+      const bool negative = i < 0;
+      values(i, j, 8) = negative ? Real(7) : Real(3);
+      values(i, j, 9) = Real(1);
+      values(i, j, 10) = static_cast<Real>(negative ? recoverable : fatal);
+    });
+  }
+
+  auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
+  ASSERT_TRUE(location.found);
+  EXPECT_EQ(location.priority, fatal);
+  EXPECT_EQ(location.i, 1000000000);
+  EXPECT_EQ(location.j, 700000000);
+  EXPECT_EQ(location.component, 3);
+
+  for (int local = 0; local < statistics.local_size(); ++local) {
+    const pops::Box2D box = statistics.box(local);
+    const pops::Array4 values = statistics.fab(local).array();
+    pops::for_each_cell(box, [=] POPS_HD(int i, int j) {
+      if (i < 0)
+        values(i, j, 10) = static_cast<Real>(fatal);
+    });
+  }
+  location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
+  ASSERT_TRUE(location.found);
+  EXPECT_EQ(location.i, -1000000000);
+  EXPECT_EQ(location.j, -700000000);
+  EXPECT_EQ(location.component, 7);
+  EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8),
+               std::runtime_error);
 }

@@ -153,6 +153,33 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
         )
 
 
+def _require_runtime_plan_projection(
+    plan: Any, runtime_plan: Any, transfers: tuple[Any, ...]
+) -> None:
+    """Require every multi-layout route the provider claims before engine construction."""
+    layout_plan = plan.artifact.layout_plan
+    assignments = {
+        row.subject.local_id: (row.subject_id, row.layout.qualified_id)
+        for row in layout_plan.assignments
+        if row.subject_kind == "block"
+    }
+    expected_calls = tuple(assignments[block.name] for block in plan.artifact.blocks)
+    actual_calls = tuple((row.block_id, row.layout_id) for row in runtime_plan.calls)
+    if actual_calls != expected_calls:
+        raise ValueError(
+            "RuntimePlanBundle calls differ from the multi-layout InstallPlan projection"
+        )
+    if runtime_plan.communication.halos:
+        raise NotImplementedError(
+            "multi-layout RuntimePlan halos require an explicit per-layout halo scheduler"
+        )
+    expected_providers = tuple(sorted({row.provider_id for row in transfers}))
+    if runtime_plan.resources.mapping_provider_ids != expected_providers:
+        raise ValueError(
+            "RuntimePlanBundle mapping providers differ from the consumed Transfers"
+        )
+
+
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
     """Authenticate the exact bundle and its Transfer projection against one InstallPlan."""
     from pops.runtime._runtime_plan_contracts import LayoutTransfer
@@ -184,6 +211,7 @@ def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
         raise ValueError(
             "RuntimePlanBundle Transfers differ from the authenticated compiled LayoutPlan"
         )
+    _require_runtime_plan_projection(plan, runtime_plan, transfers)
     _require_unique_transfer_targets(transfers)
 
 
@@ -371,6 +399,213 @@ class _MultiLayoutUniformExecutor:
 
     def block_names(self) -> tuple[str, ...]:
         return tuple(self._block_layouts)
+
+    def _ordered_program_reports(self) -> tuple[tuple[Any, tuple[str, ...], Any], ...]:
+        """Return one authenticated report for every independently installed Program."""
+        from pops.runtime.program_report import ProgramRuntimeReport
+
+        layout_programs = tuple(self._plan.artifact.layout_programs)
+        layout_ids = tuple(row.layout_id for row in layout_programs)
+        if layout_ids != tuple(self._engines):
+            raise RuntimeError(
+                "multi-layout Program reports differ from the installed layout order"
+            )
+        rows = []
+        for layout_program in layout_programs:
+            engine = self._engines[layout_program.layout_id]
+            report = engine.program_report()
+            if type(report) is not ProgramRuntimeReport:
+                raise TypeError(
+                    "multi-layout child returned a non-canonical ProgramRuntimeReport"
+                )
+            if not report.installed or not isinstance(report.program_hash, str) or not (
+                report.program_hash
+            ):
+                raise RuntimeError(
+                    "multi-layout child has no authenticated installed Program"
+                )
+            engine_blocks = tuple(engine.block_names())
+            if (
+                len(engine_blocks) != len(set(engine_blocks))
+                or set(engine_blocks) != set(layout_program.block_names)
+            ):
+                raise RuntimeError(
+                    "multi-layout child block registry differs from its compiled partition"
+                )
+            local_map = tuple(report.block_map)
+            if (
+                len(local_map) != len(engine_blocks)
+                or any(
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    for index in local_map
+                )
+                or tuple(sorted(local_map)) != tuple(range(len(engine_blocks)))
+            ):
+                raise RuntimeError(
+                    "multi-layout child Program block map is not an exact local bijection"
+                )
+            parameter_blocks = tuple(row.get("program_block") for row in report.params)
+            if (
+                len(parameter_blocks) != len(local_map)
+                or any(
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    for index in parameter_blocks
+                )
+            ):
+                raise RuntimeError(
+                    "multi-layout child Program parameter report is not exact"
+                )
+            exact_parameter_blocks = cast(tuple[int, ...], parameter_blocks)
+            if tuple(sorted(exact_parameter_blocks)) != tuple(range(len(local_map))):
+                raise RuntimeError(
+                    "multi-layout child Program parameter report is not exact"
+                )
+            rows.append((layout_program, engine_blocks, report))
+        return tuple(rows)
+
+    def program_report(self) -> Any:
+        """Aggregate every real child Program without inventing a single native engine."""
+        from pops.identity import make_identity
+        from pops.runtime.program_report import ProgramRuntimeReport
+
+        children = self._ordered_program_reports()
+        global_blocks = self.block_names()
+        global_block_indices = {
+            name: index for index, name in enumerate(global_blocks)
+        }
+        if len(global_block_indices) != len(global_blocks):
+            raise RuntimeError("multi-layout global block registry contains a duplicate")
+
+        block_map = []
+        params = []
+        diagnostics = {}
+        histories = []
+        cache = []
+        clocks = []
+        level_relations = []
+        flux_ledger = []
+        synchronization = []
+        program_offset = 0
+
+        qualified_row_sets = (
+            ("history", histories, "histories"),
+            ("clock", clocks, "clocks"),
+            ("level relation", level_relations, "level_relations"),
+            ("flux ledger", flux_ledger, "flux_ledger"),
+            ("synchronization", synchronization, "synchronization"),
+        )
+        for layout_program, engine_blocks, report in children:
+            layout_id = layout_program.layout_id
+            local_map = tuple(report.block_map)
+            local_program_blocks = tuple(
+                engine_blocks[local_system_index]
+                for local_system_index in local_map
+            )
+            block_map.extend(
+                global_block_indices[name] for name in local_program_blocks
+            )
+
+            for raw in report.params:
+                row = dict(raw)
+                local_program_block = row["program_block"]
+                if "layout_id" in row or "block" in row:
+                    raise RuntimeError(
+                        "multi-layout child parameter report contains reserved qualifiers"
+                    )
+                row["program_block"] = program_offset + local_program_block
+                row["layout_id"] = layout_id
+                row["block"] = local_program_blocks[local_program_block]
+                params.append(row)
+
+            for name, value in report.diagnostics.items():
+                if not isinstance(name, str) or not name:
+                    raise RuntimeError(
+                        "multi-layout child diagnostic name must be non-empty"
+                    )
+                diagnostics["%s::%s" % (layout_id, name)] = value
+
+            for label, destination, attribute in qualified_row_sets:
+                for raw in getattr(report, attribute):
+                    row = dict(raw)
+                    if "layout_id" in row:
+                        raise RuntimeError(
+                            "multi-layout child %s report contains a reserved qualifier"
+                            % label
+                        )
+                    row["layout_id"] = layout_id
+                    destination.append(row)
+
+            for raw in report.cache:
+                row = dict(raw)
+                if "layout_id" in row or "layout_node_id" in row:
+                    raise RuntimeError(
+                        "multi-layout child cache report contains reserved qualifiers"
+                    )
+                local_node_id = row.get("node_id")
+                if (
+                    isinstance(local_node_id, bool)
+                    or not isinstance(local_node_id, int)
+                    or local_node_id < 0
+                ):
+                    raise RuntimeError(
+                        "multi-layout child cache report has an invalid node identity"
+                    )
+                row["layout_id"] = layout_id
+                row["layout_node_id"] = local_node_id
+                row["node_id"] = len(cache)
+                cache.append(row)
+            program_offset += len(local_map)
+
+        program_hash = make_identity(
+            "multi-layout-program",
+            [
+                {
+                    "layout_id": layout_program.layout_id,
+                    "layout_program_identity": layout_program.identity.token,
+                    "installed_program_hash": report.program_hash,
+                }
+                for layout_program, _engine_blocks, report in children
+            ],
+        ).hexdigest
+        return ProgramRuntimeReport(
+            installed=True,
+            program_hash=program_hash,
+            step_transaction=_common_exact(
+                (report.step_transaction for _row, _blocks, report in children),
+                where="multi-layout Program transaction report",
+            ),
+            block_map=block_map,
+            params=params,
+            diagnostics=diagnostics,
+            histories=histories,
+            cache=cache,
+            profiler=_common_exact(
+                (report.profiler for _row, _blocks, report in children),
+                where="multi-layout Program profiler report",
+            ),
+            clocks=clocks,
+            level_relations=level_relations,
+            flux_ledger=flux_ledger,
+            synchronization=synchronization,
+            temporal_partition=_common_exact(
+                (
+                    report.temporal_partition
+                    for _row, _blocks, report in children
+                ),
+                where="multi-layout Program temporal-partition report",
+            ),
+            temporal=_common_exact(
+                (report.temporal for _row, _blocks, report in children),
+                where="multi-layout Program temporal report",
+            ),
+        )
+
+    def installed_program_hash(self) -> str:
+        """Return the domain-separated identity of the exact installed Program set."""
+        return self.program_report().program_hash
 
     def state_global(self, block: str) -> Any:
         return self.executor_for_block(block).state_global(block)
@@ -969,7 +1204,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             )
         strategies.append(strategy)
         transaction_plans.append(authored.transaction_plan())
-        configs[layout_id] = system_config_from_layout(row.descriptor)
+        configs[layout_id] = system_config_from_layout(
+            plan.artifact.native_layouts[layout_id])
     if any(value != strategies[0] for value in strategies[1:]) or any(
         value != transaction_plans[0] for value in transaction_plans[1:]
     ):

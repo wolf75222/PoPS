@@ -146,6 +146,17 @@ def build_runtime_inspection(
     cap_report = native_capability_report()
     cap_dict = cap_report.to_dict()
     options = _options(sim, runtime)
+    environment = runtime_environment_report()
+    if instance is not None:
+        selected = instance.get("resolved_dimension")
+        supported = instance.get("supported_dimensions")
+        if isinstance(selected, bool) or not isinstance(selected, int):
+            raise TypeError("runtime instance inspection requires one exact resolved_dimension")
+        if not isinstance(supported, list) or selected not in supported:
+            raise ValueError(
+                "runtime instance resolved_dimension is absent from supported_dimensions")
+        environment["dimension"] = selected
+        environment["supported_dimensions"] = list(supported)
     limitations = [
         {"feature": row.feature, "status": row.status, "reason": row.limitation}
         for row in cap_report.routes
@@ -155,7 +166,7 @@ def build_runtime_inspection(
         runtime=runtime,
         blocks=_block_names(sim),
         clock=_clock(sim),
-        runtime_environment=runtime_environment_report(),
+        runtime_environment=environment,
         capabilities=cap_dict,
         program=_program(sim),
         profile=PerformanceSummary(_profile_payload(sim)).to_dict(),
@@ -204,17 +215,29 @@ def _program(sim: Any) -> Any:
     ("installed"/"hash") are preserved, with the richer transaction/block-map/parameter/history/cache
     summary
     folded in from the same report."""
-    from pops.runtime.program_report import build_program_report
-    report = build_program_report(sim)
+    from pops.runtime.program_report import ProgramRuntimeReport, build_program_report
+
+    provider = getattr(sim, "program_report", None)
+    report = provider() if callable(provider) else build_program_report(sim)
+    if type(report) is not ProgramRuntimeReport:
+        raise TypeError(
+            "runtime inspection requires the canonical ProgramRuntimeReport"
+        )
     return {
         "installed": report.installed,
         "hash": report.program_hash,
         "step_transaction": dict(report.step_transaction),
         "block_map": list(report.block_map),
         "params": [dict(row) for row in report.params],
+        "diagnostics": dict(report.diagnostics),
         "histories": [dict(row) for row in report.histories],
         "cache": [dict(row) for row in report.cache],
         "profiler": dict(report.profiler),
+        "clocks": [dict(row) for row in report.clocks],
+        "level_relations": [dict(row) for row in report.level_relations],
+        "flux_ledger": [dict(row) for row in report.flux_ledger],
+        "synchronization": [dict(row) for row in report.synchronization],
+        "temporal": dict(report.temporal),
     }
 
 

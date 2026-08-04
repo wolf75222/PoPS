@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "5c67c081cf1808138583ed00856e6601c12384ae28e9c0f8cc7b8ce004c3b0f6"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -26,9 +26,11 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_TAGGER_V2 = 3,
   POPS_NATIVE_INTERFACE_CLUSTERING_V1 = 4,
   POPS_NATIVE_INTERFACE_TRANSFER_V1 = 5,
+  POPS_NATIVE_INTERFACE_REFLUX_V1 = 6,
   POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2 = 7,
   POPS_NATIVE_INTERFACE_WRITER_V1 = 8,
   POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2 = 9,
+  POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1 = 10,
 } PopsNativeInterfaceIdV1;
 
 typedef enum PopsTaggingOpcodeV1 {
@@ -289,6 +291,35 @@ typedef struct PopsGhostBoundaryApiV1 {
   PopsApplyRegionBatchFnV1 apply_region_batch;
 } PopsGhostBoundaryApiV1;
 
+typedef struct PopsBoundaryFluxRequestV1 {
+  uint32_t struct_size;
+  const char* provider_identity;
+  const char* state_identity;
+  PopsConstFieldViewV1 base_outward_normal_flux;
+  PopsConstFieldViewV1 coordinates;
+  PopsConstFieldViewV1 outward_normals;
+  const double* face_measures;
+  PopsBoundaryRegionV1 region;
+  size_t dependency_count;
+  const PopsQualifiedConstFieldV1* dependencies;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+} PopsBoundaryFluxRequestV1;
+typedef struct PopsBoundaryFluxResultV1 {
+  uint32_t struct_size;
+  PopsFieldViewV1 outward_normal_flux;
+  PopsComponentActionV1* actions;
+  PopsComponentStatusV1 status;
+} PopsBoundaryFluxResultV1;
+typedef int32_t (*PopsTransformBoundaryFacesFnV1)(
+    void*, const PopsBoundaryFluxRequestV1*, PopsBoundaryFluxResultV1*);
+typedef struct PopsBoundaryFluxApiV1 {
+  PopsComponentTableHeaderV1 header;
+  PopsTransformBoundaryFacesFnV1 transform_faces;
+} PopsBoundaryFluxApiV1;
+
 typedef struct PopsFieldBoundaryRequestV1 {
   uint32_t struct_size;
   const char* closure_identity;
@@ -445,6 +476,41 @@ typedef struct PopsTransferApiV1 {
   PopsComponentTableHeaderV1 header;
   PopsTransferApplyFnV1 apply;
 } PopsTransferApiV1;
+
+// Reflux providers are patch-local numerical kernels only. PoPS retains sole ownership of the
+// time-integrated flux ledger, interface topology, MPI reduction, transaction and state update.
+// Each face contains coarse/fine fluxes already integrated in time and averaged onto the same
+// coarse face. The provider writes, but never applies, side*(fine-coarse)/dx into `correction`.
+typedef enum PopsRefluxFaceSideV1 {
+  POPS_REFLUX_FACE_LOW_V1 = -1,
+  POPS_REFLUX_FACE_HIGH_V1 = 1
+} PopsRefluxFaceSideV1;
+typedef struct PopsRefluxFaceV1 {
+  uint32_t struct_size;
+  const char* interface_identity;
+  int32_t axis;
+  PopsRefluxFaceSideV1 side;
+  double inverse_coarse_cell_spacing;
+  PopsConstFieldViewV1 coarse_integrated_flux;
+  PopsConstFieldViewV1 fine_integrated_flux;
+  PopsFieldViewV1 correction;
+} PopsRefluxFaceV1;
+typedef struct PopsRefluxRequestV1 {
+  uint32_t struct_size;
+  const char* transition_identity;
+  int32_t parent_level;
+  int32_t child_level;
+  size_t face_count;
+  const PopsRefluxFaceV1* faces;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+} PopsRefluxRequestV1;
+typedef int32_t (*PopsRefluxApplyInterfaceBatchFnV1)(
+    void*, const PopsRefluxRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsRefluxApiV1 {
+  PopsComponentTableHeaderV1 header;
+  PopsRefluxApplyInterfaceBatchFnV1 apply_interface_batch;
+} PopsRefluxApiV1;
 
 typedef struct PopsFieldPatchMetadataV1 {
   uint32_t struct_size;
@@ -724,9 +790,11 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return sizeof(PopsTaggerApiV2);
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return sizeof(PopsClusteringApiV1);
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return sizeof(PopsTransferApiV1);
+    case POPS_NATIVE_INTERFACE_REFLUX_V1: return sizeof(PopsRefluxApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return sizeof(PopsFieldSolverApiV2);
     case POPS_NATIVE_INTERFACE_WRITER_V1: return sizeof(PopsWriterApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return sizeof(PopsFieldTopologyApiV2);
+    case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return sizeof(PopsBoundaryFluxApiV1);
   }
   return 0;
 }
@@ -739,11 +807,76 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return "PopsTaggerApiV2";
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return "PopsClusteringApiV1";
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return "PopsTransferApiV1";
+    case POPS_NATIVE_INTERFACE_REFLUX_V1: return "PopsRefluxApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return "PopsFieldSolverApiV2";
     case POPS_NATIVE_INTERFACE_WRITER_V1: return "PopsWriterApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return "PopsFieldTopologyApiV2";
+    case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return "PopsBoundaryFluxApiV1";
   }
   return nullptr;
+}
+inline bool generated_native_interface_table_is_complete(
+    PopsNativeInterfaceIdV1 id, const void* table, size_t table_size) noexcept {
+  if (table == nullptr)
+    return false;
+  switch (id) {
+    case POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1: {
+      if (table_size < sizeof(PopsNumericalFluxApiV1)) return false;
+      const auto* api = static_cast<const PopsNumericalFluxApiV1*>(table);
+      return api->evaluate_faces != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: {
+      if (table_size < sizeof(PopsGhostBoundaryApiV1)) return false;
+      const auto* api = static_cast<const PopsGhostBoundaryApiV1*>(table);
+      return api->apply_region_batch != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: {
+      if (table_size < sizeof(PopsFieldBoundaryClosureApiV1)) return false;
+      const auto* api = static_cast<const PopsFieldBoundaryClosureApiV1*>(table);
+      return api->residual != nullptr && api->jvp != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_TAGGER_V2: {
+      if (table_size < sizeof(PopsTaggerApiV2)) return false;
+      const auto* api = static_cast<const PopsTaggerApiV2*>(table);
+      return api->tag_batch != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_CLUSTERING_V1: {
+      if (table_size < sizeof(PopsClusteringApiV1)) return false;
+      const auto* api = static_cast<const PopsClusteringApiV1*>(table);
+      return api->cluster != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_TRANSFER_V1: {
+      if (table_size < sizeof(PopsTransferApiV1)) return false;
+      const auto* api = static_cast<const PopsTransferApiV1*>(table);
+      return api->apply != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_REFLUX_V1: {
+      if (table_size < sizeof(PopsRefluxApiV1)) return false;
+      const auto* api = static_cast<const PopsRefluxApiV1*>(table);
+      return api->apply_interface_batch != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: {
+      if (table_size < sizeof(PopsFieldSolverApiV2)) return false;
+      const auto* api = static_cast<const PopsFieldSolverApiV2*>(table);
+      return api->solve != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_WRITER_V1: {
+      if (table_size < sizeof(PopsWriterApiV1)) return false;
+      const auto* api = static_cast<const PopsWriterApiV1*>(table);
+      return api->verify != nullptr && api->publish != nullptr && api->discard != nullptr && api->rollback != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: {
+      if (table_size < sizeof(PopsFieldTopologyApiV2)) return false;
+      const auto* api = static_cast<const PopsFieldTopologyApiV2*>(table);
+      return api->prepare_topology != nullptr;
+    }
+    case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: {
+      if (table_size < sizeof(PopsBoundaryFluxApiV1)) return false;
+      const auto* api = static_cast<const PopsBoundaryFluxApiV1*>(table);
+      return api->transform_faces != nullptr;
+    }
+  }
+  return false;
 }
 }  // namespace pops::component
 #endif

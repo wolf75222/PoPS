@@ -43,6 +43,30 @@ static void companion(const Real (&roots)[N], Real (&A)[N][N]) {
     A[i][i - 1] = Real(1);
 }
 
+TEST(DenseEig, characteristic_incoming_projector_is_oriented_and_sonic_neutral) {
+  const Real A[3][3] = {{Real(-2), 0, 0}, {0, Real(0), 0}, {0, 0, Real(3)}};
+  const Real jump[3] = {Real(4), Real(5), Real(6)};
+  Real lower[3] = {Real(9), Real(9), Real(9)};
+  ASSERT_TRUE(pops::characteristic_incoming_apply(A, jump, lower, 1));
+  EXPECT_NEAR(lower[0], Real(4), Real(1e-12));
+  EXPECT_NEAR(lower[1], Real(0), Real(1e-12));
+  EXPECT_NEAR(lower[2], Real(0), Real(1e-12));
+
+  Real upper[3] = {};
+  ASSERT_TRUE(pops::characteristic_incoming_apply(A, jump, upper, -1));
+  EXPECT_NEAR(upper[0], Real(0), Real(1e-12));
+  EXPECT_NEAR(upper[1], Real(0), Real(1e-12));
+  EXPECT_NEAR(upper[2], Real(6), Real(1e-12));
+
+  const Real complex_A[2][2] = {{Real(0), Real(-1)}, {Real(1), Real(0)}};
+  const Real complex_jump[2] = {Real(1), Real(2)};
+  Real untouched[2] = {Real(7), Real(8)};
+  EXPECT_FALSE(pops::characteristic_incoming_apply(complex_A, complex_jump, untouched, 1));
+  EXPECT_EQ(untouched[0], Real(7));
+  EXPECT_EQ(untouched[1], Real(8));
+  EXPECT_FALSE(pops::characteristic_incoming_apply(A, jump, lower, 0));
+}
+
 /// Consommateur DEVICE-SAFE (pile uniquement, ni NumPy ni MATLAB) : tient lieu du projecteur
 /// HyQMOM15 qui classe un bloc 3x3 de moments puis choisit une action. Le switch est EXHAUSTIF sur
 /// pops::Spectrum -- kUnknown (non-convergence) y est traite explicitement, jamais confondu avec kReal.
