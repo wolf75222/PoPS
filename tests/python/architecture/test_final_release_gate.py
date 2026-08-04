@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import copy
+import base64
+import csv
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -62,18 +65,52 @@ def _write_release_wheel(
     purelib: str = "false",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(
-            f"pops-{version}.dist-info/METADATA",
-            f"Metadata-Version: 2.3\nName: PoPS\nVersion: {version}\n",
-        )
-        archive.writestr(
-            f"pops-{version}.dist-info/WHEEL",
+    native_rows = []
+    payloads = {
+        f"pops-{version}.dist-info/METADATA": (
+            f"Metadata-Version: 2.3\nName: PoPS\nVersion: {version}\n"
+        ).encode(),
+        f"pops-{version}.dist-info/WHEEL": (
             "Wheel-Version: 1.0\n"
             "Generator: ADC-688 test\n"
             f"Root-Is-Purelib: {purelib}\n"
-            f"Tag: {tag}\n",
+            f"Tag: {tag}\n"
+        ).encode(),
+    }
+    for dimension in (1, 2, 3):
+        relative = f"dim{dimension}/_pops.so"
+        member = "pops/_native/" + relative
+        native = f"native Dim={dimension}".encode()
+        payloads[member] = native
+        native_rows.append({
+            "dimension": dimension,
+            "path": relative,
+            "sha256": hashlib.sha256(native).hexdigest(),
+            "version": version,
+            "abi_key": f"test-abi;dim={dimension}",
+            "has_mpi": False,
+            "has_kokkos": True,
+        })
+    payloads["pops/_native/variants.json"] = (
+        json.dumps(
+            {"schema_version": 1, "variants": native_rows},
+            sort_keys=True,
+            indent=2,
         )
+        + "\n"
+    ).encode()
+    record_member = f"pops-{version}.dist-info/RECORD"
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, lineterminator="\n")
+    for name in sorted(payloads):
+        payload = payloads[name]
+        digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+        writer.writerow((name, "sha256=" + digest.decode(), str(len(payload))))
+    writer.writerow((record_member, "", ""))
+    payloads[record_member] = stream.getvalue().encode()
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, payload in payloads.items():
+            archive.writestr(name, payload)
 
 
 def _write_final_source_tree(root: Path) -> None:
@@ -961,30 +998,39 @@ def test_installed_wheel_resolver_never_imports_unsigned_native_extension() -> N
 
 def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(tmp_path):
     wheel = tmp_path / "wheels" / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
-    wheel.parent.mkdir()
-    native_member = "pops/_pops.cpython-312-darwin.so"
-    native_bytes = b"exact wheel extension"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("pops/__init__.py", "__version__ = '0.3.0'\n")
-        archive.writestr(native_member, native_bytes)
-        archive.writestr(
-            "pops-0.3.0.dist-info/METADATA",
-            "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
-        )
-    runtime = {
-        "python_executable": "/proof/bin/python",
-        "pops_file": "/proof/site-packages/pops/__init__.py",
-        "native_extension": "/proof/site-packages/pops/_pops.so",
-        "native_sha256": "post-sign-runtime-digest",
-    }
-    wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    _write_release_wheel(wheel)
+    distribution_root = Path("/proof/site-packages")
     with zipfile.ZipFile(wheel) as archive:
-        rows = [
-            "%s\0%s\n"
-            % (name, hashlib.sha256(archive.read(name)).hexdigest())
+        manifest_bytes = archive.read("pops/_native/variants.json")
+        manifest_rows = json.loads(manifest_bytes)["variants"]
+        tree_rows = [
+            "%s\0%s\n" % (name, hashlib.sha256(archive.read(name)).hexdigest())
             for name in sorted(archive.namelist())
             if not name.endswith("/") and not name.endswith(".dist-info/RECORD")
         ]
+    native_variants = [
+        {
+            "dimension": row["dimension"],
+            "extension": str(
+                distribution_root / "pops" / "_native" / row["path"]
+            ),
+            "member": "pops/_native/" + row["path"],
+            "sha256": row["sha256"],
+            "version": row["version"],
+            "abi_key": row["abi_key"],
+            "has_mpi": row["has_mpi"],
+            "has_kokkos": row["has_kokkos"],
+        }
+        for row in manifest_rows
+    ]
+    runtime = {
+        "python_executable": "/proof/bin/python",
+        "pops_file": "/proof/site-packages/pops/__init__.py",
+        "native_dimension": 2,
+        "native_extension": native_variants[1]["extension"],
+        "native_sha256": native_variants[1]["sha256"],
+    }
+    wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
     commands = []
     command_argvs = (
         [
@@ -1005,6 +1051,12 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
             "scripts/prove_installed_wheel.py",
             "--wheel",
             str(wheel),
+            "--expect-dim",
+            "1",
+            "--expect-dim",
+            "2",
+            "--expect-dim",
+            "3",
         ],
     )
     for index, argv in enumerate(command_argvs, 1):
@@ -1031,16 +1083,18 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
         "installed_wheel": {
             "commands": commands,
             "evidence": {
-                "schema_version": 2,
+                "schema_version": 3,
+                "expected_dimensions": [1, 2, 3],
                 "python_executable": runtime["python_executable"],
-                "distribution_root": "/proof/site-packages",
+                "distribution_root": str(distribution_root),
                 "package_file": runtime["pops_file"],
-                "native_extension": runtime["native_extension"],
-                "native_member": native_member,
-                "native_sha256": hashlib.sha256(native_bytes).hexdigest(),
-                "installed_member_count": len(rows),
+                "native_manifest": "/proof/site-packages/pops/_native/variants.json",
+                "native_manifest_member": "pops/_native/variants.json",
+                "native_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "native_variants": native_variants,
+                "installed_member_count": len(tree_rows),
                 "installed_tree_sha256": hashlib.sha256(
-                    "".join(rows).encode("utf-8")
+                    "".join(tree_rows).encode("utf-8")
                 ).hexdigest(),
                 "proof_script_sha256": hashlib.sha256(
                     (SCRIPTS / "prove_installed_wheel.py").read_bytes()
@@ -1051,11 +1105,11 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
             },
         },
     }
-    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "0.3.0"})
+    release = _release_contract()
 
     preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
-    gates["installed_wheel"]["evidence"]["native_sha256"] = "0" * 64
-    with pytest.raises(preflight.PreflightError, match="native member hash drifted"):
+    gates["installed_wheel"]["evidence"]["native_variants"][1]["sha256"] = "0" * 64
+    with pytest.raises(preflight.PreflightError, match="proof disagrees with its manifest"):
         preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
 
 
@@ -1075,12 +1129,21 @@ def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
     runtime = {
         "python_executable": "/proof/bin/python",
         "pops_file": "/proof/site-packages/pops/__init__.py",
-        "native_extension": "/proof/site-packages/pops/_pops.so",
-        "native_sha256": "a" * 64,
+        "native_dimension": 2,
+        "native_extension": "/proof/site-packages/pops/_native/dim2/_pops.so",
+        "native_sha256": "b" * 64,
     }
+    native_variants = [
+        {
+            "dimension": dimension,
+            "extension": f"/proof/site-packages/pops/_native/dim{dimension}/_pops.so",
+            "sha256": chr(ord("a") + dimension - 1) * 64,
+        }
+        for dimension in (1, 2, 3)
+    ]
     gates = {
         "installed_wheel": {
-            "evidence": {"native_sha256": runtime["native_sha256"]},
+            "evidence": {"native_variants": native_variants},
         },
         "codesign": {
             "commands": [
@@ -1091,33 +1154,41 @@ def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
                         "python",
                         "scripts/codesign_pops_extensions.py",
                         "--json",
+                        "--expect-dim",
+                        "1",
+                        "--expect-dim",
+                        "2",
+                        "--expect-dim",
+                        "3",
                     ],
                     "log": str(log.relative_to(tmp_path)),
                     "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
                 }
             ],
             "evidence": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "platform": "darwin",
                 "extensions": [
                     {
-                        "path": runtime["native_extension"],
-                        "sha256": runtime["native_sha256"],
+                        "dimension": variant["dimension"],
+                        "path": variant["extension"],
+                        "sha256": variant["sha256"],
                         "signature": "adhoc",
                     }
+                    for variant in native_variants
                 ],
             },
         },
     }
 
     preflight._codesign_evidence(tmp_path, gates, runtime)
-    gates["codesign"]["evidence"]["extensions"][0]["sha256"] = "b" * 64
-    with pytest.raises(preflight.PreflightError, match="live native extension"):
+    gates["codesign"]["evidence"]["extensions"][1]["sha256"] = "0" * 64
+    with pytest.raises(preflight.PreflightError, match="changed a retained-wheel native leaf"):
         preflight._codesign_evidence(tmp_path, gates, runtime)
 
-    gates["codesign"]["evidence"]["extensions"][0]["sha256"] = runtime["native_sha256"]
-    gates["installed_wheel"]["evidence"]["native_sha256"] = "b" * 64
-    with pytest.raises(preflight.PreflightError, match="published wheel"):
+    gates["codesign"]["evidence"]["extensions"][1]["sha256"] = runtime["native_sha256"]
+    runtime["native_sha256"] = "0" * 64
+    with pytest.raises(preflight.PreflightError, match="active runtime"):
         preflight._codesign_evidence(tmp_path, gates, runtime)
 
 
@@ -1358,11 +1429,20 @@ def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate
     assert "uses: ./.github/workflows/wheels.yml" in release
     assert "needs: [full-source-matrix, wheel, validate]" in release
     assert "run_final_gate.py --wheel" in release
+    assert "--dim 2 --wheel-dim 1 --wheel-dim 2 --wheel-dim 3" in release
     assert "release_preflight.py" in release
+    assert "--installed --dim 2" in release
     assert 'gh release create "$GITHUB_REF_NAME" wheelhouse/*.whl' in release
     assert "workflow_call:" in ci
     assert "FORCE_FULL: ${{ inputs.force_full || false }}" in ci
     assert "workflow_call:" in wheels
     assert "gh release upload" not in wheels
+    assert "for dim in 1 2 3" in wheels
+    assert "cmake.define.POPS_NATIVE_DIM=${dim}" in wheels
+    assert "scripts/assemble_native_variant_wheel.py" in wheels
+    assert '--variant "1=${variant_wheels[1]}"' in wheels
+    assert '--variant "2=${variant_wheels[2]}"' in wheels
+    assert '--variant "3=${variant_wheels[3]}"' in wheels
+    assert "--signature-policy adhoc" in wheels
     assert "--wheel-dir" in build
     assert "--force-reinstall --no-deps" in build

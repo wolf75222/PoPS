@@ -65,19 +65,24 @@ jobs:
           test "${#wheels[@]}" -eq 1
           evidence="$RUNNER_TEMP/pops-final-evidence.json"
           public_api_evidence="$RUNNER_TEMP/pops-final-evidence-public-api.json"
-          python scripts/run_final_gate.py --wheel "${wheels[0]}" --evidence "$evidence"
+          python scripts/run_final_gate.py --wheel "${wheels[0]}" \
+            --dim 2 --wheel-dim 1 --wheel-dim 2 --wheel-dim 3 \
+            --evidence "$evidence"
           python scripts/prove_public_api_parity.py \
             --wheel "${wheels[0]}" \
             --installed \
             --evidence "$public_api_evidence"
           python - <<'PY'
+          from pops._native_selector import select_native_dimension
+          select_native_dimension(2)
           from pops.runtime_environment import runtime_environment_report
           report = runtime_environment_report()
+          assert report["native_dimension"] == 2, report
           assert report["kokkos_backend"] == "Serial", report
           assert report["mpi_compiled"] is False, report
           PY
           python scripts/release_preflight.py \
-            --release --tag "$GITHUB_REF_NAME" --installed --evidence "$evidence" \
+            --release --tag "$GITHUB_REF_NAME" --installed --dim 2 --evidence "$evidence" \
             --public-api-evidence "$public_api_evidence"
 
       - name: Retain authenticated release evidence

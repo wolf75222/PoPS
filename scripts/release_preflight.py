@@ -8,10 +8,14 @@ build/example/IO gate. The evidence is machine output from the final gate, never
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import hashlib
+import importlib.machinery
 import importlib.util
+import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -20,7 +24,10 @@ from typing import Any
 import xml.etree.ElementTree as ET
 import zipfile
 
-from final_release_contract import (
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from final_release_contract import (  # noqa: E402
     FINAL_EXAMPLES,
     FINAL_EXAMPLE_REQUIRED_TESTS,
     FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS,
@@ -32,13 +39,18 @@ from final_release_contract import (
     require_release_matrix_source_contract,
     require_source_contract,
 )
+from write_native_variant_manifest import (  # noqa: E402
+    NativeVariantManifestError,
+    validate_manifest_payload,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 11
+EVIDENCE_SCHEMA_VERSION = 12
 PUBLIC_API_EVIDENCE_SCHEMA_VERSION = 3
+RELEASE_NATIVE_DIMENSIONS = (1, 2, 3)
 
 
 class PreflightError(RuntimeError):
@@ -150,12 +162,19 @@ def _tag_contract(version: str, tag: str) -> None:
         raise PreflightError("CHANGELOG has no exact release section for %s" % version)
 
 
-def _installed_contract(contract: Any) -> dict[str, str]:
+def _installed_contract(contract: Any, dimension: int) -> dict[str, Any]:
     import pops
+    from pops._native_selector import select_native_dimension
+
+    if type(dimension) is not int or dimension not in RELEASE_NATIVE_DIMENSIONS:
+        raise PreflightError("installed native dimension must be exactly 1, 2, or 3")
+    select_native_dimension(dimension)
     from pops import _pops
 
     if pops.__version__ != contract.PACKAGE_VERSION or _pops.__version__ != contract.PACKAGE_VERSION:
         raise PreflightError("installed Python/native/package versions disagree")
+    if _pops.__native_dimension__ != dimension:
+        raise PreflightError("installed native dimension disagrees with explicit release dimension")
     if _pops.__abi_version__ != contract.NATIVE_ABI_VERSION:
         raise PreflightError("installed native ABI disagrees with release contract")
     if _pops.__release_contract_sha256__ != contract.RELEASE_CONTRACT_SHA256:
@@ -166,6 +185,7 @@ def _installed_contract(contract: Any) -> dict[str, str]:
     return {
         "python_executable": str(Path(sys.executable).resolve()),
         "pops_file": str(Path(pops.__file__).resolve()),
+        "native_dimension": dimension,
         "native_extension": str(extension),
         "native_sha256": hashlib.sha256(extension.read_bytes()).hexdigest(),
     }
@@ -261,6 +281,114 @@ def _wheel_lane_contract(path: Path, archive: zipfile.ZipFile, contract: Any) ->
         raise PreflightError("release WHEEL metadata disagrees with the promised native lane")
 
 
+def _record_digest(payload: bytes) -> str:
+    encoded = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+    return "sha256=" + encoded.decode("ascii")
+
+
+def _safe_wheel_member(name: str) -> None:
+    relative = PurePosixPath(name)
+    if not name or "\\" in name or relative.is_absolute() or str(relative) != name \
+            or any(part in {"", ".", ".."} for part in relative.parts):
+        raise PreflightError("release wheel contains an unsafe member: %r" % name)
+    if ".data" in relative.parts:
+        raise PreflightError("release wheel uses an unsupported .data installation scheme")
+
+
+def _is_native_member(name: str) -> bool:
+    filename = PurePosixPath(name).name
+    return any(
+        filename == "_pops" + suffix
+        for suffix in importlib.machinery.EXTENSION_SUFFIXES
+    )
+
+
+def _wheel_native_contract(
+    archive: zipfile.ZipFile,
+    contract: Any,
+) -> tuple[bytes, tuple[dict[str, Any], ...]]:
+    """Reauthenticate the exact fat-native manifest, leaves and PEP 427 RECORD."""
+
+    infos = archive.infolist()
+    names = [info.filename for info in infos]
+    if len(names) != len(set(names)):
+        raise PreflightError("release wheel contains duplicate members")
+    for info in infos:
+        _safe_wheel_member(info.filename.rstrip("/"))
+        if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+            raise PreflightError("release wheel contains a symlink: %s" % info.filename)
+    files = {name for name in names if not name.endswith("/")}
+    manifest_member = "pops/_native/variants.json"
+    manifests = [name for name in files if name == manifest_member]
+    records = [name for name in files if name.endswith(".dist-info/RECORD")]
+    if manifests != [manifest_member] or len(records) != 1:
+        raise PreflightError("release wheel requires one native manifest and one RECORD")
+    manifest_bytes = archive.read(manifest_member)
+    try:
+        payload = json.loads(manifest_bytes)
+        variants = validate_manifest_payload(
+            payload, expected_dimensions=RELEASE_NATIVE_DIMENSIONS
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, NativeVariantManifestError) as exc:
+        raise PreflightError("release wheel native manifest is malformed: %s" % exc) from exc
+    expected_members = {
+        "pops/_native/" + row["path"]: row for row in variants
+    }
+    discovered = {name for name in files if _is_native_member(name)}
+    if discovered != set(expected_members):
+        raise PreflightError("release wheel native leaves do not equal its exact manifest")
+    common_abi = set()
+    for member, row in expected_members.items():
+        if hashlib.sha256(archive.read(member)).hexdigest() != row["sha256"]:
+            raise PreflightError(
+                "release wheel Dim=%d bytes disagree with variants.json"
+                % row["dimension"]
+            )
+        if row["version"] != contract.PACKAGE_VERSION \
+                or row["has_mpi"] is not False or row["has_kokkos"] is not True:
+            raise PreflightError(
+                "release wheel Dim=%d version/backend facts disagree with its lane"
+                % row["dimension"]
+            )
+        match = re.fullmatch(r"(.+);dim=([123])", row["abi_key"])
+        if match is None or int(match.group(2)) != row["dimension"]:
+            raise PreflightError(
+                "release wheel Dim=%d ABI key lacks its exact dimension"
+                % row["dimension"]
+            )
+        common_abi.add(match.group(1))
+    if len(common_abi) != 1:
+        raise PreflightError("release wheel native variants disagree on their toolchain ABI")
+
+    record_member = records[0]
+    try:
+        record_rows = list(csv.reader(io.StringIO(
+            archive.read(record_member).decode("utf-8"), newline=""
+        )))
+    except UnicodeDecodeError as exc:
+        raise PreflightError("release wheel RECORD is not UTF-8") from exc
+    if not record_rows or any(len(row) != 3 for row in record_rows):
+        raise PreflightError("release wheel RECORD is malformed")
+    by_name: dict[str, tuple[str, str]] = {}
+    for name, digest, size in record_rows:
+        _safe_wheel_member(name)
+        if name in by_name:
+            raise PreflightError("release wheel RECORD repeats a member")
+        by_name[name] = (digest, size)
+    if set(by_name) != files:
+        raise PreflightError("release wheel RECORD does not cover its exact file set")
+    for name in sorted(files):
+        digest, size = by_name[name]
+        if name == record_member:
+            if digest or size:
+                raise PreflightError("release wheel RECORD must not hash itself")
+            continue
+        member_bytes = archive.read(name)
+        if (digest, size) != (_record_digest(member_bytes), str(len(member_bytes))):
+            raise PreflightError("release wheel RECORD digest drifted: %s" % name)
+    return manifest_bytes, variants
+
+
 def _checkpoint_tree(path: Path) -> str:
     if path.is_file():
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -291,6 +419,7 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
     try:
         with zipfile.ZipFile(path) as archive:
             _wheel_lane_contract(path, archive, contract)
+            _wheel_native_contract(archive, contract)
             metadata_names = [name for name in archive.namelist()
                               if name.endswith(".dist-info/METADATA")]
             if len(metadata_names) != 1:
@@ -402,7 +531,7 @@ def _installed_wheel_evidence(
     directory: Path,
     gates: dict[str, Any],
     contract: Any,
-    runtime: dict[str, str],
+    runtime: dict[str, Any],
 ) -> None:
     wheel = gates["official_build"]["evidence"]["wheel"]
     retained = (directory / wheel["path"]).resolve()
@@ -410,12 +539,14 @@ def _installed_wheel_evidence(
     evidence = row["evidence"]
     expected = {
         "schema_version",
+        "expected_dimensions",
         "python_executable",
         "distribution_root",
         "package_file",
-        "native_extension",
-        "native_member",
-        "native_sha256",
+        "native_manifest",
+        "native_manifest_member",
+        "native_manifest_sha256",
+        "native_variants",
         "installed_member_count",
         "installed_tree_sha256",
         "proof_script_sha256",
@@ -425,7 +556,10 @@ def _installed_wheel_evidence(
     }
     if not isinstance(evidence, dict) or set(evidence) != expected:
         raise PreflightError("installed wheel evidence is malformed")
-    if evidence["schema_version"] != 2:
+    expected_dimensions = evidence["expected_dimensions"]
+    if evidence["schema_version"] != 3 \
+            or expected_dimensions != list(RELEASE_NATIVE_DIMENSIONS) \
+            or any(type(value) is not int for value in expected_dimensions):
         raise PreflightError("installed wheel evidence schema is unsupported")
     if evidence["version"] != contract.PACKAGE_VERSION:
         raise PreflightError("installed wheel evidence version disagrees with release contract")
@@ -433,9 +567,11 @@ def _installed_wheel_evidence(
             or evidence["wheel_sha256"] != wheel["sha256"]:
         raise PreflightError("installed wheel evidence does not authenticate the retained wheel")
     if evidence["python_executable"] != runtime["python_executable"] \
-            or evidence["package_file"] != runtime["pops_file"] \
-            or evidence["native_extension"] != runtime["native_extension"]:
+            or evidence["package_file"] != runtime["pops_file"]:
         raise PreflightError("installed wheel evidence belongs to another runtime")
+    expected_manifest = Path(runtime["pops_file"]).resolve().parent / "_native" / "variants.json"
+    if Path(evidence["native_manifest"]).resolve() != expected_manifest:
+        raise PreflightError("installed wheel evidence authenticates another native manifest")
 
     commands = row["commands"]
     logs = _command_evidence(directory, commands, gate="installed_wheel")
@@ -455,15 +591,20 @@ def _installed_wheel_evidence(
         "scripts/prove_installed_wheel.py",
         "--wheel",
         str(retained),
+        "--expect-dim",
+        "1",
+        "--expect-dim",
+        "2",
+        "--expect-dim",
+        "3",
     ]
     if commands[0]["argv"][-len(install_suffix):] != install_suffix \
             or commands[1]["argv"][-len(proof_suffix):] != proof_suffix:
         raise PreflightError("installed wheel gate did not reinstall and prove the retained wheel")
     try:
         with zipfile.ZipFile(retained) as archive:
-            member = evidence["native_member"]
-            member_digest = hashlib.sha256(archive.read(member)).hexdigest()
-            rows = []
+            manifest_bytes, manifest_rows = _wheel_native_contract(archive, contract)
+            tree_rows = []
             for name in sorted(archive.namelist()):
                 if name.endswith("/") or name.endswith(".dist-info/RECORD"):
                     continue
@@ -472,15 +613,55 @@ def _installed_wheel_evidence(
                         "release wheel uses an unsupported .data installation scheme"
                     )
                 digest = hashlib.sha256(archive.read(name)).hexdigest()
-                rows.append("%s\0%s\n" % (name, digest))
+                tree_rows.append("%s\0%s\n" % (name, digest))
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
-        raise PreflightError("installed wheel native member is unreadable: %s" % exc) from exc
-    if member_digest != evidence["native_sha256"]:
-        raise PreflightError("installed wheel native member hash drifted")
-    expected_tree = hashlib.sha256("".join(rows).encode("utf-8")).hexdigest()
-    if evidence["installed_member_count"] != len(rows) \
+        raise PreflightError("installed wheel native payload is unreadable: %s" % exc) from exc
+    if evidence["native_manifest_member"] != "pops/_native/variants.json" \
+            or evidence["native_manifest_sha256"] != hashlib.sha256(manifest_bytes).hexdigest():
+        raise PreflightError("installed wheel native manifest proof drifted")
+    expected_tree = hashlib.sha256("".join(tree_rows).encode("utf-8")).hexdigest()
+    if evidence["installed_member_count"] != len(tree_rows) \
             or evidence["installed_tree_sha256"] != expected_tree:
         raise PreflightError("installed wheel payload proof drifted")
+
+    native_variants = evidence["native_variants"]
+    if not isinstance(native_variants, list) or len(native_variants) != 3:
+        raise PreflightError("installed wheel proof must authenticate exactly three variants")
+    dimensions = [row.get("dimension") for row in native_variants if isinstance(row, dict)]
+    if dimensions != list(RELEASE_NATIVE_DIMENSIONS) \
+            or any(type(value) is not int for value in dimensions):
+        raise PreflightError("installed wheel proof variant set/order drifted")
+    manifest_by_dimension = {row["dimension"]: row for row in manifest_rows}
+    installed_by_dimension: dict[int, dict[str, Any]] = {}
+    distribution_root = Path(evidence["distribution_root"]).resolve()
+    for variant in native_variants:
+        if set(variant) != {
+            "dimension", "extension", "member", "sha256", "version", "abi_key",
+            "has_mpi", "has_kokkos",
+        }:
+            raise PreflightError("installed wheel native variant evidence is malformed")
+        dimension = variant["dimension"]
+        manifest_row = manifest_by_dimension[dimension]
+        member = "pops/_native/" + manifest_row["path"]
+        expected_extension = (distribution_root / member).resolve()
+        if variant != {
+            "dimension": dimension,
+            "extension": str(expected_extension),
+            "member": member,
+            "sha256": manifest_row["sha256"],
+            "version": manifest_row["version"],
+            "abi_key": manifest_row["abi_key"],
+            "has_mpi": manifest_row["has_mpi"],
+            "has_kokkos": manifest_row["has_kokkos"],
+        }:
+            raise PreflightError(
+                "installed wheel Dim=%d proof disagrees with its manifest" % dimension
+            )
+        installed_by_dimension[dimension] = variant
+    active = installed_by_dimension.get(runtime["native_dimension"])
+    if active is None or active["extension"] != runtime["native_extension"] \
+            or active["sha256"] != runtime["native_sha256"]:
+        raise PreflightError("installed wheel proof does not authenticate the active runtime")
     proof_script = ROOT / "scripts" / "prove_installed_wheel.py"
     if evidence["proof_script_sha256"] != hashlib.sha256(proof_script.read_bytes()).hexdigest():
         raise PreflightError("installed wheel proof script drifted")
@@ -489,37 +670,49 @@ def _installed_wheel_evidence(
 def _codesign_evidence(
     directory: Path,
     gates: dict[str, Any],
-    runtime: dict[str, str],
+    runtime: dict[str, Any],
 ) -> None:
     row = gates["codesign"]
     evidence = row["evidence"]
     if not isinstance(evidence, dict) or set(evidence) != {
             "schema_version", "platform", "extensions"}:
         raise PreflightError("codesign evidence is malformed")
-    if evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
+    if evidence["schema_version"] != 2 or evidence["platform"] != "darwin":
         raise PreflightError("codesign evidence must authenticate the Darwin release lane")
     extensions = evidence["extensions"]
-    if not isinstance(extensions, list) or len(extensions) != 1:
-        raise PreflightError("codesign evidence must authenticate exactly one extension")
-    extension = extensions[0]
-    if not isinstance(extension, dict) or set(extension) != {
-            "path", "sha256", "signature"}:
-        raise PreflightError("codesign extension evidence is malformed")
-    if extension != {
-        "path": runtime["native_extension"],
-        "sha256": runtime["native_sha256"],
-        "signature": "adhoc",
-    }:
-        raise PreflightError("codesign evidence does not authenticate the live native extension")
-    retained_native_sha256 = gates["installed_wheel"]["evidence"]["native_sha256"]
-    if extension["sha256"] != retained_native_sha256:
-        raise PreflightError(
-            "codesign changed the retained wheel native bytes; the published wheel "
-            "would differ from the validated runtime"
-        )
+    dimensions = [
+        item.get("dimension") for item in extensions if isinstance(item, dict)
+    ] if isinstance(extensions, list) else []
+    if not isinstance(extensions, list) or len(extensions) != 3 \
+            or dimensions != list(RELEASE_NATIVE_DIMENSIONS) \
+            or any(type(value) is not int for value in dimensions):
+        raise PreflightError("codesign evidence must authenticate exactly Dim=1/2/3")
+    installed_rows = gates["installed_wheel"]["evidence"]["native_variants"]
+    installed_by_dimension = {item["dimension"]: item for item in installed_rows}
+    for extension in extensions:
+        if not isinstance(extension, dict) or set(extension) != {
+                "dimension", "path", "sha256", "signature"}:
+            raise PreflightError("codesign extension evidence is malformed")
+        installed = installed_by_dimension.get(extension["dimension"])
+        if installed is None or extension != {
+            "dimension": extension["dimension"],
+            "path": installed["extension"],
+            "sha256": installed["sha256"],
+            "signature": "adhoc",
+        }:
+            raise PreflightError(
+                "codesign changed a retained-wheel native leaf or authenticated another path"
+            )
+    active = extensions[runtime["native_dimension"] - 1]
+    if active["path"] != runtime["native_extension"] \
+            or active["sha256"] != runtime["native_sha256"]:
+        raise PreflightError("codesign evidence does not authenticate the active runtime")
     commands = row["commands"]
     logs = _command_evidence(directory, commands, gate="codesign")
-    suffix = ["python", "scripts/codesign_pops_extensions.py", "--json"]
+    suffix = [
+        "python", "scripts/codesign_pops_extensions.py", "--json",
+        "--expect-dim", "1", "--expect-dim", "2", "--expect-dim", "3",
+    ]
     if len(logs) != 1 or commands[0]["argv"][-len(suffix):] != suffix:
         raise PreflightError("codesign gate did not run the exact structured verifier")
 
@@ -527,7 +720,7 @@ def _codesign_evidence(
 def _examples_evidence(
     directory: Path,
     gates: dict[str, Any],
-    runtime: dict[str, str],
+    runtime: dict[str, Any],
 ) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
@@ -776,11 +969,13 @@ def _evidence(
     path: Path,
     contract: Any,
     commit: str,
-    runtime: dict[str, str],
+    runtime: dict[str, Any],
 ) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
-                "artifact_directory", "runtime", "gates"}
+    expected = {
+        "schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
+        "native_variant_set", "artifact_directory", "runtime", "gates",
+    }
     if not isinstance(payload, dict) or set(payload) != expected \
             or payload["schema_version"] != EVIDENCE_SCHEMA_VERSION:
         raise PreflightError("release evidence has an unknown or incomplete schema")
@@ -796,6 +991,11 @@ def _evidence(
         raise PreflightError("release evidence was not produced by this final gate")
     if payload["runtime"] != runtime:
         raise PreflightError("release evidence belongs to another installed native extension")
+    native_variant_set = payload["native_variant_set"]
+    if native_variant_set != list(RELEASE_NATIVE_DIMENSIONS) \
+            or any(type(value) is not int for value in native_variant_set) \
+            or runtime["native_dimension"] not in RELEASE_NATIVE_DIMENSIONS:
+        raise PreflightError("release evidence must authenticate exactly native Dim=1/2/3")
     gates = payload["gates"]
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATES):
         raise PreflightError("release evidence gate set must be exactly %s" % (REQUIRED_GATES,))
@@ -894,6 +1094,7 @@ def main() -> int:
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--tag")
     parser.add_argument("--installed", action="store_true")
+    parser.add_argument("--dim", type=int, choices=RELEASE_NATIVE_DIMENSIONS)
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--public-api-evidence", type=Path)
     args = parser.parse_args()
@@ -901,11 +1102,12 @@ def main() -> int:
         if args.release and (
             not args.tag
             or not args.installed
+            or args.dim is None
             or args.evidence is None
             or args.public_api_evidence is None
         ):
             raise PreflightError(
-                "--release requires --tag, --installed, --evidence and "
+                "--release requires --tag, --installed, --dim, --evidence and "
                 "--public-api-evidence")
         contract = _generated()
         checks = _static_contract(contract)
@@ -914,7 +1116,7 @@ def main() -> int:
             commit = _run("git", "rev-parse", "HEAD")
             if _run("git", "status", "--porcelain"):
                 raise PreflightError("release checkout is dirty")
-            runtime = _installed_contract(contract)
+            runtime = _installed_contract(contract, args.dim)
             release_evidence = _evidence(args.evidence, contract, commit, runtime)
             _public_api_evidence(args.public_api_evidence, release_evidence, contract)
             checks.extend((
@@ -932,7 +1134,7 @@ def main() -> int:
                           "contract_sha256": contract.RELEASE_CONTRACT_SHA256,
                           "checks": checks}, sort_keys=True))
         return 0
-    except (PreflightError, OSError, ValueError, KeyError) as exc:
+    except (PreflightError, NativeVariantManifestError, OSError, ValueError, KeyError, TypeError) as exc:
         print("release preflight failed: %s" % exc, file=sys.stderr)
         return 1
 

@@ -165,6 +165,6 @@ def test_release_mode_cannot_run_without_tag_install_and_authenticated_evidence(
     )
     assert result.returncode != 0
     assert (
-        "requires --tag, --installed, --evidence and --public-api-evidence"
+        "requires --tag, --installed, --dim, --evidence and --public-api-evidence"
         in result.stderr
     )
