@@ -29,6 +29,7 @@ from ._functions import (
     where,
     x,
     y,
+    z,
 )
 from ._model import (
     AnalyticTruthValueError,
@@ -74,4 +75,5 @@ __all__ = [
     "where",
     "x",
     "y",
+    "z",
 ]
