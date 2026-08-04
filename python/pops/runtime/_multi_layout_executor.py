@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -121,14 +122,39 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
     transform.  It therefore represents nested resolutions of one exact physical Cartesian domain,
     never interpolation between unrelated domains.
     """
-    if float(source.L) != float(target.L):
+    source_shape = tuple(source.shape)
+    target_shape = tuple(target.shape)
+    source_lower = tuple(source.lower)
+    target_lower = tuple(target.lower)
+    source_upper = tuple(source.upper)
+    target_upper = tuple(target.upper)
+    if (
+        len(source_shape) not in (1, 2, 3)
+        or len(source_shape) != len(target_shape)
+        or not (
+            len(source_lower)
+            == len(target_lower)
+            == len(source_upper)
+            == len(target_upper)
+            == len(source_shape)
+        )
+    ):
         raise ValueError(
-            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical extents; select a mapped "
+            "CONSERVATIVE_CELL_AVERAGE_V1 requires one identical compile-time spatial rank"
+        )
+    if source.coordinate_system != target.coordinate_system:
+        raise ValueError(
+            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical coordinate systems; select a mapped "
             "Transfer operation/provider for distinct geometries"
         )
-    if float(source.xlo) != float(target.xlo) or float(source.ylo) != float(target.ylo):
+    if source_upper != target_upper:
         raise ValueError(
-            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical origins; select a mapped "
+            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical upper bounds; select a mapped "
+            "Transfer operation/provider for distinct geometries"
+        )
+    if source_lower != target_lower:
+        raise ValueError(
+            "CONSERVATIVE_CELL_AVERAGE_V1 requires identical physical lower bounds; select a mapped "
             "Transfer operation/provider for translated geometries"
         )
     source_periodicity = source.periodicity
@@ -139,11 +165,11 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
     ):
         if (
             type(periodicity) is not tuple
-            or len(periodicity) != 2
+            or len(periodicity) != len(source_shape)
             or any(type(axis) is not bool for axis in periodicity)
         ):
             raise TypeError(
-                "CONSERVATIVE_CELL_AVERAGE_V1 requires an exact (x, y) periodicity tuple "
+                "CONSERVATIVE_CELL_AVERAGE_V1 requires an exact ranked periodicity tuple "
                 f"on the {label} layout"
             )
     if source_periodicity != target_periodicity:
@@ -175,9 +201,7 @@ def _require_runtime_plan_projection(
         )
     expected_providers = tuple(sorted({row.provider_id for row in transfers}))
     if runtime_plan.resources.mapping_provider_ids != expected_providers:
-        raise ValueError(
-            "RuntimePlanBundle mapping providers differ from the consumed Transfers"
-        )
+        raise ValueError("RuntimePlanBundle mapping providers differ from the consumed Transfers")
 
 
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
@@ -270,7 +294,11 @@ class _CompositeTemporalRestartState:
         self._broadcast("before_attempt", time=time, macro_step=macro_step)
 
     def before_queued_attempt(
-        self, event: Any, *, time: Any, macro_step: Any,
+        self,
+        event: Any,
+        *,
+        time: Any,
+        macro_step: Any,
     ) -> None:
         for state in self.states:
             state.before_queued_attempt(event, time=time, macro_step=macro_step)
@@ -415,19 +443,16 @@ class _MultiLayoutUniformExecutor:
             engine = self._engines[layout_program.layout_id]
             report = engine.program_report()
             if type(report) is not ProgramRuntimeReport:
-                raise TypeError(
-                    "multi-layout child returned a non-canonical ProgramRuntimeReport"
-                )
-            if not report.installed or not isinstance(report.program_hash, str) or not (
-                report.program_hash
-            ):
-                raise RuntimeError(
-                    "multi-layout child has no authenticated installed Program"
-                )
-            engine_blocks = tuple(engine.block_names())
+                raise TypeError("multi-layout child returned a non-canonical ProgramRuntimeReport")
             if (
-                len(engine_blocks) != len(set(engine_blocks))
-                or set(engine_blocks) != set(layout_program.block_names)
+                not report.installed
+                or not isinstance(report.program_hash, str)
+                or not (report.program_hash)
+            ):
+                raise RuntimeError("multi-layout child has no authenticated installed Program")
+            engine_blocks = tuple(engine.block_names())
+            if len(engine_blocks) != len(set(engine_blocks)) or set(engine_blocks) != set(
+                layout_program.block_names
             ):
                 raise RuntimeError(
                     "multi-layout child block registry differs from its compiled partition"
@@ -436,9 +461,7 @@ class _MultiLayoutUniformExecutor:
             if (
                 len(local_map) != len(engine_blocks)
                 or any(
-                    isinstance(index, bool)
-                    or not isinstance(index, int)
-                    or index < 0
+                    isinstance(index, bool) or not isinstance(index, int) or index < 0
                     for index in local_map
                 )
                 or tuple(sorted(local_map)) != tuple(range(len(engine_blocks)))
@@ -447,22 +470,13 @@ class _MultiLayoutUniformExecutor:
                     "multi-layout child Program block map is not an exact local bijection"
                 )
             parameter_blocks = tuple(row.get("program_block") for row in report.params)
-            if (
-                len(parameter_blocks) != len(local_map)
-                or any(
-                    isinstance(index, bool)
-                    or not isinstance(index, int)
-                    for index in parameter_blocks
-                )
+            if len(parameter_blocks) != len(local_map) or any(
+                isinstance(index, bool) or not isinstance(index, int) for index in parameter_blocks
             ):
-                raise RuntimeError(
-                    "multi-layout child Program parameter report is not exact"
-                )
+                raise RuntimeError("multi-layout child Program parameter report is not exact")
             exact_parameter_blocks = cast(tuple[int, ...], parameter_blocks)
             if tuple(sorted(exact_parameter_blocks)) != tuple(range(len(local_map))):
-                raise RuntimeError(
-                    "multi-layout child Program parameter report is not exact"
-                )
+                raise RuntimeError("multi-layout child Program parameter report is not exact")
             rows.append((layout_program, engine_blocks, report))
         return tuple(rows)
 
@@ -473,9 +487,7 @@ class _MultiLayoutUniformExecutor:
 
         children = self._ordered_program_reports()
         global_blocks = self.block_names()
-        global_block_indices = {
-            name: index for index, name in enumerate(global_blocks)
-        }
+        global_block_indices = {name: index for index, name in enumerate(global_blocks)}
         if len(global_block_indices) != len(global_blocks):
             raise RuntimeError("multi-layout global block registry contains a duplicate")
 
@@ -501,12 +513,9 @@ class _MultiLayoutUniformExecutor:
             layout_id = layout_program.layout_id
             local_map = tuple(report.block_map)
             local_program_blocks = tuple(
-                engine_blocks[local_system_index]
-                for local_system_index in local_map
+                engine_blocks[local_system_index] for local_system_index in local_map
             )
-            block_map.extend(
-                global_block_indices[name] for name in local_program_blocks
-            )
+            block_map.extend(global_block_indices[name] for name in local_program_blocks)
 
             for raw in report.params:
                 row = dict(raw)
@@ -522,9 +531,7 @@ class _MultiLayoutUniformExecutor:
 
             for name, value in report.diagnostics.items():
                 if not isinstance(name, str) or not name:
-                    raise RuntimeError(
-                        "multi-layout child diagnostic name must be non-empty"
-                    )
+                    raise RuntimeError("multi-layout child diagnostic name must be non-empty")
                 diagnostics["%s::%s" % (layout_id, name)] = value
 
             for label, destination, attribute in qualified_row_sets:
@@ -532,8 +539,7 @@ class _MultiLayoutUniformExecutor:
                     row = dict(raw)
                     if "layout_id" in row:
                         raise RuntimeError(
-                            "multi-layout child %s report contains a reserved qualifier"
-                            % label
+                            "multi-layout child %s report contains a reserved qualifier" % label
                         )
                     row["layout_id"] = layout_id
                     destination.append(row)
@@ -591,10 +597,7 @@ class _MultiLayoutUniformExecutor:
             flux_ledger=flux_ledger,
             synchronization=synchronization,
             temporal_partition=_common_exact(
-                (
-                    report.temporal_partition
-                    for _row, _blocks, report in children
-                ),
+                (report.temporal_partition for _row, _blocks, report in children),
                 where="multi-layout Program temporal-partition report",
             ),
             temporal=_common_exact(
@@ -616,11 +619,10 @@ class _MultiLayoutUniformExecutor:
     def set_state(self, block: str, values: Any) -> Any:
         return self.executor_for_block(block).set_state(block, values)
 
-    def nx(self) -> int:
-        raise ValueError("multi-layout geometry requires executor_for_layout(layout_id).nx()")
-
-    def ny(self) -> int:
-        raise ValueError("multi-layout geometry requires executor_for_layout(layout_id).ny()")
+    def spatial_shape(self) -> tuple[int, ...]:
+        raise ValueError(
+            "multi-layout geometry requires executor_for_layout(layout_id).spatial_shape()"
+        )
 
     def _common_clock(self, method: str) -> Any:
         values = tuple(getattr(engine, method)() for engine in self._engines.values())
@@ -1204,8 +1206,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             )
         strategies.append(strategy)
         transaction_plans.append(authored.transaction_plan())
-        configs[layout_id] = system_config_from_layout(
-            plan.artifact.native_layouts[layout_id])
+        configs[layout_id] = system_config_from_layout(plan.artifact.native_layouts[layout_id])
     if any(value != strategies[0] for value in strategies[1:]) or any(
         value != transaction_plans[0] for value in transaction_plans[1:]
     ):
@@ -1227,7 +1228,12 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         source = configs[transfer.source_layout_id]
         target = configs[transfer.target_layout_id]
         _require_conservative_cell_average_geometry(source, target)
-        if source.n < target.n or source.n % target.n:
+        source_shape = tuple(source.shape)
+        target_shape = tuple(target.shape)
+        if any(
+            source_extent < target_extent or source_extent % target_extent
+            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+        ):
             raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
 
     from pops.runtime._runtime_executor import _uniform_initial_sources
@@ -1270,16 +1276,17 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         source_block, target_block = _mapping_blocks(plan, transfer)
         source_engine = engines[transfer.source_layout_id]
         target_engine = engines[transfer.target_layout_id]
-        source_nx, source_ny = int(source_engine.nx()), int(source_engine.ny())
-        target_nx, target_ny = int(target_engine.nx()), int(target_engine.ny())
-        if (
-            source_nx < target_nx
-            or source_ny < target_ny
-            or source_nx % target_nx
-            or source_ny % target_ny
+        source_shape = tuple(int(value) for value in source_engine.spatial_shape())
+        target_shape = tuple(int(value) for value in target_engine.spatial_shape())
+        if len(source_shape) != len(target_shape) or any(
+            source_extent < target_extent or source_extent % target_extent
+            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
         ):
             raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
-        ratio = (source_ny // target_ny, source_nx // target_nx)
+        ratio = tuple(
+            source_extent // target_extent
+            for source_extent, target_extent in zip(source_shape, target_shape, strict=True)
+        )
         component = plan.components[transfer.component_id]
         source_native = source_engine._native_step_target()
         target_native = target_engine._native_step_target()
@@ -1313,8 +1320,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
                 source_block=source_block,
                 target_block=target_block,
                 session=session,
-                source_element_count=source_components * source_nx * source_ny,
-                destination_element_count=target_components * target_nx * target_ny,
+                source_element_count=source_components * math.prod(source_shape),
+                destination_element_count=target_components * math.prod(target_shape),
             )
         )
     return _MultiLayoutUniformExecutor(plan, runtime_plan, engines, blocks, tuple(transfer_routes))

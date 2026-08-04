@@ -1,4 +1,5 @@
 """ADC-689: one pure-Python public front door and qualified instance handles."""
+
 from __future__ import annotations
 
 import importlib
@@ -33,20 +34,14 @@ _PUBLIC = (
 def _assert_fresh_python(source: str) -> None:
     """Run a public-import assertion against this exact package in a fresh interpreter."""
     package_parent = str(Path(pops.__file__).resolve().parent.parent)
-    isolated_source = (
-        "import sys\n"
-        f"sys.path.insert(0, {package_parent!r})\n"
-        f"{source}"
-    )
+    isolated_source = f"import sys\nsys.path.insert(0, {package_parent!r})\n{source}"
     result = subprocess.run(
         [sys.executable, "-I", "-c", isolated_source],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, (
-        "fresh Python public-API check failed:\n"
-        f"stdout:\n{result.stdout}\n"
-        f"stderr:\n{result.stderr}"
+        f"fresh Python public-API check failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
 
@@ -133,15 +128,41 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
 
     assert tuple(signature(pops.Program.state).parameters) == ("self", "state", "clock")
     assert tuple(libtime.__all__) == (
-        "AdamsBashforth", "BDF", "ButcherTableau", "FORWARD_EULER_TABLEAU",
-        "ForwardEuler", "IMEX", "IMEX_ARS222_TABLEAU", "IMEX_EULER_TABLEAU", "Lie",
-        "PredictorCorrector", "RK4", "RK4_TABLEAU", "RungeKutta", "SSPRK2",
-        "SSPRK2_TABLEAU", "SSPRK3", "SSPRK3_TABLEAU", "Strang",
+        "AdamsBashforth",
+        "BDF",
+        "ButcherTableau",
+        "FORWARD_EULER_TABLEAU",
+        "ForwardEuler",
+        "IMEX",
+        "IMEX_ARS222_TABLEAU",
+        "IMEX_EULER_TABLEAU",
+        "Lie",
+        "PredictorCorrector",
+        "RK4",
+        "RK4_TABLEAU",
+        "RungeKutta",
+        "SSPRK2",
+        "SSPRK2_TABLEAU",
+        "SSPRK3",
+        "SSPRK3_TABLEAU",
+        "Strang",
     )
     for removed in (
-        "forward_euler", "ssprk2", "ssprk3", "rk4", "rk", "explicit_rk", "strang",
-        "lie", "adams_bashforth", "adams_bashforth2", "bdf", "imex_local",
-        "imex_local_linear", "predictor_corrector_local_linear", "CondensedSchur",
+        "forward_euler",
+        "ssprk2",
+        "ssprk3",
+        "rk4",
+        "rk",
+        "explicit_rk",
+        "strang",
+        "lie",
+        "adams_bashforth",
+        "adams_bashforth2",
+        "bdf",
+        "imex_local",
+        "imex_local_linear",
+        "predictor_corrector_local_linear",
+        "CondensedSchur",
     ):
         assert not hasattr(libtime, removed)
 
@@ -160,7 +181,12 @@ def test_public_state_rejects_opaque_units_until_a_typed_unit_protocol_exists() 
 def test_public_bind_accepts_value_families_without_an_internal_inputs_record() -> None:
     parameters = tuple(signature(pops.bind).parameters)
     assert parameters == (
-        "artifact", "initial_state", "params", "aux", "resources", "initial_values",
+        "artifact",
+        "initial_state",
+        "params",
+        "aux",
+        "resources",
+        "initial_values",
     )
     from pops import codegen, external
 
@@ -181,14 +207,26 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
             importlib.import_module(retired_module)
 
     for retired in (
-        "BindInputs", "InstallPlan", "ResolvedSimulationPlan", "CompiledSimulationArtifact",
-        "LibraryManifest", "compile_library", "read_library_manifest", "emit_library_cpp",
+        "BindInputs",
+        "InstallPlan",
+        "ResolvedSimulationPlan",
+        "CompiledSimulationArtifact",
+        "LibraryManifest",
+        "compile_library",
+        "read_library_manifest",
+        "emit_library_cpp",
     ):
         assert retired not in codegen.__all__
         assert not hasattr(codegen, retired)
     for retired in (
-        "CompiledBrickRef", "ExternalBrick", "register", "register_manifest_file",
-        "read_manifest", "CompiledManifest", "load_cpp_library", "load_compiled_manifest",
+        "CompiledBrickRef",
+        "ExternalBrick",
+        "register",
+        "register_manifest_file",
+        "read_manifest",
+        "CompiledManifest",
+        "load_cpp_library",
+        "load_compiled_manifest",
     ):
         assert retired not in external.__all__
         assert not hasattr(external, retired)
@@ -210,11 +248,7 @@ def test_public_run_accepts_only_the_bound_runtime_instance() -> None:
 def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> None:
     from pops.runtime._runtime_instance import RuntimeInstance
 
-    public = {
-        name
-        for name in RuntimeInstance.__dict__
-        if not name.startswith("_")
-    }
+    public = {name for name in RuntimeInstance.__dict__ if not name.startswith("_")}
     assert public == {
         "amr",
         "bind_identity",
@@ -231,10 +265,10 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "field_potential_global",
         "field_potential_level_global",
         "field_provider_levels",
-            "field_provider_slots",
-            "flush_live_visualizations",
-            "flush_post_commit_consumers",
-            "get_state",
+        "field_provider_slots",
+        "flush_live_visualizations",
+        "flush_post_commit_consumers",
+        "get_state",
         "history_depth",
         "history_global",
         "history_names",
@@ -244,39 +278,40 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "installed_program_hash",
         "last_restart_identity",
         "last_run_identity",
-            "layout_identity",
-            "live_visualization_diagnostics",
-            "live_visualization_reports",
-            "local_boxes",
+        "layout_identity",
+        "live_visualization_diagnostics",
+        "live_visualization_reports",
+        "local_boxes",
         "local_state",
         "macro_step",
         "n_levels",
-        "nx",
-        "ny",
+        "spatial_shape",
         "patch_boxes",
-            "patch_rectangles",
-            "post_commit_diagnostics",
-            "post_commit_reports",
-            "program_accepted_state",
-            "program_report",
+        "patch_bounds",
+        "post_commit_diagnostics",
+        "post_commit_reports",
+        "program_accepted_state",
+        "program_report",
         "restart",
         "restore_consumer_recovery",
         "retry_consumer_finalizers",
         "state_global",
         "time",
     }
-    assert public.isdisjoint({
-        "assembly",
-        "executor_for_block",
-        "executor_for_layout",
-        "install_plan",
-        "native_executor",
-        "profile",
-        "run",
-        "runtime_plan",
-        "step",
-        "step_cfl",
-    })
+    assert public.isdisjoint(
+        {
+            "assembly",
+            "executor_for_block",
+            "executor_for_layout",
+            "install_plan",
+            "native_executor",
+            "profile",
+            "run",
+            "runtime_plan",
+            "step",
+            "step_cfl",
+        }
+    )
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
@@ -326,8 +361,16 @@ def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 
     assert physics.__all__ == [
-        "Model", "Axial", "ComponentRole", "Density", "Energy", "Momentum", "Pressure",
-        "Scalar", "Temperature", "Velocity",
+        "Model",
+        "Axial",
+        "ComponentRole",
+        "Density",
+        "Energy",
+        "Momentum",
+        "Pressure",
+        "Scalar",
+        "Temperature",
+        "Velocity",
     ]
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):

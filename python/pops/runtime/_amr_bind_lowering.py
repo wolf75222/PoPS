@@ -1,7 +1,9 @@
 """Exact lowering of an adaptive layout through its open runtime-data protocol."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 
@@ -15,8 +17,7 @@ def _runtime_data(layout: Any) -> dict[str, Any]:
     first, second = protocol(), protocol()
     if type(first) is not dict or first != second:
         raise TypeError("runtime_layout_data() must return one deterministic dict")
-    if first.get("schema_version") != 1 \
-            or first.get("layout_type") != "adaptive_cartesian":
+    if first.get("schema_version") != 1 or first.get("layout_type") != "adaptive_cartesian":
         raise ValueError("adaptive runtime layout uses an unsupported protocol schema")
     return first
 
@@ -45,21 +46,23 @@ def _regrid_every(data: dict[str, Any]) -> int:
 
 def _native_amr_grid_values(
     native_layout: Any,
-) -> tuple[
-    tuple[int, int], tuple[float, float], tuple[float, float], tuple[bool, bool]
-]:
+) -> tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...], tuple[bool, ...]]:
     """Authenticate the exact layout-derived geometry before allocating ``AmrSystemConfig``."""
     from pops.mesh import NativeSpatialLayout
-    from pops.mesh._layout_plan_contracts import CARTESIAN_2D_COORDINATES
 
     if type(native_layout) is not NativeSpatialLayout:
         raise TypeError("native AMR lowering requires an exact NativeSpatialLayout")
-    if native_layout.dimension != 2 \
-            or native_layout.coordinate_system != CARTESIAN_2D_COORDINATES \
-            or native_layout.centering != "cell" \
-            or native_layout.decomposition.get("kind") != "adaptive":
+    dimension = native_layout.dimension
+    expected_coordinates = "pops://coordinates/cartesian-%dd@1" % dimension
+    if (
+        native_layout.coordinate_system != expected_coordinates
+        or native_layout.centering != "cell"
+        or native_layout.decomposition.get("kind") != "adaptive"
+    ):
         raise NotImplementedError(
-            "native AmrSystemConfig currently supports only 2D cell-centered Cartesian AMR")
+            "native AmrSystemConfig requires cell-centered Cartesian AMR matching its exact "
+            "spatial rank"
+        )
     return (
         native_layout.shape,
         native_layout.lower,
@@ -68,33 +71,61 @@ def _native_amr_grid_values(
     )
 
 
-def _physical_patch_rectangles(
+def _physical_patch_bounds(
     patch_boxes: Any,
     *,
-    cells: tuple[int, int],
-    lengths: tuple[float, float],
-    lower: tuple[float, float],
-) -> list[tuple[float, float, float, float]]:
-    """Map inclusive AMR index boxes to exact Cartesian physical rectangles."""
-    nx, ny = cells
-    lx, ly = lengths
-    xlo, ylo = lower
-    result: list[tuple[float, float, float, float]] = []
-    for level, ilo, jlo, ihi, jhi in patch_boxes:
-        dx = lx / (nx << level)
-        dy = ly / (ny << level)
-        result.append((
-            xlo + ilo * dx,
-            ylo + jlo * dy,
-            (ihi - ilo + 1) * dx,
-            (jhi - jlo + 1) * dy,
-        ))
+    cells: tuple[int, ...],
+    lengths: tuple[float, ...],
+    lower: tuple[float, ...],
+) -> list[tuple[float, ...]]:
+    """Map ranked inclusive AMR index boxes to physical lower bounds and extents."""
+    dimension = len(cells)
+    if dimension not in (1, 2, 3) or len(lengths) != dimension or len(lower) != dimension:
+        raise ValueError("physical AMR patch projection requires one exact spatial rank")
+    if any(type(value) is not int or value < 1 for value in cells):
+        raise TypeError("physical AMR patch cell extents must be exact positive integers")
+    if any(not math.isfinite(value) or value <= 0.0 for value in lengths):
+        raise ValueError("physical AMR patch lengths must be finite and positive")
+    if any(not math.isfinite(value) for value in lower):
+        raise ValueError("physical AMR patch lower bounds must be finite")
+    result: list[tuple[float, ...]] = []
+    for position, row in enumerate(patch_boxes):
+        if not isinstance(row, (tuple, list)) or len(row) != 3:
+            raise TypeError("AMR patch %d must contain level, lower, and upper" % position)
+        level, index_lower, index_upper = row
+        if type(level) is not int or level < 0:
+            raise TypeError("AMR patch levels must be exact non-negative integers")
+        index_lower = tuple(index_lower)
+        index_upper = tuple(index_upper)
+        if (
+            len(index_lower) != dimension
+            or len(index_upper) != dimension
+            or any(type(value) is not int for value in index_lower + index_upper)
+        ):
+            raise TypeError("AMR patch bounds must match the exact spatial rank")
+        if any(high < low for low, high in zip(index_lower, index_upper, strict=True)):
+            raise ValueError("AMR patch bounds must be non-empty on every axis")
+        spacing = tuple(
+            length / (extent << level) for length, extent in zip(lengths, cells, strict=True)
+        )
+        physical_lower = tuple(
+            origin + index * width
+            for origin, index, width in zip(lower, index_lower, spacing, strict=True)
+        )
+        physical_extents = tuple(
+            (high - low + 1) * width
+            for low, high, width in zip(index_lower, index_upper, spacing, strict=True)
+        )
+        result.append(physical_lower + physical_extents)
     return result
 
 
 def _native_binary64(value: Any, *, where: str) -> float:
-    if isinstance(value, Mapping) and set(value) == {"binary64"} \
-            and isinstance(value["binary64"], str):
+    if (
+        isinstance(value, Mapping)
+        and set(value) == {"binary64"}
+        and isinstance(value["binary64"], str)
+    ):
         result = float.fromhex(value["binary64"])
     elif isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError("%s must be one canonical binary64 value" % where)
@@ -111,9 +142,7 @@ def _native_patch_generation_values(options: Any) -> tuple[bool, int]:
     if type(options) is not dict or set(options) != expected:
         raise TypeError("native AMR patch generation requires the exact box_array option schema")
     if options["native_route"] != "box_array":
-        raise NotImplementedError(
-            "native AMR patch generation requires native_route='box_array'"
-        )
+        raise NotImplementedError("native AMR patch generation requires native_route='box_array'")
     distribute_coarse = options["distribute_coarse"]
     if type(distribute_coarse) is not bool:
         raise TypeError("native AMR distribute_coarse must be an exact bool")
@@ -152,7 +181,6 @@ def amr_config_from_layout(
 
     data = _runtime_data(layout)
     cells, lower, upper, periodicity = _native_amr_grid_values(native_layout)
-    lengths = (upper[0] - lower[0], upper[1] - lower[1])
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
@@ -160,12 +188,9 @@ def amr_config_from_layout(
     native_hierarchy = lower_native_hierarchy(hierarchy)
 
     cfg = AmrSystemConfig()
-    cfg.n = cells[0]
-    cfg.ny = cells[1]
-    cfg.L = lengths[0]
-    cfg.Ly = lengths[1]
-    cfg.xlo = lower[0]
-    cfg.ylo = lower[1]
+    cfg.shape = cells
+    cfg.lower = lower
+    cfg.upper = upper
     cfg.periodicity = periodicity
     cfg.level_count = native_hierarchy.level_count
     cfg.regrid_margin = native_hierarchy.nesting_buffer
@@ -179,21 +204,22 @@ def amr_config_from_layout(
     balance = hierarchy.plan.load_balance.options.to_data()
     distribute_coarse, coarse_max_grid = _native_patch_generation_values(patches)
     if type(balance) is not dict or set(balance) != {"provider"}:
-        raise TypeError(
-            "resolved AMR load balance must preserve one exact provider authority")
+        raise TypeError("resolved AMR load balance must preserve one exact provider authority")
     from pops.amr._load_balance_contract import validate_load_balance_provider_data
     from pops.amr.providers import prepare_amr_provider_native_config
 
     balance_provider = validate_load_balance_provider_data(balance["provider"])
     if data.get("load_balance") != balance_provider:
         raise ValueError(
-            "resolved hierarchy load balance differs from the adaptive layout authority")
+            "resolved hierarchy load balance differs from the adaptive layout authority"
+        )
     prepared_clustering = prepare_amr_provider_native_config(clustering_provider)
     if prepared_clustering.role != "clustering":
         raise ValueError("resolved hierarchy selected a non-clustering provider")
     native_config_converters = {
         "cluster_min_efficiency": lambda value: _native_binary64(
-            value, where="AMR clustering minimum_efficiency"),
+            value, where="AMR clustering minimum_efficiency"
+        ),
         "cluster_min_box_size": int,
         "cluster_max_box_size": int,
     }
@@ -202,7 +228,7 @@ def amr_config_from_layout(
     for name, value in prepared_clustering.config.items():
         setattr(cfg, name, native_config_converters[name](value))
     cfg.distribute_coarse = distribute_coarse
-    cfg.coarse_max_grid = coarse_max_grid
+    cfg.coarse_max_grid = (coarse_max_grid,) * len(cells)
     cfg._set_load_balance_provider(
         balance_provider["native_route"],
         balance_provider["provider_identity"],

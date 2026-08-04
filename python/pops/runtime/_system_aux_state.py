@@ -4,6 +4,7 @@ Named-aux resolution + set/get, the disc transport-domain controls, and the prim
 state helpers of :class:`pops.runtime._system.System`. Mixed in via inheritance; methods operate
 on ``self._s`` and ``self._aux_field_index``.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -24,28 +25,34 @@ class _SystemAuxState(_System):
         derived by solve_fields). Otherwise look it up in the block table (filled at add_equation from
         the compiled model). Raises ValueError with an actionable message on unknown block/name."""
         from pops.physics.aux import AUX_CANONICAL  # late import (physics <-> __init__ cycle)
+
         if name == "B_z":
             raise ValueError(
                 "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "
-                "NOT via set_aux_field (B_z is a canonical aux field, not a named field).")
+                "NOT via set_aux_field (B_z is a canonical aux field, not a named field)."
+            )
         if name == "T_e":
             raise ValueError(
                 "set_aux_field: 'T_e' (electron temperature) is DERIVED from a fluid block via "
-                "sim.set_electron_temperature_from(block), NOT set via set_aux_field.")
+                "sim.set_electron_temperature_from(block), NOT set via set_aux_field."
+            )
         if name in AUX_CANONICAL:
             raise ValueError(
                 "set_aux_field: '%s' is a CANONICAL aux field (derived by the solver, not settable); "
-                "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name)
+                "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name
+            )
         table = self._aux_field_index.get(block)
         if table is None:
             raise ValueError(
                 "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
+                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name)
+            )
         if name not in table:
             known = sorted(table) if table else "(none)"
             raise ValueError(
                 "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"
-                % (name, block, known))
+                % (name, block, known)
+            )
         return table[name]
 
     def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
@@ -59,6 +66,7 @@ class _SystemAuxState(_System):
         (foextrap / dirichlet), applied to the non-periodic faces after the shared aux fill. Default
         None inherits the shared aux BC (bit-identical)."""
         import numpy as np
+
         comp = self._resolve_aux_field(block, name)
         arr = np.asarray(field, dtype=float)
         self._s.set_aux_field_component(comp, arr.reshape(-1))
@@ -70,6 +78,7 @@ class _SystemAuxState(_System):
         long as no set_aux_field has written it (aux channel initialized to zero, never rewritten by
         solve_fields beyond the derived components). @p name: declared by m.aux_field(name)."""
         import numpy as np
+
         comp = self._resolve_aux_field(block, name)
         return np.asarray(self._s.aux_field_component(comp), dtype=float)
 
@@ -96,21 +105,30 @@ class _SystemAuxState(_System):
         The mode is honored under Lie AND Strang (cf. Split / Strang). R > 0; Cartesian only (the
         polar one already bounds the ring by its radial walls -> explicit error)."""
         from pops.runtime._lifecycle import guard_assembling
+
         guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.geometry import DiscDomain
         from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
+
         if not isinstance(domain, DiscDomain):
             raise TypeError(
                 "set_disc_domain requires a pops.mesh.geometry.DiscDomain descriptor, got %s"
-                % type(domain).__name__)
+                % type(domain).__name__
+            )
         cx, cy, radius, mode = domain.lower()
         lower_transport_mask(domain.mode)
         # ADC-615: forward the typed CutCell numeric thresholds (kappa_min / face_open_eps /
         # cut_theta_min). 0.0 keeps the native default.
         th = transport_mask_thresholds(domain.mode)
-        self._s.set_disc_domain(cx, cy, radius, mode, kappa_min=th.get("kappa_min", 0.0),
-                                face_open_eps=th.get("face_open_eps", 0.0),
-                                cut_theta_min=th.get("cut_theta_min", 0.0))
+        self._s.set_disc_domain(
+            cx,
+            cy,
+            radius,
+            mode,
+            kappa_min=th.get("kappa_min", 0.0),
+            face_open_eps=th.get("face_open_eps", 0.0),
+            cut_theta_min=th.get("cut_theta_min", 0.0),
+        )
 
     def set_geometry_mode(self, mode: Any) -> Any:
         """Switch ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
@@ -119,8 +137,10 @@ class _SystemAuxState(_System):
 
         ``mode`` must be a typed :class:`pops.mesh.masks.TransportMask`; strings are rejected."""
         from pops.runtime._lifecycle import guard_assembling
+
         guard_assembling(self, "set_geometry_mode")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.masks import lower_transport_mask
+
         self._s.set_geometry_mode(lower_transport_mask(mode))
 
     def disc_mask(self) -> Any:
@@ -138,8 +158,9 @@ class _SystemAuxState(_System):
 
             sim.set_primitive_state("electrons", rho=rho0, u=u0, v=v0, p=p0)
 
-        Each primitive is an (n, n) array. The expected names are those of
-        variable_names(name, "primitive") (the order of the block model). The (ncomp, n, n) array is
+        Each primitive uses the exact ranked NumPy shape (native axes reversed). The expected names
+        are those of variable_names(name, "primitive") (the order of the block model). The
+        component-major array is
         assembled in that order, then CONVERTED to conservative variables by the block model (on the
         C++ side: compressible E = p/(g-1) + 1/2 rho|v|^2; isothermal rho u; scalar identity) and written
         to the state. Ergonomic counterpart of set_density (which only sets the density, leaving it at rest).
@@ -148,25 +169,28 @@ class _SystemAuxState(_System):
         import numpy as np  # local: numpy is only required for this host assembly
 
         names = list(self._s.variable_names(name, "primitive"))
-        n = self.nx()
+        shape = tuple(reversed(self.spatial_shape()))
         unknown = [k for k in prims if k not in names]
         if unknown:
             raise ValueError(
                 "set_primitive_state: unknown primitive(s) %r for block '%s'; "
-                "expected primitives: %r" % (unknown, name, names))
+                "expected primitives: %r" % (unknown, name, names)
+            )
         missing = [k for k in names if k not in prims]
         if missing:
             raise ValueError(
                 "set_primitive_state: missing primitive(s) %r for block '%s'; "
-                "provide all the primitives: %r" % (missing, name, names))
-        # Assemble (ncomp, n, n) in the model ORDER (primitive_vars), not the kwargs order.
-        prim = np.empty((len(names), n, n), dtype=np.float64)
+                "provide all the primitives: %r" % (missing, name, names)
+            )
+        # Assemble component-major state in model order, not kwargs order.
+        prim = np.empty((len(names), *shape), dtype=np.float64)
         for c, nm in enumerate(names):
             arr = np.asarray(prims[nm], dtype=np.float64)
-            if arr.shape != (n, n):
+            if arr.shape != shape:
                 raise ValueError(
-                    "set_primitive_state: primitive '%s' of shape %r, expected (%d, %d)"
-                    % (nm, tuple(arr.shape), n, n))
+                    "set_primitive_state: primitive '%s' of shape %r, expected %r"
+                    % (nm, tuple(arr.shape), shape)
+                )
             prim[c] = arr
         self._s.set_primitive_state(name, prim)
 
@@ -175,9 +199,9 @@ class _SystemAuxState(_System):
 
             P = sim.get_primitive_state("electrons")   # {"rho": ..., "u": ..., "v": ..., "p": ...}
 
-        Returns a dict {primitive_name: array (n, n)} in the order of variable_names(name,
+        Returns a dict {primitive_name: ranked array} in the order of variable_names(name,
         "primitive"). Inverse of set_primitive_state (exact round-trip to machine precision, the
         model cons <-> prim conversion being consistent)."""
         names = list(self._s.variable_names(name, "primitive"))
-        prim = self._s.get_primitive_state(name)  # (ncomp, n, n)
+        prim = self._s.get_primitive_state(name)  # component-major ranked state
         return {nm: prim[c] for c, nm in enumerate(names)}

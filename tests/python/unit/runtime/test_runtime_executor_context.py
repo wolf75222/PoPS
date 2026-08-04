@@ -101,12 +101,8 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
         ),
         "kokkos_device": context.device.identity,
         "field_memory_space": memory_spaces[0],
-        "kokkos_shared_space": backend.capabilities["shared_space"].require(
-            "runtime.shared_space"
-        ),
-        "kokkos_stream": backend.capabilities["stream_identity"].require(
-            "runtime.stream_identity"
-        ),
+        "kokkos_shared_space": backend.capabilities["shared_space"].require("runtime.shared_space"),
+        "kokkos_stream": backend.capabilities["stream_identity"].require("runtime.stream_identity"),
     }
     overrides = dict(fact_overrides)
     if overrides.pop("invert_mpi_active", False):
@@ -213,9 +209,7 @@ def _single_layout_projection():
                     SimpleNamespace(
                         subject_kind="block",
                         subject_id="block::fluid",
-                        subject=SimpleNamespace(
-                            local_id="fluid", qualified_id="block::fluid"
-                        ),
+                        subject=SimpleNamespace(local_id="fluid", qualified_id="block::fluid"),
                         layout=layout.handle,
                     ),
                 ),
@@ -248,13 +242,14 @@ def test_single_layout_provider_consumes_exact_call_and_halo_projection():
         executor._require_single_layout_runtime_plan(plan, runtime_plan)
 
 
-@pytest.mark.parametrize("transfers,providers,match", [
-    ((object(),), (), "layout Transfers"),
-    ((), ("pops://mapping/test",), "mapping providers"),
-])
-def test_single_layout_provider_refuses_unconsumed_mapping_routes(
-    transfers, providers, match
-):
+@pytest.mark.parametrize(
+    "transfers,providers,match",
+    [
+        ((object(),), (), "layout Transfers"),
+        ((), ("pops://mapping/test",), "mapping providers"),
+    ],
+)
+def test_single_layout_provider_refuses_unconsumed_mapping_routes(transfers, providers, match):
     plan, runtime_plan = _single_layout_projection()
     runtime_plan.communication.transfers = transfers
     runtime_plan.resources.mapping_provider_ids = providers
@@ -267,9 +262,7 @@ def test_single_layout_provider_refuses_unconsumed_mapping_routes(
     "provider",
     (executor._UniformNativeProvider(), executor._AdaptiveNativeProvider()),
 )
-def test_single_layout_providers_refuse_call_mismatch_before_geometry(
-    monkeypatch, provider
-):
+def test_single_layout_providers_refuse_call_mismatch_before_geometry(monkeypatch, provider):
     plan, runtime_plan = _single_layout_projection()
     runtime_plan.calls[0].block_id = "block::other"
     reached = []
@@ -316,9 +309,7 @@ def _multi_layout_projection():
             )
         ),
         communication=SimpleNamespace(halos=()),
-        resources=SimpleNamespace(
-            mapping_provider_ids=("pops://mapping/primary-secondary",)
-        ),
+        resources=SimpleNamespace(mapping_provider_ids=("pops://mapping/primary-secondary",)),
     )
     return plan, runtime_plan, (transfer,)
 
@@ -344,8 +335,6 @@ def test_multi_layout_provider_refuses_unconsumed_halo_plan():
 
     with pytest.raises(NotImplementedError, match="explicit per-layout halo scheduler"):
         multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
-
-
 
 
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():
@@ -535,8 +524,7 @@ def test_cartesian_grid_lowering_is_exact_and_refuses_unrepresentable_geometry()
     from pops.runtime._runtime_mesh_lowering import _uniform_system_values
 
     def native(grid, name):
-        normalized, = normalize_layout_plan(
-            Uniform(grid), owner=OwnerPath.case(name)).layouts
+        (normalized,) = normalize_layout_plan(Uniform(grid), owner=OwnerPath.case(name)).layouts
         assert normalized.native_spatial_layout is not None
         return normalized.native_spatial_layout
 
@@ -548,34 +536,112 @@ def test_cartesian_grid_lowering_is_exact_and_refuses_unrepresentable_geometry()
         cells=(16, 16),
     )
     assert _uniform_system_values(native(square, "square")) == (
-        16, 2.0, (False, False), 0.0, 0.0)
+        (16, 16),
+        (0.0, 0.0),
+        (2.0, 2.0),
+        (False, False),
+        (((0, 0), (16, 16)),),
+        "pops://coordinates/cartesian-2d@1",
+    )
 
     periodic = CartesianGrid(
         frame=square.frame,
         cells=(16, 16),
         periodic=PeriodicAxes(square.frame.axes),
     )
-    assert _uniform_system_values(native(periodic, "periodic")) == (
-        16, 2.0, (True, True), 0.0, 0.0)
+    assert _uniform_system_values(native(periodic, "periodic"))[3] == (True, True)
 
     partial = CartesianGrid(
         frame=square.frame,
         cells=(16, 16),
         periodic=PeriodicAxes((square.frame.x,)),
     )
-    assert _uniform_system_values(native(partial, "partial")) == (
-        16, 2.0, (True, False), 0.0, 0.0)
+    assert _uniform_system_values(native(partial, "partial"))[3] == (True, False)
 
     rectangular_cells = CartesianGrid(frame=square.frame, cells=(16, 8))
-    with pytest.raises(NotImplementedError, match="rectangular CartesianGrid"):
-        _uniform_system_values(native(rectangular_cells, "rectangular"))
+    rectangular_values = _uniform_system_values(native(rectangular_cells, "rectangular"))
+    assert rectangular_values[0] == (16, 8)
+    assert rectangular_values[2] == (2.0, 2.0)
     shifted = CartesianGrid(
         frame=Rectangle("shifted", (1.0, 0.0), (3.0, 2.0)).frame(Cartesian2D()),
         cells=(16, 16),
     )
-    assert _uniform_system_values(native(shifted, "shifted")) == (
-        16, 2.0, (False, False), 1.0, 0.0,
+    shifted_values = _uniform_system_values(native(shifted, "shifted"))
+    assert shifted_values[1:3] == ((1.0, 0.0), (3.0, 2.0))
+
+
+@pytest.mark.parametrize(
+    ("dimension", "shape", "lower", "upper", "periodicity"),
+    (
+        (1, (11,), (-2.0,), (3.0,), (True,)),
+        (
+            3,
+            (9, 7, 5),
+            (-2.0, 1.0, 4.0),
+            (3.0, 8.0, 14.0),
+            (True, False, True),
+        ),
+    ),
+)
+def test_uniform_native_config_lowering_preserves_exact_rank(
+    dimension, shape, lower, upper, periodicity
+):
+    from pops.mesh import NativeSpatialLayout
+    from pops.runtime._runtime_mesh_lowering import _uniform_system_values
+
+    layout = NativeSpatialLayout(
+        layout_id="rank-%d" % dimension,
+        coordinate_system="pops://coordinates/cartesian-%dd@1" % dimension,
+        cell_measure={
+            1: "pops://cell-measures/cartesian-length@1",
+            3: "pops://cell-measures/cartesian-volume@1",
+        }[dimension],
+        axis_names=("x", "y", "z")[:dimension],
+        shape=shape,
+        lower=lower,
+        upper=upper,
+        periodicity=periodicity,
+        centering="cell",
+        decomposition={
+            "schema_version": 1,
+            "kind": "single_box",
+            "boxes": ({"lower": (0,) * dimension, "upper_exclusive": shape},),
+        },
     )
+
+    assert _uniform_system_values(layout) == (
+        shape,
+        lower,
+        upper,
+        periodicity,
+        (((0,) * dimension, shape),),
+        "pops://coordinates/cartesian-%dd@1" % dimension,
+    )
+
+
+def test_uniform_native_config_lowering_rejects_non_tiling_boxes():
+    from pops.mesh import NativeSpatialLayout
+    from pops.runtime._runtime_mesh_lowering import _uniform_system_values
+
+    layout = NativeSpatialLayout(
+        layout_id="gap",
+        coordinate_system="pops://coordinates/cartesian-1d@1",
+        cell_measure="pops://cell-measures/cartesian-length@1",
+        axis_names=("x",),
+        shape=(8,),
+        lower=(0.0,),
+        upper=(1.0,),
+        periodicity=(False,),
+        centering="cell",
+        decomposition={
+            "schema_version": 1,
+            "kind": "axis_bands",
+            "axis": 0,
+            "boxes": ({"lower": (0,), "upper_exclusive": (7,)},),
+        },
+    )
+    with pytest.raises(ValueError, match="does not tile"):
+        _uniform_system_values(layout)
 
 
 def test_conservative_multi_layout_average_requires_one_physical_domain():
@@ -585,27 +651,47 @@ def test_conservative_multi_layout_average_requires_one_physical_domain():
         _require_conservative_cell_average_geometry,
     )
 
-    fine = SimpleNamespace(n=16, L=1.0, periodicity=(True, False), xlo=-2.0, ylo=3.0)
-    coarse = SimpleNamespace(n=8, L=1.0, periodicity=(True, False), xlo=-2.0, ylo=3.0)
+    def config(
+        shape=(16, 12),
+        lower=(-2.0, 3.0),
+        upper=(-1.0, 4.0),
+        periodicity=(True, False),
+        coordinate_system="pops://coordinates/cartesian-2d@1",
+    ):
+        return SimpleNamespace(
+            shape=shape,
+            lower=lower,
+            upper=upper,
+            periodicity=periodicity,
+            coordinate_system=coordinate_system,
+        )
+
+    fine = config()
+    coarse = config(shape=(8, 6))
     _require_conservative_cell_average_geometry(fine, coarse)
 
-    with pytest.raises(ValueError, match="identical physical extents"):
+    with pytest.raises(ValueError, match="identical physical upper bounds"):
         _require_conservative_cell_average_geometry(
             fine,
-            SimpleNamespace(n=8, L=2.0, periodicity=(True, False), xlo=-2.0, ylo=3.0),
+            config(shape=(8, 6), upper=(0.0, 4.0)),
         )
-    with pytest.raises(ValueError, match="identical physical origins"):
+    with pytest.raises(ValueError, match="identical physical lower bounds"):
         _require_conservative_cell_average_geometry(
             fine,
-            SimpleNamespace(n=8, L=1.0, periodicity=(True, False), xlo=0.0, ylo=3.0),
+            config(shape=(8, 6), lower=(0.0, 3.0)),
         )
     with pytest.raises(ValueError, match="identical boundary topology"):
         _require_conservative_cell_average_geometry(
             fine,
-            SimpleNamespace(n=8, L=1.0, periodicity=(False, True), xlo=-2.0, ylo=3.0),
+            config(shape=(8, 6), periodicity=(False, True)),
         )
-    with pytest.raises(TypeError, match=r"exact \(x, y\) periodicity tuple"):
+    with pytest.raises(TypeError, match="exact ranked periodicity tuple"):
         _require_conservative_cell_average_geometry(
             fine,
-            SimpleNamespace(n=8, L=1.0, periodicity=True, xlo=-2.0, ylo=3.0),
+            config(shape=(8, 6), periodicity=True),
+        )
+    with pytest.raises(ValueError, match="identical coordinate systems"):
+        _require_conservative_cell_average_geometry(
+            fine,
+            config(shape=(8, 6), coordinate_system="pops://coordinates/other-2d@1"),
         )

@@ -6,6 +6,7 @@ the declared runtime params, the supplied initial state), so they are exercised 
 Python objects -- no compiled ``.so``, no ``_pops``. The compiler-gated end-to-end refusal lives in
 the integration tier; this tier proves the refusal LOGIC.
 """
+
 from types import SimpleNamespace
 
 import pytest
@@ -20,9 +21,18 @@ from pops.params.constraints import Positive, Interval  # noqa: E402
 class _Manifest:
     """A minimal stand-in for CompiledArtifactManifest (only the fields the gates read)."""
 
-    def __init__(self, *, abi_key="H|clang|c++17", ghost_depth=2, precision="double",
-                 supports_mpi=None, supports_gpu=None, communicator="unknown",
-                 aux_required=(), operators=()):
+    def __init__(
+        self,
+        *,
+        abi_key="H|clang|c++17",
+        ghost_depth=2,
+        precision="double",
+        supports_mpi=None,
+        supports_gpu=None,
+        communicator="unknown",
+        aux_required=(),
+        operators=(),
+    ):
         self.abi_key = abi_key
         self.ghost_depth = ghost_depth
         self.precision = precision
@@ -40,7 +50,7 @@ class _Arguments:
 
 class _Mesh:
     def __init__(self, n):
-        self.n = n
+        self.cells = (n, n) if isinstance(n, int) else tuple(n)
 
 
 class _Uniform:
@@ -60,16 +70,20 @@ class _MultiLayout:
 
     def __init__(self, assignments):
         handles = {name: object() for name in assignments}
-        self.rows = tuple(SimpleNamespace(handle=handles[name], descriptor=layout)
-                          for name, layout in assignments.items())
-        self.plan = SimpleNamespace(assignments=tuple(
-            SimpleNamespace(
-                subject_kind="block",
-                subject=SimpleNamespace(local_id=name),
-                layout=handles[name],
+        self.rows = tuple(
+            SimpleNamespace(handle=handles[name], descriptor=layout)
+            for name, layout in assignments.items()
+        )
+        self.plan = SimpleNamespace(
+            assignments=tuple(
+                SimpleNamespace(
+                    subject_kind="block",
+                    subject=SimpleNamespace(local_id=name),
+                    layout=handles[name],
+                )
+                for name in assignments
             )
-            for name in assignments
-        ))
+        )
 
     def descriptor(self, handle):
         matches = [row.descriptor for row in self.rows if row.handle is handle]
@@ -112,6 +126,7 @@ def _one_block_args(components=1):
 # Gate d -- initial_state shape / dtype / components / ghost
 # ---------------------------------------------------------------------------
 
+
 def test_valid_initial_state_passes():
     manifest, args, layout = _Manifest(), _one_block_args(1), _Uniform(64)
     lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64, 64))})
@@ -138,10 +153,11 @@ def test_amr_initial_state_table_is_refused_for_every_shape():
 def test_typed_amr_initial_value_requires_complete_state():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
     subject = _BoundSubject("ne")
-    assert bv.validate_bound_initial_values(
-        manifest, args, layout, {subject: _Array((4, 64, 64))}) == []
-    lines = bv.validate_bound_initial_values(
-        manifest, args, layout, {subject: _Array((64, 64))})
+    assert (
+        bv.validate_bound_initial_values(manifest, args, layout, {subject: _Array((4, 64, 64))})
+        == []
+    )
+    lines = bv.validate_bound_initial_values(manifest, args, layout, {subject: _Array((64, 64))})
     assert len(lines) == 1
     assert "BindArray requires the complete state" in lines[0]
 
@@ -149,10 +165,11 @@ def test_typed_amr_initial_value_requires_complete_state():
 def test_typed_amr_initial_value_preserves_rectangular_axis_order():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR((24, 10))
     subject = _BoundSubject("ne")
-    assert bv.validate_bound_initial_values(
-        manifest, args, layout, {subject: _Array((4, 10, 24))}) == []
-    lines = bv.validate_bound_initial_values(
-        manifest, args, layout, {subject: _Array((4, 24, 10))})
+    assert (
+        bv.validate_bound_initial_values(manifest, args, layout, {subject: _Array((4, 10, 24))})
+        == []
+    )
+    lines = bv.validate_bound_initial_values(manifest, args, layout, {subject: _Array((4, 24, 10))})
     assert len(lines) == 1
     assert "BindArray requires the complete state" in lines[0]
 
@@ -160,9 +177,29 @@ def test_typed_amr_initial_value_preserves_rectangular_axis_order():
 def test_typed_uniform_bind_array_uses_cartesian_grid_cells():
     manifest, args, layout = _Manifest(), _one_block_args(2), _FramedUniform(32)
     subject = _BoundSubject("ne")
-    assert bv.validate_bound_initial_values(
-        manifest, args, layout, {subject: _Array((2, 32, 32))},
-    ) == []
+    assert (
+        bv.validate_bound_initial_values(
+            manifest,
+            args,
+            layout,
+            {subject: _Array((2, 32, 32))},
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("cells", "shape"),
+    (
+        ((12,), (2, 12)),
+        ((12, 7), (2, 7, 12)),
+        ((12, 7, 5), (2, 5, 7, 12)),
+    ),
+)
+def test_typed_uniform_bind_array_reverses_each_exact_native_rank(cells, shape):
+    manifest, args, layout = _Manifest(), _one_block_args(2), _Uniform(cells)
+    subject = _BoundSubject("ne")
+    assert bv.validate_bound_initial_values(manifest, args, layout, {subject: _Array(shape)}) == []
 
 
 def test_wrong_shape_is_refused():
@@ -187,35 +224,43 @@ def test_unknown_block_is_refused():
 
 def test_missing_ghost_depth_manifest_is_refused_as_abi_incomplete():
     manifest = _Manifest(ghost_depth=None)
-    lines = bv.validate_initial_state(manifest, _one_block_args(1), _Uniform(64),
-                                      {"ne": _Array((64, 64))})
+    lines = bv.validate_initial_state(
+        manifest, _one_block_args(1), _Uniform(64), {"ne": _Array((64, 64))}
+    )
     assert any("no ghost_depth" in l and "ABI-incomplete" in l for l in lines)
 
 
 def test_multi_layout_uses_exact_per_block_ghost_depth_and_mesh():
     manifest = _Manifest(ghost_depth=None)
     manifest.ghost_depth_by_block = {"fine": 3, "coarse": 1}
-    args = _Arguments({
-        "fine": {"state": "U", "components": 1, "required": True},
-        "coarse": {"state": "U", "components": 1, "required": True},
-    })
+    args = _Arguments(
+        {
+            "fine": {"state": "U", "components": 1, "required": True},
+            "coarse": {"state": "U", "components": 1, "required": True},
+        }
+    )
     layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
 
-    assert bv.validate_initial_state(
-        manifest,
-        args,
-        layout,
-        {"fine": _Array((1, 22, 22)), "coarse": _Array((1, 10, 10))},
-    ) == []
+    assert (
+        bv.validate_initial_state(
+            manifest,
+            args,
+            layout,
+            {"fine": _Array((1, 22, 22)), "coarse": _Array((1, 10, 10))},
+        )
+        == []
+    )
 
 
 def test_multi_layout_refuses_partial_per_block_ghost_authority():
     manifest = _Manifest(ghost_depth=3)
     manifest.ghost_depth_by_block = {"fine": 3}
-    args = _Arguments({
-        "fine": {"state": "U", "components": 1, "required": True},
-        "coarse": {"state": "U", "components": 1, "required": True},
-    })
+    args = _Arguments(
+        {
+            "fine": {"state": "U", "components": 1, "required": True},
+            "coarse": {"state": "U", "components": 1, "required": True},
+        }
+    )
     layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
 
     lines = bv.validate_initial_state(
@@ -230,13 +275,16 @@ def test_multi_layout_refuses_partial_per_block_ghost_authority():
 
 
 def test_non_array_initial_state_is_refused():
-    lines = bv.validate_initial_state(_Manifest(), _one_block_args(1), _Uniform(64), {"ne": [1, 2, 3]})
+    lines = bv.validate_initial_state(
+        _Manifest(), _one_block_args(1), _Uniform(64), {"ne": [1, 2, 3]}
+    )
     assert any("not an array" in l for l in lines)
 
 
 # ---------------------------------------------------------------------------
 # Gate c -- runtime param domain enforcement (ADC-541: the 4-part message)
 # ---------------------------------------------------------------------------
+
 
 def test_param_out_of_domain_is_refused_with_four_part_message():
     decl = {"alpha": RuntimeParam("alpha", default=1.0, domain=Positive())}
@@ -265,10 +313,16 @@ def test_const_declaration_carries_no_bind_domain_check():
 # Gate b -- ABI / Kokkos / MPI / layout manifest checks
 # ---------------------------------------------------------------------------
 
+
 def test_matching_abi_and_features_pass():
     manifest = _Manifest(abi_key="ABI1", supports_mpi=True, precision="double")
-    facts = {"abi_key": "ABI1", "supports_mpi": True, "precision": "double",
-             "communicator": "unknown", "supports_gpu": None}
+    facts = {
+        "abi_key": "ABI1",
+        "supports_mpi": True,
+        "precision": "double",
+        "communicator": "unknown",
+        "supports_gpu": None,
+    }
     assert bv.validate_bind_manifest(manifest, facts) == []
 
 
@@ -325,7 +379,7 @@ def test_honest_unknown_runtime_token_is_skipped_not_a_fallback():
 _SHA = "157c5531" + "a" * 56  # a full 64-hex headers signature (prefix from the CI log)
 # The two representations of the SAME identity, verbatim shapes from the failed gate log.
 _ARTIFACT_KEY = "%s|/usr/bin/c++|c++20" % _SHA
-_RUNTIME_KEY = ("compiler=13.3.0;std=202002L;headers=%s;kokkos=1;stdlib=libstdc++_20240904" % _SHA)
+_RUNTIME_KEY = "compiler=13.3.0;std=202002L;headers=%s;kokkos=1;stdlib=libstdc++_20240904" % _SHA
 
 
 def test_same_identity_across_representations_is_not_a_mismatch():
@@ -378,6 +432,7 @@ def test_normalize_std_spellings():
 # directional (regression: communicator='unknown' vs runtime 'serial' was refused).
 # ---------------------------------------------------------------------------
 
+
 def test_unknown_communicator_on_the_artifact_is_skipped():
     # The CI regression verbatim: the artifact declares communicator='unknown' (honest-unknown)
     # and the runtime reports 'serial' -> SKIPPED, never refused.
@@ -413,6 +468,7 @@ def test_unknown_precision_is_skipped():
 # Gate a -- aux required by a lowered operator
 # ---------------------------------------------------------------------------
 
+
 def test_operator_required_aux_unions_manifest_and_operators():
     manifest = _Manifest(aux_required=["B_z"], operators=[{"aux": ["kappa"]}])
     assert bv.operator_required_aux(manifest) == ["B_z", "kappa"]
@@ -432,19 +488,20 @@ def test_supplied_operator_aux_passes():
 
 
 def test_resolved_field_outputs_are_producers_not_bind_inputs():
-    registration = SimpleNamespace(native_options={
-        "output_route": {
-            # Semantic output labels may be "potential" + "gradient"; bind authority is the
-            # resolved scalar component route installed by the native field provider.
-            "components": ("relaxation_potential", "relaxation_gx", "relaxation_gy"),
-        },
-    })
+    registration = SimpleNamespace(
+        native_options={
+            "output_route": {
+                # Semantic output labels may be "potential" + "gradient"; bind authority is the
+                # resolved scalar component route installed by the native field provider.
+                "components": ("relaxation_potential", "relaxation_gx", "relaxation_gy"),
+            },
+        }
+    )
     artifact = SimpleNamespace(plan=SimpleNamespace(field_plans={"fields": registration}))
 
     produced = bv.field_produced_aux(artifact)
     assert produced == ("relaxation_gx", "relaxation_gy", "relaxation_potential")
-    manifest = _Manifest(aux_required=[
-        "relaxation_potential", "relaxation_gx", "relaxation_gy"])
+    manifest = _Manifest(aux_required=["relaxation_potential", "relaxation_gx", "relaxation_gy"])
     assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux=produced) == []
 
 
@@ -457,6 +514,7 @@ def test_resolved_field_output_without_native_component_route_is_refused():
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
+
 
 def test_aggregate_folds_lines_and_labels():
     msg = bv.aggregate_bind_refusals([("gate-a", ["l1"]), ("gate-b", ["l2", "l3"])])
@@ -471,4 +529,5 @@ def test_aggregate_returns_none_when_all_pass():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-q"]))
