@@ -23,6 +23,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -33,45 +34,211 @@
 namespace py = pybind11;
 using namespace pops;
 
-inline py::tuple periodicity_to_python(const Periodicity& value) {
-  return py::make_tuple(value.x, value.y);
+template <int Dim>
+py::tuple ranked_periodicity_to_python(const std::array<bool, Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[static_cast<std::size_t>(axis)];
+  return result;
 }
 
-inline Periodicity periodicity_from_python(const py::handle& value, const char* owner) {
-  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != 2)
+template <int Dim>
+std::array<bool, Dim> ranked_periodicity_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
     throw py::type_error(std::string(owner) +
-                         ".periodicity must be an exact (x: bool, y: bool) tuple");
+                         ".periodicity must be an exact tuple matching the native dimension");
   const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
-  if (!PyBool_Check(tuple[0].ptr()) || !PyBool_Check(tuple[1].ptr()))
-    throw py::type_error(std::string(owner) + ".periodicity entries must be exact bool values");
-  return Periodicity{tuple[0].ptr() == Py_True, tuple[1].ptr() == Py_True};
+  std::array<bool, Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (!PyBool_Check(tuple[axis].ptr()))
+      throw py::type_error(std::string(owner) + ".periodicity entries must be exact bool values");
+    result[static_cast<std::size_t>(axis)] = tuple[axis].ptr() == Py_True;
+  }
+  return result;
 }
 
-// field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
-// with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
-// (UNCHANGED), but nr x ntheta in polar where nr != ntheta. A square reshape (n, n) would allocate nx^2
-// slots for ny*nx values -> memcpy overflows the numpy buffer (heap overflow, crash at teardown). We
-// CHECK buffer size == source size before the memcpy (explicit guard).
-inline py::array_t<double> to_2d(const std::vector<double>& v, int rows, int cols) {
-  py::array_t<double> a({rows, cols});
-  if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("pops (bindings): field size (" + std::to_string(v.size()) +
-                             ") != rows*cols (" + std::to_string(rows) + "*" +
-                             std::to_string(cols) + "); inconsistent 2D reshape");
-  std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
-  return a;
+template <int Dim>
+py::tuple ranked_extent_to_python(const Extent<Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[axis];
+  return result;
 }
-// state (ncomp*ny*nx, component-major order, j slow / i fast) -> numpy array (ncomp, ny, nx).
-// Same guard as to_2d: rows = ny, cols = nx (square in Cartesian, nr x ntheta in polar).
-inline py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int rows, int cols) {
-  py::array_t<double> a({ncomp, rows, cols});
-  if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("pops (bindings): state size (" + std::to_string(v.size()) +
-                             ") != ncomp*rows*cols (" + std::to_string(ncomp) + "*" +
-                             std::to_string(rows) + "*" + std::to_string(cols) +
-                             "); inconsistent 3D reshape");
-  std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
-  return a;
+
+template <int Dim>
+Extent<Dim> ranked_extent_from_python(const py::handle& value, const char* owner,
+                                      bool allow_zero = false) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
+    throw py::type_error(std::string(owner) +
+                         " must be an exact tuple matching the native dimension");
+  const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (!PyLong_CheckExact(tuple[axis].ptr()) || PyBool_Check(tuple[axis].ptr()))
+      throw py::type_error(std::string(owner) + " entries must be exact integers");
+    const std::int64_t component = py::cast<std::int64_t>(tuple[axis]);
+    if (component < (allow_zero ? 0 : 1))
+      throw py::value_error(std::string(owner) + (allow_zero
+                                                      ? " entries must be non-negative"
+                                                      : " entries must be strictly positive"));
+    result[axis] = component;
+  }
+  return result;
+}
+
+template <int Dim>
+py::tuple ranked_real_vector_to_python(const RealVector<Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[axis];
+  return result;
+}
+
+template <int Dim>
+RealVector<Dim> ranked_real_vector_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
+    throw py::type_error(std::string(owner) +
+                         " must be an exact tuple matching the native dimension");
+  const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
+  RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (PyBool_Check(tuple[axis].ptr()) ||
+        (!PyFloat_CheckExact(tuple[axis].ptr()) && !PyLong_CheckExact(tuple[axis].ptr())))
+      throw py::type_error(std::string(owner) + " entries must be exact real scalars");
+    result[axis] = py::cast<double>(tuple[axis]);
+    if (!std::isfinite(result[axis]))
+      throw py::value_error(std::string(owner) + " entries must be finite");
+  }
+  return result;
+}
+
+template <int Dim>
+py::tuple ranked_boxes_to_python(const std::vector<Box<Dim>>& boxes) {
+  py::tuple result(boxes.size());
+  for (std::size_t index = 0; index < boxes.size(); ++index) {
+    py::tuple lower(Dim), upper(Dim);
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower[axis] = boxes[index].lo[axis];
+      upper[axis] = boxes[index].hi[axis] + 1;
+    }
+    result[index] = py::make_tuple(std::move(lower), std::move(upper));
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<Box<Dim>> ranked_boxes_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an exact tuple of ranked boxes");
+  const py::tuple rows = py::reinterpret_borrow<py::tuple>(value);
+  std::vector<Box<Dim>> result;
+  result.reserve(rows.size());
+  for (const py::handle row_handle : rows) {
+    if (!PyTuple_CheckExact(row_handle.ptr()) || py::len(row_handle) != 2)
+      throw py::type_error(std::string(owner) + " rows must contain lower and upper tuples");
+    const py::tuple row = py::reinterpret_borrow<py::tuple>(row_handle);
+    if (!PyTuple_CheckExact(row[0].ptr()) || !PyTuple_CheckExact(row[1].ptr()) ||
+        py::len(row[0]) != Dim || py::len(row[1]) != Dim)
+      throw py::type_error(std::string(owner) + " bounds must match the native dimension");
+    const py::tuple lower = py::reinterpret_borrow<py::tuple>(row[0]);
+    const py::tuple upper = py::reinterpret_borrow<py::tuple>(row[1]);
+    Box<Dim> box;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!PyLong_CheckExact(lower[axis].ptr()) || PyBool_Check(lower[axis].ptr()) ||
+          !PyLong_CheckExact(upper[axis].ptr()) || PyBool_Check(upper[axis].ptr()))
+        throw py::type_error(std::string(owner) + " bounds must contain exact integers");
+      const int low = py::cast<int>(lower[axis]);
+      const std::int64_t high_exclusive = py::cast<std::int64_t>(upper[axis]);
+      if (high_exclusive <= low || high_exclusive - 1 > std::numeric_limits<int>::max())
+        throw py::value_error(std::string(owner) + " contains an empty or overflowing box");
+      box.lo[axis] = low;
+      box.hi[axis] = static_cast<int>(high_exclusive - 1);
+    }
+    result.push_back(box);
+  }
+  return result;
+}
+
+template <int Dim>
+py::tuple ranked_amr_patches_to_python(const std::vector<AmrPatch<Dim>>& patches) {
+  py::tuple result(patches.size());
+  for (std::size_t index = 0; index < patches.size(); ++index) {
+    py::tuple lower(Dim), upper(Dim);
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower[axis] = patches[index].box.lo[axis];
+      upper[axis] = patches[index].box.hi[axis] + 1;
+    }
+    result[index] = py::make_tuple(patches[index].level, std::move(lower), std::move(upper));
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<AmrPatch<Dim>> ranked_amr_patches_from_python(const py::handle& value,
+                                                          const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an exact tuple of AMR patches");
+  const py::tuple rows = py::reinterpret_borrow<py::tuple>(value);
+  std::vector<AmrPatch<Dim>> result;
+  result.reserve(rows.size());
+  for (const py::handle row_handle : rows) {
+    if (!PyTuple_CheckExact(row_handle.ptr()) || py::len(row_handle) != 3)
+      throw py::type_error(std::string(owner) + " rows must contain level, lower and upper");
+    const py::tuple row = py::reinterpret_borrow<py::tuple>(row_handle);
+    if (!PyLong_CheckExact(row[0].ptr()) || PyBool_Check(row[0].ptr()))
+      throw py::type_error(std::string(owner) + " levels must be exact integers");
+    const int level = py::cast<int>(row[0]);
+    if (level < 0)
+      throw py::value_error(std::string(owner) + " levels must be non-negative");
+    const py::tuple bounds = py::make_tuple(py::make_tuple(row[1], row[2]));
+    std::vector<Box<Dim>> boxes = ranked_boxes_from_python<Dim>(bounds, owner);
+    result.push_back(AmrPatch<Dim>{level, boxes.front()});
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<py::ssize_t> ranked_numpy_shape(const Extent<Dim>& native_shape) {
+  std::vector<py::ssize_t> result(static_cast<std::size_t>(Dim));
+  for (int numpy_axis = 0; numpy_axis < Dim; ++numpy_axis) {
+    const std::int64_t cells = native_shape[Dim - 1 - numpy_axis];
+    if (cells < 1 || cells > std::numeric_limits<py::ssize_t>::max())
+      throw std::overflow_error(
+          "pops (bindings): native spatial extent is outside the NumPy shape range");
+    result[static_cast<std::size_t>(numpy_axis)] = static_cast<py::ssize_t>(cells);
+  }
+  return result;
+}
+
+/// Copy one exact ranked, axis-zero-contiguous native field to NumPy. NumPy presents the native
+/// axes in reverse order so its final axis remains contiguous; the rank itself comes from the
+/// compiled System specialization and is never inferred from the incoming value buffer.
+template <int Dim>
+py::array_t<double> to_ranked_field(const std::vector<double>& values,
+                                    const Extent<Dim>& native_shape) {
+  py::array_t<double> result(ranked_numpy_shape(native_shape));
+  if (static_cast<std::size_t>(result.size()) != values.size())
+    throw std::runtime_error(
+        "pops (bindings): field element count does not match the exact native spatial shape");
+  std::memcpy(result.mutable_data(), values.data(), values.size() * sizeof(double));
+  return result;
+}
+
+/// Component-major counterpart of to_ranked_field. The leading component axis is retained and the
+/// spatial axes alone are reversed for NumPy, yielding (ncomp, nz, ny, nx) for a 3D build.
+template <int Dim>
+py::array_t<double> to_ranked_state(const std::vector<double>& values, int ncomp,
+                                    const Extent<Dim>& native_shape) {
+  if (ncomp < 1)
+    throw std::invalid_argument("pops (bindings): state component count must be positive");
+  std::vector<py::ssize_t> shape = ranked_numpy_shape(native_shape);
+  shape.insert(shape.begin(), static_cast<py::ssize_t>(ncomp));
+  py::array_t<double> result(shape);
+  if (static_cast<std::size_t>(result.size()) != values.size())
+    throw std::runtime_error(
+        "pops (bindings): state element count does not match components times native shape");
+  std::memcpy(result.mutable_data(), values.data(), values.size() * sizeof(double));
+  return result;
 }
 template <int Dim>
 inline py::tuple output_pieces_to_python(const std::vector<OutputPiece<Dim>>& pieces) {
@@ -471,8 +638,8 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
   py::dict topology;
-  topology["periodic_x"] = report.topology.periodic_x;
-  topology["periodic_y"] = report.topology.periodic_y;
+  topology["dimension"] = report.topology.dimension;
+  topology["periodicity"] = py::cast(report.topology.periodicity);
   d["topology"] = std::move(topology);
   d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
   if (report.has_amr)

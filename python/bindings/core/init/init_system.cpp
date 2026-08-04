@@ -10,6 +10,11 @@
 #include <initializer_list>
 #include <limits>
 
+using System = pops::System<pops::kNativeDimension>;
+using SystemConfig = pops::SystemConfig<pops::kNativeDimension>;
+using SystemLayoutTransferSpec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
+using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
+
 // ADC-365: the System runtime-composition facade bindings.
 //
 // ADC-593: these .def registrations are INTERNAL seams of the bind flow (pops.bind reaches them through
@@ -49,7 +54,7 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
           py::cast<std::string>(row["source_representation"]),
           py::cast<std::string>(row["target_representation"]),
           py::cast<std::string>(row["synchronization_identity"]),
-          py::cast<std::array<std::int32_t, 2>>(row["refinement_ratio"]),
+          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
           py::cast<std::int32_t>(row["operation"])};
 }
 
@@ -427,7 +432,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       .def(
           "history_global",
           [](const System& s, const std::string& name, int slot) {
-            return to_3d(s.history_global(name, slot), s.history_ncomp(name), s.ny(), s.nx());
+            return to_ranked_state(s.history_global(name, slot), s.history_ncomp(name),
+                                   s.spatial_shape());
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &System::history_initialized, py::arg("name"))
@@ -467,8 +473,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       .def(
           "program_cache_global",
           [](const System& s, int node_id) {
-            return to_3d(s.program_cache_global(node_id), s.program_cache_ncomp(node_id), s.ny(),
-                         s.nx());
+            return to_ranked_state(s.program_cache_global(node_id), s.program_cache_ncomp(node_id),
+                                   s.spatial_shape());
           },
           py::arg("node_id"))
       .def(
@@ -732,9 +738,10 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("cut_theta_min") = 0.0)
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      // Domain 0/1 mask (ny, nx) row-major. Historical name retained for compatibility; it reports
+      // Ranked domain 0/1 mask. Historical name retained for compatibility; it reports
       // the mask of any analytic level set and is all 1.0 when none is installed.
-      .def("disc_mask", [](const System& s) { return to_2d(s.disc_mask(), s.ny(), s.nx()); })
+      .def("disc_mask",
+           [](const System& s) { return to_ranked_field(s.disc_mask(), s.spatial_shape()); })
       .def(
           "set_epsilon_field",
           [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -780,7 +787,7 @@ void bind_system_physics(py::class_<System>& cls) {
       .def(
           "aux_field_component",
           [](const System& s, int comp) {
-            return to_2d(s.aux_field_component(comp), s.ny(), s.nx());
+            return to_ranked_field(s.aux_field_component(comp), s.spatial_shape());
           },
           py::arg("comp"))
       .def("set_electron_temperature_from", &System::set_electron_temperature_from, py::arg("name"))
@@ -805,7 +812,7 @@ void bind_system_physics(py::class_<System>& cls) {
       .def(
           "get_primitive_state",
           [](System& s, const std::string& name) {
-            return to_3d(s.get_primitive_state(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.get_primitive_state(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"));
 }
@@ -883,13 +890,13 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def(
           "eval_rhs",
           [](System& s, const std::string& name) {
-            return to_3d(s.eval_rhs(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.eval_rhs(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
           "get_state",
           [](System& s, const std::string& name) {
-            return to_3d(s.get_state(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.get_state(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
@@ -912,8 +919,8 @@ void bind_system_stepping(py::class_<System>& cls) {
 // Data + IO accessors: shape/introspection, mass/density/potential, MPI-safe globals, local hyperslabs.
 void bind_system_data(py::class_<System>& cls) {
   cls.def("n_vars", &System::n_vars, py::arg("name"))
-      .def("nx", &System::nx)
-      .def("ny", &System::ny)
+      .def("spatial_shape",
+           [](const System& s) { return ranked_extent_to_python(s.spatial_shape()); })
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
@@ -927,10 +934,10 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "density",
           [](const System& s, const std::string& name) {
-            return to_2d(s.density(name), s.ny(), s.nx());
+            return to_ranked_field(s.density(name), s.spatial_shape());
           },
           py::arg("name"))
-      .def("potential", [](System& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
+      .def("potential", [](System& s) { return to_ranked_field(s.potential(), s.spatial_shape()); })
       // GLOBAL accessors (MPI-safe collectives): accepted-state checkpoint capture. Each
       // rank MUST call them (internal all_reduce); they return the COMPLETE field (rank-0 gather
       // implicit via all_reduce_sum) -- single-rank: bit-identical to density / get_state / potential.
@@ -938,21 +945,21 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "density_global",
           [](const System& s, const std::string& name) {
-            return to_2d(s.density_global(name), s.ny(), s.nx());
+            return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
           "state_global",
           [](const System& s, const std::string& name) {
-            return to_3d(s.state_global(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.state_global(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def("potential_global",
-           [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
+           [](System& s) { return to_ranked_field(s.potential_global(), s.spatial_shape()); })
       .def(
           "field_potential_global",
           [](System& s, const std::string& slot) {
-            return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
+            return to_ranked_field(s.field_potential_global(slot), s.spatial_shape());
           },
           py::arg("provider_slot"))
       .def(
@@ -972,7 +979,7 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "output_state_root_pieces",
           [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
-            std::vector<OutputPiece<2>> pieces;
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_state_root_pieces(lane, block, level);
@@ -984,7 +991,7 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "output_field_root_pieces",
           [](System& s, const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
-            std::vector<OutputPiece<2>> pieces;
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_field_root_pieces(lane, provider_slot, level);
@@ -995,13 +1002,16 @@ void bind_system_data(py::class_<System>& cls) {
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
-          [](const System& s, const std::array<double, 2>& origin,
-             const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
+          [](const System& s, const std::array<double, pops::kNativeDimension>& origin,
+             const std::array<double, pops::kNativeDimension>& spacing,
+             const std::array<std::int64_t, pops::kNativeDimension>& cell_shape,
              const std::string& cell_measure) {
-            if (cell_shape[0] != s.nx() || cell_shape[1] != s.ny())
-              throw std::invalid_argument(
-                  "System output geometry shape differs from the native domain");
-            return pops::python::detail::native_output_geometry_snapshot<2>(
+            const Extent<pops::kNativeDimension> native_shape = s.spatial_shape();
+            for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+              if (cell_shape[static_cast<std::size_t>(axis)] != native_shape[axis])
+                throw std::invalid_argument(
+                    "System output geometry shape differs from the native domain");
+            return pops::python::detail::native_output_geometry_snapshot<pops::kNativeDimension>(
                 0, 0, origin, spacing, cell_shape, cell_measure, {}, 0, false);
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
@@ -1019,9 +1029,8 @@ void bind_system_data(py::class_<System>& cls) {
             const auto boxes = s.local_boxes(name);
             if (li < 0 || li >= static_cast<int>(boxes.size()))
               throw std::out_of_range("System.local_state: local fab index out of bounds");
-            const int bnx = boxes[li][2] - boxes[li][0] + 1;  // ihi - ilo + 1
-            const int bny = boxes[li][3] - boxes[li][1] + 1;  // jhi - jlo + 1
-            return to_3d(s.local_state(name, li), s.n_vars(name), bny, bnx);
+            return to_ranked_state(s.local_state(name, li), s.n_vars(name),
+                                   boxes[static_cast<std::size_t>(li)].extent());
           },
           py::arg("name"), py::arg("li"))
       .def_static("abi_key", &System::abi_key,

@@ -11,6 +11,9 @@
 #include <limits>
 #include <string_view>
 
+using AmrSystem = pops::AmrSystem<pops::kNativeDimension>;
+using AmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
+
 // ADC-365: the AMR (AmrSystemConfig + AmrSystem) bindings.
 //
 // ADC-593: like init_system, the AmrSystem .def registrations are INTERNAL seams of the bind flow (the
@@ -76,18 +79,26 @@ py::dict prepared_provider_options_to_python(const pops::PreparedProviderOptions
 
 void require_amr_cell_array_shape(const AmrSystem& system, const py::array& array,
                                   std::string_view operation) {
-  const auto expected_ny = static_cast<py::ssize_t>(system.ny());
-  const auto expected_nx = static_cast<py::ssize_t>(system.nx());
-  if (array.ndim() != 2)
+  const std::vector<py::ssize_t> expected = ranked_numpy_shape(system.spatial_shape());
+  if (array.ndim() != pops::kNativeDimension)
     throw py::value_error(std::string(operation) +
-                          ": expected one 2D Cartesian cell array of shape (ny, nx) = (" +
-                          std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
-                          "); got ndim=" + std::to_string(array.ndim()));
-  if (array.shape(0) != expected_ny || array.shape(1) != expected_nx)
-    throw py::value_error(std::string(operation) + ": expected Cartesian cell shape (ny, nx) = (" +
-                          std::to_string(expected_ny) + ", " + std::to_string(expected_nx) +
-                          "); got (" + std::to_string(array.shape(0)) + ", " +
-                          std::to_string(array.shape(1)) + ")");
+                          ": cell-array rank differs from the native spatial dimension");
+  for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+    if (array.shape(axis) != expected[static_cast<std::size_t>(axis)])
+      throw py::value_error(std::string(operation) +
+                            ": cell-array shape differs from the exact native spatial shape");
+}
+
+void require_amr_state_array_shape(const AmrSystem& system, const py::array& array,
+                                   std::string_view operation) {
+  const std::vector<py::ssize_t> expected = ranked_numpy_shape(system.spatial_shape());
+  if (array.ndim() != pops::kNativeDimension + 1 || array.shape(0) < 1)
+    throw py::value_error(std::string(operation) +
+                          ": state rank must be one component axis plus the native dimension");
+  for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+    if (array.shape(axis + 1) != expected[static_cast<std::size_t>(axis)])
+      throw py::value_error(std::string(operation) +
+                            ": state shape differs from the exact native spatial shape");
 }
 
 pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dict& row,
@@ -591,17 +602,17 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
-      // Python owns the Cartesian orientation: exactly (ny, nx), then one explicit flattening at
-      // the vector-valued C++ boundary.
+      // Python owns the array orientation: exact native spatial rank, then one explicit flattening
+      // at the vector-valued C++ boundary.
       .def(
           "set_magnetic_field",
           [](AmrSystem& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             require_amr_cell_array_shape(s, arr, "AmrSystem.set_magnetic_field");
             s.set_magnetic_field(flat(arr));
           },
-          py::arg("bz"), "Set the coarse magnetic field from exactly one (ny, nx) array.")
+          py::arg("bz"), "Set the coarse magnetic field from one exact ranked cell array.")
       // ADC-291: model-NAMED aux field at a resolved channel component (>= kAuxNamedBase). The Python
-      // facade resolves the name -> comp and flattens the exact (ny, nx) Cartesian field.
+      // facade resolves the name -> comp and flattens the exact ranked cell field.
       .def(
           "set_aux_field_component",
           [](AmrSystem& s, int comp,
@@ -610,7 +621,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_aux_field_component(comp, flat(arr));
           },
           py::arg("comp"), py::arg("field"),
-          "Set one coarse auxiliary component from exactly one (ny, nx) array.")
+          "Set one coarse auxiliary component from one exact ranked cell array.")
       // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2).
       .def(
           "set_aux_field_halo_component",
@@ -626,26 +637,16 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
             s.set_density(name, flat(arr));
           },
           py::arg("name"), py::arg("rho"),
-          "Set a block's coarse density from exactly one (ny, nx) array.")
-      // Full initial conservative state (ncomp, ny, nx) -> starts the AMR from the paper's drift
-      // state (rho, rho*u, rho*v) instead of m=0. Keeps ndim==3 EXPLICIT: flat() flattens
-      // any C-contiguous array, so a 2D density (ny, nx) passed by mistake would become a
+          "Set a block's coarse density from one exact ranked cell array.")
+      // Full initial conservative state keeps one leading component axis. flat() flattens
+      // any C-contiguous array, so a density-only array passed by mistake could become a
       // 1-component state (comp 0 = density, momentum left at 0) -- a silent density masquerade
       // with the wrong physics. flat() then flattens in component-major c*cells + j*nx + i.
       .def(
           "set_conservative_state",
           [](AmrSystem& s, const std::string& name,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            if (arr.ndim() != 3)
-              throw std::runtime_error(
-                  "AmrSystem.set_conservative_state: state expected of shape (ncomp, ny, nx); got "
-                  "a " +
-                  std::to_string(arr.ndim()) +
-                  "D array (a 2D density? use "
-                  "set_density)");
-            if (arr.shape(1) != s.ny() || arr.shape(2) != s.nx())
-              throw std::runtime_error(
-                  "AmrSystem.set_conservative_state: spatial shape differs from (ny, nx)");
+            require_amr_state_array_shape(s, arr, "AmrSystem.set_conservative_state");
             s.set_conservative_state(name, flat(arr));
           },
           py::arg("name"), py::arg("U"))
@@ -664,12 +665,9 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           "_register_bootstrap_array",
           [](AmrSystem& s, const std::string& subject, const std::string& centering,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            if (arr.ndim() != 3)
-              throw std::runtime_error(
-                  "AmrSystem._register_bootstrap_array expects (ncomp, ny, nx)");
+            require_amr_state_array_shape(s, arr, "AmrSystem._register_bootstrap_array");
             s.register_bootstrap_array(subject, centering, static_cast<int>(arr.shape(0)),
-                                       static_cast<int>(arr.shape(1)),
-                                       static_cast<int>(arr.shape(2)), flat(arr));
+                                       s.spatial_shape(), flat(arr));
           },
           py::arg("subject"), py::arg("centering"), py::arg("values"))
       .def("_bind_bootstrap_block_subject", &AmrSystem::bind_bootstrap_block_subject,
@@ -700,10 +698,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def(
           "_rebuild_bootstrap_topology_cache",
           [](AmrSystem& s, const std::string& subject, int level) {
-            py::list out;
-            for (const pops::PatchBox& b : s.rebuild_bootstrap_topology_cache(subject, level))
-              out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
-            return out;
+            return ranked_amr_patches_to_python(s.rebuild_bootstrap_topology_cache(subject, level));
           },
           py::arg("subject"), py::arg("level"))
       .def("_bootstrap_cache_epoch", &AmrSystem::bootstrap_cache_epoch, py::arg("subject"))
@@ -960,12 +955,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // steps, zero cost on the hot path. The Python wrapper converts with the exact x/y bounds;
       // cf. AmrSystem.patch_rectangles() on the facade side.
       .def("patch_boxes",
-           [](AmrSystem& s) {
-             py::list out;
-             for (const pops::PatchBox& b : s.patch_boxes())
-               out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
-             return out;
-           })
+           [](AmrSystem& s) { return ranked_amr_patches_to_python(s.patch_boxes()); })
+      .def("spatial_shape",
+           [](const AmrSystem& s) { return ranked_extent_to_python(s.spatial_shape()); })
       // COARSE-level (base) box counts (ADC-319, MPI ownership diagnostic): coarse_local_boxes() = base
       // boxes OWNED by this rank (level-0 local_size()); coarse_total_boxes() = total base boxes (BoxArray
       // size, identical on all ranks). distribute_coarse=True -> local < total per rank (distributed
@@ -979,24 +971,25 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "mass", [](AmrSystem& s, const std::string& name) { return s.mass(name); },
           py::arg("name"))
-      .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.ny(), s.nx()); })
+      .def("density", [](AmrSystem& s) { return to_ranked_field(s.density(), s.spatial_shape()); })
       .def(
           "density",
           [](AmrSystem& s, const std::string& name) {
-            return to_2d(s.density(name), s.ny(), s.nx());
+            return to_ranked_field(s.density(name), s.spatial_shape());
           },
           py::arg("name"))
       // phi of the coarse (base) level, (ny, nx). SAME observable as System.potential(): level 0
       // covers the whole domain -> enough to sample a median circle (azimuthal FFT). In
       // multi-block, phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located), shared by all.
-      .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
+      .def("potential",
+           [](AmrSystem& s) { return to_ranked_field(s.potential(), s.spatial_shape()); })
       // ADC-428: solved potential of a NAMED elliptic field (m.elliptic_field) on the coarse level,
       // (ny, nx). Read-back counterpart of potential() for a second elliptic field; the Python
       // AmrSystem.field(name) resolves the field name to this. Solves the hierarchy if needed.
       .def(
           "named_field_values",
           [](AmrSystem& s, const std::string& field) {
-            return to_2d(s.named_field_values(field), s.ny(), s.nx());
+            return to_ranked_field(s.named_field_values(field), s.spatial_shape());
           },
           py::arg("field"))
       // AMR CHECKPOINT / RESTART single-rank (ADC-65): full conservative state per level + phi
@@ -1029,13 +1022,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("k"), py::arg("phi"))
       .def(
           "set_hierarchy",
-          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes) {
-            std::vector<pops::PatchBox> bx;
-            bx.reserve(boxes.size());
-            for (const auto& b : boxes)
-              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
-                                          std::get<3>(b), std::get<4>(b)});
-            s.set_hierarchy(bx);
+          [](AmrSystem& s, const py::handle& boxes) {
+            s.set_hierarchy(ranked_amr_patches_from_python<pops::kNativeDimension>(
+                boxes, "AmrSystem.set_hierarchy"));
           },
           py::arg("boxes"))
       // GLOBAL (np>1 gather) variants of the per-level accessors (ADC-509): the checkpoint facade
@@ -1061,7 +1050,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "output_field_root_pieces",
           [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& provider_slot,
              int level) {
-            std::vector<OutputPiece<2>> pieces;
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_field_root_pieces(lane, provider_slot, level);
@@ -1072,18 +1061,19 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
-          [](AmrSystem& s, int level, const std::array<double, 2>& origin,
-             const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
+          [](AmrSystem& s, int level, const std::array<double, pops::kNativeDimension>& origin,
+             const std::array<double, pops::kNativeDimension>& spacing,
+             const std::array<std::int64_t, pops::kNativeDimension>& cell_shape,
              int next_refinement_ratio, const std::string& cell_measure) {
             if (level < 0 || level >= s.n_levels())
               throw std::out_of_range("AmrSystem output geometry level is out of range");
-            std::vector<pops::python::detail::OutputGeometryPatch<2>> patches;
-            const std::vector<PatchBox> native_boxes = s.output_geometry_boxes();
+            std::vector<pops::python::detail::OutputGeometryPatch<pops::kNativeDimension>> patches;
+            const std::vector<AmrPatch<pops::kNativeDimension>> native_boxes =
+                s.output_geometry_boxes();
             patches.reserve(native_boxes.size());
-            for (const PatchBox& patch : native_boxes)
-              patches.push_back({patch.level, Box<2>{Index<2>{patch.ilo, patch.jlo},
-                                                     Index<2>{patch.ihi, patch.jhi}}});
-            return pops::python::detail::native_output_geometry_snapshot<2>(
+            for (const AmrPatch<pops::kNativeDimension>& patch : native_boxes)
+              patches.push_back({patch.level, patch.box});
+            return pops::python::detail::native_output_geometry_snapshot<pops::kNativeDimension>(
                 level, s.checkpoint_topology_epoch(), origin, spacing, cell_shape, cell_measure,
                 patches, next_refinement_ratio, true);
           },
@@ -1118,7 +1108,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "output_state_root_pieces",
           [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& name, int level) {
-            std::vector<OutputPiece<2>> pieces;
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_state_root_pieces(lane, name, level);
@@ -1134,7 +1124,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             s.set_block_level_state(name, k, flat(arr));
           },
           py::arg("name"), py::arg("k"), py::arg("state"))
-      // ADC-542: owner rank per box of a level (the shared DistributionMapping), for the v3 checkpoint
+      // ADC-542: owner rank per box of a level (the shared ranked ownership), for the v3 checkpoint
       // to reproduce the local-fab iteration order at restart. Empty on the single-block coupler path.
       .def(
           "level_owner_ranks", [](AmrSystem& s, int k) { return s.level_owner_ranks(k); },
@@ -1159,24 +1149,18 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).
       .def(
           "rebuild_hierarchy",
-          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes,
-             const std::vector<int>& owner_ranks) {
-            std::vector<pops::PatchBox> bx;
-            bx.reserve(boxes.size());
-            for (const auto& b : boxes)
-              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
-                                          std::get<3>(b), std::get<4>(b)});
-            s.rebuild_hierarchy(bx, owner_ranks);
+          [](AmrSystem& s, const py::handle& boxes, const std::vector<int>& owner_ranks) {
+            s.rebuild_hierarchy(ranked_amr_patches_from_python<pops::kNativeDimension>(
+                                    boxes, "AmrSystem.rebuild_hierarchy"),
+                                owner_ranks);
           },
           py::arg("boxes"), py::arg("owner_ranks"))
       .def(
           "rematerialize_hierarchy_ownership",
-          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes) {
-            std::vector<pops::PatchBox> bx;
-            bx.reserve(boxes.size());
-            for (const auto& b : boxes)
-              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
-                                          std::get<3>(b), std::get<4>(b)});
+          [](AmrSystem& s, const py::handle& boxes) {
+            const std::vector<AmrPatch<pops::kNativeDimension>> bx =
+                ranked_amr_patches_from_python<pops::kNativeDimension>(
+                    boxes, "AmrSystem.rematerialize_hierarchy_ownership");
             py::gil_scoped_release release;
             return s.rematerialize_hierarchy_ownership(bx);
           },
@@ -1271,34 +1255,73 @@ void init_amr(py::module_& m) {
   // block by block) has left the core: it is not a generic brick but a SCENARIO. It now lives
   // in adc_cases (cf. adc_cases/two_fluid_ap/), compiled on the fly against the generic
   // headers of PoPS; it is no longer exposed by the _pops module.
-  py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
+  using NativeAmrSystemConfig = AmrSystemConfig;
+  py::class_<NativeAmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
-      .def_readwrite("n", &AmrSystemConfig::n)
-      .def_readwrite("ny", &AmrSystemConfig::ny)
-      .def_readwrite("L", &AmrSystemConfig::L)
-      .def_readwrite("Ly", &AmrSystemConfig::Ly)
-      .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
-      .def_readwrite("level_count", &AmrSystemConfig::level_count)
-      .def_readwrite("regrid_grow", &AmrSystemConfig::regrid_grow)
-      .def_readwrite("regrid_margin", &AmrSystemConfig::regrid_margin)
-      .def_readwrite("explicit_bootstrap", &AmrSystemConfig::explicit_bootstrap)
+      .def_property(
+          "shape",
+          [](const NativeAmrSystemConfig& config) { return ranked_extent_to_python(config.shape); },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.shape =
+                ranked_extent_from_python<kNativeDimension>(value, "AmrSystemConfig.shape");
+          })
+      .def_property(
+          "lower",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_real_vector_to_python(config.lower);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.lower =
+                ranked_real_vector_from_python<kNativeDimension>(value, "AmrSystemConfig.lower");
+          })
+      .def_property(
+          "upper",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_real_vector_to_python(config.upper);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.upper =
+                ranked_real_vector_from_python<kNativeDimension>(value, "AmrSystemConfig.upper");
+          })
+      .def_property(
+          "boxes",
+          [](const NativeAmrSystemConfig& config) { return ranked_boxes_to_python(config.boxes); },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.boxes =
+                ranked_boxes_from_python<kNativeDimension>(value, "AmrSystemConfig.boxes");
+          })
+      .def_readwrite("coordinate_system", &NativeAmrSystemConfig::coordinate_system)
+      .def_readwrite("regrid_every", &NativeAmrSystemConfig::regrid_every)
+      .def_readwrite("level_count", &NativeAmrSystemConfig::level_count)
+      .def_readwrite("regrid_grow", &NativeAmrSystemConfig::regrid_grow)
+      .def_readwrite("regrid_margin", &NativeAmrSystemConfig::regrid_margin)
+      .def_readwrite("explicit_bootstrap", &NativeAmrSystemConfig::explicit_bootstrap)
       .def_property(
           "periodicity",
-          [](const AmrSystemConfig& config) { return periodicity_to_python(config.periodicity); },
-          [](AmrSystemConfig& config, const py::handle& value) {
-            config.periodicity = periodicity_from_python(value, "AmrSystemConfig");
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_periodicity_to_python(config.periodicity);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.periodicity =
+                ranked_periodicity_from_python<kNativeDimension>(value, "AmrSystemConfig");
           })
-      .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
-      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid)
+      .def_readwrite("distribute_coarse", &NativeAmrSystemConfig::distribute_coarse)
+      .def_property(
+          "coarse_max_grid",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extent_to_python(config.coarse_max_grid);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.coarse_max_grid = ranked_extent_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.coarse_max_grid", true);
+          })
       // ADC-616: Berger-Rigoutsos clustering params (<= 0 = the historical {0.7, 1, 32} default).
-      .def_readwrite("cluster_min_efficiency", &AmrSystemConfig::cluster_min_efficiency)
-      .def_readwrite("cluster_min_box_size", &AmrSystemConfig::cluster_min_box_size)
-      .def_readwrite("cluster_max_box_size", &AmrSystemConfig::cluster_max_box_size)
-      .def_readwrite("xlo", &AmrSystemConfig::xlo)
-      .def_readwrite("ylo", &AmrSystemConfig::ylo)
+      .def_readwrite("cluster_min_efficiency", &NativeAmrSystemConfig::cluster_min_efficiency)
+      .def_readwrite("cluster_min_box_size", &NativeAmrSystemConfig::cluster_min_box_size)
+      .def_readwrite("cluster_max_box_size", &NativeAmrSystemConfig::cluster_max_box_size)
       .def(
           "_set_load_balance_provider",
-          [](AmrSystemConfig& config, const std::string& route,
+          [](NativeAmrSystemConfig& config, const std::string& route,
              const std::string& semantic_identity, const std::string& option_schema_identity,
              const py::dict& options) {
             if (route.empty() || semantic_identity.empty())

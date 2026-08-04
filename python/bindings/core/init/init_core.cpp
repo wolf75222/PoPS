@@ -776,26 +776,49 @@ void init_core(py::module_& m) {
       },
       "True if the module's Kokkos runtime is already initialized.");
 
-  py::class_<SystemConfig>(m, "SystemConfig")
+  using NativeSystemConfig = SystemConfig<kNativeDimension>;
+  py::class_<NativeSystemConfig>(m, "SystemConfig")
       .def(py::init<>())
-      .def_readwrite("n", &SystemConfig::n)
-      .def_readwrite("L", &SystemConfig::L)
+      .def_property(
+          "shape",
+          [](const NativeSystemConfig& config) { return ranked_extent_to_python(config.shape); },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.shape = ranked_extent_from_python<kNativeDimension>(value, "SystemConfig.shape");
+          })
+      .def_property(
+          "lower",
+          [](const NativeSystemConfig& config) {
+            return ranked_real_vector_to_python(config.lower);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.lower =
+                ranked_real_vector_from_python<kNativeDimension>(value, "SystemConfig.lower");
+          })
+      .def_property(
+          "upper",
+          [](const NativeSystemConfig& config) {
+            return ranked_real_vector_to_python(config.upper);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.upper =
+                ranked_real_vector_from_python<kNativeDimension>(value, "SystemConfig.upper");
+          })
       .def_property(
           "periodicity",
-          [](const SystemConfig& config) { return periodicity_to_python(config.periodicity); },
-          [](SystemConfig& config, const py::handle& value) {
-            config.periodicity = periodicity_from_python(value, "SystemConfig");
+          [](const NativeSystemConfig& config) {
+            return ranked_periodicity_to_python(config.periodicity);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.periodicity =
+                ranked_periodicity_from_python<kNativeDimension>(value, "SystemConfig");
           })
-      // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
-      // "polar" = global ring carried by pops.mesh.PolarMesh. Polar fields ignored for cartesian.
-      .def_readwrite("geometry", &SystemConfig::geometry)
-      .def_readwrite("nr", &SystemConfig::nr)
-      .def_readwrite("ntheta", &SystemConfig::ntheta)
-      .def_readwrite("r_min", &SystemConfig::r_min)
-      .def_readwrite("r_max", &SystemConfig::r_max)
-      .def_readwrite("theta_boxes", &SystemConfig::theta_boxes)
-      .def_readwrite("xlo", &SystemConfig::xlo)
-      .def_readwrite("ylo", &SystemConfig::ylo);
+      .def_property(
+          "boxes",
+          [](const NativeSystemConfig& config) { return ranked_boxes_to_python(config.boxes); },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.boxes = ranked_boxes_from_python<kNativeDimension>(value, "SystemConfig.boxes");
+          })
+      .def_readwrite("coordinate_system", &NativeSystemConfig::coordinate_system);
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
   // No named scenario; the private Python ModelSpec composer fills these engine fields.

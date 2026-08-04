@@ -1,161 +1,115 @@
+/// @file
+/// @brief Exact compile-time-ranked Cartesian geometry and ownership of one System.
+
 #pragma once
 
-#include <pops/core/state/state.hpp>  // kAuxBaseComps (default width of the shared aux channel)
-#include <pops/parallel/comm.hpp>     // n_ranks (round-robin distribution mapping)
+#include <pops/core/state/state.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/geometry/geometry.hpp>        // Geometry, PolarGeometry
-#include <pops/mesh/storage/multifab.hpp>         // MultiFab
-#include <pops/mesh/boundary/physical_bc.hpp>     // BCRec, BCType, Periodicity
-#include <pops/mesh/index/box2d.hpp>              // Box2D
-#include <pops/runtime/context/grid_context.hpp>  // GeometryMode, analytic::AnalyticProgram
-#include <pops/runtime/system.hpp>  // SystemConfig (the geometry/layout source; system.hpp does NOT include this header, so no cycle)
+#include <pops/mesh/layout/rank_space.hpp>
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/parallel/comm.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
+#include <pops/runtime/system.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 #include <utility>
-#include <vector>
 
-/// @file
-/// @brief The GEOMETRY / LAYOUT registry of a System (ADC-578).
-///
-/// Extracted from the geometry + mesh-layout members that lived inline on `System::Impl`: the index
-/// geometry (Cartesian `geom` or polar `pgeom_`), the box array / distribution mapping (`ba` / `dm`),
-/// the transport boundary (`bc_`), the index domain (`dom`), the periodicity (`per_`),
-/// the SHARED aux channel (`aux` / `aux_ncomp_`), and the embedded-boundary signed samples, metrics,
-/// mask and routing. It names one subsystem: "where
-/// the System lives and how it is laid out".
-///
-/// CONSTRUCTED FIRST: the members have an init-order dependency (`dm` sizes from `ba`, `aux` allocates
-/// on `ba`/`dm`), so this struct owns the exact historical init-list. `System::Impl` holds a
-/// `SystemDomain domain_` constructed BEFORE `fields_` / `program_driver_`, whose back-pointers read the
-/// layout through Impl's reference aliases.
-///
-/// STEPPER / FIELD VISIBILITY: `geom`, `pgeom_`, `polar_`, `aux`, `aux_ncomp_`, `ba`, `dm`, `bc_`,
-/// `dom`, `per_`, `cfg`, `geometry_mode_` and `eb_set_` are read by SystemProgramDriver /
-/// SystemFieldSolver / native_loader via `owner_->` / `P->`. Impl re-exposes EVERY member under its
-/// exact historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom), so the three
-/// dependent headers and the MockImpl stay byte-unchanged -- the block closures that capture `&aux` by
-/// address see a stable `&aux == &domain_.aux`.
-///
-/// OWNERSHIP CONTRACT: the layout (geom / ba / dm / bc_ / dom / per_ / aux width) is FROZEN AT BIND
-/// (built at construction; widened only by the guarded structural setters, e.g. ensure_aux_width from
-/// add_block, or set_disc_domain). The aux DATA is MUTABLE DURING RUN (re-derived by the field solve
-/// each step). Not checkpointed here (the aux is re-derived; block state + ProgramRuntimeState carry
-/// the restartable state).
+namespace pops::runtime::system {
 
-namespace pops {
-namespace runtime {
-namespace system {
-
-/// Data-only geometry/layout registry with the exact historical construction order.
+/// Immutable Cartesian spatial authority shared by every block of one System.
+///
+/// The resolved Python layout supplies every ranked value. Ownership is materialized once through
+/// the prepared load-balance authority and then retained with the fields; no consumer reconstructs
+/// owners from process count or array shape. Polar and embedded-boundary implementations are
+/// capability-qualified providers and therefore deliberately absent from this core type.
+template <int Dim>
 struct SystemDomain {
-  SystemConfig cfg;
-  Geometry geom;
-  // POLAR GEOMETRY (diocotron polar-grid project, Phase 2b). polar == true when cfg.geometry ==
-  // "polar": the System runs on a global ring (r, theta) with the polar transport + polar Poisson.
-  // pgeom is INERT in Cartesian -> bit-identical. dom/ba/dm always cover the INDEX space (nx x ny),
-  // common to both geometries: only the indices -> physical space mapping (geom vs pgeom) changes.
-  bool polar_;
-  PolarGeometry pgeom_;
-  BoxArray ba;
-  DistributionMapping dm;
-  BCRec bc_;  // transport BC per Cartesian axis; polar: physical r, periodic theta
-  Box2D dom;
-  Periodicity per_;
-  MultiFab aux;
-  int aux_ncomp_ = kAuxBaseComps;  // width of the SHARED aux channel (max over blocks; >= 3)
+  static_assert(Dim >= 1 && Dim <= 3, "SystemDomain only supports dimensions 1, 2, and 3");
 
-  // EMBEDDED-BOUNDARY / LEVEL-SET DOMAIN, inert by default. eb_set_ == false: the mask is "all
-  // active" and the transport path stays BIT-IDENTICAL. The stable owner stores samples and metrics
-  // from any validated analytic level set; set_disc_domain is only one generic constructor.
-  // Signed samples and derived metrics are prepared once; no expression interpreter reaches a RHS.
-  MultiFab eb_level_set_values_;  // signed phi at cell centers, same layout, 1 ghost
-  bool eb_set_ = false;
-  MultiFab
-      domain_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty while !eb_set_
-  MultiFab eb_inverse_volume_fraction_;  // prepared 1/max(kappa,kappa_min), valid cells only
-  // At least one block requested wave_speed_cache (ADC-199, opt-in HLL cache): locks the switch to an
-  // embedded-boundary transport mode (explicit rejection rather than a silently ignored cache).
-  bool ws_cache_block_ = false;
-  // TRANSPORT GEOMETRY MODE (T5-PR3): None (default) -> full Cartesian transport (bit-identical);
-  // Staircase / CutCell -> the Program routes to the masked / cut-cell residual. Effective only if a
-  // domain is fixed (eb_set_) AND the block carries the matching embedded-boundary residual.
-  GeometryMode geometry_mode_ = GeometryMode::None;
+  using field_type = MultiFab<Dim>;
+  using layout_type = mesh::BoxArray<Dim>;
+  using distribution_type = mesh::Distribution<Dim>;
+  using rank_space_type = mesh::RankSpace<Dim>;
 
-  // Number of radial / azimuthal cells in POLAR (0 => fall back to cfg.n).
-  static int polar_nr(const SystemConfig& c) { return c.nr > 0 ? c.nr : c.n; }
-  static int polar_ntheta(const SystemConfig& c) { return c.ntheta > 0 ? c.ntheta : c.n; }
-  // INDEX domain: n x n square in Cartesian; nr x ntheta in polar (i = r, j = theta).
-  static Box2D index_domain(const SystemConfig& c) {
-    if (c.geometry == "polar")
-      return Box2D::from_extents(polar_nr(c), polar_ntheta(c));
-    return Box2D::from_extents(c.n, c.n);
-  }
-  // BoxArray of the INDEX domain. Cartesian (and polar mono-box, theta_boxes <= 1): ONE box covering
-  // the whole domain -> STRICTLY bit-identical to the historical. Polar with theta_boxes > 1: theta
-  // BANDS, each covering the whole radius [0, nr-1] and one contiguous azimuthal band. The bands tile
-  // [0, ntheta-1] EXACTLY; check_geometry already validated the divisibility.
-  static BoxArray index_boxarray(const SystemConfig& c) {
-    if (c.geometry != "polar" || c.theta_boxes <= 1)
-      return BoxArray(std::vector<Box2D>{index_domain(c)});
-    const int nr = polar_nr(c), nth = polar_ntheta(c), nseg = c.theta_boxes;
-    std::vector<Box2D> boxes;
-    boxes.reserve(static_cast<std::size_t>(nseg));
-    int base = nth / nseg, rem = nth % nseg, cur = 0;
-    for (int k = 0; k < nseg; ++k) {
-      const int len = base + (k < rem ? 1 : 0);
-      boxes.push_back(Box2D{{0, cur}, {nr - 1, cur + len - 1}});
-      cur += len;
-    }
-    return BoxArray(std::move(boxes));
-  }
+  SystemConfig<Dim> cfg;
+  Box<Dim> dom;
+  Geometry<Dim> geom;
+  layout_type ba;
+  rank_space_type rank_space;
+  std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
+  distribution_type dm;
+  Index<Dim> local_rank;
+  std::array<bool, Dim> periodicity;
+  field_type aux;
+  int aux_ncomp = kAuxBaseComps;
 
-  static BCRec make_bc(const SystemConfig& c) {
-    BCRec b;  // periodic by default
-    if (c.geometry == "polar") {
-      // POLAR: r (dir 0, xlo/xhi) carries a PHYSICAL BC (wall / free outflow, Foextrap); theta
-      // (dir 1, ylo/yhi) is PERIODIC (the ring covers [0, 2pi)).
-      b.xlo = b.xhi = BCType::Foextrap;
-      b.ylo = b.yhi = BCType::Periodic;
-      return b;
-    }
-    if (!c.periodicity.x)
-      b.xlo = b.xhi = BCType::Foextrap;
-    if (!c.periodicity.y)
-      b.ylo = b.yhi = BCType::Foextrap;
-    return b;
-  }
+  explicit SystemDomain(const SystemConfig<Dim>& config)
+      : cfg(validated_config_(config)),
+        dom(cfg.index_domain()),
+        geom(Geometry<Dim>::from_bounds(dom, cfg.lower, cfg.upper)),
+        ba(cfg.materialized_boxes()),
+        rank_space(process_rank_space_()),
+        load_balance(prepare_authority_(cfg)),
+        dm(prepare_distribution_(*load_balance, ba, rank_space)),
+        local_rank(rank_space.coordinate(static_cast<std::size_t>(my_rank()))),
+        periodicity(cfg.periodicity),
+        aux(ba, dm, local_rank, kAuxBaseComps, runtime_config_detail::filled_extent<Dim>(1)) {}
 
-  /// System::Impl layout initialization in ownership order. Cartesian periodicity comes from the
-  /// configuration; a polar ring always publishes physical-radial/periodic-azimuthal topology.
-  explicit SystemDomain(const SystemConfig& c)
-      : cfg(c),
-        geom{Box2D::from_extents(c.n, c.n), c.xlo, c.xlo + c.L, c.ylo, c.ylo + c.L},
-        polar_(c.geometry == "polar"),
-        pgeom_{index_domain(c), Real(c.r_min), Real(c.r_max)},
-        ba(index_boxarray(c)),
-        dm(ba.size(), n_ranks()),
-        bc_(make_bc(c)),
-        dom(index_domain(c)),
-        per_{polar_ ? false : c.periodicity.x, polar_ ? true : c.periodicity.y},
-        aux(ba, dm, kAuxBaseComps, 1) {}
-
-  /// Structured report (ADC-578 acceptance): the layout facts a runtime report enumerates.
   struct LayoutReport {
-    bool polar;
-    int nx, ny;
-    int n_boxes;
-    int aux_ncomp;
-    bool periodic_x;
-    bool periodic_y;
-    bool eb_active;
+    Extent<Dim> shape{};
+    RealVector<Dim> lower{};
+    RealVector<Dim> upper{};
+    std::array<bool, Dim> periodicity{};
+    std::size_t boxes = 0;
+    int aux_components = 0;
+    std::string coordinate_system;
   };
+
   LayoutReport layout_report() const {
-    return LayoutReport{polar_,     dom.nx(), dom.ny(), static_cast<int>(ba.size()),
-                        aux_ncomp_, per_.x,   per_.y,   eb_set_};
+    return {
+        cfg.shape, cfg.lower, cfg.upper, periodicity, ba.size(), aux_ncomp, cfg.coordinate_system};
+  }
+
+ private:
+  static SystemConfig<Dim> validated_config_(SystemConfig<Dim> config) {
+    config.validate_spatial_domain();
+    if (config.coordinate_system != runtime_config_detail::cartesian_coordinate_system<Dim>())
+      throw std::invalid_argument(
+          "System Cartesian core requires the exact ranked Cartesian coordinate provider");
+    return config;
+  }
+
+  static rank_space_type process_rank_space_() {
+    Extent<Dim> process_shape = runtime_config_detail::filled_extent<Dim>(1);
+    process_shape[0] = n_ranks();
+    return rank_space_type(Index<Dim>{}, process_shape);
+  }
+
+  static std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> prepare_authority_(
+      const SystemConfig<Dim>& config) {
+    return std::make_shared<const PreparedLoadBalanceAuthority<Dim>>(
+        prepare_load_balance_authority<Dim>(config.load_balance_route, config.load_balance_identity,
+                                            config.load_balance_options));
+  }
+
+  static distribution_type prepare_distribution_(const PreparedLoadBalanceAuthority<Dim>& authority,
+                                                 const layout_type& layout,
+                                                 const rank_space_type& processes) {
+    std::int64_t cells = 0;
+    for (const Box<Dim>& box : layout.boxes()) {
+      const std::int64_t box_cells = box.numPts();
+      if (box_cells < 1 || box_cells > std::numeric_limits<std::int64_t>::max() - cells)
+        throw std::overflow_error("System ownership preparation cell budget exceeds int64_t");
+      cells += box_cells;
+    }
+    const parallel::LoadBalancePreparationBudget budget{layout.size(), processes.size(), cells};
+    return authority.prepare(layout, processes, budget).plan().distribution();
   }
 };
 
-}  // namespace system
-}  // namespace runtime
-}  // namespace pops
+}  // namespace pops::runtime::system

@@ -2,8 +2,6 @@
 
 #include <limits>
 
-#include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
-#include <pops/mesh/boundary/physical_bc.hpp>  // BCRec
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions compatibility validation only
@@ -14,6 +12,9 @@
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
+#include <pops/runtime/config/spatial_domain.hpp>
+#include <pops/runtime/amr_patch.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
@@ -41,7 +42,7 @@
 /// AMR hierarchy. Like System but on an adaptive mesh.
 ///
 /// One and many-block systems use the same AmrRuntime engine. Every block is co-located on ONE
-/// SHARED AMR hierarchy (same BoxArray + DistributionMapping + dx/dy per level, guarded by
+/// SHARED AMR hierarchy (same ranked patches, ownership and spacing per level, guarded by
 /// same_layout_or_throw). All blocks live on ALL patches. A single aux per level (phi,
 /// grad phi) and a single coarse Poisson whose right-hand side is the CO-LOCATED SUM of the blocks'
 /// elliptic bricks (f = Sum_b q_b n_b read at the same cells). Conservation PER BLOCK (reflux +
@@ -81,17 +82,20 @@ struct AmrFieldSolverConfiguration {
 // the TUs that BUILD/CALL the builder (amr_dsl_block.hpp and python/amr_system.cpp) include the
 // complete definitions; a std::function with incomplete-type signature is legal as long as it is
 // not instantiated with a concrete callable outside those TUs (PIMPL std::function recipe).
+template <int Dim>
 struct AmrRuntimeBlock;
 // Forward-declared for the named-elliptic-field RHS closure signature (ADC-428,
 // set_block_elliptic_field): a std::function with an incomplete-type parameter is legal as long as it is
 // only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
-class MultiFab;
 class PreparedBoundaryPlan;
 class AmrFieldSolverProvider;
-class
-    AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
+namespace runtime::amr {
+template <int Dim>
+class AmrRuntime;
+}
 namespace detail {
+template <int Dim>
 struct SharedAmrLayout;
 }
 namespace runtime {
@@ -106,16 +110,18 @@ struct PreparedInterfaceFluxSpec;
 }  // namespace multiblock
 }  // namespace runtime
 
-/// AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
-struct AmrSystemConfig {
-  int n = 128;                      ///< coarse-level cells along x (historical square shorthand)
-  double L = 1.0;                   ///< physical x extent (historical square shorthand)
+/// Exact ranked AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
+template <int Dim>
+struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
+  static_assert(Dim >= 1 && Dim <= 3, "AmrSystemConfig only supports dimensions 1, 2, and 3");
+
+  AmrSystemConfig() { this->shape = runtime_config_detail::filled_extent<Dim>(128); }
+
   int regrid_every = 20;            ///< re-refinement every N steps (0 = never after init)
   int level_count = 2;              ///< maximum active hierarchy depth (>= 1)
   int regrid_grow = 2;              ///< tag lookahead/dilation from the resolved hierarchy
   int regrid_margin = 2;            ///< proper-nesting buffer from the resolved hierarchy
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
-  Periodicity periodicity{true, true};  ///< Cartesian topology, independently on x and y
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
   ///   and the coarse transport are REDUNDANT on each GPU (zero communication,
@@ -126,27 +132,20 @@ struct AmrSystemConfig {
   ///   and enables AMR strong-scaling. The geometric MG then operates on a multi-box coarse
   ///   (cf. geometric_mg.hpp): convergence to be measured (may require more cycles).
   bool distribute_coarse = false;
-  /// Coarse tile limit when distribute_coarse=true. Zero halves each axis independently
-  /// (a minimal 2x2 split when both axes contain at least two cells). Ignored otherwise.
-  int coarse_max_grid = 0;
+  /// Per-axis coarse tile limits when distribute_coarse=true. Zero selects the hierarchy policy's
+  /// deterministic ranked default on that axis. Ignored otherwise.
+  Extent<Dim> coarse_max_grid{};
   /// ADC-616: Berger-Rigoutsos clustering params of the regrid layout. <= 0 (default) keeps the
   /// historical ClusterParams {0.7, 1, 32}, bit-identical. min_efficiency in (0,1], sizes >= 1,
   /// min_box_size <= max_box_size (validated at set_clustering / the facade descriptor).
   double cluster_min_efficiency = 0.0;
   int cluster_min_box_size = 0;
   int cluster_max_box_size = 0;
-  // Cartesian physical origin. Appended so historical aggregate initialization keeps its meaning.
-  double xlo = 0.0;
-  double ylo = 0.0;
   /// Prepared ownership provider selected by the resolved adaptive-layout authority.  The semantic
   /// identity covers the public route, exact provider options and its weight capability.
   std::string load_balance_route = "space_filling_curve";
   std::string load_balance_identity = "pops.amr.default.space-filling-curve@1";
   PreparedProviderOptions load_balance_options{"pops.amr.load-balance.space-filling-curve@1", {}};
-  /// Independent y-axis geometry. Zero means "same as x" solely for the historical direct-C++
-  /// square shorthand; resolved CartesianGrid lowering always writes both values explicitly.
-  int ny = 0;
-  double Ly = 0.0;
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
@@ -162,32 +161,23 @@ struct AmrSystemConfig {
 /// (a sha256 over include/, cf. abi_key.hpp / python/CMakeLists.txt), which re-keys pops_native_abi_key.
 /// A .so generated before the change then diverges from the module key and add_native_block REJECTS it
 /// with a clear "regenerate" error (never silent UB). So an older .so is refused, not silently truncated.
+template <int Dim>
 struct AmrBuildParams {
-  /// Coarse mesh geometry + coarse ownership policy (AMR strong-scaling).
-  struct Mesh {
-    int n = 128;                     ///< coarse x cells (historical square shorthand)
-    double L = 1.0;                  ///< physical x extent (historical square shorthand)
-    int ny = 0;                      ///< coarse y cells; zero means n
-    double Ly = 0.0;                 ///< physical y extent; zero means L
-    double xlo = 0.0;                ///< physical lower x coordinate
-    double ylo = 0.0;                ///< physical lower y coordinate
-    int regrid_every = 20;           ///< re-refinement cadence (0 = never after init)
-    Periodicity periodicity{};       ///< explicit Cartesian topology; no implicit periodic axes
-    bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
-    int coarse_max_grid = 0;         ///< common tile cap; zero halves each axis independently
-    std::shared_ptr<const PreparedLoadBalanceAuthority>
-        load_balance;  ///< one prepared authority reused by coarse, fine seeds and every regrid
+  static_assert(Dim >= 1 && Dim <= 3, "AmrBuildParams only supports dimensions 1, 2, and 3");
 
-    [[nodiscard]] int cells_x() const noexcept { return n; }
-    [[nodiscard]] int cells_y() const noexcept { return ny == 0 ? n : ny; }
-    [[nodiscard]] double length_x() const noexcept { return L; }
-    [[nodiscard]] double length_y() const noexcept { return Ly == 0.0 ? L : Ly; }
+  /// Coarse mesh geometry + coarse ownership policy (AMR strong-scaling).
+  struct Mesh : RuntimeSpatialDomain<Dim> {
+    Mesh() { this->shape = runtime_config_detail::filled_extent<Dim>(128); }
+
+    int regrid_every = 20;           ///< re-refinement cadence (0 = never after init)
+    bool distribute_coarse = false;  ///< distributed multi-box coarse (AMR strong-scaling)
+    Extent<Dim> coarse_max_grid{};   ///< exact per-axis tile cap
+    std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>>
+        load_balance;  ///< one prepared authority reused by coarse, fine seeds and every regrid
   } mesh;
-  /// Coarse Poisson boundary condition + conductive wall (resolved by set_poisson).
-  struct Poisson {
-    BCRec bc;                     ///< coarse Poisson BC
-    ActiveRegionProvider2D wall;  ///< conductive wall predicate (empty = none)
-  } poisson;
+  /// Exact prepared field provider slot. Legacy 2D Poisson/embedded-boundary objects are installed
+  /// through their capability-qualified provider and never become part of this ranked build POD.
+  std::string field_provider_slot;
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
     bool has_density = false;
@@ -218,8 +208,9 @@ struct AmrBuildParams {
 /// amr_dsl_block.hpp) where those types are complete, and invoked only in python/amr_system.cpp.
 /// The trailing pos_floor is the Zhang-Shu positivity floor of the block (0 = inactive), forwarded to
 /// dispatch_amr_block -> build_amr_block exactly like a native multi-block.
-using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
-    const detail::SharedAmrLayout& layout, const std::string& name,
+template <int Dim>
+using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock<Dim>(
+    const detail::SharedAmrLayout<Dim>& layout, const std::string& name,
     const std::vector<double>& density, bool has_density, const std::vector<double>& state,
     bool has_state, double gamma, int substeps, bool recon_prim, int stride,
     // Compatibility slots in the frozen builder ABI. Registration rejects every non-empty selector
@@ -241,9 +232,14 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
 /// amr.set_density("ne", rho0);             // rho0: initial density on the base level
 /// amr.step_cfl(0.4);                       // conservative refluxed step + composite FAC Poisson
 /// @endcode
+template <int Dim>
 class AmrSystem {
+  static_assert(Dim >= 1 && Dim <= 3, "AmrSystem only supports dimensions 1, 2, and 3");
+
  public:
-  explicit AmrSystem(const AmrSystemConfig& cfg);
+  static constexpr int dimension = Dim;
+
+  explicit AmrSystem(const AmrSystemConfig<Dim>& cfg);
   ~AmrSystem();
   // RULE OF FIVE (C.21): move-only (PIMPL unique_ptr). The copy was already IMPLICITLY deleted
   // (move ctor declared); we make it EXPLICIT for intent. No API change (the copy was
@@ -338,7 +334,7 @@ class AmrSystem {
   /// -fvisibility=hidden (pybind11), the module would not export it without this annotation and the dlopen
   /// of the loader would fail. Symmetric with the POPS_EXPORT methods of System (grid_context/install_block).
   POPS_EXPORT void set_compiled_block(
-      int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
+      int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder<Dim> runtime_builder,
       const std::string& name = std::string(), bool recon_prim = false,
       const std::string& time = "euler", int stride = 1,
       const std::vector<std::string>& implicit_vars = {},
@@ -358,7 +354,7 @@ class AmrSystem {
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
   /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
-  /// model-aware physical-law plan; they never restore component-wise BCRec transport semantics.
+  /// model-aware physical-law plan; they never restore a legacy component-wise translation.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
       const std::vector<std::string>& face_types, const std::vector<double>& face_values,
@@ -610,7 +606,7 @@ class AmrSystem {
       const std::string& kernel, int order, const std::vector<int>& ghost_depth, int dimension,
       int refinement_ratio);
   void register_bootstrap_array(const std::string& subject, const std::string& centering, int ncomp,
-                                int ny, int nx, const std::vector<double>& values);
+                                Extent<Dim> shape, const std::vector<double>& values);
   void register_bootstrap_face_vector(const std::vector<std::string>& subjects);
   void bind_bootstrap_block_subject(const std::string& subject, const std::string& block);
   void register_analytic_constant(const std::string& subject, const std::string& block,
@@ -631,7 +627,8 @@ class AmrSystem {
   void synchronize_bootstrap_state(const std::string& subject, int fine_level);
   std::vector<double> bootstrap_array_level(const std::string& subject, int level) const;
   void invalidate_bootstrap_cache(const std::string& subject, int level);
-  std::vector<PatchBox> rebuild_bootstrap_topology_cache(const std::string& subject, int level);
+  std::vector<AmrPatch<Dim>> rebuild_bootstrap_topology_cache(const std::string& subject,
+                                                              int level);
   std::uint64_t bootstrap_cache_epoch(const std::string& subject) const;
 
   /// Sets the magnetic field B_z(x, y) of the coarse level (ny*nx row-major), required by the Schur-condensed
@@ -677,8 +674,9 @@ class AmrSystem {
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
   /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws if the system is already
   /// built or the block is unknown.
-  POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
-                                            std::function<void(const MultiFab&, MultiFab&)> rhs);
+  POPS_EXPORT void set_block_elliptic_field(
+      const std::string& block_name, const std::string& field,
+      std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
   /// Solved potential of named @p field on the COARSE level, ny*nx row-major (read-back). Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
@@ -693,10 +691,11 @@ class AmrSystem {
   std::vector<double> field_potential_level_global(const std::string& provider_slot, int level);
   /// Exact rank-local valid-cell pieces for one qualified field provider.  The returned metadata
   /// explicitly marks replicated level-zero ownership so output modes never infer it from box counts.
-  std::vector<OutputPiece<2>> output_field_local_pieces(const std::string& provider_slot,
-                                                        int level);
-  std::vector<OutputPiece<2>> output_field_root_pieces(const ObserverMpiLane& lane,
-                                                       const std::string& provider_slot, int level);
+  std::vector<OutputPiece<Dim>> output_field_local_pieces(const std::string& provider_slot,
+                                                          int level);
+  std::vector<OutputPiece<Dim>> output_field_root_pieces(const ObserverMpiLane& lane,
+                                                         const std::string& provider_slot,
+                                                         int level);
   /// Transaction bracket used by the accepted-state reader after complete payload preflight. Every
   /// hierarchy,
   /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
@@ -922,7 +921,7 @@ class AmrSystem {
   /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr
   /// receives a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen
   /// boundary.
-  POPS_EXPORT AmrRuntime* engine() const;
+  POPS_EXPORT runtime::amr::AmrRuntime<Dim>* engine() const;
   /// Compatibility inspection seam. Once built, every resolved AMR system uses AmrRuntime, so this
   /// returns true; before build engine() remains null. POPS_EXPORT for dlopen-boundary parity.
   POPS_EXPORT bool uses_runtime_engine() const;
@@ -961,8 +960,7 @@ class AmrSystem {
   /// @}
   /// @}
 
-  int nx() const;
-  int ny() const;  ///< Coarse y-axis cell count.
+  Extent<Dim> spatial_shape() const;
   /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   /// ACCEPTED macro-step counter (0-indexed; incremented by step / advance / step_cfl), parity with
@@ -1000,7 +998,7 @@ class AmrSystem {
   /// Structured report of effective numerical, solver and physical options currently configured.
   EffectiveOptionsReport effective_options_report() const;
   int n_patches();  ///< number of current fine patches (of the shared hierarchy)
-  /// Index-space signatures of the current fine patches: one PatchBox (level, ilo, jlo, ihi, jhi) per
+  /// Index-space signatures of the current fine patches: one AmrPatch<Dim> (level, ilo, jlo, ihi, jhi) per
   /// fine box, for ALL fine levels (level >= 1). INCLUSIVE corners in the index space of the
   /// level (each base-axis count shifted by ``level``, ratio 2). SAME source as n_patches()
   /// (the GLOBAL fine
@@ -1008,7 +1006,7 @@ class AmrSystem {
   /// QUERY (between steps): read-only of the already-stored boxes, NO hot-path cost. The
   /// conversion to exact physical x/y bounds is done on the Python side. Forces the lazy
   /// build (ensure_built) like n_patches()/mass()/density().
-  std::vector<PatchBox> patch_boxes();
+  std::vector<AmrPatch<Dim>> patch_boxes();
   /// COARSE-level (base) box counts, MPI ownership diagnostic (ADC-319). coarse_local_boxes() = number
   /// of base boxes OWNED by this rank (level-0 MultiFab local_size()); coarse_total_boxes() = total base
   /// boxes across all ranks (BoxArray size, identical on every rank). With distribute_coarse=true the
@@ -1044,19 +1042,20 @@ class AmrSystem {
   void set_level_potential(int k, const std::vector<double>& p);  ///< restores phi of level @p k
   /// Imposes the SAVED fine hierarchy (at restart) instead of Berger-Rigoutsos clustering: @p boxes
   /// are the patch_boxes() signatures of the checkpoint. Serial convenience over rebuild_hierarchy.
-  void set_hierarchy(const std::vector<PatchBox>& boxes);
+  void set_hierarchy(const std::vector<AmrPatch<Dim>>& boxes);
 
   /// Impose a mid-run hierarchy from a v3 checkpoint (ADC-542): @p boxes are ALL the
   /// checkpoint patch boxes (level tagged, level 0 implicit), @p owner_ranks the per-box owner rank
   /// aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid
   /// R6/R7). The v3 restart calls this so restartable=True works under ACTIVE regridding.
-  void rebuild_hierarchy(const std::vector<PatchBox>& boxes, const std::vector<int>& owner_ranks);
+  void rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
+                         const std::vector<int>& owner_ranks);
 
   /// Re-evaluate ownership for the exact recorded fine-level boxes under the load-balance authority
   /// prepared at bind. This is a collective, non-mutating restart seam: geometry and box ordering
   /// stay unchanged while the returned owner list is aligned with @p boxes for the current
   /// communicator size.
-  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<PatchBox>& boxes);
+  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<AmrPatch<Dim>>& boxes);
 
   /// Merge exact source-rank Program images and return this rank's image under the current
   /// communicator ownership. Both ownership tables are indexed [level][global patch].
@@ -1079,11 +1078,11 @@ class AmrSystem {
   /// Unified scientific-output state accessor. Unlike the checkpoint names above, this routes an
   /// exactly named block through the shared runtime and returns compact native valid-cell pieces
   /// without allocating a global level buffer.
-  std::vector<OutputPiece<2>> output_state_local_pieces(const std::string& name, int k);
-  std::vector<PatchBox> output_geometry_boxes();
-  std::vector<OutputPiece<2>> output_state_root_pieces(const ObserverMpiLane& lane,
-                                                       const std::string& name, int k);
-  /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
+  std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int k);
+  std::vector<AmrPatch<Dim>> output_geometry_boxes();
+  std::vector<OutputPiece<Dim>> output_state_root_pieces(const ObserverMpiLane& lane,
+                                                         const std::string& name, int k);
+  /// Owner rank per box of level @p k (the shared ranked ownership plan), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order.
   std::vector<int> level_owner_ranks(int k);

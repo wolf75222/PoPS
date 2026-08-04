@@ -228,9 +228,9 @@ struct EffectiveEbOptions {
   double cut_theta_min = static_cast<double>(kEbCutFractionFloor);
 };
 
-struct EffectiveCartesianTopology {
-  bool periodic_x = false;
-  bool periodic_y = false;
+struct EffectiveSpatialTopology {
+  int dimension = 0;
+  std::vector<bool> periodicity;
 };
 
 struct EffectiveOptionsReport {
@@ -238,7 +238,7 @@ struct EffectiveOptionsReport {
   std::string runtime;
   std::vector<EffectiveBlockOptions> blocks;
   EffectivePoissonOptions poisson;
-  EffectiveCartesianTopology topology;
+  EffectiveSpatialTopology topology;
   bool has_amr = false;
   EffectiveRefinementOptions amr_refinement;
   EffectiveEbOptions eb;  ///< ADC-615: effective cut-cell / EB thresholds.
