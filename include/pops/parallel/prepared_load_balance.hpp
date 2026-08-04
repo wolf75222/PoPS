@@ -5,6 +5,7 @@
 
 #include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/load_balance.hpp>
 #include <pops/parallel/ownership_plan.hpp>
 
@@ -34,16 +35,48 @@ using PreparedLoadBalanceProvider = PreparedProvider<parallel::OwnershipPlan<Dim
     const mesh::BoxArray<Dim>&, const mesh::RankSpace<Dim>&, parallel::LoadBalancePreparationBudget,
     LoadBalanceWeights)>;
 
+template <int Dim>
+class PreparedLoadBalanceAuthority;
+
 /// Authenticated result retained by hierarchy planning and later installation transactions.
 template <int Dim>
-struct PreparedLoadBalanceResult {
+class PreparedLoadBalanceResult {
   static_assert(Dim >= 1 && Dim <= 3,
                 "PreparedLoadBalanceResult only supports dimensions 1, 2, and 3");
 
-  parallel::OwnershipPlan<Dim> plan;
-  std::string collective_contract;
-  std::string source_contract;
-  std::string exact_contract;
+ public:
+  PreparedLoadBalanceResult(const PreparedLoadBalanceResult&) = default;
+  PreparedLoadBalanceResult(PreparedLoadBalanceResult&&) noexcept = default;
+  PreparedLoadBalanceResult& operator=(const PreparedLoadBalanceResult&) = delete;
+  PreparedLoadBalanceResult& operator=(PreparedLoadBalanceResult&&) = delete;
+
+  [[nodiscard]] const parallel::OwnershipPlan<Dim>& plan() const noexcept { return plan_; }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
+  }
+  [[nodiscard]] std::string_view collective_context_contract() const noexcept {
+    return collective_context_contract_;
+  }
+  [[nodiscard]] std::string_view source_contract() const noexcept { return source_contract_; }
+  [[nodiscard]] std::string_view exact_contract() const noexcept { return exact_contract_; }
+
+ private:
+  friend class PreparedLoadBalanceAuthority<Dim>;
+
+  PreparedLoadBalanceResult(parallel::OwnershipPlan<Dim> plan, std::string collective_contract,
+                            std::string collective_context_contract, std::string source_contract,
+                            std::string exact_contract)
+      : plan_(std::move(plan)),
+        collective_contract_(std::move(collective_contract)),
+        collective_context_contract_(std::move(collective_context_contract)),
+        source_contract_(std::move(source_contract)),
+        exact_contract_(std::move(exact_contract)) {}
+
+  parallel::OwnershipPlan<Dim> plan_;
+  std::string collective_contract_;
+  std::string collective_context_contract_;
+  std::string source_contract_;
+  std::string exact_contract_;
 };
 
 /// Measured, topology-qualified resource cost for one AMR patch.
@@ -85,28 +118,59 @@ enum class RebalanceReason : std::uint8_t {
 namespace detail {
 
 template <int Dim>
-inline std::string exact_load_balance_collective(std::string_view semantic_identity,
-                                                 std::string_view provider_collective_contract) {
+inline std::string exact_load_balance_collective(
+    std::string_view semantic_identity, std::string_view provider_collective_contract,
+    const std::optional<RebalancePolicy>& default_rebalance_policy) {
   ExactContractBuilder contract;
   contract.text("pops.prepared-load-balance-collective")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(static_cast<std::uint32_t>(Dim))
       .text(semantic_identity)
-      .bytes(provider_collective_contract);
+      .bytes(provider_collective_contract)
+      .scalar(static_cast<std::uint8_t>(default_rebalance_policy.has_value() ? 1 : 0));
+  if (default_rebalance_policy) {
+    contract.scalar(default_rebalance_policy->minimum_improvement_ppm)
+        .scalar(default_rebalance_policy->amortization_steps)
+        .scalar(default_rebalance_policy->migration_bandwidth_bytes_per_second)
+        .scalar(default_rebalance_policy->per_patch_migration_latency_nanoseconds);
+  }
+  return std::move(contract).release();
+}
+
+inline std::string exact_load_balance_collective_context(const ExecutionLane& lane) {
+  if (lane.identity().empty())
+    throw std::invalid_argument("prepared load-balance execution lane identity is empty");
+#ifdef POPS_HAS_MPI
+  if (!lane.active())
+    throw std::invalid_argument("prepared load-balance execution lane is inactive");
+#endif
+  const int communicator_size = lane.size();
+  if (communicator_size <= 0)
+    throw std::invalid_argument("prepared load-balance execution lane has no ranks");
+
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-load-balance-collective-context")
+      .scalar(std::uint32_t{1})
+      .text(lane.identity())
+      .scalar(static_cast<std::uint64_t>(communicator_size))
+      .scalar(static_cast<std::uint8_t>(lane.owns_communicator() ? 1 : 0))
+      .text("process-world-rank-order");
   return std::move(contract).release();
 }
 
 template <int Dim>
 inline std::string exact_load_balance_source(std::string_view collective_contract,
+                                             std::string_view collective_context_contract,
                                              const mesh::BoxArray<Dim>& patches,
                                              const mesh::RankSpace<Dim>& rank_space,
                                              parallel::LoadBalancePreparationBudget budget,
                                              LoadBalanceWeights weights) {
   ExactContractBuilder contract;
   contract.text("pops.prepared-load-balance-source")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(static_cast<std::uint32_t>(Dim))
       .bytes(collective_contract)
+      .bytes(collective_context_contract)
       .scalar(static_cast<std::uint64_t>(budget.patches))
       .scalar(static_cast<std::uint64_t>(budget.ranks))
       .scalar(budget.total_weight)
@@ -224,7 +288,7 @@ inline std::string exact_load_balance_result(std::string_view source_contract,
   const auto& distribution = plan.distribution();
   ExactContractBuilder contract;
   contract.text("pops.prepared-load-balance-result")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(static_cast<std::uint32_t>(Dim))
       .bytes(source_contract)
       .scalar(static_cast<std::uint8_t>(plan.strategy()))
@@ -422,8 +486,6 @@ class PreparedLoadBalanceAuthority {
       std::optional<RebalancePolicy> default_rebalance_policy = std::nullopt)
       : semantic_identity_(std::move(semantic_identity)),
         provider_(std::move(provider)),
-        collective_contract_(detail::exact_load_balance_collective<Dim>(
-            semantic_identity_, provider_.collective_contract())),
         default_rebalance_policy_(std::move(default_rebalance_policy)) {
     if (semantic_identity_.empty() || !provider_)
       throw std::invalid_argument("prepared load-balance authority is incomplete");
@@ -434,6 +496,8 @@ class PreparedLoadBalanceAuthority {
           policy.per_patch_migration_latency_nanoseconds < 0)
         throw std::invalid_argument("prepared load-balance default rebalance policy is invalid");
     }
+    collective_contract_ = detail::exact_load_balance_collective<Dim>(
+        semantic_identity_, provider_.collective_contract(), default_rebalance_policy_);
   }
 
   [[nodiscard]] const std::string& semantic_identity() const noexcept { return semantic_identity_; }
@@ -458,17 +522,23 @@ class PreparedLoadBalanceAuthority {
   [[nodiscard]] PreparedLoadBalanceResult<Dim> prepare(
       const mesh::BoxArray<Dim>& patches, const mesh::RankSpace<Dim>& rank_space,
       parallel::LoadBalancePreparationBudget budget, LoadBalanceWeights weights = {},
-      const CommunicatorView& communicator = world_communicator_view()) const {
+      const ExecutionLane& lane = ExecutionLane::world()) const {
+    const CommunicatorView communicator = lane.communicator();
+    std::string collective_context_contract;
     std::string source_contract;
     detail::collective_load_balance_preflight("prepared load-balance source", communicator, [&] {
       detail::validate_prepared_load_balance_request(patches, rank_space, budget, weights,
                                                      communicator.size());
-      source_contract = detail::exact_load_balance_source<Dim>(collective_contract_, patches,
-                                                               rank_space, budget, weights);
+      collective_context_contract = detail::exact_load_balance_collective_context(lane);
+      source_contract = detail::exact_load_balance_source<Dim>(
+          collective_contract_, collective_context_contract, patches, rank_space, budget, weights);
     });
 
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"collective", collective_contract_}, {"source", source_contract}}, communicator))
+            {{"collective", collective_contract_},
+             {"collective-context", collective_context_contract},
+             {"source", source_contract}},
+            communicator))
       throw std::invalid_argument(
           "prepared load-balance authority or source differs across MPI ranks");
 
@@ -485,18 +555,22 @@ class PreparedLoadBalanceAuthority {
       exact_contract = detail::exact_load_balance_result<Dim>(source_contract, *plan);
     });
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"collective", collective_contract_}, {"result", exact_contract}}, communicator))
+            {{"collective", collective_contract_},
+             {"collective-context", collective_context_contract},
+             {"result", exact_contract}},
+            communicator))
       throw std::invalid_argument(
           "prepared load-balance provider returned different plans across MPI ranks");
-    return PreparedLoadBalanceResult<Dim>{std::move(*plan), collective_contract_,
-                                          std::move(source_contract), std::move(exact_contract)};
+    return PreparedLoadBalanceResult<Dim>(std::move(*plan), collective_contract_,
+                                          std::move(collective_context_contract),
+                                          std::move(source_contract), std::move(exact_contract));
   }
 
  private:
   std::string semantic_identity_;
   PreparedLoadBalanceProvider<Dim> provider_;
-  std::string collective_contract_;
   std::optional<RebalancePolicy> default_rebalance_policy_;
+  std::string collective_contract_;
 };
 
 template <int Dim>

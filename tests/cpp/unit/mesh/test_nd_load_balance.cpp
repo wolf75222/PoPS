@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,6 +18,7 @@
 namespace {
 
 using pops::Box;
+using pops::ExecutionLane;
 using pops::Extent;
 using pops::Index;
 using pops::mesh::BoxArray;
@@ -137,6 +139,15 @@ struct LegacyTwoDimensionalProvider {
 static_assert(std::is_copy_constructible_v<PreparedLoadBalanceProvider<1>>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedLoadBalanceProvider<2>>);
 static_assert(std::is_copy_constructible_v<PreparedLoadBalanceAuthority<3>>);
+static_assert(!std::is_aggregate_v<PreparedLoadBalanceResult<1>>);
+static_assert(!std::is_default_constructible_v<PreparedLoadBalanceResult<2>>);
+static_assert(!std::is_copy_assignable_v<PreparedLoadBalanceResult<2>>);
+static_assert(!std::is_move_assignable_v<PreparedLoadBalanceResult<2>>);
+static_assert(std::is_same_v<decltype(std::declval<const PreparedLoadBalanceResult<3>&>().plan()),
+                             const pops::parallel::OwnershipPlan<3>&>);
+static_assert(
+    !std::is_constructible_v<PreparedLoadBalanceResult<2>, pops::parallel::OwnershipPlan<2>,
+                             std::string, std::string, std::string, std::string>);
 static_assert(
     !std::is_constructible_v<PreparedLoadBalanceProvider<1>, LegacyTwoDimensionalProvider>);
 static_assert(
@@ -329,27 +340,88 @@ TEST(test_nd_load_balance, prepared_authority_retains_authenticated_plans_in_eve
   const auto round_robin = round_robin_authority.prepare(
       prepared_point_patches<2>(), one_rank_space<2>(), budget(), expected_weights);
 
-  EXPECT_EQ(one.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
-  EXPECT_EQ(two.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
-  EXPECT_EQ(three.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
-  EXPECT_EQ(one.plan.weights(), expected_weights);
-  EXPECT_EQ(two.plan.weights(), expected_weights);
-  EXPECT_EQ(three.plan.weights(), expected_weights);
-  EXPECT_EQ(one.plan.distribution().rank_space(), one_rank_space<1>());
-  EXPECT_EQ(two.plan.distribution().rank_space(), one_rank_space<2>());
-  EXPECT_EQ(three.plan.distribution().rank_space(), one_rank_space<3>());
-  EXPECT_FALSE(one.collective_contract.empty());
-  EXPECT_FALSE(one.source_contract.empty());
-  EXPECT_FALSE(one.exact_contract.empty());
+  EXPECT_EQ(one.plan().strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(two.plan().strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(three.plan().strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(one.plan().weights(), expected_weights);
+  EXPECT_EQ(two.plan().weights(), expected_weights);
+  EXPECT_EQ(three.plan().weights(), expected_weights);
+  EXPECT_EQ(one.plan().distribution().rank_space(), one_rank_space<1>());
+  EXPECT_EQ(two.plan().distribution().rank_space(), one_rank_space<2>());
+  EXPECT_EQ(three.plan().distribution().rank_space(), one_rank_space<3>());
+  EXPECT_FALSE(one.collective_contract().empty());
+  EXPECT_FALSE(one.collective_context_contract().empty());
+  EXPECT_FALSE(one.source_contract().empty());
+  EXPECT_FALSE(one.exact_contract().empty());
 
-  EXPECT_NE(one.collective_contract, two.collective_contract);
-  EXPECT_NE(two.collective_contract, three.collective_contract);
-  EXPECT_NE(one.source_contract, two.source_contract);
-  EXPECT_NE(two.source_contract, three.source_contract);
-  EXPECT_NE(one.exact_contract, two.exact_contract);
-  EXPECT_NE(two.exact_contract, three.exact_contract);
-  EXPECT_NE(two.collective_contract, round_robin.collective_contract);
-  EXPECT_NE(two.exact_contract, round_robin.exact_contract);
+  EXPECT_NE(one.collective_contract(), two.collective_contract());
+  EXPECT_NE(two.collective_contract(), three.collective_contract());
+  EXPECT_NE(one.source_contract(), two.source_contract());
+  EXPECT_NE(two.source_contract(), three.source_contract());
+  EXPECT_NE(one.exact_contract(), two.exact_contract());
+  EXPECT_NE(two.exact_contract(), three.exact_contract());
+  EXPECT_NE(two.collective_contract(), round_robin.collective_contract());
+  EXPECT_NE(two.exact_contract(), round_robin.exact_contract());
+}
+
+TEST(test_nd_load_balance, default_rebalance_policy_is_part_of_the_exact_collective_identity) {
+  const auto collective_for = [](std::optional<pops::RebalancePolicy> policy) {
+    const PreparedLoadBalanceAuthority<2> authority(
+        "test.nd.policy-identity",
+        PreparedLoadBalanceProvider<2>(ExplicitGenericRoundRobin{nullptr}), std::move(policy));
+    return std::string(authority.collective_contract());
+  };
+
+  const pops::RebalancePolicy reference{
+      .minimum_improvement_ppm = 125'000,
+      .amortization_steps = 40,
+      .migration_bandwidth_bytes_per_second = 25'000'000'000,
+      .per_patch_migration_latency_nanoseconds = 2'500,
+  };
+  pops::RebalancePolicy changed_improvement = reference;
+  ++changed_improvement.minimum_improvement_ppm;
+  pops::RebalancePolicy changed_steps = reference;
+  ++changed_steps.amortization_steps;
+  pops::RebalancePolicy changed_bandwidth = reference;
+  ++changed_bandwidth.migration_bandwidth_bytes_per_second;
+  pops::RebalancePolicy changed_latency = reference;
+  ++changed_latency.per_patch_migration_latency_nanoseconds;
+
+  const std::string exact = collective_for(reference);
+  EXPECT_EQ(exact, collective_for(reference));
+  EXPECT_NE(exact, collective_for(std::nullopt));
+  EXPECT_NE(exact, collective_for(changed_improvement));
+  EXPECT_NE(exact, collective_for(changed_steps));
+  EXPECT_NE(exact, collective_for(changed_bandwidth));
+  EXPECT_NE(exact, collective_for(changed_latency));
+}
+
+TEST(test_nd_load_balance, prepared_result_is_bound_to_a_stable_execution_lane_identity) {
+  int invocations = 0;
+  const PreparedLoadBalanceAuthority<2> authority(
+      "test.nd.collective-context",
+      PreparedLoadBalanceProvider<2>(ExplicitGenericRoundRobin{&invocations}));
+  const auto first_lane = ExecutionLane::world("test.nd.collective-context/first");
+  const auto same_lane_identity = ExecutionLane::world("test.nd.collective-context/first");
+  const auto second_lane = ExecutionLane::world("test.nd.collective-context/second");
+  const std::vector<std::int64_t> weights{8, 5, 3};
+
+  const auto first = authority.prepare(prepared_point_patches<2>(), one_rank_space<2>(), budget(),
+                                       weights, first_lane);
+  const auto same = authority.prepare(prepared_point_patches<2>(), one_rank_space<2>(), budget(),
+                                      weights, same_lane_identity);
+  const auto second = authority.prepare(prepared_point_patches<2>(), one_rank_space<2>(), budget(),
+                                        weights, second_lane);
+
+  EXPECT_EQ(invocations, 3);
+  EXPECT_EQ(first.collective_contract(), same.collective_contract());
+  EXPECT_EQ(first.collective_context_contract(), same.collective_context_contract());
+  EXPECT_EQ(first.source_contract(), same.source_contract());
+  EXPECT_EQ(first.exact_contract(), same.exact_contract());
+  EXPECT_EQ(first.collective_contract(), second.collective_contract());
+  EXPECT_NE(first.collective_context_contract(), second.collective_context_contract());
+  EXPECT_NE(first.source_contract(), second.source_contract());
+  EXPECT_NE(first.exact_contract(), second.exact_contract());
 }
 
 TEST(test_nd_load_balance, prepared_source_authenticates_rank_shape_origin_budget_and_weights) {
@@ -363,22 +435,32 @@ TEST(test_nd_load_balance, prepared_source_authenticates_rank_shape_origin_budge
   const std::vector<std::int64_t> second_weights{3, 4, 6};
   const BoxArray<2> shifted_patches = prepared_point_patches<2>(-6);
   const std::string collective = pops::detail::exact_load_balance_collective<2>(
-      "test.nd.contract", "test.nd.provider-contract");
+      "test.nd.contract", "test.nd.provider-contract", std::nullopt);
   const std::string other_collective = pops::detail::exact_load_balance_collective<2>(
-      "test.nd.contract", "test.nd.other-provider-contract");
+      "test.nd.contract", "test.nd.other-provider-contract", std::nullopt);
+  const std::string collective_context = "test.nd.collective-context";
+  const std::string other_collective_context = "test.nd.other-collective-context";
 
   const std::string reference = pops::detail::exact_load_balance_source<2>(
-      collective, patches, x_major, first_budget, first_weights);
-  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, y_major,
+      collective, collective_context, patches, x_major, first_budget, first_weights);
+  EXPECT_NE(reference,
+            pops::detail::exact_load_balance_source<2>(collective, collective_context, patches,
+                                                       y_major, first_budget, first_weights));
+  EXPECT_NE(reference,
+            pops::detail::exact_load_balance_source<2>(collective, collective_context, patches,
+                                                       shifted, first_budget, first_weights));
+  EXPECT_NE(reference,
+            pops::detail::exact_load_balance_source<2>(collective, collective_context, patches,
+                                                       x_major, second_budget, first_weights));
+  EXPECT_NE(reference,
+            pops::detail::exact_load_balance_source<2>(collective, collective_context, patches,
+                                                       x_major, first_budget, second_weights));
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, collective_context,
+                                                                  shifted_patches, x_major,
                                                                   first_budget, first_weights));
-  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, shifted,
-                                                                  first_budget, first_weights));
-  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, x_major,
-                                                                  second_budget, first_weights));
-  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, x_major,
-                                                                  first_budget, second_weights));
   EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(
-                           collective, shifted_patches, x_major, first_budget, first_weights));
+                           collective, other_collective_context, patches, x_major, first_budget,
+                           first_weights));
   EXPECT_NE(collective, other_collective);
 }
 
@@ -393,9 +475,9 @@ TEST(test_nd_load_balance, explicit_generic_provider_is_invoked_once_without_a_l
       authority.prepare(prepared_point_patches<3>(), one_rank_space<3>(), budget(), weights);
 
   EXPECT_EQ(invocations, 1);
-  EXPECT_EQ(result.plan.strategy(), LoadBalanceStrategy::round_robin);
-  EXPECT_EQ(result.plan.weights(), weights);
-  EXPECT_EQ(result.plan.distribution().rank_space(), one_rank_space<3>());
+  EXPECT_EQ(result.plan().strategy(), LoadBalanceStrategy::round_robin);
+  EXPECT_EQ(result.plan().weights(), weights);
+  EXPECT_EQ(result.plan().distribution().rank_space(), one_rank_space<3>());
 }
 
 TEST(test_nd_load_balance, prepared_authority_rejects_a_plan_materialized_from_another_source) {
