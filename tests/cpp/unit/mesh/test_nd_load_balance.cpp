@@ -1,13 +1,16 @@
 #include <gtest/gtest.h>
 
 #include <pops/amr/hierarchy/nd/level_layout.hpp>
-#include <pops/parallel/nd/load_balance_provider.hpp>
+#include <pops/parallel/load_balance.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,9 +21,12 @@ using pops::Extent;
 using pops::Index;
 using pops::mesh::BoxArray;
 using pops::mesh::RankSpace;
-using pops::parallel::nd::LoadBalancePreparationBudget;
-using pops::parallel::nd::LoadBalanceProvider;
-using pops::parallel::nd::LoadBalanceStrategy;
+using pops::PreparedLoadBalanceAuthority;
+using pops::PreparedLoadBalanceProvider;
+using pops::PreparedLoadBalanceResult;
+using pops::parallel::LoadBalancePreparationBudget;
+using pops::parallel::LoadBalanceProvider;
+using pops::parallel::LoadBalanceStrategy;
 
 constexpr LoadBalancePreparationBudget budget() {
   return {128, 64, std::numeric_limits<std::int64_t>::max()};
@@ -40,6 +46,103 @@ std::vector<std::size_t> reconstructed_linear_owners(
     result.push_back(distribution.rank_space().linear_rank(owner));
   return result;
 }
+
+template <int Dim>
+BoxArray<Dim> prepared_point_patches(int seed = -7) {
+  std::vector<Box<Dim>> patches;
+  for (int patch = 0; patch < 3; ++patch) {
+    Index<Dim> coordinate{};
+    for (int axis = 0; axis < Dim; ++axis)
+      coordinate[axis] = seed + patch * (axis + 1);
+    patches.push_back(point_box(coordinate));
+  }
+  return BoxArray<Dim>(std::move(patches));
+}
+
+template <int Dim>
+RankSpace<Dim> one_rank_space(int seed = 5) {
+  Index<Dim> origin{};
+  Extent<Dim> extent{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    origin[axis] = seed + axis * 3;
+    extent[axis] = 1;
+  }
+  return RankSpace<Dim>(origin, extent);
+}
+
+template <int Dim>
+PreparedLoadBalanceResult<Dim> prepare_builtin_sfc() {
+  const auto authority = pops::prepare_load_balance_authority<Dim>(
+      "space_filling_curve", "test.nd.prepared-sfc",
+      pops::PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}});
+  const std::vector<std::int64_t> weights{9, 4, 2};
+  return authority.prepare(prepared_point_patches<Dim>(), one_rank_space<Dim>(), budget(), weights);
+}
+
+struct ExplicitGenericRoundRobin {
+  int* invocations = nullptr;
+
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.load_balance.explicit_generic_round_robin", 1};
+  }
+
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.text("explicit-generic-round-robin").scalar(std::uint32_t{1});
+  }
+
+  template <int Dim>
+  pops::parallel::OwnershipPlan<Dim> operator()(const BoxArray<Dim>& patches,
+                                                const RankSpace<Dim>& rank_space,
+                                                LoadBalancePreparationBudget preparation_budget,
+                                                pops::LoadBalanceWeights weights) const {
+    ++*invocations;
+    return LoadBalanceProvider<Dim>::round_robin().prepare(patches, rank_space, preparation_budget,
+                                                           weights);
+  }
+};
+
+struct WrongSourceGenericProvider {
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.load_balance.wrong_source_generic", 1};
+  }
+
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.text("wrong-source-generic").scalar(std::uint32_t{1});
+  }
+
+  template <int Dim>
+  pops::parallel::OwnershipPlan<Dim> operator()(const BoxArray<Dim>& patches,
+                                                const RankSpace<Dim>& rank_space,
+                                                LoadBalancePreparationBudget preparation_budget,
+                                                pops::LoadBalanceWeights weights) const {
+    std::vector<Box<Dim>> changed = patches.boxes();
+    changed.front().lo[0] += 100;
+    changed.front().hi[0] += 100;
+    return LoadBalanceProvider<Dim>::round_robin().prepare(BoxArray<Dim>(std::move(changed)),
+                                                           rank_space, preparation_budget, weights);
+  }
+};
+
+struct LegacyTwoDimensionalProvider {
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.load_balance.legacy_two_dimensional", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder&) const {}
+  std::vector<int> operator()(const std::vector<Box<2>>& boxes, int ranks,
+                              pops::LoadBalanceWeights) const {
+    return std::vector<int>(boxes.size(), ranks - 1);
+  }
+};
+
+static_assert(std::is_copy_constructible_v<PreparedLoadBalanceProvider<1>>);
+static_assert(std::is_nothrow_move_constructible_v<PreparedLoadBalanceProvider<2>>);
+static_assert(std::is_copy_constructible_v<PreparedLoadBalanceAuthority<3>>);
+static_assert(
+    !std::is_constructible_v<PreparedLoadBalanceProvider<1>, LegacyTwoDimensionalProvider>);
+static_assert(
+    !std::is_constructible_v<PreparedLoadBalanceProvider<2>, LegacyTwoDimensionalProvider>);
+static_assert(
+    !std::is_constructible_v<PreparedLoadBalanceProvider<3>, LegacyTwoDimensionalProvider>);
 
 }  // namespace
 
@@ -203,8 +306,9 @@ TEST(test_nd_load_balance, produced_distribution_constructs_a_level_layout_witho
   const Box<2> domain{Index<2>{-2, 4}, Index<2>{1, 7}};
   const auto patches = BoxArray<2>::from_domain(domain, std::array<int, 2>{2, 2});
   const RankSpace<2> ranks(Index<2>{3, -1}, Extent<2>{2, 1});
-  const auto distribution =
-      LoadBalanceProvider<2>::space_filling_curve().distribute(patches, ranks, budget());
+  const auto ownership =
+      LoadBalanceProvider<2>::space_filling_curve().prepare(patches, ranks, budget());
+  const auto& distribution = ownership.distribution();
 
   const pops::amr::hierarchy::nd::LevelLayout<2> level(
       0, domain, patches, distribution, pops::amr::hierarchy::nd::RefinementRatio<2>{1, 1},
@@ -212,4 +316,103 @@ TEST(test_nd_load_balance, produced_distribution_constructs_a_level_layout_witho
                                            patches.size() * (patches.size() - 1) / 2});
   EXPECT_EQ(level.distribution(), distribution);
   EXPECT_EQ(level.exact_identity().owners, distribution.owners());
+}
+
+TEST(test_nd_load_balance, prepared_authority_retains_authenticated_plans_in_every_dimension) {
+  const auto one = prepare_builtin_sfc<1>();
+  const auto two = prepare_builtin_sfc<2>();
+  const auto three = prepare_builtin_sfc<3>();
+  const std::vector<std::int64_t> expected_weights{9, 4, 2};
+  const auto round_robin_authority = pops::prepare_load_balance_authority<2>(
+      "round_robin", "test.nd.prepared-sfc",
+      pops::PreparedProviderOptions{"pops.amr.load-balance.round-robin@1", {}});
+  const auto round_robin = round_robin_authority.prepare(
+      prepared_point_patches<2>(), one_rank_space<2>(), budget(), expected_weights);
+
+  EXPECT_EQ(one.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(two.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(three.plan.strategy(), LoadBalanceStrategy::space_filling_curve);
+  EXPECT_EQ(one.plan.weights(), expected_weights);
+  EXPECT_EQ(two.plan.weights(), expected_weights);
+  EXPECT_EQ(three.plan.weights(), expected_weights);
+  EXPECT_EQ(one.plan.distribution().rank_space(), one_rank_space<1>());
+  EXPECT_EQ(two.plan.distribution().rank_space(), one_rank_space<2>());
+  EXPECT_EQ(three.plan.distribution().rank_space(), one_rank_space<3>());
+  EXPECT_FALSE(one.collective_contract.empty());
+  EXPECT_FALSE(one.source_contract.empty());
+  EXPECT_FALSE(one.exact_contract.empty());
+
+  EXPECT_NE(one.collective_contract, two.collective_contract);
+  EXPECT_NE(two.collective_contract, three.collective_contract);
+  EXPECT_NE(one.source_contract, two.source_contract);
+  EXPECT_NE(two.source_contract, three.source_contract);
+  EXPECT_NE(one.exact_contract, two.exact_contract);
+  EXPECT_NE(two.exact_contract, three.exact_contract);
+  EXPECT_NE(two.collective_contract, round_robin.collective_contract);
+  EXPECT_NE(two.exact_contract, round_robin.exact_contract);
+}
+
+TEST(test_nd_load_balance, prepared_source_authenticates_rank_shape_origin_budget_and_weights) {
+  const BoxArray<2> patches = prepared_point_patches<2>();
+  const RankSpace<2> x_major(Index<2>{4, -9}, Extent<2>{2, 1});
+  const RankSpace<2> y_major(Index<2>{4, -9}, Extent<2>{1, 2});
+  const RankSpace<2> shifted(Index<2>{5, -9}, Extent<2>{2, 1});
+  const LoadBalancePreparationBudget first_budget{8, 2, 100};
+  const LoadBalancePreparationBudget second_budget{9, 2, 100};
+  const std::vector<std::int64_t> first_weights{3, 4, 5};
+  const std::vector<std::int64_t> second_weights{3, 4, 6};
+  const BoxArray<2> shifted_patches = prepared_point_patches<2>(-6);
+  const std::string collective = pops::detail::exact_load_balance_collective<2>(
+      "test.nd.contract", "test.nd.provider-contract");
+  const std::string other_collective = pops::detail::exact_load_balance_collective<2>(
+      "test.nd.contract", "test.nd.other-provider-contract");
+
+  const std::string reference = pops::detail::exact_load_balance_source<2>(
+      collective, patches, x_major, first_budget, first_weights);
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, y_major,
+                                                                  first_budget, first_weights));
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, shifted,
+                                                                  first_budget, first_weights));
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, x_major,
+                                                                  second_budget, first_weights));
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(collective, patches, x_major,
+                                                                  first_budget, second_weights));
+  EXPECT_NE(reference, pops::detail::exact_load_balance_source<2>(
+                           collective, shifted_patches, x_major, first_budget, first_weights));
+  EXPECT_NE(collective, other_collective);
+}
+
+TEST(test_nd_load_balance, explicit_generic_provider_is_invoked_once_without_a_legacy_fallback) {
+  int invocations = 0;
+  const PreparedLoadBalanceAuthority<3> authority(
+      "test.nd.explicit-generic",
+      PreparedLoadBalanceProvider<3>(ExplicitGenericRoundRobin{&invocations}));
+  const std::vector<std::int64_t> weights{8, 5, 3};
+
+  const auto result =
+      authority.prepare(prepared_point_patches<3>(), one_rank_space<3>(), budget(), weights);
+
+  EXPECT_EQ(invocations, 1);
+  EXPECT_EQ(result.plan.strategy(), LoadBalanceStrategy::round_robin);
+  EXPECT_EQ(result.plan.weights(), weights);
+  EXPECT_EQ(result.plan.distribution().rank_space(), one_rank_space<3>());
+}
+
+TEST(test_nd_load_balance, prepared_authority_rejects_a_plan_materialized_from_another_source) {
+  const PreparedLoadBalanceAuthority<1> authority(
+      "test.nd.wrong-source", PreparedLoadBalanceProvider<1>(WrongSourceGenericProvider{}));
+
+  EXPECT_THROW((void)authority.prepare(prepared_point_patches<1>(), one_rank_space<1>(), budget()),
+               std::invalid_argument);
+}
+
+TEST(test_nd_load_balance, unregistered_legacy_only_route_fails_closed_for_nd) {
+  EXPECT_THROW((void)pops::prepare_load_balance_authority<1>(
+                   "legacy_two_dimensional_only", "test.nd.no-legacy-fallback",
+                   pops::PreparedProviderOptions{"pops.test.load-balance.legacy@1", {}}),
+               std::invalid_argument);
+  EXPECT_THROW((void)pops::prepare_load_balance_authority<3>(
+                   "legacy_two_dimensional_only", "test.nd.no-legacy-fallback",
+                   pops::PreparedProviderOptions{"pops.test.load-balance.legacy@1", {}}),
+               std::invalid_argument);
 }
