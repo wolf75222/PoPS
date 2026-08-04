@@ -7,10 +7,12 @@
 
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,17 +48,19 @@ void append_double(std::string& bytes, double value) {
   append_u64(bytes, std::bit_cast<std::uint64_t>(value));
 }
 
-void append_layout(std::string& bytes, const BoxArray& boxes, const DistributionMapping& owners) {
-  append_i32(bytes, boxes.size());
-  for (const Box2D& box : boxes.boxes()) {
-    append_i32(bytes, box.lo[0]);
-    append_i32(bytes, box.lo[1]);
-    append_i32(bytes, box.hi[0]);
-    append_i32(bytes, box.hi[1]);
-  }
-  append_i32(bytes, owners.size());
-  for (const int owner : owners.ranks())
-    append_i32(bytes, owner);
+template <int Dim>
+void append_layout(std::string& bytes, const mesh::BoxArray<Dim>& boxes,
+                   const mesh::Distribution<Dim>& owners) {
+  append_u64(bytes, static_cast<std::uint64_t>(boxes.size()));
+  for (const Box<Dim>& box : boxes.boxes())
+    for (int axis = 0; axis < Dim; ++axis) {
+      append_i32(bytes, box.lo[axis]);
+      append_i32(bytes, box.hi[axis]);
+    }
+  append_u64(bytes, static_cast<std::uint64_t>(owners.owners().size()));
+  for (const Index<Dim>& owner : owners.owners())
+    for (int axis = 0; axis < Dim; ++axis)
+      append_i32(bytes, owner[axis]);
 }
 
 PopsExecutionContextV1 execution_view(const SystemLayoutTransferExecution& execution) noexcept {
@@ -83,10 +87,6 @@ CommunicatorView resolve_execution_communicator(const SystemLayoutTransferExecut
                                                 const CommunicatorView& field_rank_space) {
   const PopsExecutionContextV1 view = execution_view(execution);
   component::validate_execution_context(view);
-  if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
-      execution.memory_space != POPS_MEMORY_SPACE_MANAGED_V1)
-    throw std::invalid_argument(
-        "prepared System layout transfer requires host-addressable native field storage");
   if (execution.communicator_identity == "serial") {
     if (field_rank_space.active())
       throw std::invalid_argument(
@@ -142,40 +142,77 @@ void collectively_validate(const CommunicatorView& communicator, const char* whe
 
 int checked_index(std::int64_t value, const char* where) {
   if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
-    throw std::overflow_error(std::string(where) + " exceeds the native Box2D index range");
+    throw std::overflow_error(std::string(where) + " exceeds the native index range");
   return static_cast<int>(value);
 }
 
-BoxArray source_carrier_boxes(const BoxArray& target_boxes, const Box2D& source_domain,
-                              const Box2D& target_domain,
-                              const std::array<std::int32_t, 2>& ratio) {
-  const std::int64_t ratio_x = ratio[1];
-  const std::int64_t ratio_y = ratio[0];
-  std::vector<Box2D> boxes;
-  boxes.reserve(static_cast<std::size_t>(target_boxes.size()));
-  for (const Box2D& target : target_boxes.boxes()) {
-    const std::int64_t xlo =
-        source_domain.lo[0] +
-        (static_cast<std::int64_t>(target.lo[0]) - target_domain.lo[0]) * ratio_x;
-    const std::int64_t ylo =
-        source_domain.lo[1] +
-        (static_cast<std::int64_t>(target.lo[1]) - target_domain.lo[1]) * ratio_y;
-    const std::int64_t xhi =
-        source_domain.lo[0] +
-        (static_cast<std::int64_t>(target.hi[0]) - target_domain.lo[0] + 1) * ratio_x - 1;
-    const std::int64_t yhi =
-        source_domain.lo[1] +
-        (static_cast<std::int64_t>(target.hi[1]) - target_domain.lo[1] + 1) * ratio_y - 1;
-    boxes.push_back({{checked_index(xlo, "source carrier lower x"),
-                      checked_index(ylo, "source carrier lower y")},
-                     {checked_index(xhi, "source carrier upper x"),
-                      checked_index(yhi, "source carrier upper y")}});
+template <int Dim>
+mesh::BoxArray<Dim> source_carrier_boxes(const mesh::BoxArray<Dim>& target_boxes,
+                                         const Box<Dim>& source_domain,
+                                         const Box<Dim>& target_domain,
+                                         const std::array<std::int32_t, Dim>& ratio) {
+  std::vector<Box<Dim>> boxes;
+  boxes.reserve(target_boxes.size());
+  for (const Box<Dim>& target : target_boxes.boxes()) {
+    Box<Dim> source;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (ratio[static_cast<std::size_t>(axis)] <= 0)
+        throw std::invalid_argument("prepared System transfer ratios must be positive");
+      const std::int64_t axis_ratio = ratio[static_cast<std::size_t>(axis)];
+      source.lo[axis] = checked_index(
+          source_domain.lo[axis] +
+              (static_cast<std::int64_t>(target.lo[axis]) - target_domain.lo[axis]) * axis_ratio,
+          "source carrier lower bound");
+      source.hi[axis] = checked_index(
+          source_domain.lo[axis] +
+              (static_cast<std::int64_t>(target.hi[axis]) - target_domain.lo[axis] + 1) *
+                  axis_ratio -
+              1,
+          "source carrier upper bound");
+    }
+    boxes.push_back(source);
   }
-  return BoxArray(std::move(boxes));
+  return mesh::BoxArray<Dim>(std::move(boxes));
 }
 
-std::uint64_t checked_elements(const Box2D& box, int components) {
-  const std::int64_t cells = box.num_cells();
+template <int Dim>
+mesh::Distribution<Dim> rebind_distribution(const mesh::BoxArray<Dim>& layout,
+                                            const mesh::Distribution<Dim>& model) {
+  if (layout.size() != model.box_count())
+    throw std::invalid_argument(
+        "layout-transfer carrier and target ownership cardinalities differ");
+  if (model.replicated())
+    return mesh::Distribution<Dim>::replicated(layout, model.rank_space());
+  return mesh::Distribution<Dim>::partitioned(layout, model.rank_space(), model.owners());
+}
+
+inline std::size_t checked_product(std::size_t left, std::size_t right, const char* where) {
+  if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
+    throw std::length_error(where);
+  return left * right;
+}
+
+template <int Dim, class DestinationMemorySpace, class SourceMemorySpace>
+CopySchedule<Dim> prepare_exact_copy_schedule(
+    const MultiFab<Dim, DestinationMemorySpace>& destination,
+    const MultiFab<Dim, SourceMemorySpace>& source) {
+  const std::size_t pairs = checked_product(destination.layout().size(), source.layout().size(),
+                                            "layout-transfer copy schedule exceeds size_t");
+  const auto overlap_pairs = [](std::size_t count) {
+    return count < 2 ? std::size_t{0}
+                     : checked_product(count, count - 1,
+                                       "layout-transfer overlap budget exceeds size_t") /
+                           2;
+  };
+  return prepare_copy_schedule(
+      destination, source,
+      CopyScheduleBudget{pairs, pairs, overlap_pairs(destination.layout().size()),
+                         overlap_pairs(source.layout().size())});
+}
+
+template <int Dim>
+std::uint64_t checked_elements(const Box<Dim>& box, int components) {
+  const std::int64_t cells = box.numPts();
   if (cells <= 0 || components <= 0 ||
       static_cast<std::uint64_t>(cells) >
           std::numeric_limits<std::uint64_t>::max() / static_cast<std::uint64_t>(components))
@@ -194,24 +231,68 @@ std::uint64_t collective_elements(std::uint64_t local, const CommunicatorView& c
   return static_cast<std::uint64_t>(global);
 }
 
+template <class Value, int Dim>
+Value* valid_data(FieldView<Value, Dim> view, const Box<Dim>& valid) {
+  std::int64_t offset = 0;
+  for (int axis = 0; axis < Dim; ++axis)
+    offset += (static_cast<std::int64_t>(valid.lo[axis]) - view.origin[axis]) * view.strides[axis];
+  return view.data + offset;
+}
+
+template <class AbiView, class Value, int Dim>
+AbiView component_field_view(FieldView<Value, Dim> view, const Box<Dim>& valid, int components,
+                             PopsMemorySpaceV1 memory_space, const char* layout_identity,
+                             const char* patch_identity) {
+  AbiView result{};
+  result.struct_size = sizeof(AbiView);
+  result.data = valid_data(view, valid);
+  result.dimension = Dim;
+  for (int axis = 0; axis < 3; ++axis) {
+    result.extents[axis] = 1;
+    result.axis_strides[axis] = 0;
+    result.ghost_lower[axis] = 0;
+    result.ghost_upper[axis] = 0;
+  }
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.extents[axis] = static_cast<std::size_t>(valid.length(axis));
+    result.axis_strides[axis] = static_cast<std::ptrdiff_t>(view.strides[axis]);
+  }
+  result.component_count = static_cast<std::size_t>(components);
+  result.component_stride = static_cast<std::ptrdiff_t>(view.component_stride);
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.centering_axes = 0;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = memory_space;
+  result.layout_identity = layout_identity;
+  result.patch_identity = patch_identity;
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
+}
+
 }  // namespace
 
-struct PreparedSystemLayoutTransfer::Impl {
-  System* source_owner = nullptr;
-  System* target_owner = nullptr;
-  System::Impl* source = nullptr;
-  System::Impl* target = nullptr;
+template <int Dim>
+struct PreparedSystemLayoutTransfer<Dim>::Impl {
+  using system_type = System<Dim>;
+  using system_impl_type = typename system_type::Impl;
+  using field_type = MultiFab<Dim>;
+
+  system_type* source_owner = nullptr;
+  system_type* target_owner = nullptr;
+  system_impl_type* source = nullptr;
+  system_impl_type* target = nullptr;
   std::shared_ptr<component::LoadedComponent> component_handle;
   component::LoadedComponent::PreparedState component_state;
   const PopsTransferApiV1* transfer_api = nullptr;
-  SystemLayoutTransferSpec spec;
+  SystemLayoutTransferSpec<Dim> spec;
   SystemLayoutTransferExecution execution;
   PopsExecutionContextV1 execution_abi{};
   CommunicatorView communicator;
   int source_block_index = -1;
   int target_block_index = -1;
   int components = 0;
-  MultiFab source_snapshot;
+  field_type source_snapshot;
+  std::optional<CopySchedule<Dim>> source_copy_schedule;
   std::vector<std::string> source_patch_identities;
   std::vector<std::string> target_patch_identities;
   std::uint64_t active_generation = 0;
@@ -220,8 +301,9 @@ struct PreparedSystemLayoutTransfer::Impl {
   bool active = false;
   bool applied = false;
 
-  Impl(System& source_system, System& target_system,
-       std::shared_ptr<component::LoadedComponent> loaded, SystemLayoutTransferSpec transfer_spec,
+  Impl(system_type& source_system, system_type& target_system,
+       std::shared_ptr<component::LoadedComponent> loaded,
+       SystemLayoutTransferSpec<Dim> transfer_spec,
        SystemLayoutTransferExecution transfer_execution,
        const CommunicatorView& transfer_communicator)
       : source_owner(&source_system),
@@ -237,12 +319,15 @@ struct PreparedSystemLayoutTransfer::Impl {
     source_block_index = source->blocks_.index(spec.source_block);
     target_block_index = target->blocks_.index(spec.target_block);
     components = source->sp[static_cast<std::size_t>(source_block_index)].ncomp;
-    const BoxArray carrier =
+    const mesh::BoxArray<Dim> carrier =
         source_carrier_boxes(target->ba, source->dom, target->dom, spec.refinement_ratio);
-    source_snapshot = MultiFab(carrier, target->dm, components, 0);
-    source_patch_identities.reserve(static_cast<std::size_t>(carrier.size()));
-    target_patch_identities.reserve(static_cast<std::size_t>(carrier.size()));
-    for (int global = 0; global < carrier.size(); ++global) {
+    source_snapshot = field_type(carrier, rebind_distribution(carrier, target->dm),
+                                 target->local_rank, components, Extent<Dim>{});
+    source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
+    source_copy_schedule->require_local_execution();
+    source_patch_identities.reserve(carrier.size());
+    target_patch_identities.reserve(carrier.size());
+    for (std::size_t global = 0; global < carrier.size(); ++global) {
       source_patch_identities.push_back(spec.source_block +
                                         "::source-patch::" + std::to_string(global));
       target_patch_identities.push_back(spec.target_block +
@@ -250,8 +335,8 @@ struct PreparedSystemLayoutTransfer::Impl {
     }
   }
 
-  MultiFab& source_state() { return source->sp[static_cast<std::size_t>(source_block_index)].U; }
-  MultiFab& target_state() { return target->sp[static_cast<std::size_t>(target_block_index)].U; }
+  field_type& source_state() { return source->sp[static_cast<std::size_t>(source_block_index)].U; }
+  field_type& target_state() { return target->sp[static_cast<std::size_t>(target_block_index)].U; }
 
   void validate_static_contract() const {
     if (source_owner == target_owner || source == nullptr || target == nullptr)
@@ -275,37 +360,28 @@ struct PreparedSystemLayoutTransfer::Impl {
           "prepared System transfer requires exact before-step synchronization");
     if (spec.operation != POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1)
       throw std::invalid_argument("prepared System transfer operation is unsupported");
-    if (spec.refinement_ratio[0] <= 0 || spec.refinement_ratio[1] <= 0)
-      throw std::invalid_argument("prepared System transfer ratios must be positive");
-    if (source->polar_ || target->polar_ || source->cfg.geometry != "cartesian" ||
-        target->cfg.geometry != "cartesian")
-      throw std::invalid_argument(
-          "prepared System conservative transfer currently requires Cartesian layouts");
-    if (source->cfg.L != target->cfg.L || source->cfg.xlo != target->cfg.xlo ||
-        source->cfg.ylo != target->cfg.ylo)
-      throw std::invalid_argument(
-          "prepared System conservative transfer requires one exact physical domain");
-    if (source->per_.x != target->per_.x || source->per_.y != target->per_.y)
-      throw std::invalid_argument(
-          "prepared System conservative transfer requires one exact boundary topology");
-    const std::int64_t expected_x =
-        static_cast<std::int64_t>(target->dom.nx()) * spec.refinement_ratio[1];
-    const std::int64_t expected_y =
-        static_cast<std::int64_t>(target->dom.ny()) * spec.refinement_ratio[0];
-    if (source->dom.nx() != expected_x || source->dom.ny() != expected_y)
-      throw std::invalid_argument(
-          "prepared System transfer ratio does not authenticate the exact source/target extents");
-    if (!source->ba.tiles_exactly(source->dom) || !target->ba.tiles_exactly(target->dom) ||
-        source->ba.size() != source->dm.size() || target->ba.size() != target->dm.size())
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto position = static_cast<std::size_t>(axis);
+      if (spec.refinement_ratio[position] <= 0)
+        throw std::invalid_argument("prepared System transfer ratios must be positive");
+      if (source->cfg.lower[axis] != target->cfg.lower[axis] ||
+          source->cfg.upper[axis] != target->cfg.upper[axis] ||
+          source->periodicity[position] != target->periodicity[position])
+        throw std::invalid_argument(
+            "prepared System conservative transfer requires one exact physical domain/topology");
+      const std::int64_t expected = target->dom.length(axis) * spec.refinement_ratio[position];
+      if (source->dom.length(axis) != expected)
+        throw std::invalid_argument(
+            "prepared System transfer ratio does not authenticate the source/target extents");
+    }
+    if (!source->dm.matches_layout(source->ba) || !target->dm.matches_layout(target->ba))
       throw std::invalid_argument("prepared System transfer received an invalid native layout");
     const auto& source_block = source->blocks_.find(spec.source_block);
     const auto& target_block = target->blocks_.find(spec.target_block);
     if (source_block.ncomp != target_block.ncomp || source_block.ncomp <= 0)
       throw std::invalid_argument("prepared System transfer source/target provider widths differ");
-    if (source_block.U.box_array().boxes() != source->ba.boxes() ||
-        source_block.U.dmap().ranks() != source->dm.ranks() ||
-        target_block.U.box_array().boxes() != target->ba.boxes() ||
-        target_block.U.dmap().ranks() != target->dm.ranks())
+    if (source_block.U.layout() != source->ba || source_block.U.distribution() != source->dm ||
+        target_block.U.layout() != target->ba || target_block.U.distribution() != target->dm)
       throw std::invalid_argument(
           "prepared System transfer block storage differs from its owning layout");
     if (source_owner->lifecycle_state() == "assembling" ||
@@ -325,15 +401,14 @@ struct PreparedSystemLayoutTransfer::Impl {
 
   std::string consensus_payload() const {
     std::string bytes;
-    bytes.reserve(512u + 24u * static_cast<std::size_t>(source->ba.size() + target->ba.size()));
     for (const auto* field :
          {&spec.mapping_identity, &spec.provider_identity, &spec.provider_component_identity,
           &spec.provider_manifest_identity, &spec.source_layout_identity,
           &spec.target_layout_identity, &spec.source_block, &spec.target_block,
           &spec.source_representation, &spec.target_representation, &spec.synchronization_identity})
       append_text(bytes, *field);
-    append_i32(bytes, spec.refinement_ratio[0]);
-    append_i32(bytes, spec.refinement_ratio[1]);
+    for (const std::int32_t ratio : spec.refinement_ratio)
+      append_i32(bytes, ratio);
     append_i32(bytes, spec.operation);
     append_text(bytes, execution.execution_identity);
     append_i32(bytes, static_cast<std::int32_t>(execution.context_version));
@@ -352,12 +427,12 @@ struct PreparedSystemLayoutTransfer::Impl {
     append_text(bytes, api.semantic_identity == nullptr ? "" : api.semantic_identity);
     append_text(bytes, api.catalog_sha256 == nullptr ? "" : api.catalog_sha256);
     append_text(bytes, api.abi_key == nullptr ? "" : api.abi_key);
-    append_double(bytes, source->cfg.L);
-    append_double(bytes, source->cfg.xlo);
-    append_double(bytes, source->cfg.ylo);
-    append_double(bytes, target->cfg.L);
-    append_double(bytes, target->cfg.xlo);
-    append_double(bytes, target->cfg.ylo);
+    for (int axis = 0; axis < Dim; ++axis) {
+      append_double(bytes, source->cfg.lower[axis]);
+      append_double(bytes, source->cfg.upper[axis]);
+      append_double(bytes, target->cfg.lower[axis]);
+      append_double(bytes, target->cfg.upper[axis]);
+    }
     append_i32(bytes, components);
     append_layout(bytes, source->ba, source->dm);
     append_layout(bytes, target->ba, target->dm);
@@ -384,14 +459,17 @@ struct PreparedSystemLayoutTransfer::Impl {
   }
 };
 
-PreparedSystemLayoutTransfer::PreparedSystemLayoutTransfer(std::unique_ptr<Impl> impl) noexcept
+template <int Dim>
+PreparedSystemLayoutTransfer<Dim>::PreparedSystemLayoutTransfer(std::unique_ptr<Impl> impl) noexcept
     : p_(std::move(impl)) {}
 
-PreparedSystemLayoutTransfer::~PreparedSystemLayoutTransfer() = default;
+template <int Dim>
+PreparedSystemLayoutTransfer<Dim>::~PreparedSystemLayoutTransfer() = default;
 
-std::shared_ptr<PreparedSystemLayoutTransfer> PreparedSystemLayoutTransfer::prepare(
-    System& source, System& target, std::shared_ptr<component::LoadedComponent> component,
-    SystemLayoutTransferSpec spec, SystemLayoutTransferExecution execution) {
+template <int Dim>
+std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<Dim>::prepare(
+    System<Dim>& source, System<Dim>& target, std::shared_ptr<component::LoadedComponent> component,
+    SystemLayoutTransferSpec<Dim> spec, SystemLayoutTransferExecution execution) {
   const CommunicatorView field_rank_space = world_communicator_view();
   CommunicatorView communicator;
   collectively_validate(field_rank_space, "layout-transfer execution communicator", [&] {
@@ -403,26 +481,27 @@ std::shared_ptr<PreparedSystemLayoutTransfer> PreparedSystemLayoutTransfer::prep
                                      std::move(execution), communicator);
   });
   const std::string payload = pending->consensus_payload();
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v1", payload}},
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v2", payload}},
                                                 communicator))
     throw std::invalid_argument(
         "prepared System layout-transfer contract differs between MPI ranks");
   collectively_validate(communicator, "native Transfer provider preparation",
                         [&] { pending->prepare_provider(); });
-  // Warm the persistent copy schedule and MPI buffers before the first run step.  This copy is
-  // observationally inert: the carrier is private until capture() authenticates an attempt.
   collectively_validate(communicator, "prepared System layout-transfer warmup", [&] {
-    parallel_copy(pending->source_snapshot, pending->source_state(), communicator);
+    parallel_copy(pending->source_snapshot, pending->source_state(),
+                  *pending->source_copy_schedule);
   });
   return std::shared_ptr<PreparedSystemLayoutTransfer>(
       new PreparedSystemLayoutTransfer(std::move(pending)));
 }
 
-const SystemLayoutTransferSpec& PreparedSystemLayoutTransfer::spec() const noexcept {
+template <int Dim>
+const SystemLayoutTransferSpec<Dim>& PreparedSystemLayoutTransfer<Dim>::spec() const noexcept {
   return p_->spec;
 }
 
-void PreparedSystemLayoutTransfer::begin_transaction(std::uint64_t generation) {
+template <int Dim>
+void PreparedSystemLayoutTransfer<Dim>::begin_transaction(std::uint64_t generation) {
   collectively_validate(p_->communicator, "layout-transfer begin", [&] {
     if (p_->active)
       throw std::logic_error("layout-transfer transaction is already active");
@@ -440,7 +519,8 @@ void PreparedSystemLayoutTransfer::begin_transaction(std::uint64_t generation) {
   p_->applied = false;
 }
 
-void PreparedSystemLayoutTransfer::capture(std::uint64_t generation, std::uint64_t attempt) {
+template <int Dim>
+void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::uint64_t attempt) {
   collectively_validate(p_->communicator, "layout-transfer capture", [&] {
     p_->validate_active(generation, attempt, "layout-transfer capture");
     if (p_->applied)
@@ -450,13 +530,14 @@ void PreparedSystemLayoutTransfer::capture(std::uint64_t generation, std::uint64
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
   collectively_validate(p_->communicator, "layout-transfer source capture", [&] {
-    parallel_copy(p_->source_snapshot, p_->source_state(), p_->communicator);
+    parallel_copy(p_->source_snapshot, p_->source_state(), *p_->source_copy_schedule);
   });
   p_->captured_attempt = attempt;
 }
 
-SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t generation,
-                                                                std::uint64_t attempt) {
+template <int Dim>
+SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64_t generation,
+                                                                     std::uint64_t attempt) {
   collectively_validate(p_->communicator, "layout-transfer apply preflight", [&] {
     p_->validate_active(generation, attempt, "layout-transfer apply");
     if (p_->captured_attempt != attempt)
@@ -468,61 +549,31 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t ge
   std::uint64_t local_source_elements = 0;
   std::uint64_t local_target_elements = 0;
   collectively_validate(p_->communicator, "native Transfer apply", [&] {
-    MultiFab& destination = p_->target_state();
+    MultiFab<Dim>& destination = p_->target_state();
     try {
-      for (int local = 0; local < p_->source_snapshot.local_size(); ++local) {
-        const int global = p_->source_snapshot.global_index(local);
-        const int destination_local = destination.local_index_of(global);
-        if (destination_local < 0)
+      for (std::size_t local = 0; local < p_->source_snapshot.local_size(); ++local) {
+        const std::size_t global = p_->source_snapshot.global_index(local);
+        const std::size_t destination_local = destination.local_index_of(global);
+        if (destination_local == MultiFab<Dim>::not_local)
           throw std::logic_error(
               "prepared layout-transfer source/target ownership diverged after bind");
-        const Fab2D& source_fab = p_->source_snapshot.fab(local);
-        Fab2D& destination_fab = destination.fab(destination_local);
-        const Box2D& source_box = source_fab.box();
-        const Box2D& destination_box = destination_fab.box();
-        const ConstArray4 source_values = source_fab.const_array();
-        const Array4 destination_values = destination_fab.array();
-        const PopsConstFieldViewV1 source_view{
-            sizeof(PopsConstFieldViewV1),
-            source_values.p,
-            2,
-            {static_cast<std::size_t>(source_box.ny()), static_cast<std::size_t>(source_box.nx()),
-             1},
-            {source_values.nx_tot, 1, 0},
-            static_cast<std::size_t>(p_->components),
-            source_values.comp_stride,
-            POPS_FIELD_CENTERING_CELL_V1,
-            0,
-            {0, 0, 0},
-            {0, 0, 0},
-            POPS_SCALAR_FLOAT64_V1,
+        const Fab<Dim>& source_fab = p_->source_snapshot.fab(local);
+        Fab<Dim>& destination_fab = destination.fab(destination_local);
+        const Box<Dim>& source_box = source_fab.box();
+        const Box<Dim>& destination_box = destination_fab.box();
+        const PopsConstFieldViewV1 source_view = component_field_view<PopsConstFieldViewV1>(
+            source_fab.view(), source_box, p_->components,
             static_cast<PopsMemorySpaceV1>(p_->execution.memory_space),
-            p_->spec.source_layout_identity.c_str(),
-            p_->source_patch_identities[static_cast<std::size_t>(global)].c_str(),
-            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
-        const PopsFieldViewV1 destination_view{
-            sizeof(PopsFieldViewV1),
-            &destination_values(destination_box.lo[0], destination_box.lo[1], 0),
-            2,
-            {static_cast<std::size_t>(destination_box.ny()),
-             static_cast<std::size_t>(destination_box.nx()), 1},
-            {destination_values.nx_tot, 1, 0},
-            static_cast<std::size_t>(p_->components),
-            destination_values.comp_stride,
-            POPS_FIELD_CENTERING_CELL_V1,
-            0,
-            {0, 0, 0},
-            {0, 0, 0},
-            POPS_SCALAR_FLOAT64_V1,
+            p_->spec.source_layout_identity.c_str(), p_->source_patch_identities[global].c_str());
+        const PopsFieldViewV1 destination_view = component_field_view<PopsFieldViewV1>(
+            destination_fab.view(), destination_box, p_->components,
             static_cast<PopsMemorySpaceV1>(p_->execution.memory_space),
-            p_->spec.target_layout_identity.c_str(),
-            p_->target_patch_identities[static_cast<std::size_t>(global)].c_str(),
-            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+            p_->spec.target_layout_identity.c_str(), p_->target_patch_identities[global].c_str());
         PopsTransferRequestV1 request{sizeof(PopsTransferRequestV1),
                                       source_view,
                                       destination_view,
                                       p_->spec.refinement_ratio.data(),
-                                      2,
+                                      Dim,
                                       static_cast<PopsTransferOperationV1>(p_->spec.operation),
                                       p_->execution_abi};
         PopsComponentStatusV1 status{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1,
@@ -543,9 +594,6 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t ge
       }
       device_fence();
     } catch (...) {
-      // A provider may have launched asynchronous work before reporting an error.
-      // Fence before collective error propagation so no borrowed field view outlives
-      // this call or races the enclosing transaction rollback.
       device_fence();
       throw;
     }
@@ -571,7 +619,9 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t ge
   return receipt;
 }
 
-void PreparedSystemLayoutTransfer::reject_attempt(std::uint64_t generation, std::uint64_t attempt) {
+template <int Dim>
+void PreparedSystemLayoutTransfer<Dim>::reject_attempt(std::uint64_t generation,
+                                                       std::uint64_t attempt) {
   collectively_validate(p_->communicator, "layout-transfer rejected-attempt reset", [&] {
     p_->validate_active(generation, attempt, "layout-transfer rejected-attempt reset");
     if (p_->captured_attempt != attempt)
@@ -582,7 +632,8 @@ void PreparedSystemLayoutTransfer::reject_attempt(std::uint64_t generation, std:
   p_->applied = false;
 }
 
-void PreparedSystemLayoutTransfer::finalize_transaction(std::uint64_t generation) noexcept {
+template <int Dim>
+void PreparedSystemLayoutTransfer<Dim>::finalize_transaction(std::uint64_t generation) noexcept {
   if (!p_->active || generation != p_->active_generation)
     return;
   p_->last_generation = generation;
@@ -592,7 +643,8 @@ void PreparedSystemLayoutTransfer::finalize_transaction(std::uint64_t generation
   p_->applied = false;
 }
 
-void PreparedSystemLayoutTransfer::rollback_transaction(std::uint64_t generation) noexcept {
+template <int Dim>
+void PreparedSystemLayoutTransfer<Dim>::rollback_transaction(std::uint64_t generation) noexcept {
   if (!p_->active || generation != p_->active_generation)
     return;
   p_->last_generation = generation;
@@ -601,5 +653,7 @@ void PreparedSystemLayoutTransfer::rollback_transaction(std::uint64_t generation
   p_->active = false;
   p_->applied = false;
 }
+
+template class PreparedSystemLayoutTransfer<kNativeDimension>;
 
 }  // namespace pops
