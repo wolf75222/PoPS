@@ -98,10 +98,6 @@ def compose_transport_boundary(
     normalized = layout_plan.normalized(layout)
     depth_value = int(compile_contract["required_depth"])
     dimension = len(topology.boundaries) // 2
-    if dimension != 2:
-        raise NotImplementedError(
-            "the installed ghost-plan composer currently supports exact 2D Cartesian topology"
-        )
     depth = (depth_value,) * dimension
     base_evidence = {
         "authority": authority.canonical_identity(),

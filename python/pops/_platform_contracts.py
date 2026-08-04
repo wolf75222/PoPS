@@ -656,8 +656,12 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
 
 def proven_serial_manifest(*, backend: str, target: str, abi: str,
                            runtime: bool = False) -> PlatformManifest | RuntimeBackendManifest:
-    """Exact supported 2D/float64/host route used by the current generic runtime."""
-    evidence = "pops.native.2d-float64-host.v1"
+    """Dimension-generic float64/host contract for metadata-only serial callers.
+
+    Installed native artifacts replace this authoring capability set with their one exact
+    compile-time dimension through ``runtime_backend_manifest``.
+    """
+    evidence = "pops.native.nd-float64-host.v1"
     proof = lambda value: CapabilityProof.proven(value, evidence)  # noqa: E731
     cls = RuntimeBackendManifest if runtime else PlatformManifest
     return cls(backend=proof(_text(backend, "backend")), target=proof(_text(target, "target")),
@@ -665,7 +669,7 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                precision=PrecisionPolicy(*(proof("float64") for _ in range(4))),
                device=proof("host"), memory_spaces=proof(("host",)),
                communicator=proof("serial"), capabilities={
-                   "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
+                   "supported_dimensions": proof((1, 2, 3)), "centerings": proof(("cell",)),
                    "scalars": proof(("float64",)),
                    "layouts": proof(("right", "left", "strided")),
                    "ownership": proof(("borrowed", "owned", "shared")),
@@ -731,7 +735,7 @@ def artifact_platform_manifest(
         device_proof = proof(device_value) if device_value else unknown()
         memory_proof = proof(tuple(spaces)) if spaces else unknown()
         capabilities = {
-            "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
+            "supported_dimensions": proof((1, 2, 3)), "centerings": proof(("cell",)),
             "scalars": proof(("float64",)),
             "layouts": proof(("right", "left", "strided")),
             "ownership": proof(("borrowed", "owned", "shared")),
