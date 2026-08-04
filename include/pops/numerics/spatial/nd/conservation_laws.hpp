@@ -38,6 +38,13 @@ POPS_HD bool finite_state(const State& state) {
   return true;
 }
 
+POPS_HD inline Real entropy_fixed_absolute(Real eigenvalue, Real width) {
+  const Real absolute = eigenvalue < Real(0) ? -eigenvalue : eigenvalue;
+  if (!(width > Real(0)) || absolute >= width)
+    return absolute;
+  return Real(0.5) * (eigenvalue * eigenvalue / width + width);
+}
+
 }  // namespace conservation_law_detail
 
 template <int Dim>
@@ -254,6 +261,112 @@ class IdealGasEuler {
         Kokkos::sqrt(gamma_ * primitive.value[Schema::pressure] / primitive.value[Schema::density]);
     lower = velocity - sound_speed;
     upper = velocity + sound_speed;
+  }
+
+  template <int Axis>
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real speed_left, Real speed_right) const {
+    static_assert(Axis >= 0 && Axis < Dim, "Euler contact axis is outside the dimension");
+    const Real density_left = left[Schema::density];
+    const Real density_right = right[Schema::density];
+    const Real velocity_left = left[Schema::template momentum<Axis>] / density_left;
+    const Real velocity_right = right[Schema::template momentum<Axis>] / density_right;
+    return (pressure_right - pressure_left +
+            density_left * velocity_left * (speed_left - velocity_left) -
+            density_right * velocity_right * (speed_right - velocity_right)) /
+           (density_left * (speed_left - velocity_left) -
+            density_right * (speed_right - velocity_right));
+  }
+
+  template <int Axis>
+  POPS_HD State star_state(const State& conservative, Real pressure_value, Real speed,
+                           Real contact) const {
+    static_assert(Axis >= 0 && Axis < Dim, "Euler star-state axis is outside the dimension");
+    const Real density = conservative[Schema::density];
+    const Real normal_velocity = conservative[Schema::template momentum<Axis>] / density;
+    const Real star_density = density * (speed - normal_velocity) / (speed - contact);
+    State result{};
+    result[Schema::density] = star_density;
+    for (int momentum_axis = 0; momentum_axis < Dim; ++momentum_axis)
+      result[momentum_axis + 1] =
+          star_density *
+          (momentum_axis == Axis ? contact : conservative[momentum_axis + 1] / density);
+    result[Schema::energy] =
+        star_density * (conservative[Schema::energy] / density +
+                        (contact - normal_velocity) *
+                            (contact + pressure_value / (density * (speed - normal_velocity))));
+    return result;
+  }
+
+  template <int Axis>
+  POPS_HD State roe_dissipation(const State& left, const State& right) const {
+    static_assert(Axis >= 0 && Axis < Dim, "Euler Roe axis is outside the dimension");
+    const Real density_left = left[Schema::density];
+    const Real density_right = right[Schema::density];
+    const Real pressure_left = pressure(left);
+    const Real pressure_right = pressure(right);
+    const Real root_left = Kokkos::sqrt(density_left);
+    const Real root_right = Kokkos::sqrt(density_right);
+    const Real denominator = root_left + root_right;
+    const Real roe_density = root_left * root_right;
+    const Real enthalpy_left = (left[Schema::energy] + pressure_left) / density_left;
+    const Real enthalpy_right = (right[Schema::energy] + pressure_right) / density_right;
+    const Real enthalpy = (root_left * enthalpy_left + root_right * enthalpy_right) / denominator;
+
+    Real velocity[Dim]{};
+    Real velocity_left[Dim]{};
+    Real velocity_right[Dim]{};
+    Real speed_squared = Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      velocity_left[axis] = left[axis + 1] / density_left;
+      velocity_right[axis] = right[axis + 1] / density_right;
+      velocity[axis] =
+          (root_left * velocity_left[axis] + root_right * velocity_right[axis]) / denominator;
+      speed_squared += velocity[axis] * velocity[axis];
+    }
+
+    const Real sound_squared = (gamma_ - Real(1)) * (enthalpy - Real(0.5) * speed_squared);
+    const Real sound = Kokkos::sqrt(sound_squared);
+    const Real density_jump = density_right - density_left;
+    const Real pressure_jump = pressure_right - pressure_left;
+    const Real normal_jump = velocity_right[Axis] - velocity_left[Axis];
+    const Real acoustic_low =
+        (pressure_jump - roe_density * sound * normal_jump) / (Real(2) * sound_squared);
+    const Real entropy = density_jump - pressure_jump / sound_squared;
+    const Real acoustic_high =
+        (pressure_jump + roe_density * sound * normal_jump) / (Real(2) * sound_squared);
+    const Real normal_velocity = velocity[Axis];
+    const Real acoustic_scale = Real(0.1) * sound;
+    const Real low_absolute =
+        conservation_law_detail::entropy_fixed_absolute(normal_velocity - sound, acoustic_scale);
+    const Real contact_absolute = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
+    const Real high_absolute =
+        conservation_law_detail::entropy_fixed_absolute(normal_velocity + sound, acoustic_scale);
+
+    State result{};
+    result[Schema::density] =
+        low_absolute * acoustic_low + contact_absolute * entropy + high_absolute * acoustic_high;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (axis == Axis) {
+        result[axis + 1] = low_absolute * acoustic_low * (normal_velocity - sound) +
+                           contact_absolute * entropy * normal_velocity +
+                           high_absolute * acoustic_high * (normal_velocity + sound);
+      } else {
+        const Real shear = roe_density * (velocity_right[axis] - velocity_left[axis]);
+        result[axis + 1] = low_absolute * acoustic_low * velocity[axis] +
+                           contact_absolute * (entropy * velocity[axis] + shear) +
+                           high_absolute * acoustic_high * velocity[axis];
+      }
+    }
+    Real contact_energy = entropy * Real(0.5) * speed_squared;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (axis != Axis)
+        contact_energy +=
+            roe_density * (velocity_right[axis] - velocity_left[axis]) * velocity[axis];
+    result[Schema::energy] = low_absolute * acoustic_low * (enthalpy - normal_velocity * sound) +
+                             contact_absolute * contact_energy +
+                             high_absolute * acoustic_high * (enthalpy + normal_velocity * sound);
+    return result;
   }
 
  private:

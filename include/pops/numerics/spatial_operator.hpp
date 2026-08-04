@@ -1,32 +1,16 @@
 /// @file
-/// @brief Cartesian spatial operator: assembles R(U, aux) = -div F + S over the cells of a level.
+/// @brief Canonical compile-time-ranked hyperbolic finite-volume surface.
 ///
-/// This is the "PDE -> ODE system" arrow of the method of lines. The time integrator
-/// (time/) only knows R; it is unaware of the geometry and the reconstruction scheme.
-///
-/// UMBRELLA HEADER (ADC-328): the operator is split into focused modules under numerics/spatial/.
-/// This header keeps the historical include path working (it re-exports every symbol below) so
-/// existing `#include <pops/numerics/spatial_operator.hpp>` users are unaffected and the numerics
-/// are bit-identical. Prefer including the specific module for new code.
-///
-/// Modules (one-way dependency DAG, bottom to top):
-///   - spatial/state_access.hpp     DiffusiveModel, SourceFreeModel, load_state, load_aux.
-///   - spatial/positivity.hpp       zhang_shu_scale, detail::positivity_comp.
-///   - spatial/face_flux.hpp        typed/fallible face reconstruction, positivity,
-///                                  xface_box / yface_box, compute_face_fluxes.
-///   - spatial/wave_speed.hpp       max_wave_speed_mf and step-bound reductions, the hotspot
-///                                  diagnostic.
-///   - spatial/cartesian_operator.hpp  assemble_rhs, assemble_rhs_hll_cached.
-///   - spatial/masked_operator.hpp     assemble_rhs_masked.
-///
-/// INVARIANT: the Cartesian operator is STRICTLY UNTOUCHED by the polar operator
-/// (spatial_operator_polar.hpp); a run on a Cartesian mesh is bit-identical.
+/// Dimension, normal axis, reconstruction variables and Riemann policy are static properties of
+/// the prepared operator.  Face storage is one `FaceField<Dim>` rather than parallel x/y fields.
+/// Polar, embedded-boundary and mask providers are intentionally not fallback authorities here;
+/// each must be requalified against the same ND view/metric contracts before direct composition.
 
 #pragma once
 
-#include <pops/numerics/spatial/primitives/state_access.hpp>
-#include <pops/numerics/spatial/primitives/positivity.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>
-#include <pops/numerics/spatial/primitives/wave_speed.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/nd/face_field.hpp>
+#include <pops/numerics/spatial/nd/finite_volume.hpp>
+#include <pops/numerics/spatial/nd/reconstruction.hpp>
+#include <pops/numerics/spatial/nd/state_schema.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
-#include <pops/numerics/spatial/operators/masked_operator.hpp>
