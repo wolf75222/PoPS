@@ -602,7 +602,7 @@ def _hierarchy(
     native_hierarchy_provider = prepared_hierarchy_native_provider("shared_n_level")
     capabilities = HierarchyProviderCapabilities(
         provider("shared_n_level", "amr_hierarchy_provider"),
-        supported_dimensions=(2,),
+        supported_dimensions=(1, 2, 3),
         supports_anisotropic_ratio=False,
         max_materialized_level_count=2_147_483_647,
         supports_transactional_regrid=True,

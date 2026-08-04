@@ -5,8 +5,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops._native_facts import NATIVE_SUPPORTED_DIMENSIONS
 
-NATIVE_SUPPORTED_DIMENSIONS = (2,)
 NATIVE_SUPPORTED_CENTERINGS = ("cell",)
 
 
