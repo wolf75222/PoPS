@@ -103,6 +103,37 @@ struct AxisPhysicalFlux {
       upper = -old_lower;
     }
   }
+
+  POPS_HD Real pressure(const State& state) const
+    requires requires { model.pressure(state); }
+  {
+    return model.pressure(state);
+  }
+
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real speed_left, Real speed_right,
+                             const FaceContext&) const
+    requires requires {
+      model.template contact_speed<Axis>(left, right, pressure_left, pressure_right, speed_left,
+                                         speed_right);
+    }
+  {
+    return model.template contact_speed<Axis>(left, right, pressure_left, pressure_right,
+                                              speed_left, speed_right);
+  }
+
+  POPS_HD State star_state(const State& state, Real pressure_value, Real speed, Real contact,
+                           const FaceContext&) const
+    requires requires { model.template star_state<Axis>(state, pressure_value, speed, contact); }
+  {
+    return model.template star_state<Axis>(state, pressure_value, speed, contact);
+  }
+
+  POPS_HD State roe_dissipation(const Trace& left, const Trace& right, const FaceContext&) const
+    requires requires { model.template roe_dissipation<Axis>(left.state, right.state); }
+  {
+    return model.template roe_dissipation<Axis>(left.state, right.state);
+  }
 };
 
 template <int Axis, class Model>
@@ -313,7 +344,7 @@ POPS_HD FiniteVolumeResult<StateVec<N>> conservative_residual(
     result.status = FiniteVolumeStatus::InvalidFaceField;
     return result;
   }
-  if (!(metric.identity().domain == integrated_fluxes.cells)) {
+  if (!metric.identity().domain.contains(integrated_fluxes.cells)) {
     result.status = FiniteVolumeStatus::InvalidMetric;
     return result;
   }

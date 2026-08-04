@@ -142,15 +142,60 @@ void check_euler_axis(const nd::IdealGasEuler<Dim>& model,
   const auto rusanov =
       nd::evaluate_axis_flux<Axis>(RusanovFlux{}, model, conservative, conservative);
   const auto hll = nd::evaluate_axis_flux<Axis>(HLLFlux{}, model, conservative, conservative);
+  const auto hllc = nd::evaluate_axis_flux<Axis>(HLLCFlux{}, model, conservative, conservative);
+  const auto roe = nd::evaluate_axis_flux<Axis>(RoeFlux{}, model, conservative, conservative);
   ASSERT_TRUE(rusanov.succeeded());
   ASSERT_TRUE(hll.succeeded());
+  ASSERT_TRUE(hllc.succeeded());
+  ASSERT_TRUE(roe.succeeded());
   for (int component = 0; component < Schema::nvars; ++component) {
     EXPECT_NEAR(rusanov.checked_density().value[component], flux[component], Real(4e-14));
     EXPECT_NEAR(hll.checked_density().value[component], flux[component], Real(4e-14));
+    EXPECT_NEAR(hllc.checked_density().value[component], flux[component], Real(4e-14));
+    EXPECT_NEAR(roe.checked_density().value[component], flux[component], Real(4e-13));
   }
 
   if constexpr (Axis + 1 < Dim)
     check_euler_axis<Axis + 1>(model, conservative, primitive);
+}
+
+template <int Axis, int Dim>
+void check_euler_contact_and_shear_axis(const nd::IdealGasEuler<Dim>& model) {
+  using Schema = nd::EulerStateSchema<Dim>;
+  using Primitive = typename nd::IdealGasEuler<Dim>::Primitive;
+  for (const Real normal_velocity : std::array<Real, 2>{Real(0.37), Real(-0.29)}) {
+    Primitive left{};
+    Primitive right{};
+    left[Schema::density] = Real(1.4);
+    right[Schema::density] = Real(0.8);
+    left[Schema::pressure] = right[Schema::pressure] = Real(1.1);
+    for (int velocity_axis = 0; velocity_axis < Dim; ++velocity_axis) {
+      left[velocity_axis + 1] = Real(0.12 * (velocity_axis + 1));
+      right[velocity_axis + 1] = Real(-0.09 * (velocity_axis + 1));
+    }
+    left[Schema::template velocity<Axis>] = normal_velocity;
+    right[Schema::template velocity<Axis>] = normal_velocity;
+    const auto left_state = model.make_conservative(left);
+    const auto right_state = model.make_conservative(right);
+    ASSERT_TRUE(left_state.succeeded());
+    ASSERT_TRUE(right_state.succeeded());
+
+    const auto hllc =
+        nd::evaluate_axis_flux<Axis>(HLLCFlux{}, model, left_state.value, right_state.value);
+    const auto roe =
+        nd::evaluate_axis_flux<Axis>(RoeFlux{}, model, left_state.value, right_state.value);
+    ASSERT_TRUE(hllc.succeeded());
+    ASSERT_TRUE(roe.succeeded());
+    const auto expected =
+        model.template flux<Axis>(normal_velocity > Real(0) ? left_state.value : right_state.value);
+    for (int component = 0; component < Schema::nvars; ++component) {
+      EXPECT_NEAR(hllc.checked_density().value[component], expected[component], Real(2e-12));
+      EXPECT_NEAR(roe.checked_density().value[component], expected[component], Real(2e-12));
+    }
+  }
+
+  if constexpr (Axis + 1 < Dim)
+    check_euler_contact_and_shear_axis<Axis + 1>(model);
 }
 
 template <int Dim>
@@ -169,6 +214,7 @@ void check_euler_law() {
   for (int component = 0; component < Schema::nvars; ++component)
     EXPECT_NEAR(recovered.value[component], primitive[component], Real(3e-14));
   check_euler_axis<0>(model, conservative.value, primitive);
+  check_euler_contact_and_shear_axis<0>(model);
 }
 
 template <int Axis, int Dim, class Model, class Metric>
