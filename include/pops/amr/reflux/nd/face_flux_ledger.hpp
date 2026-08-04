@@ -107,10 +107,14 @@ struct FaceFluxFragmentKey {
   }
 };
 
-/// Metric and temporal measure of one physical flux density sample.  Geometry is multiplied here,
-/// exactly once, because metric reflux compares integrated transport across coarse and fine faces.
+/// Metric and temporal measure of one physical flux density sample. The exact substep interval
+/// authenticates temporal coverage; `substep_duration` is its physical duration. Geometry is
+/// multiplied here exactly once because metric reflux compares integrated transport across coarse
+/// and fine faces.
 struct FaceFluxFragmentMeasure {
   Rational stage_weight{1, 1};
+  Rational substep_begin{0, 1};
+  Rational substep_end{0, 1};
   double substep_duration = 0.0;
   double face_measure = 0.0;
 };
@@ -153,14 +157,22 @@ void validate_face_flux_fragment(const FaceFluxFragmentKey<Dim>& key,
     throw std::invalid_argument("ND face-flux clock phase must retain canonical exact form");
 
   const double stage_weight = measure.stage_weight.value();
-  if (measure.stage_weight.denominator <= 0 || !std::isfinite(stage_weight) ||
-      !(measure.substep_duration > 0.0) || !std::isfinite(measure.substep_duration) ||
-      !(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure))
+  if (measure.stage_weight.denominator <= 0 || measure.substep_begin.denominator <= 0 ||
+      measure.substep_end.denominator <= 0 || !std::isfinite(stage_weight) ||
+      !(measure.substep_begin < measure.substep_end) || key.clock.phase < measure.substep_begin ||
+      measure.substep_end < key.clock.phase || !(measure.substep_duration > 0.0) ||
+      !std::isfinite(measure.substep_duration) || !(measure.face_measure > 0.0) ||
+      !std::isfinite(measure.face_measure))
     throw std::invalid_argument(
         "ND face-flux measure requires finite stage, time, and positive metric weights");
   if (Rational{measure.stage_weight.numerator, measure.stage_weight.denominator} !=
       measure.stage_weight)
     throw std::invalid_argument("ND face-flux stage weight must retain canonical exact form");
+  if (Rational{measure.substep_begin.numerator, measure.substep_begin.denominator} !=
+          measure.substep_begin ||
+      Rational{measure.substep_end.numerator, measure.substep_end.denominator} !=
+          measure.substep_end)
+    throw std::invalid_argument("ND face-flux substep interval must retain canonical exact form");
   if (!std::isfinite(weighted_face_flux_scale(measure)))
     throw std::invalid_argument("ND face-flux weighted metric-time scale is not finite");
 }
@@ -172,9 +184,16 @@ struct FaceFluxFragment {
   Payload payload;
 };
 
+struct FaceFluxLedgerBudget {
+  std::size_t max_pending_entries = 0;
+  std::size_t max_published_entries = 0;
+  std::size_t max_transaction_depth = 0;
+};
+
 /// One host-side ledger per normal axis.  Pending fragments remain transaction-local and are not
 /// visible through published_entries().  The outer commit first builds a complete candidate copy,
 /// then swaps it into place, preserving the accepted ledger if allocation or payload copy fails.
+/// All retained work is explicitly bounded, and accepted attempts can be discarded after reflux.
 template <int Dim, class Payload>
 class TransactionalFaceFluxLedger {
  public:
@@ -183,6 +202,12 @@ class TransactionalFaceFluxLedger {
                 "transactional ND face-flux payloads must support atomic commit copies");
 
   using Entry = FaceFluxFragment<Dim, Payload>;
+
+  explicit TransactionalFaceFluxLedger(FaceFluxLedgerBudget budget) : budget_(budget) {
+    if (budget_.max_pending_entries == 0 || budget_.max_published_entries == 0 ||
+        budget_.max_transaction_depth == 0)
+      throw std::invalid_argument("ND face-flux ledger budgets must be strictly positive");
+  }
 
   void begin(std::uint64_t attempt) {
     const bool outer = !active_attempt_.has_value();
@@ -195,6 +220,8 @@ class TransactionalFaceFluxLedger {
         throw std::invalid_argument("ND face-flux attempt identities must increase monotonically");
     }
 
+    if (savepoints_.size() >= budget_.max_transaction_depth)
+      throw std::length_error("ND face-flux transaction depth exceeds its prepared budget");
     Savepoint savepoint{};
     for (int axis = 0; axis < Dim; ++axis)
       savepoint.pending_sizes[static_cast<std::size_t>(axis)] =
@@ -211,11 +238,19 @@ class TransactionalFaceFluxLedger {
       return;
     }
 
+    const std::size_t published_count = published_size();
+    const std::size_t pending_count = pending_size();
+    if (published_count > budget_.max_published_entries ||
+        pending_count > budget_.max_published_entries - published_count)
+      throw std::length_error("ND face-flux publication exceeds its prepared budget");
+
     auto candidate = published_;
     for (int axis = 0; axis < Dim; ++axis) {
       auto& destination = candidate[static_cast<std::size_t>(axis)];
       const auto& source = pending_[static_cast<std::size_t>(axis)];
-      destination.insert(destination.end(), source.begin(), source.end());
+      destination.reserve(destination.size() + source.size());
+      for (const Entry& entry : source)
+        destination.push_back(entry);
     }
     published_.swap(candidate);
     for (auto& entries : pending_)
@@ -251,6 +286,8 @@ class TransactionalFaceFluxLedger {
     if (key.attempt != *active_attempt_)
       throw std::invalid_argument("ND face-flux fragment uses a stale attempt identity");
     validate_face_flux_fragment(key, measure);
+    if (pending_size() >= budget_.max_pending_entries)
+      throw std::length_error("ND face-flux pending entries exceed their prepared budget");
     const std::size_t axis = static_cast<std::size_t>(key.axis);
     if (contains_identity_(pending_[axis], key) || contains_identity_(published_[axis], key))
       throw std::runtime_error(
@@ -271,6 +308,27 @@ class TransactionalFaceFluxLedger {
 
   const std::vector<Entry>& published_entries(int axis) const {
     return published_[static_cast<std::size_t>(detail::checked_axis(axis, Dim))];
+  }
+
+  std::size_t discard_published_attempt(std::uint64_t attempt) {
+    if (in_transaction())
+      throw std::runtime_error(
+          "cannot discard published ND face fluxes during an active transaction");
+    std::array<std::vector<Entry>, Dim> candidate;
+    std::size_t removed = 0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto& source = published_[static_cast<std::size_t>(axis)];
+      auto& destination = candidate[static_cast<std::size_t>(axis)];
+      destination.reserve(source.size());
+      for (const Entry& entry : source) {
+        if (entry.key.attempt == attempt)
+          ++removed;
+        else
+          destination.push_back(entry);
+      }
+    }
+    published_.swap(candidate);
+    return removed;
   }
 
  private:
@@ -315,6 +373,7 @@ class TransactionalFaceFluxLedger {
   std::vector<Savepoint> savepoints_;
   std::optional<std::uint64_t> active_attempt_;
   std::optional<std::uint64_t> last_closed_attempt_;
+  FaceFluxLedgerBudget budget_;
 };
 
 }  // namespace pops::amr::reflux::nd

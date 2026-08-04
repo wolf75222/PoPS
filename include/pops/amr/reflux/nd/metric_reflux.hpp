@@ -6,6 +6,7 @@
 #include <pops/amr/reflux/nd/face_flux_ledger.hpp>
 #include <pops/amr/transfer/nd/refinement_ratio.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -32,7 +33,7 @@ struct FaceRefinementMapping {
   constexpr bool operator==(const FaceRefinementMapping&) const = default;
 };
 
-/// Identity of the coarse face whose accepted stage/substep fragments are to be reconciled.
+/// Identity and exact macro-step window of the coarse face whose accepted fragments are reconciled.
 template <int Dim>
 struct CoarseFaceRefluxKey {
   std::string owner;
@@ -42,6 +43,15 @@ struct CoarseFaceRefluxKey {
   int axis = 0;
   Index<Dim> coarse_face{};
   std::uint64_t attempt = 0;
+  std::int64_t macro_step = 0;
+  Rational window_begin{0, 1};
+  Rational window_end{1, 1};
+};
+
+struct MetricRefluxBudget {
+  std::size_t max_fine_faces = 0;
+  std::size_t max_published_entries = 0;
+  std::size_t max_clock_stage_slices = 0;
 };
 
 template <class Payload>
@@ -89,6 +99,17 @@ void validate_reflux_key(const CoarseFaceRefluxKey<Dim>& key) {
   checked_axis(key.axis, Dim);
   if (key.centering != FaceLedgerCentering::Face)
     throw std::invalid_argument("ND metric reflux accepts only face-centered flux identities");
+  if (key.macro_step < 0 || key.window_begin.denominator <= 0 || key.window_end.denominator <= 0 ||
+      !(key.window_begin < key.window_end) ||
+      Rational{key.window_begin.numerator, key.window_begin.denominator} != key.window_begin ||
+      Rational{key.window_end.numerator, key.window_end.denominator} != key.window_end)
+    throw std::invalid_argument("ND metric reflux requires one canonical exact clock window");
+}
+
+inline void validate_reflux_budget(const MetricRefluxBudget& budget) {
+  if (budget.max_fine_faces == 0 || budget.max_published_entries == 0 ||
+      budget.max_clock_stage_slices == 0)
+    throw std::invalid_argument("ND metric reflux budgets must be strictly positive");
 }
 
 template <int Dim>
@@ -97,23 +118,156 @@ bool matches_reflux_key(const FaceFluxFragmentKey<Dim>& fragment,
   return fragment.owner == query.owner && fragment.state == query.state &&
          fragment.levels == query.levels && fragment.centering == query.centering &&
          fragment.axis == query.axis && fragment.coarse_face == query.coarse_face &&
-         fragment.attempt == query.attempt;
+         fragment.attempt == query.attempt && fragment.clock.macro_step == query.macro_step &&
+         !(fragment.clock.phase < query.window_begin) && !(query.window_end < fragment.clock.phase);
 }
 
 using StageSlice =
     std::tuple<std::tuple<int, std::int64_t, std::int64_t, std::int64_t>, std::string>;
 
+struct TemporalSliceMeasure {
+  Rational stage_weight{0, 1};
+  Rational substep_begin{0, 1};
+  Rational substep_end{0, 1};
+  double substep_duration = 0.0;
+};
+
 inline StageSlice stage_slice(const ClockStamp& clock, const std::string& stage) {
   return {clock_coordinate(clock), stage};
+}
+
+inline void register_temporal_slice(std::map<StageSlice, TemporalSliceMeasure>& slices,
+                                    const StageSlice& slice, const FaceFluxFragmentMeasure& measure,
+                                    std::size_t total_slice_count,
+                                    const MetricRefluxBudget& budget) {
+  const TemporalSliceMeasure candidate{measure.stage_weight, measure.substep_begin,
+                                       measure.substep_end, measure.substep_duration};
+  const auto existing = slices.find(slice);
+  if (existing != slices.end()) {
+    if (existing->second.stage_weight != candidate.stage_weight ||
+        existing->second.substep_begin != candidate.substep_begin ||
+        existing->second.substep_end != candidate.substep_end ||
+        existing->second.substep_duration != candidate.substep_duration)
+      throw std::runtime_error(
+          "ND metric reflux clock-stage faces disagree on their temporal measure");
+    return;
+  }
+  if (total_slice_count >= budget.max_clock_stage_slices)
+    throw std::length_error("ND metric reflux clock-stage slices exceed their prepared budget");
+  slices.emplace(slice, candidate);
+}
+
+struct ExactSubstep {
+  Rational begin{0, 1};
+  Rational end{0, 1};
+
+  friend bool operator<(const ExactSubstep& left, const ExactSubstep& right) {
+    return left.begin == right.begin ? left.end < right.end : left.begin < right.begin;
+  }
+};
+
+struct SubstepQuadrature {
+  Rational stage_weight_sum{0, 1};
+  double duration = 0.0;
+};
+
+inline bool roundoff_equal(double left, double right, std::size_t operations) {
+  if (left == right)
+    return true;
+  if (!std::isfinite(left) || !std::isfinite(right))
+    return false;
+  const double scale = std::max(std::abs(left), std::abs(right));
+  const double tolerance = 128.0 * std::numeric_limits<double>::epsilon() * scale *
+                           static_cast<double>(std::max<std::size_t>(operations, 1));
+  return std::abs(left - right) <= tolerance;
+}
+
+struct AuthenticatedWindow {
+  double duration = 0.0;
+  double duration_per_phase = 0.0;
+  std::size_t substep_count = 0;
+};
+
+inline AuthenticatedWindow authenticated_window(
+    const std::map<StageSlice, TemporalSliceMeasure>& slices, Rational window_begin,
+    Rational window_end) {
+  std::map<ExactSubstep, SubstepQuadrature> substeps;
+  for (const auto& [slice, measure] : slices) {
+    (void)slice;
+    const ExactSubstep interval{measure.substep_begin, measure.substep_end};
+    auto [position, inserted] =
+        substeps.emplace(interval, SubstepQuadrature{Rational{0, 1}, measure.substep_duration});
+    if (!inserted && position->second.duration != measure.substep_duration)
+      throw std::runtime_error(
+          "ND metric reflux stages disagree on their physical substep duration");
+    position->second.stage_weight_sum = position->second.stage_weight_sum + measure.stage_weight;
+  }
+
+  Rational cursor = window_begin;
+  AuthenticatedWindow result;
+  for (const auto& [interval, quadrature] : substeps) {
+    if (interval.begin != cursor || !(interval.begin < interval.end))
+      throw std::runtime_error(
+          "ND metric reflux substeps do not form a contiguous exact clock partition");
+    if (quadrature.stage_weight_sum != Rational{1, 1})
+      throw std::runtime_error("ND metric reflux stage weights do not close one accepted substep");
+    const double phase_span = (interval.end - interval.begin).value();
+    if (!(phase_span > 0.0) || !std::isfinite(phase_span))
+      throw std::overflow_error("ND metric reflux physical clock rate is not finite");
+    const double duration_per_phase = quadrature.duration / phase_span;
+    if (!std::isfinite(duration_per_phase))
+      throw std::overflow_error("ND metric reflux physical clock rate is not finite");
+    if (result.substep_count == 0)
+      result.duration_per_phase = duration_per_phase;
+    else if (!roundoff_equal(result.duration_per_phase, duration_per_phase,
+                             result.substep_count + 1))
+      throw std::runtime_error("ND metric reflux substeps disagree on their physical clock rate");
+    cursor = interval.end;
+    result.duration += quadrature.duration;
+    ++result.substep_count;
+    if (!std::isfinite(result.duration))
+      throw std::overflow_error("ND metric reflux physical window duration is not finite");
+  }
+  if (cursor != window_end)
+    throw std::runtime_error(
+        "ND metric reflux substeps do not cover the complete exact clock window");
+  return result;
+}
+
+template <int Dim>
+void validate_temporal_coverage(const CoarseFaceRefluxKey<Dim>& key,
+                                const std::map<StageSlice, TemporalSliceMeasure>& coarse_slices,
+                                const std::map<StageSlice, TemporalSliceMeasure>& fine_slices) {
+  const AuthenticatedWindow coarse =
+      authenticated_window(coarse_slices, key.window_begin, key.window_end);
+  const AuthenticatedWindow fine =
+      authenticated_window(fine_slices, key.window_begin, key.window_end);
+  const std::size_t operations = coarse_slices.size() + fine_slices.size();
+  if (!roundoff_equal(coarse.duration, fine.duration, operations) ||
+      !roundoff_equal(coarse.duration_per_phase, fine.duration_per_phase, operations))
+    throw std::runtime_error(
+        "ND metric reflux coarse and fine physical clocks do not cover the same window");
 }
 
 template <int Dim>
 std::set<std::array<int, Dim>> expected_fine_face_set(
     const CoarseFaceRefluxKey<Dim>& key, const transfer::nd::RefinementRatio<Dim>& ratio,
-    const FaceRefinementMapping<Dim>& mapping) {
+    const FaceRefinementMapping<Dim>& mapping, const MetricRefluxBudget& budget) {
+  validate_reflux_budget(budget);
   if (!ratio.refines_any_axis())
     throw std::invalid_argument(
         "ND metric reflux requires a non-identity inter-level refinement ratio");
+  std::size_t fine_face_count = 1;
+  for (int direction = 0; direction < Dim; ++direction) {
+    if (direction == key.axis)
+      continue;
+    const std::size_t axis_faces = static_cast<std::size_t>(ratio[direction]);
+    if (axis_faces > std::numeric_limits<std::size_t>::max() / fine_face_count)
+      throw std::length_error("ND metric reflux tangential face product exceeds size_t");
+    fine_face_count *= axis_faces;
+  }
+  if (fine_face_count > budget.max_fine_faces)
+    throw std::length_error("ND metric reflux tangential face product exceeds its prepared budget");
   Index<Dim> base{};
   for (int direction = 0; direction < Dim; ++direction) {
     const std::int64_t relative =
@@ -151,7 +305,7 @@ std::set<std::array<int, Dim>> expected_fine_face_set(
   return result;
 }
 
-template <int Dim>
+template <std::size_t Dim>
 void require_complete_slices(const std::map<StageSlice, std::set<std::array<int, Dim>>>& slices,
                              const std::set<std::array<int, Dim>>& expected, const char* role) {
   if (slices.empty())
@@ -173,9 +327,10 @@ void require_complete_slices(const std::map<StageSlice, std::set<std::array<int,
 template <int Dim>
 std::vector<Index<Dim>> fine_faces_for_coarse_face(const CoarseFaceRefluxKey<Dim>& key,
                                                    const transfer::nd::RefinementRatio<Dim>& ratio,
-                                                   const FaceRefinementMapping<Dim>& mapping = {}) {
+                                                   const FaceRefinementMapping<Dim>& mapping,
+                                                   const MetricRefluxBudget& budget) {
   detail::validate_reflux_key(key);
-  const auto expected = detail::expected_fine_face_set(key, ratio, mapping);
+  const auto expected = detail::expected_fine_face_set(key, ratio, mapping, budget);
   std::vector<Index<Dim>> result;
   result.reserve(expected.size());
   for (const auto& coordinate : expected) {
@@ -194,12 +349,18 @@ template <int Dim, class Payload, class Axpy>
 MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, Payload>& ledger,
                                         const CoarseFaceRefluxKey<Dim>& key,
                                         const transfer::nd::RefinementRatio<Dim>& ratio,
-                                        const FaceRefinementMapping<Dim>& mapping, Axpy&& axpy) {
+                                        const FaceRefinementMapping<Dim>& mapping,
+                                        const MetricRefluxBudget& budget, Axpy&& axpy) {
   detail::validate_reflux_key(key);
-  const auto expected_fine = detail::expected_fine_face_set(key, ratio, mapping);
+  detail::validate_reflux_budget(budget);
+  if (ledger.published_size() > budget.max_published_entries)
+    throw std::length_error("ND metric reflux published entries exceed their prepared budget");
+  const auto expected_fine = detail::expected_fine_face_set(key, ratio, mapping, budget);
   const std::set<std::array<int, Dim>> expected_coarse{detail::coordinate_array(key.coarse_face)};
   std::map<detail::StageSlice, std::set<std::array<int, Dim>>> coarse_slices;
   std::map<detail::StageSlice, std::set<std::array<int, Dim>>> fine_slices;
+  std::map<detail::StageSlice, detail::TemporalSliceMeasure> coarse_temporal;
+  std::map<detail::StageSlice, detail::TemporalSliceMeasure> fine_temporal;
   MetricFaceReflux<Payload> result;
 
   for (const auto& entry : ledger.published_entries(key.axis)) {
@@ -210,6 +371,8 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
     switch (entry.key.role) {
       case FaceLedgerRole::Coarse:
         coarse_slices[slice].insert(detail::coordinate_array(entry.key.face));
+        detail::register_temporal_slice(coarse_temporal, slice, entry.measure,
+                                        coarse_temporal.size() + fine_temporal.size(), budget);
         axpy(result.coarse_integrated, scale, entry.payload);
         result.coarse_weighted_measure += scale;
         if (!std::isfinite(result.coarse_weighted_measure))
@@ -217,6 +380,8 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
         break;
       case FaceLedgerRole::Fine:
         fine_slices[slice].insert(detail::coordinate_array(entry.key.face));
+        detail::register_temporal_slice(fine_temporal, slice, entry.measure,
+                                        coarse_temporal.size() + fine_temporal.size(), budget);
         axpy(result.fine_integrated, scale, entry.payload);
         result.fine_weighted_measure += scale;
         if (!std::isfinite(result.fine_weighted_measure))
@@ -229,6 +394,11 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
 
   detail::require_complete_slices(coarse_slices, expected_coarse, "coarse");
   detail::require_complete_slices(fine_slices, expected_fine, "fine");
+  detail::validate_temporal_coverage(key, coarse_temporal, fine_temporal);
+  if (!detail::roundoff_equal(result.coarse_weighted_measure, result.fine_weighted_measure,
+                              ledger.published_size()))
+    throw std::runtime_error(
+        "ND metric reflux coarse and fine metric-time measures do not cover the same face");
   axpy(result.mismatch, 1.0, result.fine_integrated);
   axpy(result.mismatch, -1.0, result.coarse_integrated);
   result.fine_face_count = expected_fine.size();
@@ -256,8 +426,11 @@ Payload coarse_cell_reflux_correction(const MetricFaceReflux<Payload>& reflux,
     default:
       throw std::invalid_argument("ND metric reflux has an invalid coarse-cell face side");
   }
+  const double coefficient = sign / coarse_cell_measure;
+  if (!std::isfinite(coefficient))
+    throw std::overflow_error("ND metric reflux coarse-cell correction coefficient is not finite");
   Payload correction{};
-  axpy(correction, sign / coarse_cell_measure, reflux.mismatch);
+  axpy(correction, coefficient, reflux.mismatch);
   return correction;
 }
 
