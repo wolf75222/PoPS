@@ -59,8 +59,7 @@ def test_manifest_exactly_classifies_all_tracked_headers_and_include_fragments()
         "pops/runtime/config/generated_route_accessors.inc"
     ) in manifest.sdk_support
     assert PurePosixPath("pops/parallel/load_balance.hpp") in manifest.api
-    assert PurePosixPath("pops/parallel/nd/load_balance_provider.hpp") in manifest.api
-    assert PurePosixPath("pops/parallel/nd/ownership_plan.hpp") in manifest.api
+    assert PurePosixPath("pops/parallel/ownership_plan.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/prepared_load_balance.hpp") in manifest.api
 
 

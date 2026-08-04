@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::parallel::nd {
+namespace pops::parallel {
 
 enum class LoadBalanceStrategy : std::uint8_t {
   space_filling_curve = 0,
@@ -32,7 +32,7 @@ template <int Dim>
 class LoadBalanceProvider;
 
 /// Exact result of one prepared ownership decision. Patch ordinals and linear rank ordinals are
-/// retained alongside the spatial Distribution so reports never have to reconstruct the decision.
+/// retained alongside the spatial Distribution so reports never reconstruct the decision.
 template <int Dim>
 class OwnershipPlan {
   static_assert(Dim >= 1 && Dim <= 3, "OwnershipPlan only supports dimensions 1, 2, and 3");
@@ -82,4 +82,4 @@ class OwnershipPlan {
   std::int64_t total_weight_ = 0;
 };
 
-}  // namespace pops::parallel::nd
+}  // namespace pops::parallel
