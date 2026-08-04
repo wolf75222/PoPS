@@ -13,6 +13,11 @@ namespace {
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
+
+template <int Dim>
+using ProductionBoxArray = pops::mesh::BoxArray<Dim>;
 
 constexpr char kCompletionFailstopToken[] = "POPS_ND_COMPLETION_FAILSTOP_OBSERVED";
 TranslationExchange<1>* g_exchange = nullptr;
@@ -30,7 +35,7 @@ TranslationExchange<1>* g_exchange = nullptr;
 
 TranslationSchedule<1> completion_schedule() {
   const Box<1> domain{Index<1>{0}, Index<1>{1}};
-  const BoxArray<1> layout(std::vector<Box<1>>{domain});
+  const ProductionBoxArray<1> layout(std::vector<Box<1>>{domain});
   const RankSpace<1> ranks{Index<1>{}, Extent<1>{1}};
   const Distribution<1> distribution =
       Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{}});

@@ -3,8 +3,9 @@
 
 #pragma once
 
+#include <pops/mesh/layout/nd/distribution.hpp>
 #include <pops/mesh/nd_proof/local_neighbors.hpp>
-#include <pops/mesh/nd_proof/multifab.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -40,7 +41,10 @@ class TranslationSchedule {
   using execution_policy =
       Kokkos::RangePolicy<execution_space, Kokkos::IndexType<execution_index_type>>;
   using rank_type = Index<Dim>;
-  using multifab_type = MultiFab<Dim, MemorySpace>;
+  using layout_type = ::pops::mesh::BoxArray<Dim>;
+  using distribution_type = ::pops::mesh::Distribution<Dim>;
+  using rank_space_type = ::pops::mesh::RankSpace<Dim>;
+  using multifab_type = ::pops::MultiFab<Dim, MemorySpace>;
   using buffer_type = Kokkos::View<Real*, MemorySpace>;
 
   struct Job {
@@ -75,7 +79,7 @@ class TranslationSchedule {
     bool operator==(const CanonicalJob&) const = default;
   };
 
-  TranslationSchedule(const BoxArray<Dim>& layout, const Distribution<Dim>& distribution,
+  TranslationSchedule(const layout_type& layout, const distribution_type& distribution,
                       const Box<Dim>& domain, const PeriodicTopology<Dim>& topology,
                       Extent<Dim> ghosts, int ncomp, int first_component, int component_count,
                       rank_type local_rank, const std::array<int, Dim>& hash_bins,
@@ -93,8 +97,11 @@ class TranslationSchedule {
 
     LocalNeighborWorkBudget neighbor_budget = budget.neighbor;
     neighbor_budget.jobs = std::min(neighbor_budget.jobs, budget.global_jobs);
+    // Neighbor enumeration remains a private proof algorithm. Convert only its immutable layout
+    // input; production field identity and storage stay canonical throughout the schedule.
+    const ::pops::mesh::nd_proof::BoxArray<Dim> proof_layout(layout_.boxes());
     const std::vector<LocalNeighborJob<Dim>> neighbors = enumerate_local_translation_neighbors(
-        layout_, domain_, ghosts_, topology_, hash_bins, hash_budget, neighbor_budget);
+        proof_layout, domain_, ghosts_, topology_, hash_bins, hash_budget, neighbor_budget);
     if (neighbors.size() > budget.global_jobs)
       throw std::length_error("nd_proof::TranslationSchedule global jobs exceed budget");
 
@@ -210,8 +217,8 @@ class TranslationSchedule {
     global_job_count_ = canonical_global_jobs_.size();
   }
 
-  const BoxArray<Dim>& layout() const noexcept { return layout_; }
-  const Distribution<Dim>& distribution() const noexcept { return distribution_; }
+  const layout_type& layout() const noexcept { return layout_; }
+  const distribution_type& distribution() const noexcept { return distribution_; }
   const Box<Dim>& domain() const noexcept { return domain_; }
   const PeriodicTopology<Dim>& topology() const noexcept { return topology_; }
   const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
@@ -548,29 +555,29 @@ class TranslationSchedule {
 
   void copy(multifab_type& fields, const Job& job) const {
     const FieldView<const Real, Dim> source =
-        static_cast<const multifab_type&>(fields).fab(job.source_box).view();
-    const FieldView<Real, Dim> destination = fields.fab(job.destination_box).view();
+        static_cast<const multifab_type&>(fields).fab_global(job.source_box).view();
+    const FieldView<Real, Dim> destination = fields.fab_global(job.destination_box).view();
     const KernelJob kernel_job = lower_kernel_job(job);
     Kokkos::parallel_for("pops_nd_translation_copy", execution_policy(0, kernel_job.elements),
                          CopyKernel{destination, source, kernel_job});
   }
 
   void pack_job(const multifab_type& fields, const Job& job, buffer_type buffer) const {
-    const FieldView<const Real, Dim> source = fields.fab(job.source_box).view();
+    const FieldView<const Real, Dim> source = fields.fab_global(job.source_box).view();
     const KernelJob kernel_job = lower_kernel_job(job);
     Kokkos::parallel_for("pops_nd_translation_pack", execution_policy(0, kernel_job.elements),
                          PackKernel{buffer, source, kernel_job});
   }
 
   void unpack_job(multifab_type& fields, const Job& job, buffer_type buffer) const {
-    const FieldView<Real, Dim> destination = fields.fab(job.destination_box).view();
+    const FieldView<Real, Dim> destination = fields.fab_global(job.destination_box).view();
     const KernelJob kernel_job = lower_kernel_job(job);
     Kokkos::parallel_for("pops_nd_translation_unpack", execution_policy(0, kernel_job.elements),
                          UnpackKernel{buffer, destination, kernel_job});
   }
 
-  BoxArray<Dim> layout_{};
-  Distribution<Dim> distribution_{};
+  layout_type layout_{};
+  distribution_type distribution_{};
   Box<Dim> domain_{};
   PeriodicTopology<Dim> topology_{};
   Extent<Dim> ghosts_{};

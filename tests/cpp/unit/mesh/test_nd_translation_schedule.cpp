@@ -13,6 +13,11 @@
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
+
+template <int Dim>
+using ProductionBoxArray = pops::mesh::BoxArray<Dim>;
 
 namespace {
 
@@ -52,7 +57,7 @@ Real value_for(const Index<Dim>& index, int component) {
 template <int Dim, class MemorySpace>
 void fill_valid(MultiFab<Dim, MemorySpace>& fields, Real ghost_value = Real{-777}) {
   for (const std::size_t global_box : fields.local_global_indices()) {
-    auto& fab = fields.fab(global_box);
+    auto& fab = fields.fab_global(global_box);
     auto host = fab.create_host_mirror();
     const Box<Dim>& grown = fab.grown_box();
     const std::size_t cells = static_cast<std::size_t>(grown.numPts());
@@ -69,7 +74,7 @@ void fill_valid(MultiFab<Dim, MemorySpace>& fields, Real ghost_value = Real{-777
 template <int Dim, class MemorySpace>
 Real value_at(const MultiFab<Dim, MemorySpace>& fields, std::size_t global_box,
               const Index<Dim>& index, int component) {
-  const auto& fab = fields.fab(global_box);
+  const auto& fab = fields.fab_global(global_box);
   const Box<Dim>& grown = fab.grown_box();
   std::size_t stride = 1;
   std::size_t cell = 0;
@@ -86,7 +91,7 @@ template <int Dim, class MemorySpace>
 std::vector<Real> snapshot(const MultiFab<Dim, MemorySpace>& fields) {
   std::vector<Real> result;
   for (const std::size_t global_box : fields.local_global_indices()) {
-    const auto& fab = fields.fab(global_box);
+    const auto& fab = fields.fab_global(global_box);
     auto host = fab.create_host_mirror();
     fab.copy_to_host(host);
     for (std::size_t element = 0; element < host.size(); ++element)
@@ -142,7 +147,7 @@ void expect_partitioned_two_rank_multi_job_transfer() {
     slab_upper.values[0] = 2 * slab + 1;
     boxes.push_back(Box<Dim>{slab_lower, slab_upper});
   }
-  const BoxArray<Dim> layout(std::move(boxes));
+  const ProductionBoxArray<Dim> layout(std::move(boxes));
   Extent<Dim> rank_extent{};
   rank_extent.values[0] = 2;
   for (int axis = 1; axis < Dim; ++axis)
@@ -188,7 +193,7 @@ void expect_partitioned_two_rank_multi_job_transfer() {
     expected.insert(expected.end(), job_payload.begin(), job_payload.end());
   }
   EXPECT_EQ(snapshot_buffer(buffer), expected);
-  destination.fab(1).set_val(Real{-113});
+  destination.fab_global(1).set_val(Real{-113});
   receiver.unpack(destination, rank0, buffer);
   for (const auto& job : receive.jobs) {
     const std::size_t cells = static_cast<std::size_t>(job.destination_region.numPts());
@@ -218,8 +223,8 @@ TEST(test_nd_translation_schedule,
 TEST(test_nd_translation_schedule,
      partitioned_2d_pack_unpack_has_shared_ordinals_and_component_axis_zero_order) {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{2, 1}};
-  const BoxArray<2> layout(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{2, 0}},
-                                               Box<2>{Index<2>{0, 1}, Index<2>{2, 1}}});
+  const ProductionBoxArray<2> layout(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{2, 0}},
+                                                         Box<2>{Index<2>{0, 1}, Index<2>{2, 1}}});
   const RankSpace<2> ranks{Index<2>{4, -2}, Extent<2>{2, 1}};
   const Index<2> sender_rank{4, -2};
   const Index<2> receiver_rank{5, -2};
@@ -255,7 +260,7 @@ TEST(test_nd_translation_schedule,
   EXPECT_EQ(snapshot_buffer(buffer), expected);
   EXPECT_EQ(expected, (std::vector<Real>{10000, 10001, 10002, 20000, 20001, 20002}));
 
-  destination.fab(1).set_val(Real{-19});
+  destination.fab_global(1).set_val(Real{-19});
   receiver.unpack(destination, sender_rank, buffer);
   for (int component = 1; component <= 2; ++component)
     for (int x = 0; x <= 2; ++x)
@@ -265,7 +270,7 @@ TEST(test_nd_translation_schedule,
 
 TEST(test_nd_translation_schedule, replicated_dim1_and_deep_dim3_periodic_replay_are_local_only) {
   const Box<1> line_domain{Index<1>{0}, Index<1>{2}};
-  const BoxArray<1> line_layout(std::vector<Box<1>>{line_domain});
+  const ProductionBoxArray<1> line_layout(std::vector<Box<1>>{line_domain});
   const RankSpace<1> line_ranks{Index<1>{-3}, Extent<1>{1}};
   const auto line_distribution = Distribution<1>::replicated(line_layout, line_ranks);
   MultiFab<1> line(line_layout, line_distribution, Index<1>{-3}, 2, Extent<1>{1});
@@ -281,7 +286,7 @@ TEST(test_nd_translation_schedule, replicated_dim1_and_deep_dim3_periodic_replay
   EXPECT_EQ(value_at(line, 0, Index<1>{3}, 1), value_for(Index<1>{0}, 1));
 
   const Box<3> point{Index<3>{0, 0, 0}, Index<3>{0, 0, 0}};
-  const BoxArray<3> volume_layout(std::vector<Box<3>>{point});
+  const ProductionBoxArray<3> volume_layout(std::vector<Box<3>>{point});
   const RankSpace<3> volume_ranks{Index<3>{1, -2, 7}, Extent<3>{1, 1, 1}};
   const auto volume_distribution = Distribution<3>::replicated(volume_layout, volume_ranks);
   TranslationSchedule<3> volume_schedule(volume_layout, volume_distribution, point,
@@ -302,9 +307,9 @@ TEST(test_nd_translation_schedule, replicated_dim1_and_deep_dim3_periodic_replay
 
 TEST(test_nd_translation_schedule, peer_plans_sort_in_rank_space_order_and_budgets_are_cumulative) {
   const Box<1> domain{Index<1>{0}, Index<1>{2}};
-  const BoxArray<1> layout(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}},
-                                               Box<1>{Index<1>{1}, Index<1>{1}},
-                                               Box<1>{Index<1>{2}, Index<1>{2}}});
+  const ProductionBoxArray<1> layout(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}},
+                                                         Box<1>{Index<1>{1}, Index<1>{1}},
+                                                         Box<1>{Index<1>{2}, Index<1>{2}}});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{3}};
   const Index<1> local{1};
   const auto distribution =
@@ -342,7 +347,7 @@ TEST(test_nd_translation_schedule, peer_plans_sort_in_rank_space_order_and_budge
 
 TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_storage_unchanged) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const BoxArray<1> layout(
+  const ProductionBoxArray<1> layout(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{1}}, Box<1>{Index<1>{2}, Index<1>{3}}});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto distribution = Distribution<1>::partitioned(layout, ranks, {Index<1>{0}, Index<1>{1}});
@@ -371,7 +376,7 @@ TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_sto
   EXPECT_EQ(snapshot(destination), original_destination);
   EXPECT_EQ(snapshot_buffer(wrong), original_wrong);
 
-  const BoxArray<1> regridded(
+  const ProductionBoxArray<1> regridded(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}}, Box<1>{Index<1>{1}, Index<1>{3}}});
   const auto regridded_distribution =
       Distribution<1>::partitioned(regridded, ranks, {Index<1>{0}, Index<1>{1}});
@@ -379,7 +384,7 @@ TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_sto
   fill_valid(layout_stale);
   EXPECT_THROW(sender.pack(layout_stale, Index<1>{1}, buffer), std::invalid_argument);
   EXPECT_EQ(snapshot_buffer(buffer), original_buffer);
-  const BoxArray<1> reordered(std::vector<Box<1>>{layout[1], layout[0]});
+  const ProductionBoxArray<1> reordered(std::vector<Box<1>>{layout[1], layout[0]});
   const auto reordered_distribution =
       Distribution<1>::partitioned(reordered, ranks, {Index<1>{0}, Index<1>{1}});
   MultiFab<1> reordered_stale(reordered, reordered_distribution, Index<1>{0}, 2, Extent<1>{1});
@@ -410,7 +415,7 @@ TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_sto
   EXPECT_THROW(sender.pack(mode_stale, Index<1>{1}, buffer), std::invalid_argument);
   EXPECT_EQ(snapshot_buffer(buffer), original_buffer);
 
-  destination.fab(1).set_val(Real{-5});
+  destination.fab_global(1).set_val(Real{-5});
   const std::vector<Real> before_unpack = snapshot(destination);
   EXPECT_THROW(receiver.unpack(destination, Index<1>{1}, buffer), std::invalid_argument);
   EXPECT_EQ(snapshot(destination), before_unpack);
@@ -421,7 +426,7 @@ TEST(test_nd_translation_schedule, identity_and_buffer_refusals_leave_caller_sto
 
 TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_before_storage) {
   const Box<1> domain{Index<1>{0}, Index<1>{1}};
-  const BoxArray<1> layout(
+  const ProductionBoxArray<1> layout(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}}, Box<1>{Index<1>{1}, Index<1>{1}}});
   const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
   const auto distribution = Distribution<1>::partitioned(layout, ranks, {Index<1>{0}, Index<1>{1}});
@@ -443,7 +448,7 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
                                    Extent<1>{1}, 1, 0, 1, Index<1>{2}, {1}, kHashBudget, good),
       std::invalid_argument);
   const Box<2> plane{Index<2>{0, 0}, Index<2>{1, 1}};
-  const BoxArray<2> plane_layout(std::vector<Box<2>>{plane});
+  const ProductionBoxArray<2> plane_layout(std::vector<Box<2>>{plane});
   const RankSpace<2> plane_ranks{Index<2>{0, 0}, Extent<2>{1, 1}};
   const auto plane_distribution = Distribution<2>::replicated(plane_layout, plane_ranks);
   const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
@@ -456,13 +461,13 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
   constexpr int minimum = std::numeric_limits<int>::min();
   constexpr int maximum = std::numeric_limits<int>::max();
   const Box<3> huge_domain{Index<3>{0, minimum, minimum}, Index<3>{1, maximum, maximum}};
-  const BoxArray<3> huge_layout(
+  const ProductionBoxArray<3> huge_layout(
       std::vector<Box<3>>{Box<3>{Index<3>{0, minimum, minimum}, Index<3>{0, maximum, maximum}},
                           Box<3>{Index<3>{1, minimum, minimum}, Index<3>{1, maximum, maximum}}});
   const RankSpace<3> huge_ranks{Index<3>{0, 0, 0}, Extent<3>{1, 1, 1}};
   const auto huge_distribution = Distribution<3>::replicated(huge_layout, huge_ranks);
   const Box<3> execution_domain{Index<3>{0, minimum, 0}, Index<3>{1, maximum, 1073741823}};
-  const BoxArray<3> execution_layout(
+  const ProductionBoxArray<3> execution_layout(
       std::vector<Box<3>>{Box<3>{Index<3>{0, minimum, 0}, Index<3>{0, maximum, 1073741823}},
                           Box<3>{Index<3>{1, minimum, 0}, Index<3>{1, maximum, 1073741823}}});
   const auto execution_distribution = Distribution<3>::replicated(execution_layout, huge_ranks);

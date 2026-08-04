@@ -1,8 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/nd_proof/distribution.hpp>
-#include <pops/mesh/nd_proof/multifab.hpp>
-#include <pops/mesh/nd_proof/translation_schedule.hpp>
+#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -16,11 +15,11 @@
 using pops::Box;
 using pops::Extent;
 using pops::Index;
-using pops::mesh::nd_proof::BoxArray;
-using pops::mesh::nd_proof::Distribution;
-using pops::mesh::nd_proof::DistributionMode;
-using pops::mesh::nd_proof::MultiFab;
-using pops::mesh::nd_proof::RankSpace;
+using pops::MultiFab;
+using pops::mesh::BoxArray;
+using pops::mesh::Distribution;
+using pops::mesh::DistributionMode;
+using pops::mesh::RankSpace;
 
 TEST(test_nd_distribution, partitioned_ownership_is_ordered_and_rank_coordinates_round_trip) {
   const BoxArray<1> line(std::vector<Box<1>>{Box<1>{Index<1>{-3}, Index<1>{-2}},
@@ -110,20 +109,24 @@ TEST(test_nd_distribution,
   EXPECT_EQ(fields.local_size(), 2U);
   EXPECT_TRUE(fields.contains_local(0));
   EXPECT_FALSE(fields.contains_local(1));
-  EXPECT_EQ(fields.fab(0).ghosts(), (Extent<2>{1, 2}));
-  EXPECT_EQ(fields.fab(0).size(), 48U);
-  EXPECT_THROW((void)fields.fab(1), std::out_of_range);
+  EXPECT_EQ(fields.global_index(1), 2U);
+  EXPECT_EQ(fields.local_index_of(2), 1U);
+  EXPECT_EQ(fields.local_index_of(1), MultiFab<2>::not_local);
+  EXPECT_EQ(fields.fab_global(0).ghosts(), (Extent<2>{1, 2}));
+  EXPECT_EQ(fields.fab_global(0).size(), 48U);
+  EXPECT_THROW((void)fields.fab_global(1), std::out_of_range);
+  EXPECT_THROW((void)fields.local_index_of(4), std::out_of_range);
   EXPECT_THROW((void)MultiFab<2>(boxes, distribution, Index<2>{12, -2}, 1, Extent<2>{}),
                std::out_of_range);
 
-  fields.fab(0).set_val(3.5);
+  fields.fab_global(0).set_val(3.5);
   MultiFab<2> copy = fields;
-  EXPECT_NE(copy.fab(0).storage().data(), fields.fab(0).storage().data());
-  copy.fab(0).set_val(-2.0);
-  auto source = fields.fab(0).create_host_mirror();
-  auto copied = copy.fab(0).create_host_mirror();
-  fields.fab(0).copy_to_host(source);
-  copy.fab(0).copy_to_host(copied);
+  EXPECT_NE(copy.fab_global(0).storage().data(), fields.fab_global(0).storage().data());
+  copy.fab_global(0).set_val(-2.0);
+  auto source = fields.fab_global(0).create_host_mirror();
+  auto copied = copy.fab_global(0).create_host_mirror();
+  fields.fab_global(0).copy_to_host(source);
+  copy.fab_global(0).copy_to_host(copied);
   EXPECT_DOUBLE_EQ(source(0), 3.5);
   EXPECT_DOUBLE_EQ(copied(0), -2.0);
 

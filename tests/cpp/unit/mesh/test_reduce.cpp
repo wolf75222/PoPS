@@ -1,160 +1,107 @@
-// Contrat des reductions device sum / norm_inf (point 4 de la revue : vraies
-// reductions device via for_each_cell_reduce_*, plus de boucle hote sous fence).
-//
-// Le contrat est FP-conscient et le meme pour les trois backends :
-//   - sum est EXACT (egalite stricte) la ou la reassociation est neutre : champ
-//     constant (toutes valeurs egales) et champ symetrique a somme nulle. Sur un
-//     champ a valeurs variees, sum n'est plus bit-identique a la boucle hote sous
-//     Kokkos (somme par tuile) : on n'exige qu'un ecart RELATIF petit vs une
-//     reference hote sequentielle (1e-10), pas l'egalite stricte.
-//   - sum est IDEMPOTENT : deux appels sur le meme MultiFab inchange rendent
-//     exactement le meme bit (verifie le determinisme du reducteur, cle pour
-//     test_fill_boundary/sum_unchanged ; Kokkos::Sum est deterministe par tuile,
-//     pas d'atomics flottants).
-//   - norm_inf est EXACT partout (max et fabs sans arrondi, max associatif et
-//     commutatif en IEEE754) : egalite stricte avec la reference hote.
-
 #include <gtest/gtest.h>
 
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+
+#include "nd_multifab_test_utils.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <array>
+#include <limits>
+#include <stdexcept>
+#include <vector>
 
 using namespace pops;
+using namespace pops::mesh;
+using namespace pops::test::nd;
 
 namespace {
 
-// Reference hote sequentielle, lecture directe des fabs locaux (ordre
-// lexicographique fixe), sans passer par for_each_cell_reduce_*.
-double host_sum(const MultiFab& mf, int comp) {
-  double s = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const Fab2D& f = mf.fab(li);
-    const Box2D b = f.box();
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        s += f(i, j, comp);
-  }
-  return s;
+template <int Dim>
+Real arithmetic_value(const Index<Dim>& index, int component) {
+  Real value = component + 2;
+  for (int axis = 0; axis < Dim; ++axis)
+    value += static_cast<Real>((axis + 1) * index[axis]);
+  return value;
 }
 
-double host_norm_inf(const MultiFab& mf, int comp) {
-  double m = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const Fab2D& f = mf.fab(li);
-    const Box2D b = f.box();
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        const double a = f(i, j, comp);
-        m = std::max(m, a < 0 ? -a : a);
-      }
-  }
-  return m;
-}
+template <int Dim>
+void expect_reductions() {
+  const Box<Dim> domain = cube<Dim>(-1, 1);
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, axis_sizes<Dim>(2, 3));
+  const auto distribution = Distribution<Dim>::replicated(layout, one_rank_space<Dim>());
+  HostMultiFab<Dim> field(layout, distribution, Index<Dim>{}, 2, uniform_extent<Dim>(1));
+  fill_valid(field, Real{9000}, arithmetic_value<Dim>);
 
-// Domaine 256x256 decoupe en boites 32x32 (64 fabs), une composante -- partage par tous les cas.
-BoxArray make_domain_ba(Box2D& dom_out) {
-  dom_out = Box2D::from_extents(256, 256);
-  return BoxArray::from_domain(dom_out, 32);
+  for (int component = 0; component < field.ncomp(); ++component) {
+    Real sum = 0;
+    Real absolute_sum = 0;
+    Real maximum = -std::numeric_limits<Real>::infinity();
+    Real minimum = std::numeric_limits<Real>::infinity();
+    Real square_sum = 0;
+    for (std::size_t cell = 0; cell < static_cast<std::size_t>(domain.numPts()); ++cell) {
+      const Real value = arithmetic_value(index_from_ordinal(domain, cell), component);
+      sum += value;
+      absolute_sum += value < 0 ? -value : value;
+      maximum = std::max(maximum, value);
+      minimum = std::min(minimum, value);
+      square_sum += value * value;
+    }
+    EXPECT_DOUBLE_EQ(reduce_sum(field, component), sum);
+    EXPECT_DOUBLE_EQ(reduce_abs_sum(field, component), absolute_sum);
+    EXPECT_DOUBLE_EQ(reduce_max(field, component), maximum);
+    EXPECT_DOUBLE_EQ(reduce_min(field, component), minimum);
+    EXPECT_DOUBLE_EQ(norm_inf(field, component),
+                     std::max(maximum < 0 ? -maximum : maximum, minimum < 0 ? -minimum : minimum));
+    EXPECT_DOUBLE_EQ(dot(field, field, component), square_sum);
+  }
+
+  HostMultiFab<Dim> zero = field;
+  scale(zero, Real{0});
+  EXPECT_DOUBLE_EQ(difference_sum_sq_all(field, zero), dot_all(field, field));
+
+  HostMultiFab<Dim> destination = field;
+  lincomb(destination, Real{2}, field, Real{-1}, field);
+  EXPECT_DOUBLE_EQ(dot_all(destination, field), dot_all(field, field));
+  saxpy(destination, Real{-1}, field);
+  EXPECT_DOUBLE_EQ(norm_inf(destination), Real{0});
 }
 
 }  // namespace
 
-TEST(test_reduce, sum_constant_field_is_exact) {
-  Box2D dom;
-  BoxArray ba = make_domain_ba(dom);
-  DistributionMapping dm(ba.size(), n_ranks());
-
-  // champ constant : sum exact (reassociation neutre, valeurs egales).
-  MultiFab mf(ba, dm, 1, 0);
-  mf.set_val(2.0);
-  const double expect = 2.0 * dom.num_cells();
-  EXPECT_LE(std::fabs(sum(mf) - expect), 1e-15 * expect) << "sum_constant_exact";
+TEST(test_reduce, arithmetic_and_collectives_are_dimension_generic) {
+  expect_reductions<1>();
+  expect_reductions<2>();
+  expect_reductions<3>();
 }
 
-TEST(test_reduce, sum_varied_field_matches_host_within_relative_tolerance) {
-  Box2D dom;
-  BoxArray ba = make_domain_ba(dom);
-  DistributionMapping dm(ba.size(), n_ranks());
+TEST(test_reduce, relative_cell_measure_uses_exact_nd_metric_identity) {
+  const Box<2> domain = cube<2>(0, 2);
+  const BoxArray<2> layout(std::vector<Box<2>>{domain});
+  const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
+  HostMultiFab<2> field(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  HostMultiFab<2> active(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  HostMultiFab<2> inverse(layout, distribution, Index<2>{}, 1, Extent<2>{});
+  fill_valid(field, Real{0}, [](const Index<2>& index, int) {
+    return static_cast<Real>(1 + index[0] + 3 * index[1]);
+  });
+  fill_valid(active, Real{0},
+             [](const Index<2>& index, int) { return index[0] == 1 ? Real{1} : Real{0}; });
+  fill_valid(inverse, Real{0}, [](const Index<2>&, int) { return Real{2}; });
 
-  // champ a valeurs variees : ecart RELATIF device vs reference hote < 1e-10
-  // (PAS d'egalite stricte ; la somme par tuile reassocie sous Kokkos).
-  MultiFab mf(ba, dm, 1, 0);
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) { a(i, j, 0) = i + 100.0 * j; });
-  }
-  device_fence();
-  const double ref = host_sum(mf, 0);
-  const double dev = sum(mf, 0);
-  const double rel = std::fabs(dev - ref) / std::max(1.0, std::fabs(ref));
-  EXPECT_LT(rel, 1e-10) << "sum_varied_relative";
+  const RelativeCellMeasure<2, Kokkos::HostSpace> measure{&active, &inverse};
+  Real expected = 0;
+  for (int y = 0; y <= 2; ++y)
+    expected += Real{2} * static_cast<Real>(2 + 3 * y);
+  EXPECT_DOUBLE_EQ(reduce_sum(field, 0, measure), expected);
+  EXPECT_DOUBLE_EQ(dot(field, field, 0, measure),
+                   Real{2} * (Real{2} * Real{2} + Real{5} * Real{5} + Real{8} * Real{8}));
 }
 
-TEST(test_reduce, sum_antisymmetric_field_is_small) {
-  Box2D dom;
-  BoxArray ba = make_domain_ba(dom);
-  DistributionMapping dm(ba.size(), n_ranks());
-
-  // champ symetrique a somme nulle : valeurs +v / -v par parite de (i+j).
-  // Toute reassociation appariant +v et -v donne 0 ; ici on tolere quand
-  // meme un bruit relatif a la magnitude des termes.
-  MultiFab mf(ba, dm, 1, 0);
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) {
-      const Real v = i + 100.0 * j;
-      a(i, j, 0) = ((i + j) & 1) ? -v : v;
-    });
-  }
-  device_fence();
-  const double dev = sum(mf, 0);
-  EXPECT_LT(std::fabs(dev), 1e-6) << "sum_antisymmetric_small";
-}
-
-TEST(test_reduce, norm_inf_is_exact) {
-  Box2D dom;
-  BoxArray ba = make_domain_ba(dom);
-  DistributionMapping dm(ba.size(), n_ranks());
-
-  // norm_inf EXACT : signe alterne, max |.| connu. Egalite stricte vs hote.
-  MultiFab mf(ba, dm, 1, 0);
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) {
-      const Real v = i + 100.0 * j;
-      a(i, j, 0) = ((i + j) & 1) ? -v : v;
-    });
-  }
-  device_fence();
-  const double ref = host_norm_inf(mf, 0);
-  const double dev = norm_inf(mf, 0);
-  EXPECT_EQ(dev, ref) << "norm_inf_exact";
-  // max |i + 100 j| sur [0..255]^2 = 255 + 100*255 = 25755.
-  EXPECT_EQ(dev, 255.0 + 100.0 * 255.0) << "norm_inf_value";
-}
-
-TEST(test_reduce, sum_and_norm_inf_are_idempotent) {
-  Box2D dom;
-  BoxArray ba = make_domain_ba(dom);
-  DistributionMapping dm(ba.size(), n_ranks());
-
-  // idempotence : deux sum / deux norm_inf sur le meme champ inchange rendent
-  // exactement le meme bit (determinisme du reducteur).
-  MultiFab mf(ba, dm, 1, 0);
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a] POPS_HD(int i, int j) {
-      a(i, j, 0) = std::sin(0.1 * i) + std::cos(0.07 * j);
-    });
-  }
-  device_fence();
-  EXPECT_EQ(sum(mf, 0), sum(mf, 0)) << "sum_idempotent";
-  EXPECT_EQ(norm_inf(mf, 0), norm_inf(mf, 0)) << "norm_inf_idempotent";
+TEST(test_reduce, communicator_rank_mismatch_fails_closed) {
+  const BoxArray<1> layout(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{1}}});
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
+  const auto distribution = Distribution<1>::replicated(layout, ranks);
+  HostMultiFab<1> field(layout, distribution, Index<1>{0}, 1, Extent<1>{});
+  field.set_val(Real{3});
+  EXPECT_THROW((void)reduce_sum(field), std::logic_error);
 }
