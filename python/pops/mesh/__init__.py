@@ -3,8 +3,9 @@
 ``pops.mesh`` describes the discrete domain and the objects the runtime materialises. It
 contains no physics and no solver. Layout descriptors live in :mod:`pops.layouts`.
 
-The ordinary public Cartesian path has one spelling: a :class:`CartesianGrid` over a framed
-:class:`pops.domain.Rectangle`, with periodic topology expressed by :class:`PeriodicAxes`.
+The ordinary public Cartesian path has one spelling: a :class:`CartesianGrid` over a bounded
+Cartesian frame.  :class:`pops.domain.CartesianDomain` infers rank 1, 2 or 3 from its bounds;
+periodic topology is expressed by :class:`PeriodicAxes`.
 :class:`PolarMesh` remains an advanced, currently supported native annulus descriptor; it is not a
 second Cartesian authoring path. Adaptive authoring lives at :mod:`pops.amr`; ``pops.mesh._amr`` is
 an implementation package and is deliberately not re-exported here.

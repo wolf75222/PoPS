@@ -11,8 +11,12 @@ from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
     CARTESIAN_2D_COORDINATES,
+    CARTESIAN_3D_COORDINATES,
+    CARTESIAN_CELL_LENGTH,
     CARTESIAN_CELL_AREA,
+    CARTESIAN_CELL_VOLUME,
     POLAR_ANNULUS_2D_COORDINATES,
     POLAR_ANNULUS_CELL_AREA,
 )
@@ -886,7 +890,8 @@ class LayoutPlan:
 
 
 __all__ = [
-    "CARTESIAN_2D_COORDINATES", "CARTESIAN_CELL_AREA",
+    "CARTESIAN_1D_COORDINATES", "CARTESIAN_2D_COORDINATES", "CARTESIAN_3D_COORDINATES",
+    "CARTESIAN_CELL_LENGTH", "CARTESIAN_CELL_AREA", "CARTESIAN_CELL_VOLUME",
     "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingOperation",
     "LayoutMappingProvider", "LayoutMappingPort", "LayoutMappingRequirement",
     "LayoutRepresentation", "LayoutSynchronization", "LayoutPlan", "NormalizedLayout",

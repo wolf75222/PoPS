@@ -5,25 +5,32 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
+    CARTESIAN_2D_COORDINATES,
+    CARTESIAN_3D_COORDINATES,
+    CARTESIAN_CELL_AREA,
+    CARTESIAN_CELL_LENGTH,
+    CARTESIAN_CELL_VOLUME,
+)
 from pops.descriptors_report import CapabilitySet, RequirementSet
-from pops.domain import BoundaryPair, RectangleFrame
+from pops.domain import BoundaryPair, CartesianDomainFrame, RectangleFrame
 from pops.frames import CartesianAxis
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 
-from ._layout_plan_contracts import (
-    CARTESIAN_2D_COORDINATES,
-    CARTESIAN_CELL_AREA,
-    NormalizedGeometry,
-)
+from ._layout_plan_contracts import NormalizedGeometry
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
-def _cells(value: Any) -> tuple[int, int]:
-    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 2:
-        raise TypeError("CartesianGrid.cells must contain exactly two integers")
+def _cells(value: Any, *, dimension: int) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) \
+            or len(value) != dimension:
+        raise TypeError(
+            "CartesianGrid.cells must contain exactly %d integers" % dimension
+        )
     result = []
     for index, count in enumerate(value):
         if isinstance(count, bool) or not isinstance(count, int):
@@ -31,7 +38,7 @@ def _cells(value: Any) -> tuple[int, int]:
         if count < 1:
             raise ValueError("CartesianGrid.cells[%d] must be >= 1" % index)
         result.append(count)
-    return (result[0], result[1])
+    return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,16 +90,18 @@ class PeriodicAxes:
 class CartesianGridTopology:
     """Canonical periodic/physical axis partition derived from one framed grid."""
 
-    axis_pairs: tuple[BoundaryPair, BoundaryPair]
+    axis_pairs: tuple[BoundaryPair, ...]
     periodic_axes: tuple[CartesianAxis, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.axis_pairs, tuple) or len(self.axis_pairs) != 2 \
+        if not isinstance(self.axis_pairs, tuple) or len(self.axis_pairs) not in (1, 2, 3) \
                 or any(not isinstance(pair, BoundaryPair) for pair in self.axis_pairs):
-            raise TypeError("CartesianGridTopology.axis_pairs must contain two BoundaryPair values")
+            raise TypeError(
+                "CartesianGridTopology.axis_pairs must contain 1, 2, or 3 BoundaryPair values"
+            )
         indices = tuple(pair.axis.index for pair in self.axis_pairs)
-        if indices != (0, 1):
-            raise ValueError("CartesianGridTopology axes must use canonical x,y order")
+        if indices != tuple(range(len(self.axis_pairs))):
+            raise ValueError("CartesianGridTopology axes must use canonical x,y,z order")
         if not isinstance(self.periodic_axes, tuple) or any(
                 not isinstance(axis, CartesianAxis) for axis in self.periodic_axes):
             raise TypeError(
@@ -137,21 +146,21 @@ class CartesianGrid:
 
     category: ClassVar[str] = "mesh"
     __pops_ir_immutable__: ClassVar[bool] = True
-    frame: RectangleFrame
-    cells: tuple[int, int]
+    frame: RectangleFrame | CartesianDomainFrame
+    cells: tuple[int, ...]
     periodic: PeriodicAxes | None
 
     def __init__(self, *, frame: Any, cells: Any, periodic: Any = None) -> None:
-        if not isinstance(frame, RectangleFrame):
+        if not isinstance(frame, (RectangleFrame, CartesianDomainFrame)):
             raise TypeError(
-                "CartesianGrid.frame must be a RectangleFrame returned by Rectangle.frame()")
+                "CartesianGrid.frame must be returned by a bounded Cartesian domain")
         if periodic is not None and not isinstance(periodic, PeriodicAxes):
             raise TypeError(
                 "CartesianGrid.periodic must be PeriodicAxes, never bool, strings or indices")
         if periodic is not None and any(axis not in frame.axes for axis in periodic.axes):
             raise ValueError("CartesianGrid periodic axes must belong to its exact frame")
         object.__setattr__(self, "frame", frame)
-        object.__setattr__(self, "cells", _cells(cells))
+        object.__setattr__(self, "cells", _cells(cells, dimension=len(frame.axes)))
         object.__setattr__(self, "periodic", periodic)
 
     @property
@@ -159,27 +168,31 @@ class CartesianGrid:
         return type(self).__name__
 
     @property
-    def axes(self) -> tuple[CartesianAxis, CartesianAxis]:
+    def axes(self) -> tuple[CartesianAxis, ...]:
         return self.frame.axes
 
     @property
-    def axis_order(self) -> tuple[CartesianAxis, CartesianAxis]:
+    def axis_order(self) -> tuple[CartesianAxis, ...]:
         return self.axes
 
     @property
-    def extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
+    def extent(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
         return (self.frame.lower, self.frame.upper)
 
     @property
-    def cell_widths(self) -> tuple[float, float]:
-        lengths = self.frame.lengths
-        return (lengths[0] / self.cells[0], lengths[1] / self.cells[1])
+    def cell_widths(self) -> tuple[float, ...]:
+        return tuple(
+            length / count for length, count in zip(
+                self.frame.lengths, self.cells, strict=True
+            )
+        )
 
     @property
     def topology(self) -> CartesianGridTopology:
         boundaries = self.frame.boundaries
-        return CartesianGridTopology((
-            boundaries.pair(self.axes[0]), boundaries.pair(self.axes[1])),
+        return CartesianGridTopology(tuple(
+            boundaries.pair(axis) for axis in self.axes
+        ),
             () if self.periodic is None else self.periodic.axes,
         )
 
@@ -189,7 +202,7 @@ class CartesianGrid:
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet({
             "geometry": "cartesian",
-            "dim": 2,
+            "dim": len(self.cells),
             "bounded_axes": len(self.topology.physical_axes),
             "periodic_axes": len(self.topology.periodic_axes),
         })
@@ -206,9 +219,20 @@ class CartesianGrid:
 
     def normalized_geometry(self) -> NormalizedGeometry:
         """Project the exact framed grid without relying on runtime-engine internals."""
+        dimension = len(self.cells)
+        coordinate_systems = {
+            1: CARTESIAN_1D_COORDINATES,
+            2: CARTESIAN_2D_COORDINATES,
+            3: CARTESIAN_3D_COORDINATES,
+        }
+        cell_measures = {
+            1: CARTESIAN_CELL_LENGTH,
+            2: CARTESIAN_CELL_AREA,
+            3: CARTESIAN_CELL_VOLUME,
+        }
         return NormalizedGeometry(
-            coordinate_system=CARTESIAN_2D_COORDINATES,
-            cell_measure=CARTESIAN_CELL_AREA,
+            coordinate_system=coordinate_systems[dimension],
+            cell_measure=cell_measures[dimension],
             axis_names=tuple(axis.name for axis in self.axis_order),
             lower=self.frame.lower,
             upper=self.frame.upper,
@@ -287,8 +311,18 @@ class CartesianGrid:
             raise TypeError("CartesianGrid topology has an unsupported shape")
         periodic_axes = tuple(
             CartesianAxis.from_dict(axis) for axis in topology["periodic_axes"])
+        raw_frame = data["frame"]
+        if not isinstance(raw_frame, Mapping):
+            raise TypeError("CartesianGrid frame data has an unsupported shape")
+        frame_type = raw_frame.get("frame_type")
+        if frame_type == "rectangle_cartesian_2d":
+            frame = RectangleFrame.from_dict(raw_frame)
+        elif frame_type == "cartesian_box":
+            frame = CartesianDomainFrame.from_dict(raw_frame)
+        else:
+            raise ValueError("CartesianGrid frame uses an unsupported provider")
         result = cls(
-            frame=RectangleFrame.from_dict(data["frame"]),
+            frame=frame,
             cells=data["cells"],
             periodic=None if not periodic_axes else PeriodicAxes(periodic_axes),
         )
