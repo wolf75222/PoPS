@@ -1,4 +1,4 @@
-"""Dimension-generic VTK topology without weakening the native two-dimensional solver."""
+"""Dimension-generic geometry and VTK topology contracts."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -24,6 +24,7 @@ from pops.output import (
     read_paraview_parallel,
 )
 from pops.output._consumer_contracts import ParallelMode
+from pops.output.data import _NATIVE_GEOMETRY_ARRAYS
 from pops.output._writers.paraview import _series_identity, _stage_pvtu, _vtu_schema
 
 
@@ -67,9 +68,6 @@ def _snapshot(
         (lower + cell_shape,),
         np.zeros(cell_shape, dtype=np.bool_),
         np.ones(cell_shape, dtype=np.float64),
-        coordinate_system="pops://coordinates/cartesian-%dd@1" % dimension,
-        cell_measure="pops://cell-measures/cartesian-%dd@1" % dimension,
-        axis_names=tuple("xyz"[:dimension]),
     )
     snapshot = OutputSnapshot(
         OutputClock.at("macro", 0.5, 2, stage="accepted"),
@@ -90,6 +88,58 @@ def _stage(tmp_path, snapshot: OutputSnapshot, request: OutputRequest, name: str
         snapshot, request, tmp_path / name)
     session.stage()
     return session
+
+
+@pytest.mark.parametrize(
+    ("cell_shape", "coordinate_system", "cell_measure", "axis_names"),
+    (
+        ((3,), "pops://coordinates/cartesian-1d@1",
+         "pops://cell-measures/cartesian-length@1", ("x",)),
+        ((2, 3), "pops://coordinates/cartesian-2d@1",
+         "pops://cell-measures/cartesian-area@1", ("x", "y")),
+        ((2, 1, 3), "pops://coordinates/cartesian-3d@1",
+         "pops://cell-measures/cartesian-volume@1", ("x", "y", "z")),
+    ),
+)
+def test_level_geometry_infers_cartesian_contract_from_cell_shape(
+    cell_shape,
+    coordinate_system,
+    cell_measure,
+    axis_names,
+):
+    snapshot, _request = _snapshot(cell_shape)
+    geometry = snapshot.geometries[0]
+
+    assert geometry.spatial_rank == len(cell_shape)
+    assert geometry.coordinate_system == coordinate_system
+    assert geometry.cell_measure == cell_measure
+    assert geometry.axis_names == axis_names
+
+
+@pytest.mark.parametrize("cell_shape", ((4,), (2, 1, 3)))
+def test_native_level_geometry_borrows_rank_generic_arrays(cell_shape):
+    dimension = len(cell_shape)
+    valid = np.ones(cell_shape, dtype=np.bool_)
+    coverage = np.zeros(cell_shape, dtype=np.bool_)
+    volumes = np.ones(cell_shape, dtype=np.float64)
+    geometry = LevelGeometry(
+        _identity("layout-plan", "native-%dd" % dimension),
+        "uniform",
+        0,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+        cell_shape,
+        ((0,) * dimension + cell_shape,),
+        coverage,
+        volumes,
+        _native_valid_cells=valid,
+        _native_arrays=_NATIVE_GEOMETRY_ARRAYS,
+    )
+
+    assert geometry.spatial_rank == dimension
+    assert np.shares_memory(geometry.valid_cells, valid)
+    assert np.shares_memory(geometry.coverage, coverage)
+    assert np.shares_memory(geometry.cell_volumes, volumes)
 
 
 def test_vtu_round_trip_uses_shared_points_and_vtk_lines_in_one_dimension(tmp_path):
@@ -167,8 +217,9 @@ def test_nodal_field_requires_state_none_until_state_association_is_generic(tmp_
     session.abort_prepare()
 
 
-def test_pvtu_authenticates_nodal_schema_as_parallel_point_data(tmp_path):
-    snapshot, serial_request = _snapshot((2, 2), centering="node")
+@pytest.mark.parametrize("cell_shape", ((3,), (2, 2), (2, 1, 2)))
+def test_pvtu_authenticates_nodal_schema_as_parallel_point_data(tmp_path, cell_shape):
+    snapshot, serial_request = _snapshot(cell_shape, centering="node")
     rank0_request = replace(
         serial_request, parallel_mode=ParallelMode.PER_RANK, rank=0, size=2)
     rank1_request = replace(rank0_request, rank=1)

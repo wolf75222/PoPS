@@ -127,19 +127,28 @@ def _frame(
     mode: ParallelMode = ParallelMode.SERIAL,
     centering: str = "cell",
     native_geometry_arrays=None,
-    coordinate_system: str = "pops://coordinates/cartesian-2d@1",
-    origin=(0.0, 0.0),
-    spacing=(0.5, 0.25),
+    coordinate_system: str | None = None,
+    cell_shape: tuple[int, ...] = (2, 2),
+    origin: tuple[float, ...] | None = None,
+    spacing: tuple[float, ...] | None = None,
     field_name="temperature",
     component_names=("temperature",),
 ):
+    dimension = len(cell_shape)
+    if origin is None:
+        origin = (0.0,) * dimension
+    if spacing is None:
+        spacing = (0.5, 0.25) if dimension == 2 else tuple(
+            1.0 / (axis + 2) for axis in range(dimension)
+        )
     layout = _identity("layout-plan", "uniform")
     component = _identity("component-manifest", "heat")
     owner = OwnerPath.case("case").child(OwnerKind.BLOCK, "heat")
     reference = Handle(field_name, kind="state", owner=owner)
     key = FieldKey(reference, component, layout, 0, "accepted")
-    coverage = np.asarray([[False, True], [False, False]])
-    volumes = np.full((2, 2), 0.125)
+    coverage = np.zeros(cell_shape, dtype=np.bool_)
+    coverage.reshape(-1)[min(1, coverage.size - 1)] = True
+    volumes = np.full(cell_shape, float(np.prod(spacing)))
     geometry_kwargs = {}
     if native_geometry_arrays is not None:
         valid, coverage, volumes = native_geometry_arrays
@@ -153,18 +162,22 @@ def _frame(
         0,
         origin,
         spacing,
-        (2, 2),
-        ((0, 0, 2, 2),),
+        cell_shape,
+        ((0,) * dimension + cell_shape,),
         coverage,
         volumes,
         coordinate_system=coordinate_system,
         **geometry_kwargs,
     )
-    spatial_shape = (2, 2) if centering == "cell" else (3, 3)
+    spatial_shape = (
+        cell_shape
+        if centering == "cell"
+        else tuple(extent + 1 for extent in cell_shape)
+    )
     piece = ArrayPiece(
-        (0, 0),
+        (0,) * dimension,
         spatial_shape,
-        np.arange(1, 1 + spatial_shape[0] * spatial_shape[1], dtype=np.float64).reshape(
+        np.arange(1, 1 + np.prod(spatial_shape), dtype=np.float64).reshape(
             (1,) + spatial_shape
         ),
         0,
@@ -507,9 +520,214 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
     assert reports[0].receipt.detail["conduit_module"] == "test_catalyst_conduit"
 
 
+@pytest.mark.parametrize(
+    ("cell_shape", "origin", "spacing", "expected_dims"),
+    (
+        ((3,), (1.0,), (0.25,), {"i": 4}),
+        ((2, 3), (1.0, 2.0), (0.25, 0.5), {"i": 4, "j": 3}),
+        (
+            (2, 1, 3),
+            (1.0, 2.0, 3.0),
+            (0.25, 0.5, 0.75),
+            {"i": 4, "j": 2, "k": 3},
+        ),
+    ),
+    ids=("line", "quad", "hex"),
+)
+def test_catalyst_uniform_blueprint_is_spatial_rank_generic(
+    tmp_path: Path,
+    cell_shape: tuple[int, ...],
+    origin: tuple[float, ...],
+    spacing: tuple[float, ...],
+    expected_dims: dict[str, int],
+):
+    pipeline = tmp_path / ("rank_%d_pipeline.py" % len(cell_shape))
+    pipeline.write_text("# dimension-generic Catalyst topology\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+    frame = _frame(
+        cell_shape=cell_shape,
+        origin=origin,
+        spacing=spacing,
+    )
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    coordset = next(
+        path.removesuffix("/type")
+        for path, value in paths.items()
+        if "/coordsets/" in path and path.endswith("/type") and value == "uniform"
+    )
+    topology = next(
+        path.removesuffix("/type")
+        for path, value in paths.items()
+        if "/topologies/" in path and path.endswith("/type") and value == "uniform"
+    )
+    assert {
+        path.rsplit("/", 1)[-1]: value
+        for path, value in paths.items()
+        if path.startswith(coordset + "/dims/")
+    } == expected_dims
+    assert {
+        path.rsplit("/", 1)[-1]: value
+        for path, value in paths.items()
+        if path.startswith(coordset + "/origin/")
+    } == dict(zip("xyz"[:len(origin)], origin, strict=True))
+    assert {
+        path.rsplit("/", 1)[-1]: value
+        for path, value in paths.items()
+        if path.startswith(coordset + "/spacing/")
+    } == dict(zip(
+        ("d" + axis for axis in "xyz"[:len(spacing)]),
+        spacing,
+        strict=True,
+    ))
+    assert paths[topology + "/coordset"] == coordset.rsplit("/", 1)[-1]
+    temperature = next(
+        path.removesuffix("/display_name")
+        for path, value in paths.items()
+        if path.endswith("/display_name") and value == "temperature"
+    )
+    assert np.array_equal(
+        paths[temperature + "/values"],
+        np.arange(1, np.prod(cell_shape) + 1, dtype=np.float64),
+    )
+    assert next(value for path, value in paths.items() if path.endswith("/state/domain_id")) == 0
+    assert next(value for path, value in paths.items() if path.endswith("/state/level_id")) == 0
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_catalyst_amr_domains_keep_rank_level_and_domain_identity(
+    tmp_path: Path,
+    dimension: int,
+):
+    coarse_shape = (2,) * dimension
+    fine_shape = (4,) * dimension
+    base = _frame(cell_shape=coarse_shape)
+    coarse_field = base.snapshot.fields[0]
+    layout = coarse_field.key.layout_identity
+    lower = (0,) * dimension
+    coarse_geometry = LevelGeometry(
+        layout,
+        "amr",
+        0,
+        (0.0,) * dimension,
+        (0.5,) * dimension,
+        coarse_shape,
+        (lower + coarse_shape,),
+        np.ones(coarse_shape, dtype=np.bool_),
+        np.full(coarse_shape, 0.5 ** dimension),
+    )
+    fine_geometry = LevelGeometry(
+        layout,
+        "amr",
+        1,
+        (0.0,) * dimension,
+        (0.25,) * dimension,
+        fine_shape,
+        (lower + fine_shape,),
+        np.zeros(fine_shape, dtype=np.bool_),
+        np.full(fine_shape, 0.25 ** dimension),
+    )
+    fine_key = FieldKey(
+        coarse_field.key.reference,
+        coarse_field.key.component_manifest_identity,
+        layout,
+        1,
+        coarse_field.key.state_id,
+    )
+    fine_field = FieldPayload(
+        fine_key,
+        "cell",
+        coarse_field.units,
+        coarse_field.component_names,
+        fine_shape,
+        (
+            ArrayPiece(
+                lower,
+                fine_shape,
+                np.arange(1, np.prod(fine_shape) + 1, dtype=np.float64).reshape(
+                    (1,) + fine_shape
+                ),
+                0,
+                0,
+                False,
+            ),
+        ),
+    )
+    snapshot = OutputSnapshot(
+        base.snapshot.clock,
+        base.snapshot.provenance,
+        (coarse_geometry, fine_geometry),
+        (coarse_field, fine_field),
+        dict(base.snapshot.metadata),
+    )
+    frame = ObserverFrame(
+        snapshot,
+        OutputRequest(
+            "live-temperature-amr",
+            (coarse_field.key, fine_key),
+            ParallelMode.SERIAL,
+        ),
+    )
+    pipeline = tmp_path / ("amr_rank_%d_pipeline.py" % dimension)
+    pipeline.write_text("# dimension-generic AMR Catalyst topology\n")
+    catalyst_module = _CatalystModule()
+    session = Catalyst(
+        pipeline=str(pipeline),
+        provider=CatalystPythonProvider(
+            catalyst_module=catalyst_module,
+            conduit_module=_ConduitModule(),
+        ),
+    ).open_session(_serial_context())
+
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
+    session.execute(frame)
+    session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    assert sorted(
+        value for path, value in paths.items() if path.endswith("/state/domain_id")
+    ) == [0, 1]
+    assert sorted(
+        value for path, value in paths.items() if path.endswith("/state/level_id")
+    ) == [0, 1]
+    for axis in "ijk"[:dimension]:
+        assert sorted(
+            value for path, value in paths.items()
+            if path.endswith("/dims/" + axis)
+        ) == [3, 5]
+    field_sizes = sorted(
+        value.size
+        for path, value in paths.items()
+        if path.endswith("/values")
+        and paths.get(path.removesuffix("/values") + "/display_name") == "temperature"
+    )
+    assert field_sizes == [2 ** dimension, 4 ** dimension]
+
+
+@pytest.mark.parametrize(
+    ("cell_shape", "expected_dims"),
+    (
+        ((3,), {"i": 0}),
+        ((2, 2), {"i": 0, "j": 1}),
+        ((2, 1, 3), {"i": 0, "j": 1, "k": 1}),
+    ),
+)
 def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cell_shape: tuple[int, ...],
+    expected_dims: dict[str, int],
 ):
     pipeline = tmp_path / "empty_rank_pipeline.py"
     pipeline.write_text("# collective rank with no local mesh partition\n")
@@ -527,7 +745,9 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
         execution_context,
     )
 
-    frame = _without_local_pieces(_frame(mode=ParallelMode.COLLECTIVE))
+    frame = _without_local_pieces(
+        _frame(mode=ParallelMode.COLLECTIVE, cell_shape=cell_shape)
+    )
 
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     session.execute(frame)
@@ -545,6 +765,12 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
         path.endswith("/topologies/mesh_000000/type") and value == "uniform"
         for path, value in child_paths.items()
     )
+    dims = {
+        path.rsplit("/", 1)[-1]: value
+        for path, value in child_paths.items()
+        if "/coordsets/coords_000000/dims/" in path
+    }
+    assert dims == expected_dims
     empty_arrays = [
         value
         for path, value in child_paths.items()
@@ -554,14 +780,15 @@ def test_collective_catalyst_publishes_empty_mesh_when_rank_owns_no_geometry_box
     assert all(array.size == 0 for array in empty_arrays)
 
 
-def test_collective_catalyst_rejects_unproved_polar_empty_peer(
+def test_collective_catalyst_publishes_schema_complete_polar_empty_peer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     pipeline = tmp_path / "polar_empty_rank_pipeline.py"
-    pipeline.write_text("# polar collective zero-cell peer is not proved\n")
+    pipeline.write_text("# polar collective zero-cell peer\n")
+    catalyst_module = _CatalystModule()
     provider = CatalystPythonProvider(
-        catalyst_module=_CatalystModule(),
+        catalyst_module=catalyst_module,
         conduit_module=_FetchTrackingConduitModule(),
     )
     execution_context, worker_lane, _agreements = _collective_context(monkeypatch)
@@ -580,12 +807,24 @@ def test_collective_catalyst_rejects_unproved_polar_empty_peer(
     )
 
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
-    with pytest.raises(
-        RuntimeError,
-        match="zero-cell peers currently prove Cartesian 2D only",
-    ):
-        session.execute(frame)
+    session.execute(frame)
     session.finalize()
+
+    paths = catalyst_module.operations[1][1].values
+    assert next(
+        value for path, value in paths.items()
+        if path.endswith("/coordsets/coords_000000/type")
+    ) == "explicit"
+    assert next(
+        value for path, value in paths.items()
+        if path.endswith("/topologies/mesh_000000/elements/shape")
+    ) == "quad"
+    empty_geometry = [
+        value for path, value in paths.items()
+        if path.endswith(("/values/x", "/values/y", "/elements/connectivity"))
+    ]
+    assert len(empty_geometry) == 3
+    assert all(array.size == 0 for array in empty_geometry)
 
 
 def test_catalyst_rejects_nested_async_environment(tmp_path: Path, monkeypatch):

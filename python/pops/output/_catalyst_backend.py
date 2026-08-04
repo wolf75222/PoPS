@@ -2,8 +2,9 @@
 
 The dependency is imported lazily.  Production uses the installed ``catalyst`` and ``conduit``
 modules; focused tests inject API-compatible modules without pretending that Catalyst is present.
-The native runtime currently supplies rank-2 cell-centered fields.  Live visualization accepts a
-serial frame or collective rank-local frames on an authenticated duplicated MPI observer lane.
+Live visualization consumes the immutable rank-1/2/3 ``LevelGeometry`` and field-piece contract;
+it accepts a serial frame or collective rank-local frames on an authenticated duplicated MPI
+observer lane.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
     CARTESIAN_2D_COORDINATES,
+    CARTESIAN_3D_COORDINATES,
     POLAR_ANNULUS_2D_COORDINATES,
 )
 from pops.output._consumer_contracts import ParallelMode
@@ -27,7 +30,23 @@ from pops.output.observers import (
     ObserverRun,
     ObserverWorkerCollectiveLost,
 )
-from pops.output._writers.paraview import _field_display_names, _field_families
+from pops.output._writers.paraview import (
+    _cell_corner_offsets,
+    _field_display_names,
+    _field_families,
+)
+from pops.output._writers.common import validate_field_pieces
+
+
+_BLUEPRINT_INDEX_AXES = ("i", "j", "k")
+_BLUEPRINT_COORDINATE_AXES = ("x", "y", "z")
+_BLUEPRINT_SPACING_AXES = ("dx", "dy", "dz")
+_BLUEPRINT_CELL_SHAPES = {1: "line", 2: "quad", 3: "hex"}
+_CARTESIAN_COORDINATES = {
+    1: CARTESIAN_1D_COORDINATES,
+    2: CARTESIAN_2D_COORDINATES,
+    3: CARTESIAN_3D_COORDINATES,
+}
 
 
 def _module_version(module: Any) -> str:
@@ -58,6 +77,123 @@ def _block_name(geometry: LevelGeometry) -> str:
     """Name one logical PDC block identically on every MPI rank."""
 
     return "layout_%s_level_%04d" % (geometry.layout_identity.hexdigest[:16], geometry.level)
+
+
+def _box_bounds(
+    geometry: LevelGeometry,
+    box_index: int,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    dimension = geometry.spatial_rank
+    box = geometry.boxes[box_index]
+    return box[:dimension], box[dimension:]
+
+
+def _spatial_slices(
+    lower: tuple[int, ...],
+    upper: tuple[int, ...],
+) -> tuple[slice, ...]:
+    return tuple(slice(lo, hi) for lo, hi in zip(lower, upper, strict=True))
+
+
+def _structured_connectivity(cell_shape: tuple[int, ...]) -> Any:
+    """Return VTK-wound line/quad/hex connectivity for one dense logical box."""
+
+    import numpy as np
+
+    dimension = len(cell_shape)
+    point_shape = tuple(extent + 1 for extent in cell_shape)
+    point_ids = np.arange(np.prod(point_shape), dtype=np.int64).reshape(point_shape)
+    cell_indices = np.indices(cell_shape, dtype=np.int64)
+    connectivity = np.stack(
+        tuple(
+            point_ids[tuple(
+                cell_indices[axis] + corner[axis]
+                for axis in range(dimension)
+            )]
+            for corner in _cell_corner_offsets(dimension)
+        ),
+        axis=-1,
+    )
+    return np.ascontiguousarray(connectivity).reshape(-1)
+
+
+def _add_blueprint_topology(
+    root: Any,
+    base: str,
+    geometry: LevelGeometry,
+    lower: tuple[int, ...],
+    upper: tuple[int, ...],
+    coordset: str,
+    topology: str,
+    *,
+    empty: bool,
+) -> None:
+    """Materialize one exact Blueprint topology at the external Catalyst boundary."""
+
+    import numpy as np
+
+    dimension = geometry.spatial_rank
+    expected_cartesian = _CARTESIAN_COORDINATES[dimension]
+    coordset_base = base + "/coordsets/%s" % coordset
+    topology_base = base + "/topologies/%s" % topology
+    coordinate_lower = tuple(reversed(lower))
+    coordinate_upper = tuple(reversed(upper))
+    if geometry.coordinate_system == expected_cartesian:
+        root[coordset_base + "/type"] = "uniform"
+        for axis, (lo, hi, origin, spacing) in enumerate(zip(
+            coordinate_lower,
+            coordinate_upper,
+            geometry.origin,
+            geometry.spacing,
+            strict=True,
+        )):
+            point_count = hi - lo + 1
+            if empty:
+                point_count = 0 if axis == 0 else 1
+            root[
+                coordset_base + "/dims/" + _BLUEPRINT_INDEX_AXES[axis]
+            ] = point_count
+            root[
+                coordset_base + "/origin/" + _BLUEPRINT_COORDINATE_AXES[axis]
+            ] = origin + lo * spacing
+            root[
+                coordset_base + "/spacing/" + _BLUEPRINT_SPACING_AXES[axis]
+            ] = spacing
+        root[topology_base + "/type"] = "uniform"
+        root[topology_base + "/coordset"] = coordset
+        return
+    if geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES:
+        if dimension != 2:
+            raise ValueError("polar-annulus coordinates require spatial rank two")
+        root[coordset_base + "/type"] = "explicit"
+        if empty:
+            x = np.empty(0, dtype=np.float64)
+            y = np.empty(0, dtype=np.float64)
+            connectivity = np.empty(0, dtype=np.int64)
+        else:
+            logical = np.indices(
+                tuple(hi - lo + 1 for lo, hi in zip(lower, upper, strict=True)),
+                dtype=np.int64,
+            )
+            for axis, lo in enumerate(lower):
+                logical[axis] += lo
+            radius = geometry.origin[0] + logical[-1] * geometry.spacing[0]
+            angle = geometry.origin[1] + logical[-2] * geometry.spacing[1]
+            x = np.ascontiguousarray(radius * np.cos(angle)).reshape(-1)
+            y = np.ascontiguousarray(radius * np.sin(angle)).reshape(-1)
+            connectivity = _structured_connectivity(tuple(
+                hi - lo for lo, hi in zip(lower, upper, strict=True)
+            ))
+        root[coordset_base + "/values/x"] = x
+        root[coordset_base + "/values/y"] = y
+        root[topology_base + "/type"] = "unstructured"
+        root[topology_base + "/coordset"] = coordset
+        root[topology_base + "/elements/shape"] = _BLUEPRINT_CELL_SHAPES[dimension]
+        root[topology_base + "/elements/connectivity"] = connectivity
+        return
+    raise NotImplementedError(
+        "Catalyst has no proved coordinate mapping for %s" % geometry.coordinate_system
+    )
 
 
 class CatalystPythonProvider:
@@ -466,70 +602,29 @@ class _CatalystPythonSession:
         layout_ordinal: int,
         box_index: int,
         partition_index: int,
+        domain_id: int,
         domain_name: str,
         display_names: Mapping[str, str],
     ) -> None:
         import numpy as np
 
-        if len(geometry.cell_shape) != 2:
-            raise NotImplementedError("Catalyst Python provider currently proves rank-2 meshes")
-        jlo, ilo, jhi, ihi = geometry.boxes[box_index]
+        lower, upper = _box_bounds(geometry, box_index)
         base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % partition_index
         topology = "mesh_%06d" % partition_index
-        if geometry.coordinate_system == CARTESIAN_2D_COORDINATES:
-            root[base + "/coordsets/%s/type" % coordset] = "uniform"
-            root[base + "/coordsets/%s/dims/i" % coordset] = ihi - ilo + 1
-            root[base + "/coordsets/%s/dims/j" % coordset] = jhi - jlo + 1
-            root[base + "/coordsets/%s/origin/x" % coordset] = (
-                geometry.origin[0] + ilo * geometry.spacing[0]
-            )
-            root[base + "/coordsets/%s/origin/y" % coordset] = (
-                geometry.origin[1] + jlo * geometry.spacing[1]
-            )
-            root[base + "/coordsets/%s/spacing/dx" % coordset] = geometry.spacing[0]
-            root[base + "/coordsets/%s/spacing/dy" % coordset] = geometry.spacing[1]
-            root[base + "/topologies/%s/type" % topology] = "uniform"
-            root[base + "/topologies/%s/coordset" % topology] = coordset
-        elif geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES:
-            radial = (
-                geometry.origin[0] + np.arange(ilo, ihi + 1, dtype=np.float64) * geometry.spacing[0]
-            )
-            theta = (
-                geometry.origin[1] + np.arange(jlo, jhi + 1, dtype=np.float64) * geometry.spacing[1]
-            )
-            theta_grid, radial_grid = np.meshgrid(theta, radial, indexing="ij")
-            root[base + "/coordsets/%s/type" % coordset] = "explicit"
-            root[base + "/coordsets/%s/values/x" % coordset] = np.ascontiguousarray(
-                radial_grid * np.cos(theta_grid)
-            ).reshape(-1)
-            root[base + "/coordsets/%s/values/y" % coordset] = np.ascontiguousarray(
-                radial_grid * np.sin(theta_grid)
-            ).reshape(-1)
-            ni = ihi - ilo
-            nj = jhi - jlo
-            lower_left = np.arange(nj * ni, dtype=np.int64).reshape(nj, ni)
-            lower_left += np.arange(nj, dtype=np.int64)[:, None]
-            connectivity = np.stack(
-                (
-                    lower_left,
-                    lower_left + 1,
-                    lower_left + ni + 2,
-                    lower_left + ni + 1,
-                ),
-                axis=-1,
-            )
-            root[base + "/topologies/%s/type" % topology] = "unstructured"
-            root[base + "/topologies/%s/coordset" % topology] = coordset
-            root[base + "/topologies/%s/elements/shape" % topology] = "quad"
-            root[base + "/topologies/%s/elements/connectivity" % topology] = np.ascontiguousarray(
-                connectivity
-            ).reshape(-1)
-        else:
-            raise NotImplementedError(
-                "Catalyst has no proved coordinate mapping for %s" % geometry.coordinate_system
-            )
+        _add_blueprint_topology(
+            root,
+            base,
+            geometry,
+            lower,
+            upper,
+            coordset,
+            topology,
+            empty=False,
+        )
         root[base + "/state/level"] = geometry.level
+        root[base + "/state/level_id"] = geometry.level
+        root[base + "/state/domain_id"] = domain_id
         root[base + "/state/cycle"] = frame.macro_step
         root[base + "/state/time"] = frame.physical_time
 
@@ -556,7 +651,8 @@ class _CatalystPythonSession:
                 root[prefix + "/values"] = np.ascontiguousarray(values).reshape(-1)
             return internal_name
 
-        coverage = geometry.coverage[jlo:jhi, ilo:ihi].astype(np.uint8, copy=False)
+        spatial = _spatial_slices(lower, upper)
+        coverage = geometry.coverage[spatial].astype(np.uint8, copy=False)
         cell_field(
             "pops_layout",
             np.full(coverage.shape, layout_ordinal, dtype=np.int32),
@@ -570,7 +666,7 @@ class _CatalystPythonSession:
         # scientific values from the live Blueprint domain.
         ghost_field = cell_field("vtkGhostType", coverage * np.uint8(8))
         root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
-        cell_field("pops_cell_volume", geometry.cell_volumes[jlo:jhi, ilo:ihi])
+        cell_field("pops_cell_volume", geometry.cell_volumes[spatial])
 
         names: set[str] = set()
         for field in self._geometry_fields(frame, geometry):
@@ -595,27 +691,30 @@ class _CatalystPythonSession:
         frame: ObserverFrame,
         geometry: LevelGeometry,
         box_index: int,
+        domain_id: int,
         domain_name: str,
         display_names: Mapping[str, str],
     ) -> None:
         """Publish one schema-complete zero-cell block for a box owned by another MPI rank."""
         import numpy as np
 
-        if len(geometry.cell_shape) != 2:
-            raise NotImplementedError("Catalyst Python provider currently proves rank-2 meshes")
-        if geometry.coordinate_system != CARTESIAN_2D_COORDINATES:
-            raise NotImplementedError(
-                "collective Catalyst zero-cell peers currently prove Cartesian 2D only"
-            )
+        lower, upper = _box_bounds(geometry, box_index)
         base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % box_index
         topology = "mesh_%06d" % box_index
-        root[base + "/coordsets/%s/type" % coordset] = "uniform"
-        root[base + "/coordsets/%s/dims/i" % coordset] = 0
-        root[base + "/coordsets/%s/dims/j" % coordset] = 1
-        root[base + "/topologies/%s/type" % topology] = "uniform"
-        root[base + "/topologies/%s/coordset" % topology] = coordset
+        _add_blueprint_topology(
+            root,
+            base,
+            geometry,
+            lower,
+            upper,
+            coordset,
+            topology,
+            empty=True,
+        )
         root[base + "/state/level"] = geometry.level
+        root[base + "/state/level_id"] = geometry.level
+        root[base + "/state/domain_id"] = domain_id
         root[base + "/state/cycle"] = frame.macro_step
         root[base + "/state/time"] = frame.physical_time
 
@@ -695,6 +794,14 @@ class _CatalystPythonSession:
         if callable(fetch):
             fetch("catalyst/channels/%s/data" % self._channel)
         selected_fields = frame.snapshot.select(frame.request)
+        for field in selected_fields:
+            validate_field_pieces(
+                field,
+                frame.snapshot.geometry(field.key),
+                complete=frame.request.parallel_mode is ParallelMode.SERIAL,
+                rank=frame.request.rank,
+                size=frame.request.size,
+            )
         families = _field_families(selected_fields)
         names = _field_display_names(families)
         display_names = {
@@ -708,7 +815,11 @@ class _CatalystPythonSession:
         ]
         if not geometries:
             raise ValueError("Catalyst frame has no selected geometry")
+        dimensions = {geometry.spatial_rank for geometry in geometries}
+        if len(dimensions) != 1:
+            raise ValueError("one Catalyst channel requires one common spatial rank")
         populated_blocks = []
+        domain_id = 0
         for layout_ordinal, geometry in enumerate(geometries):
             block_name = _block_name(geometry)
             fields = self._geometry_fields(frame, geometry)
@@ -732,13 +843,21 @@ class _CatalystPythonSession:
                         layout_ordinal,
                         box_index,
                         box_index,
+                        domain_id,
                         domain_name,
                         display_names,
                     )
                 else:
                     self._add_empty_domain(
-                        node, frame, geometry, box_index, domain_name, display_names
+                        node,
+                        frame,
+                        geometry,
+                        box_index,
+                        domain_id,
+                        domain_name,
+                        display_names,
                     )
+                domain_id += 1
 
         blueprint = getattr(self._conduit, "blueprint", None)
         mesh = getattr(blueprint, "mesh", None)

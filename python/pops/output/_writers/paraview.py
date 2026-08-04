@@ -319,7 +319,7 @@ def _physical_point_coordinates(
     """Map rank-1/2/3 logical vertices to VTK's three Cartesian coordinates."""
     import numpy as np
 
-    dimension = len(geometry.cell_shape)
+    dimension = geometry.spatial_rank
     if len(logical_indices) != dimension:
         raise ValueError("ParaView point indices differ from geometry spatial rank")
     cartesian = {
@@ -1658,7 +1658,7 @@ class ParaViewWriter:
                 seen.add(geometry.key)
                 geometries.append(geometry)
         geometries.sort(key=lambda item: item.key)
-        dimensions = {len(geometry.cell_shape) for geometry in geometries}
+        dimensions = {geometry.spatial_rank for geometry in geometries}
         if len(dimensions) != 1 or not dimensions.issubset({1, 2, 3}):
             raise ValueError(
                 "one ParaView VTU snapshot requires one common spatial rank 1, 2, or 3")

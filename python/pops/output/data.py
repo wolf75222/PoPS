@@ -13,8 +13,12 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
     CARTESIAN_2D_COORDINATES,
+    CARTESIAN_3D_COORDINATES,
     CARTESIAN_CELL_AREA as _CARTESIAN_CELL_AREA,
+    POLAR_ANNULUS_2D_COORDINATES,
+    POLAR_ANNULUS_CELL_AREA,
 )
 from pops.identity import Identity, make_identity
 from pops.model import Handle
@@ -22,6 +26,17 @@ from pops.model import Handle
 
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
 _NATIVE_GEOMETRY_ARRAYS = object()
+_CARTESIAN_COORDINATES = {
+    1: CARTESIAN_1D_COORDINATES,
+    2: CARTESIAN_2D_COORDINATES,
+    3: CARTESIAN_3D_COORDINATES,
+}
+_CARTESIAN_CELL_MEASURES = {
+    1: "pops://cell-measures/cartesian-length@1",
+    2: _CARTESIAN_CELL_AREA,
+    3: "pops://cell-measures/cartesian-volume@1",
+}
+_CARTESIAN_AXIS_NAMES = ("x", "y", "z")
 
 
 def _box_slices(lower: tuple[int, ...], upper: tuple[int, ...]) -> tuple[slice, ...]:
@@ -207,9 +222,9 @@ class LevelGeometry:
     boxes: tuple[tuple[int, ...], ...]
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
-    coordinate_system: str = CARTESIAN_2D_COORDINATES
-    cell_measure: str = _CARTESIAN_CELL_AREA
-    axis_names: tuple[str, ...] = ("x", "y")
+    coordinate_system: str | None = None
+    cell_measure: str | None = None
+    axis_names: tuple[str, ...] = ()
     valid_cells: Any = field(init=False, repr=False, compare=False)
     _native_valid_cells: InitVar[Any] = None
     _native_arrays: InitVar[Any] = None
@@ -225,10 +240,6 @@ class LevelGeometry:
             self.layout_identity, "layout_identity"))
         if self.layout_kind not in {"uniform", "amr"}:
             raise ValueError("layout_kind must be exactly 'uniform' or 'amr'")
-        for name in ("coordinate_system", "cell_measure"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.startswith("pops://") or "@" not in value:
-                raise ValueError("geometry %s must be a versioned pops:// URI" % name)
         if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
             raise ValueError("geometry level must be an integer >= 0")
         shape = tuple(self.cell_shape)
@@ -237,11 +248,33 @@ class LevelGeometry:
                 for item in shape):
             raise ValueError(
                 "cell_shape must have spatial rank 1, 2, or 3 and positive integer extents")
-        if native and len(shape) != 2:
-            raise ValueError("native LevelGeometry authority is currently exactly two-dimensional")
         object.__setattr__(self, "cell_shape", shape)
         dimension = len(shape)
+        coordinate_system = self.coordinate_system
+        if coordinate_system is None:
+            coordinate_system = _CARTESIAN_COORDINATES[dimension]
+        if not isinstance(coordinate_system, str) \
+                or not coordinate_system.startswith("pops://") or "@" not in coordinate_system:
+            raise ValueError("geometry coordinate_system must be a versioned pops:// URI")
+        object.__setattr__(self, "coordinate_system", coordinate_system)
+        cell_measure = self.cell_measure
+        if cell_measure is None:
+            if coordinate_system == _CARTESIAN_COORDINATES[dimension]:
+                cell_measure = _CARTESIAN_CELL_MEASURES[dimension]
+            elif coordinate_system == POLAR_ANNULUS_2D_COORDINATES and dimension == 2:
+                cell_measure = POLAR_ANNULUS_CELL_AREA
+            else:
+                raise ValueError(
+                    "geometry cell_measure must be explicit for coordinate system %s"
+                    % coordinate_system
+                )
+        if not isinstance(cell_measure, str) \
+                or not cell_measure.startswith("pops://") or "@" not in cell_measure:
+            raise ValueError("geometry cell_measure must be a versioned pops:// URI")
+        object.__setattr__(self, "cell_measure", cell_measure)
         axis_names = tuple(self.axis_names)
+        if not axis_names:
+            axis_names = _CARTESIAN_AXIS_NAMES[:dimension]
         if len(axis_names) != dimension or any(
                 not isinstance(item, str) or not item for item in axis_names) \
                 or len(set(axis_names)) != dimension:
@@ -317,6 +350,12 @@ class LevelGeometry:
     @property
     def key(self) -> tuple[str, int]:
         return self.layout_identity.token, self.level
+
+    @property
+    def spatial_rank(self) -> int:
+        """Return the immutable rank inferred from the authoritative cell shape."""
+
+        return len(self.cell_shape)
 
     def to_data(self) -> dict[str, Any]:
         return {
