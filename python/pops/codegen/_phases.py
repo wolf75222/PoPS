@@ -99,6 +99,12 @@ def resolve(
     from pops.codegen._layout_resolution import resolve_native_spatial_layouts
 
     native_layouts = resolve_native_spatial_layouts(layout_plan)
+    from pops.codegen._native_spatial_layout import (
+        resolved_dimension,
+        validate_program_spatial_dimension,
+    )
+
+    validate_program_spatial_dimension(resolved_time, resolved_dimension(native_layouts))
     validate_layout_mapping_components(layout_plan, components)
     if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
         _refuse_runtime(
@@ -400,6 +406,7 @@ def compile(plan: Any) -> Any:
                 problem_snapshot=plan.snapshot,
                 field_plans={},
                 balance_due_contract=balance_due_contract,
+                native_dimension=plan.resolved_dimension,
                 **slice_options,
             )
             compiled_program._discard_authoring()

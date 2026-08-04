@@ -1,14 +1,14 @@
 """pops.runtime_environment -- explicit native runtime environment capabilities.
 
 This module is metadata-only at import time. It centralizes the current native runtime facts:
-2D mesh core, AMR refinement ratio 2, double precision, and no custom communicator route.
+an artifact-selected compile-time spatial dimension, AMR refinement ratio 2, double precision,
+and no custom communicator route.
 When the compiled extension is available, :func:`runtime_environment_report` delegates to the
 C++ report; otherwise it returns the same conservative static facts with unknown lifecycle fields
 and zero active Kokkos concurrency.
 """
 from __future__ import annotations
 
-from importlib.util import find_spec
 from typing import Any
 
 from pops.params.use_sites import ParamUse, resolve_param_use
@@ -18,11 +18,18 @@ from pops.params.use_sites import ParamUse, resolve_param_use
 from pops._native_facts import (  # noqa: F401  (re-export)
     NATIVE_AMR_REFINEMENT_RATIO,
     NATIVE_COMMUNICATOR,
-    NATIVE_DIMENSION,
     NATIVE_MAX_RUNTIME_PARAMS,
     NATIVE_PRECISION,
     NATIVE_REAL_BYTES,
+    NATIVE_SUPPORTED_DIMENSIONS,
 )
+
+
+def native_dimension() -> int | None:
+    """Return the exact dimension baked into the loaded extension, or ``None`` without one."""
+    from pops._native_selector import selected_native_dimension
+
+    return selected_native_dimension()
 
 
 class RuntimeCapabilityError(ValueError):
@@ -46,7 +53,7 @@ class RuntimeCapabilityError(ValueError):
 
 def _static_report() -> dict:
     return {
-        "dimension": NATIVE_DIMENSION,
+        "dimension": native_dimension(),
         "amr_refinement_ratio": NATIVE_AMR_REFINEMENT_RATIO,
         "precision": NATIVE_PRECISION,
         "real_bytes": NATIVE_REAL_BYTES,
@@ -83,14 +90,16 @@ def runtime_environment_report() -> dict:
     """Return runtime facts for reports and validators.
 
     The preferred source is ``_pops.runtime_environment_report()``. The fallback is static and
-    conservative: it never claims custom communicators, non-2D, non-ratio-2 AMR, non-double
+    conservative: it never claims custom communicators, an unauthenticated dimension,
+    non-ratio-2 AMR, non-double
     precision support, or an active Kokkos execution-space concurrency.
     """
-    if find_spec("pops._pops") is None:
-        return _static_report()
-    from pops import _pops  # noqa: PLC0415 -- optional runtime extension
+    from pops._native_selector import selected_native_module
 
-    fn = getattr(_pops, "runtime_environment_report", None)
+    native = selected_native_module(required=False)
+    if native is None:
+        return _static_report()
+    fn = getattr(native, "runtime_environment_report", None)
     if fn is not None:
         # A present native module is authoritative.  Import/ABI/runtime failures must remain
         # visible; silently reporting a serial/unknown fallback would let resolve authenticate a
@@ -117,14 +126,22 @@ def compiled_runtime_facts(*, supports_mpi: Any = None) -> dict:
 
 
 def validate_dimension(value: Any, *, where: str = "runtime") -> int:
-    """Reject any requested dimension other than the native 2D core."""
+    """Require the requested dimension to equal the compiled artifact specialization."""
     value = resolve_param_use(value, ParamUse.ABI, where="%s(dimension=)" % where)
-    dim = int(value)
-    if dim != NATIVE_DIMENSION:
+    if type(value) is not int or value not in NATIVE_SUPPORTED_DIMENSIONS:
         raise RuntimeCapabilityError(
-            "%s: dimension=%d is unsupported; native PoPS is dimension=%d only "
-            "(Box2D/Fab2D/Geometry/Euler/Lorentz/EB/AMR kernels are 2D)."
-            % (where, dim, NATIVE_DIMENSION), field="dimension", requested=dim)
+            "%s: dimension must be exactly 1, 2, or 3" % where,
+            field="dimension", requested=value)
+    dim = value
+    active = native_dimension()
+    if active is None:
+        raise RuntimeCapabilityError(
+            "%s: no compiled PoPS artifact authenticates the requested dimension" % where,
+            field="dimension", requested=dim)
+    if dim != active:
+        raise RuntimeCapabilityError(
+            "%s: dimension=%d differs from the loaded compile-time specialization dimension=%d"
+            % (where, dim, active), field="dimension", requested=dim)
     return dim
 
 
@@ -189,7 +206,8 @@ def validate_runtime_environment(*, dimension: Any = None, amr_refinement_ratio:
 
 
 __all__ = [
-    "NATIVE_DIMENSION", "NATIVE_AMR_REFINEMENT_RATIO", "NATIVE_PRECISION",
+    "NATIVE_SUPPORTED_DIMENSIONS", "native_dimension", "NATIVE_AMR_REFINEMENT_RATIO",
+    "NATIVE_PRECISION",
     "NATIVE_REAL_BYTES", "NATIVE_COMMUNICATOR", "runtime_environment_report",
     "compiled_runtime_facts", "validate_dimension", "validate_amr_refinement_ratio",
     "validate_precision", "validate_communicator", "validate_runtime_environment",

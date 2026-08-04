@@ -51,6 +51,13 @@
 #define POPS_ABI_STR_(x) #x
 #define POPS_ABI_STR(x) POPS_ABI_STR_(x)
 
+#ifndef POPS_NATIVE_DIM
+#error "PoPS ABI requires an explicit POPS_NATIVE_DIM=1, 2, or 3"
+#endif
+#if POPS_NATIVE_DIM < 1 || POPS_NATIVE_DIM > 3
+#error "POPS_NATIVE_DIM must be exactly 1, 2, or 3"
+#endif
+
 // Kokkos token: evaluated PER UNIT (_pops module on one side, generated .so loader on the other).
 #ifdef POPS_HAS_KOKKOS
 #define POPS_ABI_KOKKOS "1"
@@ -95,7 +102,7 @@
 
 // ABI key of the current TRANSLATION UNIT, as a pure literal concatenated by the preprocessor:
 // "compiler=<__VERSION__>;std=<__cplusplus>;headers=<POPS_HEADER_SIG>;kokkos=<0|1>;stdlib=<...>;
-// mpi=<0|1>;mpi_abi=<sha256|off>".
+// mpi=<0|1>;mpi_abi=<sha256|off>;dim=<1|2|3>".
 // All tokens are string literals (__VERSION__ and POPS_HEADER_SIG already are), so the key is frozen
 // in the .rodata of EACH TU at preprocessing -- NO function call.
 //
@@ -112,7 +119,7 @@
   "compiler=" POPS_ABI_COMPILER                                                            \
   ";std=" POPS_ABI_STR(__cplusplus) ";headers=" POPS_HEADER_SIG ";kokkos=" POPS_ABI_KOKKOS \
                                     ";stdlib=" POPS_ABI_STDLIB ";mpi=" POPS_ABI_MPI        \
-                                    ";mpi_abi=" POPS_ABI_MPI_ID
+                                    ";mpi_abi=" POPS_ABI_MPI_ID ";dim=" POPS_ABI_STR(POPS_NATIVE_DIM)
 
 namespace pops {
 namespace detail {

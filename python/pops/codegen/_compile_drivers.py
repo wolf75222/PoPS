@@ -186,8 +186,21 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None,
-                    field_plans: Any = None, balance_due_contract: Any = None) -> Any:
+                    field_plans: Any = None, balance_due_contract: Any = None,
+                    native_dimension: Any = None) -> Any:
     """Compile the public low-level Program route without privileged resolve evidence."""
+    from pops._native_selector import (
+        select_native_dimension,
+        selected_native_dimension,
+    )
+
+    if native_dimension is None:
+        native_dimension = selected_native_dimension()
+        if native_dimension is None:
+            raise TypeError(
+                "low-level compile_problem requires native_dimension=1, 2, or 3; "
+                "the public pops.compile(resolved_plan) route derives it from the domain")
+    select_native_dimension(native_dimension)
     return _compile_problem_impl(
         so_path,
         model=model,
@@ -204,6 +217,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
         problem_snapshot=problem_snapshot,
         field_plans=field_plans,
         balance_due_contract=balance_due_contract,
+        native_dimension=native_dimension,
         shared_interface_codegen_evidence=None,
     )
 
@@ -235,6 +249,7 @@ def _compile_resolved_problem(plan: Any) -> Any:
         problem_snapshot=plan.snapshot,
         field_plans=plan.field_plans,
         balance_due_contract=balance_due_contract,
+        native_dimension=plan.resolved_dimension,
         shared_interface_codegen_evidence=evidence,
         **options,
     )
@@ -246,6 +261,7 @@ def _compile_problem_impl(
     force: Any = False, cxx: Any = None, include: Any = None, std: Any = None,
     debug: Any = False, libraries: Any = None, problem_snapshot: Any = None,
     field_plans: Any = None, balance_due_contract: Any = None,
+    native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
 ) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
@@ -259,6 +275,20 @@ def _compile_problem_impl(
     require_shared_library_compile_platform("compile_problem", windows_supported=False)
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
+    if type(native_dimension) is not int:
+        raise TypeError("compile_problem requires one exact integer native_dimension")
+    if native_dimension not in (1, 2, 3):
+        raise ValueError("compile_problem native_dimension must be 1, 2, or 3")
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(native_dimension)
+    from pops.codegen.toolchain import loader_native_dimension
+    module_dimension = loader_native_dimension()
+    if native_dimension != module_dimension:
+        raise RuntimeError(
+            "resolved native dimension %d does not match loaded module specialization %d; "
+            "run this domain in a fresh process so PoPS can select Dim=%d"
+            % (native_dimension, module_dimension, native_dimension))
     if problem_snapshot is not None:
         from pops.problem._snapshot import validate_problem_snapshot
         validate_problem_snapshot(problem_snapshot)
@@ -328,7 +358,7 @@ def _compile_problem_impl(
     cc, cflags, lflags = pops_loader_build_flags(cxx)
     lflags = deterministic_program_link_flags(lflags)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
-    abi_key = "%s|%s|%s" % (sig, cc, eff_std)
+    abi_key = "%s|%s|%s|dim=%d" % (sig, cc, eff_std, native_dimension)
     # Semantic, artifact-spec and final binary identities remain independently versioned.
     optflags = _dsl_optflags()
     from pops.codegen._artifact_identity import program_artifact_spec
@@ -355,6 +385,7 @@ def _compile_problem_impl(
             "manifest": component.manifest(),
             "manifest_sha256": component.manifest_sha256,
         } for component in native_components],
+        native_dimension=native_dimension,
     )
     program_hash = semantic.hexdigest
     cache_key = spec_identity.hexdigest
@@ -402,6 +433,7 @@ def _compile_problem_impl(
             generated_cpp=src,
             lowering_coverage=lowering_coverage,
             program_graph=program_graph,
+            native_dimension=native_dimension,
         )
         compiled.semantic_identity = semantic
         compiled.artifact_spec_identity = spec_identity

@@ -12,7 +12,6 @@ from typing import Any
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
 from pops.params.use_sites import ParamUse, resolve_param_use
-from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 from ._layout_plan_contracts import (
     NormalizedGeometry,
@@ -39,10 +38,11 @@ class PolarMesh(MeshDescriptor):
     """
 
     category = "mesh"
+    axis_names = ("r", "theta")
 
-    def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any, theta_boxes: Any = 1,
-                 *, dim: Any = NATIVE_DIMENSION) -> None:
-        self.dim = validate_dimension(dim, where="PolarMesh")
+    def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any,
+                 theta_boxes: Any = 1) -> None:
+        self.dim = len(self.axis_names)
         r_min = resolve_param_use(
             r_min, ParamUse.MESH_EXTENT, where="PolarMesh(r_min=)")
         r_max = resolve_param_use(
@@ -93,7 +93,7 @@ class PolarMesh(MeshDescriptor):
         return NormalizedGeometry(
             coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
             cell_measure=POLAR_ANNULUS_CELL_AREA,
-            axis_names=("r", "theta"),
+            axis_names=self.axis_names,
             lower=(self.r_min, 0.0),
             upper=(self.r_max, math.tau),
             cells=(self.nr, self.ntheta),

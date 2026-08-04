@@ -13,8 +13,9 @@
 # flow presets+PYTHONPATH (cmake --preset python...) stays available and unchanged. Thread/device
 # resources are selected before native initialization; standard OMP/Kokkos environment variables
 # remain honored.
-# POPS_NATIVE_DIM is intentionally not defaulted here: a wheel contains exactly one Dim=1, 2, or 3
-# specialization, and CMake rejects an implicit or invalid selection.
+# POPS_NATIVE_DIM is intentionally not defaulted here: one low-level sub-build produces exactly one
+# specialization and CMake rejects an implicit selection.  Release assembly runs three isolated
+# sub-builds and combines their authenticated leaves into one ordinary user wheel.
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
 build-backend = "scikit_build_core.build"
@@ -43,11 +44,8 @@ cmake.version = ">=3.21"
 wheel.packages = ["python/pops"]
 build-dir = "build/{wheel_tag}"  # persistent build cache: fast reinstall/editable
 
-# Apple links Mach-O extensions with an ad-hoc signature.  ``cmake --install --strip`` rewrites the
-# binary after that signature was emitted, so macOS kills the installed module at import time.  Keep
-# the linker-signed image on Darwin; other platforms retain scikit-build-core's Release stripping.
-[[tool.scikit-build.overrides]]
-if.platform-system = "darwin"
+# The native manifest hashes the exact linked extension.  Installation must not rewrite those bytes:
+# release repair/signing happens later and atomically refreshes the manifest before RECORD is sealed.
 install.strip = false
 
 [tool.scikit-build.cmake.define]

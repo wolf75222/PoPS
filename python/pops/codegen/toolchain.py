@@ -5,7 +5,6 @@ Public API re-exported from pops.codegen.__init__.
 """
 from __future__ import annotations
 
-import importlib
 import os
 import shutil
 import sys
@@ -20,17 +19,9 @@ def _pops_module() -> Any:
     A binary-loader or dependency error from an installed extension must remain visible: treating it
     as an unavailable optional module would select a different toolchain and hide the real cause.
     """
-    try:
-        return importlib.import_module("_pops")
-    except ModuleNotFoundError as exc:
-        if exc.name != "_pops":
-            raise
-    try:
-        return importlib.import_module("pops._pops")
-    except ModuleNotFoundError as exc:
-        if exc.name == "pops._pops":
-            return None
-        raise
+    from pops._native_selector import selected_native_module
+
+    return selected_native_module(required=False)
 
 
 _NATIVE_LOADER_CONTRACT_FIELDS = frozenset({"schema_version", "compile_definitions"})
@@ -190,6 +181,17 @@ def loader_cxx_std() -> str:
     _pops = _pops_module()
     std = _pops_cxx_std_from_module(_pops) if _pops is not None else None
     return std or "c++23"
+
+
+def loader_native_dimension() -> int:
+    """Exact compile-time spatial rank of the loaded native module."""
+    module = _pops_module()
+    dimension = getattr(module, "__native_dimension__", None) if module is not None else None
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise RuntimeError(
+            "the loaded pops._pops module does not authenticate one native dimension; "
+            "rebuild it with POPS_NATIVE_DIM=1, 2, or 3")
+    return dimension
 
 
 def _pops_cxx_std_from_module(mod: Any) -> Any:
@@ -688,7 +690,8 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     loader_cflags = _native_loader_manifest_compile_flags(module)
     from pops.codegen._native_mpi import native_mpi_build_flags
     mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
-    cflags = [*loader_cflags, *cflags, *mpi_cflags]
+    cflags = ["-DPOPS_NATIVE_DIM=%d" % loader_native_dimension(),
+              *loader_cflags, *cflags, *mpi_cflags]
     lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":
         cflags = list(cflags) + ["-undefined", "dynamic_lookup"]

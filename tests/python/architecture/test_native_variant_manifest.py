@@ -16,6 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 WRITER = ROOT / "scripts" / "write_native_variant_manifest.py"
 PROVER = ROOT / "scripts" / "prove_installed_wheel.py"
+PYTHON_CMAKE = ROOT / "python" / "CMakeLists.txt"
 
 
 def _writer():
@@ -141,6 +142,16 @@ def test_writer_cli_is_fully_explicit():
         assert option in source
     assert "required=True" in source
     assert 'name = "pops._pops"' in source
+
+
+def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
+    source = PYTHON_CMAKE.read_text(encoding="utf-8")
+
+    assert "add_custom_command(TARGET _pops POST_BUILD" in source
+    assert '"$<TARGET_FILE:_pops>"' in source
+    assert '--dimension "${POPS_NATIVE_DIM}"' in source
+    assert '--version "${PROJECT_VERSION}"' in source
+    assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)' in source
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

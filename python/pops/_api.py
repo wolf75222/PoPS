@@ -39,6 +39,14 @@ def resolve(
 
 def compile(plan: Any) -> Any:
     """Authenticate the native toolchain and lower one resolved plan."""
+    from pops.codegen._plans import ResolvedSimulationPlan
+
+    if type(plan) is not ResolvedSimulationPlan:
+        raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
+    plan.verify()
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(getattr(plan, "resolved_dimension", None))
     from pops import _bootstrap  # noqa: F401  # intentional native cut line
     from pops.codegen._phases import compile as phase
 
@@ -60,6 +68,14 @@ def bind(
     ``BindInputs`` evidence record is an orchestration detail built exactly once here; users never
     import a phase-internal codegen type or choose between two bind spellings.
     """
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    if type(artifact) is not CompiledSimulationArtifact:
+        raise TypeError("pops.bind requires an exact CompiledSimulationArtifact")
+    artifact.verify()
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(getattr(artifact, "resolved_dimension", None))
     from pops import _bootstrap  # noqa: F401  # intentional native cut line
     from pops.codegen._plans import BindInputs, _canonical_initial_values
     from pops.codegen._phases import bind as phase

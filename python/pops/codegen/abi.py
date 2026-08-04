@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .toolchain import pops_header_signature, _pops_module, pops_include  # noqa: F401
+from .toolchain import (  # noqa: F401
+    _pops_module,
+    loader_native_dimension,
+    pops_header_signature,
+    pops_include,
+)
 
 
 def module_header_signature() -> Any:
@@ -35,12 +40,28 @@ def check_compiled_matches_module(abi_key: Any) -> None:
     INDISPENSABLE COMPLEMENT of _check_headers_match_module : on a cache HIT, compile_native does not
     run (the .so comes out of the cache) and the compilation guard therefore does not protect this path --
     a stale _pops module would dlopen the .so and fail on the cryptic 'symbol not found'.
-    Here we compare the header signature EMBEDDED in the Python key of the .so ('<sig>|<cxx>|<std>',
+    Here we compare the header signature EMBEDDED in the Python key of the .so
+    ('<sig>|<cxx>|<std>|dim=<N>',
     cf. _abi_key_python, recomputed on the CURRENT include tree at each compile()) with the one baked
-    into the module. Pure STRING comparison (no re-hash). No-op if either of the two is missing
-    (old module, CompiledModel built by hand)."""
+    into the module. Pure STRING comparison (no re-hash). Dimension provenance is mandatory; only
+    an unavailable header signature may degrade that independent header check."""
+    if not abi_key:
+        raise RuntimeError(
+            "pops: the compiled model has no authenticated ABI or native spatial dimension")
+    tokens = str(abi_key).split("|")
+    dimensions = [token[len("dim="):] for token in tokens if token.startswith("dim=")]
+    if len(dimensions) != 1 or not dimensions[0].isdigit():
+        raise RuntimeError(
+            "pops: the compiled model does not authenticate one native spatial dimension")
+    artifact_dimension = int(dimensions[0])
+    module_dimension = loader_native_dimension()
+    if artifact_dimension != module_dimension:
+        raise RuntimeError(
+            "pops: compiled model dimension %d differs from loaded native module dimension %d; "
+            "recompile the model with the selected PoPS specialization"
+            % (artifact_dimension, module_dimension))
     baked = module_header_signature()
-    if baked is None or not abi_key:
+    if baked is None:
         return
     so_sig = str(abi_key).split("|", 1)[0]
     if so_sig and so_sig != baked:
@@ -60,7 +81,9 @@ def _abi_key_python(include: Any, cxx: Any, std: Any) -> str:
     """ABI key on the Python side, MIRROR of pops::detail::abi_key_string (compiler + standard +
     header signature). Makes the verification + diagnostic available on the Python side BEFORE
     loading the .so (the native path compares its own on the C++ side). Stable and readable form:
-    "<header sig>|<cxx>|<std>". include absent -> empty signature (degraded diagnostic, no UB)."""
+    "<header sig>|<cxx>|<std>|dim=<N>". include absent -> empty signature (degraded
+    diagnostic, no UB)."""
     import os
     sig = pops_header_signature(include) if include and os.path.isdir(include) else ""
-    return "%s|%s|%s" % (sig, cxx or "", std or "")
+    return "%s|%s|%s|dim=%d" % (
+        sig, cxx or "", std or "", loader_native_dimension())

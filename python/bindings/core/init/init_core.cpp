@@ -603,6 +603,7 @@ void init_core(py::module_& m) {
   // key (which itself always encodes __cplusplus). 202002L -> 20, beyond -> 23.
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
+  m.attr("__native_dimension__") = pops::kNativeDimension;
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.

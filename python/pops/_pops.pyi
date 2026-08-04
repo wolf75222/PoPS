@@ -16,6 +16,7 @@ __all__ = (
     "__normalization_version__",
     "__component_registry_version__",
     "__checkpoint_schema_version__",
+    "__native_dimension__",
     "__cxx_std__",
     "__cxx_compiler__",
     "__has_kokkos__",
@@ -54,6 +55,7 @@ __semantic_ir_version__: int
 __normalization_version__: int
 __component_registry_version__: int
 __checkpoint_schema_version__: int
+__native_dimension__: Literal[1, 2, 3]
 __cxx_std__: int
 __cxx_compiler__: str
 __has_kokkos__: bool

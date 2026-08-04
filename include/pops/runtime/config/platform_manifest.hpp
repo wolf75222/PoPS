@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/core/foundation/native_dimension.hpp>
+
 /// @file
 /// Explicit platform/backend/field-view ABI.  This header has no MPI or device-runtime include:
 /// communicator, datatype, and device handles enter only through ExecutionContext.
@@ -376,7 +378,7 @@ inline PlatformManifest proven_host_platform(const std::string& backend, const s
           prove_text("host", evidence),
           prove_text_set({"host"}, evidence),
           prove_text(communicator, evidence),
-          {{"dimensions", prove_int_set({2}, evidence)},
+          {{"dimensions", prove_int_set({kNativeDimension}, evidence)},
            {"centerings", prove_text_set({"cell"}, evidence)},
            {"scalars", prove_text_set({"float64"}, evidence)},
            {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
@@ -404,7 +406,7 @@ inline PlatformManifest proven_native_platform(
           prove_text(device, evidence),
           prove_text_set(std::move(memory_spaces), evidence),
           prove_text(communicator, evidence),
-          {{"dimensions", prove_int_set({2}, evidence)},
+          {{"dimensions", prove_int_set({kNativeDimension}, evidence)},
            {"centerings", prove_text_set({"cell"}, evidence)},
            {"scalars", prove_text_set({"float64"}, evidence)},
            {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},

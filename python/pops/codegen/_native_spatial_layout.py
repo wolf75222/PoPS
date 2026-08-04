@@ -122,7 +122,37 @@ def resolved_dimension(layouts: Mapping[str, Any]) -> int:
     return next(iter(dimensions))
 
 
+def validate_program_spatial_dimension(program: Any, dimension: int) -> None:
+    """Match every dimension-qualified IR node to the selected native specialization."""
+    from pops.time import Program
+
+    if type(program) is not Program:
+        raise TypeError("spatial-dimension validation requires an exact Program")
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise ValueError("resolved spatial dimension must be 1, 2, or 3")
+    for node in program.ir_nodes(recursive=True):
+        declared = node["attrs"].get("spatial_dimension")
+        if declared is None:
+            continue
+        if type(declared) is not int or declared not in (1, 2, 3):
+            raise ValueError(
+                "Program operation %r carries an invalid spatial_dimension"
+                % node["op"])
+        if declared != dimension:
+            raise NativeSpatialLayoutError(
+                "program_dimension_mismatch",
+                "Program operation %r has spatial rank %d but the resolved layout has rank %d"
+                % (node["op"], declared, dimension),
+                evidence={
+                    "operation": node["op"],
+                    "program_dimension": declared,
+                    "resolved_dimension": dimension,
+                },
+            )
+
+
 __all__ = [
     "NATIVE_SUPPORTED_CENTERINGS", "NATIVE_SUPPORTED_DIMENSIONS",
     "NativeSpatialLayoutError", "native_spatial_layouts", "resolved_dimension",
+    "validate_program_spatial_dimension",
 ]

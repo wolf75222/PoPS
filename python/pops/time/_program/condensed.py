@@ -9,8 +9,8 @@ carries the operator NAME + the coupled ``subset`` + the scalar coefficients, an
 the P.schur_* ops.
 
 Compile-time refusals (design section 5), fail-loud at build, never a silent partial:
-  - the subset is the SPATIAL velocity block eliminated against grad(phi)/div(F), so its size
-    must equal the native spatial dimension (NATIVE_DIMENSION, the ADC-294 2D core invariant);
+  - the subset is the SPATIAL velocity block eliminated against grad(phi)/div(F); authoring
+    records its rank and resolve later matches it to the selected layout dimension;
     the J machinery itself (block_inverse<N> / mat_inverse<N>) is unbounded in N;
   - subset must be distinct non-negative component indices;
   - the coefficients must be numbers or dt-polynomials, c_rho a non-negative int.
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops._native_facts import NATIVE_DIMENSION
+from pops._native_facts import NATIVE_SUPPORTED_DIMENSIONS
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time._program.constants import _ProgramConstants
 from pops.time._program.value_validation import require_compatible_spaces
@@ -48,9 +48,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def _condensed_subset(self, subset: Any, where: Any) -> tuple:
         """Validate + normalize the coupled component @p subset (the momentum block the solve
         eliminates): a tuple of DISTINCT non-negative ints whose size equals the native spatial
-        dimension -- the subset IS the velocity vector eliminated against grad(phi)/div(F), so its
-        length is set by the space the elliptic coupling lives in (ADC-294 2D core invariant), not
-        by any dense-inverse capacity (block_inverse<N>/mat_inverse<N> are unbounded in N)."""
+        dimension -- the subset IS the velocity vector eliminated against grad(phi)/div(F)."""
         if not isinstance(subset, (tuple, list)) or not subset:
             raise ValueError("%s: subset must be a non-empty tuple of component indices" % where)
         sub = tuple(subset)
@@ -60,12 +58,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                                  % (where, c))
         if len(set(sub)) != len(sub):
             raise ValueError("%s: subset components must be distinct (got %r)" % (where, sub))
-        if len(sub) != NATIVE_DIMENSION:
+        if len(sub) not in NATIVE_SUPPORTED_DIMENSIONS:
             raise ValueError(
-                "%s: the condensed subset is the spatial velocity block eliminated against "
-                "grad(phi)/div(F), so its size must equal the native spatial dimension "
-                "(dimension=%d, the 2D core invariant); got %d components %r"
-                % (where, NATIVE_DIMENSION, len(sub), sub))
+                "%s: the condensed spatial subset must have rank 1, 2, or 3; got %d "
+                "components %r" % (where, len(sub), sub))
         return sub
 
     @staticmethod
@@ -105,7 +101,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         c_d = self._coeff_dict(c, "c", "condensed_coeffs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_coeffs")
         return self._new("condensed_coeffs", "condensed_coeffs", (state,),
-                         {"linear_operator": opname, "subset": sub, "c": c_d, "th_dt": th_d,
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "c": c_d, "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs")}, name,
                          state.block)
 
@@ -128,7 +125,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_rhs")
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
         return self._new("scalar_field", "condensed_rhs", (out, phi_n, state),
-                         {"linear_operator": opname, "subset": sub, "th_dt": th_d, "g": g_d},
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "th_dt": th_d, "g": g_d},
                          out.name, state.block)
 
     def condensed_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
@@ -154,7 +152,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         sub = self._condensed_subset(subset, "condensed_reconstruct")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_reconstruct")
         return self._new("state", "condensed_reconstruct", (state, phi),
-                         {"linear_operator": opname, "subset": sub, "th_dt": th_d,
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct")}, name,
                          state.block, space=state.space)
 

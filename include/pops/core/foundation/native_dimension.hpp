@@ -2,8 +2,14 @@
 
 namespace pops {
 
-/// Exact dimension carried by the current Box2D/Fab2D runtime. Dimension-generic local providers
-/// advertise their own compile-time dimension and do not change this runtime fact.
-inline constexpr int kNativeDimension = 2;
+#ifndef POPS_NATIVE_DIM
+#error "PoPS requires an explicit POPS_NATIVE_DIM=1, 2, or 3 compile-time specialization"
+#endif
+
+static_assert(POPS_NATIVE_DIM >= 1 && POPS_NATIVE_DIM <= 3,
+              "POPS_NATIVE_DIM must be exactly 1, 2, or 3");
+
+/// Immutable spatial rank of this compiled native artifact.
+inline constexpr int kNativeDimension = POPS_NATIVE_DIM;
 
 }  // namespace pops
