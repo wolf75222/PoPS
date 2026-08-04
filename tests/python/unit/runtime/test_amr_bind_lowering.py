@@ -1,4 +1,5 @@
 """AMR bind lowering preserves every authored Cartesian axis topology."""
+
 from __future__ import annotations
 
 import sys
@@ -13,7 +14,7 @@ from pops.frames import Cartesian2D
 from pops.mesh.grid import CartesianGrid, PeriodicAxes
 from pops.runtime._amr_bind_lowering import (
     _native_amr_grid_values,
-    _physical_patch_rectangles,
+    _physical_patch_bounds,
     _regrid_every,
 )
 from pops.runtime._amr_system_install import _AmrSystemInstall
@@ -26,6 +27,25 @@ from pops.time import Clock, every
 
 def _frame():
     return Rectangle("unit_square", (0, 0), (1, 1)).frame(Cartesian2D())
+
+
+def _native_amr_layout(grid: CartesianGrid, name: str):
+    from pops.mesh import NativeSpatialLayout
+
+    geometry = grid.normalized_geometry()
+    spatial = grid.native_spatial_data()
+    return NativeSpatialLayout(
+        layout_id=name,
+        coordinate_system=geometry.coordinate_system,
+        cell_measure=geometry.cell_measure,
+        axis_names=geometry.axis_names,
+        shape=geometry.cells,
+        lower=geometry.lower,
+        upper=geometry.upper,
+        periodicity=tuple(spatial["periodicity"]),
+        centering="cell",
+        decomposition={"kind": "adaptive"},
+    )
 
 
 def test_native_regrid_lowering_preserves_explicit_frozen_and_scheduled_policies() -> None:
@@ -49,7 +69,8 @@ def test_frozen_capacity_installs_exact_materialized_prefix() -> None:
         level_count = 4
 
     assert _materialized_shared_interface_levels(
-        NativeHierarchyProbe(), ResolvedHierarchyProbe()) == (0, 1, 2)
+        NativeHierarchyProbe(), ResolvedHierarchyProbe()
+    ) == (0, 1, 2)
 
 
 def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
@@ -98,28 +119,40 @@ def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind()
 @pytest.mark.parametrize(
     ("execution", "ranks"),
     [
-        ({
-            "communicator_identity": "MPI_COMM_WORLD",
-            "device_identity": "host",
-            "memory_space": 1,
-        }, 1),
-        ({
-            "communicator_identity": "MPI_COMM_WORLD",
-            "device_identity": "host",
-            "memory_space": 1,
-        }, 2),
-        ({
-            "communicator_identity": "serial",
-            "device_identity": "host",
-            "memory_space": 1,
-        }, 2),
+        (
+            {
+                "communicator_identity": "MPI_COMM_WORLD",
+                "device_identity": "host",
+                "memory_space": 1,
+            },
+            1,
+        ),
+        (
+            {
+                "communicator_identity": "MPI_COMM_WORLD",
+                "device_identity": "host",
+                "memory_space": 1,
+            },
+            2,
+        ),
+        (
+            {
+                "communicator_identity": "serial",
+                "device_identity": "host",
+                "memory_space": 1,
+            },
+            2,
+        ),
     ],
 )
 def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ranks) -> None:
     with pytest.raises(NotImplementedError, match="currently serial-only"):
         _validate_refined_shared_interface_execution(
-            (0, 1), execution, ranks,
-            implicit_jacvec_pair=True, complete_bind=True,
+            (0, 1),
+            execution,
+            ranks,
+            implicit_jacvec_pair=True,
+            complete_bind=True,
         )
 
 
@@ -143,8 +176,11 @@ def test_implicit_pair_refuses_device_or_managed_memory_before_native_install(
 ) -> None:
     with pytest.raises(NotImplementedError, match="currently host-memory-only"):
         _validate_refined_shared_interface_execution(
-            (0,), execution, 1,
-            implicit_jacvec_pair=True, complete_bind=False,
+            (0,),
+            execution,
+            1,
+            implicit_jacvec_pair=True,
+            complete_bind=False,
         )
 
 
@@ -159,12 +195,16 @@ def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> 
         )
     with pytest.raises(TypeError, match="complete-bind contracts must be exact bools"):
         _validate_refined_shared_interface_execution(
-            (0, 1), {"communicator_identity": "serial"}, 1,
-            implicit_jacvec_pair=True, complete_bind=1,
+            (0, 1),
+            {"communicator_identity": "serial"},
+            1,
+            implicit_jacvec_pair=True,
+            complete_bind=1,
         )
     with pytest.raises(TypeError, match="serial or exact MPI_COMM_WORLD"):
         _validate_refined_shared_interface_execution(
-            (0, 1), {"communicator_identity": "MPI_COMM_SELF"}, 1)
+            (0, 1), {"communicator_identity": "MPI_COMM_SELF"}, 1
+        )
 
 
 def test_implicit_pair_envelope_precedes_program_and_interface_install(
@@ -291,8 +331,8 @@ def test_native_amr_grid_preserves_none_or_all_periodic_axes() -> None:
         periodic=PeriodicAxes(frame.axes),
     )
 
-    assert _native_amr_grid_values(closed.to_dict())[-1] == (False, False)
-    assert _native_amr_grid_values(periodic.to_dict())[-1] == (True, True)
+    assert _native_amr_grid_values(_native_amr_layout(closed, "closed"))[-1] == (False, False)
+    assert _native_amr_grid_values(_native_amr_layout(periodic, "periodic"))[-1] == (True, True)
 
 
 def test_native_amr_grid_preserves_partial_periodicity() -> None:
@@ -303,53 +343,95 @@ def test_native_amr_grid_preserves_partial_periodicity() -> None:
         periodic=PeriodicAxes((frame.x,)),
     )
 
-    assert _native_amr_grid_values(partial.to_dict())[-1] == (True, False)
+    assert _native_amr_grid_values(_native_amr_layout(partial, "partial"))[-1] == (True, False)
 
     y_only = CartesianGrid(
         frame=frame,
         cells=(16, 16),
         periodic=PeriodicAxes((frame.y,)),
     )
-    assert _native_amr_grid_values(y_only.to_dict())[-1] == (False, True)
+    assert _native_amr_grid_values(_native_amr_layout(y_only, "y-only"))[-1] == (False, True)
 
 
 def test_native_amr_grid_preserves_rectangular_cells_and_bounds() -> None:
-    frame = Rectangle(
-        "rectangular", (-3.0, 2.0), (5.0, 5.0)
-    ).frame(Cartesian2D())
+    frame = Rectangle("rectangular", (-3.0, 2.0), (5.0, 5.0)).frame(Cartesian2D())
     grid = CartesianGrid(
         frame=frame,
         cells=(24, 10),
         periodic=PeriodicAxes((frame.y,)),
     )
 
-    assert _native_amr_grid_values(grid.to_dict()) == (
-        (24, 10), (-3.0, 2.0), (5.0, 5.0), (False, True),
+    assert _native_amr_grid_values(_native_amr_layout(grid, "rectangular")) == (
+        (24, 10),
+        (-3.0, 2.0),
+        (5.0, 5.0),
+        (False, True),
     )
 
 
-def test_native_amr_grid_and_patch_rectangles_preserve_a_shifted_origin() -> None:
-    shifted_frame = Rectangle(
-        "shifted_square", (-2.0, 3.0), (2.0, 7.0)
-    ).frame(Cartesian2D())
+def test_native_amr_grid_and_patch_bounds_preserve_a_shifted_origin() -> None:
+    shifted_frame = Rectangle("shifted_square", (-2.0, 3.0), (2.0, 7.0)).frame(Cartesian2D())
     grid = CartesianGrid(frame=shifted_frame, cells=(8, 8))
 
-    assert _native_amr_grid_values(grid.to_dict()) == (
-        (8, 8), (-2.0, 3.0), (2.0, 7.0), (False, False),
+    assert _native_amr_grid_values(_native_amr_layout(grid, "shifted")) == (
+        (8, 8),
+        (-2.0, 3.0),
+        (2.0, 7.0),
+        (False, False),
     )
 
-    assert _physical_patch_rectangles(
-        [(1, 2, 4, 5, 7)],
+    assert _physical_patch_bounds(
+        [(1, (2, 4), (5, 7))],
         cells=(8, 8),
         lengths=(4.0, 4.0),
         lower=(-2.0, 3.0),
     ) == [(-1.5, 4.0, 1.0, 1.0)]
 
 
-def test_patch_rectangles_use_independent_axis_spacing() -> None:
-    assert _physical_patch_rectangles(
-        [(1, 2, 1, 5, 2)],
+def test_patch_bounds_use_independent_axis_spacing() -> None:
+    assert _physical_patch_bounds(
+        [(1, (2, 1), (5, 2))],
         cells=(12, 4),
         lengths=(6.0, 2.0),
         lower=(-1.0, 3.0),
     ) == [(-0.5, 3.25, 1.0, 0.5)]
+
+
+@pytest.mark.parametrize(
+    ("dimension", "shape", "lower", "upper", "periodicity"),
+    (
+        (1, (9,), (-1.0,), (2.0,), (True,)),
+        (3, (4, 5, 6), (-1.0, 2.0, 4.0), (1.0, 5.0, 10.0), (True, False, True)),
+    ),
+)
+def test_native_amr_grid_accepts_exact_ranked_cartesian_layouts(
+    dimension, shape, lower, upper, periodicity
+) -> None:
+    from pops.mesh import NativeSpatialLayout
+
+    layout = NativeSpatialLayout(
+        layout_id="rank-%d" % dimension,
+        coordinate_system="pops://coordinates/cartesian-%dd@1" % dimension,
+        cell_measure={
+            1: "pops://cell-measures/cartesian-length@1",
+            3: "pops://cell-measures/cartesian-volume@1",
+        }[dimension],
+        axis_names=("x", "y", "z")[:dimension],
+        shape=shape,
+        lower=lower,
+        upper=upper,
+        periodicity=periodicity,
+        centering="cell",
+        decomposition={"kind": "adaptive"},
+    )
+
+    assert _native_amr_grid_values(layout) == (shape, lower, upper, periodicity)
+
+
+def test_physical_patch_bounds_preserve_rank_three_axes() -> None:
+    assert _physical_patch_bounds(
+        [(2, (4, 2, 0), (7, 5, 3))],
+        cells=(8, 4, 2),
+        lengths=(4.0, 2.0, 8.0),
+        lower=(-1.0, 3.0, 10.0),
+    ) == [(-0.5, 3.25, 10.0, 0.5, 0.5, 4.0)]

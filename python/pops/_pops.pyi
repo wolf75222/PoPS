@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-
 # This extension is an implementation detail of ``pops``.  ``__all__`` is the
 # complete supported direct surface; the config/model/engine declarations below
 # are only the typed seam consumed by ``pops._bootstrap``.
@@ -46,7 +45,6 @@ __all__ = (
     "kokkos_is_initialized",
 )
 
-
 __version__: str
 __abi_version__: int
 __release_contract_sha256__: str
@@ -71,7 +69,6 @@ __aux_max_comps__: int
 __max_runtime_params__: int
 __aux_canonical__: dict[str, int]
 
-
 class StepAttemptRejected(RuntimeError):
     status: Literal[
         "solved",
@@ -90,7 +87,6 @@ class StepAttemptRejected(RuntimeError):
     disposition: Literal["retry", "reject"]
     reason_code: int
     failed_rank: int
-
 
 class _RuntimeEnvironmentReport(TypedDict):
     dimension: int
@@ -127,7 +123,6 @@ class _RuntimeEnvironmentReport(TypedDict):
     comm_allocator_mode: str
     allocator_lifetime: str
 
-
 class _NativeExecutionResource:
     """Non-constructible process-lifetime Kokkos execution resource."""
 
@@ -138,13 +133,11 @@ class _NativeExecutionResource:
     stream_handle: int
     stream_identity: str
 
-
 class _NativeMpiDatatype:
     """Non-constructible native MPI datatype identity owned by the process world."""
 
     identity: str
     fortran_handle: int
-
 
 class _NativeWorldCommunicator:
     """Non-constructible exact native process-world authority."""
@@ -162,11 +155,8 @@ class _NativeWorldCommunicator:
     def barrier(self) -> None: ...
     def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
     def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
-    def gather_bytes(
-        self, payload: bytes, root: int = 0
-    ) -> tuple[bytes, ...] | None: ...
+    def gather_bytes(self, payload: bytes, root: int = 0) -> tuple[bytes, ...] | None: ...
     def duplicate_observer_lane(self, identity: str) -> _NativeObserverMpiLane: ...
-
 
 class _NativeObserverMpiLane:
     """Explicit-lifetime communicator duplicated for one post-commit observer worker."""
@@ -180,11 +170,8 @@ class _NativeObserverMpiLane:
     def barrier(self) -> None: ...
     def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
     def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
-    def gather_bytes(
-        self, payload: bytes, root: int = 0
-    ) -> tuple[bytes, ...] | None: ...
+    def gather_bytes(self, payload: bytes, root: int = 0) -> tuple[bytes, ...] | None: ...
     def close_collectively(self) -> None: ...
-
 
 class _SolveReport:
     iters: int
@@ -206,48 +193,40 @@ class _SolveReport:
     def solved_value_available(self) -> bool: ...
     def failed(self) -> bool: ...
 
-
 # Internal bootstrap seam: these data PODs are re-exported from pops.runtime,
 # not from the private native module's supported direct API.
 class SystemConfig:
-    n: int
-    L: float
-    xlo: float
-    ylo: float
-    periodicity: tuple[bool, bool]
-    geometry: str
-    nr: int
-    ntheta: int
-    r_min: float
-    r_max: float
-    theta_boxes: int
+    shape: tuple[int, ...]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
+    periodicity: tuple[bool, ...]
+    boxes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+    coordinate_system: str
     def __init__(self) -> None: ...
 
-
 class AmrSystemConfig:
-    n: int
-    ny: int
-    L: float
-    Ly: float
-    xlo: float
-    ylo: float
+    shape: tuple[int, ...]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
     regrid_every: int
     level_count: int
     regrid_grow: int
     regrid_margin: int
     explicit_bootstrap: bool
-    periodicity: tuple[bool, bool]
+    periodicity: tuple[bool, ...]
     distribute_coarse: bool
-    coarse_max_grid: int
+    coarse_max_grid: tuple[int, ...]
     cluster_min_efficiency: float
     cluster_min_box_size: int
     cluster_max_box_size: int
     def __init__(self) -> None: ...
     def _set_load_balance_provider(
-        self, route: str, semantic_identity: str,
-        option_schema_identity: str, options: dict[str, object],
+        self,
+        route: str,
+        semantic_identity: str,
+        option_schema_identity: str,
+        options: dict[str, object],
     ) -> None: ...
-
 
 class ModelSpec:
     transport: str
@@ -270,7 +249,6 @@ class ModelSpec:
     def _semantic_data(self) -> dict[str, str | float]: ...
     def _pops_freeze_snapshot(self, capability: object) -> bool: ...
     def _pops_freeze_restore(self, capability: object, state: bool) -> None: ...
-
 
 # Internal native engines.  Their operational methods deliberately have no
 # dynamic fallback in the stub: a new bootstrap use must be declared explicitly.
@@ -299,7 +277,6 @@ class System:
     def output_field_root_pieces(
         self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
-
 
 class AmrSystem:
     def __init__(self, config: AmrSystemConfig) -> None: ...
@@ -335,7 +312,6 @@ class AmrSystem:
         self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
 
-
 def abi_key() -> str: ...
 def my_rank() -> int: ...
 def n_ranks() -> int: ...
@@ -343,15 +319,12 @@ def mpi_world() -> _NativeWorldCommunicator: ...
 def module_capabilities(target: str = "module") -> dict[str, object]: ...
 def capability_report(target: str = "module") -> dict[str, object]: ...
 def runtime_environment_report() -> _RuntimeEnvironmentReport: ...
-def runtime_backend_manifest(
-    backend: str, target: str, communicator: str
-) -> dict[str, object]: ...
+def runtime_backend_manifest(backend: str, target: str, communicator: str) -> dict[str, object]: ...
 def native_execution_resource() -> _NativeExecutionResource: ...
 def numerical_defaults_report() -> dict[str, object]: ...
 def fallback_diagnostics_report() -> dict[str, object]: ...
 def reset_fallback_diagnostics() -> None: ...
 def kokkos_is_initialized() -> bool: ...
-
 
 # Private native parallel-HDF5 provider.  The world argument is the exact non-fabricable native
 # authority; manifest/array descriptors are validated by the binding before the C API is entered.
@@ -363,7 +336,6 @@ def _write_parallel_hdf5(
     root_arrays: dict[str, object],
     fields: tuple[dict[str, object], ...],
 ) -> None: ...
-
 
 # Private native identity helpers used by the Python implementation and its
 # native-parity tests.  ``object`` is intentional: C++ validates the closed

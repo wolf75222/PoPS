@@ -2,8 +2,7 @@
 
 Companion to :mod:`pops.runtime._system_contract`. The concrete
 :class:`pops.runtime._amr_system.AmrSystem` composes the ``_amr_system_*`` mixins; each reads the
-native facade ``self._s``, a few instance attributes (``self._L`` / ``self._Ly`` /
-``self._xlo`` / ``self._ylo`` /
+native facade ``self._s``, a few instance attributes (ranked spatial arrays,
 ``self._regrid_every`` /
 ``self._aux_field_index`` / typed step-transaction state) and sibling methods defined across the
 other AMR mixins and the concrete ``AmrSystem`` body. Declared once here as a ``TYPE_CHECKING``-only
@@ -21,10 +20,10 @@ class _AmrSystem:
     """The :class:`AmrSystem` instance surface the ``_amr_system_*`` mixins share."""
 
     _s: Any
-    _L: float
-    _Ly: float
-    _xlo: float
-    _ylo: float
+    _shape: tuple[int, ...]
+    _lower: tuple[float, ...]
+    _upper: tuple[float, ...]
+    _lengths: tuple[float, ...]
     _regrid_every: int
     _aux_field_index: dict
     _step_strategy: Any
@@ -53,7 +52,7 @@ class _AmrSystem:
     def set_program_params(self, *args: Any, **kwargs: Any) -> Any: ...
     def density(self, *args: Any, **kwargs: Any) -> Any: ...
     def potential(self, *args: Any, **kwargs: Any) -> Any: ...
-    def patch_rectangles(self) -> Any: ...
+    def patch_bounds(self) -> Any: ...
     @property
     def bound_snapshot(self) -> Any: ...
     @property

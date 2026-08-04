@@ -4,6 +4,7 @@
 cells. theta is PERIODIC, r carries a PHYSICAL boundary. Axis convention: direction 0 =
 radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C++ side).
 """
+
 from __future__ import annotations
 
 import math
@@ -40,18 +41,15 @@ class PolarMesh(MeshDescriptor):
     category = "mesh"
     axis_names = ("r", "theta")
 
-    def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any,
-                 theta_boxes: Any = 1) -> None:
+    def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any, theta_boxes: Any = 1) -> None:
         self.dim = len(self.axis_names)
-        r_min = resolve_param_use(
-            r_min, ParamUse.MESH_EXTENT, where="PolarMesh(r_min=)")
-        r_max = resolve_param_use(
-            r_max, ParamUse.MESH_EXTENT, where="PolarMesh(r_max=)")
+        r_min = resolve_param_use(r_min, ParamUse.MESH_EXTENT, where="PolarMesh(r_min=)")
+        r_max = resolve_param_use(r_max, ParamUse.MESH_EXTENT, where="PolarMesh(r_max=)")
         nr = resolve_param_use(nr, ParamUse.SHAPE, where="PolarMesh(nr=)")
-        ntheta = resolve_param_use(
-            ntheta, ParamUse.SHAPE, where="PolarMesh(ntheta=)")
+        ntheta = resolve_param_use(ntheta, ParamUse.SHAPE, where="PolarMesh(ntheta=)")
         theta_boxes = resolve_param_use(
-            theta_boxes, ParamUse.MESH_TOPOLOGY, where="PolarMesh(theta_boxes=)")
+            theta_boxes, ParamUse.MESH_TOPOLOGY, where="PolarMesh(theta_boxes=)"
+        )
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh: requires r_max > r_min >= 0 (ring)")
         # nr >= 3: the radial drift uses a 2nd-order ONE-SIDED stencil at both walls.
@@ -63,7 +61,9 @@ class PolarMesh(MeshDescriptor):
         if tb < 1:
             raise ValueError("PolarMesh: theta_boxes >= 1 (1 = single-box)")
         if tb > int(ntheta):
-            raise ValueError("PolarMesh: theta_boxes <= ntheta (at least one azimuthal cell per band)")
+            raise ValueError(
+                "PolarMesh: theta_boxes <= ntheta (at least one azimuthal cell per band)"
+            )
         if int(ntheta) % tb != 0:
             raise ValueError("PolarMesh: theta_boxes must DIVIDE ntheta (equal azimuthal bands)")
         self.r_min = float(r_min)
@@ -73,20 +73,27 @@ class PolarMesh(MeshDescriptor):
         self.theta_boxes = tb
 
     def options(self) -> dict:
-        return {"r_min": self.r_min, "r_max": self.r_max, "nr": self.nr,
-                "ntheta": self.ntheta, "theta_boxes": self.theta_boxes}
+        return {
+            "r_min": self.r_min,
+            "r_max": self.r_max,
+            "nr": self.nr,
+            "ntheta": self.ntheta,
+            "theta_boxes": self.theta_boxes,
+        }
 
     def capabilities(self) -> Any:
-        return CapabilitySet({
-            "geometry": "polar",
-            "dim": self.dim,
-            "scalar_transport": True,
-            "isothermal_fluid": True,
-            "compressible_euler": False,
-            "amr": False,
-            "direct_poisson_mpi": False,
-            "multibox_transport": self.theta_boxes > 1,
-        })
+        return CapabilitySet(
+            {
+                "geometry": "polar",
+                "dim": self.dim,
+                "scalar_transport": True,
+                "isothermal_fluid": True,
+                "compressible_euler": False,
+                "amr": False,
+                "direct_poisson_mpi": False,
+                "multibox_transport": self.theta_boxes > 1,
+            }
+        )
 
     def normalized_geometry(self) -> NormalizedGeometry:
         """Project exact annular coordinates and the physical polar cell-area measure."""
@@ -122,10 +129,13 @@ class PolarMesh(MeshDescriptor):
 
     def _apply_system_config(self, config: Any) -> None:
         """Lower this advanced descriptor through the private native-config protocol."""
-        config.geometry = "polar"
-        config.nr = self.nr
-        config.ntheta = self.ntheta
-        config.r_min = self.r_min
-        config.r_max = self.r_max
-        config.theta_boxes = self.theta_boxes
-        config.n = self.nr  # n serves as the default size for the rest of the config (diagnostics)
+        native = self.native_spatial_data()
+        config.shape = (self.nr, self.ntheta)
+        config.lower = (self.r_min, 0.0)
+        config.upper = (self.r_max, math.tau)
+        config.periodicity = tuple(native["periodicity"])
+        config.boxes = tuple(
+            (tuple(row["lower"]), tuple(row["upper_exclusive"]))
+            for row in native["decomposition"]["boxes"]
+        )
+        config.coordinate_system = POLAR_ANNULUS_2D_COORDINATES

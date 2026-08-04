@@ -678,11 +678,16 @@ class RuntimeInstance:
             )
         return provider(block, box_index)
 
-    def nx(self) -> int:
-        return int(self._executor.nx())
-
-    def ny(self) -> int:
-        return int(self._executor.ny())
+    def spatial_shape(self) -> tuple[int, ...]:
+        provider: Any = getattr(self._executor, "spatial_shape", None)
+        if not callable(provider):
+            raise NotImplementedError("runtime provider does not expose its exact spatial shape")
+        shape = tuple(provider())
+        if len(shape) not in (1, 2, 3) or any(
+            type(value) is not int or value < 1 for value in shape
+        ):
+            raise TypeError("native runtime spatial shape must contain exact positive integers")
+        return shape
 
     def n_levels(self) -> int:
         provider: Any = getattr(self._executor, "n_levels", None)
@@ -707,8 +712,8 @@ class RuntimeInstance:
     def patch_boxes(self) -> Any:
         return self._executor.patch_boxes()
 
-    def patch_rectangles(self) -> Any:
-        return self._executor.patch_rectangles()
+    def patch_bounds(self) -> Any:
+        return self._executor.patch_bounds()
 
     def block_level_state(self, block: str, level: int) -> Any:
         return self._executor.block_level_state(block, level)
@@ -1768,9 +1773,7 @@ class RuntimeInstance:
                 # ownership to an inode reacquired by path after capture.
                 transaction_receipt.authenticate_entry_at(candidate)
                 if candidate.owner != initial.owner:
-                    raise RuntimeError(
-                        "native checkpoint replaced its created-at staging inode"
-                    )
+                    raise RuntimeError("native checkpoint replaced its created-at staging inode")
                 transaction_receipt.authenticate_entry_at(initial)
             except BaseException:
                 raise

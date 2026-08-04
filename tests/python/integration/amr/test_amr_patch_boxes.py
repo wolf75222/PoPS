@@ -4,6 +4,7 @@ The only runtime object used here is the :func:`pops.bind` result.  In particula
 is read from the public ``RuntimeInstance`` after an AMR execution whose 2:1 level-clock relation
 was explicitly authored.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -78,7 +79,8 @@ def _program(rows):
         stage = StagePoint(name + "_stage", {"main": TimePoint(program.clock, 0)})
         rhs = program.value(name + "_rhs", rate(temporal.n), at=stage)
         next_value = program.value(
-            name + "_next", temporal.n + program.dt * rhs, at=temporal.next.point)
+            name + "_next", temporal.n + program.dt * rhs, at=temporal.next.point
+        )
         endpoints.append((temporal.next, next_value))
     for endpoint, value in endpoints:
         program.commit(endpoint, value)
@@ -113,30 +115,35 @@ def _resolved(native_cxx, block_count):
             ),
         )
         case.numerics(numerics, block=block)
-    program = _program(tuple(
-        (name, instance, rate)
-        for name, _block, instance, _state, _flux, rate, _center in block_specs
-    ))
+    program = _program(
+        tuple(
+            (name, instance, rate)
+            for name, _block, instance, _state, _flux, rate, _center in block_specs
+        )
+    )
     case.program(program)
     x_axis, y_axis = frame.axes
     x_coord, y_coord = coordinates(frame)
     for name, _block, instance, _state, _flux, _rate, center in block_specs:
         profile = Gaussian(
-            frame=frame, center={x_axis: center[0], y_axis: center[1]},
-            background=0.0, amplitude=1.0, inverse_width=120.0,
+            frame=frame,
+            center={x_axis: center[0], y_axis: center[1]},
+            background=0.0,
+            amplitude=1.0,
+            inverse_width=120.0,
         )
         if name == "reference":
             profile = Analytic(
                 frame=frame,
-                components=(
-                    0.25 + x_coord * x_coord + 2.0 * y_coord + x_coord * y_coord,
-                ),
+                components=(0.25 + x_coord * x_coord + 2.0 * y_coord + x_coord * y_coord,),
             )
-        case.initials.add(InitialCondition(
-            state=instance,
-            value=profile,
-            projection=ConservativeCellAverage(),
-        ))
+        case.initials.add(
+            InitialCondition(
+                state=instance,
+                value=profile,
+                projection=ConservativeCellAverage(),
+            )
+        )
     threshold = case.param(RuntimeParam("patch_refine_threshold", default=0.2))
     transfer = AMRTransfer()
     for _name, _block, instance, _state, _flux, _rate, _center in block_specs:
@@ -164,23 +171,25 @@ def _resolved(native_cxx, block_count):
 
 def _assert_public_patch_geometry(simulation):
     boxes = simulation.patch_boxes()
-    rectangles = simulation.patch_rectangles()
+    physical_bounds = simulation.patch_bounds()
     assert isinstance(boxes, list)
-    assert len(boxes) == len(rectangles) > 0
-    for level, ilo, jlo, ihi, jhi in boxes:
-        limit = N * (2 ** level)
+    assert len(boxes) == len(physical_bounds) > 0
+    for level, lower, upper in boxes:
+        limit = N * (2**level)
         assert level >= 1
-        assert 0 <= ilo <= ihi < limit
-        assert 0 <= jlo <= jhi < limit
-    for x0, y0, width, height in rectangles:
+        assert len(lower) == len(upper) == 2
+        assert all(0 <= lo <= hi < limit for lo, hi in zip(lower, upper, strict=True))
+    for x0, y0, width, height in physical_bounds:
         assert width > 0.0 and height > 0.0
         assert 0.0 <= x0 <= x0 + width <= 1.0
         assert 0.0 <= y0 <= y0 + height <= 1.0
-    return boxes, rectangles
+    return boxes, physical_bounds
 
 
-def test_public_amr_patch_boxes_are_parallel_to_rectangles_and_read_only(
-    native_cxx, isolated_native_cache, kokkos_root,
+def test_public_amr_patch_boxes_are_parallel_to_physical_bounds_and_read_only(
+    native_cxx,
+    isolated_native_cache,
+    kokkos_root,
 ):
     del isolated_native_cache, kokkos_root
     for block_count in (1, 2):
@@ -190,33 +199,38 @@ def test_public_amr_patch_boxes_are_parallel_to_rectangles_and_read_only(
             x_coord, y_coord = np.meshgrid(centers, centers, indexing="xy")
             dx = 1.0 / N
             expected_reference = (
-                0.25 + x_coord * x_coord + dx * dx / 12.0
-                + 2.0 * y_coord + x_coord * y_coord
+                0.25 + x_coord * x_coord + dx * dx / 12.0 + 2.0 * y_coord + x_coord * y_coord
             )
             initial_reference = np.asarray(
-                simulation.block_level_state_global("reference", 0), dtype=np.float64,
+                simulation.block_level_state_global("reference", 0),
+                dtype=np.float64,
             ).reshape((1, N, N))[0]
             np.testing.assert_allclose(
-                initial_reference, expected_reference, rtol=0.0, atol=2.0e-14,
+                initial_reference,
+                expected_reference,
+                rtol=0.0,
+                atol=2.0e-14,
             )
         report = pops.run(simulation, t_end=2.0 * DT, max_steps=2)
         expected_names = ("tracer",) if block_count == 1 else ("tracer", "reference")
         assert simulation.block_names() == expected_names
         before = {
             name: np.asarray(
-                simulation.block_level_state_global(name, 0), dtype=np.float64,
+                simulation.block_level_state_global(name, 0),
+                dtype=np.float64,
             ).copy()
             for name in simulation.block_names()
         }
-        first_boxes, first_rectangles = _assert_public_patch_geometry(simulation)
-        second_boxes, second_rectangles = _assert_public_patch_geometry(simulation)
+        first_boxes, first_bounds = _assert_public_patch_geometry(simulation)
+        second_boxes, second_bounds = _assert_public_patch_geometry(simulation)
         _ = simulation.patch_boxes()
         assert report.accepted_steps == simulation.macro_step() == 2
         assert simulation.n_levels() == 2
         assert second_boxes == first_boxes
-        assert second_rectangles == first_rectangles
+        assert second_bounds == first_bounds
         for name, expected in before.items():
             actual = np.asarray(
-                simulation.block_level_state_global(name, 0), dtype=np.float64,
+                simulation.block_level_state_global(name, 0),
+                dtype=np.float64,
             )
             np.testing.assert_array_equal(actual, expected)

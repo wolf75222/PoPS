@@ -7,7 +7,7 @@ refine envelope, before any runtime), this package reports a *live*
 hierarchy, the regrid cadence in force, and the ghost / reflux / checkpoint route limitations.
 
 The surface is INERT: every method READS the already-built runtime (the box accessors
-``patch_rectangles`` / ``coarse_local_boxes`` / ``coarse_total_boxes`` and the static config the
+``patch_bounds`` / ``coarse_local_boxes`` / ``coarse_total_boxes`` and the static config the
 ``AmrSystem`` retained) and the descriptor metadata; it RUNS nothing, ALLOCATES nothing, and never
 steps the clock. A measure that the current native build cannot answer (composite multi-level
 Poisson, a per-level ghost depth not exposed by C++) is DECLARED unavailable, never fabricated.

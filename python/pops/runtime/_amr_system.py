@@ -96,10 +96,17 @@ class AmrSystem(
         # has no more effect after this point.
         _threading._first_system_built = True
         self._s = _AmrSystem(config)
-        self._L = float(config.L)
-        self._Ly = float(config.Ly) if float(config.Ly) != 0.0 else self._L
-        self._xlo = float(config.xlo)
-        self._ylo = float(config.ylo)
+        self._shape = tuple(config.shape)
+        self._lower = tuple(config.lower)
+        self._upper = tuple(config.upper)
+        if not (
+            len(self._shape) == len(self._lower) == len(self._upper)
+            and len(self._shape) in (1, 2, 3)
+        ):
+            raise ValueError("AmrSystemConfig spatial arrays do not share one supported rank")
+        self._lengths = tuple(
+            high - low for low, high in zip(self._lower, self._upper, strict=True)
+        )
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
         # (otherwise the post-restart regrid would re-diverge the hierarchy). Memorized for the restart guard.
         self._regrid_every = int(config.regrid_every)
@@ -243,25 +250,15 @@ class AmrSystem(
             )
         return _AmrProfileSession(self, profile)
 
-    def patch_rectangles(self) -> Any:
-        """Physical rectangles ``(x0, y0, width, height)`` of the current fine patches.
+    def patch_bounds(self) -> Any:
+        """Physical ``lower + extents`` tuples for the current ranked fine patches."""
+        from pops.runtime._amr_bind_lowering import _physical_patch_bounds
 
-        Converts patch_boxes() (index space, inclusive corners) into physical coordinates. The level
-        spacings are resolved independently on x and y (ratio 2 per level); a patch
-        [ilo..ihi] x [jlo..jhi] covers the corresponding exact Cartesian cell rectangle. Grid convention
-        ne[j, i] -> index 0 = x (i), index 1 = y (j), consistent with density() and an imshow
-        with the authored frame extent. Convenient to plot the real patches without
-        rebuilding a density proxy. Returns a list of (x0, y0, w, h), one per fine patch (all
-        fine levels combined). Query (between steps) : triggers the lazy build like
-        n_patches(), no cost on the hot path.
-        """
-        from pops.runtime._amr_bind_lowering import _physical_patch_rectangles
-
-        return _physical_patch_rectangles(
+        return _physical_patch_bounds(
             self._s.patch_boxes(),
-            cells=(self._s.nx(), self._s.ny()),
-            lengths=(self._L, self._Ly),
-            lower=(self._xlo, self._ylo),
+            cells=self._shape,
+            lengths=self._lengths,
+            lower=self._lower,
         )
 
     def coarse_local_boxes(self) -> Any:
