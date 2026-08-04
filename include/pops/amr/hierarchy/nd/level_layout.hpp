@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -35,7 +36,7 @@ inline int floor_div(int numerator, int denominator) {
 }
 
 template <int Dim>
-void validate_ratio(const RefinementRatio<Dim>& ratio) {
+void validate_ratio(const std::type_identity_t<RefinementRatio<Dim>>& ratio) {
   for (int axis = 0; axis < Dim; ++axis)
     if (ratio[axis] <= 0)
       throw std::invalid_argument("ND refinement ratios must be strictly positive");
@@ -45,8 +46,8 @@ void validate_ratio(const RefinementRatio<Dim>& ratio) {
 
 /// Refine an inclusive box independently along every axis.
 template <int Dim>
-Box<Dim> refine_box(const Box<Dim>& box, const RefinementRatio<Dim>& ratio) {
-  detail::validate_ratio(ratio);
+Box<Dim> refine_box(const Box<Dim>& box, const std::type_identity_t<RefinementRatio<Dim>>& ratio) {
+  detail::validate_ratio<Dim>(ratio);
   if (box.empty())
     return box;
   Box<Dim> result{};
@@ -62,8 +63,8 @@ Box<Dim> refine_box(const Box<Dim>& box, const RefinementRatio<Dim>& ratio) {
 
 /// Coarsen an inclusive box with mathematical floor division on negative origins.
 template <int Dim>
-Box<Dim> coarsen_box(const Box<Dim>& box, const RefinementRatio<Dim>& ratio) {
-  detail::validate_ratio(ratio);
+Box<Dim> coarsen_box(const Box<Dim>& box, const std::type_identity_t<RefinementRatio<Dim>>& ratio) {
+  detail::validate_ratio<Dim>(ratio);
   if (box.empty())
     return box;
   Box<Dim> result{};
@@ -135,7 +136,7 @@ class LevelLayout {
     if (!distribution_.matches_layout(patches_))
       throw std::invalid_argument(
           "LevelLayout distribution does not authenticate its patch layout");
-    detail::validate_ratio(ratio_from_parent_);
+    detail::validate_ratio<Dim>(ratio_from_parent_);
     bool refined_axis = false;
     for (int axis = 0; axis < Dim; ++axis)
       refined_axis = refined_axis || ratio_from_parent_[axis] > 1;
