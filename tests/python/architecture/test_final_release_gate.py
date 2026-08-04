@@ -1446,3 +1446,28 @@ def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate
     assert "--signature-policy adhoc" in wheels
     assert "--wheel-dir" in build
     assert "--force-reinstall --no-deps" in build
+
+
+def test_cibuildwheel_refreshes_repaired_mono_manifest_before_selector_import():
+    wheels = (ROOT / ".github" / "workflows" / "wheels.yml").read_text()
+    test_command = wheels[
+        wheels.index('CIBW_TEST_COMMAND="') : wheels.index(
+            "python -m cibuildwheel --output-dir", wheels.index('CIBW_TEST_COMMAND="')
+        )
+    ]
+
+    assert "validate_manifest_payload" in test_command
+    assert "expected_dimensions=(${dim},)" in test_command
+    assert 'codesign --force --sign - \\\"\\$native_leaf\\\"' in test_command
+    assert "scripts/write_native_variant_manifest.py" in test_command
+    assert "scripts/codesign_pops_extensions.py --expect-dim ${dim}" in test_command
+    assert "scripts/verify_installed_native.py --expect-dim ${dim}" in test_command
+    assert test_command.index("codesign --force") < test_command.index(
+        "scripts/write_native_variant_manifest.py"
+    )
+    assert test_command.index("scripts/write_native_variant_manifest.py") < test_command.index(
+        "scripts/codesign_pops_extensions.py"
+    )
+    assert test_command.index("scripts/codesign_pops_extensions.py") < test_command.index(
+        "scripts/verify_installed_native.py"
+    )

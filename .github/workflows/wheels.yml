@@ -146,8 +146,17 @@ jobs:
           for dim in 1 2 3; do
             output_dir="$PWD/wheel-leaves/dim${dim}"
             mkdir -p "$output_dir"
+            # delocate may rewrite/sign the Mach-O after CMake emitted the mono-Dim manifest. In the
+            # disposable test venv, resolve only the manifest-declared leaf, explicitly sign it,
+            # regenerate its row by loading those exact bytes, recheck signature+hash, then import.
+            # The assembler independently proves the untouched repaired wheel archive afterwards.
             CIBW_CONFIG_SETTINGS="cmake.define.POPS_NATIVE_DIM=${dim} cmake.define.POPS_HEAVY_MODULE_TU_POOL=2" \
-            CIBW_TEST_COMMAND="python {project}/scripts/verify_installed_native.py --expect-dim ${dim} --expect-serial" \
+            CIBW_TEST_COMMAND="native_leaf=\"\$(python -c 'import importlib.util,json,sys; from pathlib import Path,PurePosixPath; sys.path.insert(0, \"{project}/scripts\"); from write_native_variant_manifest import validate_manifest_payload; spec=importlib.util.find_spec(\"pops\"); assert spec is not None; roots=tuple(spec.submodule_search_locations or ()); assert len(roots)==1; manifest=Path(roots[0])/\"_native\"/\"variants.json\"; rows=validate_manifest_payload(json.loads(manifest.read_text()), expected_dimensions=(${dim},)); leaf=manifest.parent.joinpath(*PurePosixPath(rows[0][\"path\"]).parts); assert leaf.is_file() and not leaf.is_symlink(); print(leaf.resolve())')\" && \
+              native_manifest=\"\$(dirname \"\$(dirname \"\$native_leaf\")\")/variants.json\" && \
+              codesign --force --sign - \"\$native_leaf\" && \
+              python {project}/scripts/write_native_variant_manifest.py --extension \"\$native_leaf\" --manifest \"\$native_manifest\" --dimension ${dim} --version \"\$(python -c 'import importlib.metadata; print(importlib.metadata.version(\"pops\"))')\" && \
+              python {project}/scripts/codesign_pops_extensions.py --expect-dim ${dim} && \
+              python {project}/scripts/verify_installed_native.py --expect-dim ${dim} --expect-serial" \
               python -m cibuildwheel --output-dir "$output_dir"
             built=("$output_dir"/pops-*.whl)
             test "${#built[@]}" -eq 1
