@@ -431,7 +431,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_residual_operator
   test_capability_report
   test_canonical_identity
-  test_box2d
+  test_box
   test_fab2d
   test_box_array
   test_multifab

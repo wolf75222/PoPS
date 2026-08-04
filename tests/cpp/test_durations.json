@@ -81,7 +81,7 @@
   "test_aux_te": 0.01,
   "test_block_builder": 0.04,
   "test_block_inverse": 0.03,
-  "test_box2d": 0.02,
+  "test_box": 0.02,
   "test_box_array": 0.01,
   "test_brick_catalog": 0.14,
   "test_cache_manager": 0.04,

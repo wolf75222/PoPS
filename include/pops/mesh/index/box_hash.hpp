@@ -1,79 +1,187 @@
 /// @file
-/// @brief BoxHash: spatial hash for fast lookup of boxes intersecting a query.
-///
-/// A uniform bin grid (classic spatial-hash technique) maps each bin to the list of boxes that
-/// touch it: finding the boxes whose region may intersect a query box becomes ~O(1) per query
-/// (the halo-pair search drops from O(N) to ~O(n), n << N). Built ONCE per mesh, reusable as long
-/// as it does not change. Non-omission INVARIANT: if a box intersects the query, they share a cell
-/// hence a bin -> query() returns a sorted SUPERSET without duplicates, the caller tests the exact
-/// intersection.
+/// @brief Bounded structural spatial hash over compile-time-ranked patch layouts.
 
 #pragma once
 
-#include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
-namespace pops {
+namespace pops::mesh {
 
-/// Spatial index of a BoxArray's boxes via a bin grid. References the BoxArray by INDEX
-/// (the indices returned by query() are global indices into the original BoxArray);
-/// valid as long as that BoxArray does not change.
-class BoxHash {
- public:
-  /// Builds the index: bin = side of a bin (cells); bin <= 0 forces bin = 1. Each box is
-  /// inserted into all the bins it covers. Cost proportional to the total area in bins.
-  BoxHash(const BoxArray& ba, int bin) : bin_(bin > 0 ? bin : 1) {
-    for (int i = 0; i < ba.size(); ++i) {
-      const Box2D& b = ba[i];
-      for (int by = fdiv(b.lo[1]); by <= fdiv(b.hi[1]); ++by)
-        for (int bx = fdiv(b.lo[0]); bx <= fdiv(b.hi[0]); ++bx)
-          bins_[key(bx, by)].push_back(i);
+template <int Dim>
+struct BinCoordinate {
+  static_assert(Dim >= 1 && Dim <= 3, "BinCoordinate only supports dimensions 1, 2, and 3");
+
+  std::array<std::int64_t, Dim> axes{};
+
+  constexpr bool operator==(const BinCoordinate&) const = default;
+};
+
+template <int Dim>
+struct BinCoordinateHash {
+  std::size_t operator()(const BinCoordinate<Dim>& coordinate) const noexcept {
+    std::size_t hash = 1469598103934665603ULL;
+    for (int axis = 0; axis < Dim; ++axis) {
+      hash ^= std::hash<std::int64_t>{}(coordinate.axes[axis]);
+      hash *= 1099511628211ULL;
     }
+    return hash;
+  }
+};
+
+/// Explicit work limits. No hash construction or query limit is silently inferred.
+struct BoxHashBudget {
+  std::size_t build_bin_visits;
+  std::size_t query_bin_visits;
+  std::size_t candidate_references;
+};
+
+/// Remaining cumulative query work for a sequence of hash queries.
+struct BoxHashQueryBudget {
+  std::size_t bin_visits;
+  std::size_t candidate_references;
+};
+
+template <int Dim>
+class BoxHash {
+  static_assert(Dim >= 1 && Dim <= 3, "BoxHash only supports dimensions 1, 2, and 3");
+
+ public:
+  using box_type = Box<Dim>;
+
+  BoxHash(const BoxArray<Dim>& boxes, const Extent<Dim>& bin_extent, BoxHashBudget budget)
+      : bin_extent_(bin_extent), budget_(budget) {
+    for (int axis = 0; axis < Dim; ++axis)
+      if (bin_extent_[axis] <= 0)
+        throw std::invalid_argument("BoxHash bin extents must be strictly positive");
+
+    std::size_t total_visits = 0;
+    for (std::size_t index = 0; index < boxes.size(); ++index) {
+      if (boxes[index].empty())
+        continue;
+      const std::size_t visits = checked_bin_visits_(boxes[index]);
+      if (total_visits > budget_.build_bin_visits ||
+          visits > budget_.build_bin_visits - total_visits || total_visits > bins_.max_size() ||
+          visits > bins_.max_size() - total_visits)
+        throw std::length_error("BoxHash bin enumeration exceeds its explicit capacity");
+      total_visits += visits;
+    }
+
+    for (std::size_t index = 0; index < boxes.size(); ++index)
+      if (!boxes[index].empty())
+        for_each_bin_(boxes[index], [this, index](const BinCoordinate<Dim>& key) {
+          bins_[key].push_back(index);
+        });
   }
 
-  /// Indices (SORTED, without duplicates) of the boxes that may intersect q: guaranteed SUPERSET
-  /// (no intersecting box is omitted). The caller tests the exact intersection. Empty if q is empty.
-  std::vector<int> query(const Box2D& q) const {
-    std::vector<int> out;
-    if (q.empty())
-      return out;
-    for (int by = fdiv(q.lo[1]); by <= fdiv(q.hi[1]); ++by)
-      for (int bx = fdiv(q.lo[0]); bx <= fdiv(q.hi[0]); ++bx) {
-        auto it = bins_.find(key(bx, by));
-        if (it != bins_.end())
-          out.insert(out.end(), it->second.begin(), it->second.end());
+  std::vector<std::size_t> query(const box_type& query_box,
+                                 BoxHashQueryBudget* cumulative_budget = nullptr) const {
+    std::vector<std::size_t> candidates;
+    if (query_box.empty())
+      return candidates;
+    const std::size_t query_visits = checked_bin_visits_(query_box);
+    if (query_visits > budget_.query_bin_visits)
+      throw std::length_error("BoxHash query enumeration exceeds its explicit budget");
+    if (cumulative_budget != nullptr) {
+      if (query_visits > cumulative_budget->bin_visits)
+        throw std::length_error("BoxHash cumulative query bins exceed their explicit budget");
+      cumulative_budget->bin_visits -= query_visits;
+    }
+    std::size_t references = 0;
+    for_each_bin_(query_box, [this, &candidates, &references,
+                              cumulative_budget](const BinCoordinate<Dim>& key) {
+      const auto found = bins_.find(key);
+      if (found == bins_.end())
+        return;
+      if (references > budget_.candidate_references ||
+          found->second.size() > budget_.candidate_references - references ||
+          candidates.size() > candidates.max_size() - found->second.size())
+        throw std::length_error("BoxHash candidate references exceed their explicit budget");
+      references += found->second.size();
+      if (cumulative_budget != nullptr) {
+        if (found->second.size() > cumulative_budget->candidate_references)
+          throw std::length_error(
+              "BoxHash cumulative candidate references exceed their explicit budget");
+        cumulative_budget->candidate_references -= found->second.size();
       }
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
-    return out;
+      candidates.insert(candidates.end(), found->second.begin(), found->second.end());
+    });
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    return candidates;
   }
 
  private:
-  // bin index = integer division by bin_ rounded down (toward -inf) (handles negative coords).
-  // Thin adapter over floor_div (box2d.hpp): bin_ > 0 (forced by the constructor) -> result
-  // bit-identical to the old x >= 0 ? x / bin_: -((-x + bin_ - 1) / bin_).
-  int fdiv(int x) const { return floor_div(x, bin_); }
-  static std::int64_t key(int bx, int by) {
-    return (static_cast<std::int64_t>(bx) << 32) |
-           (static_cast<std::int64_t>(static_cast<std::uint32_t>(by)) & INT64_C(0xffffffff));
+  static std::int64_t floor_div_(int numerator, std::int64_t denominator) {
+    const std::int64_t quotient = static_cast<std::int64_t>(numerator) / denominator;
+    const std::int64_t remainder = static_cast<std::int64_t>(numerator) % denominator;
+    return remainder < 0 ? quotient - 1 : quotient;
   }
 
-  int bin_;
-  std::unordered_map<std::int64_t, std::vector<int>> bins_;
+  std::size_t checked_bin_visits_(const box_type& box) const {
+    std::size_t visits = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t lower = floor_div_(box.lo[axis], bin_extent_[axis]);
+      const std::int64_t upper = floor_div_(box.hi[axis], bin_extent_[axis]);
+      const std::uint64_t axis_visits = static_cast<std::uint64_t>(upper - lower) + 1;
+      if (axis_visits > std::numeric_limits<std::size_t>::max() / visits)
+        throw std::length_error("BoxHash bin enumeration exceeds its explicit capacity");
+      visits *= static_cast<std::size_t>(axis_visits);
+    }
+    return visits;
+  }
+
+  template <class Callback>
+  void for_each_bin_(const box_type& box, Callback&& callback) const {
+    BinCoordinate<Dim> lower{};
+    BinCoordinate<Dim> upper{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower.axes[axis] = floor_div_(box.lo[axis], bin_extent_[axis]);
+      upper.axes[axis] = floor_div_(box.hi[axis], bin_extent_[axis]);
+    }
+
+    BinCoordinate<Dim> current = lower;
+    for (;;) {
+      callback(current);
+      int axis = 0;
+      for (; axis < Dim; ++axis) {
+        if (current.axes[axis] != upper.axes[axis]) {
+          ++current.axes[axis];
+          break;
+        }
+        current.axes[axis] = lower.axes[axis];
+      }
+      if (axis == Dim)
+        return;
+    }
+  }
+
+  Extent<Dim> bin_extent_{};
+  BoxHashBudget budget_{};
+  std::unordered_map<BinCoordinate<Dim>, std::vector<std::size_t>, BinCoordinateHash<Dim>> bins_{};
 };
 
-/// Recommended bin size for a BoxArray: the largest box extent (at least 1), so that
-/// neighboring boxes fall into adjacent bins (memory / selectivity trade-off).
-inline int suggest_bin(const BoxArray& ba) {
-  int m = 1;
-  for (int i = 0; i < ba.size(); ++i)
-    m = std::max({m, ba[i].nx(), ba[i].ny()});
-  return m;
+template <int Dim>
+Extent<Dim> suggest_bin(const BoxArray<Dim>& boxes) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = 1;
+  for (const Box<Dim>& box : boxes.boxes()) {
+    if (box.empty())
+      continue;
+    for (int axis = 0; axis < Dim; ++axis)
+      result[axis] = result[axis] < box.length(axis) ? box.length(axis) : result[axis];
+  }
+  return result;
 }
 
-}  // namespace pops
+}  // namespace pops::mesh

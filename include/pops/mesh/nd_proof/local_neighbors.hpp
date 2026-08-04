@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <pops/mesh/nd_proof/box_hash.hpp>
+#include <pops/mesh/index/box_hash.hpp>
 #include <pops/mesh/nd_proof/periodicity.hpp>
 
 #include <array>
@@ -59,8 +59,7 @@ std::array<std::int64_t, Dim> inverse_translation(const AxisTranslationImage<Dim
 template <int Dim>
 std::vector<LocalNeighborJob<Dim>> enumerate_local_translation_neighbors(
     const BoxArray<Dim>& boxes, const Box<Dim>& domain, const Extent<Dim>& destination_ghosts,
-    const PeriodicTopology<Dim>& topology,
-    const std::array<int, static_cast<std::size_t>(Dim)>& hash_bin_extent,
+    const PeriodicTopology<Dim>& topology, const Extent<Dim>& hash_bin_extent,
     BoxHashBudget hash_budget, LocalNeighborWorkBudget work_budget) {
   if (domain.empty())
     throw std::invalid_argument("nd_proof local neighbors require a non-empty domain");

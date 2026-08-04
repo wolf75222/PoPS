@@ -1,281 +1,230 @@
 /// @file
-/// @brief BoxArray: the set of boxes tiling a level (disjoint, covering).
-///
-/// Equivalent of AMReX's BoxArray. from_domain splits a domain into tiles of at most
-/// max_grid_size per direction, distributed as EVENLY as possible (better balancing than
-/// greedy chunks). Carries NO field data and no MPI distribution (cf. MultiFab /
-/// DistributionMapping): it is only the geometric decomposition of the level.
+/// @brief Ordered compile-time-ranked patch layouts with bounded exact validation.
 
 #pragma once
 
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
 
-#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <limits>
-#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-namespace pops {
+namespace pops::mesh {
 
-/// Ordered list of boxes tiling a level. Construction preserves arbitrary box lists; use
-/// tiles_exactly() where the disjoint-and-covering invariant is required. The ORDER is significant
-/// (global box index = position in the vector; shared by MultiFab / DistributionMapping). Copyable
-/// (vector of Box2D).
-class BoxArray {
+/// Explicit finite budget for the quadratic disjointness proof.
+struct BoxArrayValidationBudget {
+  std::size_t boxes = 0;
+  std::size_t overlap_pairs = 0;
+
+  bool operator==(const BoxArrayValidationBudget&) const = default;
+};
+
+/// Portable unsigned four-limb count. Three full signed-index axes require exactly 97 bits.
+class ExactCellCount {
  public:
-  BoxArray() = default;
-  /// Build from an already-computed list of boxes (move). The order is kept as is.
-  explicit BoxArray(std::vector<Box2D> boxes) : boxes_(std::move(boxes)) {}
+  constexpr ExactCellCount() = default;
+  constexpr bool operator==(const ExactCellCount&) const = default;
 
-  /// Tile the domain into tiles of at most max_grid_size per direction, distributed evenly.
-  /// Traversal order is y outer, x inner (deterministic, identical on all ranks).
-  static BoxArray from_domain(const Box2D& domain, int max_grid_size) {
-    return from_domain(domain, max_grid_size, max_grid_size);
+  static ExactCellCount from_uint64(std::uint64_t value) {
+    ExactCellCount result;
+    result.limbs_[0] = static_cast<std::uint32_t>(value);
+    result.limbs_[1] = static_cast<std::uint32_t>(value >> 32);
+    return result;
   }
 
-  /// Axis-resolved counterpart used by rectangular Cartesian layouts.  The one-argument overload
-  /// remains exactly equivalent to passing the same limit on both axes.
-  static BoxArray from_domain(const Box2D& domain, int max_grid_size_x, int max_grid_size_y) {
-    if (max_grid_size_x <= 0 || max_grid_size_y <= 0)
-      throw std::invalid_argument(
-          "pops::BoxArray::from_domain: axis grid sizes must be strictly positive");
-    if (domain.empty())
-      return BoxArray{};
-
-    const std::uint64_t count_x = split_count(domain.lo[0], domain.hi[0], max_grid_size_x);
-    const std::uint64_t count_y = split_count(domain.lo[1], domain.hi[1], max_grid_size_y);
-    if (count_y != 0 && count_x > std::numeric_limits<std::uint64_t>::max() / count_y)
-      throw std::length_error("pops::BoxArray::from_domain: tile count overflows uint64_t");
-    const std::uint64_t count = count_x * count_y;
-    if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
-      throw std::length_error(
-          "pops::BoxArray::from_domain: tile count exceeds the signed-int box-index contract");
-
-    std::vector<Box2D> boxes;
-    if (count > static_cast<std::uint64_t>(boxes.max_size()))
-      throw std::length_error("pops::BoxArray::from_domain: tile count exceeds vector max_size");
-    auto sx = split_range(domain.lo[0], domain.hi[0], count_x);
-    auto sy = split_range(domain.lo[1], domain.hi[1], count_y);
-    boxes.reserve(static_cast<std::size_t>(count));
-    for (auto [ylo, yhi] : sy)
-      for (auto [xlo, xhi] : sx)
-        boxes.push_back(Box2D{{xlo, ylo}, {xhi, yhi}});
-    return BoxArray{std::move(boxes)};
+  static ExactCellCount power_of_two(unsigned int bit) {
+    if (bit >= 128)
+      throw std::overflow_error("ExactCellCount bit is outside four limbs");
+    ExactCellCount result;
+    result.limbs_[bit / 32] = std::uint32_t{1} << (bit % 32);
+    return result;
   }
 
-  /// Number of boxes in the tiling.
-  int size() const {
-    if (boxes_.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-      throw std::overflow_error(
-          "pops::BoxArray::size: number of boxes exceeds the signed-int box-index contract");
-    return static_cast<int>(boxes_.size());
+  template <int Dim>
+  static ExactCellCount from_box(const Box<Dim>& box) {
+    if (box.empty())
+      return {};
+    ExactCellCount result = from_uint64(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      result.multiply_(static_cast<std::uint64_t>(box.length(axis)));
+    return result;
   }
-  /// Box at global index i (0 <= i < size()); the index is the box identity throughout the code.
-  const Box2D& operator[](int i) const { return boxes_[i]; }
-  /// View on the underlying vector (element-by-element equality = same boxes AND same order).
-  const std::vector<Box2D>& boxes() const { return boxes_; }
 
-  /// Return whether the boxes form an exact tiling of `domain`.
-  ///
-  /// Every box must be non-empty and contained in `domain`; boxes must be pairwise disjoint and
-  /// their exact integer area must equal the domain area.  Overlaps are detected in O(N log N)
-  /// with a sweep over half-open rectangles.  At a shared x edge, removals are processed before
-  /// insertions so adjacent boxes are accepted.  Coordinate and area arithmetic cannot overflow.
-  /// An empty BoxArray exactly tiles an empty domain.
-  bool tiles_exactly(const Box2D& domain) const noexcept {
-    try {
-      return tiles_exactly_impl(domain);
-    } catch (...) {
-      // Validation is a total predicate.  Allocation failure (or a standard-container size
-      // failure) cannot turn an invalid/unverified layout into a valid one.
-      return false;
+  bool add(const ExactCellCount& other) noexcept {
+    std::uint64_t carry = 0;
+    for (std::size_t limb = 0; limb < limbs_.size(); ++limb) {
+      const std::uint64_t sum =
+          static_cast<std::uint64_t>(limbs_[limb]) + other.limbs_[limb] + carry;
+      limbs_[limb] = static_cast<std::uint32_t>(sum);
+      carry = sum >> 32;
     }
-  }
-
-  /// Total number of valid cells (sum of num_cells over all boxes).
-  std::int64_t num_cells() const {
-    std::int64_t n = 0;
-    for (const auto& b : boxes_) {
-      const std::int64_t cells = b.num_cells();
-      if (cells > std::numeric_limits<std::int64_t>::max() - n)
-        throw std::overflow_error("pops::BoxArray::num_cells: total cell count exceeds int64_t");
-      n += cells;
-    }
-    return n;
-  }
-
-  /// Smallest box enclosing all boxes (empty box if the tiling is empty).
-  Box2D bounding_box() const {
-    if (boxes_.empty())
-      return Box2D{};
-    Box2D b = boxes_[0];
-    for (const auto& o : boxes_) {
-      b.lo[0] = std::min(b.lo[0], o.lo[0]);
-      b.lo[1] = std::min(b.lo[1], o.lo[1]);
-      b.hi[0] = std::max(b.hi[0], o.hi[0]);
-      b.hi[1] = std::max(b.hi[1], o.hi[1]);
-    }
-    return b;
+    return carry == 0;
   }
 
  private:
-  struct ExactArea {
-    std::uint64_t high = 0;  // coefficient of 2^64 (at most one for a Box2D)
-    std::uint64_t low = 0;
-  };
-
-  static ExactArea exact_area(const Box2D& box) noexcept {
-    static_assert(std::numeric_limits<int>::digits <= 31,
-                  "BoxArray exact-area arithmetic assumes the 32-bit Box2D index contract");
-    const auto width = static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[0]) -
-                                                  static_cast<std::int64_t>(box.lo[0]) + 1);
-    const auto height = static_cast<std::uint64_t>(static_cast<std::int64_t>(box.hi[1]) -
-                                                   static_cast<std::int64_t>(box.lo[1]) + 1);
-    if (width != 0 && height > std::numeric_limits<std::uint64_t>::max() / width)
-      return {1, 0};  // the only possible overflow is exactly 2^32 * 2^32 = 2^64
-    return {0, width * height};
-  }
-
-  static bool area_less(const ExactArea& lhs, const ExactArea& rhs) noexcept {
-    return lhs.high < rhs.high || (lhs.high == rhs.high && lhs.low < rhs.low);
-  }
-
-  static void subtract_area(ExactArea& lhs, const ExactArea& rhs) noexcept {
-    const bool borrow = lhs.low < rhs.low;
-    lhs.low -= rhs.low;
-    lhs.high -= rhs.high;
-    if (borrow)
-      --lhs.high;
-  }
-
-  bool tiles_exactly_impl(const Box2D& domain) const {
-    if (domain.empty())
-      return boxes_.empty();
-    if (boxes_.empty())
-      return false;
-
-    struct Event {
-      std::int64_t x;
-      bool insertion;  // false sorts first: remove [x0, x) before inserting [x, x1)
-      std::size_t box;
-    };
-    struct Interval {
-      std::int64_t y0;
-      std::int64_t y1;
-      std::size_t box;
-    };
-    struct IntervalLess {
-      bool operator()(const Interval& lhs, const Interval& rhs) const noexcept {
-        if (lhs.y0 != rhs.y0)
-          return lhs.y0 < rhs.y0;
-        if (lhs.y1 != rhs.y1)
-          return lhs.y1 < rhs.y1;
-        return lhs.box < rhs.box;
-      }
-    };
-
-    std::vector<Event> events;
-    if (boxes_.size() > events.max_size() / 2)
-      return false;
-    events.reserve(boxes_.size() * 2);
-
-    ExactArea remaining = exact_area(domain);
-    for (std::size_t index = 0; index < boxes_.size(); ++index) {
-      const Box2D& box = boxes_[index];
-      if (box.empty() || !domain.contains(box))
-        return false;
-
-      const ExactArea area = exact_area(box);
-      if (area_less(remaining, area))
-        return false;
-      subtract_area(remaining, area);
-
-      // Inclusive Box2D -> half-open sweep interval.  Widen before adding one so INT_MAX is safe.
-      const auto x0 = static_cast<std::int64_t>(box.lo[0]);
-      const auto x1 = static_cast<std::int64_t>(box.hi[0]) + 1;
-      events.push_back({x0, true, index});
-      events.push_back({x1, false, index});
+  void multiply_(std::uint64_t factor) {
+    ExactCellCount result;
+    const std::uint32_t low = static_cast<std::uint32_t>(factor);
+    const std::uint32_t high = static_cast<std::uint32_t>(factor >> 32);
+    for (std::size_t limb = 0; limb < limbs_.size(); ++limb) {
+      if (low != 0)
+        result.add_product_(limb, limbs_[limb], low);
+      if (high != 0)
+        result.add_product_(limb + 1, limbs_[limb], high);
     }
-    if (remaining.high != 0 || remaining.low != 0)
-      return false;
+    *this = result;
+  }
 
-    std::sort(events.begin(), events.end(), [](const Event& lhs, const Event& rhs) {
-      if (lhs.x != rhs.x)
-        return lhs.x < rhs.x;
-      if (lhs.insertion != rhs.insertion)
-        return lhs.insertion < rhs.insertion;
-      return lhs.box < rhs.box;
-    });
+  void add_product_(std::size_t offset, std::uint32_t left, std::uint32_t right) {
+    const std::uint64_t product = static_cast<std::uint64_t>(left) * right;
+    add_word_(offset, static_cast<std::uint32_t>(product));
+    add_word_(offset + 1, static_cast<std::uint32_t>(product >> 32));
+  }
 
-    std::set<Interval, IntervalLess> active;
-    for (const Event& event : events) {
-      const Box2D& box = boxes_[event.box];
-      const Interval interval{static_cast<std::int64_t>(box.lo[1]),
-                              static_cast<std::int64_t>(box.hi[1]) + 1, event.box};
-      if (!event.insertion) {
-        if (active.erase(interval) != 1)
-          return false;
-        continue;
-      }
-
-      const auto next = active.lower_bound(interval);
-      if (next != active.end() && next->y0 < interval.y1)
-        return false;
-      if (next != active.begin()) {
-        const auto previous = std::prev(next);
-        if (previous->y1 > interval.y0)
-          return false;
-      }
-      active.insert(next, interval);
+  void add_word_(std::size_t offset, std::uint32_t word) {
+    while (word != 0) {
+      if (offset >= limbs_.size())
+        throw std::overflow_error("ExactCellCount exceeds four limbs");
+      const std::uint64_t sum = static_cast<std::uint64_t>(limbs_[offset]) + word;
+      limbs_[offset] = static_cast<std::uint32_t>(sum);
+      word = static_cast<std::uint32_t>(sum >> 32);
+      ++offset;
     }
-    return active.empty();
   }
 
-  static std::uint64_t split_count(int lo, int hi, int m) {
-    if (hi < lo)
-      return 0;
-    const auto length = static_cast<std::uint64_t>(static_cast<std::int64_t>(hi) -
-                                                   static_cast<std::int64_t>(lo) + 1);
-    const auto width = static_cast<std::uint64_t>(m);
-    return (length - 1) / width + 1;  // ceil(length / width), without addition overflow
-  }
-
-  // Split [lo, hi] into segments of length <= m, distributed evenly:
-  // n = ceil(len/m) segments, the first `rem` of them one notch longer.  All cursor arithmetic is
-  // widened so a final segment ending at INT_MAX never evaluates INT_MAX + 1 in signed int.
-  static std::vector<std::pair<int, int>> split_range(int lo, int hi, std::uint64_t count) {
-    std::vector<std::pair<int, int>> segs;
-    if (count == 0)
-      return segs;
-    if (count > static_cast<std::uint64_t>(segs.max_size()))
-      throw std::length_error("pops::BoxArray::from_domain: split count exceeds vector max_size");
-    segs.reserve(static_cast<std::size_t>(count));
-
-    const auto length = static_cast<std::uint64_t>(static_cast<std::int64_t>(hi) -
-                                                   static_cast<std::int64_t>(lo) + 1);
-    const std::uint64_t base = length / count;
-    const std::uint64_t remainder = length % count;
-    std::int64_t cursor = lo;
-    for (std::uint64_t segment = 0; segment < count; ++segment) {
-      const std::int64_t segment_length =
-          static_cast<std::int64_t>(base + (segment < remainder ? 1 : 0));
-      const std::int64_t end = cursor + segment_length - 1;
-      if (cursor < std::numeric_limits<int>::min() || cursor > std::numeric_limits<int>::max() ||
-          end < std::numeric_limits<int>::min() || end > std::numeric_limits<int>::max())
-        throw std::overflow_error(
-            "pops::BoxArray::from_domain: split endpoint exceeds signed-int coordinates");
-      segs.push_back({static_cast<int>(cursor), static_cast<int>(end)});
-      cursor = end + 1;
-    }
-    return segs;
-  }
-
-  std::vector<Box2D> boxes_{};
+  std::array<std::uint32_t, 4> limbs_{};
 };
 
-}  // namespace pops
+/// Ordered collection of candidate patches in one immutable compile-time spatial rank.
+template <int Dim>
+class BoxArray {
+  static_assert(Dim >= 1 && Dim <= 3, "BoxArray only supports dimensions 1, 2, and 3");
+
+ public:
+  using box_type = Box<Dim>;
+
+  BoxArray() = default;
+  explicit BoxArray(std::vector<box_type> boxes) : boxes_(std::move(boxes)) {}
+
+  /// Tile a domain deterministically with axis 0 contiguous in the resulting order.
+  static BoxArray from_domain(const box_type& domain, const Extent<Dim>& max_grid_size) {
+    for (int axis = 0; axis < Dim; ++axis)
+      if (max_grid_size[axis] <= 0)
+        throw std::invalid_argument("BoxArray max grid sizes must be strictly positive");
+    if (domain.empty())
+      return {};
+
+    std::array<std::uint64_t, Dim> segments{};
+    std::size_t tile_count = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::uint64_t length = static_cast<std::uint64_t>(domain.length(axis));
+      const std::uint64_t limit = static_cast<std::uint64_t>(max_grid_size[axis]);
+      segments[axis] = 1 + (length - 1) / limit;
+      if (segments[axis] > std::numeric_limits<std::size_t>::max() / tile_count)
+        throw std::length_error("BoxArray tile count exceeds size_t");
+      tile_count *= static_cast<std::size_t>(segments[axis]);
+    }
+    if (tile_count > std::vector<box_type>{}.max_size())
+      throw std::length_error("BoxArray tile count exceeds vector capacity");
+
+    std::vector<box_type> boxes;
+    boxes.reserve(tile_count);
+    for (std::size_t ordinal = 0; ordinal < tile_count; ++ordinal) {
+      box_type tile{};
+      std::size_t quotient = ordinal;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::uint64_t segment = quotient % segments[axis];
+        quotient /= segments[axis];
+        const std::uint64_t length = static_cast<std::uint64_t>(domain.length(axis));
+        const std::uint64_t base = length / segments[axis];
+        const std::uint64_t remainder = length % segments[axis];
+        const std::uint64_t offset = segment * base + (segment < remainder ? segment : remainder);
+        const std::uint64_t width = base + (segment < remainder ? 1 : 0);
+        const std::int64_t lower =
+            static_cast<std::int64_t>(domain.lo[axis]) + static_cast<std::int64_t>(offset);
+        tile.lo[axis] = static_cast<int>(lower);
+        tile.hi[axis] = static_cast<int>(lower + static_cast<std::int64_t>(width) - 1);
+      }
+      boxes.push_back(tile);
+    }
+    return BoxArray{std::move(boxes)};
+  }
+
+  std::size_t size() const noexcept { return boxes_.size(); }
+  bool empty() const noexcept { return boxes_.empty(); }
+  const box_type& operator[](std::size_t index) const { return boxes_.at(index); }
+  const std::vector<box_type>& boxes() const noexcept { return boxes_; }
+
+  bool operator==(const BoxArray&) const = default;
+
+  box_type bounding_box() const {
+    box_type result{};
+    bool initialized = false;
+    for (const box_type& box : boxes_) {
+      if (box.empty())
+        continue;
+      if (!initialized) {
+        result = box;
+        initialized = true;
+        continue;
+      }
+      for (int axis = 0; axis < Dim; ++axis) {
+        result.lo[axis] = result.lo[axis] < box.lo[axis] ? result.lo[axis] : box.lo[axis];
+        result.hi[axis] = result.hi[axis] < box.hi[axis] ? box.hi[axis] : result.hi[axis];
+      }
+    }
+    return result;
+  }
+
+  ExactCellCount exact_cell_count() const {
+    ExactCellCount total;
+    for (const box_type& box : boxes_)
+      if (!total.add(ExactCellCount::from_box(box)))
+        throw std::overflow_error("BoxArray exact cell count exceeds four limbs");
+    return total;
+  }
+
+  /// Validate that every patch is non-empty, inside the domain and pairwise disjoint.
+  bool is_disjoint_within(const box_type& domain, BoxArrayValidationBudget budget) const {
+    require_budget_(budget);
+    for (std::size_t left = 0; left < boxes_.size(); ++left) {
+      const box_type& box = boxes_[left];
+      if (box.empty() || !domain.contains(box))
+        return false;
+      for (std::size_t right = 0; right < left; ++right)
+        if (!box.intersect(boxes_[right]).empty())
+          return false;
+    }
+    return true;
+  }
+
+  bool tiles_exactly(const box_type& domain, BoxArrayValidationBudget budget) const {
+    if (domain.empty())
+      return boxes_.empty();
+    if (!is_disjoint_within(domain, budget))
+      return false;
+    return exact_cell_count() == ExactCellCount::from_box(domain);
+  }
+
+ private:
+  void require_budget_(BoxArrayValidationBudget budget) const {
+    if (boxes_.size() > budget.boxes)
+      throw std::length_error("BoxArray validation exceeds the explicit patch budget");
+    std::size_t pairs = 0;
+    if (boxes_.size() > 1) {
+      if (boxes_.size() - 1 > std::numeric_limits<std::size_t>::max() / boxes_.size())
+        throw std::length_error("BoxArray overlap count exceeds size_t");
+      pairs = boxes_.size() * (boxes_.size() - 1) / 2;
+    }
+    if (pairs > budget.overlap_pairs)
+      throw std::length_error("BoxArray validation exceeds the explicit overlap budget");
+  }
+
+  std::vector<box_type> boxes_{};
+};
+
+}  // namespace pops::mesh

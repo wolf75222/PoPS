@@ -157,8 +157,9 @@ void expect_partitioned_two_rank_multi_job_transfer() {
   Index<Dim> rank1{};
   rank1.values[0] = 1;
   const auto distribution = Distribution<Dim>::partitioned(layout, ranks, {rank0, rank1, rank0});
-  std::array<int, Dim> hash_bins{};
-  hash_bins.fill(2);
+  Extent<Dim> hash_bins{};
+  for (int axis = 0; axis < Dim; ++axis)
+    hash_bins[axis] = 2;
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     ghosts.values[axis] = 1;

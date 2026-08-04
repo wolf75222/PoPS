@@ -1,11 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/nd_proof/box_array.hpp>
-#include <pops/mesh/nd_proof/box_hash.hpp>
-#include <pops/mesh/nd_proof/rank_space.hpp>
+#include <pops/mesh/index/box_hash.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -16,15 +15,15 @@
 using pops::Box;
 using pops::Extent;
 using pops::Index;
-using pops::mesh::nd_proof::BoxArray;
-using pops::mesh::nd_proof::BoxArrayValidationBudget;
-using pops::mesh::nd_proof::BoxHash;
-using pops::mesh::nd_proof::BoxHashBudget;
-using pops::mesh::nd_proof::BinCoordinate;
-using pops::mesh::nd_proof::BinCoordinateHash;
-using pops::mesh::nd_proof::ExactCellCount;
-using pops::mesh::nd_proof::RankSpace;
-using pops::mesh::nd_proof::suggest_bin;
+using pops::mesh::BinCoordinate;
+using pops::mesh::BinCoordinateHash;
+using pops::mesh::BoxArray;
+using pops::mesh::BoxArrayValidationBudget;
+using pops::mesh::BoxHash;
+using pops::mesh::BoxHashBudget;
+using pops::mesh::ExactCellCount;
+using pops::mesh::RankSpace;
+using pops::mesh::suggest_bin;
 
 constexpr BoxHashBudget kHashBudget{128, 128, 256};
 constexpr BoxArrayValidationBudget kTilingBudget{128, 4096};
@@ -69,7 +68,7 @@ TEST(test_nd_layout, axis_zero_is_contiguous_and_round_trips_nonzero_origin) {
   EXPECT_EQ(space.linear_rank(Index<3>{-3, 10, 8}), 8U);
 
   for (std::size_t rank = 0; rank < space.size(); ++rank)
-    EXPECT_EQ(space.linear_rank(space.coord_from_linear(rank)), rank);
+    EXPECT_EQ(space.linear_rank(space.coordinate(rank)), rank);
 }
 
 TEST(test_nd_layout, empty_rank_spaces_are_valid_but_have_no_coordinates) {
@@ -78,7 +77,7 @@ TEST(test_nd_layout, empty_rank_spaces_are_valid_but_have_no_coordinates) {
   EXPECT_EQ(empty.size(), 0U);
   EXPECT_FALSE(empty.contains(Index<2>{7, -3}));
   EXPECT_THROW((void)empty.linear_rank(Index<2>{7, -3}), std::out_of_range);
-  EXPECT_THROW((void)empty.coord_from_linear(0), std::out_of_range);
+  EXPECT_THROW((void)empty.coordinate(0), std::out_of_range);
 }
 
 TEST(test_nd_layout, invalid_extents_coordinates_and_ranks_fail_deterministically) {
@@ -88,7 +87,7 @@ TEST(test_nd_layout, invalid_extents_coordinates_and_ranks_fail_deterministicall
   const RankSpace<2> space{Index<2>{4, -2}, Extent<2>{2, 3}};
   EXPECT_THROW((void)space.linear_rank(Index<2>{3, -2}), std::out_of_range);
   EXPECT_THROW((void)space.linear_rank(Index<2>{4, 1}), std::out_of_range);
-  EXPECT_THROW((void)space.coord_from_linear(space.size()), std::out_of_range);
+  EXPECT_THROW((void)space.coordinate(space.size()), std::out_of_range);
 }
 
 TEST(test_nd_layout, coordinate_and_size_overflows_are_rejected_before_narrowing) {
@@ -111,7 +110,7 @@ TEST(test_nd_layout, rank_space_extreme_extent_checks_before_signed_addition) {
 
 TEST(test_nd_layout, box_array_balances_negative_anisotropic_tiles_in_axis_zero_order) {
   const Box<1> line_domain{Index<1>{-5}, Index<1>{4}};
-  const BoxArray<1> line = BoxArray<1>::from_domain(line_domain, std::array<int, 1>{4});
+  const BoxArray<1> line = BoxArray<1>::from_domain(line_domain, Extent<1>{4});
   ASSERT_EQ(line.size(), 3U);
   const Box<1> first_line{Index<1>{-5}, Index<1>{-2}};
   const Box<1> second_line{Index<1>{-1}, Index<1>{1}};
@@ -122,7 +121,7 @@ TEST(test_nd_layout, box_array_balances_negative_anisotropic_tiles_in_axis_zero_
   EXPECT_TRUE(line.tiles_exactly(line_domain, kTilingBudget));
 
   const Box<2> plane_domain{Index<2>{-3, 5}, Index<2>{4, 10}};
-  const BoxArray<2> plane = BoxArray<2>::from_domain(plane_domain, std::array<int, 2>{3, 4});
+  const BoxArray<2> plane = BoxArray<2>::from_domain(plane_domain, Extent<2>{3, 4});
   ASSERT_EQ(plane.size(), 6U);
   const Box<2> first_plane{Index<2>{-3, 5}, Index<2>{-1, 7}};
   const Box<2> second_plane{Index<2>{0, 5}, Index<2>{2, 7}};
@@ -135,7 +134,7 @@ TEST(test_nd_layout, box_array_balances_negative_anisotropic_tiles_in_axis_zero_
   EXPECT_TRUE(plane.tiles_exactly(plane_domain, kTilingBudget));
 
   const Box<3> volume_domain{Index<3>{-2, 1, 4}, Index<3>{2, 3, 6}};
-  const BoxArray<3> volume = BoxArray<3>::from_domain(volume_domain, std::array<int, 3>{2, 2, 2});
+  const BoxArray<3> volume = BoxArray<3>::from_domain(volume_domain, Extent<3>{2, 2, 2});
   ASSERT_EQ(volume.size(), 12U);
   const Box<3> first_volume{Index<3>{-2, 1, 4}, Index<3>{-1, 2, 5}};
   const Box<3> second_volume{Index<3>{0, 1, 4}, Index<3>{1, 2, 5}};
@@ -182,10 +181,8 @@ TEST(test_nd_layout, box_array_handles_full_signed_spans_without_narrowing) {
 
   EXPECT_TRUE(single_full.tiles_exactly(full, kTilingBudget));
   EXPECT_EQ(single_full.exact_cell_count(), ExactCellCount::power_of_two(96));
-  EXPECT_THROW((void)BoxArray<3>::from_domain(full, std::array<int, 3>{1, 1, 1}),
-               std::length_error);
-  EXPECT_THROW((void)BoxArray<1>::from_domain(Box<1>{}, std::array<int, 1>{0}),
-               std::invalid_argument);
+  EXPECT_THROW((void)BoxArray<3>::from_domain(full, Extent<3>{1, 1, 1}), std::length_error);
+  EXPECT_THROW((void)BoxArray<1>::from_domain(Box<1>{}, Extent<1>{0}), std::invalid_argument);
 }
 
 TEST(test_nd_layout, exact_cell_count_carries_across_portable_limbs) {
@@ -211,21 +208,21 @@ TEST(test_nd_layout, box_hash_uses_structural_negative_anisotropic_bins) {
 
   const BoxArray<1> line(
       std::vector<Box<1>>{Box<1>{Index<1>{-7}, Index<1>{-3}}, Box<1>{Index<1>{-2}, Index<1>{2}}});
-  const BoxHash<1> line_hash(line, std::array<int, 1>{3}, kHashBudget);
+  const BoxHash<1> line_hash(line, Extent<1>{3}, kHashBudget);
   EXPECT_EQ(line_hash.query(Box<1>{Index<1>{-4}, Index<1>{-1}}), (std::vector<std::size_t>{0, 1}));
 
   const BoxArray<2> plane(std::vector<Box<2>>{Box<2>{Index<2>{-7, -3}, Index<2>{-4, 1}},
                                               Box<2>{Index<2>{-3, -2}, Index<2>{1, 3}},
                                               Box<2>{Index<2>{5, -4}, Index<2>{7, -1}}});
-  const BoxHash<2> plane_hash(plane, std::array<int, 2>{3, 2}, kHashBudget);
+  const BoxHash<2> plane_hash(plane, Extent<2>{3, 2}, kHashBudget);
   EXPECT_EQ(plane_hash.query(Box<2>{Index<2>{-5, -1}, Index<2>{0, 2}}),
             (std::vector<std::size_t>{0, 1}));
   EXPECT_TRUE(plane_hash.query(Box<2>{}).empty());
-  EXPECT_EQ(suggest_bin(plane), (std::array<int, 2>{5, 6}));
+  EXPECT_EQ(suggest_bin(plane), (Extent<2>{5, 6}));
 
   const BoxArray<3> volume(std::vector<Box<3>>{Box<3>{Index<3>{-3, -2, -1}, Index<3>{-1, 0, 1}},
                                                Box<3>{Index<3>{0, -1, 0}, Index<3>{2, 1, 2}}});
-  const BoxHash<3> volume_hash(volume, std::array<int, 3>{2, 3, 2}, kHashBudget);
+  const BoxHash<3> volume_hash(volume, Extent<3>{2, 3, 2}, kHashBudget);
   EXPECT_EQ(volume_hash.query(Box<3>{Index<3>{-1, -1, 0}, Index<3>{0, 0, 1}}),
             (std::vector<std::size_t>{0, 1}));
 }
@@ -234,7 +231,7 @@ TEST(test_nd_layout, box_hash_has_no_omissions_against_bruteforce_intersections)
   const BoxArray<2> boxes(std::vector<Box<2>>{
       Box<2>{Index<2>{-7, -3}, Index<2>{-4, 1}}, Box<2>{Index<2>{-3, -2}, Index<2>{1, 3}},
       Box<2>{Index<2>{5, -4}, Index<2>{7, -1}}, Box<2>{Index<2>{0, 4}, Index<2>{2, 5}}});
-  const BoxHash<2> hash(boxes, std::array<int, 2>{3, 2}, kHashBudget);
+  const BoxHash<2> hash(boxes, Extent<2>{3, 2}, kHashBudget);
   expect_hash_superset(boxes, hash,
                        std::vector<Box<2>>{Box<2>{Index<2>{-8, -4}, Index<2>{-6, -2}},
                                            Box<2>{Index<2>{-5, -1}, Index<2>{0, 2}},
@@ -244,24 +241,22 @@ TEST(test_nd_layout, box_hash_has_no_omissions_against_bruteforce_intersections)
 
 TEST(test_nd_layout, box_hash_refuses_invalid_and_unbounded_enumerations) {
   const BoxArray<2> small(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{1, 1}}});
-  EXPECT_THROW((void)(BoxHash<2>{small, std::array<int, 2>{0, 1}, kHashBudget}),
-               std::invalid_argument);
+  EXPECT_THROW((void)(BoxHash<2>{small, Extent<2>{0, 1}, kHashBudget}), std::invalid_argument);
 
   constexpr int minimum = std::numeric_limits<int>::min();
   constexpr int maximum = std::numeric_limits<int>::max();
   const Box<3> full{Index<3>{minimum, minimum, minimum}, Index<3>{maximum, maximum, maximum}};
   const BoxArray<3> full_layout(std::vector<Box<3>>{full});
-  EXPECT_THROW((void)(BoxHash<3>{full_layout, std::array<int, 3>{1, 1, 1}, kHashBudget}),
-               std::length_error);
+  EXPECT_THROW((void)(BoxHash<3>{full_layout, Extent<3>{1, 1, 1}, kHashBudget}), std::length_error);
 
   const BoxArray<3> one_cell(std::vector<Box<3>>{Box<3>{Index<3>{0, 0, 0}, Index<3>{0, 0, 0}}});
-  const BoxHash<3> one_cell_hash(one_cell, std::array<int, 3>{1, 1, 1}, kHashBudget);
+  const BoxHash<3> one_cell_hash(one_cell, Extent<3>{1, 1, 1}, kHashBudget);
   EXPECT_THROW((void)one_cell_hash.query(full), std::length_error);
 }
 
 TEST(test_nd_layout, box_array_tiling_requires_explicit_bounded_work) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const BoxArray<1> boxes = BoxArray<1>::from_domain(domain, std::array<int, 1>{1});
+  const BoxArray<1> boxes = BoxArray<1>::from_domain(domain, Extent<1>{1});
   EXPECT_THROW((void)boxes.tiles_exactly(domain, BoxArrayValidationBudget{3, 6}),
                std::length_error);
   EXPECT_THROW((void)boxes.tiles_exactly(domain, BoxArrayValidationBudget{4, 5}),
@@ -272,25 +267,25 @@ TEST(test_nd_layout, box_array_tiling_requires_explicit_bounded_work) {
 TEST(test_nd_layout, box_hash_budgets_are_explicit_and_fail_before_work) {
   const BoxArray<1> one_bin(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{1}}});
   const BoxHashBudget exact{1, 1, 1};
-  const BoxHash<1> exact_hash(one_bin, std::array<int, 1>{2}, exact);
+  const BoxHash<1> exact_hash(one_bin, Extent<1>{2}, exact);
   EXPECT_EQ(exact_hash.query(Box<1>{Index<1>{0}, Index<1>{1}}), (std::vector<std::size_t>{0}));
 
   const BoxArray<1> two_bins(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{3}}});
-  EXPECT_THROW((void)(BoxHash<1>{two_bins, std::array<int, 1>{2}, BoxHashBudget{1, 2, 2}}),
+  EXPECT_THROW((void)(BoxHash<1>{two_bins, Extent<1>{2}, BoxHashBudget{1, 2, 2}}),
                std::length_error);
-  const BoxHash<1> query_limited(two_bins, std::array<int, 1>{2}, BoxHashBudget{2, 1, 2});
+  const BoxHash<1> query_limited(two_bins, Extent<1>{2}, BoxHashBudget{2, 1, 2});
   EXPECT_THROW((void)query_limited.query(Box<1>{Index<1>{0}, Index<1>{3}}), std::length_error);
 
   const BoxArray<1> same_bin(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}}, Box<1>{Index<1>{3}, Index<1>{3}}});
-  const BoxHash<1> candidate_limited(same_bin, std::array<int, 1>{4}, BoxHashBudget{2, 1, 1});
+  const BoxHash<1> candidate_limited(same_bin, Extent<1>{4}, BoxHashBudget{2, 1, 1});
   EXPECT_THROW((void)candidate_limited.query(Box<1>{Index<1>{0}, Index<1>{0}}), std::length_error);
 }
 
 TEST(test_nd_layout, hash_false_positives_are_filtered_at_the_exact_intersection_boundary) {
   const BoxArray<1> boxes(
       std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{0}}, Box<1>{Index<1>{3}, Index<1>{3}}});
-  const BoxHash<1> hash(boxes, std::array<int, 1>{4}, BoxHashBudget{2, 1, 2});
+  const BoxHash<1> hash(boxes, Extent<1>{4}, BoxHashBudget{2, 1, 2});
   const Box<1> query{Index<1>{0}, Index<1>{0}};
   const std::vector<std::size_t> candidates = hash.query(query);
   ASSERT_EQ(candidates, (std::vector<std::size_t>{0, 1}));

@@ -1,5 +1,5 @@
 /// @file
-/// @brief Compile-time-ranked process-coordinate space for production ND layouts.
+/// @brief Compile-time-ranked process-coordinate space for patch ownership.
 
 #pragma once
 

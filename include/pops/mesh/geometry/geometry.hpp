@@ -1,92 +1,124 @@
 /// @file
-/// @brief Geometry: index-space (Box2D) <-> Cartesian physical-space mapping;
-///        PolarGeometry: SIBLING for a global annular domain (r, theta).
-///
-/// Physical domain is FIXED, no dx/dy cell size shrinking with refinement (refine() refines
-/// the index space at constant physical EXTENT). Cell centers (and faces, in polar) defined
-/// for EVERY index, ghosts included (negative indices). Accessors are POPS_HD: pure arithmetic,
-/// capturable by value and callable from a device kernel. Trivial POD: the annotation is
-/// free and keeps the host path bit-identical.
+/// @brief Compile-time-ranked Cartesian geometry over one exact integer domain.
 
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/index/real_vector.hpp>
+
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <type_traits>
 
 namespace pops {
 
-/// Cartesian geometry of a level: index domain + physical bounds [xlo, xhi] x [ylo, yhi].
-/// Trivial POD; POPS_HD accessors. Uniform cell size (dx = (xhi-xlo)/nx, same for dy).
-struct Geometry {
-  Box2D domain{};
-  Real xlo = 0, xhi = 1, ylo = 0, yhi = 1;
+namespace geometry_detail {
 
-  // POPS_HD accessors: pure arithmetic, capturable by value and callable FROM A device KERNEL.
-  // Without POPS_HD, geom.x_cell(i) inside a Kokkos::Cuda kernel is a __host__ call from
-  // __device__: nvcc returns a GARBAGE value (often 0) on device, WITHOUT a compile or
-  // runtime error. An init kernel that sets x = geom.x_cell(i) then sees x = 0 on GPU (sin(pi*0) = 0)
-  // -> field silently zero (defect observed on test_condensed_schur). Geometry is a trivial
-  // POD: the annotation is free and keeps the host path bit-identical.
-  /// Grid spacing in x (= (xhi - xlo) / domain.nx()). POPS_HD.
-  POPS_HD Real dx() const { return (xhi - xlo) / domain.nx(); }
-  /// Grid spacing in y (= (yhi - ylo) / domain.ny()). POPS_HD.
-  POPS_HD Real dy() const { return (yhi - ylo) / domain.ny(); }
-  /// Abscissa at the CENTER of cell index i (i = domain.lo[0] -> xlo + dx/2). POPS_HD.
-  POPS_HD Real x_cell(int i) const {
-    return xlo + (Real(i) - Real(domain.lo[0]) + Real(0.5)) * dx();
-  }
-  /// Ordinate at the CENTER of cell index j. POPS_HD.
-  POPS_HD Real y_cell(int j) const {
-    return ylo + (Real(j) - Real(domain.lo[1]) + Real(0.5)) * dy();
+constexpr bool finite(Real value) {
+  return value == value && value != std::numeric_limits<Real>::infinity() &&
+         value != -std::numeric_limits<Real>::infinity();
+}
+
+}  // namespace geometry_detail
+
+/// Uniform Cartesian index-to-physical mapping with an immutable compile-time spatial rank.
+/// Cell and face coordinates remain defined for ghost indices outside ``domain``.
+template <int Dim>
+class Geometry {
+  static_assert(Dim >= 1 && Dim <= 3, "Geometry only supports dimensions 1, 2, and 3");
+
+ public:
+  static constexpr int rank = Dim;
+
+  static Geometry from_bounds(Box<Dim> domain, RealVector<Dim> lower, RealVector<Dim> upper) {
+    if (domain.empty())
+      throw std::invalid_argument("Geometry requires a non-empty index domain");
+    RealVector<Dim> inverse_cells{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!geometry_detail::finite(lower[axis]) || !geometry_detail::finite(upper[axis]) ||
+          !(upper[axis] > lower[axis]))
+        throw std::invalid_argument(
+            "Geometry physical bounds must be finite and strictly increasing");
+      const std::int64_t cells = domain.length(axis);
+      if (cells <= 0)
+        throw std::invalid_argument("Geometry requires positive cell extents on every axis");
+      const Real physical_extent = upper[axis] - lower[axis];
+      const Real cell_spacing = physical_extent / static_cast<Real>(cells);
+      if (!geometry_detail::finite(physical_extent) || !geometry_detail::finite(cell_spacing) ||
+          !(cell_spacing > Real(0)))
+        throw std::invalid_argument(
+            "Geometry physical extents must produce finite positive cell spacing");
+      inverse_cells[axis] = Real(1) / static_cast<Real>(cells);
+    }
+    return Geometry(domain, lower, upper, inverse_cells);
   }
 
-  /// Geometry refined by ratio r: SAME physical extent, refined index domain (dx -> dx/r).
-  Geometry refine(int r) const { return Geometry{domain.refine(r), xlo, xhi, ylo, yhi}; }
+  POPS_HD const Box<Dim>& domain() const noexcept { return domain_; }
+  POPS_HD const RealVector<Dim>& lower() const noexcept { return lower_; }
+  POPS_HD const RealVector<Dim>& upper() const noexcept { return upper_; }
+
+  POPS_HD Real spacing(int axis) const {
+    return (upper_[axis] - lower_[axis]) * inverse_cells_[axis];
+  }
+
+  POPS_HD Real cell_coordinate(int axis, int index) const {
+    return lower_[axis] +
+           (static_cast<Real>(index) - static_cast<Real>(domain_.lo[axis]) + Real(0.5)) *
+               spacing(axis);
+  }
+
+  POPS_HD Real face_coordinate(int axis, int index) const {
+    return lower_[axis] +
+           (static_cast<Real>(index) - static_cast<Real>(domain_.lo[axis])) * spacing(axis);
+  }
+
+  POPS_HD RealVector<Dim> cell_center(const Index<Dim>& index) const {
+    RealVector<Dim> result{};
+    for (int axis = 0; axis < Dim; ++axis)
+      result[axis] = cell_coordinate(axis, index[axis]);
+    return result;
+  }
+
+  POPS_HD RealVector<Dim> lower_face(const Index<Dim>& index) const {
+    RealVector<Dim> result{};
+    for (int axis = 0; axis < Dim; ++axis)
+      result[axis] = face_coordinate(axis, index[axis]);
+    return result;
+  }
+
+  Geometry refine(const Extent<Dim>& ratio) const {
+    Box<Dim> refined{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (ratio[axis] <= 0 || ratio[axis] > std::numeric_limits<int>::max())
+        throw std::invalid_argument(
+            "Geometry refinement ratios must be positive signed-index values");
+      refined.lo[axis] =
+          detail::checked_box_index(static_cast<std::int64_t>(domain_.lo[axis]) * ratio[axis],
+                                    "Geometry refined lower bound exceeds the signed index range");
+      refined.hi[axis] = detail::checked_box_index(
+          static_cast<std::int64_t>(domain_.hi[axis]) * ratio[axis] + ratio[axis] - 1,
+          "Geometry refined upper bound exceeds the signed index range");
+    }
+    return from_bounds(refined, lower_, upper_);
+  }
+
+  bool operator==(const Geometry&) const = default;
+
+ private:
+  POPS_HD constexpr Geometry(Box<Dim> domain, RealVector<Dim> lower, RealVector<Dim> upper,
+                             RealVector<Dim> inverse_cells)
+      : domain_(domain), lower_(lower), upper_(upper), inverse_cells_(inverse_cells) {}
+
+  Box<Dim> domain_;
+  RealVector<Dim> lower_;
+  RealVector<Dim> upper_;
+  RealVector<Dim> inverse_cells_;
 };
 
-// PolarGeometry: SIBLING of Geometry for a GLOBAL ANNULAR domain (r, theta).
-// Global annular geometry used by the advanced pops.mesh.PolarMesh route.
-// Carrying the radial direction on a grid axis avoids projecting purely azimuthal transport
-// across Cartesian grid directions; the MMS and conservation suites validate this geometry.
-//
-// AXIS CONVENTION (fixed):
-//   - index direction 0 = RADIAL    (i runs over r, from r_min to r_max)
-//   - index direction 1 = AZIMUTHAL (j runs over theta, from 0 to 2pi)
-// The domain is r in [r_min, r_max] (PHYSICAL BC at r_min/r_max) x theta in [0, 2pi)
-// (PERIODIC in theta). This is a global ring, NOT a local Cartesian<->polar patch
-// (the hybrid interface + interpolation + boundary conservation = Phase 2, out of scope here).
-//
-// The cell size (dr, dtheta) is uniform in INDEX; the PHYSICAL cell size in theta is r*dtheta
-// and thus grows with r (hence the 1/r metric of the divergence: cf. assemble_rhs_polar). The
-// centers and faces are defined for every index (ghosts included, i negative or >= nr).
-struct PolarGeometry {
-  Box2D domain{};             ///< nx() = nr (radial cells), ny() = ntheta (azimuthal cells)
-  Real r_min = 0, r_max = 1;  ///< physical radial bounds of the ring
-  // theta covers [0, 2pi) (periodic): we store no bounds, dtheta = 2pi/ntheta.
-
-  // Local pi (no global pops::kPi constant: it would collide with the local kPi from
-  // 'using namespace pops;' in several tests). Constexpr -> no overhead.
-  static constexpr Real kTwoPi = Real(2) * Real(3.14159265358979323846);
-
-  // POPS_HD accessors (same pattern as Geometry): device-callable from a kernel without returning
-  // garbage under nvcc. Pure arithmetic, host bit-identical.
-  POPS_HD Real dr() const { return (r_max - r_min) / domain.nx(); }
-  POPS_HD Real dtheta() const { return kTwoPi / domain.ny(); }
-  /// Radius at the CENTER of radial cell i (i = domain.lo[0] -> r_min + dr/2).
-  POPS_HD Real r_cell(int i) const {
-    return r_min + (Real(i) - Real(domain.lo[0]) + Real(0.5)) * dr();
-  }
-  /// Radius at radial FACE i (face at i = domain.lo[0] is r_min).
-  POPS_HD Real r_face(int i) const { return r_min + (Real(i) - Real(domain.lo[0])) * dr(); }
-  /// Angle at the CENTER of azimuthal cell j (j = domain.lo[1] -> dtheta/2).
-  POPS_HD Real theta_cell(int j) const {
-    return (Real(j) - Real(domain.lo[1]) + Real(0.5)) * dtheta();
-  }
-  /// Angle at azimuthal FACE j (face between cells j-1 and j).
-  POPS_HD Real theta_face(int j) const { return (Real(j) - Real(domain.lo[1])) * dtheta(); }
-
-  // Same annular physical extent, refined index domain (counterpart of Geometry::refine).
-  PolarGeometry refine(int r) const { return PolarGeometry{domain.refine(r), r_min, r_max}; }
-};
+static_assert(std::is_trivially_copyable_v<Geometry<1>>);
+static_assert(std::is_trivially_copyable_v<Geometry<2>>);
+static_assert(std::is_trivially_copyable_v<Geometry<3>>);
 
 }  // namespace pops
