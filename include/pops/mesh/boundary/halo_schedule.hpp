@@ -1,149 +1,307 @@
 /// @file
-/// @brief HaloSchedule: memoized intra-level halo-exchange plan for fill_boundary (ADC-260).
-///
-/// fill_boundary_begin used to enumerate, on EVERY call, the neighbor-box job schedule: a BoxHash
-/// build plus a local (and, under MPI, a global) enumeration over the BoxArray. That schedule is a
-/// pure function of the LAYOUT (BoxArray, DistributionMapping, n_grow) and the per-call (Periodicity,
-/// domain); only the copy/pack/MPI/unpack of the LIVE data must rerun. This header holds the
-/// cacheable plan so the enumeration runs ONCE per (layout, Periodicity, domain). Jobs carry GLOBAL
-/// box indices (resolved to local fabs at replay), so a plan is valid for any MultiFab over the same
-/// layout. MPI-free: the in-flight buffers and MPI_Request stay in HaloExchange (fill_boundary.hpp).
+/// @brief Authenticated compile-time-ranked halo schedules.
 
 #pragma once
 
-#include <pops/mesh/boundary/periodicity.hpp>
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/layout/nd/box_array.hpp>
+#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/mesh/topology/boundary_topology.hpp>
 
 #include <array>
-#include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace pops {
 
-struct HaloExchangeStorage;
+/// Finite preparation budget.  Halo construction is quadratic in the patch count and also visits
+/// every periodic image that can intersect the requested ghost depth.
+struct HaloScheduleBudget {
+  mesh::BoxArrayValidationBudget layout{};
+  std::size_t box_image_pairs = 0;
+  std::size_t jobs = 0;
+  std::size_t periodic_images = 0;
+};
 
-/// One halo copy/transfer: the ghost @p region of box @p dst is filled from the shifted valid region
-/// of box @p src (shift sx, sy in cells for the periodic wrap; 0 for an interior neighbor). @p src and
-/// @p dst are GLOBAL box indices into the BoxArray (resolved to local fabs when the job is replayed).
+template <int Dim>
 struct HaloJob {
-  int src = 0;
-  int dst = 0;
-  int sx = 0;
-  int sy = 0;
-  Box2D region{};
-  bool mapped = false;
-  // src[source_axis] = source_sign[source_axis] *
-  //                    dst[source_from_destination_axis[source_axis]]
-  //                    + source_offset[source_axis].
-  std::array<int, 2> source_from_destination_axis{{0, 1}};
-  std::array<int, 2> source_sign{{1, 1}};
-  std::array<int, 2> source_offset{{0, 0}};
+  std::size_t source_box = 0;
+  std::size_t destination_box = 0;
+  Box<Dim> destination_region{};
+  Index<Dim> source_from_destination{};
+
+  bool operator==(const HaloJob&) const = default;
 };
 
-/// Memoized schedule for ONE (Periodicity, domain, communicator rank space) over a fixed layout.
-/// @p local holds the copies
-/// whose dst AND src are owned by this rank; @p send[r]/@p recv[r] hold the jobs exchanged with rank
-/// r (both empty unless built under MPI with n_ranks() > 1). The fingerprint (per_x, per_y, domain)
-/// identifies the (Periodicity, domain) it was built for; communicator size/rank distinguish a
-/// rank-local replay from the process-world schedule. The exact layout is retained once in the plan
-/// so replay and begin/end publication can fail closed without copying it on each exchange.
-/// The jobs carry only Box2D regions, so the plan is INDEPENDENT of ncomp (the component count is
-/// supplied at replay via mf.ncomp() to size buffers); ncomp is intentionally absent from the key.
-struct HaloSchedule {
-  bool per_x = false;
-  bool per_y = false;
-  std::vector<PeriodicIdentification2D> mapped_periodic;
-  Box2D domain{};
-  int communicator_size = 1;
-  int communicator_rank = 0;
-  // Exact layout identity, captured once with the prepared schedule.  In-flight handles retain
-  // this shared plan and compare the live MultiFab against it at publication, avoiding a fresh
-  // boxes/ranks copy on every begin/end pair.
-  std::vector<Box2D> boxes;
-  std::vector<int> ranks;
-  int ngrow = 0;
-  std::vector<HaloJob> local;
-  std::vector<std::vector<HaloJob>> send;  // [rank]; empty unless MPI && n_ranks() > 1
-  std::vector<std::vector<HaloJob>> recv;  // [rank]
+template <int Dim>
+struct HaloPeerPlan {
+  Index<Dim> peer{};
+  std::vector<HaloJob<Dim>> jobs{};
+
+  bool operator==(const HaloPeerPlan&) const = default;
 };
 
-/// Small per-MultiFab cache of halo schedules, one entry per distinct
-/// (Periodicity, domain, communicator size/rank). In
-/// practice a MultiFab is filled with a single (Periodicity, domain) for its role, so this holds one
-/// or two entries; lookup is a short linear scan. Entries are shared_ptr so an in-flight
-/// HaloExchange can hold a stable handle to the plan it is replaying even if a later call appends a
-/// new entry. The cache LIVES ON the MultiFab (multifab.hpp); it is dropped when the MultiFab is
-/// reassigned (e.g. AMR regrid builds a fresh MultiFab and move-assigns it over the slot), which is
-/// the only way the layout changes, so a stale schedule can never be served. NOT thread-safe (the
-/// fill_boundary path is driven from a single host thread; Kokkos parallelism lives inside for_each).
-class HaloScheduleCache {
+namespace halo_schedule_detail {
+
+inline std::size_t checked_product(std::size_t left, std::size_t right, const char* operation) {
+  if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
+    throw std::length_error(operation);
+  return left * right;
+}
+
+inline int checked_index(std::int64_t value, const char* operation) {
+  if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
+    throw std::overflow_error(operation);
+  return static_cast<int>(value);
+}
+
+inline std::int64_t checked_multiply(std::int64_t left, std::int64_t right, const char* operation) {
+  if (left < 0 || right < 0)
+    throw std::invalid_argument(operation);
+  if (left != 0 && right > std::numeric_limits<std::int64_t>::max() / left)
+    throw std::overflow_error(operation);
+  return left * right;
+}
+
+template <int Dim>
+Box<Dim> grow(const Box<Dim>& box, const Extent<Dim>& ghosts) {
+  Box<Dim> result = box;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (ghosts[axis] < 0)
+      throw std::invalid_argument("pops::HaloSchedule ghost extents must be non-negative");
+    result = result.grow(
+        axis, checked_index(ghosts[axis], "pops::HaloSchedule ghost extent exceeds int"));
+  }
+  return result;
+}
+
+/// Return a disjoint decomposition of subject minus cut.  At most 2*Dim boxes are produced.
+template <int Dim>
+std::vector<Box<Dim>> subtract(const Box<Dim>& subject, const Box<Dim>& cut) {
+  const Box<Dim> overlap = subject.intersect(cut);
+  if (overlap.empty())
+    return {subject};
+  if (overlap == subject)
+    return {};
+
+  std::vector<Box<Dim>> result;
+  result.reserve(static_cast<std::size_t>(2 * Dim));
+  Box<Dim> remainder = subject;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (remainder.lo[axis] < overlap.lo[axis]) {
+      Box<Dim> lower = remainder;
+      lower.hi[axis] = overlap.lo[axis] - 1;
+      result.push_back(lower);
+      remainder.lo[axis] = overlap.lo[axis];
+    }
+    if (overlap.hi[axis] < remainder.hi[axis]) {
+      Box<Dim> upper = remainder;
+      upper.lo[axis] = overlap.hi[axis] + 1;
+      result.push_back(upper);
+      remainder.hi[axis] = overlap.hi[axis];
+    }
+  }
+  return result;
+}
+
+template <int Dim>
+std::array<std::size_t, Dim> image_counts(const Box<Dim>& domain, const Extent<Dim>& ghosts,
+                                          const BoundaryTopology<Dim>& topology,
+                                          std::size_t& total) {
+  std::array<std::size_t, Dim> counts{};
+  total = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (ghosts[axis] < 0)
+      throw std::invalid_argument("pops::HaloSchedule ghost extents must be non-negative");
+    const Face<Dim> lower{axis, BoundarySide::lower};
+    counts[axis] = 1;
+    if (topology.is_periodic(lower) && ghosts[axis] != 0) {
+      const std::int64_t extent = domain.length(axis);
+      if (extent <= 0)
+        throw std::invalid_argument("pops::HaloSchedule periodic domain must be non-empty");
+      const std::int64_t wraps = 1 + (ghosts[axis] - 1) / extent;
+      if (wraps > static_cast<std::int64_t>((std::numeric_limits<std::size_t>::max() - 1) / 2))
+        throw std::length_error("pops::HaloSchedule periodic image count exceeds size_t");
+      counts[axis] = 1 + 2 * static_cast<std::size_t>(wraps);
+    }
+    total = checked_product(total, counts[axis],
+                            "pops::HaloSchedule periodic image product exceeds size_t");
+  }
+  return counts;
+}
+
+template <int Dim>
+Index<Dim> image_shift(std::size_t ordinal, const std::array<std::size_t, Dim>& counts,
+                       const Box<Dim>& domain) {
+  Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t option = ordinal % counts[axis];
+    ordinal /= counts[axis];
+    if (option == 0)
+      continue;
+    const std::size_t wrap = 1 + (option - 1) / 2;
+    if (wrap > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
+      throw std::overflow_error("pops::HaloSchedule periodic wrap exceeds int64_t");
+    const std::int64_t magnitude =
+        checked_multiply(static_cast<std::int64_t>(wrap), domain.length(axis),
+                         "pops::HaloSchedule periodic shift overflows int64_t");
+    result[axis] = checked_index(option % 2 == 1 ? magnitude : -magnitude,
+                                 "pops::HaloSchedule periodic shift exceeds Index range");
+  }
+  return result;
+}
+
+template <int Dim>
+Index<Dim> negate(const Index<Dim>& value) {
+  Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = checked_index(-static_cast<std::int64_t>(value[axis]),
+                                 "pops::HaloSchedule periodic shift negation overflows");
+  return result;
+}
+
+template <int Dim>
+HaloPeerPlan<Dim>& peer_plan(std::vector<HaloPeerPlan<Dim>>& plans, const Index<Dim>& peer) {
+  for (HaloPeerPlan<Dim>& plan : plans)
+    if (plan.peer == peer)
+      return plan;
+  plans.push_back(HaloPeerPlan<Dim>{peer, {}});
+  return plans.back();
+}
+
+}  // namespace halo_schedule_detail
+
+/// A per-rank immutable halo plan over exact ND layout and ownership identities.
+template <int Dim>
+class HaloSchedule {
  public:
-  /// Existing schedule for (px, py, dom, communicator rank space), or nullptr if none is cached.
-  std::shared_ptr<const HaloSchedule> find(
-      bool px, bool py, const Box2D& dom, int communicator_size, int communicator_rank,
-      const std::vector<PeriodicIdentification2D>& mapped_periodic = {}) const {
-    for (const auto& s : entries_) {
-      if (s->per_x == px && s->per_y == py && s->domain == dom &&
-          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank &&
-          s->mapped_periodic == mapped_periodic) {
-        return s;
+  using job_type = HaloJob<Dim>;
+  using peer_plan_type = HaloPeerPlan<Dim>;
+
+  HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
+               Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
+               BoundaryTopology<Dim> topology, HaloScheduleBudget budget)
+      : layout_(layout),
+        distribution_(distribution),
+        local_rank_(local_rank),
+        domain_(domain),
+        ghosts_(ghosts),
+        topology_(topology) {
+    if (!distribution_.matches_layout(layout_))
+      throw std::invalid_argument("pops::HaloSchedule distribution does not match its layout");
+    if (!distribution_.rank_space().contains(local_rank_))
+      throw std::out_of_range("pops::HaloSchedule local rank is outside the rank space");
+    if (!layout_.tiles_exactly(domain_, budget.layout))
+      throw std::invalid_argument("pops::HaloSchedule layout must tile the domain exactly");
+
+    std::size_t image_count = 0;
+    const std::array<std::size_t, Dim> image_count_by_axis =
+        halo_schedule_detail::image_counts(domain_, ghosts_, topology_, image_count);
+    if (image_count > budget.periodic_images)
+      throw std::length_error("pops::HaloSchedule periodic image budget exceeded");
+    const std::size_t pair_count = halo_schedule_detail::checked_product(
+        layout_.size(), layout_.size(), "pops::HaloSchedule patch pair count exceeds size_t");
+    const std::size_t work = halo_schedule_detail::checked_product(
+        pair_count, image_count, "pops::HaloSchedule box-image work exceeds size_t");
+    if (work > budget.box_image_pairs)
+      throw std::length_error("pops::HaloSchedule box-image pair budget exceeded");
+
+    std::vector<job_type> jobs;
+    for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
+      const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
+      for (std::size_t image = 0; image < image_count; ++image) {
+        const Index<Dim> source_from_destination =
+            halo_schedule_detail::image_shift<Dim>(image, image_count_by_axis, domain_);
+        const Index<Dim> image_from_source = halo_schedule_detail::negate(source_from_destination);
+        for (std::size_t source = 0; source < layout_.size(); ++source) {
+          const Box<Dim> candidate = grown.intersect(layout_[source].shift(image_from_source));
+          if (candidate.empty())
+            continue;
+          for (const Box<Dim>& region :
+               halo_schedule_detail::subtract(candidate, layout_[destination])) {
+            if (jobs.size() >= budget.jobs)
+              throw std::length_error("pops::HaloSchedule job budget exceeded");
+            const Box<Dim> source_region = region.shift(source_from_destination);
+            if (!layout_[source].contains(source_region))
+              throw std::logic_error("pops::HaloSchedule generated an invalid source region");
+            jobs.push_back(job_type{source, destination, region, source_from_destination});
+          }
+        }
       }
     }
-    return nullptr;
+
+    for (const job_type& job : jobs)
+      classify_(job);
   }
 
-  /// Reserve publication capacity before building a schedule. publish_prepared() is then noexcept:
-  /// a failed build can never leave a partially initialized entry visible to a later replay.
-  void reserve_for_append() { entries_.reserve(entries_.size() + 1u); }
+  const mesh::BoxArray<Dim>& layout() const noexcept { return layout_; }
+  const mesh::Distribution<Dim>& distribution() const noexcept { return distribution_; }
+  const Index<Dim>& local_rank() const noexcept { return local_rank_; }
+  const Box<Dim>& domain() const noexcept { return domain_; }
+  const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
+  const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
+  const std::vector<job_type>& local_jobs() const noexcept { return local_; }
+  const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
+  const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
 
-  void publish_prepared(std::shared_ptr<HaloSchedule> schedule) noexcept {
-    entries_.push_back(std::move(schedule));
+  bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
+
+  void require_local_execution() const {
+    if (has_remote_jobs())
+      throw std::logic_error(
+          "pops::HaloSchedule contains remote ND jobs; this build has no production ND transport");
   }
 
-  /// Drops every cached schedule, forcing a rebuild on the next fill_boundary. Used by tests to
-  /// compare the cached path against a fresh rebuild; not needed in production (regrid drops the
-  /// whole cache by reassigning the MultiFab).
-  void clear() {
-    entries_.clear();
-    exchange_pool_.clear();
+  template <class MemorySpace>
+  void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
+    if (fields.layout() != layout_ || fields.distribution() != distribution_ ||
+        fields.local_rank() != local_rank_ || fields.ghosts() != ghosts_)
+      throw std::invalid_argument("pops::HaloSchedule does not match the destination MultiFab");
   }
-
-  /// Number of cached schedules (test/instrumentation hook).
-  std::size_t size() const { return entries_.size(); }
-  std::size_t exchange_pool_size() const { return exchange_pool_.size(); }
-
-  /// Borrow persistent communication storage for one schedule/component width. Multiple in-flight
-  /// exchanges receive distinct leases; blocking repeated fills reuse capacities without allocating.
-  std::shared_ptr<HaloExchangeStorage> acquire_exchange(
-      const std::shared_ptr<const HaloSchedule>& schedule, int ncomp);
 
  private:
-  std::vector<std::shared_ptr<HaloSchedule>> entries_;
-  std::vector<std::shared_ptr<HaloExchangeStorage>> exchange_pool_;
+  void classify_(const job_type& job) {
+    const bool source_local = distribution_.is_local(job.source_box, local_rank_);
+    const bool destination_local = distribution_.is_local(job.destination_box, local_rank_);
+    if (source_local && destination_local) {
+      local_.push_back(job);
+      return;
+    }
+    if (distribution_.replicated())
+      throw std::logic_error("pops::HaloSchedule replicated ownership classification is invalid");
+    if (source_local) {
+      halo_schedule_detail::peer_plan(send_, distribution_.owner(job.destination_box))
+          .jobs.push_back(job);
+    } else if (destination_local) {
+      halo_schedule_detail::peer_plan(receive_, distribution_.owner(job.source_box))
+          .jobs.push_back(job);
+    }
+  }
+
+  mesh::BoxArray<Dim> layout_{};
+  mesh::Distribution<Dim> distribution_{};
+  Index<Dim> local_rank_{};
+  Box<Dim> domain_{};
+  Extent<Dim> ghosts_{};
+  BoundaryTopology<Dim> topology_{};
+  std::vector<job_type> local_{};
+  std::vector<peer_plan_type> send_{};
+  std::vector<peer_plan_type> receive_{};
 };
 
-namespace detail {
-/// Process-wide count of halo-schedule (re)builds. Independent execution lanes may warm their
-/// private caches concurrently, so even this instrumentation counter must not introduce a data race.
-inline std::atomic<std::int64_t>& halo_schedule_build_counter() {
-  static std::atomic<std::int64_t> n{0};
-  return n;
-}
-}  // namespace detail
-
-/// Number of times fill_boundary has BUILT (enumerated) a halo schedule. A reused (cached) schedule
-/// does NOT increment it, so a stable layout filled K times reports 1. Test hook for cache
-/// engagement; not part of the public numerical API.
-inline std::int64_t halo_schedule_build_count() {
-  return detail::halo_schedule_build_counter().load(std::memory_order_relaxed);
-}
-
-/// Resets the build counter (tests).
-inline void reset_halo_schedule_build_count() {
-  detail::halo_schedule_build_counter().store(0, std::memory_order_relaxed);
+template <int Dim, class MemorySpace>
+HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields,
+                                        const Box<Dim>& domain,
+                                        const BoundaryTopology<Dim>& topology,
+                                        HaloScheduleBudget budget) {
+  return HaloSchedule<Dim>{fields.layout(), fields.distribution(), fields.local_rank(),
+                           domain,          fields.ghosts(),       topology,
+                           budget};
 }
 
 }  // namespace pops

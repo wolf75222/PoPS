@@ -1,113 +1,102 @@
-// fill_boundary : echange de halos intra-niveau.
-//   - 4 boxes, non periodique : aretes et coin interieurs remplis depuis les
-//     voisins, ghosts hors domaine laisses a 0.
-//   - 1 box, periodique : wrapping correct des deux cotes et des coins.
-//   - la somme sur les cellules valides ne change pas (on n'ecrit que les ghosts).
-
 #include <gtest/gtest.h>
 
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/storage/multifab.hpp>
 
-#include <cmath>
+#include "nd_multifab_test_utils.hpp"
+
+#include <array>
+#include <cstddef>
+#include <stdexcept>
+#include <vector>
 
 using namespace pops;
+using namespace pops::mesh;
+using namespace pops::test::nd;
 
 namespace {
 
-// champ global continu a travers les frontieres de boxes
-double g(int i, int j) {
-  return i + 100.0 * j;
+template <int Dim>
+HaloScheduleBudget halo_budget(std::size_t boxes, std::size_t images = 64) {
+  return HaloScheduleBudget{{boxes, boxes * (boxes - 1) / 2},
+                            boxes * boxes * images,
+                            boxes * boxes * images * static_cast<std::size_t>(2 * Dim),
+                            images};
 }
 
-void fill_valid(MultiFab& mf) {
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a](int i, int j) { a(i, j, 0) = g(i, j); });
+template <int Dim>
+Index<Dim> periodic_source(Index<Dim> index, const Box<Dim>& domain) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    while (index[axis] < domain.lo[axis])
+      index[axis] += static_cast<int>(domain.length(axis));
+    while (index[axis] > domain.hi[axis])
+      index[axis] -= static_cast<int>(domain.length(axis));
   }
+  return index;
 }
 
-// recupere le fab local dont le coin bas vaut (lo0, lo1)
-const Fab2D& fab_with_lo(const MultiFab& mf, int lo0, int lo1) {
-  for (int li = 0; li < mf.local_size(); ++li)
-    if (mf.box(li).lo[0] == lo0 && mf.box(li).lo[1] == lo1)
-      return mf.fab(li);
-  return mf.fab(0);
+template <int Dim>
+void expect_periodic_halo() {
+  const Box<Dim> domain = cube<Dim>(0, 3);
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, axis_sizes<Dim>(2, 4));
+  const auto ranks = one_rank_space<Dim>();
+  const auto distribution = Distribution<Dim>::replicated(layout, ranks);
+  HostMultiFab<Dim> fields(layout, distribution, Index<Dim>{}, 2, uniform_extent<Dim>(1));
+  fill_valid_encoded(fields, Real{-777});
+
+  std::array<bool, Dim> periodic{};
+  periodic.fill(true);
+  const auto schedule =
+      prepare_halo_schedule(fields, domain, BoundaryTopology<Dim>::axis_periodic(periodic),
+                            halo_budget<Dim>(layout.size(), 64));
+  ASSERT_FALSE(schedule.has_remote_jobs());
+  fill_boundary(fields, schedule);
+
+  for (const std::size_t global : fields.local_global_indices()) {
+    const auto& fab = fields.fab_global(global);
+    const std::size_t cells = static_cast<std::size_t>(fab.grown_box().numPts());
+    for (std::size_t cell = 0; cell < cells; ++cell) {
+      const Index<Dim> index = index_from_ordinal(fab.grown_box(), cell);
+      const Index<Dim> source = fab.box().contains(index) ? index : periodic_source(index, domain);
+      for (int component = 0; component < fields.ncomp(); ++component)
+        EXPECT_DOUBLE_EQ(value_at(fields, global, index, component),
+                         encoded_value(source, component));
+    }
+  }
 }
 
 }  // namespace
 
-TEST(test_fill_boundary, four_boxes_nonperiodic) {
-  Box2D dom = Box2D::from_extents(8, 8);
-  BoxArray ba = BoxArray::from_domain(dom, 4);  // boxes 4x4
-  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, 1);
-  fill_valid(mf);
-  Real s_before = sum(mf);
-
-  fill_boundary(mf, dom, Periodicity{false, false});
-
-  const Fab2D& b0 = fab_with_lo(mf, 0, 0);           // box [0..3]x[0..3]
-  EXPECT_EQ(b0(4, 2, 0), g(4, 2)) << "edge_right";   // depuis le voisin x
-  EXPECT_EQ(b0(2, 4, 0), g(2, 4)) << "edge_top";     // depuis le voisin y
-  EXPECT_EQ(b0(4, 4, 0), g(4, 4)) << "corner_diag";  // depuis le voisin diagonal
-  EXPECT_EQ(b0(-1, 2, 0), 0.0) << "phys_left_zero";  // bord physique : intact
-  EXPECT_EQ(b0(2, -1, 0), 0.0) << "phys_bottom_zero";
-  EXPECT_EQ(b0(-1, -1, 0), 0.0) << "phys_corner_zero";
-
-  EXPECT_LT(std::fabs(sum(mf) - s_before), 1e-12) << "sum_unchanged";
+TEST(test_fill_boundary, ordinary_periodic_halos_are_exact_in_1d_2d_and_3d) {
+  expect_periodic_halo<1>();
+  expect_periodic_halo<2>();
+  expect_periodic_halo<3>();
 }
 
-TEST(test_fill_boundary, single_box_periodic_wraps) {
-  Box2D dom = Box2D::from_extents(8, 8);
-  BoxArray ba = BoxArray::from_domain(dom, 8);  // une seule box [0..7]x[0..7]
-  ASSERT_EQ(ba.size(), 1) << "single_box";
-  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, 1);
-  fill_valid(mf);
+TEST(test_fill_boundary, remote_schedule_refuses_before_local_mutation) {
+  const Box<1> domain{Index<1>{0}, Index<1>{3}};
+  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
+  const auto distribution =
+      Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});
+  HostMultiFab<1> fields(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
+  fields.set_val(Real{-19});
+  const auto before = snapshot(fields);
 
-  fill_boundary(mf, dom, Periodicity{true, true});
-
-  const Fab2D& f = mf.fab(0);
-  EXPECT_EQ(f(-1, 3, 0), g(7, 3)) << "wrap_left";    // i=-1 <- i=7
-  EXPECT_EQ(f(8, 3, 0), g(0, 3)) << "wrap_right";    // i=8  <- i=0
-  EXPECT_EQ(f(3, -1, 0), g(3, 7)) << "wrap_bottom";  // j=-1 <- j=7
-  EXPECT_EQ(f(3, 8, 0), g(3, 0)) << "wrap_top";      // j=8  <- j=0
-  EXPECT_EQ(f(-1, -1, 0), g(7, 7)) << "wrap_corner";
-  EXPECT_EQ(f(8, 8, 0), g(0, 0)) << "wrap_corner2";
+  const auto schedule = prepare_halo_schedule(fields, domain, BoundaryTopology<1>::physical(),
+                                              halo_budget<1>(layout.size(), 1));
+  ASSERT_TRUE(schedule.has_remote_jobs());
+  EXPECT_THROW(fill_boundary(fields, schedule), std::logic_error);
+  EXPECT_EQ(snapshot(fields), before);
 }
 
-TEST(test_fill_boundary, periodic_halo_deeper_than_one_cell_domain) {
-  constexpr int ng = 5;
-  const Box2D dom = Box2D::from_extents(1, 1);
-  const BoxArray ba = BoxArray::from_domain(dom, 1);
-  ASSERT_EQ(ba.size(), 1);
-  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
-  mf.fab(0)(0, 0, 0) = 17.25;
-
-  fill_boundary(mf, dom, Periodicity{true, true});
-
-  const Fab2D& f = mf.fab(0);
-  const Box2D grown = dom.grow(ng);
-  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
-    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
-      EXPECT_EQ(f(i, j, 0), 17.25) << "deep periodic ghost at (" << i << ", " << j << ")";
-}
-
-TEST(test_fill_boundary, deep_periodic_wrap_preserves_nonzero_index_origin) {
-  constexpr int ng = 4;
-  const Box2D dom{{-7, 11}, {-7, 11}};
-  const BoxArray ba(std::vector<Box2D>{dom});
-  MultiFab mf(ba, DistributionMapping(ba.size(), n_ranks()), 1, ng);
-  mf.fab(0)(dom.lo[0], dom.lo[1], 0) = -3.75;
-
-  fill_boundary(mf, dom, Periodicity{true, true});
-
-  const Box2D grown = dom.grow(ng);
-  for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
-    for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
-      EXPECT_EQ(mf.fab(0)(i, j, 0), -3.75)
-          << "deep periodic ghost at nonzero-origin index (" << i << ", " << j << ")";
+TEST(test_fill_boundary, stale_field_identity_is_rejected) {
+  const Box<2> domain = cube<2>(0, 1);
+  const BoxArray<2> layout(std::vector<Box<2>>{domain});
+  const auto ranks = one_rank_space<2>();
+  const auto distribution = Distribution<2>::replicated(layout, ranks);
+  HostMultiFab<2> one_ghost(layout, distribution, Index<2>{}, 1, Extent<2>{1, 1});
+  HostMultiFab<2> two_ghosts(layout, distribution, Index<2>{}, 1, Extent<2>{2, 2});
+  const auto schedule = prepare_halo_schedule(one_ghost, domain, BoundaryTopology<2>::physical(),
+                                              halo_budget<2>(1, 1));
+  EXPECT_THROW(fill_boundary(two_ghosts, schedule), std::invalid_argument);
 }
