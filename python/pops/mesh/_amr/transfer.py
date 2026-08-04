@@ -86,6 +86,33 @@ def _kernel_family_data(kernel: Any, *, where: str) -> Any:
     return rows[0] if len(rows) == 1 else rows
 
 
+def _ranked_axis_values(
+    value: Any, *, dimension: int, where: str, minimum: int
+) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)):
+        raise TypeError("%s must be an ordered axis sequence" % where)
+    try:
+        raw = tuple(value)
+    except TypeError as exc:
+        raise TypeError("%s must be an ordered axis sequence" % where) from exc
+    if len(raw) not in (1, dimension) or any(
+        type(item) is not int or item < minimum for item in raw
+    ):
+        raise ValueError(
+            "%s must contain one or %d integers >= %d" % (where, dimension, minimum)
+        )
+    if len(raw) == 1:
+        return tuple(raw[0] for _ in range(dimension))
+    return raw
+
+
+def _oriented_face_centerings(axis_names: tuple[str, ...]) -> tuple[Any, ...]:
+    return tuple(
+        BuiltinTransferAxis("centering", "face_%s" % axis_name)
+        for axis_name in axis_names
+    )
+
+
 class AMRTransfer:
     """Object-level public declaration of how AMR values are materialized.
 
@@ -262,7 +289,7 @@ class AMRTransfer:
     @staticmethod
     def _layout_contract(
         layout_plan: LayoutPlan, subject: Any, layout: LayoutHandle | None
-    ) -> tuple[LayoutHandle, int, tuple[int, ...]]:
+    ) -> tuple[LayoutHandle, int, tuple[str, ...], tuple[tuple[int, ...], ...]]:
         if layout is None:
             try:
                 layout = layout_plan.layout_for(subject)
@@ -271,22 +298,45 @@ class AMRTransfer:
                     "transfer subjects outside state/field/block require an explicit plan layout"
                 ) from exc
         normalized = layout_plan.normalized(layout)
-        dimension = normalized.capabilities.get("dim")
-        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
-            raise ValueError("AMR layout manifest must authenticate dimension 1, 2, or 3")
+        dimension = normalized.geometry.dimension
+        authenticated_dimension = normalized.capabilities.get("dim")
+        if dimension not in (1, 2, 3) or authenticated_dimension != dimension:
+            raise ValueError(
+                "AMR layout geometry and manifest must authenticate one dimension from {1,2,3}"
+            )
         if not normalized.adaptive or not normalized.transition_ratios:
             raise ValueError("AMRTransfer requires an adaptive layout with level transitions")
-        return layout, dimension, normalized.transition_ratios
+        transition_ratios = tuple(
+            _ranked_axis_values(
+                (ratio,),
+                dimension=dimension,
+                where="AMR layout transition_ratios[%d]" % index,
+                minimum=2,
+            )
+            for index, ratio in enumerate(normalized.transition_ratios)
+        )
+        ratios = tuple(dict.fromkeys(transition_ratios))
+        return layout, dimension, normalized.geometry.axis_names, ratios
 
     @staticmethod
     def _accuracy(
-        policy: Any, *, dimension: int, ratio: int, temporal: bool = False
+        policy: Any, *, dimension: int, ratio: tuple[int, ...], temporal: bool = False
     ) -> AccuracyRequirement:
         return AccuracyRequirement(
             order=policy.order,
-            ghost_depth=policy.ghost_depth,
+            ghost_depth=_ranked_axis_values(
+                policy.ghost_depth,
+                dimension=dimension,
+                where="AMR transfer kernel ghost_depth",
+                minimum=0,
+            ),
             dimension=dimension,
-            refinement_ratio=(ratio,) * dimension,
+            refinement_ratio=_ranked_axis_values(
+                ratio,
+                dimension=dimension,
+                where="AMR transfer refinement_ratio",
+                minimum=2,
+            ),
             conservative=policy.conservative,
             temporal=temporal,
         )
@@ -305,7 +355,7 @@ class AMRTransfer:
 
     @staticmethod
     def _resolved_spatial_accuracy(
-        subject: Handle, numerics: tuple[Any, ...]
+        subject: Handle, numerics: tuple[Any, ...], dimension: int
     ) -> tuple[int, tuple[int, ...]] | None:
         methods = []
         for plan in numerics:
@@ -329,7 +379,8 @@ class AMRTransfer:
                     "resolved spatial methods must authenticate integer order and ghost depth")
             orders.append(order)
             ghosts.append(ghost)
-        return max(orders), (max(ghosts),)
+        ghost = max(ghosts)
+        return max(orders), tuple(ghost for _ in range(dimension))
 
     def resolve(
         self, layout_plan: LayoutPlan, numerics: tuple[Any, ...] = ()
@@ -356,14 +407,12 @@ class AMRTransfer:
             ("time_interpolation", TEMPORAL_INTERPOLATION),
         )
         for subject, policy, layout in self._states:
-            layout, dimension, ratios = self._layout_contract(layout_plan, subject, layout)
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "the selected transfer requirement schema cannot collapse heterogeneous "
-                    "transition ratios; select a per-transition transfer provider"
-                )
-            ratio = ratios[0]
-            spatial_accuracy = self._resolved_spatial_accuracy(subject, tuple(numerics))
+            layout, dimension, _, ratios = self._layout_contract(
+                layout_plan, subject, layout
+            )
+            spatial_accuracy = self._resolved_spatial_accuracy(
+                subject, tuple(numerics), dimension
+            )
             if numerics and spatial_accuracy is None:
                 raise ValueError(
                     "AMR cell state %s has no exact resolved spatial method; coarse/fine "
@@ -395,40 +444,35 @@ class AMRTransfer:
                     kernels,
                     key=lambda value: (value.order, tuple(value.ghost_depth), value.native_route),
                 )
-                if operation == COARSE_FINE_FILL and spatial_accuracy is not None:
-                    required_order, required_ghost = spatial_accuracy
-                    accuracy = AccuracyRequirement(
-                        order=required_order,
-                        ghost_depth=required_ghost,
-                        dimension=dimension,
-                        refinement_ratio=(ratio,) * dimension,
-                        conservative=True,
-                        temporal=False,
+                for ratio in ratios:
+                    if operation == COARSE_FINE_FILL and spatial_accuracy is not None:
+                        required_order, required_ghost = spatial_accuracy
+                        accuracy = AccuracyRequirement(
+                            order=required_order,
+                            ghost_depth=required_ghost,
+                            dimension=dimension,
+                            refinement_ratio=ratio,
+                            conservative=True,
+                            temporal=False,
+                        )
+                    else:
+                        accuracy = self._accuracy(
+                            requirement_kernel,
+                            dimension=dimension,
+                            ratio=ratio,
+                            temporal=operation == TEMPORAL_INTERPOLATION,
+                        )
+                    resolver.require(
+                        subject,
+                        key,
+                        accuracy=accuracy,
+                        layout=layout,
+                        provider=provider,
                     )
-                else:
-                    accuracy = self._accuracy(
-                        requirement_kernel,
-                        dimension=dimension,
-                        ratio=ratio,
-                        temporal=operation == TEMPORAL_INTERPOLATION,
-                    )
-                resolver.require(
-                    subject,
-                    key,
-                    accuracy=accuracy,
-                    layout=layout,
-                    provider=provider,
-                )
-        face_centerings = (FACE_X_CENTERED, FACE_Y_CENTERED)
         for subjects, policy, layout in self._faces:
-            resolved_layout, dimension, ratios = self._layout_contract(
+            resolved_layout, dimension, axis_names, ratios = self._layout_contract(
                 layout_plan, subjects[0], layout
             )
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "the selected face transfer provider requires homogeneous transitions"
-                )
-            ratio = ratios[0]
             for subject in subjects[1:]:
                 try:
                     subject_layout = layout_plan.layout_for(subject)
@@ -444,11 +488,8 @@ class AMRTransfer:
                 raise ValueError(
                     "AMRTransfer.face requires exactly one normal component per layout axis"
                 )
-            if dimension != 2:
-                raise NotImplementedError(
-                    "the installed divergence-preserving face provider supports dimension 2"
-                )
             kernel = policy.prolongation
+            face_centerings = _oriented_face_centerings(axis_names)
             keys = tuple(
                 TransferKey(
                     FACE_SPACE,
@@ -475,24 +516,20 @@ class AMRTransfer:
             )
             resolver.register(provider)
             for subject, key in zip(subjects, keys, strict=True):
-                resolver.require(
-                    subject,
-                    key,
-                    accuracy=self._accuracy(
-                        kernel, dimension=dimension, ratio=ratio
-                    ),
-                    layout=resolved_layout,
-                    provider=provider,
-                )
+                for ratio in ratios:
+                    resolver.require(
+                        subject,
+                        key,
+                        accuracy=self._accuracy(
+                            kernel, dimension=dimension, ratio=ratio
+                        ),
+                        layout=resolved_layout,
+                        provider=provider,
+                    )
         for subject, policy, layout in self._nodes:
-            resolved_layout, dimension, ratios = self._layout_contract(
+            resolved_layout, dimension, _, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "the selected node transfer provider requires homogeneous transitions"
-                )
-            ratio = ratios[0]
             kernel = policy.prolongation
             key = TransferKey(
                 NODE_SPACE,
@@ -510,67 +547,64 @@ class AMRTransfer:
                 ),),
             )
             resolver.register(provider)
-            resolver.require(
-                subject,
-                key,
-                accuracy=self._accuracy(kernel, dimension=dimension, ratio=ratio),
-                layout=resolved_layout,
-                provider=provider,
-            )
+            for ratio in ratios:
+                resolver.require(
+                    subject,
+                    key,
+                    accuracy=self._accuracy(kernel, dimension=dimension, ratio=ratio),
+                    layout=resolved_layout,
+                    provider=provider,
+                )
         for subject, policy, layout in self._fields:
-            resolved_layout, dimension, ratios = self._layout_contract(
+            resolved_layout, dimension, _, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "the selected field materializer requires homogeneous transitions"
+            for ratio in ratios:
+                resolver.require(
+                    subject,
+                    TransferKey(
+                        FIELD_SPACE,
+                        CELL_CENTERED,
+                        PRIMITIVE_REPRESENTATION,
+                        DENSE_STORAGE,
+                        COARSE_FINE_FILL,
+                    ),
+                    materialization=DERIVED_FIELD,
+                    accuracy=AccuracyRequirement(
+                        1, tuple(0 for _ in range(dimension)), dimension, ratio
+                    ),
+                    layout=resolved_layout,
+                    materializer=MaterializationProvider(
+                        provider_handle((subject,), "field", "field_operator"),
+                        DERIVED_FIELD,
+                        CanonicalOptions({"native_route": policy.native_route}),
+                    ),
                 )
-            ratio = ratios[0]
-            resolver.require(
-                subject,
-                TransferKey(
-                    FIELD_SPACE,
-                    CELL_CENTERED,
-                    PRIMITIVE_REPRESENTATION,
-                    DENSE_STORAGE,
-                    COARSE_FINE_FILL,
-                ),
-                materialization=DERIVED_FIELD,
-                accuracy=AccuracyRequirement(1, (0,), dimension, (ratio,) * dimension),
-                layout=resolved_layout,
-                materializer=MaterializationProvider(
-                    provider_handle((subject,), "field", "field_operator"),
-                    DERIVED_FIELD,
-                    CanonicalOptions({"native_route": policy.native_route}),
-                ),
-            )
         for subject, policy, layout in self._caches:
-            resolved_layout, dimension, ratios = self._layout_contract(
+            resolved_layout, dimension, _, ratios = self._layout_contract(
                 layout_plan, subject, layout
             )
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "the selected cache materializer requires homogeneous transitions"
+            for ratio in ratios:
+                resolver.require(
+                    subject,
+                    TransferKey(
+                        CACHE_SPACE,
+                        CELL_CENTERED,
+                        PRIMITIVE_REPRESENTATION,
+                        DENSE_STORAGE,
+                        COARSE_FINE_FILL,
+                    ),
+                    materialization=CACHE,
+                    accuracy=AccuracyRequirement(
+                        1, tuple(0 for _ in range(dimension)), dimension, ratio
+                    ),
+                    layout=resolved_layout,
+                    materializer=MaterializationProvider(
+                        provider_handle((subject,), "cache", "cache_provider"),
+                        CACHE,
+                        CanonicalOptions({"native_route": policy.native_route}),
+                    ),
                 )
-            ratio = ratios[0]
-            resolver.require(
-                subject,
-                TransferKey(
-                    CACHE_SPACE,
-                    CELL_CENTERED,
-                    PRIMITIVE_REPRESENTATION,
-                    DENSE_STORAGE,
-                    COARSE_FINE_FILL,
-                ),
-                materialization=CACHE,
-                accuracy=AccuracyRequirement(1, (0,), dimension, (ratio,) * dimension),
-                layout=resolved_layout,
-                materializer=MaterializationProvider(
-                    provider_handle((subject,), "cache", "cache_provider"),
-                    CACHE,
-                    CanonicalOptions({"native_route": policy.native_route}),
-                ),
-            )
         return resolver.resolve()
 
 
@@ -582,7 +616,7 @@ class AMRTransferBuilder:
             raise TypeError("AMRTransferBuilder requires an exact LayoutPlan")
         self._layout_plan = layout_plan
         self._providers: dict[str, TransferProvider] = {}
-        self._requirements: dict[tuple[str, str], TransferRequirement] = {}
+        self._requirements: dict[str, TransferRequirement] = {}
 
     def register(self, provider: TransferProvider) -> None:
         if type(provider) is not TransferProvider:
@@ -631,9 +665,9 @@ class AMRTransferBuilder:
             materializer,
             provider,
         )
-        registry_key = (requirement.key.identity.token, subject.qualified_id)
+        registry_key = requirement.identity.token
         if registry_key in self._requirements:
-            raise ValueError("duplicate AMR transfer requirement for exact key and subject")
+            raise ValueError("duplicate exact AMR transfer requirement")
         self._requirements[registry_key] = requirement
         return requirement
 

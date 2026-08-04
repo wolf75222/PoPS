@@ -11,31 +11,62 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class PreparedHierarchyNativeLowering:
-    """Provider-authenticated values consumed by the current native AMR runtime ABI."""
+    """Provider-authenticated rank-generic hierarchy values carried to native bind."""
 
     provider: Mapping[str, Any]
+    dimension: int
     level_count: int
-    nesting_buffer: int
-    nesting_lookahead: int
+    transition_ratios: tuple[tuple[int, ...], ...]
+    transition_buffers: tuple[tuple[int, ...], ...]
+    transition_lookaheads: tuple[int, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.provider, Mapping):
             raise TypeError("hierarchy native lowering requires provider authority")
         object.__setattr__(self, "provider", MappingProxyType(dict(self.provider)))
+        if type(self.dimension) is not int or self.dimension not in (1, 2, 3):
+            raise ValueError("hierarchy native lowering dimension must be 1, 2, or 3")
         if type(self.level_count) is not int or self.level_count < 1:
             raise ValueError("hierarchy native lowering level_count must be positive")
-        for name in ("nesting_buffer", "nesting_lookahead"):
-            value = getattr(self, name)
-            if type(value) is not int or value < 0:
-                raise ValueError("hierarchy native lowering %s must be non-negative" % name)
+        ratios = tuple(tuple(row) for row in self.transition_ratios)
+        buffers = tuple(tuple(row) for row in self.transition_buffers)
+        lookaheads = tuple(self.transition_lookaheads)
+        transition_count = self.level_count - 1
+        if len(ratios) != transition_count \
+                or len(buffers) != transition_count \
+                or len(lookaheads) != transition_count:
+            raise ValueError(
+                "hierarchy native lowering must preserve one contract per level transition"
+            )
+        for name, rows, minimum in (
+            ("transition_ratios", ratios, 2),
+            ("transition_buffers", buffers, 0),
+        ):
+            for index, row in enumerate(rows):
+                if len(row) != self.dimension or any(
+                    type(value) is not int or value < minimum for value in row
+                ):
+                    raise ValueError(
+                        "hierarchy native lowering %s[%d] must contain %d integers >= %d"
+                        % (name, index, self.dimension, minimum)
+                    )
+        if any(type(value) is not int or value < 0 for value in lookaheads):
+            raise ValueError(
+                "hierarchy native lowering transition_lookaheads must be non-negative integers"
+            )
+        object.__setattr__(self, "transition_ratios", ratios)
+        object.__setattr__(self, "transition_buffers", buffers)
+        object.__setattr__(self, "transition_lookaheads", lookaheads)
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "provider": dict(self.provider),
+            "dimension": self.dimension,
             "level_count": self.level_count,
-            "nesting_buffer": self.nesting_buffer,
-            "nesting_lookahead": self.nesting_lookahead,
+            "transition_ratios": [list(row) for row in self.transition_ratios],
+            "transition_buffers": [list(row) for row in self.transition_buffers],
+            "transition_lookaheads": list(self.transition_lookaheads),
         }
 
 
@@ -159,29 +190,18 @@ def _lower_shared_n_level(
     }:
         raise ValueError("shared_n_level hierarchy provider options are not canonical")
     transitions = hierarchy.plan.transitions
-    if any(row.dimension != 2 or row.ratio != (2, 2) for row in transitions):
-        raise NotImplementedError(
-            "shared_n_level implements only exact two-dimensional ratio-(2,2) transitions"
-        )
-    buffers = {row.buffer for row in transitions}
-    lookaheads = {row.lookahead for row in transitions}
-    if len(buffers) != 1 or len(lookaheads) != 1 \
-            or any(len(set(row)) != 1 for row in buffers):
-        raise NotImplementedError(
-            "shared_n_level requires one isotropic buffer and one lookahead across transitions"
-        )
-    buffer = next(iter(buffers), (0, 0))
-    lookahead = next(iter(lookaheads), 0)
     return PreparedHierarchyNativeLowering(
         authority,
+        hierarchy.plan.dimension,
         hierarchy.plan.level_count,
-        buffer[0],
-        lookahead,
+        tuple(row.ratio for row in transitions),
+        tuple(row.buffer for row in transitions),
+        tuple(row.lookahead for row in transitions),
     )
 
 
 register_prepared_hierarchy_native_provider(
-    PreparedHierarchyNativeProvider("shared_n_level", 1, _lower_shared_n_level)
+    PreparedHierarchyNativeProvider("shared_n_level", 2, _lower_shared_n_level)
 )
 
 

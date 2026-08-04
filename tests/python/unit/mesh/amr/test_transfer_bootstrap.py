@@ -3,7 +3,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from pops.mesh import LayoutPlanBuilder
+from pops._ir.expr import Const
+from pops.amr import (
+    AMRClockRelation,
+    AMRExecution,
+    AMRHierarchy,
+    AMRRegrid,
+    AMRTagging,
+    Buffer,
+    Tag,
+)
+from pops.domain import CartesianDomain
+from pops.layouts import AMR
+from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
 from pops.initial import InitialConditionPlanBuilder, InitialConditionSource
 from pops.mesh._amr import (
     AnalyticReprojection,
@@ -93,6 +105,82 @@ def _layout():
     builder.assign_field(field, layout)
     plan = builder.resolve(states=(state,), fields=(field,))
     return plan, layout, state, field
+
+
+def _ranked_face_layout(dimension: int, ratios: tuple[int, ...]):
+    domain = CartesianDomain(
+        "ranked-face-%d" % dimension,
+        tuple(0.0 for _ in range(dimension)),
+        tuple(1.0 for _ in range(dimension)),
+    )
+    frame = domain.frame()
+    grid = CartesianGrid(
+        frame=frame,
+        cells=tuple(8 for _ in range(dimension)),
+        periodic=PeriodicAxes(frame.axes),
+    )
+    descriptor = AMR(
+        grid=grid,
+        hierarchy=AMRHierarchy(len(ratios) + 1, ratios),
+        tagging=AMRTagging(
+            rules=(Tag(Const(1.0) > Const(0.0)), Buffer(1)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS,
+        ),
+        regrid=AMRRegrid.frozen(),
+        transfer=AMRTransfer(),
+        execution=AMRExecution.subcycled(tuple(
+            AMRClockRelation(level, level + 1, ratio)
+            for level, ratio in enumerate(ratios)
+        )),
+    )
+    subjects = tuple(
+        Handle("face_%d" % axis, kind="state", owner=OwnerPath.model(
+            "ranked-face-%d" % dimension
+        ))
+        for axis in range(dimension)
+    )
+    builder = LayoutPlanBuilder(OWNER)
+    layout = builder.layout("ranked_face_%d" % dimension, descriptor)
+    for subject in subjects:
+        builder.assign_state(subject, layout)
+    return builder.resolve(states=subjects), layout, subjects
+
+
+class _RankGenericFaceKernel:
+    native_route = "tests_rank_generic_face"
+    order = 2
+    ghost_depth = (1,)
+    dimensions = (1, 2, 3)
+    refinement_ratios = (2, 3, 4)
+    conservative = True
+    temporal = False
+
+    def amr_transfer_kernel_data(self):
+        return {
+            "schema_version": 1,
+            "kernel_type": "amr_transfer_kernel",
+            "native_route": self.native_route,
+            "order": self.order,
+            "ghost_depth": self.ghost_depth,
+            "dimensions": self.dimensions,
+            "refinement_ratios": self.refinement_ratios,
+            "conservative": self.conservative,
+            "temporal": self.temporal,
+        }
+
+
+class _RankGenericFacePolicy:
+    policy_kind = "face"
+    prolongation = _RankGenericFaceKernel()
+
+    def amr_transfer_policy_data(self):
+        return {
+            "schema_version": 1,
+            "authority_type": "amr_transfer_policy",
+            "policy_kind": self.policy_kind,
+            "routes": {"prolongation": self.prolongation.amr_transfer_kernel_data()},
+        }
 
 
 def _key(operation=PROLONGATION, *, representation=CONSERVATIVE_REPRESENTATION):
@@ -313,6 +401,56 @@ def test_builtin_policies_are_intrinsic_and_reject_duplicate_accuracy_knobs():
         FaceTransfer(ghost_depth=(2,))
     with pytest.raises(TypeError):
         NodeTransfer(conservative=True)
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_rank_generic_face_transfer_iterates_axes_ghosts_and_level_ratios(
+    dimension: int,
+) -> None:
+    ratios = (2, 3)
+    plan, layout, subjects = _ranked_face_layout(dimension, ratios)
+    authored = AMRTransfer()
+    authored.face(subjects, _RankGenericFacePolicy(), layout=layout)
+
+    resolved = authored.resolve(plan)
+
+    axis_names = plan.normalized(layout).geometry.axis_names
+    for subject, axis_name in zip(subjects, axis_names, strict=True):
+        entry = resolved.for_subject(subject, PROLONGATION)
+        assert entry.key.centering.name == "face_%s" % axis_name
+        assert len(entry.requirements) == len(ratios)
+        assert {
+            requirement.accuracy.refinement_ratio
+            for requirement in entry.requirements
+        } == {
+            tuple(ratio for _ in range(dimension)) for ratio in ratios
+        }
+        assert all(
+            requirement.accuracy.ghost_depth == tuple(1 for _ in range(dimension))
+            for requirement in entry.requirements
+        )
+    assert resolved.nesting_requirement.minimum_buffer == tuple(
+        1 for _ in range(dimension)
+    )
+
+
+def test_rank_generic_accuracy_preserves_anisotropic_ratio_without_dimension_switch() -> None:
+    accuracy = AMRTransfer._accuracy(
+        _RankGenericFaceKernel(), dimension=3, ratio=(2, 3, 4)
+    )
+
+    assert accuracy.refinement_ratio == (2, 3, 4)
+    assert accuracy.ghost_depth == (1, 1, 1)
+
+
+@pytest.mark.parametrize("dimension", (1, 3))
+def test_specialized_face_provider_refuses_rank_through_capabilities(dimension: int) -> None:
+    plan, layout, subjects = _ranked_face_layout(dimension, (2,))
+    authored = AMRTransfer()
+    authored.face(subjects, FaceTransfer(), layout=layout)
+
+    with pytest.raises(ValueError, match="incompatible AMR transfer provider"):
+        authored.resolve(plan)
 
 
 def test_public_provider_identity_is_stable_under_declaration_reordering():
