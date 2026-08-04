@@ -111,6 +111,9 @@ template <int Dim>
 std::set<std::array<int, Dim>> expected_fine_face_set(
     const CoarseFaceRefluxKey<Dim>& key, const transfer::nd::RefinementRatio<Dim>& ratio,
     const FaceRefinementMapping<Dim>& mapping) {
+  if (!ratio.refines_any_axis())
+    throw std::invalid_argument(
+        "ND metric reflux requires a non-identity inter-level refinement ratio");
   Index<Dim> base{};
   for (int direction = 0; direction < Dim; ++direction) {
     const std::int64_t relative =

@@ -34,6 +34,21 @@ void scalar_axpy(double& destination, double coefficient, const double& source) 
   destination += coefficient * source;
 }
 
+struct ThrowingPayload {
+  double value = 0.0;
+  inline static bool fail_copy = false;
+
+  ThrowingPayload() = default;
+  explicit ThrowingPayload(double input) : value(input) {}
+  ThrowingPayload(const ThrowingPayload& other) : value(other.value) {
+    if (fail_copy)
+      throw std::runtime_error("injected payload copy failure");
+  }
+  ThrowingPayload& operator=(const ThrowingPayload&) = default;
+  ThrowingPayload(ThrowingPayload&&) noexcept = default;
+  ThrowingPayload& operator=(ThrowingPayload&&) noexcept = default;
+};
+
 template <int Dim>
 RefinementRatio<Dim> sample_ratio() {
   if constexpr (Dim == 1)
@@ -228,6 +243,28 @@ TEST(test_nd_flux_ledger, exact_stage_weights_are_applied_before_metric_reflux) 
   EXPECT_TRUE(ledger.published_entries(1).empty());
 }
 
+TEST(test_nd_flux_ledger, identity_ratios_and_incomplete_fine_surfaces_fail_closed) {
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 41);
+  EXPECT_THROW((void)fine_faces_for_coarse_face(query, RefinementRatio<2>{1, 1}, mapping),
+               std::invalid_argument);
+
+  TransactionalFaceFluxLedger<2, double> ledger;
+  ledger.begin(query.attempt);
+  ledger.accumulate(fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "coarse_stage",
+                                 Rational{1, 2}),
+                    FaceFluxFragmentMeasure{Rational{1, 1}, 0.25, 2.0}, 3.0);
+  const auto fine_faces = fine_faces_for_coarse_face(query, ratio, mapping);
+  ASSERT_EQ(fine_faces.size(), 2u);
+  ledger.accumulate(
+      fragment_key(query, FaceLedgerRole::Fine, fine_faces.front(), "fine_stage", Rational{1, 2}),
+      FaceFluxFragmentMeasure{Rational{1, 1}, 0.25, 1.0}, 3.0);
+  ledger.commit();
+
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, scalar_axpy), std::runtime_error);
+}
+
 TEST(test_nd_flux_ledger, rejected_attempt_never_publishes_pending_faces) {
   const RefinementRatio<2> ratio{2, 3};
   const auto mapping = sample_mapping<2>();
@@ -251,6 +288,32 @@ TEST(test_nd_flux_ledger, rejected_attempt_never_publishes_pending_faces) {
   ledger.commit();
   EXPECT_EQ(ledger.published_size(), 4u);
   EXPECT_THROW(ledger.begin(1), std::invalid_argument);
+}
+
+TEST(test_nd_flux_ledger, failed_commit_preserves_accepted_and_pending_transactions) {
+  TransactionalFaceFluxLedger<1, ThrowingPayload> ledger;
+  auto accepted = sample_query<1>(0, 0);
+  ledger.begin(accepted.attempt);
+  ledger.accumulate(fragment_key(accepted, FaceLedgerRole::Coarse, accepted.coarse_face, "accepted",
+                                 Rational{1, 2}),
+                    FaceFluxFragmentMeasure{Rational{1, 1}, 0.1, 1.0}, ThrowingPayload{2.0});
+  ledger.commit();
+  ASSERT_EQ(ledger.published_size(), 1u);
+
+  auto candidate = sample_query<1>(0, 1);
+  ledger.begin(candidate.attempt);
+  ledger.accumulate(fragment_key(candidate, FaceLedgerRole::Coarse, candidate.coarse_face,
+                                 "candidate", Rational{1, 2}),
+                    FaceFluxFragmentMeasure{Rational{1, 1}, 0.1, 1.0}, ThrowingPayload{3.0});
+  ThrowingPayload::fail_copy = true;
+  EXPECT_THROW(ledger.commit(), std::runtime_error);
+  ThrowingPayload::fail_copy = false;
+  EXPECT_TRUE(ledger.in_transaction());
+  EXPECT_EQ(ledger.published_size(), 1u);
+  EXPECT_EQ(ledger.pending_size(), 1u);
+  ledger.rollback();
+  EXPECT_EQ(ledger.published_size(), 1u);
+  EXPECT_EQ(ledger.pending_size(), 0u);
 }
 
 TEST(test_nd_flux_ledger, sources_cell_centering_and_stale_attempts_fail_closed) {

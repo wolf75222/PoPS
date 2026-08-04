@@ -88,20 +88,22 @@ struct FaceFluxFragmentKey {
   FaceLedgerContribution contribution = FaceLedgerContribution::NumericalFlux;
 
   friend bool operator<(const FaceFluxFragmentKey& left, const FaceFluxFragmentKey& right) {
-    const auto left_prefix = std::tuple{left.owner,       left.state,     left.levels.coarse,
-                                        left.levels.fine, left.centering, left.axis};
-    const auto right_prefix = std::tuple{right.owner,       right.state,     right.levels.coarse,
-                                         right.levels.fine, right.centering, right.axis};
+    const auto left_prefix = std::tie(left.owner, left.state, left.levels.coarse, left.levels.fine,
+                                      left.centering, left.axis);
+    const auto right_prefix = std::tie(right.owner, right.state, right.levels.coarse,
+                                       right.levels.fine, right.centering, right.axis);
     if (left_prefix != right_prefix)
       return left_prefix < right_prefix;
     if (!detail::index_equal(left.coarse_face, right.coarse_face))
       return detail::index_less(left.coarse_face, right.coarse_face);
     if (!detail::index_equal(left.face, right.face))
       return detail::index_less(left.face, right.face);
-    return std::tuple{detail::clock_coordinate(left.clock), left.stage, left.attempt, left.role,
-                      left.contribution} < std::tuple{detail::clock_coordinate(right.clock),
-                                                      right.stage, right.attempt, right.role,
-                                                      right.contribution};
+    const auto left_clock = detail::clock_coordinate(left.clock);
+    const auto right_clock = detail::clock_coordinate(right.clock);
+    if (left_clock != right_clock)
+      return left_clock < right_clock;
+    return std::tie(left.stage, left.attempt, left.role, left.contribution) <
+           std::tie(right.stage, right.attempt, right.role, right.contribution);
   }
 };
 
