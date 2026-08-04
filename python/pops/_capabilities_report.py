@@ -1305,7 +1305,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state NPZ checkpoint (uniform v5, AMR v7)",
+            available_route="strict accepted-state NPZ checkpoint (uniform v6, AMR v8)",
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),

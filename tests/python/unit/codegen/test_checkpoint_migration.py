@@ -16,6 +16,7 @@ from types import ModuleType
 import numpy as np
 import pytest
 
+from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from pops.codegen.checkpoint_migration import (
     UNIFORM_V2_AUTHORITY_TRANSFERS,
     UniformV2BlockMapping,
@@ -24,10 +25,15 @@ from pops.codegen.checkpoint_migration import (
     migrate_uniform_v2_checkpoint,
 )
 from pops.identity import make_identity
+from pops.mesh._layout_plan_contracts import NativeSpatialLayout
 from pops.output._checkpoint_collective import decode_checkpoint_bytes
 from pops.runtime._checkpoint_manifest import (
     inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
+)
+from pops.runtime._checkpoint_spatial import (
+    add_checkpoint_spatial_contract,
+    install_checkpoint_spatial_contract,
 )
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import Clock, FixedDt, TimePoint
@@ -41,6 +47,21 @@ FROZEN_UNIFORM_V2_SHA256 = (
 )
 TARGET_PROGRAM_HASH = hashlib.sha256(b"adc667-current-program").hexdigest()
 TARGET_ABI_KEY = "adc667-current-test-abi"
+
+
+def _native_layout():
+    return NativeSpatialLayout(
+        layout_id="case:adc667/layout:grid",
+        coordinate_system="pops://coordinates/cartesian-nd@1",
+        cell_measure="pops://measures/cartesian-cell@1",
+        axis_names=("x", "y"),
+        shape=(4, 4),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+        centering="cell",
+        decomposition={"kind": "single_box", "shape": [4, 4]},
+    )
 
 
 def _schedule():
@@ -132,11 +153,9 @@ def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
 
     schedule = _schedule()
     payload = {
-        "pops_checkpoint_version": 5,
+        "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
         "t": 0.03,
         "macro_step": 3,
-        "nx": 4,
-        "ny": 4,
         "abi_key": TARGET_ABI_KEY,
         "program_hash": TARGET_PROGRAM_HASH,
         "blocks": np.asarray(["blk"]),
@@ -180,8 +199,10 @@ def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
         ),
     }
     owner = _AuthorityOwner()
+    spatial = install_checkpoint_spatial_contract(owner, _native_layout())
+    add_checkpoint_spatial_contract(payload, spatial)
     restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
-    path = tmp_path / "authority-v5.npz"
+    path = tmp_path / "authority-v6.npz"
     with open(path, "wb") as stream:
         np.savez_compressed(stream, **payload)
     return path, owner, restart, schedule
@@ -189,7 +210,7 @@ def _write_authority(tmp_path, *, history_slot_dt=(0.01, 0.01)):
 
 def _mapping(source_payload, owner, restart):
     return UniformV2MigrationMapping(
-        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v5",
+        reviewed_mapping_id="ADC-667-frozen-uniform-v2-to-current-v6",
         source_content_sha256=FROZEN_UNIFORM_V2_SHA256,
         source_abi_key=str(source_payload["abi_key"]),
         source_program_hash=str(source_payload["program_hash"]),
@@ -226,6 +247,9 @@ class _NativeTarget:
 
     def restore_program_cadence_window(self, *values):
         self.cadence = values
+
+    def _prepare_checkpoint_spatial_contract(self, contract):
+        return [int(np.prod(contract["shape"], dtype=np.int64))]
 
     def nx(self):
         return 4
@@ -316,6 +340,7 @@ def _strict_uniform_target(owner, schedule, monkeypatch):
             self._identities = owner.identities
             self.last_run_identity = owner.last_run_identity
             self._temporal_restart_state = SimpleNamespace(program_schedule=schedule)
+            install_checkpoint_spatial_contract(self, _native_layout())
 
         def _checkpoint_identities(self):
             return self._identities
@@ -326,7 +351,7 @@ def _strict_uniform_target(owner, schedule, monkeypatch):
 def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, monkeypatch):
     source, source_payload = _write_source(tmp_path)
     authority, owner, authority_restart, schedule = _write_authority(tmp_path)
-    destination = tmp_path / "migrated-v5.npz"
+    destination = tmp_path / "migrated-v6.npz"
 
     report = migrate_uniform_v2_checkpoint(
         source,
@@ -342,7 +367,7 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, mo
     migrated = decode_checkpoint_bytes(destination.read_bytes())
     _, restart = inspect_checkpoint_payload_integrity(migrated, runtime_kind="uniform")
     assert report.destination_restart_identity == restart.token
-    assert int(migrated["pops_checkpoint_version"]) == 5
+    assert int(migrated["pops_checkpoint_version"]) == 6
     assert str(migrated["program_hash"]) == TARGET_PROGRAM_HASH
     assert np.array_equal(migrated["state_blk"], source_payload["state_blk"])
     assert np.array_equal(migrated["phi"], source_payload["phi"])

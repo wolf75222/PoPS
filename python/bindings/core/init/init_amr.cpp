@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
 #include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
+#include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
 #include <pops/runtime/amr/prepared_component_providers.hpp>
@@ -1201,6 +1202,14 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("source_states"), py::arg("source_level_owners"), py::arg("target_level_owners"),
           "Merge exact source-rank Program images and return this rank's current-ownership image.")
+      .def(
+          "_prepare_checkpoint_spatial_contract",
+          [](const AmrSystem&, const py::dict& data) {
+            return pops::python::detail::prepare_checkpoint_spatial_contract<kNativeDimension>(
+                data);
+          },
+          py::arg("contract"),
+          "Validate the exact rank-generic checkpoint schema before restart state work.")
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)

@@ -38,6 +38,7 @@ _VERSION_FIELDS = (
     "component_interface_abi_version",
     "native_abi_version",
     "checkpoint_envelope_schema_version",
+    "checkpoint_spatial_schema_version",
     "uniform_checkpoint_payload_version",
     "amr_checkpoint_payload_version",
 )
@@ -154,6 +155,7 @@ def _cpp_text(data: dict[str, Any], package_version: str, digest: str) -> str:
         "component_interface_abi_version": "kComponentInterfaceAbiVersion",
         "native_abi_version": "kReleaseNativeAbiVersion",
         "checkpoint_envelope_schema_version": "kCheckpointEnvelopeSchemaVersion",
+        "checkpoint_spatial_schema_version": "kCheckpointSpatialSchemaVersion",
         "uniform_checkpoint_payload_version": "kUniformCheckpointPayloadVersion",
         "amr_checkpoint_payload_version": "kAmrCheckpointPayloadVersion",
     }

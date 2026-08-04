@@ -83,7 +83,8 @@ def owner_ranks_for_boxes(payload, boxes, level_count):
     }
     cursor = {level: 0 for level in range(level_count)}
     owners = []
-    for level, _ilo, _jlo, _ihi, _jhi in boxes:
+    for box in boxes:
+        level = box[0]
         if level not in per_level:
             raise ValueError(
                 "restart: checkpoint lacks owner-rank map for AMR level %d" % level)

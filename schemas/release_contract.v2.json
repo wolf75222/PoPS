@@ -10,8 +10,9 @@
   "component_interface_abi_version": 1,
   "native_abi_version": 3,
   "checkpoint_envelope_schema_version": 1,
-  "uniform_checkpoint_payload_version": 5,
-  "amr_checkpoint_payload_version": 7,
+  "checkpoint_spatial_schema_version": 1,
+  "uniform_checkpoint_payload_version": 6,
+  "amr_checkpoint_payload_version": 8,
   "component_catalog_sha256": "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66",
   "component_catalog_semantic_sha256": "b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3",
   "supported_matrix": {

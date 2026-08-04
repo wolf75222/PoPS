@@ -237,6 +237,13 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         normalized_layout, = plan.artifact.layout_plan.layouts
         config = system_config_from_layout(normalized_layout.native_spatial_layout)
         engine = System(config)
+        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+
+        install_checkpoint_spatial_contract(
+            engine,
+            normalized_layout.native_spatial_layout,
+            transition_ratios=normalized_layout.transition_ratios,
+        )
         cast(Any, engine)._execution_context = plan.execution_context
         install_uniform_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
@@ -282,6 +289,13 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
             hierarchy=plan.resolved_hierarchy,
             native_layout=normalized_layout.native_spatial_layout,
         ))
+        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+
+        install_checkpoint_spatial_contract(
+            engine,
+            normalized_layout.native_spatial_layout,
+            transition_ratios=normalized_layout.transition_ratios,
+        )
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
