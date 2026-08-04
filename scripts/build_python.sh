@@ -14,14 +14,15 @@
 #     scikit-build-core / pybind11 (the SAME stack as the toolchain) instead of a fresh pip build env;
 #   - ends on the runtime-layer environment doctor.
 #
-#   bash scripts/build_python.sh            # build + install into the active env
-#   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
-#   bash scripts/build_python.sh --fresh    # --clean AND `ccache -C`: a true COLD compile (measuring)
-#   bash scripts/build_python.sh --mpi      # distributed MPI + native parallel-HDF5 backend
-#   bash scripts/build_python.sh --wheel-dir /tmp/wheels
+#   bash scripts/build_python.sh --dim 2            # build the exact Dim=2 specialization
+#   POPS_NATIVE_DIM=1 bash scripts/build_python.sh  # the equivalent environment route
+#   bash scripts/build_python.sh --dim 2 --clean    # drop the scikit-build wheel cache first
+#   bash scripts/build_python.sh --dim 2 --fresh    # --clean + ccache -C: a true COLD compile
+#   bash scripts/build_python.sh --dim 3 --mpi      # MPI + native parallel-HDF5, exactly Dim=3
+#   bash scripts/build_python.sh --dim 2 --wheel-dir /tmp/wheels
 #                                           # build, retain, then install that exact wheel
-#   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
-#   bash scripts/build_python.sh -- -e      # pass extra args through to pip (here: editable install)
+#   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh --dim 2  # pin the pool
+#   bash scripts/build_python.sh --dim 2 -- -e  # pass extra args to pip (editable install)
 #
 # NOT `set -u`: `conda activate` references unset variables in its own shell hook.
 set -eo pipefail
@@ -35,26 +36,53 @@ DO_CLEAN=0
 DO_FRESH=0
 WITH_MPI=0
 WHEEL_DIR=""
+CALLER_NATIVE_DIM="${POPS_NATIVE_DIM-}"
+CLI_NATIVE_DIM=""
 EXTRA_PIP=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) DO_CLEAN=1 ;;
     --fresh) DO_CLEAN=1; DO_FRESH=1 ;;
     --mpi)   WITH_MPI=1 ;;
+    --dim)
+      shift
+      [[ $# -gt 0 ]] || { echo "--dim requires 1, 2, or 3" >&2; exit 2; }
+      CLI_NATIVE_DIM="$1"
+      ;;
     --wheel-dir)
       shift
       [[ $# -gt 0 ]] || { echo "--wheel-dir requires a directory" >&2; exit 2; }
       WHEEL_DIR="$1"
       ;;
     -h|--help)
-      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     --) shift; EXTRA_PIP=("$@"); break ;;
-    *) echo "unknown argument: $1 (use --clean | --fresh | --mpi | --wheel-dir DIR | --help, or -- <pip args>)" >&2
+    *) echo "unknown argument: $1 (use --dim N | --clean | --fresh | --mpi | --wheel-dir DIR | --help, or -- <pip args>)" >&2
        exit 2 ;;
   esac
   shift
 done
+
+# A PoPS native module is one immutable compile-time spatial specialization.  Do not silently
+# manufacture a Dim=2 artifact: every build must name Dim=1, 2, or 3 at its outermost entry point.
+if [[ -n "$CLI_NATIVE_DIM" && -n "$CALLER_NATIVE_DIM" \
+      && "$CLI_NATIVE_DIM" != "$CALLER_NATIVE_DIM" ]]; then
+  echo "conflicting native dimensions: --dim=$CLI_NATIVE_DIM but POPS_NATIVE_DIM=$CALLER_NATIVE_DIM" >&2
+  exit 2
+fi
+NATIVE_DIM="${CLI_NATIVE_DIM:-$CALLER_NATIVE_DIM}"
+case "$NATIVE_DIM" in
+  1|2|3) ;;
+  "")
+    echo "native dimension is required: pass --dim 1|2|3 or export POPS_NATIVE_DIM=1|2|3" >&2
+    exit 2
+    ;;
+  *)
+    echo "invalid native dimension '$NATIVE_DIM': expected exactly 1, 2, or 3" >&2
+    exit 2
+    ;;
+esac
 
 # --- conda present + env active ----------------------------------------------------------------------
 if ! pops_load_conda; then
@@ -66,7 +94,9 @@ if ! conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   exit 1
 fi
 conda activate "$ENV_NAME"
+export POPS_NATIVE_DIM="$NATIVE_DIM"
 echo "--- env '$ENV_NAME' active (CONDA_PREFIX=$CONDA_PREFIX) ---"
+echo "native spatial specialization: Dim=$POPS_NATIVE_DIM"
 
 # Conda's macOS OpenMPI wrappers remember the compiler used to build the package, which is not part
 # of this deliberately AppleClang-based environment.  OpenMPI's documented override keeps mpicc,
@@ -157,7 +187,11 @@ cd "$HERE"
 if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
   WHEEL_DIR="$HERE/$WHEEL_DIR"
 fi
-cmake_settings=(-C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+cmake_settings=(
+  -C build-dir="build/{wheel_tag}-dim${POPS_NATIVE_DIM}"
+  -C cmake.define.POPS_NATIVE_DIM="$POPS_NATIVE_DIM"
+  -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool"
+)
 if [[ $WITH_MPI -eq 1 ]]; then
   # Environment seeding applies only to a fresh CMake cache.  These explicit settings switch an
   # existing scikit-build cache to the requested MPI + parallel-HDF5 contract.

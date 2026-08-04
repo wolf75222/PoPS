@@ -72,13 +72,14 @@ Recommended path for the Python module:
 ```bash
 git clone https://github.com/wolf75222/PoPS.git && cd PoPS
 bash scripts/setup_env.sh      # conda env + toolchain
-bash scripts/build_python.sh   # build + install, then pops.doctor()
+bash scripts/build_python.sh --dim 2  # exact Dim=2 build + install, then pops.doctor()
 ```
 
 `scripts/setup_env.sh` creates the conda environment and pins the platform toolchain.
-`scripts/build_python.sh` builds and installs `pops`, exports the discovery variables, and
-finishes with `pops.doctor()`.
-Use `bash scripts/build_python.sh --mpi` for the final distributed artifact; that strict route
+`scripts/build_python.sh` builds and installs one explicit compile-time spatial specialization of
+`pops`, exports the discovery variables, and finishes with `pops.doctor()`. Pass `--dim 1`, `--dim 2`,
+or `--dim 3` (equivalently export `POPS_NATIVE_DIM`); there is no implicit dimensional fallback.
+Use `bash scripts/build_python.sh --dim 2 --mpi` for a distributed Dim=2 artifact; that strict route
 enables both MPI and its native parallel-HDF5 writer and fails if either backend is unavailable.
 
 ### C++ core only
@@ -90,6 +91,10 @@ cmake --preset serial
 cmake --build --preset serial
 ctest --preset serial --output-on-failure
 ```
+
+The checked-in presets explicitly select `POPS_NATIVE_DIM=2`. To build another specialization,
+override it at configure time and use a dimension-specific build directory for the resulting
+artifact, for example `cmake -S . -B build-dim3 -G Ninja -DPOPS_NATIVE_DIM=3`.
 
 The Ninja build already uses all available cores. Pin it to fewer jobs on a constrained machine
 with `cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
