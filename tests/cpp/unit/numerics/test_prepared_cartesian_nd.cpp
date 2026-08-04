@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
-#include <pops/numerics/spatial/operators/prepared_cartesian_nd.hpp>
+#include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -13,166 +15,298 @@ using namespace pops;
 
 namespace {
 
-template <int Dimension>
-struct LinearTransport {
-  using State = StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-
-  std::array<Real, Dimension> velocity{};
-
-  template <class Providers>
-  POPS_HD State flux(const State& state, const Providers&, int axis) const {
-    return State{velocity[axis] * state[0]};
-  }
-
-  template <class Providers>
-  POPS_HD Real max_wave_speed(const State&, const Providers&, int axis) const {
-    return velocity[axis] < Real(0) ? -velocity[axis] : velocity[axis];
-  }
-};
-
-template <std::size_t Dimension>
-std::size_t linear_index(const std::array<int, Dimension>& index,
-                         const std::array<int, Dimension>& extents) {
-  std::size_t result = 0;
-  std::size_t stride = 1;
-  for (std::size_t axis = 0; axis < Dimension; ++axis) {
-    result += static_cast<std::size_t>(index[axis]) * stride;
-    stride *= static_cast<std::size_t>(extents[axis]);
-  }
-  return result;
-}
-
-template <std::size_t Dimension, class Function>
-void for_each_index(const std::array<int, Dimension>& extents, Function&& function) {
-  std::size_t cells = 1;
-  for (const int extent : extents)
-    cells *= static_cast<std::size_t>(extent);
-  for (std::size_t linear = 0; linear < cells; ++linear) {
-    std::size_t remaining = linear;
-    std::array<int, Dimension> index{};
-    for (std::size_t axis = 0; axis < Dimension; ++axis) {
-      index[axis] = static_cast<int>(remaining % static_cast<std::size_t>(extents[axis]));
-      remaining /= static_cast<std::size_t>(extents[axis]);
+template <int Dim, class Function>
+void for_each_host_index(const Box<Dim>& box, Function&& function) {
+  for (std::int64_t linear = 0; linear < box.numPts(); ++linear) {
+    std::int64_t remaining = linear;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = box.lo[axis] + static_cast<int>(remaining % box.length(axis));
+      remaining /= box.length(axis);
     }
     function(index);
   }
 }
 
+template <int Dim>
+std::size_t host_offset(const Box<Dim>& storage, const Index<Dim>& index, int component) {
+  std::int64_t linear = 0;
+  std::int64_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    linear += static_cast<std::int64_t>(index[axis] - storage.lo[axis]) * stride;
+    stride *= storage.length(axis);
+  }
+  return static_cast<std::size_t>(component * storage.numPts() + linear);
+}
+
+template <int Dim>
+Index<Dim> periodic_image(Index<Dim> index, const Box<Dim>& valid) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    const int extent = static_cast<int>(valid.length(axis));
+    while (index[axis] < valid.lo[axis])
+      index[axis] += extent;
+    while (index[axis] > valid.hi[axis])
+      index[axis] -= extent;
+  }
+  return index;
+}
+
+template <int Dim, class Function>
+void fill_periodic(Fab<Dim>& field, Function&& value) {
+  auto host = field.create_host_mirror();
+  const Box<Dim> storage = field.grown_box();
+  for_each_host_index(storage, [&](const Index<Dim>& index) {
+    const Index<Dim> wrapped = periodic_image(index, field.box());
+    for (int component = 0; component < field.ncomp(); ++component)
+      host(host_offset(storage, index, component)) = value(wrapped, component);
+  });
+  field.copy_from_host(host);
+}
+
+template <int Dim>
+std::vector<Real> valid_values(const Fab<Dim>& field, int component = 0) {
+  auto host = field.create_host_mirror();
+  field.copy_to_host(host);
+  std::vector<Real> result;
+  result.reserve(static_cast<std::size_t>(field.box().numPts()));
+  for_each_host_index(field.box(), [&](const Index<Dim>& index) {
+    result.push_back(host(host_offset(field.grown_box(), index, component)));
+  });
+  return result;
+}
+
+template <int Dim>
+Geometry<Dim> unit_geometry(const Box<Dim>& domain) {
+  RealVector<Dim> lower{};
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = Real(1 + axis);
+  return Geometry<Dim>::from_bounds(domain, lower, upper);
+}
+
+template <int Dim>
+Extent<Dim> uniform_extent(int value) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+void check_constant_and_conservation(const Extent<Dim>& extents) {
+  const Box<Dim> domain = Box<Dim>::from_extents(extents);
+  RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = axis % 2 == 0 ? Real(0.7 + 0.1 * axis) : Real(-0.4 - 0.1 * axis);
+  const auto geometry = unit_geometry(domain);
+  const auto model = nd::ScalarAdvection<Dim>::prepare(velocity);
+  const auto op = nd::prepare_cartesian_operator<Dim>(geometry, model, VanLeer{}, HLLFlux{});
+
+  Fab<Dim> state(domain, 1, uniform_extent<Dim>(VanLeer::n_ghost));
+  Fab<Dim> residual(domain, 1);
+  fill_periodic(state, [](const Index<Dim>&, int) { return Real(2.5); });
+  op.assemble_residual(state, residual);
+  for (const Real value : valid_values(residual))
+    EXPECT_EQ(value, Real(0));
+
+  constexpr Real two_pi = Real(6.283185307179586476925286766559);
+  fill_periodic(state, [&](const Index<Dim>& index, int) {
+    Real value = Real(0.75);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += (Real(0.1) + Real(0.03) * axis) *
+               std::sin(two_pi * (Real(index[axis] - domain.lo[axis]) + Real(0.5)) /
+                        static_cast<Real>(domain.length(axis)));
+    return value;
+  });
+  op.assemble_residual(state, residual);
+  const auto values = valid_values(residual);
+  EXPECT_TRUE(std::any_of(values.begin(), values.end(),
+                          [](Real value) { return std::abs(value) > Real(1e-8); }));
+  const Real volume = op.metric().cell_measure(domain.lo);
+  EXPECT_NEAR(std::accumulate(values.begin(), values.end(), Real(0)) * volume, Real(0),
+              Real(4e-13));
+}
+
+template <int Axis, int Dim>
+void check_constant_face_axis(const nd::FaceField<Dim>& fluxes,
+                              const std::array<Real, Dim>& expected) {
+  const auto& field = fluxes.template field<Axis>();
+  for (const Real value : valid_values(field))
+    EXPECT_NEAR(value, expected[Axis], Real(4e-14));
+  if constexpr (Axis + 1 < Dim)
+    check_constant_face_axis<Axis + 1>(fluxes, expected);
+}
+
 }  // namespace
 
 TEST(test_prepared_cartesian_nd, one_dimensional_kernel_preserves_constant_state_and_conservation) {
-  constexpr int dimension = 1;
-  const std::array<int, dimension> extents{32};
-  const std::array<Real, dimension> lower{Real(-1)};
-  const std::array<Real, dimension> upper{Real(2)};
-  const PreparedPeriodicCartesianResidual<dimension, LinearTransport<dimension>, VanLeer,
-                                          RusanovFlux>
-      residual(extents, lower, upper, LinearTransport<dimension>{{Real(0.7)}});
-
-  EXPECT_TRUE(residual.capabilities().supports(
-      {1, SpatialProviderGeometry::Cartesian, SpatialProviderOperation::Residual}));
-  EXPECT_FALSE(residual.capabilities().supports(
-      {2, SpatialProviderGeometry::Cartesian, SpatialProviderOperation::Residual}));
-
-  std::vector<Real> constant(residual.scalar_count(), Real(2.5));
-  std::vector<Real> output(residual.scalar_count(), Real(99));
-  residual.execute(constant, output);
-  EXPECT_TRUE(
-      std::all_of(output.begin(), output.end(), [](Real value) { return value == Real(0); }));
-
-  constexpr Real two_pi = Real(6.283185307179586476925286766559);
-  std::vector<Real> wave(residual.scalar_count());
-  for (int i = 0; i < extents[0]; ++i)
-    wave[static_cast<std::size_t>(i)] =
-        Real(1) + Real(0.2) * std::sin(two_pi * (Real(i) + Real(0.5)) / Real(extents[0]));
-  residual.execute(wave, output);
-  EXPECT_TRUE(std::any_of(output.begin(), output.end(),
-                          [](Real value) { return std::abs(value) > Real(1e-8); }));
-  const Real integral =
-      std::accumulate(output.begin(), output.end(), Real(0)) * residual.metric().cell_measure;
-  EXPECT_NEAR(integral, Real(0), Real(2e-14));
+  check_constant_and_conservation<1>(Extent<1>{32});
 }
 
 TEST(test_prepared_cartesian_nd,
      three_dimensional_kernel_is_axis_permutation_invariant_and_conservative) {
-  constexpr int dimension = 3;
-  constexpr std::array<int, dimension> permutation{2, 0, 1};
-  const std::array<int, dimension> extents{8, 7, 6};
-  const std::array<Real, dimension> lower{Real(-1), Real(2), Real(0.5)};
-  const std::array<Real, dimension> upper{Real(3), Real(5), Real(2.5)};
-  const std::array<Real, dimension> velocity{Real(0.7), Real(-0.4), Real(0.25)};
-  const PreparedPeriodicCartesianResidual<dimension, LinearTransport<dimension>, VanLeer,
-                                          RusanovFlux>
-      original(extents, lower, upper, LinearTransport<dimension>{velocity});
+  check_constant_and_conservation<3>(Extent<3>{8, 7, 6});
 
-  std::array<int, dimension> permuted_extents{};
-  std::array<Real, dimension> permuted_lower{};
-  std::array<Real, dimension> permuted_upper{};
-  std::array<Real, dimension> permuted_velocity{};
-  for (int axis = 0; axis < dimension; ++axis) {
-    permuted_extents[axis] = extents[permutation[axis]];
-    permuted_lower[axis] = lower[permutation[axis]];
-    permuted_upper[axis] = upper[permutation[axis]];
-    permuted_velocity[axis] = velocity[permutation[axis]];
-  }
-  const PreparedPeriodicCartesianResidual<dimension, LinearTransport<dimension>, VanLeer,
-                                          RusanovFlux>
-      permuted(permuted_extents, permuted_lower, permuted_upper,
-               LinearTransport<dimension>{permuted_velocity});
+  const Box<3> xyz = Box<3>::from_extents(Extent<3>{8, 7, 6});
+  const Box<3> zyx = Box<3>::from_extents(Extent<3>{6, 7, 8});
+  const auto xyz_geometry =
+      Geometry<3>::from_bounds(xyz, RealVector<3>{}, RealVector<3>{Real(1), Real(2), Real(3)});
+  const auto zyx_geometry =
+      Geometry<3>::from_bounds(zyx, RealVector<3>{}, RealVector<3>{Real(3), Real(2), Real(1)});
+  const auto xyz_model =
+      nd::ScalarAdvection<3>::prepare(RealVector<3>{Real(0.7), Real(-0.5), Real(0.9)});
+  const auto zyx_model =
+      nd::ScalarAdvection<3>::prepare(RealVector<3>{Real(0.9), Real(-0.5), Real(0.7)});
+  const auto xyz_operator =
+      nd::prepare_cartesian_operator<3>(xyz_geometry, xyz_model, VanLeer{}, HLLFlux{});
+  const auto zyx_operator =
+      nd::prepare_cartesian_operator<3>(zyx_geometry, zyx_model, VanLeer{}, HLLFlux{});
 
-  std::vector<Real> state(original.scalar_count());
-  std::vector<Real> permuted_state(permuted.scalar_count());
+  Fab<3> xyz_state(xyz, 1, uniform_extent<3>(VanLeer::n_ghost));
+  Fab<3> zyx_state(zyx, 1, uniform_extent<3>(VanLeer::n_ghost));
   constexpr Real two_pi = Real(6.283185307179586476925286766559);
-  for_each_index<dimension>(extents, [&](const auto& index) {
-    Real value = Real(0.75);
-    for (int axis = 0; axis < dimension; ++axis)
-      value += (Real(0.1) + Real(0.05) * Real(axis)) *
-               std::sin(two_pi * (Real(index[axis]) + Real(0.5)) / Real(extents[axis]));
-    state[linear_index(index, extents)] = value;
-    std::array<int, dimension> mapped{};
-    for (int axis = 0; axis < dimension; ++axis)
-      mapped[axis] = index[permutation[axis]];
-    permuted_state[linear_index(mapped, permuted_extents)] = value;
+  const auto xyz_value = [&](const Index<3>& index) {
+    return Real(0.9) +
+           Real(0.13) * std::sin(two_pi * (Real(index[0]) + Real(0.5)) / Real(xyz.length(0))) +
+           Real(0.07) * std::cos(two_pi * (Real(index[1]) + Real(0.5)) / Real(xyz.length(1))) +
+           Real(0.04) * std::sin(two_pi * (Real(index[2]) + Real(0.5)) / Real(xyz.length(2)));
+  };
+  fill_periodic(xyz_state, [&](const Index<3>& index, int) { return xyz_value(index); });
+  fill_periodic(zyx_state, [&](const Index<3>& index, int) {
+    return xyz_value(Index<3>{index[2], index[1], index[0]});
   });
 
-  std::vector<Real> output(original.scalar_count());
-  std::vector<Real> permuted_output(permuted.scalar_count());
-  original.execute(state, output);
-  permuted.execute(permuted_state, permuted_output);
-  for_each_index<dimension>(extents, [&](const auto& index) {
-    std::array<int, dimension> mapped{};
-    for (int axis = 0; axis < dimension; ++axis)
-      mapped[axis] = index[permutation[axis]];
-    EXPECT_NEAR(output[linear_index(index, extents)],
-                permuted_output[linear_index(mapped, permuted_extents)], Real(3e-13));
+  Fab<3> xyz_residual(xyz, 1);
+  Fab<3> zyx_residual(zyx, 1);
+  xyz_operator.assemble_residual(xyz_state, xyz_residual);
+  zyx_operator.assemble_residual(zyx_state, zyx_residual);
+  auto xyz_host = xyz_residual.create_host_mirror();
+  auto zyx_host = zyx_residual.create_host_mirror();
+  xyz_residual.copy_to_host(xyz_host);
+  zyx_residual.copy_to_host(zyx_host);
+  for_each_host_index(zyx, [&](const Index<3>& zyx_index) {
+    const Index<3> xyz_index{zyx_index[2], zyx_index[1], zyx_index[0]};
+    EXPECT_NEAR(xyz_host(host_offset(xyz_residual.grown_box(), xyz_index, 0)),
+                zyx_host(host_offset(zyx_residual.grown_box(), zyx_index, 0)), Real(3e-12));
   });
-
-  const Real integral =
-      std::accumulate(output.begin(), output.end(), Real(0)) * original.metric().cell_measure;
-  EXPECT_NEAR(integral, Real(0), Real(2e-13));
-
-  std::fill(state.begin(), state.end(), Real(1.25));
-  original.execute(state, output);
-  EXPECT_TRUE(
-      std::all_of(output.begin(), output.end(), [](Real value) { return value == Real(0); }));
 }
 
-TEST(test_prepared_cartesian_nd, preparation_refuses_invalid_metric_and_buffer_contracts) {
-  using Residual = PreparedPeriodicCartesianResidual<3, LinearTransport<3>, VanLeer, RusanovFlux>;
-  EXPECT_THROW((Residual({2, 4, 4}, {Real(0), Real(0), Real(0)}, {Real(1), Real(1), Real(1)},
-                         LinearTransport<3>{{Real(1), Real(1), Real(1)}})),
-               std::invalid_argument);
-  EXPECT_THROW((Residual({4, 4, 4}, {Real(0), Real(0), Real(0)}, {Real(1), Real(0), Real(1)},
-                         LinearTransport<3>{{Real(1), Real(1), Real(1)}})),
-               std::invalid_argument);
+TEST(test_prepared_cartesian_nd, one_face_field_carries_every_compile_time_axis) {
+  const Box<3> domain = Box<3>::from_extents(Extent<3>{4, 5, 6});
+  const auto geometry =
+      Geometry<3>::from_bounds(domain, RealVector<3>{}, RealVector<3>{Real(1), Real(1), Real(1)});
+  const auto model =
+      nd::ScalarAdvection<3>::prepare(RealVector<3>{Real(0.5), Real(0.5), Real(0.5)});
+  const auto op = nd::prepare_cartesian_operator<3>(geometry, model);
+  Fab<3> state(domain, 1, uniform_extent<3>(NoSlope::n_ghost));
+  fill_periodic(state, [](const Index<3>&, int) { return Real(2); });
 
-  Residual residual({4, 4, 4}, {Real(0), Real(0), Real(0)}, {Real(1), Real(1), Real(1)},
-                    LinearTransport<3>{{Real(1), Real(1), Real(1)}});
-  std::vector<Real> state(residual.scalar_count(), Real(1));
-  EXPECT_THROW(residual.execute(state, std::span<Real>(state.data(), state.size())),
-               std::invalid_argument);
-  std::vector<Real> short_output(residual.scalar_count() - 1);
-  EXPECT_THROW(residual.execute(state, short_output), std::invalid_argument);
+  nd::FaceField<3> fluxes(domain, 1);
+  op.materialize_face_fluxes(state, fluxes);
+  check_constant_face_axis<0>(
+      fluxes, std::array<Real, 3>{Real(1) / Real(30), Real(1) / Real(24), Real(1) / Real(20)});
+}
+
+TEST(test_prepared_cartesian_nd, prepared_face_field_is_the_public_boundary_to_divergence_seam) {
+  const Box<1> domain = Box<1>::from_extents(Extent<1>{4});
+  const auto model = nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)});
+  const auto op = nd::prepare_cartesian_operator<1>(unit_geometry(domain), model);
+  nd::FaceField<1> fluxes(domain, 1);
+  Fab<1>& faces = fluxes.field<0>();
+  auto face_host = faces.create_host_mirror();
+  faces.copy_to_host(face_host);
+  for_each_host_index(faces.box(), [&](const Index<1>& face) {
+    face_host(host_offset(faces.grown_box(), face, 0)) = Real(face[0]);
+  });
+  faces.copy_from_host(face_host);
+
+  Fab<1> residual(domain, 1);
+  op.assemble_residual_from_face_fluxes(fluxes, residual);
+  for (const Real value : valid_values(residual))
+    EXPECT_EQ(value, Real(-4));
+
+  residual.set_val(Real(9));
+  faces.copy_to_host(face_host);
+  face_host(host_offset(faces.grown_box(), Index<1>{1}, 0)) =
+      std::numeric_limits<Real>::quiet_NaN();
+  faces.copy_from_host(face_host);
+  EXPECT_THROW(op.assemble_residual_from_face_fluxes(fluxes, residual), std::runtime_error);
+  for (const Real value : valid_values(residual))
+    EXPECT_EQ(value, Real(9));
+}
+
+TEST(test_prepared_cartesian_nd, primitive_euler_hllc_uses_the_same_three_dimensional_path) {
+  using Model = nd::IdealGasEuler<3>;
+  using Schema = Model::Schema;
+  const Box<3> domain = Box<3>::from_extents(Extent<3>{4, 4, 4});
+  const auto geometry = unit_geometry(domain);
+  const auto model = Model::prepare(Real(1.4));
+  typename Model::Primitive primitive{};
+  primitive[Schema::density] = Real(1.2);
+  primitive[Schema::template velocity<0>] = Real(0.3);
+  primitive[Schema::template velocity<1>] = Real(-0.2);
+  primitive[Schema::template velocity<2>] = Real(0.1);
+  primitive[Schema::pressure] = Real(0.9);
+  const auto conservative = model.make_conservative(primitive);
+  ASSERT_TRUE(conservative.succeeded());
+
+  RealVector<3> lengths{};
+  for (int axis = 0; axis < 3; ++axis)
+    lengths[axis] = geometry.upper()[axis] - geometry.lower()[axis];
+  const auto metric =
+      prepare_metric_provider(domain, CartesianCoordinateMap<3>::make(geometry.lower(), lengths));
+  const nd::PreparedCartesianOperator<3, Model, decltype(metric), VanLeer, HLLCFlux,
+                                      nd::ReconstructionVariables::Primitive>
+      op(model, metric);
+  Fab<3> state(domain, Model::n_vars, uniform_extent<3>(VanLeer::n_ghost));
+  fill_periodic(state,
+                [&](const Index<3>&, int component) { return conservative.value[component]; });
+  Fab<3> residual(domain, Model::n_vars);
+  op.assemble_residual(state, residual);
+  for (int component = 0; component < Model::n_vars; ++component)
+    for (const Real value : valid_values(residual, component))
+      EXPECT_NEAR(value, Real(0), Real(8e-14));
+}
+
+TEST(test_prepared_cartesian_nd, preflight_failure_leaves_the_residual_unpublished) {
+  const Box<2> domain = Box<2>::from_extents(Extent<2>{4, 4});
+  const auto geometry = unit_geometry(domain);
+  const auto model = nd::ScalarAdvection<2>::prepare(RealVector<2>{Real(1), Real(1)});
+  const auto op = nd::prepare_cartesian_operator<2>(geometry, model, Weno5{});
+  Fab<2> state(domain, 1, Extent<2>{2, 2});
+  Fab<2> residual(domain, 1);
+  residual.set_val(Real(7));
+  EXPECT_THROW(op.assemble_residual(state, residual), std::invalid_argument);
+  for (const Real value : valid_values(residual))
+    EXPECT_EQ(value, Real(7));
+
+  Fab<2> alias(domain, 1, Extent<2>{Weno5::n_ghost, Weno5::n_ghost});
+  EXPECT_THROW(op.assemble_residual(alias, alias), std::invalid_argument);
+}
+
+TEST(test_prepared_cartesian_nd, multi_patch_failure_is_transactional_before_first_publication) {
+  const Box<1> domain{Index<1>{0}, Index<1>{7}};
+  const Box<1> first{Index<1>{0}, Index<1>{3}};
+  const Box<1> second{Index<1>{4}, Index<1>{7}};
+  const mesh::BoxArray<1> layout(std::vector<Box<1>>{first, second});
+  const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const auto distribution = mesh::Distribution<1>::replicated(layout, ranks);
+  MultiFab<1> state(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
+  MultiFab<1> residual(layout, distribution, Index<1>{0}, 1, Extent<1>{0});
+  state.set_val(Real(1));
+  residual.set_val(Real(7));
+
+  Fab<1>& invalid_patch = state.fab(1);
+  auto invalid_host = invalid_patch.create_host_mirror();
+  invalid_patch.copy_to_host(invalid_host);
+  invalid_host(host_offset(invalid_patch.grown_box(), Index<1>{4}, 0)) =
+      std::numeric_limits<Real>::quiet_NaN();
+  invalid_patch.copy_from_host(invalid_host);
+
+  const auto model = nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)});
+  const auto op = nd::prepare_cartesian_operator<1>(unit_geometry(domain), model);
+  EXPECT_THROW(op.assemble_residual(state, residual), std::runtime_error);
+  for (std::size_t local = 0; local < residual.local_size(); ++local)
+    for (const Real value : valid_values(residual.fab(local)))
+      EXPECT_EQ(value, Real(7));
 }

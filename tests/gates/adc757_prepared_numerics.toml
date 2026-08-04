@@ -86,13 +86,13 @@ test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
 requirement = "prepared_boundary_publication"
 polarity = "positive"
 target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.evaluates_prepared_coordinate_time_inflow_on_device_without_hot_path_allocation$"
+test_regex = "^test_prepared_boundary_plan\\.one_dimensional_fixed_and_extrapolated_halos_are_exact$"
 
 [[check]]
 requirement = "prepared_boundary_publication"
 polarity = "refusal"
 target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
+test_regex = "^test_prepared_boundary_plan\\.analytic_boundary_without_nd_coordinate_provider_is_refused$"
 
 [[check]]
 requirement = "post_riemann_boundary_flux"
@@ -316,13 +316,13 @@ test_regex = "^test_amr_history_ring\\.RegridRecoveryRefusalRollsBackRemappedHis
 requirement = "physical_boundary_trace_recovery_publication"
 polarity = "positive"
 target = "test_prepared_boundary_plan"
-test_regex = "^PreparedBoundaryTraceRecovery\\.accepts_admissible_physical_traces_without_hot_path_allocation$"
+test_regex = "^test_prepared_boundary_plan\\.physical_fill_preflight_token_commits_one_complete_builtin_transaction$"
 
 [[check]]
 requirement = "physical_boundary_trace_recovery_publication"
 polarity = "refusal"
 target = "test_prepared_boundary_plan"
-test_regex = "^PreparedBoundaryTraceRecovery\\.rejects_inadmissible_traces_and_restores_complete_ghost_transaction$"
+test_regex = "^test_prepared_boundary_plan\\.characteristic_boundary_requires_model_qualification_before_physical_mutation$"
 
 [[check]]
 requirement = "terminal_source_recovery_publication"
@@ -452,7 +452,7 @@ test_regex = "^ProgramRuntime\\.EmbeddedBoundaryCapabilitiesRejectUnsupportedPro
 requirement = "characteristic_boundary_geometry_matrix"
 polarity = "positive"
 target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.executes_prepared_model_characteristics_without_scalar_fallback$"
+test_regex = "^test_prepared_boundary_plan\\.characteristic_metadata_preserves_the_compile_time_rank$"
 
 [[check]]
 requirement = "characteristic_boundary_geometry_matrix"
