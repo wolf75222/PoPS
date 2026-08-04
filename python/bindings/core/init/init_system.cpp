@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
 #include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
+#include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -410,7 +411,13 @@ void bind_system_program(py::class_<System>& cls) {
 
 // Checkpoint/restart seams: multistep history rings + scheduler value-cache (gathered/restored directly).
 void bind_system_checkpoint(py::class_<System>& cls) {
-  cls
+  cls.def(
+         "_prepare_checkpoint_spatial_contract",
+         [](const System&, const py::dict& data) {
+           return pops::python::detail::prepare_checkpoint_spatial_contract<kNativeDimension>(data);
+         },
+         py::arg("contract"),
+         "Validate the exact rank-generic checkpoint schema before restart state work.")
       // Multistep history checkpoint/restart seam (ADC-406b): the facade gathers/restores the
       // System-owned rings DIRECTLY (no .so checkpoint_extra ABI). history_global mirrors state_global
       // (collective gather, component-major); restore_history mirrors set_state (owner-rank scatter).

@@ -11,6 +11,7 @@ from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
 from tests.python.support.native_execution_context import artifact_execution_context
 from pops.codegen._plans import BindInputs, InstallPlan
 from pops.identity import make_identity
+from pops.mesh._layout_plan_contracts import NativeSpatialLayout
 from pops.runtime._bound_snapshot import (
     BoundSnapshot,
     _require_exact_install_inputs,
@@ -23,11 +24,35 @@ from pops.runtime._checkpoint_manifest import (
     inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
 )
+from pops.runtime._checkpoint_spatial import (
+    CheckpointSpatialContract,
+    add_checkpoint_spatial_contract,
+    authenticate_checkpoint_spatial_contract,
+    cell_count,
+    install_checkpoint_spatial_contract,
+    inspect_checkpoint_spatial_contract,
+)
 from pops.runtime._run_manifest import RunManifest
 from pops.runtime._step_strategy import run_control_payload
 from pops.runtime._amr_system import AmrSystem
 from pops.runtime._system import System
 from pops.time import AdaptiveCFL, FixedDt, StepTransactionPlan
+
+
+def _native_spatial_layout(dimension, shape):
+    axes = tuple("xyz"[:dimension])
+    return NativeSpatialLayout(
+        layout_id="case:test/layout:grid",
+        coordinate_system="pops://coordinates/cartesian-nd@1",
+        cell_measure="pops://measures/cartesian-cell@1",
+        axis_names=axes,
+        shape=shape,
+        lower=tuple(-float(axis + 1) for axis in range(dimension)),
+        upper=tuple(float(extent - axis - 1) for axis, extent in enumerate(shape)),
+        periodicity=tuple(axis % 2 == 0 for axis in range(dimension)),
+        centering="cell",
+        decomposition={"kind": "single_box", "shape": list(shape)},
+    )
 
 
 def _run_control(cfl=0.4):
@@ -357,6 +382,108 @@ def test_internal_engines_do_not_reintroduce_public_strategy_controls():
         assert "cfl" not in signature.parameters
         assert signature.parameters["controls"].default is None
         assert signature.parameters["max_steps"].default is inspect.Parameter.empty
+
+
+@pytest.mark.parametrize(
+    ("shape", "ratios", "expected_cells"),
+    [
+        ((7,), ((3,),), 7),
+        ((3, 4), ((2, 3),), 12),
+        ((2, 3, 4), ((2, 1, 4),), 24),
+    ],
+)
+def test_checkpoint_spatial_contract_is_exact_and_rank_generic(shape, ratios, expected_cells):
+    native = _native_spatial_layout(len(shape), shape)
+    contract = CheckpointSpatialContract.from_native_layout(
+        native, transition_ratios=ratios
+    )
+
+    assert contract.dimension == len(shape)
+    assert contract.shape == shape
+    assert all(len(row) == contract.dimension for row in contract.refinement_ratios)
+    assert cell_count(contract.shape) == expected_cells
+    assert contract.cells_at_level(1) == expected_cells * cell_count(ratios[0])
+    assert CheckpointSpatialContract.from_data(contract.to_data()) == contract
+
+
+def test_checkpoint_spatial_dimension_mismatch_is_refused_before_restart_mutation():
+    current_owner = SimpleNamespace()
+    recorded_owner = SimpleNamespace()
+    install_checkpoint_spatial_contract(
+        current_owner, _native_spatial_layout(2, (3, 4)), transition_ratios=((2, 3),)
+    )
+    recorded = install_checkpoint_spatial_contract(
+        recorded_owner,
+        _native_spatial_layout(3, (3, 4, 5)),
+        transition_ratios=((2, 3, 4),),
+    )
+    payload = {}
+    add_checkpoint_spatial_contract(payload, recorded)
+    mutation_started = False
+
+    with pytest.raises(ValueError, match="dimension 3 does not match native dimension 2"):
+        authenticate_checkpoint_spatial_contract(current_owner, payload)
+        mutation_started = True
+    assert mutation_started is False
+
+
+def test_checkpoint_spatial_schema_refuses_padding_and_parallel_2d_keys():
+    native = _native_spatial_layout(3, (2, 3, 4))
+    contract = CheckpointSpatialContract.from_native_layout(
+        native, transition_ratios=((2, 3, 4),)
+    )
+    forged_schema = contract.to_data()
+    forged_schema["schema_version"] = True
+    with pytest.raises(TypeError, match="schema_version must be an exact integer"):
+        CheckpointSpatialContract.from_data(forged_schema)
+
+    data = contract.to_data()
+    data["shape"].append(1)
+    with pytest.raises(ValueError, match="shape length"):
+        CheckpointSpatialContract.from_data(data)
+
+    payload = {}
+    add_checkpoint_spatial_contract(payload, contract)
+    payload["nx"] = 2
+    with pytest.raises(ValueError, match="forbidden legacy spatial keys"):
+        inspect_checkpoint_spatial_contract(payload)
+
+
+def test_checkpoint_install_expands_normalized_isotropic_ratios_to_exact_dim_vectors():
+    native = _native_spatial_layout(3, (2, 3, 4))
+    contract = CheckpointSpatialContract.from_native_layout(
+        native, transition_ratios=(2, 3)
+    )
+
+    assert contract.refinement_ratios == ((2, 2, 2), (3, 3, 3))
+
+
+def test_checkpoint_install_requires_native_products_to_match_before_publishing_authority():
+    calls = []
+
+    class Native:
+        def _prepare_checkpoint_spatial_contract(self, data):
+            calls.append(data)
+            return [24, 192]
+
+    owner = SimpleNamespace(_s=Native())
+    contract = install_checkpoint_spatial_contract(
+        owner,
+        _native_spatial_layout(3, (2, 3, 4)),
+        transition_ratios=((2, 1, 4),),
+    )
+    assert calls == [contract.to_data()]
+
+    owner = SimpleNamespace(
+        _s=SimpleNamespace(_prepare_checkpoint_spatial_contract=lambda _data: [24, 193])
+    )
+    with pytest.raises(RuntimeError, match="products differ"):
+        install_checkpoint_spatial_contract(
+            owner,
+            _native_spatial_layout(3, (2, 3, 4)),
+            transition_ratios=((2, 1, 4),),
+        )
+    assert not hasattr(owner, "_checkpoint_spatial_contract")
 
 
 def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(monkeypatch):

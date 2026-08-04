@@ -273,7 +273,7 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the authenticated AMR v7 accepted-state envelope: exact recorded patch geometry, every
+    Surfaces the authenticated AMR v8 accepted-state envelope: exact recorded patch geometry, every
     block and level, field/history state, runtime-owned tagging hysteresis, regrid metadata, rational
     clocks and transfer-plan provenance. Owner ranks remain exact for bit-identical replay; the
     explicitly non-bit-identical route may rematerialize ownership without changing the recorded
@@ -299,7 +299,7 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v7 envelope)" % head]
+        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v8 envelope)" % head]
         lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")

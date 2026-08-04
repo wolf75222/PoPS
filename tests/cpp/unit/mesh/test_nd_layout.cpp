@@ -3,6 +3,7 @@
 #include <pops/mesh/nd_proof/box_array.hpp>
 #include <pops/mesh/nd_proof/box_hash.hpp>
 #include <pops/mesh/nd_proof/rank_space.hpp>
+#include <pops/runtime/checkpoint/spatial_contract.hpp>
 
 #include <algorithm>
 #include <array>
@@ -25,9 +26,31 @@ using pops::mesh::nd_proof::BinCoordinateHash;
 using pops::mesh::nd_proof::ExactCellCount;
 using pops::mesh::nd_proof::RankSpace;
 using pops::mesh::nd_proof::suggest_bin;
+using pops::runtime::checkpoint::EncodedSpatialContract;
+using pops::runtime::checkpoint::SpatialContract;
+using pops::runtime::checkpoint::decode_spatial_contract;
+using pops::runtime::checkpoint::encode_spatial_contract;
+using pops::runtime::checkpoint::prepare_spatial_restart;
 
 constexpr BoxHashBudget kHashBudget{128, 128, 256};
 constexpr BoxArrayValidationBudget kTilingBudget{128, 4096};
+
+template <int Dim>
+SpatialContract<Dim> checkpoint_contract(const std::array<std::int64_t, Dim>& shape,
+                                         const std::array<int, Dim>& ratio) {
+  SpatialContract<Dim> result;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto index = static_cast<std::size_t>(axis);
+    result.shape[axis] = shape[index];
+    result.lower[index] = -static_cast<double>(axis + 1);
+    result.upper[index] = result.lower[index] + static_cast<double>(shape[index]);
+    result.periodicity[index] = axis % 2 == 0;
+  }
+  result.refinement_ratios.emplace_back(ratio);
+  result.native_layout_identity = "native-spatial-layout:1:sha256:native";
+  result.spatial_identity = "checkpoint-spatial-layout:1:sha256:checkpoint";
+  return result;
+}
 
 template <int Dim>
 void expect_hash_superset(const BoxArray<Dim>& boxes, const BoxHash<Dim>& hash,
@@ -40,6 +63,50 @@ void expect_hash_superset(const BoxArray<Dim>& boxes, const BoxHash<Dim>& hash,
       if (!query.intersect(boxes[index]).empty())
         EXPECT_NE(std::find(candidates.begin(), candidates.end(), index), candidates.end());
   }
+}
+
+TEST(test_nd_layout, checkpoint_spatial_schema_round_trips_exact_1d_2d_and_3d_vectors) {
+  const auto line = checkpoint_contract<1>({7}, {3});
+  const auto plane = checkpoint_contract<2>({3, 4}, {2, 3});
+  const auto volume = checkpoint_contract<3>({2, 3, 4}, {2, 1, 4});
+
+  const auto encoded_line = encode_spatial_contract(line);
+  const auto encoded_plane = encode_spatial_contract(plane);
+  const auto encoded_volume = encode_spatial_contract(volume);
+  EXPECT_EQ(encoded_line.shape.size(), 1U);
+  EXPECT_EQ(encoded_plane.refinement_ratios.at(0).size(), 2U);
+  EXPECT_EQ(encoded_volume.lower.size(), 3U);
+  EXPECT_EQ(decode_spatial_contract<1>(encoded_line), line);
+  EXPECT_EQ(decode_spatial_contract<2>(encoded_plane), plane);
+  EXPECT_EQ(decode_spatial_contract<3>(encoded_volume), volume);
+  EXPECT_EQ(line.cell_count(), 7);
+  EXPECT_EQ(plane.cell_count(), 12);
+  EXPECT_EQ(volume.cell_count(), 24);
+  EXPECT_EQ(plane.shape_at_level(1), (Extent<2>{6, 12}));
+  EXPECT_EQ(volume.shape_at_level(1), (Extent<3>{4, 3, 16}));
+}
+
+TEST(test_nd_layout, checkpoint_restart_refuses_schema_dimension_and_layout_before_state_work) {
+  const auto current = checkpoint_contract<2>({3, 4}, {2, 3});
+  auto encoded = encode_spatial_contract(current);
+  bool state_allocation_started = false;
+
+  encoded.dimension = 3;
+  EXPECT_THROW(
+      {
+        const auto prepared = prepare_spatial_restart<2>(encoded, current);
+        state_allocation_started = prepared.cell_count() > 0;
+      },
+      std::invalid_argument);
+  EXPECT_FALSE(state_allocation_started);
+
+  encoded = encode_spatial_contract(current);
+  encoded.schema_version += 1;
+  EXPECT_THROW((void)prepare_spatial_restart<2>(encoded, current), std::invalid_argument);
+
+  encoded = encode_spatial_contract(current);
+  encoded.shape[1] += 1;
+  EXPECT_THROW((void)prepare_spatial_restart<2>(encoded, current), std::invalid_argument);
 }
 
 TEST(test_nd_layout, rank_spaces_support_anisotropic_1d_2d_and_3d_extents) {

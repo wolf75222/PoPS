@@ -104,6 +104,7 @@ def preflight_uniform_restart(payload: Any) -> None:
     required = {
         "t",
         "macro_step",
+        "pops_spatial_contract",
         "program_hash",
         "history_names",
         "cache_nodes",

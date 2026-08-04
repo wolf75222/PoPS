@@ -1237,8 +1237,16 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     for row in layouts.rows:
         layout_id = row.handle.qualified_id
         engine = System(configs[layout_id])
+        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+
+        normalized_layout = layouts.plan.normalized(row.handle)
+        install_checkpoint_spatial_contract(
+            engine,
+            normalized_layout.native_spatial_layout,
+            transition_ratios=normalized_layout.transition_ratios,
+        )
         cast(Any, engine)._execution_context = plan.execution_context
-        install_uniform_embedded_boundary(engine, layouts.plan.normalized(row.handle))
+        install_uniform_embedded_boundary(engine, normalized_layout)
         selected = {
             name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
         }

@@ -141,7 +141,7 @@ Offline envelope inspection authenticates only the integrity of a canonical chec
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
 identities, temporal state, consumer cursors, and field-provider state. The explicit
 `pops.codegen.checkpoint_migration` route can migrate exactly that frozen, store-all Uniform v2
-schema only when the caller supplies both a complete authenticated current-v5 authority checkpoint
+schema only when the caller supplies both a complete authenticated current-v6 authority checkpoint
 and a reviewed mapping. The mapping pins the source bytes, source ABI and Program hash, the
 authority restart and target lifecycle/ABI/Program identities, every block/component/history
 correspondence, and the closed set of current metadata inherited from the authority. The supported

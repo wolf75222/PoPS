@@ -292,11 +292,14 @@ Supported native routes include:
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v5 for Uniform and v7 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v6 for Uniform and v8 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
-  authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
-  and authenticates that file once on rank
+  authority is resolved into the compiled plan, including the builtin v5 manual route. It persists
+  the release-versioned rank-generic spatial authority: one authenticated dimension and
+  exact `Dim`-length shape, bounds, periodicity and per-transition refinement-ratio vectors. Restart
+  compares that authority before native hierarchy allocation or state mutation; scalar `nx`/`ny`
+  compatibility fields are not a runtime route. Restart reads and authenticates that file once on rank
   zero, broadcasts the exact bytes through the installed `ExecutionContext` communicator, preflights
   every rank before mutation, and keeps a rollback snapshot until apply/commit consensus. Multi-layout
   child payloads are decoded and replayed in memory without shared child files. AMR preserves

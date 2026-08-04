@@ -62,6 +62,10 @@ class _SystemIO(_System):
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.identity import make_identity
         from pops.output._checkpoint_collective import canonical_checkpoint_path
+        from pops.runtime._checkpoint_spatial import (
+            add_checkpoint_spatial_contract,
+            require_checkpoint_spatial_contract,
+        )
         from pops.runtime._program_cadence_checkpoint import capture_program_cadence
         from pops.runtime._system_io_history import prepare_history_capture
 
@@ -81,12 +85,12 @@ class _SystemIO(_System):
             "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
             "t": time,
             "macro_step": macro_step,
-            "nx": int(self._s.nx()),
-            "ny": int(self._s.ny()),
             "abi_key": abi_key(),
             "blocks": np.array(blocks),
             "temporal_restart_state": np.array(temporal_json),
         }
+        spatial = require_checkpoint_spatial_contract(self)
+        add_checkpoint_spatial_contract(out, spatial)
         out.update(cadence.to_payload())
         block_evidence = []
         for b in blocks:
@@ -181,7 +185,7 @@ class _SystemIO(_System):
                 "runtime_kind": "uniform",
                 "target": str(target),
                 "clock": {"time": time.hex(), "macro_step": macro_step},
-                "grid": {"nx": int(out["nx"]), "ny": int(out["ny"])},
+                "spatial_contract": spatial.to_data(),
                 "abi_key": str(out["abi_key"]),
                 "blocks": block_evidence,
                 "field_slots": list(field_slots),
@@ -276,6 +280,7 @@ class _SystemIO(_System):
             authenticate_checkpoint_payload,
             require_exact_payload_version,
         )
+        from pops.runtime._checkpoint_spatial import authenticate_checkpoint_spatial_contract
         from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
@@ -294,6 +299,7 @@ class _SystemIO(_System):
             expected=UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
             runtime_kind="Uniform",
         )
+        spatial = authenticate_checkpoint_spatial_contract(self, d)
         preflight_uniform_restart(d)
         cadence = prepare_program_cadence(
             self._s,
@@ -310,12 +316,7 @@ class _SystemIO(_System):
             macro_step=d["macro_step"],
             program_schedule=installed_schedule,
         )
-        nx, ny = int(self._s.nx()), int(self._s.ny())
-        if int(d["nx"]) != nx or int(d["ny"]) != ny:
-            raise ValueError(
-                "restart : checkpoint grid (%d x %d) != system (%d x %d)"
-                % (int(d["nx"]), int(d["ny"]), nx, ny)
-            )
+        cells = spatial.cells_at_level(0)
         blocks = [str(block) for block in d["blocks"]]
         current_blocks = list(self._s.block_names())
         if blocks != current_blocks:
@@ -330,9 +331,9 @@ class _SystemIO(_System):
                     "restart : block '%s' has %d components in the checkpoint, %d here"
                     % (block, ncomp, self._s.n_vars(block))
                 )
-            if np.asarray(d["state_" + block]).size != ncomp * nx * ny:
+            if np.asarray(d["state_" + block]).size != ncomp * cells:
                 raise ValueError("restart : block '%s' state payload has the wrong size" % block)
-        if np.asarray(d["phi"]).size != nx * ny:
+        if np.asarray(d["phi"]).size != cells:
             raise ValueError("restart : potential payload has the wrong size")
         slots = [str(slot) for slot in d["field_provider_slots"]]
         current_slots = list(self._s.field_provider_slots())
@@ -343,7 +344,7 @@ class _SystemIO(_System):
             )
         for index, slot in enumerate(slots):
             key = "field_potential_%d" % index
-            if key not in d or np.asarray(d[key]).size != nx * ny:
+            if key not in d or np.asarray(d[key]).size != cells:
                 raise RuntimeError(
                     "checkpoint potential for qualified field provider %s is missing or malformed"
                     % slot
@@ -455,7 +456,7 @@ class _SystemIO(_System):
                     "runtime cannot rebuild selectively persisted history '%s'" % name
                 )
             for slot in stored:
-                if np.asarray(d["history_%s_%d" % (name, slot)]).size != ncomp * nx * ny:
+                if np.asarray(d["history_%s_%d" % (name, slot)]).size != ncomp * cells:
                     raise ValueError(
                         "restart : history '%s' slot %d payload has the wrong size" % (name, slot)
                     )
@@ -479,7 +480,7 @@ class _SystemIO(_System):
             ngrow = int(d["cache_ngrow_%d" % node])
             if ncomp <= 0 or ngrow < 0:
                 raise ValueError("restart : scheduled cache node %d has invalid metadata" % node)
-            if np.asarray(d["cache_value_%d" % node]).size != ncomp * nx * ny:
+            if np.asarray(d["cache_value_%d" % node]).size != ncomp * cells:
                 raise ValueError(
                     "restart : scheduled cache node %d has the wrong value size" % node
                 )
