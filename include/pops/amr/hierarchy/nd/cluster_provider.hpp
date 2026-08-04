@@ -19,6 +19,7 @@ struct ClusterWorkBudget {
   std::size_t recursion_nodes = 0;
   std::size_t cell_visits = 0;
   std::size_t output_boxes = 0;
+  std::size_t identity_bytes = 0;
 
   bool operator==(const ClusterWorkBudget&) const = default;
 };
@@ -38,7 +39,7 @@ struct ClusterResultIdentity {
   std::string provider{};
   LevelLayoutIdentity<Dim> source_level{};
   ClusterOptions<Dim> options{};
-  std::vector<TagMaskIdentity<Dim>> canonical_shards{};
+  std::vector<TagShardIdentity<Dim>> canonical_shards{};
   std::vector<Box<Dim>> boxes{};
 
   bool operator==(const ClusterResultIdentity&) const = default;

@@ -24,6 +24,7 @@ struct HierarchyValidationBudget {
 template <int Dim>
 struct HierarchyPlanIdentity {
   std::vector<LevelLayoutIdentity<Dim>> levels{};
+  HierarchyValidationBudget validation_budget{};
 
   bool operator==(const HierarchyPlanIdentity&) const = default;
 };
@@ -54,6 +55,7 @@ class HierarchyPlan {
     identity.levels.reserve(levels_.size());
     for (const LevelLayout<Dim>& level_layout : levels_)
       identity.levels.push_back(level_layout.exact_identity());
+    identity.validation_budget = budget_;
     return identity;
   }
 

@@ -13,6 +13,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -56,13 +57,34 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     }
     std::sort(boxes.begin(), boxes.end(), lexicographic_less_);
 
+    work.require_identity(std::string_view{kIdentity}.size());
+    work.require_identity(checked_product_(source.patches.size(), sizeof(Box<Dim>)));
+    work.require_identity(checked_product_(source.owners.size(), sizeof(Index<Dim>)));
+    work.require_identity(checked_product_(boxes.size(), sizeof(Box<Dim>)));
+    work.require_identity(checked_product_(canonical.size(), sizeof(TagShardIdentity<Dim>)));
+    for (std::size_t shard_index = 0; shard_index < canonical.size(); ++shard_index) {
+      const TagMask<Dim>* shard = canonical[shard_index];
+      if (source.distribution_mode == mesh::DistributionMode::replicated && shard_index != 0)
+        continue;
+      work.require_identity(
+          checked_product_(shard->patches().size(), sizeof(PatchTagIdentity<Dim>)));
+      for (const auto& patch : shard->patches())
+        work.require_identity(patch.tags.size());
+    }
+
     ClusterResultIdentity<Dim> identity;
     identity.provider = std::string(kIdentity);
     identity.source_level = source;
     identity.options = options;
     identity.canonical_shards.reserve(canonical.size());
-    for (const TagMask<Dim>* shard : canonical)
-      identity.canonical_shards.push_back(shard->exact_identity());
+    for (std::size_t shard_index = 0; shard_index < canonical.size(); ++shard_index) {
+      if (source.distribution_mode == mesh::DistributionMode::replicated && shard_index != 0) {
+        identity.canonical_shards.push_back(
+            TagShardIdentity<Dim>{canonical[shard_index]->local_rank(), {}, true});
+      } else {
+        identity.canonical_shards.push_back(canonical[shard_index]->shard_identity());
+      }
+    }
     identity.boxes = boxes;
     return ClusterResult<Dim>{mesh::BoxArray<Dim>{std::move(boxes)}, std::move(identity)};
   }
@@ -89,15 +111,30 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
       output_boxes += count;
     }
 
+    void require_identity(std::size_t count) {
+      if (identity_bytes > allowed.identity_bytes ||
+          count > allowed.identity_bytes - identity_bytes)
+        throw std::length_error("Berger-Rigoutsos exceeds its identity-copy byte budget");
+      identity_bytes += count;
+    }
+
     ClusterWorkBudget allowed{};
     std::size_t nodes = 0;
     std::size_t visited_cells = 0;
     std::size_t output_boxes = 0;
+    std::size_t identity_bytes = 0;
   };
 
   struct Scan {
     Box<Dim> bounds{};
     std::size_t tagged = 0;
+  };
+
+  struct AxisCut {
+    int axis = -1;
+    int offset = -1;
+    std::int64_t length = 0;
+    long double score = 0.0L;
   };
 
   static bool lexicographic_less_(const Box<Dim>& left, const Box<Dim>& right) {
@@ -121,7 +158,8 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
         throw std::invalid_argument("Berger-Rigoutsos minimum box size cannot exceed its maximum");
     }
     if (options.budget.shards == 0 || options.budget.recursion_nodes == 0 ||
-        options.budget.cell_visits == 0 || options.budget.output_boxes == 0)
+        options.budget.cell_visits == 0 || options.budget.output_boxes == 0 ||
+        options.budget.identity_bytes == 0)
       throw std::invalid_argument("Berger-Rigoutsos work budgets must be strictly positive");
     if (options.budget.cell_visits >
         static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
@@ -153,18 +191,28 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
       if (canonical[index - 1]->local_rank() == canonical[index]->local_rank())
         throw std::invalid_argument("Berger-Rigoutsos received duplicate rank tag shards");
 
+    if (canonical.size() != source.rank_space.size())
+      throw std::invalid_argument(
+          "Berger-Rigoutsos requires one tag shard for every process coordinate");
+    for (std::size_t rank = 0; rank < canonical.size(); ++rank)
+      if (canonical[rank]->local_rank() != source.rank_space.coordinate(rank))
+        throw std::invalid_argument("Berger-Rigoutsos tag shards do not cover the process space");
+
     if (source.distribution_mode == mesh::DistributionMode::replicated) {
-      if (canonical.size() != 1)
-        throw std::invalid_argument(
-            "Berger-Rigoutsos requires exactly one shard for a replicated tag layout");
-    } else {
-      if (canonical.size() != source.rank_space.size())
-        throw std::invalid_argument(
-            "Berger-Rigoutsos partitioned tags require one shard for every process coordinate");
-      for (std::size_t rank = 0; rank < canonical.size(); ++rank)
-        if (canonical[rank]->local_rank() != source.rank_space.coordinate(rank))
+      const auto& reference = canonical.front()->patches();
+      for (const TagMask<Dim>* shard : canonical) {
+        if (shard->patches() != reference)
           throw std::invalid_argument(
-              "Berger-Rigoutsos partitioned tag shards do not cover the process space");
+              "Berger-Rigoutsos replicated tag shards do not have identical tag bits");
+        if (shard->patches().size() != source.patches.size())
+          throw std::invalid_argument("Berger-Rigoutsos replicated tag shard omits a patch");
+        for (std::size_t patch = 0; patch < source.patches.size(); ++patch)
+          if (shard->patches()[patch].global_patch != patch ||
+              shard->patches()[patch].box != source.patches[patch])
+            throw std::invalid_argument(
+                "Berger-Rigoutsos replicated tag shard patch identity is invalid");
+      }
+      return canonical;
     }
 
     std::vector<unsigned char> seen(source.patches.size(), 0);
@@ -183,6 +231,12 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     if (std::find(seen.begin(), seen.end(), 0) != seen.end())
       throw std::invalid_argument("Berger-Rigoutsos tag shards omit an owned patch");
     return canonical;
+  }
+
+  static std::size_t checked_product_(std::size_t left, std::size_t right) {
+    if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
+      throw std::length_error("Berger-Rigoutsos identity byte count exceeds size_t");
+    return left * right;
   }
 
   static const TagMask<Dim>& owner_for_patch_(const std::vector<const TagMask<Dim>*>& shards,
@@ -299,8 +353,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     }
 
     const auto signatures = signatures_(mask, region, work);
-    int axis = -1;
-    int cut = -1;
+    std::vector<AxisCut> cuts;
     for (int candidate_axis = 0; candidate_axis < Dim; ++candidate_axis) {
       if (!splittable[candidate_axis])
         continue;
@@ -308,15 +361,19 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
           best_hole_(signatures[candidate_axis], options.min_box_size[candidate_axis]);
       if (candidate_cut < 0)
         continue;
-      if (axis < 0 || region.length(candidate_axis) > region.length(axis) ||
-          (region.length(candidate_axis) == region.length(axis) && candidate_axis < axis)) {
-        axis = candidate_axis;
-        cut = candidate_cut;
-      }
+      cuts.push_back(AxisCut{candidate_axis, candidate_cut, region.length(candidate_axis), 0.0L});
+    }
+    if (!cuts.empty()) {
+      const auto longest = std::max_element(
+          cuts.begin(), cuts.end(),
+          [](const AxisCut& left, const AxisCut& right) { return left.length < right.length; });
+      const std::int64_t selected_length = longest->length;
+      std::erase_if(cuts, [=](const AxisCut& candidate_cut) {
+        return candidate_cut.length != selected_length;
+      });
     }
 
-    if (axis < 0) {
-      long double best_score = 0.0L;
+    if (cuts.empty()) {
       for (int candidate_axis = 0; candidate_axis < Dim; ++candidate_axis) {
         if (!splittable[candidate_axis])
           continue;
@@ -324,33 +381,53 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
             best_inflection_(signatures[candidate_axis], options.min_box_size[candidate_axis]);
         if (candidate_cut < 0)
           continue;
-        if (axis < 0 || score > best_score ||
-            (score == best_score && region.length(candidate_axis) > region.length(axis)) ||
-            (score == best_score && region.length(candidate_axis) == region.length(axis) &&
-             candidate_axis < axis)) {
-          axis = candidate_axis;
-          cut = candidate_cut;
-          best_score = score;
-        }
+        cuts.push_back(
+            AxisCut{candidate_axis, candidate_cut, region.length(candidate_axis), score});
+      }
+      if (!cuts.empty()) {
+        const auto strongest = std::max_element(cuts.begin(), cuts.end(),
+                                                [](const AxisCut& left, const AxisCut& right) {
+                                                  if (left.score != right.score)
+                                                    return left.score < right.score;
+                                                  return left.length < right.length;
+                                                });
+        const long double selected_score = strongest->score;
+        const std::int64_t selected_length = strongest->length;
+        std::erase_if(cuts, [=](const AxisCut& candidate_cut) {
+          return candidate_cut.score != selected_score || candidate_cut.length != selected_length;
+        });
       }
     }
 
-    if (axis < 0) {
+    if (cuts.empty()) {
+      std::int64_t longest = 0;
       for (int candidate_axis = 0; candidate_axis < Dim; ++candidate_axis)
-        if (splittable[candidate_axis] &&
-            (axis < 0 || region.length(candidate_axis) > region.length(axis)))
-          axis = candidate_axis;
-      cut = static_cast<int>(region.length(axis) / 2);
+        if (splittable[candidate_axis])
+          longest = std::max(longest, region.length(candidate_axis));
+      for (int candidate_axis = 0; candidate_axis < Dim; ++candidate_axis)
+        if (splittable[candidate_axis] && region.length(candidate_axis) == longest)
+          cuts.push_back(AxisCut{candidate_axis,
+                                 static_cast<int>(region.length(candidate_axis) / 2),
+                                 region.length(candidate_axis), 0.0L});
     }
-    if (axis < 0 || cut <= 0 || cut >= region.length(axis))
-      throw std::logic_error("Berger-Rigoutsos failed to produce a strict deterministic split");
+    if (cuts.empty())
+      throw std::logic_error("Berger-Rigoutsos failed to select a deterministic split");
 
-    Box<Dim> left = region;
-    Box<Dim> right = region;
-    left.hi[axis] = region.lo[axis] + cut - 1;
-    right.lo[axis] = region.lo[axis] + cut;
-    cluster_rec_(mask, left, options, work, output);
-    cluster_rec_(mask, right, options, work, output);
+    std::vector<Box<Dim>> children{region};
+    for (const AxisCut& selected : cuts) {
+      if (selected.axis < 0 || selected.offset <= 0 ||
+          selected.offset >= region.length(selected.axis))
+        throw std::logic_error("Berger-Rigoutsos failed to produce a strict split");
+      const std::size_t previous_size = children.size();
+      for (std::size_t child = 0; child < previous_size; ++child) {
+        Box<Dim> right = children[child];
+        children[child].hi[selected.axis] = region.lo[selected.axis] + selected.offset - 1;
+        right.lo[selected.axis] = region.lo[selected.axis] + selected.offset;
+        children.push_back(right);
+      }
+    }
+    for (const Box<Dim>& child : children)
+      cluster_rec_(mask, child, options, work, output);
   }
 
   static std::size_t chopped_count_(const Box<Dim>& box, const std::array<int, Dim>& max_box_size) {

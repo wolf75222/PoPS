@@ -16,10 +16,12 @@
 namespace pops::amr::hierarchy::nd {
 
 struct TagMaskBudget {
+  std::size_t global_patches = 0;
   std::size_t owned_patches = 0;
   std::size_t cells_per_patch = 0;
   std::size_t owned_cells = 0;
   std::size_t bytes = 0;
+  std::size_t identity_bytes = 0;
 
   bool operator==(const TagMaskBudget&) const = default;
 };
@@ -34,10 +36,18 @@ struct PatchTagIdentity {
 };
 
 template <int Dim>
-struct TagMaskIdentity {
-  LevelLayoutIdentity<Dim> level{};
+struct TagShardIdentity {
   Index<Dim> local_rank{};
   std::vector<PatchTagIdentity<Dim>> patches{};
+  bool replicated_alias = false;
+
+  bool operator==(const TagShardIdentity&) const = default;
+};
+
+template <int Dim>
+struct TagMaskIdentity {
+  LevelLayoutIdentity<Dim> level{};
+  TagShardIdentity<Dim> shard{};
 
   bool operator==(const TagMaskIdentity&) const = default;
 };
@@ -57,13 +67,26 @@ class TagMask {
   };
 
   TagMask(const LevelLayout<Dim>& level, Index<Dim> local_rank, TagMaskBudget budget)
-      : level_identity_(level.exact_identity()), local_rank_(local_rank) {
+      : local_rank_(local_rank) {
     const mesh::Distribution<Dim>& distribution = level.distribution();
     if (!distribution.rank_space().contains(local_rank_))
       throw std::out_of_range("TagMask rank coordinate is outside the level process space");
-    const std::vector<std::size_t> local = distribution.local_box_indices(local_rank_);
-    if (local.size() > budget.owned_patches)
+    if (level.patches().size() > budget.global_patches)
+      throw std::length_error("TagMask exceeds its explicit global-patch metadata budget");
+    std::size_t identity_bytes = checked_product_(level.patches().size(), sizeof(Box<Dim>));
+    identity_bytes = checked_sum_(
+        identity_bytes, checked_product_(distribution.owners().size(), sizeof(Index<Dim>)));
+    if (identity_bytes > budget.identity_bytes)
+      throw std::length_error("TagMask exceeds its explicit identity-copy byte budget");
+
+    const std::size_t expected_local =
+        distribution.replicated()
+            ? level.patches().size()
+            : static_cast<std::size_t>(std::count(distribution.owners().begin(),
+                                                  distribution.owners().end(), local_rank_));
+    if (expected_local > budget.owned_patches)
       throw std::length_error("TagMask exceeds its explicit owned-patch budget");
+    const std::vector<std::size_t> local = distribution.local_box_indices(local_rank_);
 
     std::size_t cells = 0;
     for (const std::size_t global_patch : local) {
@@ -81,7 +104,13 @@ class TagMask {
     }
     if (cells > budget.bytes)
       throw std::length_error("TagMask exceeds its explicit byte budget");
+    identity_bytes =
+        checked_sum_(identity_bytes, checked_product_(local.size(), sizeof(PatchTagIdentity<Dim>)));
+    identity_bytes = checked_sum_(identity_bytes, cells);
+    if (identity_bytes > budget.identity_bytes)
+      throw std::length_error("TagMask exceeds its explicit identity-copy byte budget");
 
+    level_identity_ = level.exact_identity();
     patches_.reserve(local.size());
     for (const std::size_t global_patch : local) {
       const Box<Dim>& box = level.patches()[global_patch];
@@ -152,16 +181,35 @@ class TagMask {
   }
 
   TagMaskIdentity<Dim> exact_identity() const {
-    TagMaskIdentity<Dim> identity{level_identity_, local_rank_, {}};
+    return TagMaskIdentity<Dim>{level_identity_, shard_identity()};
+  }
+
+  TagShardIdentity<Dim> shard_identity() const {
+    TagShardIdentity<Dim> identity{local_rank_, {}, false};
     identity.patches.reserve(patches_.size());
     for (const PatchTags& patch : patches_)
       identity.patches.push_back(PatchTagIdentity<Dim>{patch.global_patch, patch.box, patch.tags});
     return identity;
   }
 
-  bool operator==(const TagMask& other) const { return exact_identity() == other.exact_identity(); }
+  bool operator==(const TagMask& other) const {
+    return level_identity_ == other.level_identity_ && local_rank_ == other.local_rank_ &&
+           patches_ == other.patches_;
+  }
 
  private:
+  static std::size_t checked_product_(std::size_t left, std::size_t right) {
+    if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
+      throw std::length_error("TagMask identity byte count exceeds size_t");
+    return left * right;
+  }
+
+  static std::size_t checked_sum_(std::size_t left, std::size_t right) {
+    if (right > std::numeric_limits<std::size_t>::max() - left)
+      throw std::length_error("TagMask identity byte count exceeds size_t");
+    return left + right;
+  }
+
   static std::size_t linear_index_(const Box<Dim>& box, const Index<Dim>& index) {
     if (!box.contains(index))
       throw std::out_of_range("TagMask cell is outside the selected patch");
