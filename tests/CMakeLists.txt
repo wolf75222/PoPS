@@ -439,6 +439,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_cluster
   test_nd_distribution
   test_nd_execution
+  test_nd_flux_ledger
   test_nd_hierarchy_plan
   test_nd_layout
   test_nd_tag_mask

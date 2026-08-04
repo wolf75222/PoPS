@@ -866,6 +866,11 @@ sources = ["tests/cpp/unit/numerics/test_nd_finite_volume.cpp"]
 labels = ["unit", "numerics", "spatial", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_flux_ledger"
+sources = ["tests/cpp/unit/amr/test_nd_flux_ledger.cpp"]
+labels = ["unit", "amr", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_hierarchy_plan"
 sources = ["tests/cpp/unit/mesh/test_nd_hierarchy_plan.cpp"]
 labels = ["unit", "mesh", "fast"]
