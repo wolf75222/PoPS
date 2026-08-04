@@ -3,6 +3,7 @@
 #include <pops/amr/hierarchy/nd/hierarchy_plan.hpp>
 
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -138,6 +139,14 @@ TEST(test_nd_hierarchy_plan, layout_and_hierarchy_refuse_invalid_contracts) {
   EXPECT_THROW(
       (void)nd::HierarchyPlan<1>({coarse, changed_space}, nd::HierarchyValidationBudget{2, 0}),
       std::invalid_argument);
+  EXPECT_THROW((void)nd::refine_box(Box<1>{Index<1>{std::numeric_limits<int>::max()},
+                                           Index<1>{std::numeric_limits<int>::max()}},
+                                    nd::RefinementRatio<1>{2}),
+               std::overflow_error);
+  EXPECT_THROW((void)nd::refine_box(Box<1>{Index<1>{std::numeric_limits<int>::min()},
+                                           Index<1>{std::numeric_limits<int>::min()}},
+                                    nd::RefinementRatio<1>{2}),
+               std::overflow_error);
 }
 
 TEST(test_nd_hierarchy_plan, sparse_parent_coverage_and_nonconsecutive_levels_fail_closed) {
@@ -172,6 +181,15 @@ TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replaceme
   const nd::HierarchyPlan<1> left_plan({left_owned}, kHierarchyBudget);
   const nd::HierarchyPlan<1> right_plan({right_owned}, kHierarchyBudget);
   EXPECT_NE(left_plan.exact_identity(), right_plan.exact_identity());
+  const mesh::BoxArray<1> reordered_patches(std::vector<Box<1>>{patches[1], patches[0]});
+  const auto reordered =
+      make_level<1>(0, domain, reordered_patches, ranks, {Index<1>{5}, Index<1>{4}}, {1});
+  const nd::HierarchyPlan<1> reordered_plan({reordered}, kHierarchyBudget);
+  EXPECT_NE(left_plan.exact_identity(), reordered_plan.exact_identity());
+
+  const nd::HierarchyValidationBudget append_forbidden{1, 4096};
+  const nd::HierarchyPlan<1> limited_plan({left_owned}, append_forbidden);
+  EXPECT_NE(left_plan.exact_identity(), limited_plan.exact_identity());
 
   const Box<1> fine_domain = nd::refine_box(domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> fine_patches(std::vector<Box<1>>{
@@ -181,5 +199,20 @@ TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replaceme
   ASSERT_EQ(appended.num_levels(), 2U);
   EXPECT_EQ(appended.level(0).exact_identity(), left_owned.exact_identity());
   EXPECT_NE(appended.exact_identity(), left_plan.exact_identity());
+  EXPECT_THROW((void)limited_plan.with_level(fine), std::length_error);
   EXPECT_THROW((void)left_plan.level(1), std::out_of_range);
+
+  const Box<1> finer_domain = nd::refine_box(fine_domain, nd::RefinementRatio<1>{2});
+  const mesh::BoxArray<1> finer_patches(
+      std::vector<Box<1>>{nd::refine_box(fine_patches[0], nd::RefinementRatio<1>{2})});
+  const auto finer = make_level<1>(2, finer_domain, finer_patches, ranks, {Index<1>{4}}, {2});
+  const nd::HierarchyPlan<1> three_levels({left_owned, fine, finer}, kHierarchyBudget);
+
+  const mesh::BoxArray<1> replacement_patches(std::vector<Box<1>>{
+      nd::refine_box(Box<1>{Index<1>{0}, Index<1>{1}}, nd::RefinementRatio<1>{2})});
+  const auto replacement =
+      make_level<1>(1, fine_domain, replacement_patches, ranks, {Index<1>{5}}, {2});
+  const nd::HierarchyPlan<1> truncated = three_levels.with_level(replacement);
+  ASSERT_EQ(truncated.num_levels(), 2U);
+  EXPECT_EQ(truncated.level(1).exact_identity(), replacement.exact_identity());
 }
