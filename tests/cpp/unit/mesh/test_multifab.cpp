@@ -1,73 +1,132 @@
-// MultiFab : allocation des fabs locaux, iteration, remplissage via dispatch,
-// reduction sum sur les cellules valides.
-
 #include <gtest/gtest.h>
 
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/layout/nd/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
-#include <cmath>
+#include <Kokkos_Core.hpp>
+
+#include <array>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-using namespace pops;
+using pops::Box;
+using pops::Extent;
+using pops::Index;
+using pops::MultiFab;
+using pops::MultiFabCapabilities;
+using pops::Real;
+using pops::mesh::BoxArray;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
 
-// Pipeline stateful : le meme MultiFab est rempli puis interroge en plusieurs etapes.
-TEST(test_multifab, allocate_fill_and_reduce) {
-  Box2D dom = Box2D::from_extents(8, 8);
-  BoxArray ba = BoxArray::from_domain(dom, 4);  // 4 boxes
-  DistributionMapping dm(ba.size(), n_ranks());
-  MultiFab mf(ba, dm, /*ncomp=*/1, /*ngrow=*/1);
+namespace {
 
-  // rang unique : tous les fabs sont locaux
-  EXPECT_EQ(mf.local_size(), 4) << "local_size";
-  EXPECT_TRUE(mf.ncomp() == 1 && mf.n_grow() == 1) << "meta";
-
-  mf.set_val(2.0);
-  EXPECT_LT(std::fabs(sum(mf) - 2.0 * 64), 1e-12) << "sum_constant";
-
-  // remplir chaque cellule valide avec une valeur globale f(i, j) = i + 100 j
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Array4 a = mf.fab(li).array();
-    for_each_cell(mf.box(li), [a](int i, int j) { a(i, j, 0) = i + 100.0 * j; });
+template <int Dim, class MemorySpace>
+void expect_all_values(const MultiFab<Dim, MemorySpace>& fields, Real expected) {
+  for (std::size_t local = 0; local < fields.local_size(); ++local) {
+    const auto& fab = fields.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t element = 0; element < host.size(); ++element)
+      EXPECT_DOUBLE_EQ(host(element), expected);
   }
-
-  // somme sur tout le domaine : sum_{i,j} (i + 100 j), i,j dans [0..7]
-  // = 64*(sum i)/... -> sum_i i = 28 (x8 lignes) + 100 * sum_j j (x8 colonnes)
-  Real expected = 0;
-  for (int j = 0; j < 8; ++j)
-    for (int i = 0; i < 8; ++i)
-      expected += i + 100.0 * j;
-  EXPECT_LT(std::fabs(sum(mf) - expected), 1e-9) << "sum_field";
-
-  // verifier une cellule precise via la box qui la contient
-  bool found = false;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    if (mf.box(li).contains(5, 6)) {
-      found = true;
-      EXPECT_EQ(mf.fab(li)(5, 6, 0), 5 + 600.0) << "cell_value";
-    }
-  }
-  EXPECT_TRUE(found) << "cell_located";
 }
 
-TEST(test_multifab, set_val_fills_every_local_fab_valid_and_ghost_cells) {
-  const BoxArray boxes(std::vector<Box2D>{{{-9, 4}, {-6, 7}}, {{3, -8}, {7, -5}}});
-  const DistributionMapping owners(
-      std::vector<int>(static_cast<std::size_t>(boxes.size()), my_rank()));
-  MultiFab field(boxes, owners, /*ncomp=*/3, /*ngrow=*/2);
+}  // namespace
 
-  field.set_val(Real(6.5));
+TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
+  const BoxArray<2> layout =
+      BoxArray<2>::from_domain(Box<2>{Index<2>{-2, 3}, Index<2>{1, 6}}, std::array<int, 2>{2, 2});
+  const RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{2, 2}};
+  const Index<2> local_rank{10, -2};
+  const auto distribution = Distribution<2>::partitioned(
+      layout, ranks, {local_rank, Index<2>{11, -2}, local_rank, Index<2>{11, -1}});
 
-  ASSERT_EQ(field.local_size(), boxes.size());
-  for (int local = 0; local < field.local_size(); ++local) {
-    const Fab2D& fab = field.fab(local);
-    const Box2D grown = fab.grown_box();
-    for (int component = 0; component < field.ncomp(); ++component)
-      for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
-        for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
-          EXPECT_DOUBLE_EQ(fab(i, j, component), Real(6.5));
+  MultiFab<2, Kokkos::HostSpace> fields(layout, distribution, local_rank, 3, Extent<2>{1, 2});
+
+  EXPECT_EQ(fields.layout(), layout);
+  EXPECT_EQ(fields.box_array(), layout);
+  EXPECT_EQ(fields.distribution(), distribution);
+  EXPECT_EQ(fields.rank_space(), ranks);
+  EXPECT_EQ(fields.local_rank(), local_rank);
+  EXPECT_EQ(fields.ncomp(), 3);
+  EXPECT_EQ(fields.ghosts(), (Extent<2>{1, 2}));
+  EXPECT_EQ(fields.local_global_indices(), (std::vector<std::size_t>{0, 2}));
+  ASSERT_EQ(fields.local_size(), 2U);
+  EXPECT_EQ(fields.global_index(0), 0U);
+  EXPECT_EQ(fields.global_index(1), 2U);
+  EXPECT_EQ(fields.local_index_of(0), 0U);
+  EXPECT_EQ(fields.local_index_of(1), (MultiFab<2, Kokkos::HostSpace>::not_local));
+  EXPECT_EQ(fields.local_index_of(2), 1U);
+  EXPECT_EQ(fields.fab(1).box(), layout[2]);
+  EXPECT_EQ(fields.fab_global(2).box(), layout[2]);
+  EXPECT_THROW((void)fields.fab(2), std::out_of_range);
+  EXPECT_THROW((void)fields.fab_global(1), std::out_of_range);
+  EXPECT_THROW((void)fields.global_index(2), std::out_of_range);
+  EXPECT_THROW((void)fields.local_index_of(layout.size()), std::out_of_range);
+
+  using HostMultiFab = MultiFab<2, Kokkos::HostSpace>;
+  EXPECT_THROW((void)HostMultiFab(layout, distribution, local_rank, 0, Extent<2>{}),
+               std::invalid_argument);
+  EXPECT_THROW((void)HostMultiFab(layout, distribution, local_rank, 1, Extent<2>{1, -1}),
+               std::invalid_argument);
+}
+
+TEST(test_multifab, set_val_copy_and_move_preserve_deep_1d_and_3d_ownership) {
+  const BoxArray<1> line =
+      BoxArray<1>::from_domain(Box<1>{Index<1>{-4}, Index<1>{3}}, std::array<int, 1>{3});
+  const RankSpace<1> line_ranks{Index<1>{7}, Extent<1>{1}};
+  const auto line_distribution = Distribution<1>::replicated(line, line_ranks);
+  MultiFab<1> one_dimensional(line, line_distribution, Index<1>{7}, 2, Extent<1>{2});
+  one_dimensional.set_val(Real{6.5});
+  expect_all_values(one_dimensional, Real{6.5});
+
+  MultiFab<1> copied = one_dimensional;
+  ASSERT_EQ(copied.local_size(), one_dimensional.local_size());
+  EXPECT_FALSE(copied.shares_storage_with(one_dimensional));
+  EXPECT_TRUE(copied.shares_storage_with(copied));
+  for (std::size_t local = 0; local < copied.local_size(); ++local)
+    EXPECT_NE(copied.fab(local).storage().data(), one_dimensional.fab(local).storage().data());
+  copied.set_val(Real{-2});
+  expect_all_values(one_dimensional, Real{6.5});
+  expect_all_values(copied, Real{-2});
+
+  const BoxArray<3> volume = BoxArray<3>::from_domain(Box<3>{Index<3>{-1, 2, 4}, Index<3>{2, 3, 5}},
+                                                      std::array<int, 3>{2, 1, 2});
+  const RankSpace<3> volume_ranks{Index<3>{1, -1, 7}, Extent<3>{2, 1, 1}};
+  std::vector<Index<3>> owners(volume.size(), Index<3>{2, -1, 7});
+  owners.front() = Index<3>{1, -1, 7};
+  const auto volume_distribution =
+      Distribution<3>::partitioned(volume, volume_ranks, std::move(owners));
+  MultiFab<3, Kokkos::HostSpace> three_dimensional(volume, volume_distribution, Index<3>{1, -1, 7},
+                                                   1, Extent<3>{1, 2, 1});
+
+  MultiFab<3, Kokkos::HostSpace> moved(std::move(three_dimensional));
+  EXPECT_EQ(three_dimensional.local_size(), 0U);
+  EXPECT_TRUE(three_dimensional.layout().empty());
+  ASSERT_EQ(moved.local_size(), 1U);
+  EXPECT_EQ(moved.global_index(0), 0U);
+  EXPECT_EQ(moved.fab(0).ghosts(), (Extent<3>{1, 2, 1}));
+  EXPECT_EQ(moved.fab(0).size(), 80U);
+}
+
+TEST(test_multifab, communication_is_explicitly_unavailable_and_fails_closed) {
+  constexpr MultiFabCapabilities expected{/*local_storage=*/true, /*halo_exchange=*/false,
+                                          /*parallel_copy=*/false, /*mpi_exchange=*/false};
+  static_assert(MultiFab<1>::capabilities() == expected);
+  static_assert(MultiFab<2>::capabilities() == expected);
+  static_assert(MultiFab<3>::capabilities() == expected);
+  static_assert(std::is_nothrow_move_assignable_v<MultiFab<3>>);
+
+  try {
+    MultiFab<2>::require_communication("halo exchange");
+    FAIL() << "missing ND communication must fail closed";
+  } catch (const std::logic_error& error) {
+    EXPECT_NE(std::string(error.what()).find("halo exchange"), std::string::npos);
+    EXPECT_NE(std::string(error.what()).find("no halo, parallel-copy, or MPI schedule"),
+              std::string::npos);
   }
 }

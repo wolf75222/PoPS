@@ -54,7 +54,7 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 class TranslationExchange {
  public:
   using schedule_type = TranslationSchedule<Dim, MemorySpace>;
-  using multifab_type = MultiFab<Dim, MemorySpace>;
+  using multifab_type = ::pops::MultiFab<Dim, MemorySpace>;
   using rank_type = Index<Dim>;
   using device_buffer_type = typename schedule_type::buffer_type;
   using pinned_buffer_type = Kokkos::View<Real*, Kokkos::SharedHostPinnedSpace>;
@@ -272,11 +272,11 @@ class TranslationExchange {
     append_u64_(bytes, context_.context_generation);
     append_u64_(bytes, context_.schedule_generation);
     append_i64_(bytes, context_.tag);
-    const BoxArray<Dim>& layout = schedule_->layout();
+    const auto& layout = schedule_->layout();
     append_u64_(bytes, layout.size());
     for (const Box<Dim>& box : layout.boxes())
       append_box_(bytes, box);
-    const Distribution<Dim>& distribution = schedule_->distribution();
+    const auto& distribution = schedule_->distribution();
     append_i64_(bytes, static_cast<int>(distribution.mode()));
     append_index_(bytes, distribution.rank_space().origin());
     append_extent_(bytes, distribution.rank_space().extent());
@@ -326,7 +326,7 @@ class TranslationExchange {
                     ? 1L
                     : 0L;
       if (invalid == 0) {
-        const RankSpace<Dim>& ranks = schedule_->distribution().rank_space();
+        const auto& ranks = schedule_->distribution().rank_space();
         if (ranks.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
             lane_->size() != static_cast<int>(ranks.size()) ||
             lane_->rank() != static_cast<int>(ranks.linear_rank(schedule_->local_rank())))
@@ -376,7 +376,7 @@ class TranslationExchange {
   }
 
   void initialize_peers_() {
-    const RankSpace<Dim>& ranks = schedule_->distribution().rank_space();
+    const auto& ranks = schedule_->distribution().rank_space();
     const auto add = [this, &ranks](const typename schedule_type::PeerPlan& plan, bool send) {
       const std::size_t linear = ranks.linear_rank(plan.peer);
       if (linear > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||

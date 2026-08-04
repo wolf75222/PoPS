@@ -20,6 +20,11 @@
 
 using namespace pops;
 using namespace pops::mesh::nd_proof;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
+
+template <int Dim>
+using ProductionBoxArray = pops::mesh::BoxArray<Dim>;
 
 static_assert(std::is_nothrow_move_assignable_v<ExecutionLane>);
 
@@ -86,7 +91,7 @@ TranslationSchedule<Dim> make_schedule(int ranks, int rank, bool replicated, int
     boxes.push_back(Box<Dim>{box_lower, box_upper});
     owners.push_back(rank_coordinate<Dim>(box % ranks));
   }
-  const BoxArray<Dim> layout(std::move(boxes));
+  const ProductionBoxArray<Dim> layout(std::move(boxes));
   Extent<Dim> rank_extent{};
   rank_extent[0] = ranks;
   for (int axis = 1; axis < Dim; ++axis)
@@ -120,7 +125,7 @@ TranslationSchedule<Dim> make_schedule(int ranks, int rank, bool replicated, int
 template <int Dim>
 void fill_valid(MultiFab<Dim>& fields, Real bias) {
   for (std::size_t global_box : fields.local_global_indices()) {
-    auto& fab = fields.fab(global_box);
+    auto& fab = fields.fab_global(global_box);
     auto host = fab.create_host_mirror();
     const Box<Dim>& grown = fab.grown_box();
     const std::size_t cells = static_cast<std::size_t>(grown.numPts());
@@ -137,7 +142,7 @@ void fill_valid(MultiFab<Dim>& fields, Real bias) {
 template <int Dim>
 Real value_at(const MultiFab<Dim>& fields, std::size_t global_box, const Index<Dim>& index,
               int component) {
-  const auto& fab = fields.fab(global_box);
+  const auto& fab = fields.fab_global(global_box);
   const Box<Dim>& grown = fab.grown_box();
   std::size_t stride = 1;
   std::size_t cell = 0;

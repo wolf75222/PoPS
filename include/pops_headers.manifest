@@ -73,7 +73,6 @@ test-only pops/mesh/nd_proof/box_array.hpp
 test-only pops/mesh/nd_proof/box_hash.hpp
 test-only pops/mesh/nd_proof/distribution.hpp
 test-only pops/mesh/nd_proof/local_neighbors.hpp
-test-only pops/mesh/nd_proof/multifab.hpp
 test-only pops/mesh/nd_proof/periodicity.hpp
 test-only pops/mesh/nd_proof/rank_space.hpp
 test-only pops/mesh/nd_proof/translation_schedule.hpp
