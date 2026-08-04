@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -54,16 +55,18 @@ bool box_less(const Box<Dim>& left, const Box<Dim>& right) {
   return false;
 }
 
-template <int Dim>
-Index<Dim> permute(const Index<Dim>& index, const std::array<int, Dim>& axes) {
+template <int Dim, std::size_t AxisCount>
+  requires(AxisCount == static_cast<std::size_t>(Dim))
+Index<Dim> permute(const Index<Dim>& index, const std::array<int, AxisCount>& axes) {
   Index<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis)
     result[axis] = index[axes[axis]];
   return result;
 }
 
-template <int Dim>
-Box<Dim> permute(const Box<Dim>& box, const std::array<int, Dim>& axes) {
+template <int Dim, std::size_t AxisCount>
+  requires(AxisCount == static_cast<std::size_t>(Dim))
+Box<Dim> permute(const Box<Dim>& box, const std::array<int, AxisCount>& axes) {
   return Box<Dim>{permute(box.lo, axes), permute(box.hi, axes)};
 }
 
