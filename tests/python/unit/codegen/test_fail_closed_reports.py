@@ -381,6 +381,39 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     assert estimate.categories["state"] == 2 * 3 * 5 * 16
 
 
+@pytest.mark.parametrize("shape", ((7,), (3, 5), (2, 3, 4)))
+def test_absolute_memory_estimate_is_rank_generic(monkeypatch, shape):
+    from math import prod
+
+    from pops.domain import CartesianDomain
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid
+
+    dimension = len(shape)
+
+    class Extension:
+        @staticmethod
+        def runtime_environment_report():
+            return {"dimension": dimension, "real_bytes": 8, "amr_refinement_ratio": 2}
+
+    domain = CartesianDomain("estimate", (0.0,) * dimension, (1.0,) * dimension)
+    grid = CartesianGrid(frame=domain.frame(), cells=shape)
+    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    monkeypatch.setattr(
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
+    estimate = inspect_compiled.build_memory_estimate(
+        _memory_artifact(), grid, layout=Uniform(grid)
+    )
+
+    cells = prod(shape)
+    ghost_cells = prod(extent + 4 for extent in shape) - cells
+    assert estimate.cells == cells
+    assert estimate.mesh_shape == shape
+    assert estimate.categories["state"] == 2 * cells * 8
+    assert estimate.categories["halo"] == ghost_cells * 2 * 8
+
+
 def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch):
     from pops.descriptors_report import CapabilitySet
     from tests.python.support.layout_plan import cartesian_grid
@@ -416,6 +449,41 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
     )
     assert estimate.layout == "amr"
     assert estimate.categories["amr_patch"] == (2**2 + 2**4) * (2 * 4 * 4 * 16)
+
+
+def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypatch):
+    from pops.descriptors_report import CapabilitySet
+    from pops.domain import CartesianDomain
+    from pops.mesh import CartesianGrid
+
+    class Extension:
+        @staticmethod
+        def runtime_environment_report():
+            return {"dimension": 3, "real_bytes": 8, "amr_refinement_ratio": 2}
+
+    class ThreeDimensionalAMR:
+        @staticmethod
+        def capabilities():
+            return CapabilitySet({
+                "layout": "amr",
+                "dim": 3,
+                "max_levels": 3,
+                "ratio": 2,
+                "transition_ratios": [2, 2],
+                "supports_amr": True,
+            })
+
+    domain = CartesianDomain("volume", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    mesh = CartesianGrid(frame=domain.frame(), cells=(2, 3, 4))
+    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    monkeypatch.setattr(
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
+    estimate = inspect_compiled.build_memory_estimate(
+        _memory_artifact(), mesh, layout=ThreeDimensionalAMR()
+    )
+    state = 2 * 2 * 3 * 4 * 8
+    assert estimate.categories["amr_patch"] == (2**3 + 2**6) * state
 
 
 def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypatch):
