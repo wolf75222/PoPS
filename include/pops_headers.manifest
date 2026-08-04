@@ -17,6 +17,8 @@ api pops/amr/hierarchy/nd/level_layout.hpp
 api pops/amr/hierarchy/nd/tag_mask.hpp
 api pops/amr/hierarchy/refinement_ratio.hpp
 api pops/amr/regridding/regrid.hpp
+api pops/amr/reflux/nd/face_flux_ledger.hpp
+api pops/amr/reflux/nd/metric_reflux.hpp
 api pops/amr/tagging/cluster.hpp
 api pops/amr/tagging/clustering_provider.hpp
 api pops/amr/tagging/tag_box.hpp
