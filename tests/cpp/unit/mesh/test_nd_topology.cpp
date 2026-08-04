@@ -181,10 +181,10 @@ TEST(test_nd_topology, axis_translation_image_corners_are_axis_zero_fastest_and_
 
 TEST(test_nd_topology, local_neighbors_enumerate_internal_and_periodic_self_seams_in_1d) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
-  const BoxArray<1> split = BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
+  const BoxArray<1> split = BoxArray<1>::from_domain(domain, Extent<1>{2});
   const auto internal =
       enumerate_local_translation_neighbors(split, domain, Extent<1>{1}, PeriodicTopology<1>{},
-                                            std::array<int, 1>{2}, kHashBudget, kNeighborBudget);
+                                            Extent<1>{2}, kHashBudget, kNeighborBudget);
   EXPECT_EQ(internal,
             brute_translation_neighbors(split, domain, Extent<1>{1}, PeriodicTopology<1>{}));
   ASSERT_EQ(internal.size(), 2U);
@@ -192,15 +192,15 @@ TEST(test_nd_topology, local_neighbors_enumerate_internal_and_periodic_self_seam
   EXPECT_EQ(internal[0].destination_box, 0U);
   EXPECT_EQ(internal[0].destination_region, (Box<1>{Index<1>{2}, Index<1>{2}}));
   EXPECT_THROW((void)enumerate_local_translation_neighbors(
-                   split, domain, Extent<1>{1}, PeriodicTopology<1>{}, std::array<int, 1>{2},
-                   kHashBudget, LocalNeighborWorkBudget{4096, 4096, {4096, 4096}, {1, 4096}}),
+                   split, domain, Extent<1>{1}, PeriodicTopology<1>{}, Extent<1>{2}, kHashBudget,
+                   LocalNeighborWorkBudget{4096, 4096, {4096, 4096}, {1, 4096}}),
                std::length_error);
 
   const Box<1> small_domain{Index<1>{0}, Index<1>{1}};
-  const BoxArray<1> one_box = BoxArray<1>::from_domain(small_domain, std::array<int, 1>{2});
+  const BoxArray<1> one_box = BoxArray<1>::from_domain(small_domain, Extent<1>{2});
   const auto periodic = enumerate_local_translation_neighbors(
       one_box, small_domain, Extent<1>{3}, PeriodicTopology<1>::axis_translations({true}),
-      std::array<int, 1>{2}, kHashBudget, kNeighborBudget);
+      Extent<1>{2}, kHashBudget, kNeighborBudget);
   EXPECT_EQ(periodic, brute_translation_neighbors(one_box, small_domain, Extent<1>{3},
                                                   PeriodicTopology<1>::axis_translations({true})));
   ASSERT_EQ(periodic.size(), 4U);
@@ -211,16 +211,14 @@ TEST(test_nd_topology, local_neighbors_enumerate_internal_and_periodic_self_seam
 
 TEST(test_nd_topology, local_neighbors_are_exact_unique_and_ordered_for_2d_corners) {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{3, 3}};
-  const BoxArray<2> boxes = BoxArray<2>::from_domain(domain, std::array<int, 2>{2, 2});
+  const BoxArray<2> boxes = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
   const auto topology = PeriodicTopology<2>::axis_translations({true, true});
-  const auto jobs =
-      enumerate_local_translation_neighbors(boxes, domain, Extent<2>{1, 1}, topology,
-                                            std::array<int, 2>{2, 2}, kHashBudget, kNeighborBudget);
+  const auto jobs = enumerate_local_translation_neighbors(
+      boxes, domain, Extent<2>{1, 1}, topology, Extent<2>{2, 2}, kHashBudget, kNeighborBudget);
   const auto brute = brute_translation_neighbors(boxes, domain, Extent<2>{1, 1}, topology);
   EXPECT_EQ(jobs, brute);
-  const auto coarse_jobs =
-      enumerate_local_translation_neighbors(boxes, domain, Extent<2>{1, 1}, topology,
-                                            std::array<int, 2>{4, 4}, kHashBudget, kNeighborBudget);
+  const auto coarse_jobs = enumerate_local_translation_neighbors(
+      boxes, domain, Extent<2>{1, 1}, topology, Extent<2>{4, 4}, kHashBudget, kNeighborBudget);
   EXPECT_EQ(coarse_jobs,
             brute);  // Coarse bins produce false positives; exact intersections filter them.
   const LocalNeighborJob<2>* corner = find_job(jobs, 3, 0, {4, 4});
@@ -228,7 +226,7 @@ TEST(test_nd_topology, local_neighbors_are_exact_unique_and_ordered_for_2d_corne
   EXPECT_EQ(corner->destination_region, (Box<2>{Index<2>{-1, -1}, Index<2>{-1, -1}}));
 
   EXPECT_THROW((void)enumerate_local_translation_neighbors(
-                   boxes, domain, Extent<2>{1, 1}, topology, std::array<int, 2>{2, 2}, kHashBudget,
+                   boxes, domain, Extent<2>{1, 1}, topology, Extent<2>{2, 2}, kHashBudget,
                    LocalNeighborWorkBudget{9, 1, {4096, 4096}, {4096, 4096}}),
                std::length_error);
 }
@@ -270,19 +268,18 @@ TEST(test_nd_topology, topology_canonical_reverse_and_affine_round_trips_are_exa
 
 TEST(test_nd_topology, local_neighbors_cover_3d_multibox_and_deep_corner_images) {
   const Box<3> domain{Index<3>{0, 0, 0}, Index<3>{3, 1, 1}};
-  const BoxArray<3> split = BoxArray<3>::from_domain(domain, std::array<int, 3>{2, 2, 2});
+  const BoxArray<3> split = BoxArray<3>::from_domain(domain, Extent<3>{2, 2, 2});
   const auto topology = PeriodicTopology<3>::axis_translations({true, true, true});
-  const auto jobs = enumerate_local_translation_neighbors(split, domain, Extent<3>{2, 1, 1},
-                                                          topology, std::array<int, 3>{2, 2, 2},
-                                                          kHashBudget, kNeighborBudget);
+  const auto jobs =
+      enumerate_local_translation_neighbors(split, domain, Extent<3>{2, 1, 1}, topology,
+                                            Extent<3>{2, 2, 2}, kHashBudget, kNeighborBudget);
   EXPECT_EQ(jobs, brute_translation_neighbors(split, domain, Extent<3>{2, 1, 1}, topology));
 
   const Box<3> one_cell_domain{Index<3>{0, 0, 0}, Index<3>{0, 0, 0}};
-  const BoxArray<3> one_cell =
-      BoxArray<3>::from_domain(one_cell_domain, std::array<int, 3>{1, 1, 1});
-  const auto deep = enumerate_local_translation_neighbors(
-      one_cell, one_cell_domain, Extent<3>{2, 1, 1}, topology, std::array<int, 3>{1, 1, 1},
-      kHashBudget, kNeighborBudget);
+  const BoxArray<3> one_cell = BoxArray<3>::from_domain(one_cell_domain, Extent<3>{1, 1, 1});
+  const auto deep =
+      enumerate_local_translation_neighbors(one_cell, one_cell_domain, Extent<3>{2, 1, 1}, topology,
+                                            Extent<3>{1, 1, 1}, kHashBudget, kNeighborBudget);
   EXPECT_EQ(deep,
             brute_translation_neighbors(one_cell, one_cell_domain, Extent<3>{2, 1, 1}, topology));
   EXPECT_NE(find_job(deep, 0, 0, {2, 1, 1}), nullptr);
@@ -290,19 +287,19 @@ TEST(test_nd_topology, local_neighbors_cover_3d_multibox_and_deep_corner_images)
 
 TEST(test_nd_topology, local_neighbors_reject_unmappable_topology_and_checked_ghost_growth) {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{1, 1}};
-  const BoxArray<2> boxes = BoxArray<2>::from_domain(domain, std::array<int, 2>{2, 2});
+  const BoxArray<2> boxes = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
   const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
       Face<2>{0, Side::lower}, Face<2>{1, Side::upper}, SignedPermutation<2>{{1, 0}, {1, -1}}}}};
-  EXPECT_THROW((void)enumerate_local_translation_neighbors(boxes, domain, Extent<2>{1, 1}, mapped,
-                                                           std::array<int, 2>{2, 2}, kHashBudget,
-                                                           kNeighborBudget),
-               std::invalid_argument);
+  EXPECT_THROW(
+      (void)enumerate_local_translation_neighbors(boxes, domain, Extent<2>{1, 1}, mapped,
+                                                  Extent<2>{2, 2}, kHashBudget, kNeighborBudget),
+      std::invalid_argument);
 
   const Box<1> edge{Index<1>{std::numeric_limits<int>::min()},
                     Index<1>{std::numeric_limits<int>::min()}};
   const BoxArray<1> edge_boxes(std::vector<Box<1>>{edge});
-  EXPECT_THROW((void)enumerate_local_translation_neighbors(
-                   edge_boxes, edge, Extent<1>{1}, PeriodicTopology<1>{}, std::array<int, 1>{1},
-                   kHashBudget, kNeighborBudget),
+  EXPECT_THROW((void)enumerate_local_translation_neighbors(edge_boxes, edge, Extent<1>{1},
+                                                           PeriodicTopology<1>{}, Extent<1>{1},
+                                                           kHashBudget, kNeighborBudget),
                std::overflow_error);
 }

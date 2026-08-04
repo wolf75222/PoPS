@@ -4,9 +4,9 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/layout/nd/box_array.hpp>
-#include <pops/mesh/layout/nd/distribution.hpp>
-#include <pops/mesh/layout/nd/rank_space.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/fab.hpp>
 
 #include <cstddef>

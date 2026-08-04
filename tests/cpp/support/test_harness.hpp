@@ -39,7 +39,7 @@ inline constexpr double kPi = 3.14159265358979323846;
 ///   `auto chk = [&](bool c, const char* w){...}` recopie dans presque chaque test.
 /// Contrat : deux styles d'impression, choisis a la construction, pour reproduire EXACTEMENT la
 ///   sortie des deux familles de tests existantes :
-///   - `Style::Terse`   (defaut) : n'imprime QUE les echecs, `FAIL <libelle>\n` (cf. test_box2d) ;
+///   - `Style::Terse`   (defaut) : n'imprime QUE les echecs, `FAIL <libelle>\n` (cf. test_box) ;
 ///   - `Style::Verbose` : imprime chaque ligne `  [OK ] <libelle>` / `  [XX ] <libelle>`
 ///     (cf. test_dense_eig, test_amr_system_contract).
 /// Contraintes : non copiable par valeur n'est pas requis ; on le capture par reference dans une

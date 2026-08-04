@@ -1,10 +1,10 @@
 /// @file
-/// @brief Exact ND patch ownership over an explicit process-coordinate space.
+/// @brief Exact compile-time-ranked patch ownership over an explicit process space.
 
 #pragma once
 
-#include <pops/mesh/layout/nd/box_array.hpp>
-#include <pops/mesh/layout/nd/rank_space.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 
 #include <cstddef>
 #include <stdexcept>

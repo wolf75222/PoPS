@@ -1,11 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <Kokkos_Core.hpp>
 
-#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -59,7 +58,7 @@ TEST(test_nd_distribution, partitioned_ownership_is_ordered_and_rank_coordinates
 
 TEST(test_nd_distribution, replicated_layouts_store_no_fake_owner_and_are_local_everywhere) {
   const BoxArray<2> boxes =
-      BoxArray<2>::from_domain(Box<2>{Index<2>{-3, 4}, Index<2>{0, 7}}, std::array<int, 2>{2, 2});
+      BoxArray<2>::from_domain(Box<2>{Index<2>{-3, 4}, Index<2>{0, 7}}, Extent<2>{2, 2});
   const RankSpace<2> ranks{Index<2>{4, -3}, Extent<2>{2, 3}};
   const auto distribution = Distribution<2>::replicated(boxes, ranks);
 
@@ -98,7 +97,7 @@ TEST(test_nd_distribution, distribution_rejects_invalid_counts_owners_rank_space
 TEST(test_nd_distribution,
      multifab_allocates_only_ordered_partitioned_boxes_and_refuses_remote_access) {
   const BoxArray<2> boxes =
-      BoxArray<2>::from_domain(Box<2>{Index<2>{-2, 3}, Index<2>{1, 6}}, std::array<int, 2>{2, 2});
+      BoxArray<2>::from_domain(Box<2>{Index<2>{-2, 3}, Index<2>{1, 6}}, Extent<2>{2, 2});
   const RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{2, 2}};
   const Index<2> first_rank{10, -2};
   const auto distribution = Distribution<2>::partitioned(
@@ -190,8 +189,8 @@ TEST(test_nd_distribution,
   EXPECT_EQ(assigned.local_size(), 0U);
   EXPECT_EQ(move_assigned.fab(0).ghosts(), Extent<1>{2});
 
-  const BoxArray<3> volume = BoxArray<3>::from_domain(Box<3>{Index<3>{-1, 2, 4}, Index<3>{2, 3, 5}},
-                                                      std::array<int, 3>{2, 1, 2});
+  const BoxArray<3> volume =
+      BoxArray<3>::from_domain(Box<3>{Index<3>{-1, 2, 4}, Index<3>{2, 3, 5}}, Extent<3>{2, 1, 2});
   const RankSpace<3> ranks3{Index<3>{1, -1, 7}, Extent<3>{2, 1, 1}};
   std::vector<Index<3>> owners(volume.size(), Index<3>{2, -1, 7});
   owners[0] = Index<3>{1, -1, 7};

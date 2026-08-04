@@ -1,11 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <Kokkos_Core.hpp>
 
-#include <array>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -39,7 +38,7 @@ void expect_all_values(const MultiFab<Dim, MemorySpace>& fields, Real expected) 
 
 TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
   const BoxArray<2> layout =
-      BoxArray<2>::from_domain(Box<2>{Index<2>{-2, 3}, Index<2>{1, 6}}, std::array<int, 2>{2, 2});
+      BoxArray<2>::from_domain(Box<2>{Index<2>{-2, 3}, Index<2>{1, 6}}, Extent<2>{2, 2});
   const RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{2, 2}};
   const Index<2> local_rank{10, -2};
   const auto distribution = Distribution<2>::partitioned(
@@ -77,7 +76,7 @@ TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
 
 TEST(test_multifab, set_val_copy_and_move_preserve_deep_1d_and_3d_ownership) {
   const BoxArray<1> line =
-      BoxArray<1>::from_domain(Box<1>{Index<1>{-4}, Index<1>{3}}, std::array<int, 1>{3});
+      BoxArray<1>::from_domain(Box<1>{Index<1>{-4}, Index<1>{3}}, Extent<1>{3});
   const RankSpace<1> line_ranks{Index<1>{7}, Extent<1>{1}};
   const auto line_distribution = Distribution<1>::replicated(line, line_ranks);
   MultiFab<1> one_dimensional(line, line_distribution, Index<1>{7}, 2, Extent<1>{2});
@@ -94,8 +93,8 @@ TEST(test_multifab, set_val_copy_and_move_preserve_deep_1d_and_3d_ownership) {
   expect_all_values(one_dimensional, Real{6.5});
   expect_all_values(copied, Real{-2});
 
-  const BoxArray<3> volume = BoxArray<3>::from_domain(Box<3>{Index<3>{-1, 2, 4}, Index<3>{2, 3, 5}},
-                                                      std::array<int, 3>{2, 1, 2});
+  const BoxArray<3> volume =
+      BoxArray<3>::from_domain(Box<3>{Index<3>{-1, 2, 4}, Index<3>{2, 3, 5}}, Extent<3>{2, 1, 2});
   const RankSpace<3> volume_ranks{Index<3>{1, -1, 7}, Extent<3>{2, 1, 1}};
   std::vector<Index<3>> owners(volume.size(), Index<3>{2, -1, 7});
   owners.front() = Index<3>{1, -1, 7};

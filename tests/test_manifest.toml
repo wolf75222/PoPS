@@ -769,8 +769,8 @@ sources = ["tests/cpp/unit/elliptic/test_variable_epsilon.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_box2d"
-sources = ["tests/cpp/unit/mesh/test_box2d.cpp"]
+name = "test_box"
+sources = ["tests/cpp/unit/mesh/test_box.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <Kokkos_Core.hpp>

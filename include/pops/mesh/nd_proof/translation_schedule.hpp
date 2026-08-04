@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/nd_proof/local_neighbors.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
@@ -82,8 +82,8 @@ class TranslationSchedule {
   TranslationSchedule(const layout_type& layout, const distribution_type& distribution,
                       const Box<Dim>& domain, const PeriodicTopology<Dim>& topology,
                       Extent<Dim> ghosts, int ncomp, int first_component, int component_count,
-                      rank_type local_rank, const std::array<int, Dim>& hash_bins,
-                      BoxHashBudget hash_budget, TranslationScheduleBudget budget)
+                      rank_type local_rank, const Extent<Dim>& hash_bins, BoxHashBudget hash_budget,
+                      TranslationScheduleBudget budget)
       : layout_(layout),
         distribution_(distribution),
         domain_(domain),
@@ -97,11 +97,8 @@ class TranslationSchedule {
 
     LocalNeighborWorkBudget neighbor_budget = budget.neighbor;
     neighbor_budget.jobs = std::min(neighbor_budget.jobs, budget.global_jobs);
-    // Neighbor enumeration remains a private proof algorithm. Convert only its immutable layout
-    // input; production field identity and storage stay canonical throughout the schedule.
-    const ::pops::mesh::nd_proof::BoxArray<Dim> proof_layout(layout_.boxes());
     const std::vector<LocalNeighborJob<Dim>> neighbors = enumerate_local_translation_neighbors(
-        proof_layout, domain_, ghosts_, topology_, hash_bins, hash_budget, neighbor_budget);
+        layout_, domain_, ghosts_, topology_, hash_bins, hash_budget, neighbor_budget);
     if (neighbors.size() > budget.global_jobs)
       throw std::length_error("nd_proof::TranslationSchedule global jobs exceed budget");
 

@@ -209,7 +209,7 @@ CPP_ZERO_IMPACT_FILES = {
 }
 
 CPP_SMOKE_TARGETS = (
-    "test_box2d",
+    "test_box",
     "test_reduce",
     "test_system_abstraction",
 )
