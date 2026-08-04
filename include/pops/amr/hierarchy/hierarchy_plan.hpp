@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/amr/hierarchy/nd/level_layout.hpp>
+#include <pops/amr/hierarchy/level_layout.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::hierarchy::nd {
+namespace pops::amr::hierarchy {
 
 struct HierarchyValidationBudget {
   std::size_t levels = 0;
@@ -129,4 +129,4 @@ class HierarchyPlan {
   HierarchyValidationBudget budget_{};
 };
 
-}  // namespace pops::amr::hierarchy::nd
+}  // namespace pops::amr::hierarchy

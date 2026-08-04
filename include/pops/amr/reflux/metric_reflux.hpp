@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include <pops/amr/reflux/nd/face_flux_ledger.hpp>
-#include <pops/amr/transfer/nd/refinement_ratio.hpp>
+#include <pops/amr/reflux/face_flux_ledger.hpp>
+#include <pops/amr/refinement_ratio.hpp>
 
 #include <algorithm>
 #include <array>
@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::reflux::nd {
+namespace pops::amr::reflux {
 
 /// Affine relation between the coarse and fine face index spaces.  The same mapping applies to
 /// normal face coordinates and to tangential cell coordinates; the normal fine face has no child
@@ -250,9 +250,10 @@ void validate_temporal_coverage(const CoarseFaceRefluxKey<Dim>& key,
 }
 
 template <int Dim>
-std::set<std::array<int, Dim>> expected_fine_face_set(
-    const CoarseFaceRefluxKey<Dim>& key, const transfer::nd::RefinementRatio<Dim>& ratio,
-    const FaceRefinementMapping<Dim>& mapping, const MetricRefluxBudget& budget) {
+std::set<std::array<int, Dim>> expected_fine_face_set(const CoarseFaceRefluxKey<Dim>& key,
+                                                      const RefinementRatio<Dim>& ratio,
+                                                      const FaceRefinementMapping<Dim>& mapping,
+                                                      const MetricRefluxBudget& budget) {
   validate_reflux_budget(budget);
   if (!ratio.refines_any_axis())
     throw std::invalid_argument(
@@ -326,7 +327,7 @@ void require_complete_slices(const std::map<StageSlice, std::set<std::array<int,
 /// both other-axis ratios.  The normal-axis ratio changes only the normal coordinate mapping.
 template <int Dim>
 std::vector<Index<Dim>> fine_faces_for_coarse_face(const CoarseFaceRefluxKey<Dim>& key,
-                                                   const transfer::nd::RefinementRatio<Dim>& ratio,
+                                                   const RefinementRatio<Dim>& ratio,
                                                    const FaceRefinementMapping<Dim>& mapping,
                                                    const MetricRefluxBudget& budget) {
   detail::validate_reflux_key(key);
@@ -348,7 +349,7 @@ std::vector<Index<Dim>> fine_faces_for_coarse_face(const CoarseFaceRefluxKey<Dim
 template <int Dim, class Payload, class Axpy>
 MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, Payload>& ledger,
                                         const CoarseFaceRefluxKey<Dim>& key,
-                                        const transfer::nd::RefinementRatio<Dim>& ratio,
+                                        const RefinementRatio<Dim>& ratio,
                                         const FaceRefinementMapping<Dim>& mapping,
                                         const MetricRefluxBudget& budget, Axpy&& axpy) {
   detail::validate_reflux_key(key);
@@ -434,4 +435,4 @@ Payload coarse_cell_reflux_correction(const MetricFaceReflux<Payload>& reflux,
   return correction;
 }
 
-}  // namespace pops::amr::reflux::nd
+}  // namespace pops::amr::reflux

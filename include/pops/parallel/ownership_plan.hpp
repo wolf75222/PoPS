@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 
 #include <algorithm>
 #include <cstddef>

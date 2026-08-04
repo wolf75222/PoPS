@@ -9,7 +9,9 @@
 #include <pops/parallel/load_balance.hpp>
 #include <pops/parallel/ownership_plan.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -115,6 +117,34 @@ enum class RebalanceReason : std::uint8_t {
   NetBenefit = 3,
 };
 
+/// Topology-qualified ownership proposal with the complete prepared result retained as evidence.
+///
+/// A hierarchy may consume `proposed.plan().distribution()` only when `accepted` is true and the
+/// source contract still matches its live level identity.  Retaining the full prepared result keeps
+/// spatial owners, linear owners, weights, traversal, rank loads, provider identity, and collective
+/// context inseparable throughout migration.
+template <int Dim>
+struct PreparedRebalanceDecision {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PreparedRebalanceDecision only supports dimensions 1, 2, and 3");
+
+  std::uint64_t topology_epoch = 0;
+  std::uint64_t materialization_generation = 0;
+  std::string source_contract;
+  PreparedLoadBalanceResult<Dim> proposed;
+  RebalanceReason reason = RebalanceReason::EmptyHierarchy;
+  bool accepted = false;
+  std::int64_t moved_patches = 0;
+  std::int64_t migration_bytes = 0;
+  std::int64_t migration_nanoseconds = 0;
+  std::int64_t current_max_nanoseconds_per_step = 0;
+  std::int64_t proposed_max_nanoseconds_per_step = 0;
+  double current_imbalance = 1.0;
+  double proposed_imbalance = 1.0;
+  double predicted_net_speedup = 1.0;
+  std::string exact_contract;
+};
+
 namespace detail {
 
 template <int Dim>
@@ -192,6 +222,180 @@ inline std::int64_t checked_add_cost(std::int64_t lhs, std::int64_t rhs, std::st
   if (lhs < 0 || rhs < 0 || rhs > std::numeric_limits<std::int64_t>::max() - lhs)
     throw std::overflow_error(std::string(context) + " exceeds int64_t");
   return lhs + rhs;
+}
+
+inline std::int64_t estimate_weight(const ResourceEstimate& estimate, std::uint64_t topology_epoch,
+                                    std::uint64_t materialization_generation) {
+  if (estimate.topology_epoch != topology_epoch ||
+      estimate.materialization_generation != materialization_generation)
+    throw std::invalid_argument("load-balance resource estimate is stale for the live topology");
+  if (estimate.samples <= 0 || estimate.cell_updates <= 0 || estimate.compute_nanoseconds < 0 ||
+      estimate.memory_bytes < 0 || estimate.communication_bytes < 0 ||
+      estimate.communication_nanoseconds < 0 || estimate.resident_bytes <= 0)
+    throw std::invalid_argument("load-balance resource estimate is incomplete or negative");
+  const std::int64_t total =
+      checked_add_cost(estimate.compute_nanoseconds, estimate.communication_nanoseconds,
+                       "load-balance measured time");
+  if (total <= 0)
+    throw std::invalid_argument("load-balance resource estimate has no measured time");
+  const std::int64_t quotient = total / estimate.samples;
+  return checked_add_cost(quotient, total % estimate.samples == 0 ? 0 : 1,
+                          "load-balance per-sample weight");
+}
+
+template <int Dim>
+inline void append_rank_space(ExactContractBuilder& contract,
+                              const mesh::RankSpace<Dim>& rank_space) {
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(static_cast<std::int32_t>(rank_space.origin()[axis]))
+        .scalar(static_cast<std::int64_t>(rank_space.extent()[axis]));
+  contract.scalar(static_cast<std::uint64_t>(rank_space.size()));
+}
+
+template <int Dim>
+inline void append_distribution(ExactContractBuilder& contract,
+                                const mesh::Distribution<Dim>& distribution) {
+  contract.scalar(static_cast<std::uint8_t>(distribution.mode()));
+  append_rank_space(contract, distribution.rank_space());
+  contract
+      .sequence(distribution.layout().boxes(),
+                [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(static_cast<std::int32_t>(patch.lo[axis]))
+                        .scalar(static_cast<std::int32_t>(patch.hi[axis]));
+                })
+      .sequence(distribution.owners(), [](ExactContractBuilder& item, const Index<Dim>& owner) {
+        for (int axis = 0; axis < Dim; ++axis)
+          item.scalar(static_cast<std::int32_t>(owner[axis]));
+      });
+}
+
+template <int Dim>
+inline std::string exact_rebalance_request(const mesh::Distribution<Dim>& current,
+                                           std::uint64_t topology_epoch,
+                                           std::uint64_t materialization_generation,
+                                           ResourceEstimates estimates,
+                                           const RebalancePolicy& policy) {
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-rebalance-request")
+      .scalar(std::uint32_t{3})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .scalar(topology_epoch)
+      .scalar(materialization_generation)
+      .scalar(policy.minimum_improvement_ppm)
+      .scalar(policy.amortization_steps)
+      .scalar(policy.migration_bandwidth_bytes_per_second)
+      .scalar(policy.per_patch_migration_latency_nanoseconds);
+  append_distribution(contract, current);
+  contract.scalar(static_cast<std::uint64_t>(estimates.size()));
+  for (const ResourceEstimate& estimate : estimates) {
+    contract.scalar(estimate.topology_epoch)
+        .scalar(estimate.materialization_generation)
+        .scalar(estimate.samples)
+        .scalar(estimate.cell_updates)
+        .scalar(estimate.compute_nanoseconds)
+        .scalar(estimate.memory_bytes)
+        .scalar(estimate.communication_bytes)
+        .scalar(estimate.communication_nanoseconds)
+        .scalar(estimate.resident_bytes);
+  }
+  return std::move(contract).release();
+}
+
+template <int Dim>
+inline std::string exact_rebalance_source(std::string_view authority_identity,
+                                          std::string_view authority_collective_contract,
+                                          int source_level, std::uint64_t topology_epoch,
+                                          std::uint64_t materialization_generation,
+                                          const mesh::Distribution<Dim>& current) {
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-rebalance-source")
+      .scalar(std::uint32_t{3})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .text(authority_identity)
+      .bytes(authority_collective_contract)
+      .scalar(source_level)
+      .scalar(topology_epoch)
+      .scalar(materialization_generation);
+  append_distribution(contract, current);
+  return std::move(contract).release();
+}
+
+template <int Dim>
+inline std::vector<std::int64_t> rank_costs(const mesh::Distribution<Dim>& distribution,
+                                            LoadBalanceWeights weights) {
+  if (distribution.mode() != mesh::DistributionMode::partitioned ||
+      distribution.owners().size() != weights.size())
+    throw std::invalid_argument(
+        "rebalance requires a partitioned distribution and one weight per patch");
+  std::vector<std::int64_t> costs(distribution.rank_space().size(), 0);
+  for (std::size_t patch = 0; patch < weights.size(); ++patch) {
+    const std::size_t owner = distribution.rank_space().linear_rank(distribution.owners()[patch]);
+    costs[owner] =
+        checked_add_cost(costs[owner], weights[patch], "rebalance per-rank measured cost");
+  }
+  return costs;
+}
+
+template <int Dim>
+inline std::int64_t maximum_rank_cost(const mesh::Distribution<Dim>& distribution,
+                                      LoadBalanceWeights weights) {
+  const std::vector<std::int64_t> costs = rank_costs(distribution, weights);
+  return costs.empty() ? 0 : *std::max_element(costs.begin(), costs.end());
+}
+
+template <int Dim>
+inline double measured_imbalance(const mesh::Distribution<Dim>& distribution,
+                                 LoadBalanceWeights weights) {
+  if (weights.empty())
+    return 1.0;
+  std::int64_t total = 0;
+  for (const std::int64_t weight : weights)
+    total = checked_add_cost(total, weight, "rebalance measured total");
+  if (total == 0 || distribution.rank_space().empty())
+    return 1.0;
+  const double average =
+      static_cast<double>(total) / static_cast<double>(distribution.rank_space().size());
+  return static_cast<double>(maximum_rank_cost(distribution, weights)) / average;
+}
+
+inline std::int64_t migration_time_nanoseconds(std::int64_t bytes, std::int64_t moved_patches,
+                                               const RebalancePolicy& policy) {
+  if (bytes < 0 || moved_patches < 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
+      policy.per_patch_migration_latency_nanoseconds < 0)
+    throw std::invalid_argument("rebalance migration cost model is invalid");
+  const long double transfer =
+      std::ceil(static_cast<long double>(bytes) * 1.0e9L /
+                static_cast<long double>(policy.migration_bandwidth_bytes_per_second));
+  const long double latency =
+      static_cast<long double>(moved_patches) * policy.per_patch_migration_latency_nanoseconds;
+  const long double total = transfer + latency;
+  if (total > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+    throw std::overflow_error("rebalance migration time exceeds int64_t");
+  return static_cast<std::int64_t>(total);
+}
+
+template <int Dim>
+inline std::string exact_rebalance_decision(const PreparedRebalanceDecision<Dim>& decision) {
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-rebalance-decision")
+      .scalar(std::uint32_t{3})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .scalar(decision.topology_epoch)
+      .scalar(decision.materialization_generation)
+      .bytes(decision.source_contract)
+      .bytes(decision.proposed.exact_contract())
+      .scalar(static_cast<std::uint8_t>(decision.reason))
+      .scalar(static_cast<std::uint8_t>(decision.accepted ? 1 : 0))
+      .scalar(decision.moved_patches)
+      .scalar(decision.migration_bytes)
+      .scalar(decision.migration_nanoseconds)
+      .scalar(decision.current_max_nanoseconds_per_step)
+      .scalar(decision.proposed_max_nanoseconds_per_step)
+      .scalar(decision.current_imbalance)
+      .scalar(decision.proposed_imbalance)
+      .scalar(decision.predicted_net_speedup);
+  return std::move(contract).release();
 }
 
 template <int Dim>
@@ -471,6 +675,87 @@ struct RoundRobinLoadBalance {
 
 }  // namespace detail
 
+/// Evaluate an authenticated candidate ownership plan without mutating hierarchy state.
+template <int Dim>
+inline PreparedRebalanceDecision<Dim> make_rebalance_decision(
+    const mesh::BoxArray<Dim>& patches, const mesh::Distribution<Dim>& current,
+    PreparedLoadBalanceResult<Dim> proposed, std::uint64_t topology_epoch,
+    std::uint64_t materialization_generation, ResourceEstimates estimates,
+    const RebalancePolicy& policy, std::string source_contract) {
+  const mesh::Distribution<Dim>& candidate = proposed.plan().distribution();
+  if (!current.matches_layout(patches) || !candidate.matches_layout(patches) ||
+      current.mode() != mesh::DistributionMode::partitioned ||
+      candidate.mode() != mesh::DistributionMode::partitioned ||
+      current.rank_space() != candidate.rank_space() || estimates.size() != patches.size() ||
+      source_contract.empty())
+    throw std::invalid_argument(
+        "prepared rebalance distributions, estimates, and source must describe one layout");
+  if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
+      policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
+      policy.per_patch_migration_latency_nanoseconds < 0)
+    throw std::invalid_argument("rebalance policy is outside its exact bounded envelope");
+
+  std::vector<std::int64_t> weights;
+  weights.reserve(estimates.size());
+  for (const ResourceEstimate& estimate : estimates)
+    weights.push_back(
+        detail::estimate_weight(estimate, topology_epoch, materialization_generation));
+  if (proposed.plan().weights() != weights)
+    throw std::invalid_argument(
+        "prepared rebalance proposal does not retain the authenticated measured weights");
+
+  PreparedRebalanceDecision<Dim> decision{
+      .topology_epoch = topology_epoch,
+      .materialization_generation = materialization_generation,
+      .source_contract = std::move(source_contract),
+      .proposed = std::move(proposed),
+  };
+  if (patches.empty()) {
+    decision.reason = RebalanceReason::EmptyHierarchy;
+    decision.exact_contract = detail::exact_rebalance_decision(decision);
+    return decision;
+  }
+
+  const mesh::Distribution<Dim>& proposed_distribution = decision.proposed.plan().distribution();
+  decision.current_max_nanoseconds_per_step = detail::maximum_rank_cost(current, weights);
+  decision.proposed_max_nanoseconds_per_step =
+      detail::maximum_rank_cost(proposed_distribution, weights);
+  decision.current_imbalance = detail::measured_imbalance(current, weights);
+  decision.proposed_imbalance = detail::measured_imbalance(proposed_distribution, weights);
+  for (std::size_t patch = 0; patch < patches.size(); ++patch) {
+    if (current.owners()[patch] == proposed_distribution.owners()[patch])
+      continue;
+    ++decision.moved_patches;
+    decision.migration_bytes = detail::checked_add_cost(
+        decision.migration_bytes, estimates[patch].resident_bytes, "rebalance migration bytes");
+  }
+  decision.migration_nanoseconds =
+      detail::migration_time_nanoseconds(decision.migration_bytes, decision.moved_patches, policy);
+
+  const long double current_horizon =
+      static_cast<long double>(decision.current_max_nanoseconds_per_step) *
+      policy.amortization_steps;
+  const long double proposed_horizon =
+      static_cast<long double>(decision.proposed_max_nanoseconds_per_step) *
+          policy.amortization_steps +
+      decision.migration_nanoseconds;
+  if (!(current_horizon > 0.0L) || !(proposed_horizon > 0.0L))
+    throw std::invalid_argument("rebalance measured horizon must be strictly positive");
+  decision.predicted_net_speedup = static_cast<double>(current_horizon / proposed_horizon);
+  const long double required_fraction =
+      1.0L - static_cast<long double>(policy.minimum_improvement_ppm) / 1.0e6L;
+  decision.accepted =
+      decision.moved_patches > 0 && proposed_horizon <= current_horizon * required_fraction;
+  if (decision.moved_patches == 0)
+    decision.reason = RebalanceReason::MappingUnchanged;
+  else if (decision.accepted)
+    decision.reason = RebalanceReason::NetBenefit;
+  else
+    decision.reason = RebalanceReason::InsufficientNetBenefit;
+  decision.exact_contract = detail::exact_rebalance_decision(decision);
+  return decision;
+}
+
 /// Immutable compile-time-ranked authority prepared before hierarchy materialization.
 ///
 /// The provider is invoked exactly once.  Request provenance and every retained OwnershipPlan
@@ -519,6 +804,16 @@ class PreparedLoadBalanceAuthority {
     return *default_rebalance_policy_;
   }
 
+  [[nodiscard]] std::string rebalance_source_contract(
+      int source_level, const mesh::Distribution<Dim>& current, std::uint64_t topology_epoch,
+      std::uint64_t materialization_generation) const {
+    if (source_level < 0 || current.mode() != mesh::DistributionMode::partitioned ||
+        current.rank_space().empty())
+      throw std::invalid_argument("prepared rebalance source is not a partitioned hierarchy level");
+    return detail::exact_rebalance_source(semantic_identity_, collective_contract_, source_level,
+                                          topology_epoch, materialization_generation, current);
+  }
+
   [[nodiscard]] PreparedLoadBalanceResult<Dim> prepare(
       const mesh::BoxArray<Dim>& patches, const mesh::RankSpace<Dim>& rank_space,
       parallel::LoadBalancePreparationBudget budget, LoadBalanceWeights weights = {},
@@ -564,6 +859,72 @@ class PreparedLoadBalanceAuthority {
     return PreparedLoadBalanceResult<Dim>(std::move(*plan), collective_contract_,
                                           std::move(collective_context_contract),
                                           std::move(source_contract), std::move(exact_contract));
+  }
+
+  /// Produce one collective, topology-qualified migration decision from measured patch costs.
+  /// The hierarchy remains unchanged until it validates and consumes the returned source contract.
+  [[nodiscard]] PreparedRebalanceDecision<Dim> decide_rebalance(
+      int source_level, const mesh::BoxArray<Dim>& patches, const mesh::Distribution<Dim>& current,
+      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+      ResourceEstimates estimates, parallel::LoadBalancePreparationBudget preparation_budget,
+      const RebalancePolicy& policy, const ExecutionLane& lane = ExecutionLane::world()) const {
+    const CommunicatorView communicator = lane.communicator();
+    std::vector<std::int64_t> weights;
+    std::string request_contract;
+    std::string source_contract;
+    detail::collective_load_balance_preflight("prepared rebalance request", communicator, [&] {
+      if (source_level < 0 || current.mode() != mesh::DistributionMode::partitioned ||
+          !current.matches_layout(patches) ||
+          current.rank_space().size() != static_cast<std::size_t>(communicator.size()) ||
+          estimates.size() != patches.size())
+        throw std::invalid_argument(
+            "prepared rebalance source must be one partitioned level on the execution rank space");
+      if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
+          policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
+          policy.per_patch_migration_latency_nanoseconds < 0)
+        throw std::invalid_argument("rebalance policy is outside its exact bounded envelope");
+      weights.reserve(estimates.size());
+      for (const ResourceEstimate& estimate : estimates)
+        weights.push_back(
+            detail::estimate_weight(estimate, topology_epoch, materialization_generation));
+      request_contract = detail::exact_rebalance_request(
+          current, topology_epoch, materialization_generation, estimates, policy);
+      source_contract = rebalance_source_contract(source_level, current, topology_epoch,
+                                                  materialization_generation);
+    });
+
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{"collective", collective_contract_},
+                                                   {"rebalance-source", source_contract},
+                                                   {"rebalance-request", request_contract}},
+                                                  communicator))
+      throw std::invalid_argument(
+          "prepared rebalance authority or measured request differs across MPI ranks");
+
+    PreparedLoadBalanceResult<Dim> proposal =
+        prepare(patches, current.rank_space(), preparation_budget, weights, lane);
+    std::optional<PreparedRebalanceDecision<Dim>> result;
+    detail::collective_load_balance_preflight("prepared rebalance decision", communicator, [&] {
+      result.emplace(make_rebalance_decision(patches, current, std::move(proposal), topology_epoch,
+                                             materialization_generation, estimates, policy,
+                                             source_contract));
+    });
+    if (!result)
+      throw std::logic_error("prepared rebalance decision was not materialized");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"collective", collective_contract_}, {"decision", result->exact_contract}},
+            communicator))
+      throw std::invalid_argument("prepared rebalance decision differs across MPI ranks");
+    return std::move(*result);
+  }
+
+  [[nodiscard]] PreparedRebalanceDecision<Dim> decide_rebalance(
+      int source_level, const mesh::BoxArray<Dim>& patches, const mesh::Distribution<Dim>& current,
+      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+      ResourceEstimates estimates, parallel::LoadBalancePreparationBudget preparation_budget,
+      const ExecutionLane& lane = ExecutionLane::world()) const {
+    return decide_rebalance(source_level, patches, current, topology_epoch,
+                            materialization_generation, estimates, preparation_budget,
+                            default_rebalance_policy(), lane);
   }
 
  private:

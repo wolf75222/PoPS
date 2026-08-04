@@ -67,27 +67,20 @@ def test_amr_layout_paths_require_one_prepared_load_balance_authority():
     paths = (
         "include/pops/amr/hierarchy/amr_hierarchy.hpp",
         "include/pops/amr/regridding/regrid.hpp",
-        "include/pops/coupling/amr/amr_coupler_mp.hpp",
-        "include/pops/coupling/amr/amr_regrid_coupler.hpp",
         "include/pops/runtime/amr/amr_runtime.hpp",
-        "include/pops/runtime/builders/compiled/amr_dsl_block.hpp",
     )
     sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in paths}
 
     assert all("make_default_load_balance_authority" not in source for source in sources.values())
-    assert all(
-        "DistributionMapping(ba.size(), n_ranks())" not in source
-        and "DistributionMapping(fine_ba.size(), n_ranks())" not in source
-        for source in sources.values()
-    )
-    assert "load_balance.distribute(ba, n_ranks())" in sources[paths[2]]
+    assert all("DistributionMapping" not in source for source in sources.values())
+    assert "const PreparedLoadBalanceAuthority<Dim>& load_balance" in sources[paths[1]]
+    assert "load_balance.prepare(" in sources[paths[1]]
+    assert "ownership->plan().distribution()" in sources[paths[1]]
     assert (
-        "load_balance.distribute(*candidate_layout, communicator.size(), {}, communicator)"
-        in sources[paths[3]]
+        "std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance"
+        in sources[paths[2]]
     )
-    assert "hierarchy.load_balance_authority()" in sources[paths[3]]
-    assert "*hierarchy_.load_balance" in sources[paths[4]]
-    assert "bp.mesh.load_balance->distribute" in sources[paths[5]]
+    assert "load_balance_->decide_rebalance(" in sources[paths[2]]
 
 
 def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():

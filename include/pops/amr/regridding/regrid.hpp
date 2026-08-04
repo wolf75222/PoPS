@@ -1,126 +1,210 @@
 /// @file
-/// @brief Portable tagging primitives shared by the canonical AMR regrid transaction.
-///
-/// Layer: `include/pops/amr` (AMR geometric primitives).
-/// Role: tags a level and provides the low-level bounded tag dilation primitive. Layout consensus,
-/// clustering, proper nesting, load balancing and field publication are a single transaction in
-/// coupling/amr/amr_regrid_coupler.hpp; there is intentionally no second regrid pipeline here.
-/// Contract: the low-level tagging criterion is a trivially-copyable, device-callable predicate on
-/// (ConstArray4, i, j); we stay agnostic of the physics. For a gradient criterion, the caller fills
-/// the ghosts beforehand. Runtime-authored tagging uses PreparedTaggingExecutionPlan instead.
-///
-/// Invariants:
-/// - conservative regrid = common hierarchy, co-located cells, regrid by union of tags;
-/// - the fine level lives in the refined index space of the coarse level (refine(ref_ratio));
-/// - without any tag, the fine level (and the finer ones) is removed.
+/// @brief Prepared compile-time-ranked AMR regrid transaction.
 
 #pragma once
 
-#include <pops/amr/tagging/tag_box.hpp>
-#include <pops/core/foundation/allocator.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+#include <pops/amr/hierarchy/level_layout.hpp>
+#include <pops/amr/tagging/clustering_provider.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
-#include <type_traits>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-namespace pops {
+namespace pops::amr::regridding {
+
+struct RegridPreparationBudget {
+  mesh::BoxArrayValidationBudget clustered_parent_layout{};
+  mesh::BoxArrayValidationBudget fine_layout{};
+  parallel::LoadBalancePreparationBudget load_balance{};
+
+  bool operator==(const RegridPreparationBudget&) const = default;
+};
+
+template <int Dim>
+class PreparedRegrid {
+ public:
+  static_assert(Dim >= 1 && Dim <= 3, "PreparedRegrid only supports dimensions 1, 2, and 3");
+
+  PreparedRegrid(const PreparedRegrid&) = default;
+  PreparedRegrid(PreparedRegrid&&) noexcept = default;
+  PreparedRegrid& operator=(const PreparedRegrid&) = delete;
+  PreparedRegrid& operator=(PreparedRegrid&&) = delete;
+
+  const hierarchy::LevelLayoutIdentity<Dim>& source_level() const noexcept { return source_level_; }
+  const RefinementRatio<Dim>& ratio() const noexcept { return ratio_; }
+  const tagging::ClusterResultIdentity<Dim>& clustering() const noexcept { return clustering_; }
+  bool removes_fine_level() const noexcept { return !fine_layout_.has_value(); }
+  const std::optional<hierarchy::LevelLayout<Dim>>& fine_layout() const noexcept {
+    return fine_layout_;
+  }
+  const std::optional<PreparedLoadBalanceResult<Dim>>& ownership() const noexcept {
+    return ownership_;
+  }
+  std::string_view exact_contract() const noexcept { return exact_contract_; }
+
+ private:
+  template <int Rank>
+  friend PreparedRegrid<Rank> prepare_regrid(const hierarchy::LevelLayout<Rank>&,
+                                             RefinementRatio<Rank>, tagging::ClusterResult<Rank>,
+                                             const PreparedLoadBalanceAuthority<Rank>&,
+                                             RegridPreparationBudget, const ExecutionLane&);
+
+  PreparedRegrid(hierarchy::LevelLayoutIdentity<Dim> source_level, RefinementRatio<Dim> ratio,
+                 tagging::ClusterResultIdentity<Dim> clustering,
+                 std::optional<PreparedLoadBalanceResult<Dim>> ownership,
+                 std::optional<hierarchy::LevelLayout<Dim>> fine_layout, std::string exact_contract)
+      : source_level_(std::move(source_level)),
+        ratio_(ratio),
+        clustering_(std::move(clustering)),
+        ownership_(std::move(ownership)),
+        fine_layout_(std::move(fine_layout)),
+        exact_contract_(std::move(exact_contract)) {}
+
+  hierarchy::LevelLayoutIdentity<Dim> source_level_;
+  RefinementRatio<Dim> ratio_;
+  tagging::ClusterResultIdentity<Dim> clustering_;
+  std::optional<PreparedLoadBalanceResult<Dim>> ownership_;
+  std::optional<hierarchy::LevelLayout<Dim>> fine_layout_;
+  std::string exact_contract_;
+};
 
 namespace detail {
 
-template <class Crit>
-struct PortableTagCellsKernel {
-  ConstArray4 values;
-  Crit criterion;
-  char* mask;
-  int nx;
-  int lo_x;
-  int lo_y;
-
-  POPS_HD void operator()(int i, int j) const {
-    if (criterion(values, i, j)) {
-      const std::int64_t row = static_cast<std::int64_t>(j) - lo_y;
-      const std::int64_t column = static_cast<std::int64_t>(i) - lo_x;
-      mask[row * nx + column] = char{1};
+template <int Dim>
+std::string exact_regrid_contract(const hierarchy::LevelLayoutIdentity<Dim>& source,
+                                  const RefinementRatio<Dim>& ratio,
+                                  const tagging::ClusterResultIdentity<Dim>& clustering,
+                                  const std::optional<PreparedLoadBalanceResult<Dim>>& ownership,
+                                  const std::optional<hierarchy::LevelLayout<Dim>>& fine_layout,
+                                  const RegridPreparationBudget& budget) {
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-regrid")
+      .scalar(std::uint32_t{1})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .scalar(source.level);
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(source.domain.lo[axis])
+        .scalar(source.domain.hi[axis])
+        .scalar(source.ratio_from_parent[axis])
+        .scalar(ratio[axis])
+        .scalar(source.rank_space.origin()[axis])
+        .scalar(source.rank_space.extent()[axis]);
+  contract.scalar(static_cast<std::uint8_t>(source.distribution_mode))
+      .scalar(static_cast<std::uint64_t>(source.validation_budget.boxes))
+      .scalar(static_cast<std::uint64_t>(source.validation_budget.overlap_pairs))
+      .sequence(source.patches,
+                [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
+                })
+      .sequence(source.owners,
+                [](ExactContractBuilder& item, const Index<Dim>& owner) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(owner[axis]);
+                })
+      .text(clustering.provider)
+      .scalar(clustering.options.min_efficiency);
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(clustering.options.min_box_size[static_cast<std::size_t>(axis)])
+        .scalar(clustering.options.max_box_size[static_cast<std::size_t>(axis)]);
+  contract.scalar(static_cast<std::uint64_t>(clustering.options.budget.shards))
+      .scalar(static_cast<std::uint64_t>(clustering.options.budget.recursion_nodes))
+      .scalar(static_cast<std::uint64_t>(clustering.options.budget.cell_visits))
+      .scalar(static_cast<std::uint64_t>(clustering.options.budget.output_boxes))
+      .scalar(static_cast<std::uint64_t>(clustering.options.budget.identity_bytes))
+      .scalar(static_cast<std::uint64_t>(clustering.canonical_shards.size()));
+  for (const tagging::TagShardIdentity<Dim>& shard : clustering.canonical_shards) {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(shard.local_rank[axis]);
+    contract.scalar(static_cast<std::uint8_t>(shard.replicated_alias ? 1 : 0))
+        .scalar(static_cast<std::uint64_t>(shard.patches.size()));
+    for (const tagging::PatchTagIdentity<Dim>& patch : shard.patches) {
+      contract.scalar(static_cast<std::uint64_t>(patch.global_patch));
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(patch.box.lo[axis]).scalar(patch.box.hi[axis]);
+      contract.sequence(patch.tags);
     }
   }
-};
+  contract
+      .sequence(clustering.boxes,
+                [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
+                })
+      .scalar(static_cast<std::uint64_t>(budget.clustered_parent_layout.boxes))
+      .scalar(static_cast<std::uint64_t>(budget.clustered_parent_layout.overlap_pairs))
+      .scalar(static_cast<std::uint64_t>(budget.fine_layout.boxes))
+      .scalar(static_cast<std::uint64_t>(budget.fine_layout.overlap_pairs))
+      .scalar(static_cast<std::uint64_t>(budget.load_balance.patches))
+      .scalar(static_cast<std::uint64_t>(budget.load_balance.ranks))
+      .scalar(budget.load_balance.total_weight)
+      .scalar(static_cast<std::uint8_t>(fine_layout.has_value() ? 1 : 0));
+  if (fine_layout) {
+    contract.sequence(fine_layout->patches().boxes(),
+                      [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                        for (int axis = 0; axis < Dim; ++axis)
+                          item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
+                      });
+  }
+  contract.bytes(ownership ? ownership->exact_contract() : std::string_view{});
+  return std::move(contract).release();
+}
 
 }  // namespace detail
 
-/// Marks the valid cells where the predicate is true, on a TagBox covering the domain.
-/// @tparam Crit trivially-copyable device predicate (ConstArray4, i, j) -> bool, evaluated on the
-/// valid cells of each fab. Host-only type erasure such as std::function is deliberately rejected.
-/// @param mf source field (local: only iterates over the rank's local fabs).
-/// @param domain domain covered by the returned TagBox (level index space).
-/// @return TagBox over domain, marked where crit is true.
-template <class Crit>
-TagBox tag_cells(const MultiFab& mf, const Box2D& domain, Crit crit) {
-  static_assert(std::is_trivially_copyable_v<Crit>,
-                "tag_cells requires a trivially-copyable device predicate; use the prepared "
-                "tagging program for runtime-authored criteria");
-  if (domain.empty() || mf.box_array().size() == 0)
-    throw std::invalid_argument("tag_cells requires a non-empty domain and field layout");
-  for (int current = 0; current < mf.box_array().size(); ++current) {
-    const Box2D& box = mf.box_array()[current];
-    if (box.empty() || !domain.contains(box))
-      throw std::invalid_argument("tag_cells field box lies outside the tag domain");
-    for (int previous = 0; previous < current; ++previous)
-      if (!box.intersect(mf.box_array()[previous]).empty())
-        throw std::invalid_argument("tag_cells requires a non-overlapping field layout");
+/// Prepare clustering-to-ownership cutover for the child of `parent`.
+///
+/// Cluster boxes are expressed in the parent index space.  Each is refined along every axis before
+/// ownership preparation, so child patches contain complete parent cells by construction.  An empty
+/// cluster result is an authenticated request to remove the child and all finer levels.
+template <int Dim>
+PreparedRegrid<Dim> prepare_regrid(const hierarchy::LevelLayout<Dim>& parent,
+                                   RefinementRatio<Dim> ratio,
+                                   tagging::ClusterResult<Dim> clustered,
+                                   const PreparedLoadBalanceAuthority<Dim>& load_balance,
+                                   RegridPreparationBudget budget,
+                                   const ExecutionLane& lane = ExecutionLane::world()) {
+  if (!ratio.refines_any_axis())
+    throw std::invalid_argument("prepared regrid requires a non-identity inter-level ratio");
+  if (clustered.identity.provider.empty() ||
+      clustered.identity.source_level != parent.exact_identity() ||
+      clustered.identity.boxes != clustered.boxes.boxes())
+    throw std::invalid_argument(
+        "prepared regrid clustering result does not authenticate its parent level and boxes");
+  if (!clustered.boxes.is_disjoint_within(parent.domain(), budget.clustered_parent_layout))
+    throw std::invalid_argument(
+        "prepared regrid cluster boxes must be disjoint and inside the parent");
+
+  std::optional<PreparedLoadBalanceResult<Dim>> ownership;
+  std::optional<hierarchy::LevelLayout<Dim>> fine_layout;
+  if (!clustered.boxes.empty()) {
+    std::vector<Box<Dim>> refined;
+    refined.reserve(clustered.boxes.size());
+    for (const Box<Dim>& parent_patch : clustered.boxes.boxes())
+      refined.push_back(hierarchy::refine_box(parent_patch, ratio));
+    mesh::BoxArray<Dim> fine_patches(std::move(refined));
+    const Box<Dim> fine_domain = hierarchy::refine_box(parent.domain(), ratio);
+    if (!fine_patches.is_disjoint_within(fine_domain, budget.fine_layout))
+      throw std::invalid_argument("prepared regrid refined patches are not a valid child layout");
+
+    ownership.emplace(load_balance.prepare(fine_patches, parent.distribution().rank_space(),
+                                           budget.load_balance, {}, lane));
+    fine_layout.emplace(parent.level() + 1, fine_domain, std::move(fine_patches),
+                        ownership->plan().distribution(), ratio, budget.fine_layout);
   }
-  TagBox tb(domain);
-  std::vector<char, fab_allocator<char>> device_mask(tb.t.size(), char{0});
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const Fab2D& f = mf.fab(li);
-    const Box2D v = f.box();
-    for_each_cell(v, detail::PortableTagCellsKernel<Crit>{f.const_array(), crit, device_mask.data(),
-                                                          domain.nx(), domain.lo[0], domain.lo[1]});
-  }
-  device_fence();
-  std::copy(device_mask.begin(), device_mask.end(), tb.t.begin());
-  return tb;
+
+  hierarchy::LevelLayoutIdentity<Dim> source = parent.exact_identity();
+  tagging::ClusterResultIdentity<Dim> clustering = std::move(clustered.identity);
+  const std::string exact_contract =
+      detail::exact_regrid_contract(source, ratio, clustering, ownership, fine_layout, budget);
+  return PreparedRegrid<Dim>(std::move(source), ratio, std::move(clustering), std::move(ownership),
+                             std::move(fine_layout), exact_contract);
 }
 
-/// Grows the tags by n cells (square neighborhood), staying within the domain.
-/// @param n dilation radius (buffer); used for nesting and to anticipate the motion of structures.
-/// @param domain bounds the neighborhood: no tag is placed outside the domain.
-/// @return new TagBox over in.box, marked over the union of the square neighborhoods of the tagged cells.
-inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain, bool periodic_x,
-                        bool periodic_y) {
-  if (n < 0)
-    throw std::invalid_argument("grow_tags radius must be non-negative");
-  if (in.box != domain)
-    throw std::invalid_argument("grow_tags requires the tag box to match the bounded domain");
-  TagBox out(in.box);
-  const Box2D& b = in.box;
-  const auto wrap = [](int index, int lo, int extent) {
-    const int offset = (index - lo) % extent;
-    return lo + (offset < 0 ? offset + extent : offset);
-  };
-  for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-    for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-      if (in(i, j))
-        for (int dj = -n; dj <= n; ++dj)
-          for (int di = -n; di <= n; ++di) {
-            int ii = i + di, jj = j + dj;
-            if (periodic_x)
-              ii = wrap(ii, domain.lo[0], domain.nx());
-            if (periodic_y)
-              jj = wrap(jj, domain.lo[1], domain.ny());
-            if (b.contains(ii, jj) && domain.contains(ii, jj))
-              out(ii, jj) = 1;
-          }
-  return out;
-}
-
-inline TagBox grow_tags(const TagBox& in, int n, const Box2D& domain) {
-  return grow_tags(in, n, domain, false, false);
-}
-
-}  // namespace pops
+}  // namespace pops::amr::regridding

@@ -21,11 +21,6 @@ sources = ["tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_hierarchy"
-sources = ["tests/cpp/integration/amr/test_amr_hierarchy.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_history_ring"
 sources = ["tests/cpp/integration/amr/test_amr_history_ring.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -127,18 +122,8 @@ sources = ["tests/cpp/integration/amr/test_flux_register.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_ref_ratio"
-sources = ["tests/cpp/integration/amr/test_ref_ratio.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_refinement"
 sources = ["tests/cpp/integration/amr/test_refinement.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_regrid"
-sources = ["tests/cpp/integration/amr/test_regrid.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -779,11 +764,6 @@ sources = ["tests/cpp/unit/mesh/test_box_array.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
-name = "test_cluster"
-sources = ["tests/cpp/unit/mesh/test_cluster.cpp"]
-labels = ["unit", "mesh", "fast"]
-
-[[cpp.suite]]
 name = "test_coverage_mask"
 sources = ["tests/cpp/unit/mesh/test_coverage_mask.cpp"]
 labels = ["unit", "mesh", "fast"]
@@ -831,11 +811,6 @@ sources = ["tests/cpp/unit/mesh/test_nd_metric_provider.cpp"]
 labels = ["unit", "mesh", "geometry", "fast"]
 
 [[cpp.suite]]
-name = "test_load_balance"
-sources = ["tests/cpp/unit/mesh/test_load_balance.cpp"]
-labels = ["unit", "mesh", "fast"]
-
-[[cpp.suite]]
 name = "test_multifab"
 sources = ["tests/cpp/unit/mesh/test_multifab.cpp"]
 labels = ["unit", "mesh", "fast"]
@@ -869,6 +844,11 @@ labels = ["unit", "numerics", "spatial", "fast"]
 name = "test_nd_flux_ledger"
 sources = ["tests/cpp/unit/amr/test_nd_flux_ledger.cpp"]
 labels = ["unit", "amr", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_amr_runtime"
+sources = ["tests/cpp/unit/amr/test_nd_amr_runtime.cpp"]
+labels = ["unit", "amr", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_nd_hierarchy_plan"

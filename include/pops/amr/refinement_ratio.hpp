@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace pops::amr::nd {
+namespace pops::amr {
 
 /// A positive, immutable-by-interface refinement ratio for dimensions 1, 2, and 3.
 ///
@@ -93,8 +93,4 @@ class RefinementRatio {
   std::int64_t child_count_ = 1;
 };
 
-static_assert(std::is_trivially_copyable_v<RefinementRatio<1>>);
-static_assert(std::is_trivially_copyable_v<RefinementRatio<2>>);
-static_assert(std::is_trivially_copyable_v<RefinementRatio<3>>);
-
-}  // namespace pops::amr::nd
+}  // namespace pops::amr

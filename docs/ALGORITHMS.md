@@ -1929,17 +1929,17 @@ function regrid_level(hierarchy, coarse_lev, crit, params):
     install_level(coarse_lev+1, fba, newfine)
 ```
 
-**Code.** The clustering is `berger_rigoutsos` in
-[`amr/cluster.hpp`](../include/pops/amr/tagging/cluster.hpp), with the helpers `detail::tag_bbox` (trim),
-`detail::signature`, `detail::best_hole`, `detail::best_inflection` (max $|D[k]-D[k-1]|$),
-`detail::cluster_rec` (recursion), and the final chop by `BoxArray::from_domain(b, max_box_size)`. The
-parameters are `ClusterParams` (`min_efficiency`, `min_box_size`, `max_box_size`). The regrid is
-`regrid_level` in [`amr/regrid.hpp`](../include/pops/amr/regridding/regrid.hpp): `tag_cells` (generic predicate
-on `ConstArray4`), `grow_tags` (square dilation bounded to the domain), `berger_rigoutsos`, then
-`Box2D::refine(ref_ratio)`, `interpolate` and `parallel_copy` (to preserve the values of the old fine)
-of [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp), finally `AmrHierarchy::install_level`. Without
-a tag, `clear_above` removes the fine level and the finer ones. Under MPI, the global OR of the tags
-(`all_reduce_or_inplace`) must precede the clustering, otherwise the fine BoxArray would differ per rank.
+**Code.** The ranked clustering contract is
+[`ClusterProvider<Dim>`](../include/pops/amr/tagging/clustering_provider.hpp), with the deterministic
+Berger--Rigoutsos implementation in
+[`berger_rigoutsos.hpp`](../include/pops/amr/tagging/berger_rigoutsos.hpp). Its result authenticates
+the source `LevelLayout<Dim>`, options, canonical tag shards, and output boxes. The transaction
+[`prepare_regrid`](../include/pops/amr/regridding/regrid.hpp) refines every axis through one
+`RefinementRatio<Dim>`, prepares ownership with the bound `PreparedLoadBalanceAuthority<Dim>`, and
+retains that complete ownership proof beside the child layout. Publication occurs only through
+`AmrRuntime<Dim>::publish_regrid`; an authenticated empty cluster result removes the child and all
+finer levels. Under MPI, tags must be canonicalized collectively before clustering so every rank
+prepares the same exact regrid contract.
 
 **Constraints / remarks.** The clustering is pure, sequential, without physics nor MPI: it consumes a
 `TagBox` already gathered. The proper nesting (each fine patch strictly interior to the parent

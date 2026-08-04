@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <pops/amr/nd/refinement_ratio.hpp>
-#include <pops/mesh/layout/nd/box_array.hpp>
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/amr/refinement_ratio.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 
 #include <cstdint>
 #include <limits>
@@ -14,10 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::hierarchy::nd {
-
-template <int Dim>
-using RefinementRatio = ::pops::amr::nd::RefinementRatio<Dim>;
+namespace pops::amr::hierarchy {
 
 namespace detail {
 
@@ -84,6 +81,7 @@ struct LevelLayoutIdentity {
   mesh::RankSpace<Dim> rank_space{};
   mesh::DistributionMode distribution_mode = mesh::DistributionMode::replicated;
   std::vector<Index<Dim>> owners{};
+  mesh::BoxArrayValidationBudget validation_budget{};
 
   bool operator==(const LevelLayoutIdentity&) const = default;
 };
@@ -101,7 +99,8 @@ class LevelLayout {
         domain_(domain),
         patches_(std::move(patches)),
         distribution_(std::move(distribution)),
-        ratio_from_parent_(ratio_from_parent) {
+        ratio_from_parent_(ratio_from_parent),
+        validation_budget_(validation_budget) {
     validate_(validation_budget);
   }
 
@@ -110,6 +109,9 @@ class LevelLayout {
   const mesh::BoxArray<Dim>& patches() const noexcept { return patches_; }
   const mesh::Distribution<Dim>& distribution() const noexcept { return distribution_; }
   const RefinementRatio<Dim>& ratio_from_parent() const noexcept { return ratio_from_parent_; }
+  const mesh::BoxArrayValidationBudget& validation_budget() const noexcept {
+    return validation_budget_;
+  }
 
   LevelLayoutIdentity<Dim> exact_identity() const {
     return LevelLayoutIdentity<Dim>{level_,
@@ -118,7 +120,8 @@ class LevelLayout {
                                     patches_.boxes(),
                                     distribution_.rank_space(),
                                     distribution_.mode(),
-                                    distribution_.owners()};
+                                    distribution_.owners(),
+                                    validation_budget_};
   }
 
   bool operator==(const LevelLayout& other) const {
@@ -156,6 +159,7 @@ class LevelLayout {
   mesh::BoxArray<Dim> patches_{};
   mesh::Distribution<Dim> distribution_{};
   RefinementRatio<Dim> ratio_from_parent_{};
+  mesh::BoxArrayValidationBudget validation_budget_{};
 };
 
-}  // namespace pops::amr::hierarchy::nd
+}  // namespace pops::amr::hierarchy
