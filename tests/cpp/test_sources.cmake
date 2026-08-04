@@ -116,6 +116,7 @@ set(POPS_CPP_TEST_SOURCE_test_geometric_mg "tests/cpp/unit/elliptic/test_geometr
 set(POPS_CPP_TEST_SOURCE_test_geometry "tests/cpp/unit/mesh/test_geometry.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_metric_provider "tests/cpp/unit/mesh/test_nd_metric_provider.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_finite_volume "tests/cpp/unit/numerics/test_nd_finite_volume.cpp")
+set(POPS_CPP_TEST_SOURCE_test_nd_amr_consumers "tests/cpp/unit/amr/test_nd_amr_consumers.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_amr_runtime "tests/cpp/unit/amr/test_nd_amr_runtime.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_ap "tests/cpp/unit/numerics/test_imex_ap.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_partial "tests/cpp/unit/numerics/test_imex_partial.cpp")
