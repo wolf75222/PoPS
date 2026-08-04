@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
 from pathlib import Path
@@ -872,22 +873,39 @@ def test_release_evidence_refuses_wheel_lane_drift(
         preflight._wheel_evidence(tmp_path, gates, _release_contract())
 
 
-def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_path):
+def test_installed_wheel_proof_requires_exact_manifest_variant_set_and_direct_url(tmp_path):
     wheel = tmp_path / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
     native_bytes = b"exact wheel extension"
+    suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+    native_member = f"pops/_native/dim2/_pops{suffix}"
+    manifest_payload = {
+        "schema_version": 1,
+        "variants": [{
+            "dimension": 2,
+            "path": f"dim2/_pops{suffix}",
+            "sha256": hashlib.sha256(native_bytes).hexdigest(),
+            "version": "0.3.0",
+            "abi_key": "abi-dim2",
+            "has_mpi": False,
+            "has_kokkos": True,
+        }],
+    }
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("pops/__init__.py", "__version__ = '0.3.0'\n")
-        archive.writestr("pops/_pops.cpython-312-darwin.so", native_bytes)
+        archive.writestr(native_member, native_bytes)
+        archive.writestr("pops/_native/variants.json", json.dumps(manifest_payload))
         archive.writestr(
             "pops-0.3.0.dist-info/METADATA",
             "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
         )
     package = tmp_path / "site-packages" / "pops" / "__init__.py"
-    extension = package.parent / "_pops.cpython-312-darwin.so"
+    extension = package.parent / "_native" / f"dim2/_pops{suffix}"
+    manifest = package.parent / "_native" / "variants.json"
     distribution = package.parents[1]
-    package.parent.mkdir(parents=True)
+    extension.parent.mkdir(parents=True)
     package.write_text("__version__ = '0.3.0'\n", encoding="utf-8")
     extension.write_bytes(native_bytes)
+    manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
     metadata = distribution / "pops-0.3.0.dist-info" / "METADATA"
     metadata.parent.mkdir()
     metadata.write_text(
@@ -903,26 +921,30 @@ def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_p
     proof = installed.build_proof(
         wheel,
         package_file=package,
-        native_extension=extension,
+        native_manifest=manifest,
         distribution_root=distribution,
         python_executable=Path(sys.executable),
         installed_version="0.3.0",
         direct_url=direct_url,
+        expected_dimensions=(2,),
     )
 
     assert proof["wheel_sha256"] == wheel_sha256
-    assert proof["native_sha256"] == hashlib.sha256(native_bytes).hexdigest()
-    assert proof["installed_member_count"] == 3
+    assert proof["expected_dimensions"] == [2]
+    assert proof["native_variants"][0]["sha256"] == hashlib.sha256(native_bytes).hexdigest()
+    assert proof["native_variants"][0]["member"] == native_member
+    assert proof["installed_member_count"] == 4
     extension.write_bytes(b"not the retained wheel")
     with pytest.raises(installed.InstalledWheelProofError, match="not byte-identical"):
         installed.build_proof(
             wheel,
             package_file=package,
-            native_extension=extension,
+            native_manifest=manifest,
             distribution_root=distribution,
             python_executable=Path(sys.executable),
             installed_version="0.3.0",
             direct_url=direct_url,
+            expected_dimensions=(2,),
         )
 
 
@@ -1143,27 +1165,43 @@ def test_installed_example_authenticates_native_bytes_before_execution(
     assert "example_args=--output-dir|/proof/output" in output
 
 
-def test_final_gate_rejects_incomplete_non_darwin_or_rewritten_codesign_runtime():
+def test_final_gate_rejects_incomplete_non_darwin_or_rewritten_codesign_variant_set():
     evidence = {
-        "schema_version": 1,
+        "schema_version": 2,
         "platform": "darwin",
         "extensions": [
             {
-                "path": "/proof/pops/_pops.so",
+                "dimension": 2,
+                "path": "/proof/pops/_native/dim2/_pops.so",
                 "sha256": "a" * 64,
                 "signature": "adhoc",
             }
         ],
     }
+    retained = [{
+        "dimension": 2,
+        "extension": "/proof/pops/_native/dim2/_pops.so",
+        "sha256": "a" * 64,
+    }]
 
     assert gate._signed_runtime_sha256(
-        evidence, retained_native_sha256="a" * 64
+        evidence, retained_variants=retained, runtime_dimension=2
     ) == "a" * 64
-    with pytest.raises(gate.FinalGateError, match="different from the validated runtime"):
-        gate._signed_runtime_sha256(evidence, retained_native_sha256="b" * 64)
+    with pytest.raises(gate.FinalGateError, match="different from the validated variant set"):
+        gate._signed_runtime_sha256(
+            evidence,
+            retained_variants=[{
+                "dimension": 2,
+                "extension": "/proof/pops/_native/dim2/_pops.so",
+                "sha256": "b" * 64,
+            }],
+            runtime_dimension=2,
+        )
     evidence["platform"] = "linux"
     with pytest.raises(gate.FinalGateError, match="Darwin release proof"):
-        gate._signed_runtime_sha256(evidence, retained_native_sha256="a" * 64)
+        gate._signed_runtime_sha256(
+            evidence, retained_variants=retained, runtime_dimension=2
+        )
 
 
 def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_path):

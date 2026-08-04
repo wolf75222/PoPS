@@ -141,13 +141,13 @@ echo "ccache: dir=$CCACHE_DIR basedir=$CCACHE_BASEDIR"
 
 # --- clean / fresh ----------------------------------------------------------------------------------
 if [[ $DO_CLEAN -eq 1 ]]; then
-  # scikit-build-core caches under build/<wheel_tag>/ (e.g. build/cp312-cp312-macosx_14_0_arm64). Remove
-  # ONLY those tag dirs, never the C++ preset build/ root (its CMakeCache.txt sits at build/).
+  # Each specialization owns build/<wheel_tag>-dimN. Remove only the requested Dim=N cache, never
+  # another specialization nor the C++ preset build/ root (its CMakeCache.txt sits at build/).
   shopt -s nullglob
   removed=0
-  for d in "$HERE"/build/cp3*/; do rm -rf "$d"; removed=1; done
-  [[ $removed -eq 1 ]] && echo "--clean: removed scikit-build wheel cache (build/cp3*/)" \
-                       || echo "--clean: no scikit-build wheel cache to remove"
+  for d in "$HERE"/build/cp3*-dim"$POPS_NATIVE_DIM"/; do rm -rf "$d"; removed=1; done
+  [[ $removed -eq 1 ]] && echo "--clean: removed Dim=$POPS_NATIVE_DIM wheel cache" \
+                       || echo "--clean: no Dim=$POPS_NATIVE_DIM wheel cache to remove"
 fi
 if [[ $DO_FRESH -eq 1 ]]; then
   if command -v ccache >/dev/null 2>&1; then
@@ -241,22 +241,28 @@ if [[ -n "$WHEEL_DIR" ]]; then
   echo "--- installing exact retained wheel ${built_wheels[0]} ---"
   python -m pip install --force-reinstall --no-deps "${built_wheels[0]}"
   echo "release wheel: ${built_wheels[0]}"
+  # Prove the immutable installed payload before Darwin codesign is allowed to repair bytes and
+  # refresh their installed-manifest hashes. This build produces exactly the requested one-row set.
+  PYTHONPATH= PYTHONNOUSERSITE=1 \
+    python "$HERE/scripts/prove_installed_wheel.py" \
+      --wheel "${built_wheels[0]}" --expect-dim "$POPS_NATIVE_DIM"
 fi
 
 # --- diagnose ---------------------------------------------------------------------------------------
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
 # output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
 # verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
-PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/codesign_pops_extensions.py" --expect-dim "$POPS_NATIVE_DIM"
 native_verify_args=()
 if [[ $WITH_MPI -eq 1 ]]; then
-  native_verify_args=(--expect-mpi --expect-parallel-hdf5)
+  native_verify_args=(--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5)
 else
-  native_verify_args=(--expect-serial)
+  native_verify_args=(--expect-dim "$POPS_NATIVE_DIM" --expect-serial)
 fi
 PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
 PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"
+  python -c "import pops; from pops._native_selector import select_native_dimension; select_native_dimension($POPS_NATIVE_DIM); from pops.runtime.doctor import doctor; print('pops', pops.__version__, 'Dim=$POPS_NATIVE_DIM'); doctor()"

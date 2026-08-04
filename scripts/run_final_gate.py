@@ -27,7 +27,15 @@ import tempfile
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from final_release_contract import (
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from write_native_variant_manifest import (  # noqa: E402
+    NativeVariantManifestError,
+    exact_dimensions,
+)
+
+from final_release_contract import (  # noqa: E402
     FINAL_EXAMPLES,
     FINAL_EXAMPLE_REQUIRED_TESTS,
     FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS,
@@ -43,7 +51,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 11
+EVIDENCE_SCHEMA_VERSION = 12
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -168,22 +176,25 @@ def _resolve_ctest_dir(requested: Path | None) -> Path:
     return candidate
 
 
-def _runtime_provenance() -> dict[str, str]:
+def _runtime_provenance(dimension: int) -> dict[str, Any]:
     code = """
 import hashlib
 import json
 from pathlib import Path
 import pops
+from pops._native_selector import select_native_dimension
+select_native_dimension(%d)
 from pops import _pops
 extension = Path(_pops.__file__).resolve()
 digest = hashlib.sha256(extension.read_bytes()).hexdigest()
 print(json.dumps({
     'python_executable': str(Path(__import__('sys').executable).resolve()),
     'pops_file': str(Path(pops.__file__).resolve()),
+    'native_dimension': _pops.__native_dimension__,
     'native_extension': str(extension),
     'native_sha256': digest,
 }, sort_keys=True))
-"""
+""" % dimension
     completed = subprocess.run(_conda_command(["python", "-c", code]), cwd=ROOT, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     if completed.returncode:
@@ -192,9 +203,11 @@ print(json.dumps({
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise FinalGateError("runtime provenance was not JSON: %s" % completed.stdout) from exc
-    expected = {"python_executable", "pops_file", "native_extension", "native_sha256"}
+    strings = {"python_executable", "pops_file", "native_extension", "native_sha256"}
+    expected = {*strings, "native_dimension"}
     if set(payload) != expected or not all(isinstance(payload[name], str) and payload[name]
-                                           for name in expected):
+                                           for name in strings) \
+            or payload["native_dimension"] != dimension:
         raise FinalGateError("runtime provenance is incomplete")
     return payload
 
@@ -210,28 +223,43 @@ def _json_evidence(stdout: str, *, gate: str) -> dict[str, Any]:
 
 
 def _signed_runtime_sha256(
-    evidence: dict[str, Any], *, retained_native_sha256: str
+    evidence: dict[str, Any], *, retained_variants: Sequence[dict[str, Any]],
+    runtime_dimension: int,
 ) -> str:
     if set(evidence) != {"schema_version", "platform", "extensions"} \
-            or evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
+            or evidence["schema_version"] != 2 or evidence["platform"] != "darwin":
         raise FinalGateError("codesign evidence is not the Darwin release proof")
     extensions = evidence["extensions"]
-    if not isinstance(extensions, list) or len(extensions) != 1:
-        raise FinalGateError("codesign evidence must authenticate exactly one extension")
-    extension = extensions[0]
-    if not isinstance(extension, dict) or set(extension) != {
-            "path", "sha256", "signature"} or extension["signature"] != "adhoc":
-        raise FinalGateError("codesign extension evidence is malformed")
-    digest = extension["sha256"]
-    if not isinstance(digest, str) or len(digest) != 64 \
-            or any(character not in "0123456789abcdef" for character in digest):
-        raise FinalGateError("codesign extension sha256 is malformed")
-    if digest != retained_native_sha256:
-        raise FinalGateError(
-            "codesign changed the retained wheel native bytes; refusing to publish "
-            "an artifact different from the validated runtime"
-        )
-    return digest
+    retained = {
+        row.get("dimension"): (row.get("sha256"), row.get("extension"))
+        for row in retained_variants
+        if isinstance(row, dict)
+    }
+    if not isinstance(extensions, list) or len(extensions) != len(retained) \
+            or set(retained) != {row.get("dimension") for row in extensions
+                                if isinstance(row, dict)}:
+        raise FinalGateError("codesign evidence does not cover the retained native variant set")
+    active_digest = None
+    for extension in extensions:
+        if not isinstance(extension, dict) or set(extension) != {
+                "dimension", "path", "sha256", "signature"} \
+                or extension["signature"] != "adhoc":
+            raise FinalGateError("codesign extension evidence is malformed")
+        digest = extension["sha256"]
+        if not isinstance(digest, str) or len(digest) != 64 \
+                or any(character not in "0123456789abcdef" for character in digest):
+            raise FinalGateError("codesign extension sha256 is malformed")
+        retained_digest, retained_path = retained.get(extension["dimension"], (None, None))
+        if retained_digest != digest or retained_path != extension["path"]:
+            raise FinalGateError(
+                "codesign changed retained wheel native bytes; refusing to publish "
+                "an artifact different from the validated variant set"
+            )
+        if extension["dimension"] == runtime_dimension:
+            active_digest = digest
+    if active_digest is None:
+        raise FinalGateError("codesign evidence omits the active runtime dimension")
+    return active_digest
 
 
 def _contract() -> tuple[str, str]:
@@ -568,12 +596,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ctest-dir", type=Path,
                         help="configured CTest build tree; auto-detected otherwise")
     parser.add_argument(
+        "--dim", required=True, type=int, choices=(1, 2, 3),
+        help="active dimension for doctor, conformance and final examples",
+    )
+    parser.add_argument(
+        "--wheel-dim", action="append", required=True, type=int, choices=(1, 2, 3),
+        help="exact wheel variant set; repeat (fat release: 1, 2, 3)",
+    )
+    parser.add_argument(
         "--wheel", type=Path,
         help="validate and install this already-built release wheel instead of rebuilding it; "
              "all native, Python, example, restart, documentation and provenance gates still run",
     )
     args = parser.parse_args(argv)
     try:
+        wheel_dimensions = exact_dimensions(
+            args.wheel_dim, where="final gate wheel dimensions"
+        )
+        if args.dim not in wheel_dimensions:
+            raise FinalGateError(
+                "active --dim must be included in the explicit --wheel-dim set"
+            )
+        if args.wheel is None and wheel_dimensions != (args.dim,):
+            raise FinalGateError(
+                "the current build path produces one leaf; use --wheel for an explicit fat wheel"
+            )
         require_source_contract(ROOT)
         require_release_matrix_source_contract(ROOT)
         _require_cpp_duration_catalogs()
@@ -591,7 +638,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         wheel_directory = evidence_root / "wheels"
         if args.wheel is None:
             recorder.run("official_build", [
-                "bash", "scripts/build_python.sh", "--wheel-dir", str(wheel_directory),
+                "bash", "scripts/build_python.sh", "--dim", str(args.dim),
+                "--wheel-dir", str(wheel_directory),
             ])
         else:
             supplied_wheel = args.wheel.expanduser().resolve()
@@ -628,6 +676,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "installed_wheel",
             _conda_command([
                 "python", "scripts/prove_installed_wheel.py", "--wheel", str(wheel),
+                *[
+                    item
+                    for dimension in wheel_dimensions
+                    for item in ("--expect-dim", str(dimension))
+                ],
             ]),
         )
         recorder.rows["installed_wheel"]["evidence"] = _json_evidence(
@@ -637,6 +690,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "codesign",
             _conda_command([
                 "python", "scripts/codesign_pops_extensions.py", "--json",
+                *[
+                    item
+                    for dimension in wheel_dimensions
+                    for item in ("--expect-dim", str(dimension))
+                ],
             ]),
         )
         recorder.rows["codesign"]["evidence"] = _json_evidence(
@@ -644,13 +702,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
+        recorder.run("doctor", _conda_command([
+            "python", "scripts/verify_installed_native.py",
+            "--expect-dim", str(args.dim),
+        ]))
         doctor_code = (
-            "import pops; from pops.runtime.doctor import doctor; "
+            "import pops; from pops._native_selector import select_native_dimension; "
+            "select_native_dimension(%d); from pops.runtime.doctor import doctor; "
             "report = doctor(verbose=False); "
             "failed = {name: detail for name, (ok, detail) in report.items() if not ok}; "
             "assert not failed, failed; "
             "print('doctor package=' + pops.__version__)"
-        )
+        ) % args.dim
         recorder.run("doctor", _conda_command(["python", "-c", doctor_code]))
 
         ctest_dir = _resolve_ctest_dir(args.ctest_dir)
@@ -711,9 +774,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
             recorder.rows["codesign"]["evidence"],
-            retained_native_sha256=(
-                recorder.rows["installed_wheel"]["evidence"]["native_sha256"]
+            retained_variants=(
+                recorder.rows["installed_wheel"]["evidence"]["native_variants"]
             ),
+            runtime_dimension=args.dim,
         )
         examples, reopened, restarted = _run_examples(
             recorder, runtime_sha256=signed_runtime_sha256)
@@ -728,7 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.run("diff", ["git", "diff", "--check"])
         recorder.run("diff", ["git", "diff", "--cached", "--check"])
         _check_clean_checkout()
-        runtime = _runtime_provenance()
+        runtime = _runtime_provenance(args.dim)
 
         if tuple(recorder.rows) != REQUIRED_GATES:
             raise FinalGateError("internal evidence gate mismatch: %s" % tuple(recorder.rows))
@@ -741,6 +805,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "commit_sha": _git("rev-parse", "HEAD"),
             "package_version": package_version,
             "contract_sha256": contract_sha256,
+            "native_variant_set": list(wheel_dimensions),
             "artifact_directory": evidence_root.name,
             "runtime": runtime,
             "gates": recorder.rows,
@@ -756,7 +821,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "examples": [str(item) for item in FINAL_EXAMPLES],
         }, sort_keys=True))
         return 0
-    except (FinalGateError, OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (
+        FinalGateError,
+        NativeVariantManifestError,
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
         print("final release gate failed: %s" % exc, file=sys.stderr)
         return 1
 

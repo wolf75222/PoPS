@@ -5,13 +5,17 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 PARAVIEW_ROOT="${POPS_PARAVIEW_ROOT:-${PARAVIEW_ROOT:-}}"
 MPI_RANKS=""
+CALLER_NATIVE_DIM="${POPS_NATIVE_DIM-}"
+CLI_NATIVE_DIM=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/paraview_python.sh [--paraview-root PATH] [--mpi RANKS] SCRIPT [ARG ...]
+Usage: scripts/paraview_python.sh --dim N [--paraview-root PATH] [--mpi RANKS] SCRIPT [ARG ...]
 
 Runs SCRIPT with ParaView's private Python and Catalyst modules while PoPS initializes MPI first
-with MPI_THREAD_MULTIPLE. On macOS, PATH may name either ParaView.app or ParaView.app/Contents.
+with MPI_THREAD_MULTIPLE. N is the exact pre-resolution native specialization (1, 2, or 3).
+POPS_NATIVE_DIM=N is the equivalent explicit environment route. On macOS, PATH may name either
+ParaView.app or ParaView.app/Contents.
 EOF
 }
 
@@ -25,6 +29,11 @@ while [[ $# -gt 0 ]]; do
     --mpi)
       [[ $# -ge 2 ]] || { echo "--mpi requires a rank count" >&2; exit 2; }
       MPI_RANKS="$2"
+      shift 2
+      ;;
+    --dim)
+      [[ $# -ge 2 ]] || { echo "--dim requires 1, 2, or 3" >&2; exit 2; }
+      CLI_NATIVE_DIM="$2"
       shift 2
       ;;
     -h|--help)
@@ -45,6 +54,18 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$CLI_NATIVE_DIM" && -n "$CALLER_NATIVE_DIM" \
+      && "$CLI_NATIVE_DIM" != "$CALLER_NATIVE_DIM" ]]; then
+  echo "conflicting native dimensions: --dim=$CLI_NATIVE_DIM but POPS_NATIVE_DIM=$CALLER_NATIVE_DIM" >&2
+  exit 2
+fi
+NATIVE_DIM="${CLI_NATIVE_DIM:-$CALLER_NATIVE_DIM}"
+case "$NATIVE_DIM" in
+  1|2|3) ;;
+  "") echo "native dimension is required: pass --dim 1|2|3 or set POPS_NATIVE_DIM" >&2; exit 2 ;;
+  *) echo "invalid native dimension '$NATIVE_DIM': expected exactly 1, 2, or 3" >&2; exit 2 ;;
+esac
 
 [[ $# -ge 1 ]] || { usage >&2; exit 2; }
 if [[ -z "$PARAVIEW_ROOT" ]]; then
@@ -112,16 +133,21 @@ fi
 POPS_PYTHON="$CONDA_PREFIX/bin/python"
 POPS_SITE="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" -c \
   'import pathlib, pops, sys; p=pathlib.Path(pops.__file__).resolve(); root=pathlib.Path(sys.prefix).resolve(); p.relative_to(root); print(p.parent.parent)')"
-POPS_EXTENSION="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" -c \
-  'from pops import _pops; print(_pops.__file__)')"
-POPS_HAS_MPI="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" -c \
-  'from pops import _pops; print(1 if _pops.__has_mpi__ else 0)')"
-POPS_HAS_PARALLEL_HDF5="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" -c \
-  'from pops import _pops; print(1 if getattr(_pops, "__has_parallel_hdf5__", False) else 0)')"
+env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" \
+  "$HERE/scripts/codesign_pops_extensions.py" --expect-dim "$NATIVE_DIM"
+POPS_NATIVE_REPORT="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" \
+  "$HERE/scripts/verify_installed_native.py" --expect-dim "$NATIVE_DIM" \
+    --expect-mpi --expect-parallel-hdf5 --json)"
+POPS_EXTENSION="$(printf '%s' "$POPS_NATIVE_REPORT" | "$POPS_PYTHON" -c \
+  'import json,sys; print(json.load(sys.stdin)["native_extension"])')"
+POPS_HAS_MPI="$(printf '%s' "$POPS_NATIVE_REPORT" | "$POPS_PYTHON" -c \
+  'import json,sys; print(1 if json.load(sys.stdin)["has_mpi"] else 0)')"
+POPS_HAS_PARALLEL_HDF5="$(printf '%s' "$POPS_NATIVE_REPORT" | "$POPS_PYTHON" -c \
+  'import json,sys; print(1 if json.load(sys.stdin)["has_parallel_hdf5"] else 0)')"
 POPS_MINOR="$(env PYTHONPATH= PYTHONNOUSERSITE=1 "$POPS_PYTHON" -c \
   'import sys; print("%d.%d" % sys.version_info[:2])')"
 [[ "$POPS_HAS_MPI" == 1 ]] || {
-  echo "the active PoPS package must be rebuilt with scripts/build_python.sh --mpi --clean" >&2
+  echo "rebuild Dim=$NATIVE_DIM with scripts/build_python.sh --dim $NATIVE_DIM --mpi --clean" >&2
   exit 2
 }
 case "$(basename "$LIBPYTHON")" in
@@ -295,6 +321,7 @@ if [[ "$(uname)" == Linux ]]; then
 fi
 
 export POPS_PARAVIEW_LIBPYTHON="$LIBPYTHON"
+export POPS_NATIVE_DIM="$NATIVE_DIM"
 export POPS_ACTIVE_MPI_LIBRARY
 export POPS_ACTIVE_PMPI_LIBRARY
 export POPS_ACTIVE_MPICXX_LIBRARY
