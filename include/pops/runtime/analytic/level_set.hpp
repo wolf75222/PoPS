@@ -1,11 +1,11 @@
 /// @file
-/// @brief Device-safe level-set adapter and transactional materialization for analytic programs.
+/// @brief Device-safe ranked level-set adapter and transactional materialization.
 
 #pragma once
 
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
+#include <pops/mesh/storage/fab.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 
 #include <stdexcept>
@@ -14,77 +14,78 @@
 
 namespace pops::analytic {
 
-/// Lightweight callable used by embedded-boundary and cut-cell kernels.  The owning
-/// AnalyticProgram must outlive every kernel that captures this view.
+/// Lightweight callable used by embedded-boundary and cut-cell kernels. The owning program must
+/// outlive every kernel that captures this view.
+template <int Dim>
 struct AnalyticLevelSet {
   AnalyticProgramView expression{};
 
-  POPS_HD Real level_set(Real x, Real y) const { return expression.eval(x, y); }
-  POPS_HD Real operator()(Real x, Real y) const { return level_set(x, y); }
-  POPS_HD bool cell_active(Real x, Real y) const { return level_set(x, y) < Real(0); }
+  POPS_HD Real level_set(const RealVector<Dim>& point) const { return expression.eval(point); }
+  POPS_HD Real operator()(const RealVector<Dim>& point) const { return level_set(point); }
+  POPS_HD bool cell_active(const RealVector<Dim>& point) const {
+    return level_set(point) < Real(0);
+  }
 };
 
-static_assert(std::is_trivially_copyable_v<AnalyticLevelSet>);
+static_assert(std::is_trivially_copyable_v<AnalyticLevelSet<1>>);
+static_assert(std::is_trivially_copyable_v<AnalyticLevelSet<2>>);
+static_assert(std::is_trivially_copyable_v<AnalyticLevelSet<3>>);
 
-/// Validate the static level-set contract before a view can reach a kernel.
-inline AnalyticLevelSet make_analytic_level_set(const AnalyticProgram& program) {
+/// Validate the static level-set contract before a view can reach a ranked kernel.
+template <int Dim>
+AnalyticLevelSet<Dim> make_analytic_level_set(const AnalyticProgram& program) {
   if (program.empty())
     throw std::invalid_argument("analytic level set: program must not be empty");
   if (program.result_type() != AnalyticValueType::Scalar)
     throw std::invalid_argument("analytic level set: expression must have scalar result type");
-  return AnalyticLevelSet{program.view()};
+  if (program.required_dimension() > Dim)
+    throw std::invalid_argument("analytic level set: expression requires a higher spatial rank");
+  return AnalyticLevelSet<Dim>{program.view()};
 }
-
-/// Materialized signed values and their staircase active mask over the same valid box and ghosts.
-/// This object is published only after every sampled value has passed the finite-value preflight.
-struct AnalyticLevelSetMaterialization {
-  Fab2D values;
-  Fab2D active_mask;
-
-  AnalyticLevelSetMaterialization() = default;
-  AnalyticLevelSetMaterialization(const Box2D& valid, int n_ghost)
-      : values(valid, 1, n_ghost), active_mask(valid, 1, n_ghost) {}
-
-  [[nodiscard]] const Box2D& box() const noexcept { return values.box(); }
-  [[nodiscard]] const Box2D& grown_box() const noexcept { return values.grown_box(); }
-  [[nodiscard]] int n_ghost() const noexcept { return values.n_ghost(); }
-};
-
-static_assert(std::is_nothrow_move_assignable_v<AnalyticLevelSetMaterialization>,
-              "transactional publication requires a no-throw materialization move");
 
 namespace detail {
 
+template <int Dim>
+Extent<Dim> uniform_ghost_extent(int width) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = width;
+  return result;
+}
+
+template <int Dim>
 struct MaterializeAnalyticLevelSetKernel {
-  AnalyticLevelSet level_set;
-  Geometry geometry;
-  Array4 values;
-  Array4 active_mask;
+  AnalyticLevelSet<Dim> level_set;
+  Geometry<Dim> geometry;
+  FieldView<Real, Dim> values;
+  FieldView<Real, Dim> active_mask;
 
-  POPS_HD void operator()(int i, int j) const {
-    const Real value = level_set(geometry.x_cell(i), geometry.y_cell(j));
-    values(i, j) = value;
-    active_mask(i, j) = value < Real(0) ? Real(1) : Real(0);
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    const Real value = level_set(geometry.cell_center(index));
+    values(index) = value;
+    active_mask(index) = value < Real(0) ? Real(1) : Real(0);
   }
 };
 
+template <int Dim>
 struct NonFiniteLevelSetIndicator {
-  ConstArray4 values;
+  FieldView<const Real, Dim> values;
 
-  POPS_HD Real operator()(int i, int j) const {
-    return Kokkos::isfinite(values(i, j)) ? Real(0) : Real(1);
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return Kokkos::isfinite(values(index)) ? Real(0) : Real(1);
   }
 };
 
-inline void validate_materialization_request(const AnalyticProgram& program,
-                                             const Geometry& geometry, const Box2D& valid,
-                                             int n_ghost) {
-  (void)make_analytic_level_set(program);
-  if (geometry.domain.empty())
+template <int Dim>
+void validate_materialization_request(const AnalyticProgram& program,
+                                      const Geometry<Dim>& geometry, const Box<Dim>& valid,
+                                      int n_ghost) {
+  (void)make_analytic_level_set<Dim>(program);
+  if (geometry.domain().empty())
     throw std::invalid_argument("analytic level set: geometry domain must not be empty");
   if (valid.empty())
     throw std::invalid_argument("analytic level set: materialization box must not be empty");
-  if (!geometry.domain.contains(valid))
+  if (!geometry.domain().contains(valid))
     throw std::invalid_argument(
         "analytic level set: materialization box must be contained in the geometry domain");
   if (n_ghost < 0)
@@ -93,22 +94,47 @@ inline void validate_materialization_request(const AnalyticProgram& program,
 
 }  // namespace detail
 
+/// Materialized signed values and staircase active mask over the same ranked valid box and ghosts.
+/// The object is published only after every sampled value passes the finite-value preflight.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+struct AnalyticLevelSetMaterialization {
+  Fab<Dim, MemorySpace> values;
+  Fab<Dim, MemorySpace> active_mask;
+  int ghost_width = 0;
+
+  AnalyticLevelSetMaterialization() = default;
+  AnalyticLevelSetMaterialization(const Box<Dim>& valid, int n_ghost)
+      : values(valid, 1, detail::uniform_ghost_extent<Dim>(n_ghost)),
+        active_mask(valid, 1, detail::uniform_ghost_extent<Dim>(n_ghost)),
+        ghost_width(n_ghost) {}
+
+  [[nodiscard]] const Box<Dim>& box() const noexcept { return values.box(); }
+  [[nodiscard]] const Box<Dim>& grown_box() const noexcept { return values.grown_box(); }
+  [[nodiscard]] int n_ghost() const noexcept { return ghost_width; }
+};
+
+static_assert(std::is_nothrow_move_assignable_v<AnalyticLevelSetMaterialization<1>>);
+static_assert(std::is_nothrow_move_assignable_v<AnalyticLevelSetMaterialization<2>>);
+static_assert(std::is_nothrow_move_assignable_v<AnalyticLevelSetMaterialization<3>>);
+
 /// Evaluate one scalar analytic program at every cell center of valid.grow(n_ghost).
 ///
-/// The values and mask live in temporary storage until a second device pass proves all values
-/// finite.  On failure, the temporary is discarded and no caller-owned state has been modified.
-/// The active convention is strict and shared with the EB core: phi < 0 is active; phi == 0 is not.
-inline AnalyticLevelSetMaterialization materialize_analytic_level_set(
-    const AnalyticProgram& program, const Geometry& geometry, const Box2D& valid, int n_ghost) {
+/// Values and mask live in temporary storage until a second device pass proves all values finite.
+/// On failure the temporary is discarded. The active convention is strict: phi < 0 is active.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+AnalyticLevelSetMaterialization<Dim, MemorySpace> materialize_analytic_level_set(
+    const AnalyticProgram& program, const Geometry<Dim>& geometry, const Box<Dim>& valid,
+    int n_ghost) {
   detail::validate_materialization_request(program, geometry, valid, n_ghost);
-  AnalyticLevelSetMaterialization staged(valid, n_ghost);
-  const Box2D sampled = staged.grown_box();
+  AnalyticLevelSetMaterialization<Dim, MemorySpace> staged(valid, n_ghost);
+  const Box<Dim> sampled = staged.grown_box();
 
-  for_each_cell(sampled, detail::MaterializeAnalyticLevelSetKernel{make_analytic_level_set(program),
-                                                                   geometry, staged.values.array(),
-                                                                   staged.active_mask.array()});
+  for_each_cell(sampled, detail::MaterializeAnalyticLevelSetKernel<Dim>{
+                             make_analytic_level_set<Dim>(program), geometry, staged.values.view(),
+                             staged.active_mask.view()});
   const Real has_non_finite = for_each_cell_reduce_max(
-      sampled, detail::NonFiniteLevelSetIndicator{staged.values.const_array()});
+      sampled, detail::NonFiniteLevelSetIndicator<Dim>{
+                   static_cast<const Fab<Dim, MemorySpace>&>(staged.values).view()});
   if (has_non_finite != Real(0))
     throw std::domain_error(
         "analytic level set: expression produced a non-finite value on the sampled box");
@@ -116,12 +142,12 @@ inline AnalyticLevelSetMaterialization materialize_analytic_level_set(
 }
 
 /// Strong transactional replacement for runtime owners that already hold a materialization.
-inline void replace_analytic_level_set_materialization(AnalyticLevelSetMaterialization& destination,
-                                                       const AnalyticProgram& program,
-                                                       const Geometry& geometry, const Box2D& valid,
-                                                       int n_ghost) {
-  AnalyticLevelSetMaterialization staged =
-      materialize_analytic_level_set(program, geometry, valid, n_ghost);
+template <int Dim, class MemorySpace>
+void replace_analytic_level_set_materialization(
+    AnalyticLevelSetMaterialization<Dim, MemorySpace>& destination,
+    const AnalyticProgram& program, const Geometry<Dim>& geometry, const Box<Dim>& valid,
+    int n_ghost) {
+  auto staged = materialize_analytic_level_set<Dim, MemorySpace>(program, geometry, valid, n_ghost);
   destination = std::move(staged);
 }
 
