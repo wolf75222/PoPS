@@ -1832,7 +1832,7 @@ def test_composite_integrals_refuses_non_cartesian_cell_measure():
         replace(geometry, cell_measure=POLAR_ANNULUS_CELL_AREA)
         for geometry in snapshot.geometries
     ))
-    with pytest.raises(NotImplementedError, match="only the native Cartesian cell-area metric"):
+    with pytest.raises(NotImplementedError, match="requires the native Cartesian cell-measure"):
         composite_integrals(snapshot, request)
 
 

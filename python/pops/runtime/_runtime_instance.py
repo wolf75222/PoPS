@@ -29,7 +29,12 @@ from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effec
 from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
-from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot, _layout_identity
+from ._runtime_consumers import (
+    RuntimeConsumerPublisher,
+    RuntimeOutputSnapshot,
+    _layout_identity,
+    _native_cartesian_geometry,
+)
 from ._runtime_executor import install_runtime_executor
 from ._runtime_planning import build_runtime_plans
 from .run_report import RunReport
@@ -627,13 +632,8 @@ class RuntimeInstance:
             raise NotImplementedError("uniform runtime provider does not expose reduce_component")
         if selected_levels not in {(), (0,)}:
             raise ValueError("uniform integral accepts only level 0")
-        from pops.mesh._layout_plan_contracts import (
-            CARTESIAN_CELL_AREA,
-            NormalizedGeometry,
-        )
-
         geometry = layout.geometry
-        if type(geometry) is not NormalizedGeometry or geometry.cell_measure != CARTESIAN_CELL_AREA:
+        if not _native_cartesian_geometry(geometry):
             raise NotImplementedError("uniform integral requires the native Cartesian cell measure")
         measure = 1.0
         for length, cells in zip(geometry.lengths, geometry.cells, strict=True):

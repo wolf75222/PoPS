@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from pops._geometry_contracts import cartesian_geometry_contract
+
 from .data import (
     OutputRequest,
     OutputSnapshot,
-    _CARTESIAN_CELL_AREA,
     _composite_integral_authority_identity,
     _field_family_identity,
 )
@@ -39,9 +40,10 @@ def composite_integrals(snapshot: OutputSnapshot, request: OutputRequest) -> Any
         geometry = snapshot.geometry(field.key)
         if geometry.layout_kind != "amr":
             raise ValueError("composite_integrals requires an adaptive AMR layout")
-        if geometry.cell_measure != _CARTESIAN_CELL_AREA:
+        coordinate_system, cell_measure = cartesian_geometry_contract(geometry.spatial_rank)
+        if geometry.coordinate_system != coordinate_system or geometry.cell_measure != cell_measure:
             raise NotImplementedError(
-                "composite_integrals currently supports only the native Cartesian cell-area "
+                "composite_integrals requires the native Cartesian cell-measure "
                 "metric; non-Cartesian measures require a typed native metric provider")
         family = _field_family_identity(field.key).token
         row = selected.setdefault(family, {

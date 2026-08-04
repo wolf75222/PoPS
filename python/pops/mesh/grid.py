@@ -5,14 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pops._geometry_contracts import (
-    CARTESIAN_1D_COORDINATES,
-    CARTESIAN_2D_COORDINATES,
-    CARTESIAN_3D_COORDINATES,
-    CARTESIAN_CELL_AREA,
-    CARTESIAN_CELL_LENGTH,
-    CARTESIAN_CELL_VOLUME,
-)
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.domain import BoundaryPair, CartesianDomainFrame, RectangleFrame
 from pops.frames import CartesianAxis
@@ -220,19 +213,10 @@ class CartesianGrid:
     def normalized_geometry(self) -> NormalizedGeometry:
         """Project the exact framed grid without relying on runtime-engine internals."""
         dimension = len(self.cells)
-        coordinate_systems = {
-            1: CARTESIAN_1D_COORDINATES,
-            2: CARTESIAN_2D_COORDINATES,
-            3: CARTESIAN_3D_COORDINATES,
-        }
-        cell_measures = {
-            1: CARTESIAN_CELL_LENGTH,
-            2: CARTESIAN_CELL_AREA,
-            3: CARTESIAN_CELL_VOLUME,
-        }
+        coordinate_system, cell_measure = cartesian_geometry_contract(dimension)
         return NormalizedGeometry(
-            coordinate_system=coordinate_systems[dimension],
-            cell_measure=cell_measures[dimension],
+            coordinate_system=coordinate_system,
+            cell_measure=cell_measure,
             axis_names=tuple(axis.name for axis in self.axis_order),
             lower=self.frame.lower,
             upper=self.frame.upper,

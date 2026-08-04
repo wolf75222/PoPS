@@ -12,6 +12,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from pops._geometry_contracts import (
+    CARTESIAN_CELL_MEASURES_BY_DIMENSION,
+    POLAR_ANNULUS_CELL_AREA,
+    cartesian_geometry_contract,
+)
 from pops._native_collectives import (
     allgather_value,
     rank as native_rank,
@@ -20,11 +25,7 @@ from pops._native_collectives import (
 )
 from pops._frozen_data import thaw_data
 from pops.identity import Identity, make_identity
-from pops.mesh._layout_plan_contracts import (
-    CARTESIAN_CELL_AREA,
-    POLAR_ANNULUS_CELL_AREA,
-    NormalizedGeometry,
-)
+from pops.mesh._layout_plan_contracts import NormalizedGeometry
 from pops.output.data import (
     _NATIVE_GEOMETRY_ARRAYS,
     _NativeCompositeIntegral,
@@ -327,13 +328,15 @@ def _active_output_levels(
 
 
 _NATIVE_CELL_MEASURES = frozenset(
-    {
-        "pops://cell-measures/cartesian-length@1",
-        CARTESIAN_CELL_AREA,
-        "pops://cell-measures/cartesian-volume@1",
-        POLAR_ANNULUS_CELL_AREA,
-    }
+    CARTESIAN_CELL_MEASURES_BY_DIMENSION + (POLAR_ANNULUS_CELL_AREA,)
 )
+
+
+def _native_cartesian_geometry(geometry: Any) -> bool:
+    if type(geometry) is not NormalizedGeometry:
+        return False
+    coordinate_system, cell_measure = cartesian_geometry_contract(geometry.dimension)
+    return geometry.coordinate_system == coordinate_system and geometry.cell_measure == cell_measure
 
 
 def _target(
@@ -3934,10 +3937,8 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                             raise NotImplementedError(
                                 "automatic reflux balance requires an adaptive hierarchy"
                             )
-                        if (
-                            "projection" in automatic_terms
-                            and layout.geometry.cell_measure != CARTESIAN_CELL_AREA
-                        ):
+                        if "projection" in automatic_terms \
+                                and not _native_cartesian_geometry(layout.geometry):
                             raise NotImplementedError(
                                 "automatic projection balance requires exact Cartesian cell "
                                 "measure support"
@@ -3986,7 +3987,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         geometry = rows[0].geometry
         if type(geometry) is not NormalizedGeometry:
             raise TypeError("diagnostic requires an exact normalized geometry")
-        if geometry.cell_measure != CARTESIAN_CELL_AREA:
+        if not _native_cartesian_geometry(geometry):
             raise NotImplementedError(
                 "uniform metric-weighted diagnostics require a native provider for %s"
                 % geometry.cell_measure
@@ -5051,7 +5052,7 @@ class RuntimeOutputSnapshot:
                 levels = _active_output_levels(self._owner, layout, tuple(selected))
                 block = _block_name(quantity.reference, component_names)
                 native_cartesian_integral = (
-                    layout.adaptive and layout.geometry.cell_measure == CARTESIAN_CELL_AREA
+                    layout.adaptive and _native_cartesian_geometry(layout.geometry)
                 )
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:

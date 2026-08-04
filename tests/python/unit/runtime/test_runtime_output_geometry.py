@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -18,8 +19,27 @@ from pops.output import FieldKey
 from pops.output._consumer_contracts import ParallelMode
 from pops.runtime._runtime_consumers import (
     _active_output_levels,
+    _native_cartesian_geometry,
     RuntimeOutputSnapshot,
 )
+
+
+@pytest.mark.parametrize("shape", ((5,), (4, 3), (4, 3, 2)))
+def test_native_cartesian_geometry_contract_accepts_every_compiled_rank(shape):
+    coordinate_system, cell_measure = cartesian_geometry_contract(len(shape))
+    geometry = NormalizedGeometry(
+        coordinate_system,
+        cell_measure,
+        ("x", "y", "z")[:len(shape)],
+        (0.0,) * len(shape),
+        (1.0,) * len(shape),
+        shape,
+    )
+
+    assert _native_cartesian_geometry(geometry)
+    assert not _native_cartesian_geometry(replace(
+        geometry, cell_measure="pops://cell-measures/not-cartesian@1"
+    ))
 
 
 class _Engine:
