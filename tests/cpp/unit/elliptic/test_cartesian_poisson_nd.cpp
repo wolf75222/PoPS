@@ -2,6 +2,7 @@
 
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <array>
 #include <cmath>
@@ -156,6 +157,37 @@ void expect_all_boundaries() {
   expect_manufactured_mode<Dim>(CartesianBoundaryKind::neumann);
 }
 
+template <int Dim>
+void expect_exact_marshaling_round_trip() {
+  Index<Dim> upper{};
+  Extent<Dim> patch{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 2 + axis;
+    patch[axis] = 2;
+  }
+  const Box<Dim> domain{Index<Dim>{}, upper};
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, patch);
+  const RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
+  const auto distribution = Distribution<Dim>::replicated(layout, ranks);
+  MultiFab<Dim> field(layout, distribution, Index<Dim>{}, 2, uniform_extent<Dim>(1));
+  field.set_val(Real{-9});
+
+  const std::size_t cells = runtime::system::marshaling::checked_cell_count(domain);
+  std::vector<double> payload(2 * cells);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    payload[cell] = 0.25 + static_cast<double>(cell);
+    payload[cells + cell] = -3.5 - static_cast<double>(cell);
+  }
+  runtime::system::marshaling::write_global(field, domain, payload, 2);
+  EXPECT_EQ(runtime::system::marshaling::gather_global(field, domain, 2), payload);
+
+  const std::vector<double> before = runtime::system::marshaling::gather_global(field, domain, 2);
+  EXPECT_THROW(runtime::system::marshaling::write_global(
+                   field, domain, std::vector<double>(payload.size() - 1), 2),
+               std::invalid_argument);
+  EXPECT_EQ(runtime::system::marshaling::gather_global(field, domain, 2), before);
+}
+
 }  // namespace
 
 TEST(test_cartesian_poisson_nd, manufactured_modes_solve_in_exact_rank_one_two_and_three) {
@@ -230,5 +262,51 @@ TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_m
     fab.copy_to_host(host);
     for (std::size_t element = 0; element < host.size(); ++element)
       EXPECT_DOUBLE_EQ(host(element), Real{13});
+  }
+}
+
+TEST(test_cartesian_poisson_nd, exact_field_marshaling_round_trips_rank_one_two_and_three) {
+  expect_exact_marshaling_round_trip<1>();
+  expect_exact_marshaling_round_trip<2>();
+  expect_exact_marshaling_round_trip<3>();
+}
+
+TEST(test_cartesian_poisson_nd, incomplete_distribution_fails_before_resident_mutation) {
+  const Box<1> domain{Index<1>{0}, Index<1>{7}};
+  const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{4});
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
+  const auto distribution =
+      Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});
+  MultiFab<1> field(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
+  field.set_val(Real{17});
+
+  EXPECT_THROW(
+      runtime::system::marshaling::write_global(field, domain, std::vector<double>(8, 2.0), 1),
+      std::runtime_error);
+  const auto& fab = static_cast<const MultiFab<1>&>(field).fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  for (std::size_t element = 0; element < host.size(); ++element)
+    EXPECT_DOUBLE_EQ(host(element), Real{17});
+}
+
+TEST(test_cartesian_poisson_nd, overlapping_equal_count_layout_fails_before_resident_mutation) {
+  const Box<1> domain{Index<1>{0}, Index<1>{7}};
+  const BoxArray<1> layout{
+      std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{3}}, Box<1>{Index<1>{2}, Index<1>{5}}}};
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
+  const auto distribution = Distribution<1>::replicated(layout, ranks);
+  MultiFab<1> field(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
+  field.set_val(Real{29});
+
+  EXPECT_THROW(
+      runtime::system::marshaling::write_global(field, domain, std::vector<double>(8, 2.0), 1),
+      std::runtime_error);
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto& fab = static_cast<const MultiFab<1>&>(field).fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t element = 0; element < host.size(); ++element)
+      EXPECT_DOUBLE_EQ(host(element), Real{29});
   }
 }

@@ -276,6 +276,7 @@ api pops/runtime/runtime_environment.hpp
 sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
+sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp

@@ -1,269 +1,182 @@
-// ADC-257 : couverture MULTI-RANGS des accesseurs GLOBAUX collectifs de l'IO v1
-// (System::density_global / state_global / potential_global) -- le gather all_reduce_sum
-// utilise par sim.write / sim.checkpoint -- + un aller-retour checkpoint/restart.
-//
-// CONTEXTE. System repartit UNE box couvrant tout le domaine en round-robin
-// (DistributionMapping(1, n_ranks())) : a np>1 seul le rang 0 la possede, les autres ont
-// local_size()==0. Les accesseurs _global remplissent un buffer GLOBAL a partir des fabs LOCAUX
-// (aux indices GLOBAUX) puis font un all_reduce_sum : un rang sans box n'ecrit rien (boucle
-// local_size() vide -> 0), donc la somme = le champ exact. La correction n'est valide que si
-// CHAQUE cellule est ecrite par EXACTEMENT un rang ; un double-comptage (cellule ecrite par >1
-// rang, p.ex. box dupliquee/decoupee) MULTIPLIERAIT le gather par le nombre d'ecrivains.
-//
-// CE TEST verrouille le chemin COLLECTIF du gather a np>1, jamais teste avant ADC-257 (le test
-// Python tests/python/integration/io/test_io_multirank.py tourne en MONO-RANG ; tests/cpp/integration/mpi/test_mpi_system_gather_scatter.cpp
-// couvre la garde fab(0) des fermetures, PAS le gather IO). PORTEE : System ne decoupe pas la box
-// aujourd'hui, donc le double-comptage proprement dit n'est pas declenchable par cette topologie ;
-// ce que le test verrouille, c'est que (a) les rangs SANS box contribuent EXACTEMENT 0 a
-// l'all_reduce (buffer zero-init + boucle local_size() vide), (b) le gather est BIT-A-BIT invariant
-// au nombre de rangs, (c) l'aller-retour checkpoint/restart est correct a np=2/4. Un futur decoupage
-// /duplication de box qui introduirait un double-comptage casserait T1 (gather = writers x ref).
-// Sous mpirun -np {1,2,4} :
-//   T1 - GATHER == REFERENCE CONNUE (np-invariant) : sur une densite analytique posee, density_global
-//        et state_global egalent BIT-A-BIT la reference calculee identiquement par chaque rang.
-//   T2 - GATHER == LOCAL apres pas COLLECTIFS : sur le rang proprietaire, density_global == density,
-//        state_global == get_state, potential_global == potential (bit-a-bit). Tous les rangs
-//        appellent les 3 accesseurs (collectifs) + mass() ; masse conservee == reference (np-invariant).
-//   T3 - CHECKPOINT/RESTART : gather global de l'etat + du potentiel (collectif), restauration dans un
-//        System FRAIS (scatter box-proprietaire + horloge), puis K pas identiques sur les deux ->
-//        get_state bit-a-bit identique (parite restart), potentiel et masse a la tolerance solveur.
-//
-// CHOIX DU MODELE : Euler + brique de charge, source NoSource -> phi N'AGIT PAS sur le gaz. Donc (i)
-// la masse est conservee par le transport FV conservatif seul (a l'arrondi, ~1e-13), independamment
-// du Poisson, ce qui justifie la tolerance 1e-9 de T2 ; (ii) l'etat evolue de maniere DETERMINISTE
-// (pur Euler, sans le solveur iteratif) -> la parite restart de get_state est bit-a-bit exacte. Le
-// potentiel, lui, sort d'un MG iteratif : on le compare a une tolerance serree (robuste a l'ordre de
-// reduction sous OpenMP), pas bit-a-bit.
-//
-// DISCIPLINE COLLECTIVE MPI : density_global / state_global / potential_global et mass() font un
-// all_reduce_sum -> TOUS les rangs DOIVENT les appeler (sinon interblocage). set_state ecrit la box
-// du proprietaire : appele UNIQUEMENT sur le rang proprietaire (convention des tests MPI System ;
-// write_state est en fait no-op sur un rang vide, mais on garde la garde owns). set_potential est
-// COLLECTIF car il materialise le solveur prepare avant le no-op des rangs sans box ; set_clock est
-// MPI-safe et local. step() / step_cfl() sont collectifs.
+/// @file
+/// @brief MPI proof for exact-ranked System field marshaling in 1D, 2D, and 3D.
 
 #include <gtest/gtest.h>
 
-#include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
-#include <pops/physics/composition/composite.hpp>
-#include <pops/physics/fluids/euler.hpp>  // Euler (bloc fluide a 4 composantes, etat conservatif riche)
-#include <pops/physics/bricks/source.hpp>                // NoSource
-#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
-#include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 
-#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
+
 #ifdef POPS_HAS_MPI
 #include <mpi.h>
 #endif
 
-using namespace pops;
+namespace {
 
-// Brique elliptique de CHARGE neutralisee : le Poisson periodique porte la perturbation de densite
-// rho-rho0. rho0 est la moyenne discrete exacte de l'etat de reference, donc le RHS satisfait le
-// nullspace constant sans projection implicite et potential_global() reste non trivial.
-struct ChargeEll {
-  Real rho0 = 0;
-  template <class State>
-  POPS_HD Real rhs(const State& u) const {
-    return u[0] - rho0;
+using namespace pops;
+using pops::mesh::BoxArray;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
+
+template <int Dim>
+Extent<Dim> uniform_extent(std::int64_t value) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+struct ExactFixture {
+  Box<Dim> domain;
+  BoxArray<Dim> layout;
+  RankSpace<Dim> ranks;
+  Distribution<Dim> distribution;
+  Index<Dim> local_rank;
+
+  ExactFixture(int rank, int processes)
+      : domain(make_domain_(processes)),
+        layout(make_layout_(domain, processes)),
+        ranks(make_rank_space_(processes)),
+        distribution(Distribution<Dim>::partitioned(layout, ranks, make_owners_(ranks))),
+        local_rank(ranks.coordinate(static_cast<std::size_t>(rank))) {}
+
+ private:
+  static Box<Dim> make_domain_(int processes) {
+    Index<Dim> upper{};
+    upper[0] = 3 * processes - 1;
+    for (int axis = 1; axis < Dim; ++axis)
+      upper[axis] = axis + 2;
+    return Box<Dim>{Index<Dim>{}, upper};
+  }
+
+  static BoxArray<Dim> make_layout_(const Box<Dim>& domain, int processes) {
+    std::vector<Box<Dim>> patches;
+    patches.reserve(static_cast<std::size_t>(processes));
+    for (int rank = 0; rank < processes; ++rank) {
+      Box<Dim> patch = domain;
+      patch.lo[0] = 3 * rank;
+      patch.hi[0] = patch.lo[0] + 2;
+      patches.push_back(patch);
+    }
+    return BoxArray<Dim>{std::move(patches)};
+  }
+
+  static RankSpace<Dim> make_rank_space_(int processes) {
+    Extent<Dim> process_shape = uniform_extent<Dim>(1);
+    process_shape[0] = processes;
+    return RankSpace<Dim>{Index<Dim>{}, process_shape};
+  }
+
+  static std::vector<Index<Dim>> make_owners_(const RankSpace<Dim>& ranks) {
+    std::vector<Index<Dim>> owners;
+    owners.reserve(ranks.size());
+    for (std::size_t rank = 0; rank < ranks.size(); ++rank)
+      owners.push_back(ranks.coordinate(rank));
+    return owners;
   }
 };
 
-using GasModel = CompositeModel<Euler, NoSource, ChargeEll>;  // Euler + charge le Poisson
+template <int Dim, class Check>
+void prove_exact_marshaling(int rank, int processes, Check&& check) {
+  ExactFixture<Dim> fixture(rank, processes);
+  MultiFab<Dim> field(fixture.layout, fixture.distribution, fixture.local_rank, 2,
+                      uniform_extent<Dim>(1));
+  field.set_val(Real{-17});
 
-static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
+  const std::size_t cells = runtime::system::marshaling::checked_cell_count(fixture.domain);
+  std::vector<double> payload(2 * cells);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    payload[cell] = static_cast<double>(cell) + 0.25;
+    payload[cells + cell] = -static_cast<double>(cell) - 2.5;
+  }
+
+  runtime::system::marshaling::write_global(field, fixture.domain, payload, 2);
+  check(runtime::system::marshaling::gather_global(field, fixture.domain, 2) == payload,
+        "partitioned round-trip differs");
+
+  if (processes > 1) {
+    // A different checkpoint image on one rank must be rejected by every rank before resident data
+    // changes. The following gather also proves that all ranks remained collectively aligned.
+    std::vector<double> divergent = payload;
+    if (rank == 0)
+      divergent.front() += 1.0;
+    bool rejected = false;
+    try {
+      runtime::system::marshaling::write_global(field, fixture.domain, divergent, 2);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    check(rejected, "rank-divergent restore payload was accepted");
+    check(runtime::system::marshaling::gather_global(field, fixture.domain, 2) == payload,
+          "rejected restore mutated resident data");
+  }
+
+  // A replicated decomposition has one canonical collective contributor but every resident replica
+  // is restored. This prevents rank-count multiplication without a special dimension route.
+  const auto replicated = Distribution<Dim>::replicated(fixture.layout, fixture.ranks);
+  MultiFab<Dim> replica(fixture.layout, replicated, fixture.local_rank, 2, uniform_extent<Dim>(1));
+  replica.set_val(Real{-23});
+  runtime::system::marshaling::write_global(replica, fixture.domain, payload, 2);
+  check(runtime::system::marshaling::gather_global(replica, fixture.domain, 2) == payload,
+        "replicated round-trip double-counted the payload");
+
+  if (processes > 1) {
+    bool component_request_rejected = false;
+    try {
+      (void)runtime::system::marshaling::gather_global(field, fixture.domain, rank == 0 ? 1 : 2);
+    } catch (const std::invalid_argument&) {
+      component_request_rejected = true;
+    }
+    check(component_request_rejected, "rank-divergent gather request was accepted");
+  }
+}
+
+int run_mpi_system_io_gather(int argc, char** argv) {
   comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
-  const int me = my_rank(), np = n_ranks();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("[rank %d/%d] FAIL %s\n", me, np, w);
-      ++fails;
+  const int rank = my_rank();
+  const int processes = n_ranks();
+  long failures = 0;
+  const auto check = [&](bool condition, const char* message) {
+    if (!condition) {
+      std::fprintf(stderr, "[rank %d/%d] Dim-generic System I/O failure: %s\n", rank, processes,
+                   message);
+      ++failures;
     }
   };
 
-  const int n = 16;
-  const double gamma = 1.4;
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-
-  // Etat de REFERENCE, calcule a l'IDENTIQUE par chaque rang (fonction pure, aucun MPI). Bosse
-  // gaussienne lisse en densite (p = rho -> le gaz evolue en acoustique sous Euler), quantite de
-  // mouvement au repos, E = p/(gamma-1). Layout component-major (c*ny + j)*nx + i, EXACTEMENT celui
-  // de state_global / get_state. Sert de cible bit-a-bit np-invariante a T1.
-  auto build_ref = [&]() {
-    std::vector<double> U(4 * nn, 0.0);
-    for (int j = 0; j < n; ++j) {
-      for (int i = 0; i < n; ++i) {
-        const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-        const double r =
-            1.0 + 0.4 * std::exp(-50.0 * ((x - 0.4) * (x - 0.4) + (y - 0.5) * (y - 0.5)));
-        const std::size_t k = static_cast<std::size_t>(j) * n + i;
-        U[0 * nn + k] = r;                  // rho
-        U[3 * nn + k] = r / (gamma - 1.0);  // E = p/(gamma-1), p = rho ; momentum (comp 1,2) = 0
-      }
-    }
-    return U;
-  };
-  const std::vector<double> Uref = build_ref();
-  std::vector<double> rho_ref(nn);
-  for (std::size_t k = 0; k < nn; ++k)
-    rho_ref[k] = Uref[0 * nn + k];
-  double mass_ref = 0.0;
-  for (double r : rho_ref)
-    mass_ref += r;
-  const double rho0 = mass_ref / static_cast<double>(nn);
-
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-
-  // Construction COLLECTIVE (repliquee sur tous les rangs).
-  System sys(cfg);
-  add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
-                     "rusanov", "conservative", "explicit", gamma);
-  sys.set_poisson("composite", "geometric_mg");  // f = somme des briques elliptiques (la charge)
-  test::install_forward_euler_program(sys);
-
-  const bool owns = (me == 0);  // box 0 -> rang 0 sous DistributionMapping(1, np)
-  if (owns)
-    sys.set_state("gas", Uref);
-
-  // === T1 : gather == reference connue (np-invariant), sur le champ fraichement pose ===========
-  // Tous les rangs appellent les accesseurs collectifs ; le resultat egale BIT-A-BIT la reference.
-  auto output_lane = ObserverMpiLane::duplicate_world_collectively("test/system-io/root-output");
-  {
-    const std::vector<double> dG = sys.density_global("gas");
-    const std::vector<double> sG = sys.state_global("gas");
-    const std::vector<OutputPiece<2>> local = sys.output_state_local_pieces("gas", 0);
-    const std::vector<OutputPiece<2>> root = sys.output_state_root_pieces(output_lane, "gas", 0);
-    chk(dG.size() == nn, "T1_density_global_size");
-    chk(sG.size() == 4 * nn, "T1_state_global_size");
-    chk(dG == rho_ref, "T1_density_global_eq_ref_no_double_count");
-    chk(sG == Uref, "T1_state_global_eq_ref_no_double_count");
-    chk(local.size() == (owns ? 1u : 0u), "T1_output_state_local_ownership");
-    chk(root.size() == (owns ? 1u : 0u), "T1_output_state_root_ownership");
-    if (owns && !local.empty()) {
-      const OutputPiece<2>& piece = local.front();
-      chk(piece.level == 0 && piece.box.lo[0] == 0 && piece.box.lo[1] == 0 &&
-              piece.box.hi[0] == n - 1 && piece.box.hi[1] == n - 1,
-          "T1_output_state_local_box");
-      chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
-          "T1_output_state_local_metadata");
-      chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_local_values");
-    }
-    if (owns && !root.empty()) {
-      const OutputPiece<2>& piece = root.front();
-      chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
-          "T1_output_state_root_metadata");
-      chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_root_values");
-    }
-  }
-  output_lane.close_collectively();
-
-  // === T2 : apres des pas COLLECTIFS, gather == accesseur local sur le proprietaire ============
-  const double dt = 0.01;
-  for (int s = 0; s < 5; ++s)
-    sys.step(dt);  // collectif : solve_fields (Poisson) + advance
-
-  const std::vector<double> dG = sys.density_global("gas");  // collectif (tous les rangs)
-  const std::vector<double> sG = sys.state_global("gas");    // collectif
-  const std::vector<double> pG = sys.potential_global();     // collectif (resout le Poisson)
-  chk(dG.size() == nn && sG.size() == 4 * nn && pG.size() == nn, "T2_global_sizes");
-  bool gfin = true;
-  for (double v : sG)
-    gfin = gfin && std::isfinite(v);
-  for (double v : pG)
-    gfin = gfin && std::isfinite(v);
-  chk(gfin, "T2_globals_finite");
-  // Sur le rang proprietaire UNIQUEMENT : le gather GLOBAL (deja calcule collectivement ci-dessus)
-  // egale BIT-A-BIT l'accesseur LOCAL (density / get_state / potential, lecture fab(0) NON collective).
-  // On NE rappelle PAS les accesseurs _global ici : ce sont des all_reduce -> les rappeler sous le
-  // garde owns ferait diverger les collectifs entre rangs (MPI_ERR_TRUNCATE).
-  if (owns) {
-    chk(dG == sys.density("gas"), "T2_density_global_eq_local");
-    chk(sG == sys.get_state("gas"), "T2_state_global_eq_local");
-    chk(pG == sys.potential(), "T2_potential_global_eq_local");
-  }
-  const double mtot = sys.mass("gas");  // collectif (sum -> all_reduce)
-  chk(std::isfinite(mtot), "T2_mass_finite");
-  chk(std::fabs(mtot - mass_ref) < 1e-9, "T2_mass_conserved_eq_ref");
-
-  // === T3 : aller-retour checkpoint/restart (parite bit-a-bit, np-invariant) ====================
-  // Instantane GLOBAL (collectif) de l'etat + du potentiel + de l'horloge.
-  const std::vector<double> ckpt_state = sys.state_global("gas");
-  const std::vector<double> ckpt_phi = sys.potential_global();
-  const double ckpt_t = sys.time();
-  const int ckpt_ms = sys.macro_step();
-
-  // System FRAIS, construit a l'identique sur tous les rangs.
-  System rs(cfg);
-  add_compiled_model(rs, "gas", GasModel{Euler{gamma}, NoSource{}, ChargeEll{rho0}}, "minmod",
-                     "rusanov", "conservative", "explicit", gamma);
-  rs.set_poisson("composite", "geometric_mg");
-  test::install_forward_euler_program(rs);
-  // Restauration : scatter box-proprietaire pour l'etat, puis set_potential COLLECTIF (sa
-  // materialisation du solveur prepare est collective, avant le no-op des rangs sans box) + horloge.
-  // state_global et get_state partagent le MEME layout mono-box, donc set_state(ckpt_state) sur le
-  // proprietaire reproduit exactement l'etat.
-  if (owns)
-    rs.set_state("gas", ckpt_state);
-  rs.set_potential(ckpt_phi);
-  rs.set_clock(ckpt_t, ckpt_ms);
-
-  // K pas identiques sur les DEUX systemes (collectifs). L'etat (pur Euler, sans retro-action de phi)
-  // evolue de maniere deterministe -> get_state bit-a-bit identique. Le warm-start MG restaure
-  // (set_potential) ramene le potentiel a la tolerance du solveur.
-  for (int s = 0; s < 4; ++s) {
-    sys.step(dt);
-    rs.step(dt);
-  }
-  if (owns) {
-    chk(rs.get_state("gas") == sys.get_state("gas"), "T3_restart_state_bit_identical");
-    // Potentiel : tolerance serree (MG iteratif -> ordre de reduction non bit-stable sous OpenMP).
-    const std::vector<double> p_rs = rs.potential(), p_sys = sys.potential();
-    double dphi = 0.0, phimax = 0.0;
-    for (std::size_t k = 0; k < p_sys.size(); ++k) {
-      dphi = std::fmax(dphi, std::fabs(p_rs[k] - p_sys[k]));
-      phimax = std::fmax(phimax, std::fabs(p_sys[k]));
-    }
-    chk(dphi <= 1e-10 * (1.0 + phimax), "T3_restart_potential_within_tol");
-  }
-  const double m_sys = sys.mass("gas"), m_rs = rs.mass("gas");  // collectifs (tous les rangs)
-  chk(std::fabs(m_rs - m_sys) < 1e-12, "T3_restart_mass_parity");
-
-  if (owns)
-    std::printf("[rank %d/%d] np=%d  mass=%.12f  |phi|gathered=%zu  OK gather+restart\n", me, np,
-                np, m_sys, pG.size());
+  prove_exact_marshaling<1>(rank, processes, check);
+  prove_exact_marshaling<2>(rank, processes, check);
+  prove_exact_marshaling<3>(rank, processes, check);
 
 #ifdef POPS_HAS_MPI
-  if (np > 1) {
-    long g = 0;
-    MPI_Allreduce(&fails, &g, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
-    fails = g;
+  if (processes > 1) {
+    long collective_failures = 0;
+    MPI_Allreduce(&failures, &collective_failures, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+    failures = collective_failures;
   }
 #endif
-  if (me == 0 && fails == 0)
-    std::printf("OK test_mpi_system_io_gather (np=%d)\n", np);
+  if (rank == 0 && failures == 0)
+    std::printf("OK exact-ranked MPI System I/O (np=%d, Dim=1/2/3)\n", processes);
   comm_finalize();
-  return fails == 0 ? 0 : 1;
+  return failures == 0 ? 0 : 1;
 }
 
-TEST(test_mpi_system_io_gather, Runs) {
-  EXPECT_EQ(
-      pops::test::RunTestBody(&pops_run_test_mpi_system_io_gather, "test_mpi_system_io_gather"), 0);
+}  // namespace
+
+TEST(test_mpi_system_io_gather, exact_ranked_collective_round_trip_and_fail_close) {
+  EXPECT_EQ(pops::test::RunTestBody(&run_mpi_system_io_gather, "test_mpi_system_io_gather"), 0);
 }

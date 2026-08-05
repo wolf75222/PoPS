@@ -9,6 +9,7 @@
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -28,58 +29,6 @@ namespace pops {
 namespace {
 
 template <int Dim>
-std::size_t checked_cell_count(const Box<Dim>& domain) {
-  const std::int64_t cells = domain.numPts();
-  if (cells < 0 || static_cast<std::uint64_t>(cells) >
-                       static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-    throw std::overflow_error("System field cell count exceeds size_t");
-  return static_cast<std::size_t>(cells);
-}
-
-template <int Dim>
-std::size_t domain_ordinal(const Box<Dim>& domain, const Index<Dim>& index) {
-  std::size_t ordinal = 0;
-  std::size_t stride = 1;
-  for (int axis = 0; axis < Dim; ++axis) {
-    if (index[axis] < domain.lo[axis] || index[axis] > domain.hi[axis])
-      throw std::out_of_range("System field index lies outside the exact domain");
-    ordinal += static_cast<std::size_t>(index[axis] - domain.lo[axis]) * stride;
-    const std::size_t extent = static_cast<std::size_t>(domain.length(axis));
-    if (axis + 1 < Dim && extent > std::numeric_limits<std::size_t>::max() / stride)
-      throw std::overflow_error("System field linear stride exceeds size_t");
-    stride *= extent;
-  }
-  return ordinal;
-}
-
-template <int Dim, class Function>
-void for_each_host_index(const Box<Dim>& box, Function&& function) {
-  const std::size_t cells = checked_cell_count(box);
-  for (std::size_t linear = 0; linear < cells; ++linear) {
-    std::size_t remainder = linear;
-    Index<Dim> index{};
-    for (int axis = 0; axis < Dim; ++axis) {
-      const std::size_t extent = static_cast<std::size_t>(box.length(axis));
-      index[axis] = box.lo[axis] + static_cast<int>(remainder % extent);
-      remainder /= extent;
-    }
-    function(index, linear);
-  }
-}
-
-template <int Dim>
-std::size_t storage_ordinal(const Fab<Dim>& fab, const Index<Dim>& index, int component) {
-  const Box<Dim>& grown = fab.grown_box();
-  std::size_t cell = 0;
-  std::size_t stride = 1;
-  for (int axis = 0; axis < Dim; ++axis) {
-    cell += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
-    stride *= static_cast<std::size_t>(grown.length(axis));
-  }
-  return static_cast<std::size_t>(component) * checked_cell_count(grown) + cell;
-}
-
-template <int Dim>
 void copy_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
   if (source.layout() != destination.layout() ||
       source.distribution() != destination.distribution() ||
@@ -90,76 +39,13 @@ void copy_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
   Kokkos::fence();
 }
 
-template <int Dim>
-std::vector<double> gather_global(const MultiFab<Dim>& field, const Box<Dim>& domain,
-                                  int components) {
-  if (components < 1 || components > field.ncomp())
-    throw std::invalid_argument("System global gather component count is invalid");
-  const std::size_t cells = checked_cell_count(domain);
-  if (cells != 0 &&
-      static_cast<std::size_t>(components) > std::numeric_limits<std::size_t>::max() / cells)
-    throw std::overflow_error("System global gather size exceeds size_t");
-  std::vector<double> result(static_cast<std::size_t>(components) * cells, 0.0);
-  for (std::size_t local = 0; local < field.local_size(); ++local) {
-    const Fab<Dim>& fab = field.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-      const std::size_t global = domain_ordinal(domain, index);
-      for (int component = 0; component < components; ++component)
-        result[static_cast<std::size_t>(component) * cells + global] =
-            static_cast<double>(host(storage_ordinal(fab, index, component)));
-    });
-  }
-  all_reduce_sum_inplace(result.data(), result.size());
-  return result;
-}
-
-template <int Dim>
-std::vector<double> gather_local_compact(const MultiFab<Dim>& field, int components) {
-  if (components < 1 || components > field.ncomp())
-    throw std::invalid_argument("System local gather component count is invalid");
-  std::size_t cells = 0;
-  for (std::size_t local = 0; local < field.local_size(); ++local)
-    cells += checked_cell_count(field.box(local));
-  std::vector<double> result(static_cast<std::size_t>(components) * cells, 0.0);
-  std::size_t base = 0;
-  for (std::size_t local = 0; local < field.local_size(); ++local) {
-    const Fab<Dim>& fab = field.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    const std::size_t local_cells = checked_cell_count(fab.box());
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t linear) {
-      for (int component = 0; component < components; ++component)
-        result[static_cast<std::size_t>(component) * cells + base + linear] =
-            static_cast<double>(host(storage_ordinal(fab, index, component)));
-    });
-    base += local_cells;
-  }
-  return result;
-}
-
-template <int Dim>
-void write_global(MultiFab<Dim>& field, const Box<Dim>& domain, const std::vector<double>& values,
-                  int components) {
-  const std::size_t cells = checked_cell_count(domain);
-  if (components < 1 || components > field.ncomp() ||
-      values.size() != static_cast<std::size_t>(components) * cells)
-    throw std::invalid_argument("System global field payload has the wrong exact shape");
-  for (std::size_t local = 0; local < field.local_size(); ++local) {
-    Fab<Dim>& fab = field.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-      const std::size_t global = domain_ordinal(domain, index);
-      for (int component = 0; component < components; ++component)
-        host(storage_ordinal(fab, index, component)) =
-            static_cast<Real>(values[static_cast<std::size_t>(component) * cells + global]);
-    });
-    fab.copy_from_host(host);
-  }
-  Kokkos::fence();
-}
+using runtime::system::marshaling::checked_cell_count;
+using runtime::system::marshaling::domain_ordinal;
+using runtime::system::marshaling::for_each_host_index;
+using runtime::system::marshaling::gather_global;
+using runtime::system::marshaling::gather_local_compact;
+using runtime::system::marshaling::storage_ordinal;
+using runtime::system::marshaling::write_global;
 
 template <int Dim, class Species>
 void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& candidate,

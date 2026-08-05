@@ -1044,7 +1044,8 @@ class System {
   /// Component count of the slots of history @p name (the block's ncomp). @throws if unknown.
   POPS_EXPORT int history_ncomp(const std::string& name) const;
   /// GLOBAL (collective, MPI-safe) gather of slot @p slot (0 = current, k = k macro-steps back) of
-  /// history @p name into a component-major buffer of size ncomp*ny*nx, EXACTLY like state_global
+  /// history @p name into a component-major buffer of size ncomp times the product of every exact
+  /// spatial extent, EXACTLY like state_global
   /// (every rank fills its local boxes then all_reduce_sum). All ranks MUST call it. @throws if @p name
   /// is unknown or @p slot is out of range. Reads the slot even before the first store (the checkpoint
   /// of a never-stored ring is its zero fill); the initialized flag is serialized separately.
@@ -1158,11 +1159,14 @@ class System {
   POPS_EXPORT double program_cache_accumulated_dt(int node_id) const;
   /// The component count of slot @p node_id's cached value. @throws if absent.
   POPS_EXPORT int program_cache_ncomp(int node_id) const;
-  /// The ghost-cell width of slot @p node_id's cached value (1 for the aux, the block-state width for a
-  /// held scratch) -- serialized so restore rebuilds with the same ngrow. @throws if absent.
+  /// The uniform ghost-cell width of slot @p node_id's cached value (1 for the aux, the block-state
+  /// width for a held scratch) -- serialized so restore rebuilds with the same width on every exact
+  /// axis. @throws if absent or if an anisotropic extent cannot be represented by this checkpoint
+  /// schema.
   POPS_EXPORT int program_cache_ngrow(int node_id) const;
   /// GLOBAL (collective, MPI-safe) gather of slot @p node_id's cached MultiFab<Dim> into a component-major
-  /// buffer of size ncomp*ny*nx, EXACTLY like state_global / history_global. All ranks MUST call it.
+  /// buffer of size ncomp times the product of every exact spatial extent, EXACTLY like
+  /// state_global / history_global. All ranks MUST call it.
   /// @throws if @p node_id is absent.
   POPS_EXPORT std::vector<double> program_cache_global(int node_id) const;
   /// RESTORE (restart) slot @p node_id from a GLOBAL component-major buffer (same layout as
