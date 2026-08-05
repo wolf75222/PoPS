@@ -958,6 +958,11 @@ sources = ["tests/cpp/unit/numerics/test_imex_transport.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_implicit_source_nd"
+sources = ["tests/cpp/unit/numerics/test_implicit_source_nd.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_numerical_defaults"
 sources = ["tests/cpp/unit/numerics/test_numerical_defaults.cpp"]
 labels = ["unit", "numerics", "fast"]

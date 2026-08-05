@@ -121,6 +121,7 @@ set(POPS_CPP_TEST_SOURCE_test_nd_amr_runtime "tests/cpp/unit/amr/test_nd_amr_run
 set(POPS_CPP_TEST_SOURCE_test_imex_ap "tests/cpp/unit/numerics/test_imex_ap.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_partial "tests/cpp/unit/numerics/test_imex_partial.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_transport "tests/cpp/unit/numerics/test_imex_transport.cpp")
+set(POPS_CPP_TEST_SOURCE_test_implicit_source_nd "tests/cpp/unit/numerics/test_implicit_source_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_isothermal_vacuum_floor "tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp")
 set(POPS_CPP_TEST_SOURCE_test_model_registry "tests/cpp/unit/codegen/test_model_registry.cpp")
 set(POPS_CPP_TEST_SOURCE_test_module_metadata "tests/cpp/integration/runtime/test_module_metadata.cpp")
