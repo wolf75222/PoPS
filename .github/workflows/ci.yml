@@ -303,7 +303,7 @@ jobs:
             --force-full "$FORCE_FULL" \
             --github-output "$GITHUB_OUTPUT"
 
-  # PREWARM C++ NATIF. Quatre runners compilent une partition exacte et disjointe des objets runtime
+  # PREWARM C++ NATIF. Trois runners compilent une partition exacte et disjointe des objets runtime
   # communs a tous les shards. Ils publient uniquement des entrees ccache et leur contrat exact
   # compilateur/flags/revision/sources. Les shards reconfigurent ensuite eux-memes le graphe officiel,
   # authentifient ces contrats, compilent leurs executables distincts et executent leurs propres tests.
@@ -317,7 +317,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-block-base, amr-compressible]
+        lane: [system, amr-runtime, amr-fields]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-cpp-prewarm
@@ -377,7 +377,7 @@ jobs:
               lane_parallelism=2
               lane_watchdog=24m
               ;;
-            amr-base|amr-compressible) lane_parallelism=2 ;;
+            amr-runtime|amr-fields) lane_parallelism=2 ;;
           esac
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
@@ -430,7 +430,7 @@ jobs:
     if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # Le cache final fusionne les quatre partitions runtime puis ajoute les objets de tests du
+      # Le cache final fusionne les trois partitions runtime puis ajoute les objets de tests du
       # shard. Deux Gio evitent d'evincer le socle authentifie avant son utilisation.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
@@ -536,7 +536,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -597,7 +597,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"
@@ -748,11 +748,11 @@ jobs:
       - name: Pyright
         run: pyright
 
-  # PREWARM PYTHON NATIF : quatre runners compilent des ensembles d'objets O3 disjoints du MEME
-  # graphe Ninja (System/core, AMR core, AMR block base, AMR compressible). Ils ne publient aucun
+  # PREWARM PYTHON NATIF : trois runners compilent des ensembles d'objets O3 disjoints du MEME
+  # graphe Ninja (System/core, runtime AMR exact, solveurs de champ AMR). Ils ne publient aucun
   # binaire : seulement
   # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
-  # final ci-dessous reconfigure officiellement tout le module, authentifie les quatre contrats,
+  # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
   # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
   gate-python-prewarm:
     name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
@@ -763,7 +763,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-block-base, amr-compressible]
+        lane: [system, amr-runtime, amr-fields]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -855,7 +855,7 @@ jobs:
           test "${#object_targets[@]}" -gt 0
           # Four simultaneous GCC frontends now also exhaust the 16 GiB runner on the grown System
           # seam. Bound that lane to two frontends and give its cold O3 path the same measured
-          # watchdog margin as OpenMP; the four semantic lanes still execute independently.
+          # watchdog margin as OpenMP; the three semantic lanes still execute independently.
           lane_parallelism=4
           lane_watchdog=18m
           case "${{ matrix.lane }}" in
@@ -863,7 +863,7 @@ jobs:
               lane_parallelism=2
               lane_watchdog=24m
               ;;
-            amr-base|amr-compressible) lane_parallelism=2 ;;
+            amr-runtime|amr-fields) lane_parallelism=2 ;;
           esac
           run_with_heartbeat "Python prewarm ${{ matrix.lane }}" "$lane_watchdog" \
             cmake --build --preset ci-kokkos-python --parallel "$lane_parallelism" \
@@ -987,7 +987,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1037,7 +1037,7 @@ jobs:
           # embedded path strings change; instructions/symbols identical) -> the abi_key (compiler+header
           # content hash) is untouched. CI-only -D, mirroring -DCMAKE_LINKER_TYPE=MOLD (presets stay clean).
           # POPS_HEAVY_MODULE_TU_POOL=4 (ADC-621): use the public Linux runner's four compile slots.
-          # Keeping the old value 2 serialized half of the generated-seam leaves.
+          # Keeping the old value 2 serialized half of the exact-ranked runtime objects.
           # This measured CI-only override remains guarded by the cold-build watchdog
           # and attempt cache; the CMake default stays the conservative size-1 OOM
           # guard and wheel builders keep their platform-specific bounded pools.
@@ -1049,7 +1049,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           # Refuse prewarmed entries unless the final official graph proves the same compiler,
           # complete command flags, Git revision and source content for every runtime object.
           python3 scripts/ci_python_module_objects.py \
@@ -1459,7 +1459,7 @@ jobs:
         run: ccache -s
 
   # PREWARM MPI NATIF. Le prewarm Serial ci-dessus ne peut pas produire de hits ccache fiables pour
-  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces quatre
+  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces trois
   # lanes configurent donc le graphe ci-mpi exact et compilent uniquement sa partition disjointe
   # d'objets runtime. Comme pour le prewarm Serial, les artefacts ne contiennent aucun binaire lie :
   # seulement les entrees ccache et un contrat compiler/flags/revision/sources que le job final verifie.
@@ -1474,7 +1474,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-block-base, amr-compressible]
+        lane: [system, amr-runtime, amr-fields]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
@@ -1543,7 +1543,7 @@ jobs:
               lane_parallelism=2
               lane_watchdog=24m
               ;;
-            amr-base|amr-compressible) lane_parallelism=2 ;;
+            amr-runtime|amr-fields) lane_parallelism=2 ;;
           esac
           mpi_cmake_args=()
           if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
@@ -1724,7 +1724,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1801,7 +1801,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-mpi \
             --verify-contracts "${compile_contracts[@]}"
@@ -2024,7 +2024,7 @@ jobs:
   # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
   # chacun des sept shards C++ ni le module Python a recompiler leur socle runtime avant leurs
   # executables/bindings. Les graphes C++ et Python ont volontairement des defines/visibilites
-  # differents : chaque graphe possede donc ses quatre lanes semantiques exactes. Elles publient
+  # differents : chaque graphe possede donc ses trois lanes semantiques exactes. Elles publient
   # uniquement ccache et le contrat compilateur/flags/revision/sources ; aucun binaire lie n'est
   # transmis, et chaque consommateur reconfigure puis authentifie son propre contrat.
   gate-openmp-prewarm:
@@ -2037,7 +2037,7 @@ jobs:
       fail-fast: false
       matrix:
         graph: [cpp, python]
-        lane: [system, amr-base, amr-block-base, amr-compressible]
+        lane: [system, amr-runtime, amr-fields]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm
@@ -2390,7 +2390,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-${{ matrix.kind }}-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 4
+          test "${#cache_archives[@]}" -eq 3
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -2398,8 +2398,8 @@ jobs:
 
       - name: Configure + build (backend Kokkos OpenMP)
         if: matrix.kind == 'cpp'
-        # Le socle runtime froid est construit une seule fois par les quatre lanes semantiques. Ce
-        # shard reconfigure le graphe officiel, authentifie les quatre contrats puis ne compile que
+        # Le socle runtime froid est construit une seule fois par les trois lanes semantiques. Ce
+        # shard reconfigure le graphe officiel, authentifie les trois contrats puis ne compile que
         # ses executables/tests propres ; le watchdog reste un garde-fou, pas le mecanisme de vitesse.
         timeout-minutes: 43
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
@@ -2444,7 +2444,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-cpp-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"
@@ -2563,7 +2563,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-python-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 4
+          test "${#compile_contracts[@]}" -eq 3
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-py \
             --verify-contracts "${compile_contracts[@]}"

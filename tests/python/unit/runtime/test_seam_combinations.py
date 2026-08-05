@@ -1,11 +1,4 @@
-"""Every generated AMR transport/flux seam is executable.
-
-``src/runtime/builders/seam_combinations.cmake`` is the declarative authority for the
-generated AMR builder translation units. Uniform System uses compiled
-``PreparedSystemBlock<Dim>`` providers instead of this legacy seam product. The source-only
-architecture gate checks the AMR manifest against the component registry; this runtime gate
-complements it by advancing every declared AMR route.
-"""
+"""Every built-in route materializes and executes through the exact-ranked AMR package."""
 
 from __future__ import annotations
 
@@ -83,7 +76,7 @@ def _seed_density(runtime: AmrSystem, name: str, n: int) -> None:
 
 
 @pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)
-def test_amr_generated_seam_advances(transport: str, flux: str | None) -> None:
+def test_amr_prepared_package_route_advances(transport: str, flux: str | None) -> None:
     n = 32
     runtime = AmrSystem(n=n, regrid_every=0, periodicity=(True, True))
     runtime.add_equation(

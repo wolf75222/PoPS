@@ -9,7 +9,7 @@
 #   - reporte per_step_ms np=1/2/4 pour replique ET reparti -> montre (ou non) le strong-scaling.
 # Lancer depuis un checkout PoPS complet (ou definir POPS_SOURCE_ROOT). Le job copie dans son espace
 # temporaire le CMake racine, cmake/, include/ et src/ : src/CMakeLists.txt reste ainsi l'autorite
-# unique des sources runtime et des seams generees. Kokkos (Cuda+Serial, Hopper90) reste installe dans
+# unique des sources runtime exactes. Kokkos (Cuda+Serial, Hopper90) reste installe dans
 # $HOME/pops_gpu_p1/kinstall. Soumettre : sbatch tests/gpu/romeo/amrmpi_romeo_build.sh
 #SBATCH --account=r250127
 #SBATCH --constraint=armgpu
@@ -30,8 +30,7 @@ echo "noeud=$(hostname) arch=$(uname -m)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POPS_SOURCE_ROOT="${POPS_SOURCE_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 [[ -f "$POPS_SOURCE_ROOT/CMakeLists.txt" \
-   && -f "$POPS_SOURCE_ROOT/src/CMakeLists.txt" \
-   && -f "$POPS_SOURCE_ROOT/src/runtime/builders/seam_combinations.cmake" ]] || {
+   && -f "$POPS_SOURCE_ROOT/src/CMakeLists.txt" ]] || {
   echo "POPS_SOURCE_ROOT is not a complete PoPS checkout: $POPS_SOURCE_ROOT" >&2
   exit 3
 }

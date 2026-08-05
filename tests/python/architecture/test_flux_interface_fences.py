@@ -154,11 +154,11 @@ def test_fixed_riemann_recovery_route_is_wired_for_cartesian_uniform_and_amr_onl
         row for row in riemann["routes"]
         if row["token"] == "roe_hll_rusanov_recovery"
     )
-    uniform = _behavior(ROOT / "include/pops/runtime/builders/block/block_builder.hpp")
-    amr = _behavior(ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp")
-    system_install = _behavior(ROOT / "src/runtime/system/system_install.cpp")
-    amr_compressible = _behavior(
-        ROOT / "src/runtime/builders/amr/block/compressible/amr_block_compressible.cpp"
+    uniform = _behavior(
+        ROOT / "include/pops/runtime/builders/compiled/generated_system_block.hpp"
+    )
+    amr = _behavior(
+        ROOT / "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp"
     )
     policy = _behavior(ROOT / "include/pops/numerics/fv/numerical_flux.hpp")
 
@@ -169,9 +169,7 @@ def test_fixed_riemann_recovery_route_is_wired_for_cartesian_uniform_and_amr_onl
     assert route["metadata"]["polar_ok"] is False
     assert "using RoeHllRusanovRecoveryPolicy" in policy
     assert "case RiemannRouteId::kRoeHllRusanovRecovery" in uniform
-    assert "build_block<L, RoeHllRusanovRecoveryPolicy>" in uniform
+    assert "materialize_block<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy" in uniform
     assert "case RiemannRouteId::kRoeHllRusanovRecovery" in amr
-    assert "build_amr_block<Model, L, RoeHllRusanovRecoveryPolicy>" in amr
-    assert 'wave_speed_cache && riem != "hll"' in uniform
-    assert system_install.count('wave_speed_cache && riemann != "hll"') == 2
-    assert 'wave_speed_cache && a.riemann != "hll"' in amr_compressible
+    assert "materialize_system<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy" in amr
+    assert "if (routes.wave_speed_cache)" in amr

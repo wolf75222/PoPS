@@ -27,11 +27,11 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
             _target("runtime/output/hdf5_collective.cpp.o", "pops_runtime_output"),
             _target("runtime/amr/amr_system.cpp.o", "pops_runtime_amr"),
             _target(
-                "generated_seams/amr/block/base/amr_block_exb.cpp.o",
+                "runtime/amr/amr_field_solver_builtin.cpp.o",
                 "pops_runtime_amr",
             ),
             _target(
-                "generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
+                "runtime/amr/amr_field_solver_component.cpp.o",
                 "pops_runtime_amr",
             ),
             "python/CMakeFiles/_pops.dir/bindings.cpp.o: CXX_COMPILER___pops_Release",
@@ -44,14 +44,12 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
             "src/CMakeFiles/pops_runtime_output.dir/runtime/output/hdf5_collective.cpp.o",
             "src/CMakeFiles/pops_runtime_system.dir/runtime/system/system.cpp.o",
         ],
-        "amr-base": [
+        "amr-runtime": [
             "src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_system.cpp.o",
         ],
-        "amr-block-base": [
-            "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/block/base/amr_block_exb.cpp.o",
-        ],
-        "amr-compressible": [
-            "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
+        "amr-fields": [
+            "src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_builtin.cpp.o",
+            "src/CMakeFiles/pops_runtime_amr.dir/runtime/amr/amr_field_solver_component.cpp.o",
         ],
     }
 

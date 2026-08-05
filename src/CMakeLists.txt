@@ -2,16 +2,7 @@
 #
 # This directory is the single source authority for the System/AmrSystem object libraries used by
 # both the Python extension and the C++ conformance tests.  Consumer CMake files link these targets;
-# they never repeat the source manifest or regenerate a second seam product.
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/runtime/builders/seam_combinations.cmake)
-
-set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
-set(POPS_RUNTIME_AMR_GENERATED_SEAMS "")
-foreach(_seam_row IN LISTS POPS_SEAM_COMBINATIONS)
-  pops_generate_seam(
-    "${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_RUNTIME_AMR_GENERATED_SEAMS)
-endforeach()
+# they never repeat the source list or instantiate a parallel legacy block product.
 
 set(POPS_RUNTIME_CORE_SOURCES
     runtime/program/step_transaction.cpp)
@@ -29,9 +20,7 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
 set(POPS_RUNTIME_AMR_SOURCES
     runtime/amr/amr_field_solver_builtin.cpp
     runtime/amr/amr_field_solver_component.cpp
-    runtime/amr/amr_system.cpp
-    runtime/builders/amr/block/compressible/amr_block_compressible.cpp
-    ${POPS_RUNTIME_AMR_GENERATED_SEAMS})
+    runtime/amr/amr_system.cpp)
 
 set(POPS_RUNTIME_OUTPUT_SOURCES
     runtime/output/hdf5_collective.cpp)

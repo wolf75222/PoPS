@@ -22,7 +22,7 @@
 ///   - a table of function pointers cannot carry a TYPE (build_block<Limiter, Flux> needs Limiter as a
 ///     template argument, resolved per TU per flux) without type-erasing the closure (defeats inlining,
 ///     adds a heap allocation on a device-adjacent path) or pre-enumerating the whole Limiter x Flux x
-///     Model product in one TU (the ~1700-leaf blow-up seam_combinations.cmake exists to avoid);
+///     Model product in one TU (the generated package instead pins one exact `Dim` specialization);
 ///   - a hand-written switch on LimiterRouteId gives exhaustiveness only via -Wswitch -- but this repo
 ///     compiles WITHOUT -Werror (cmake/PopsDevTooling.cmake: "Informatif d'abord : PAS de -Werror"), so a
 ///     missing arm is a silent warning, not a build failure;
