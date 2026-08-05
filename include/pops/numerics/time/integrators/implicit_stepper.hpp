@@ -10,17 +10,16 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/nonlinear/local_nonlinear_collective.hpp>
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>
-#include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -112,47 +111,6 @@ template <class Model, int N>
 POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int component) {
   return mask.active ? mask.flag[component] : model_is_implicit<Model>(component);
 }
-
-/// Public preparation policy. It contains no solver implementation or failure-policy escape hatch.
-struct NewtonOptions {
-  int max_iters = kNewtonDefaultMaxIters;
-  Real rel_tol = kNewtonDefaultRelTol;
-  Real abs_tol = kNewtonDefaultAbsTol;
-  Real fd_eps = kNewtonDefaultFdEps;
-  Real damping = kNewtonDefaultDamping;
-};
-
-inline void validate_newton_options(const NewtonOptions& options, const char* where) {
-  const std::string prefix = std::string(where) + " : ";
-  if (options.max_iters < 1)
-    throw std::runtime_error(prefix + "newton_max_iters >= 1");
-  if (!std::isfinite(options.rel_tol) || !std::isfinite(options.abs_tol) ||
-      !std::isfinite(options.fd_eps) || options.rel_tol < Real(0) || options.abs_tol < Real(0) ||
-      (options.rel_tol == Real(0) && options.abs_tol == Real(0)) || options.fd_eps <= Real(0))
-    throw std::runtime_error(prefix +
-                             "newton_rel_tol/abs_tol >= 0 with at least one positive tolerance, "
-                             "and newton_fd_eps > 0");
-  if (!std::isfinite(options.damping) || !(options.damping > Real(0) && options.damping <= Real(1)))
-    throw std::runtime_error(prefix + "newton_damping in (0, 1]");
-}
-
-/// Compatibility inspection aggregate. The common SolveReport remains authoritative.
-struct NewtonReport {
-  bool enabled = false;
-  bool converged = true;
-  Real max_residual = Real(0);
-  Real max_iters_used = Real(0);
-  double n_failed = 0;
-  Index<3> failed_cell{};
-  int failed_dimension = 0;
-  int failed_component = -1;
-  bool has_failed_cell = false;
-  SolveReport solve{};
-  RuntimeDiagnosticsReport diagnostics =
-      make_runtime_diagnostics_report("pops.numerics.time.prepared_local_nonlinear");
-
-  void reset() { *this = NewtonReport{}; }
-};
 
 namespace detail {
 
@@ -384,77 +342,6 @@ struct LocalStatValue {
   POPS_HD Real operator()(const Index<Dim>& index) const { return values(index, component); }
 };
 
-template <int Axis, int Dim>
-struct FailureCoordinateMinimum {
-  FieldView<const Real, Dim> values{};
-  int priority = 0;
-  int priority_component = 0;
-  Index<Dim> selected{};
-
-  POPS_HD void operator()(const Index<Dim>& index, int& result) const {
-    if (static_cast<int>(values(index, priority_component)) != priority)
-      return;
-    for (int higher = Axis + 1; higher < Dim; ++higher)
-      if (index[higher] != selected[higher])
-        return;
-    if (index[Axis] < result)
-      result = index[Axis];
-  }
-};
-
-template <int Dim>
-struct FailureComponentMinimum {
-  FieldView<const Real, Dim> values{};
-  int priority = 0;
-  int priority_component = 0;
-  int component_component = 0;
-  Index<Dim> selected{};
-
-  POPS_HD void operator()(const Index<Dim>& index, int& result) const {
-    for (int axis = 0; axis < Dim; ++axis)
-      if (index[axis] != selected[axis])
-        return;
-    if (static_cast<int>(values(index, priority_component)) != priority)
-      return;
-    const int component = static_cast<int>(values(index, component_component));
-    if (component < result)
-      result = component;
-  }
-};
-
-template <int Dim, class Kernel>
-int reduce_min_integer(const Box<Dim>& box, Kernel kernel) {
-  if (box.empty())
-    return std::numeric_limits<int>::max();
-  require_iterable_box(box);
-  ensure_kokkos_initialized();
-  int selected = std::numeric_limits<int>::max();
-  if constexpr (Dim == 1) {
-    Kokkos::parallel_reduce(
-        "pops_implicit_failure_min_1d",
-        Kokkos::RangePolicy<Kokkos::IndexType<int>>(box.lo[0], box.hi[0] + 1),
-        KOKKOS_LAMBDA(const int i, int& result) { kernel(Index<1>{i}, result); },
-        Kokkos::Min<int>{selected});
-  } else if constexpr (Dim == 2) {
-    Kokkos::parallel_reduce(
-        "pops_implicit_failure_min_2d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-            {box.lo[0], box.lo[1]}, {box.hi[0] + 1, box.hi[1] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, int& result) { kernel(Index<2>{i, j}, result); },
-        Kokkos::Min<int>{selected});
-  } else {
-    Kokkos::parallel_reduce(
-        "pops_implicit_failure_min_3d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            {box.lo[0], box.lo[1], box.lo[2]}, {box.hi[0] + 1, box.hi[1] + 1, box.hi[2] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k, int& result) {
-          kernel(Index<3>{i, j, k}, result);
-        },
-        Kokkos::Min<int>{selected});
-  }
-  return selected;
-}
-
 template <int Dim>
 struct LocalStatReasonForLocation {
   FieldView<const Real, Dim> values{};
@@ -493,66 +380,6 @@ double collective_sum_component(const MultiFab<Dim, MemorySpace>& statistics, in
         statistics.box(local_index),
         LocalStatValue<Dim>{statistics.fab(local_index).view(), component});
   return all_reduce_sum(static_cast<double>(local));
-}
-
-template <int Axis, int Dim, class MemorySpace>
-bool select_failure_coordinates(const MultiFab<Dim, MemorySpace>& statistics, int priority,
-                                int priority_component, Index<Dim>& selected) {
-  int local = std::numeric_limits<int>::max();
-  for (std::size_t patch = 0; patch < statistics.local_size(); ++patch) {
-    const int candidate = reduce_min_integer(
-        statistics.box(patch),
-        FailureCoordinateMinimum<Axis, Dim>{statistics.fab(patch).view(), priority,
-                                            priority_component, selected});
-    if (candidate < local)
-      local = candidate;
-  }
-  const long global = all_reduce_min(static_cast<long>(local));
-  if (global == std::numeric_limits<int>::max())
-    return false;
-  selected[Axis] = static_cast<int>(global);
-  if constexpr (Axis > 0)
-    return select_failure_coordinates<Axis - 1>(statistics, priority, priority_component, selected);
-  return true;
-}
-
-template <int Dim>
-struct LocalNonlinearFailureLocation {
-  int priority = 0;
-  Index<Dim> cell{};
-  int component = -1;
-  bool found = false;
-};
-
-template <int Dim, class MemorySpace>
-LocalNonlinearFailureLocation<Dim> collective_first_failure(
-    const MultiFab<Dim, MemorySpace>& statistics, int priority, int priority_component,
-    int component_component) {
-  LocalNonlinearFailureLocation<Dim> result{};
-  result.priority = priority;
-  if (priority <= 0)
-    return result;
-  result.found =
-      select_failure_coordinates<Dim - 1>(statistics, priority, priority_component, result.cell);
-  if (!result.found)
-    return result;
-
-  int local = std::numeric_limits<int>::max();
-  for (std::size_t patch = 0; patch < statistics.local_size(); ++patch) {
-    const int candidate = reduce_min_integer(
-        statistics.box(patch),
-        FailureComponentMinimum<Dim>{statistics.fab(patch).view(), priority, priority_component,
-                                     component_component, result.cell});
-    if (candidate < local)
-      local = candidate;
-  }
-  const long global = all_reduce_min(static_cast<long>(local));
-  if (global == std::numeric_limits<int>::max()) {
-    result.found = false;
-    return result;
-  }
-  result.component = static_cast<int>(global);
-  return result;
 }
 
 template <int Dim, class MemorySpace>
@@ -597,12 +424,9 @@ NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve
   staged.n_failed += failed_cells;
   if (!solve.solved()) {
     staged.converged = false;
-    staged.failed_dimension = Dim;
-    staged.failed_component = failure.component;
-    staged.has_failed_cell = failure.found;
-    if (failure.found)
-      for (int axis = 0; axis < Dim; ++axis)
-        staged.failed_cell[axis] = failure.cell[axis];
+    staged.failed_i = solve.failed_i;
+    staged.failed_j = solve.failed_j;
+    staged.failed_comp = failure.component;
   }
   return staged;
 }
@@ -659,6 +483,7 @@ template <int Dim, class Model, class MemorySpace>
   if (active_cells != nullptr && (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
     throw std::invalid_argument(
         "Implicit source active-cell mask must have one component and match the state layout");
+  mf_arith_detail::require_collective_identity(state, "backward_euler_source");
 
   auto candidate = std::make_unique<MultiFab<Dim, MemorySpace>>(
       state.layout(), state.distribution(), state.local_rank(), state.ncomp(), state.ghosts());
@@ -671,7 +496,7 @@ template <int Dim, class Model, class MemorySpace>
       active = active_cells->fab(local_index).view();
     for_each_cell(state.box(local_index), detail::PreparedImplicitSourceKernel<Dim, Model>{
                                               model,
-                                              state.fab(local_index).view(),
+                                              std::as_const(state).fab(local_index).view(),
                                               aux.fab(local_index).view(),
                                               active,
                                               active_cells != nullptr,
@@ -695,26 +520,28 @@ template <int Dim, class Model, class MemorySpace>
   const int safeguard_steps = static_cast<int>(detail::collective_max_component(statistics, 7));
   const double failed_cells = detail::collective_sum_component(statistics, 9);
 
-  detail::LocalNonlinearFailureLocation<Dim> failure{};
+  LocalNonlinearFailureLocation<Dim> failure{};
   int failed_component = -1;
   std::uint32_t reason_code = 0;
   if (failed_cells > 0) {
-    failure = detail::collective_first_failure(statistics, status_priority, 12, 8);
+    failure = collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8);
     if (!failure.found || failure.priority != status_priority)
       throw std::runtime_error("implicit source collective status/location precedence mismatch");
     failed_component = failure.component;
     const int reason_high =
-        static_cast<int>(detail::collective_reason(statistics, status_code, failure.cell, 10));
+        static_cast<int>(detail::collective_reason(statistics, status_code, failure.index, 10));
     const int reason_low = static_cast<int>(
-        detail::collective_reason(statistics, status_code, failure.cell, 11, reason_high));
+        detail::collective_reason(statistics, status_code, failure.index, 11, reason_high));
     reason_code =
         (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
   }
 
-  const int failed_i = failure.found ? failure.cell[0] : -1;
-  int failed_j = -1;
-  if constexpr (Dim > 1)
-    failed_j = failure.found ? failure.cell[1] : -1;
+  int legacy_coordinates[2] = {-1, -1};
+  if (failure.found)
+    for (int axis = 0; axis < Dim && axis < 2; ++axis)
+      legacy_coordinates[axis] = failure.index[axis];
+  const int failed_i = legacy_coordinates[0];
+  const int failed_j = legacy_coordinates[1];
   SolveReport solve =
       local_nonlinear_solve_report(status_code, iterations, evaluations, reference_residual,
                                    residual, step, condition, safeguard_steps, failed_i, failed_j,
@@ -723,6 +550,11 @@ template <int Dim, class Model, class MemorySpace>
     solve.reason = std::string("implicit_source_") + local_nonlinear_status_name(status);
     if (reason_code != 0)
       solve.reason += "_reason_" + std::to_string(reason_code);
+    if (failure.found) {
+      solve.reason += "_index";
+      for (int axis = 0; axis < Dim; ++axis)
+        solve.reason += "_" + std::to_string(failure.index[axis]);
+    }
   } else {
     solve.reason = "implicit_source_converged";
   }

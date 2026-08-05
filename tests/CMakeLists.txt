@@ -529,6 +529,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_assembler_driver
   test_amr_layout_guard
   test_system_hardening
+  test_implicit_source_nd
   test_imex_partial
   test_imex_transport
   test_multirate_stride

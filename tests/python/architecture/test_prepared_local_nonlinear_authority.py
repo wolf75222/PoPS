@@ -141,12 +141,33 @@ def test_failure_location_uses_staged_integer_collectives_without_float_packing(
     for source in (provider, implicit, generated, program_ops):
         assert "encode_local_nonlinear_failure" not in source
         assert "encode_ranked_local_nonlinear_failure" not in source
-    assert "Kokkos::Min<int>" in collective
+    assert "Kokkos::atomic_min" in collective
     assert "all_reduce_min(static_cast<long>" in collective
-    assert "LocalNonlinearFailureJMin" in collective
-    assert "LocalNonlinearFailureIMin" in collective
+    assert "LocalNonlinearFailureAxisMin" in collective
     assert "LocalNonlinearFailureComponentMin" in collective
-    assert "Kokkos::Min<int>" in implicit
-    assert "all_reduce_min(static_cast<long>" in implicit
-    assert "FailureCoordinateMinimum" in implicit
-    assert "FailureComponentMinimum" in implicit
+    assert "for (int axis = Dim - 1; axis >= 0; --axis)" in collective
+    assert "collective_first_local_nonlinear_failure" in implicit
+    assert "Kokkos::Min<int>" not in implicit
+    assert "Kokkos::Rank<" not in implicit
+
+
+def test_implicit_provider_and_failure_collective_share_one_ranked_authority():
+    implicit = _without_cpp_comments(IMPLICIT_STEPPER.read_text(encoding="utf-8"))
+    collective = _without_cpp_comments(COLLECTIVE.read_text(encoding="utf-8"))
+
+    for source in (implicit, collective):
+        for forbidden in (
+            "Box2D",
+            "Fab2D",
+            "Array4",
+            "ConstArray4",
+            ".array(",
+            ".const_array(",
+        ):
+            assert forbidden not in source
+    assert "FieldView<const Real, Dim>" in implicit
+    assert "MultiFab<Dim, MemorySpace>" in implicit
+    assert "LocalNonlinearFailureLocation<Dim>" in collective
+    assert "Index<Dim> selected" in collective
+    assert not re.search(r"if constexpr\s*\(\s*Dim\b", implicit)
+    assert not re.search(r"if constexpr\s*\(\s*Dim\b", collective)
