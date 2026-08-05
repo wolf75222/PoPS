@@ -12,6 +12,8 @@ PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 FLUX_FAILURE = ROOT / "include/pops/numerics/fv/flux_failure.hpp"
 FACE_FLUX = ROOT / "include/pops/numerics/spatial/primitives/face_flux.hpp"
+ND_RECONSTRUCTION = ROOT / "include/pops/numerics/spatial/nd/reconstruction.hpp"
+CARTESIAN_OPERATOR = ROOT / "include/pops/numerics/spatial/operators/cartesian_operator.hpp"
 RECOVERY = ROOT / "include/pops/numerics/nonlinear/prepared_variable_recovery.hpp"
 SPATIAL_RECOVERY_CONSUMERS = (
     FACE_FLUX,
@@ -130,17 +132,22 @@ def test_program_terminal_state_publication_validates_every_candidate_before_fir
     assert "AMR Program terminal state publication" in amr
 
 
-def test_face_reconstruction_returns_and_consumes_one_typed_recovery_report():
-    reconstruction = FACE_FLUX.read_text(encoding="utf-8")
-    assert "struct ReconstructedFaceState" in reconstruction
-    assert "prepare_model_variable_recovery(model)" in reconstruction
-    assert "recover_prepared_variable(plan" in reconstruction
-    assert "recovery_report(outcome)" in reconstruction
+def test_nd_face_reconstruction_consumes_typed_conversion_before_flux_evaluation():
+    reconstruction = ND_RECONSTRUCTION.read_text(encoding="utf-8")
+    operator = CARTESIAN_OPERATOR.read_text(encoding="utf-8")
+
+    assert "StateConversion<typename Model::State>" in reconstruction
+    assert "model.recover(pops::load_state<Model>(state" in reconstruction
+    assert "reconstruct_face_pair<Axis, Variables>" in operator
+    left_status = operator.index("traces.left_status != StateConversionStatus::Success")
+    right_status = operator.index("traces.right_status != StateConversionStatus::Success")
+    evaluation = operator.index("evaluate_axis_flux<Axis>")
+    assert left_status < evaluation
+    assert right_status < evaluation
     assert "model.to_primitive" not in reconstruction
 
     failure_channel = FLUX_FAILURE.read_text(encoding="utf-8")
     assert "record_recovery(const RecoveryReport& report" in failure_channel
-    assert "recovery_evaluation_status(report.status)" in failure_channel
 
 
 def test_every_production_spatial_path_consumes_recovery_before_flux_evaluation():

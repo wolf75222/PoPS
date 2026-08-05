@@ -63,12 +63,15 @@ def test_legacy_transport_boundary_authorities_are_deleted() -> None:
     )
 
 
-def test_prepared_boundary_plan_is_the_only_native_transport_authority() -> None:
+def test_native_transport_boundary_is_separate_from_the_polar_metric_specialization() -> None:
     polar_builder = (
         ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
     ).read_text(encoding="utf-8")
     polar_operator = (
         ROOT / "include/pops/numerics/spatial/operators/polar_operator.hpp"
+    ).read_text(encoding="utf-8")
+    prepared_boundary = (
+        ROOT / "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
     ).read_text(encoding="utf-8")
     amr_runtime = (ROOT / "include/pops/runtime/amr/amr_runtime.hpp").read_text(
         encoding="utf-8"
@@ -76,10 +79,13 @@ def test_prepared_boundary_plan_is_the_only_native_transport_authority() -> None
 
     assert "build_block_polar requires a prepared boundary plan" in polar_builder
     assert "boundary_plan->fill_same_level_and_physical" in polar_builder
-    assert "boundary_plan.zeroes_face(0, -1)" in polar_operator
-    assert "boundary_plan.zeroes_face(0, 1)" in polar_operator
-    assert "boundary_plan.has_component_boundaries()" in polar_operator
-    assert "boundary_plan.has_omitted_faces()" in polar_operator
+    assert "PlanarPolarCoordinateMap" in polar_operator
+    assert "prepare_cartesian_operator<2" in polar_operator
+    assert "boundary_plan" not in polar_operator
+    assert "apply_physical_flux_conditions" in prepared_boundary
+    assert "HyperbolicBoundaryLaw::NoFlux" in prepared_boundary
+    assert "ZeroBoundaryFaceFlux<Dim>" in prepared_boundary
+    assert "apply_flux_axes_<Axis + 1>" in prepared_boundary
     system_install = (ROOT / "src/runtime/system/system_install.cpp").read_text(
         encoding="utf-8"
     )

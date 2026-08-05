@@ -1,226 +1,226 @@
 /// @file
-/// @brief Domain-mask-aware Cartesian residual (conservative active sub-domain, OPT-IN).
-///
-/// CONTRACT: the mask-aware variant of assemble_rhs. SEPARATE entry point: the default path
-/// (System::step) stays strictly bit-identical as long as it does not call this overload.
-///   - assemble_rhs_masked<Limiter,NumericalFlux>: residual restricted to a 0/1 cell-centered mask.
-///
-/// Convention: mask(i,j) >= 0.5 -> ACTIVE. A face is OPEN only if BOTH adjacent cells are active;
-/// otherwise the normal flux is set to ZERO (FV wall), so the mass over the active sub-domain is
-/// conserved to machine precision. Reconstruction and the positivity role come from face_flux.hpp /
-/// positivity.hpp.
+/// @brief Prepared ND Cartesian transport restricted by a cell-centred active mask.
 
 #pragma once
 
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/primitives/finite.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
-#include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
-#include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux
+#include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 
-#include <type_traits>
+#include <Kokkos_MathematicalFunctions.hpp>
 
-namespace pops {
+#include <cstddef>
+#include <stdexcept>
+#include <utility>
 
-// ============================================================================
-// DOMAIN MASK (T2 effort, conservative, OPT-IN -- default path untouched)
-// ============================================================================
-// The mask makes the FV transport aware of an ACTIVE sub-domain (e.g. a bounded disk-shaped region).
-// Convention: mask(i, j) >= 0.5 -> ACTIVE cell, otherwise INACTIVE. A face is OPEN (normal flux
-// computed) if BOTH adjacent cells are active; it is CLOSED (normal flux set to ZERO) if at least
-// one is inactive. Zeroing the normal flux at active/inactive faces makes the step CONSERVATIVE
-// over the active sub-domain: no mass crosses the boundary, so the total mass over the active cells
-// is conserved to machine precision (telescoping internal fluxes, zero boundary fluxes). This is the
-// FV counterpart of the conducting wall (which only acts on the elliptic part).
-//
-// The residual is written ONLY on the active cells; an inactive cell keeps its residual at 0
-// (the caller does not advance it). This header does NOT wire this path into System::step: it
-// provides the mask-aware brick, exercised directly by the tests and, eventually, behind the
-// active-sub-domain opt-in.
+namespace pops::nd {
 
-namespace detail {
-/// Activity indicator of a cell from a 0/1 cell-centered mask (>= 0.5 -> active).
-POPS_HD inline bool mask_active(const ConstArray4& mask, int i, int j) {
-  return mask(i, j, 0) >= Real(0.5);
-}
-
-/// Device-safe description of Cartesian boundary faces owned by a prepared shared interface.
-/// The ordinary masked operator receives the default value (no omission).  A multi-block Program
-/// supplies the exact domain and four booleans resolved by its boundary plan, so the local residual
-/// leaves those faces empty before the unique pair flux is scattered by the interface scheduler.
-/// This is geometry-agnostic: it describes face ownership, not the shape of the embedded boundary.
+/// Boundary faces whose flux is owned by another prepared topology provider.
+///
+/// Axis and dimension are type properties.  The descriptor never decodes an x/y convention and
+/// cannot become an alternate face-field authority.
+template <int Dim>
 struct BoundaryFaceOmission {
-  Box2D domain{};
-  bool xlo = false;
-  bool xhi = false;
-  bool ylo = false;
-  bool yhi = false;
+  Box<Dim> domain{};
+  bool lower[Dim]{};
+  bool upper[Dim]{};
 
-  POPS_HD bool omit(int axis, int side, int i, int j) const {
-    if (axis == 0)
-      return side < 0 ? (xlo && i == domain.lo[0]) : (xhi && i == domain.hi[0]);
-    return side < 0 ? (ylo && j == domain.lo[1]) : (yhi && j == domain.hi[1]);
+  template <int Axis>
+  POPS_HD bool omits(const FaceIndex<Dim, Axis>& face) const {
+    static_assert(Axis >= 0 && Axis < Dim);
+    return (lower[Axis] && face.coordinate[Axis] == domain.lo[Axis]) ||
+           (upper[Axis] && face.coordinate[Axis] == domain.hi[Axis] + 1);
   }
 };
 
-/// AssembleRhsMaskedKernel: variant of AssembleRhsKernel AWARE of a domain mask.
-///
-/// Inactive cell -> residual 0 (not advanced by the caller). Active cell -> R = -div Fhat + S,
-/// BUT the normal flux of a face whose neighbor cell is INACTIVE is set to ZERO (FV wall:
-/// zero normal flux at the active/inactive boundary) -> mass conservation over the active
-/// sub-domain. Named functor (same device contract as AssembleRhsKernel). POPS_HD.
-///
-/// Diffusive models are rejected by the block capability preflight until a conservative EB
-/// diffusive-flux provider exists.  This kernel therefore owns hyperbolic transport plus source only.
-template <class Limiter, class NumericalFlux, class Model>
-struct AssembleRhsMaskedKernel {
+namespace masked_operator_detail {
+
+template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+          class Reconstruction, class NumericalFlux>
+struct MaterializeMaskedFaceFlux {
   Model model;
-  ConstArray4 u, ax, mask;
-  Array4 r;
-  Real dx, dy;
-  Limiter lim;
-  NumericalFlux nflux;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  BoundaryFaceOmission omission{};
-  FluxEvaluationRecorder failures;
-  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    if (!mask_active(mask, i,
-                     j)) {  // cell outside the active sub-domain: zero residual, not advanced
-      for (int c = 0; c < Model::n_vars; ++c)
-        r(i, j, c) = Real(0);
+  Metric metric;
+  Reconstruction reconstruction;
+  NumericalFlux numerical_flux;
+  FieldView<const Real, Dim> state{};
+  FieldView<const Real, Dim> active_cells{};
+  FaceFieldView<Real, Dim> integrated_fluxes{};
+  FaceFieldView<Real, Dim> statuses{};
+  BoundaryFaceOmission<Dim> omission{};
+
+  POPS_HD void clear(const FaceIndex<Dim, Axis>& face, FiniteVolumeStatus status) const {
+    for (int component = 0; component < Model::n_vars; ++component)
+      integrated_fluxes.template operator()<Axis>(face.coordinate, component) = Real(0);
+    statuses.template operator()<Axis>(face.coordinate) = static_cast<Real>(status);
+  }
+
+  POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
+    Index<Dim> left_cell = face.coordinate;
+    --left_cell[Axis];
+    const Index<Dim> right_cell = face.coordinate;
+    if (omission.template omits<Axis>(face) || active_cells(left_cell) < Real(0.5) ||
+        active_cells(right_cell) < Real(0.5)) {
+      clear(face, FiniteVolumeStatus::Success);
       return;
     }
-    const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    bool evaluations_succeeded = true;
 
-    // Reconstruct only after the face is proven open.  This ordering is part of the EB policy:
-    // inactive storage may contain arbitrary sentinels and must never enter a primitive conversion,
-    // limiter or numerical flux merely because its face is later zeroed.
-    const FaceContext xface = FaceContext::axis_aligned(0);
-    typename Model::State Fxm{}, Fxp{};
-    if (!omission.omit(0, -1, i, j) && mask_active(mask, i - 1, j)) {
-      const auto Lxm = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      const auto Rxm = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      if (record_reconstruction_recoveries(failures, failure, Lxm, Rxm)) {
-        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lxm.value, ax, i - 1, j,
-                                                           Rxm.value, ax, i, j, xface);
-        failures.record(evaluation, failure);
-        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-        Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
-      } else {
-        evaluations_succeeded = false;
-      }
+    const auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+    if (traces.left_status != StateConversionStatus::Success) {
+      clear(face, finite_volume_detail::finite_volume_status(traces.left_status));
+      return;
     }
-    if (!omission.omit(0, +1, i, j) && mask_active(mask, i + 1, j)) {
-      const auto Lxp = reconstruct_pp_recovered<Model>(model, u, i, j, 0, +1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      const auto Rxp = reconstruct_pp_recovered<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      if (record_reconstruction_recoveries(failures, failure, Lxp, Rxp)) {
-        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lxp.value, ax, i, j,
-                                                           Rxp.value, ax, i + 1, j, xface);
-        failures.record(evaluation, failure);
-        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-        Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
-      } else {
-        evaluations_succeeded = false;
-      }
+    if (traces.right_status != StateConversionStatus::Success) {
+      clear(face, finite_volume_detail::finite_volume_status(traces.right_status));
+      return;
     }
 
-    // y faces
-    const FaceContext yface = FaceContext::axis_aligned(1);
-    typename Model::State Fym{}, Fyp{};
-    if (!omission.omit(1, -1, i, j) && mask_active(mask, i, j - 1)) {
-      const auto Lym = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      const auto Rym = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      if (record_reconstruction_recoveries(failures, failure, Lym, Rym)) {
-        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lym.value, ax, i, j - 1,
-                                                           Rym.value, ax, i, j, yface);
-        failures.record(evaluation, failure);
-        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-        Fym = apply_face_measure(evaluation.checked_density(), yface).value;
-      } else {
-        evaluations_succeeded = false;
+    FaceContext context{};
+    if (face.coordinate[Axis] == integrated_fluxes.cells.lo[Axis])
+      context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
+    else
+      context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
+    const auto evaluation =
+        evaluate_axis_flux<Axis>(numerical_flux, model, traces.left, traces.right,
+                                 context.face_measure, context.cell_measure);
+    if (!evaluation.succeeded()) {
+      clear(face, FiniteVolumeStatus::InvalidWaveSpeed);
+      return;
+    }
+    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      if (!Kokkos::isfinite(integrated.value[component])) {
+        clear(face, FiniteVolumeStatus::NonFiniteFaceFlux);
+        return;
       }
     }
-    if (!omission.omit(1, +1, i, j) && mask_active(mask, i, j + 1)) {
-      const auto Lyp = reconstruct_pp_recovered<Model>(model, u, i, j, 1, +1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      const auto Ryp = reconstruct_pp_recovered<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim,
-                                                       pos_floor, pos_comp);
-      if (record_reconstruction_recoveries(failures, failure, Lyp, Ryp)) {
-        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lyp.value, ax, i, j,
-                                                           Ryp.value, ax, i, j + 1, yface);
-        failures.record(evaluation, failure);
-        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-        Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
-      } else {
-        evaluations_succeeded = false;
-      }
-    }
-
-    const auto S = model.source(load_state<Model>(u, i, j), Ac);
-    for (int c = 0; c < Model::n_vars; ++c)
-      r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
-    if (evaluations_succeeded)
-      for (int c = 0; c < Model::n_vars; ++c)
-        failures.record_nonfinite(r(i, j, c), failure);
+    for (int component = 0; component < Model::n_vars; ++component)
+      integrated_fluxes.template operator()<Axis>(face.coordinate, component) =
+          integrated.value[component];
+    statuses.template operator()<Axis>(face.coordinate) =
+        static_cast<Real>(FiniteVolumeStatus::Success);
   }
 };
 
-template <class Limiter, class NumericalFlux, class Model>
-void assemble_rhs_masked_impl(const Model& model, const MultiFab& U, const MultiFab& aux,
-                              const MultiFab& mask, const Geometry& geom, MultiFab& R,
-                              bool recon_prim, Real pos_floor, Real weno_eps,
-                              BoundaryFaceOmission omission) {
-  require_reconstruction_ghosts<Limiter>(U);
-  const Real dx = geom.dx(), dy = geom.dy();
-  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
-  const NumericalFlux nflux{};
-  const int pos_comp = positivity_comp<Model>(pos_floor);
-  FluxEvaluationTracker failures{process_world_flux_collective};
-  for (int li = 0; li < U.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    const ConstArray4 ax = aux.fab(li).const_array();
-    const ConstArray4 mk = mask.fab(li).const_array();
-    Array4 r = R.fab(li).array();
-    const Box2D v = R.box(li);
-    failures.merge(
-        reduce_max_uint64_cell(v, AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
-                                      model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim,
-                                      pos_floor, pos_comp, omission, failures.recorder()}));
-  }
-  failures.throw_if_failed("assemble_rhs_masked");
+template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+          class Reconstruction, class NumericalFlux, class MemorySpace>
+void materialize_axes(const Model& model, const Metric& metric,
+                      const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
+                      const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& active_cells,
+                      FaceField<Dim, MemorySpace>& integrated_fluxes,
+                      FaceField<Dim, MemorySpace>& statuses,
+                      const BoundaryFaceOmission<Dim>& omission) {
+  for_each_face<Axis>(
+      state.box(),
+      MaterializeMaskedFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux>{
+          model, metric, reconstruction, numerical_flux, state.view(), active_cells.view(),
+          integrated_fluxes.view(), statuses.view(), omission});
+  if constexpr (Axis + 1 < Dim)
+    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux, state,
+                                          active_cells, integrated_fluxes, statuses, omission);
 }
-}  // namespace detail
 
-/// assemble_rhs_masked<Limiter,NumericalFlux>: residual R = -div Fhat + S RESTRICTED to a 0/1
-/// cell-centered domain mask (OPT-IN, T2 effort). On an inactive cell R = 0 (not advanced); on an
-/// active cell, the normal flux of a face whose neighbor is inactive is set to zero (FV wall).
-/// Result: the mass over the active sub-domain is CONSERVED to machine precision (no flux crosses
-/// the boundary) -- property validated by the active-sub-domain mass-conservation test.
+template <int Dim, class MemorySpace>
+void require_active_mask(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& active_cells) {
+  if (active_cells.ncomp() != 1 || !(active_cells.box() == state.box()) ||
+      !active_cells.grown_box().contains(state.box().grow(1)))
+    throw std::invalid_argument(
+        "prepared ND masked transport requires a scalar mask with one ghost layer");
+}
+
+template <int Dim, class MemorySpace>
+void require_same_multifab_layout(const MultiFab<Dim, MemorySpace>& left,
+                                  const MultiFab<Dim, MemorySpace>& right, const char* operation) {
+  if (!(left.layout() == right.layout()) || !(left.distribution() == right.distribution()) ||
+      !(left.local_rank() == right.local_rank()) || left.local_size() != right.local_size())
+    throw std::invalid_argument(operation);
+}
+
+}  // namespace masked_operator_detail
+
+/// Prepared Cartesian capability whose face set is gated by a ranked active-cell field.
 ///
-/// @p mask must have the SAME layout as @p U (same BoxArray / DistributionMapping) and carry at
-/// least 1 ghost (reading the neighbors i-1/i+1/j-1/j+1 up to the edge). This entry point is
-/// SEPARATE from assemble_rhs: the default path (System::step) stays strictly bit-identical as long
-/// as it does NOT call this overload.
-template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void assemble_rhs_masked(const Model& model, const MultiFab& U, const MultiFab& aux,
-                         const MultiFab& mask, const Geometry& geom, MultiFab& R,
-                         bool recon_prim = false, Real pos_floor = Real(0),
-                         Real weno_eps = kWenoEpsilon) {
-  detail::assemble_rhs_masked_impl<Limiter, NumericalFlux>(model, U, aux, mask, geom, R, recon_prim,
-                                                           pos_floor, weno_eps, {});
+/// Closed faces are rejected before reconstruction, so inactive sentinel storage never reaches a
+/// primitive conversion or Riemann solver.  Open faces and the conservative divergence remain the
+/// exact canonical ND implementation.
+template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
+          class NumericalFlux = RusanovFlux,
+          ReconstructionVariables Variables = ReconstructionVariables::Conservative>
+  requires(ConservationLaw<Dim, Model> && PreparedMetricProvider<Dim, Metric> &&
+           ReconstructionPolicy<Reconstruction>)
+class PreparedMaskedCartesianOperator {
+ public:
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Model::n_vars;
+
+  PreparedMaskedCartesianOperator(Model model, Metric metric, Reconstruction reconstruction = {},
+                                  NumericalFlux numerical_flux = {})
+      : base_(model, metric, reconstruction, numerical_flux),
+        reconstruction_(std::move(reconstruction)),
+        numerical_flux_(std::move(numerical_flux)) {}
+
+  const Model& model() const noexcept { return base_.model(); }
+  const Metric& metric() const noexcept { return base_.metric(); }
+
+  template <class MemorySpace>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& active_cells, Fab<Dim, MemorySpace>& residual,
+                         BoundaryFaceOmission<Dim> omission = {}) const {
+    if (!base_.domain().contains(state.box()))
+      throw std::invalid_argument("prepared ND masked state lies outside the metric domain");
+    require_reconstruction_storage<Reconstruction>(state, state.box(), n_vars);
+    masked_operator_detail::require_active_mask(state, active_cells);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
+
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    masked_operator_detail::materialize_axes<0, Variables>(model(), metric(), reconstruction_,
+                                                           numerical_flux_, state, active_cells,
+                                                           integrated_fluxes, statuses, omission);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND masked face evaluation refused publication");
+    base_.assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& active_cells,
+                         MultiFab<Dim, MemorySpace>& residual,
+                         BoundaryFaceOmission<Dim> omission = {}) const {
+    masked_operator_detail::require_same_multifab_layout(
+        state, active_cells, "prepared ND masked state and mask layouts differ");
+    masked_operator_detail::require_same_multifab_layout(
+        state, residual, "prepared ND masked state and residual layouts differ");
+    if (state.ncomp() != n_vars || active_cells.ncomp() != 1 || residual.ncomp() != n_vars ||
+        state.shares_storage_with(residual))
+      throw std::invalid_argument("prepared ND masked MultiFab components differ or alias");
+
+    MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                         residual.local_rank(), n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      assemble_residual(state.fab(local), active_cells.fab(local), candidate.fab(local), omission);
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    cartesian_operator_detail::CopyCellField<Dim>{
+                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), n_vars});
+    device_fence();
+  }
+
+ private:
+  PreparedCartesianOperator<Dim, Model, Metric, Reconstruction, NumericalFlux, Variables> base_;
+  Reconstruction reconstruction_;
+  NumericalFlux numerical_flux_;
+};
+
+template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
+          class NumericalFlux = RusanovFlux,
+          ReconstructionVariables Variables = ReconstructionVariables::Conservative>
+auto prepare_masked_cartesian_operator(Model model, Metric metric,
+                                       Reconstruction reconstruction = {},
+                                       NumericalFlux numerical_flux = {}) {
+  return PreparedMaskedCartesianOperator<Dim, Model, Metric, Reconstruction, NumericalFlux,
+                                         Variables>(
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux));
 }
 
-}  // namespace pops
+}  // namespace pops::nd

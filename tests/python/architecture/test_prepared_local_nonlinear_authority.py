@@ -97,9 +97,11 @@ def test_generated_program_routes_delegate_instead_of_emitting_newton():
 def test_implicit_source_device_kernel_is_a_stack_only_provider_adapter():
     source = _without_cpp_comments(IMPLICIT_STEPPER.read_text(encoding="utf-8"))
     adapter = source.split("struct PreparedImplicitSourceKernel", 1)[1].split(
-        "struct LocalStatMax", 1
+        "struct LocalStatValue", 1
     )[0]
-    kernel = _cpp_body(adapter, "POPS_HD void operator()(int i, int j) const")
+    kernel = _cpp_body(
+        adapter, "POPS_HD void operator()(const Index<Dim>& index) const"
+    )
     assert kernel.count("solve_prepared_local_nonlinear") == 1
     assert "LocalNonlinearCellResult<N> solved;" in kernel
     for forbidden in (
@@ -120,8 +122,10 @@ def test_implicit_source_device_kernel_is_a_stack_only_provider_adapter():
 
 def test_implicit_source_publication_consumes_one_collective_outcome():
     source = _without_cpp_comments(IMPLICIT_STEPPER.read_text(encoding="utf-8"))
-    publication = _cpp_body(source, "const MultiFab* active_cells = nullptr)")
-    assert publication.count("PreparedImplicitSourceKernel<Model>") == 1
+    publication = _cpp_body(
+        source, "const MultiFab<Dim, MemorySpace>* active_cells = nullptr)"
+    )
+    assert publication.count("PreparedImplicitSourceKernel<Dim, Model>") == 1
     assert publication.count("SolveOutcome::collective_world") == 1
     assert "ImplicitSourcePublication" in publication
     assert "solved_value_available()" not in publication
@@ -142,3 +146,7 @@ def test_failure_location_uses_staged_integer_collectives_without_float_packing(
     assert "LocalNonlinearFailureJMin" in collective
     assert "LocalNonlinearFailureIMin" in collective
     assert "LocalNonlinearFailureComponentMin" in collective
+    assert "Kokkos::Min<int>" in implicit
+    assert "all_reduce_min(static_cast<long>" in implicit
+    assert "FailureCoordinateMinimum" in implicit
+    assert "FailureComponentMinimum" in implicit
