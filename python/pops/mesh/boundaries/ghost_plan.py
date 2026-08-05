@@ -511,11 +511,6 @@ class GhostProducerPlan:
                 # Ordinary per-axis periodicity is already represented by the ranked face table.
                 # Keeping a second endpoint row would recreate the retired 2D topology authority.
                 continue
-            if dimension != 2:
-                raise NotImplementedError(
-                    "signed/permuted periodic identifications require a capability-qualified "
-                    "topology provider for the exact compiled dimension"
-                )
             periodic_identifications.append({
                 "source": identification.source.canonical_identity(),
                 "target": identification.target.canonical_identity(),
