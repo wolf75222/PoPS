@@ -832,6 +832,17 @@ def _support_rows(flags: Any, source: Any) -> list:
 def _inventory_rows(flags: Any, source: Any) -> list:
     mpi = bool(_flag_value(flags, "supports_mpi"))
     gpu = bool(_flag_value(flags, "supports_gpu"))
+    from pops.mesh._amr._transfer_contracts import (
+        CELL_CENTERED,
+        NODE_CENTERED,
+        ORIENTED_FACE_CENTERINGS,
+    )
+
+    physical_transfer_centerings = "/".join((
+        CELL_CENTERED.name,
+        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+        NODE_CENTERED.name,
+    ))
     return [
         _row(
             "layout:Uniform",
@@ -1134,11 +1145,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             gpu=gpu,
             status="partial",
             limitation=(
-                "physical transfer routes are exact dense cell/face_x/face_y/node "
+                "physical transfer routes are exact dense %s "
                 "contracts; restriction, coarse-fine fill and temporal interpolation "
                 "currently accept cell-centered state only; derived fields recompute "
                 "through elliptic_solve and caches rebuild through patch_topology"
-            ),
+            ) % physical_transfer_centerings,
             source=source,
         ),
         _row(

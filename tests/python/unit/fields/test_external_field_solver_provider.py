@@ -99,16 +99,29 @@ def _provider(tmp_path):
     ), topology, solver
 
 
-def test_external_field_solver_refuses_a_3d_only_pair_member(tmp_path):
+def test_external_field_solver_refuses_pair_without_a_common_ranked_dimension(tmp_path):
     topology = _component(
         tmp_path, name="topology", interface=interfaces.FieldTopology)
     solver = _component(
         tmp_path, name="solver_3d", interface=interfaces.FieldSolver, dimension=3)
 
-    with pytest.raises(
-        ValueError, match="one exact supported 2D float64 target variant"
-    ):
+    with pytest.raises(ValueError, match="share no supported native dimension"):
         ExternalFieldSolver(topology=topology, solver=solver)
+
+
+def test_external_field_solver_accepts_a_3d_pair_then_uses_the_domain_rank(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_3d", interface=interfaces.FieldTopology, dimension=3)
+    solver = _component(
+        tmp_path, name="solver_3d", interface=interfaces.FieldSolver, dimension=3)
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+
+    assert provider.capabilities().to_dict()["host"] is True
+    with pytest.raises(LoweringRejection, match="compatible Dim=2 float64 CPU targets"):
+        capture_field_plans(
+            _case(provider), lambda value: value, target="system",
+            layout=Uniform(cartesian_grid(n=8, periodic=False)),
+        )
 
 
 def test_external_pair_survives_field_lowering_with_exact_component_authorities(tmp_path):

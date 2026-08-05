@@ -113,7 +113,7 @@ def _external_component(value: Any, *, interface: Any, where: str) -> Any:
             % (where, interface.uri, interface.version, actual.uri, actual.version)
         )
     interface.require_manifest(value.component_manifest)
-    interface.resolve_native_target(value)
+    interface.native_target_variants(value)
     determinism = value.component_manifest.determinism.get("classification")
     if determinism not in {"bitwise", "reproducible"}:
         raise ValueError(
@@ -241,14 +241,23 @@ def _tagger_capability(component: Any) -> dict[str, Any]:
 def _require_tagger_target_execution(component: Any, capability: Mapping[str, Any]) -> None:
     from pops import interfaces
 
-    target = interfaces.Tagger.resolve_native_target(component)
+    targets = interfaces.Tagger.native_target_variants(component)
     if capability["execution_mode"] != "native_backend":
         return
-    required_space = "host" if target["device"] == "cpu" else "managed"
-    if required_space not in capability["memory_spaces"]:
+    required_spaces = {
+        target["device"]: "host" if target["device"] == "cpu" else "managed"
+        for target in targets
+    }
+    incompatible = tuple(
+        (device, required_space)
+        for device, required_space in sorted(required_spaces.items())
+        if required_space not in capability["memory_spaces"]
+    )
+    if incompatible:
+        device, required_space = incompatible[0]
         raise ValueError(
             "native-backend AMR Tagger target %r requires %r field memory"
-            % (target["device"], required_space)
+            % (device, required_space)
         )
 
 

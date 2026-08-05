@@ -47,14 +47,52 @@ def compile_component(
     *,
     cxx: Any = None,
     include: Any = None,
+    native_dimension: Any = None,
 ) -> CompiledComponentArtifact:
-    """Instantiate, compile, link and audit one source component for the proved CPU target."""
+    """Compile one source component for an explicit or already-selected native rank."""
     if type(component) is not ExternalComponent:
         raise TypeError("compile_component requires an exact ExternalComponent")
     package = component.component_type.package
     package.verify()
     from pops.codegen._compile_platform import require_shared_library_compile_platform
     require_shared_library_compile_platform("compile_component", windows_supported=False)
+    from pops._native_selector import select_native_dimension, selected_native_dimension
+
+    if native_dimension is None:
+        native_dimension = selected_native_dimension()
+        if native_dimension is None:
+            raise TypeError(
+                "standalone compile_component requires native_dimension=1, 2, or 3; "
+                "pops.compile(resolved_plan) derives it from the domain")
+    _pops = select_native_dimension(native_dimension)
+    module_dimension = getattr(_pops, "__native_dimension__", None)
+    if module_dimension != native_dimension:
+        raise RuntimeError(
+            "component native dimension %d differs from loaded module specialization %r"
+            % (native_dimension, module_dimension))
+
+    interface = component.component_type.interface
+    interface.require_manifest(component.component_manifest)
+    from pops.codegen._native_mpi import native_mpi_communicator
+    from pops._platform_contracts import artifact_platform_manifest
+    from pops.runtime._platform_manifest import native_runtime_backend_for_route
+
+    # The component is compiled with the same shared loader flags as generated Programs. Its
+    # manifest must therefore describe the selected communicator and device specialization.
+    communicator = native_mpi_communicator(_pops)
+    runtime_backend = native_runtime_backend_for_route(
+        "aot-component", "component", communicator)
+    runtime_dimensions = tuple(runtime_backend.capabilities["supported_dimensions"].require(
+        "runtime.supported_dimensions"))
+    if runtime_dimensions != (native_dimension,):
+        raise RuntimeError(
+            "component runtime backend dimensions %r differ from selected Dim=%d"
+            % (runtime_dimensions, native_dimension))
+    runtime_device = runtime_backend.device.require("runtime.device")
+    normalized_runtime_device = "cpu" if runtime_device in ("host", "cpu") else runtime_device
+    target = interface.resolve_native_target(
+        component, dimension=native_dimension, device=normalized_runtime_device)
+    component.component_manifest.require_target(target)
 
     # Toolchain ownership stays in the private codegen implementation. Importing the public
     # external-component package remains pure until the explicit compilation operation is called.
@@ -67,32 +105,11 @@ def compile_component(
         pops_loader_build_flags,
     )
 
-    interface = component.component_type.interface
-    target = interface.resolve_native_target(component)
     include = include or pops_include()
     signature = _check_headers_match_module(include)
     compiler, cflags, lflags = pops_loader_build_flags(cxx)
     cflags = [*cflags, '-DPOPS_HEADER_SIG="%s"' % signature]
     standard = _probe_cxx_std(compiler, loader_cxx_std())
-    from pops._native_selector import selected_native_module
-    from pops.codegen._native_mpi import native_mpi_communicator
-    from pops._platform_contracts import artifact_platform_manifest
-    from pops.runtime._platform_manifest import native_runtime_backend_for_route
-
-    _pops = selected_native_module(required=True)
-    # The component is compiled with the same shared loader flags as generated Programs.  Its
-    # manifest must therefore describe that selected host communicator as well; claiming ``serial``
-    # for a binary built with POPS_HAS_MPI defeats the exact launch gate later at installation.
-    communicator = native_mpi_communicator(_pops)
-    runtime_backend = native_runtime_backend_for_route(
-        "aot-component", "component", communicator)
-    runtime_device = runtime_backend.device.require("runtime.device")
-    normalized_runtime_device = "cpu" if runtime_device in ("host", "cpu") else runtime_device
-    if target["device"] != normalized_runtime_device:
-        raise ComponentPackageError(
-            "target", "component.target",
-            "component target device %r differs from installed Kokkos target %r"
-            % (target["device"], normalized_runtime_device))
     host_abi = getattr(_pops, "abi_key", None)
     if not callable(host_abi) or not isinstance((abi := host_abi()), str) or not abi:
         raise RuntimeError("loaded pops._pops exposes no exact native abi_key()")
@@ -103,7 +120,6 @@ def compile_component(
         communicator=communicator,
         runtime_backend=runtime_backend,
     )
-    component.component_manifest.require_target(target)
     symbols = {
         name: component.component_manifest.entry_points[name]
         for name in component.component_type.interface.runtime_entry_points

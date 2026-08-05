@@ -42,6 +42,27 @@ def test_capability_report_does_not_hide_native_call_failure(monkeypatch):
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
+def test_amr_transfer_report_iterates_every_canonical_oriented_face_centering():
+    from pops.mesh._amr._transfer_contracts import (
+        CELL_CENTERED,
+        NODE_CENTERED,
+        ORIENTED_FACE_CENTERINGS,
+    )
+
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": False, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    transfer = {row.feature: row for row in report.routes}["amr:transfer_contracts"]
+    expected = "/".join((
+        CELL_CENTERED.name,
+        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+        NODE_CENTERED.name,
+    ))
+    assert "exact dense %s contracts" % expected in transfer.limitation
+    assert "face_z" in transfer.limitation
+
+
 @pytest.mark.parametrize(
     ("supports_mpi", "expected"),
     ((False, "unavailable"), (True, "available")),
