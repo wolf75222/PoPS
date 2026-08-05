@@ -6,7 +6,7 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
-#include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
+#include <pops/runtime/export.hpp>  // POPS_EXPORT: exact package seams resolved by native loaders
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
@@ -70,7 +70,7 @@ template <int Dim, class MemorySpace>
 class AmrProgramContext;
 class HierarchyTensorSolverProvider;
 class HierarchyTensorSolverProviderRegistry;
-}
+}  // namespace runtime::program
 
 namespace runtime::amr {
 struct PreparedTaggerSpec;
@@ -79,7 +79,7 @@ struct PreparedRefluxSpec;
 struct PreparedTaggingProgram {
   struct Stencil;
 };
-}
+}  // namespace runtime::amr
 
 namespace runtime::field {
 struct PreparedFieldSolverSpec;
@@ -95,17 +95,15 @@ struct AmrFieldSolverConfiguration {
   AmrFieldSolverOptions options;
 };
 
-// Forward declarations of the runtime multi-block engine (definitions in amr_runtime.hpp /
-// amr_dsl_block.hpp). set_compiled_block stores a DEFERRED runtime-block BUILDER which, given the
-// SHARED layout materialized at lazy build, returns the type-erased AmrRuntimeBlock of the compiled
-// block: this is what lets SEVERAL compiled blocks (multi-block production DSL) co-exist on the
-// SAME AMR hierarchy, exactly like add_block in native multi-block. We forward-declare so as NOT
-// to weigh down this public header (read by bindings.cpp and the loaders) with amr_runtime.hpp: only
-// the TUs that BUILD/CALL the builder (amr_dsl_block.hpp and python/amr_system.cpp) include the
-// complete definitions; a std::function with incomplete-type signature is legal as long as it is
-// not instantiated with a concrete callable outside those TUs (PIMPL std::function recipe).
+// Forward declarations of the exact-ranked runtime package types. The generated-package header
+// materializes PreparedAmrSystemBlock<Dim>; this public facade retains it without importing the
+// implementation-heavy AMR/operator headers into every binding and native loader translation unit.
 template <int Dim>
 struct AmrRuntimeBlock;
+template <int Dim, class MemorySpace>
+struct PreparedAmrSystemBlock;
+template <int Dim, class MemorySpace>
+struct PreparedAmrLevelEvaluation;
 // Forward-declared for the named-elliptic-field RHS closure signature (ADC-428,
 // set_block_elliptic_field): a std::function with an incomplete-type parameter is legal as long as it is
 // only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
@@ -129,6 +127,7 @@ struct ProgramRuntimeState;
 namespace multiblock {
 struct AxisAlignedInterface;
 struct PreparedInterfaceFluxSpec;
+struct BoundaryEvaluationPoint;
 }  // namespace multiblock
 }  // namespace runtime
 
@@ -221,18 +220,9 @@ struct AmrBuildParams {
   } named_aux;
 };
 
-/// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
-/// ONCE at lazy build, common to all blocks) plus the block parameters frozen at
-/// add time (name, initial density/state, gamma, substeps/stride and reconstruction metadata),
-/// and returns the type-erased AmrRuntimeBlock of the block
-/// (captures the CONCRETE Model/Limiter/Flux via detail::dispatch_amr_block, the kernel stays
-/// COMPILED). Symmetric with the
-/// native add_block path: the (sole) difference is only that the types are known at add time (compiled
-/// model) rather than resolved from a ModelSpec at build. The SIGNATURE mentions FORWARD-DECLARED types:
-/// it is instantiated with a concrete callable only in add_compiled_model(AmrSystem&) (header
-/// amr_dsl_block.hpp) where those types are complete, and invoked only in python/amr_system.cpp.
-/// The trailing pos_floor is the Zhang-Shu positivity floor of the block (0 = inactive), forwarded to
-/// dispatch_amr_block -> build_amr_block exactly like a native multi-block.
+/// Frozen argument type of the rejected pre-final loader ABI. It remains only so an old shared
+/// object can resolve set_compiled_block and receive a deterministic fail-closed error; the final
+/// runtime never stores or invokes this callable.
 template <int Dim>
 using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock<Dim>(
     const detail::SharedAmrLayout<Dim>& layout, const std::string& name,
@@ -263,6 +253,9 @@ class AmrSystem {
 
  public:
   using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
+  using memory_space = typename MultiFab<Dim>::memory_space;
+  using PreparedBlock = PreparedAmrSystemBlock<Dim, memory_space>;
+  using PreparedLevelEvaluation = PreparedAmrLevelEvaluation<Dim, memory_space>;
   static constexpr int dimension = Dim;
 
   explicit AmrSystem(const AmrSystemConfig<Dim>& cfg);
@@ -342,23 +335,8 @@ class AmrSystem {
                  double weno_epsilon = static_cast<double>(kWenoEpsilon),
                  bool wave_speed_cache = false);
 
-  /// Registers a COMPILED block (add_compiled_model path, header amr_dsl_block.hpp). The single
-  /// type-erased builder materializes an AmrRuntimeBlock on the runtime-owned shared hierarchy.
-  /// Single- and multi-block systems deliberately use this same route: no hidden AmrCouplerMP
-  /// orchestration or second elliptic-solver authority survives behind this facade.
-  /// @p recon_prim / @p imex / @p time / @p stride are authoring metadata frozen at add time. The
-  /// canonical @p time token is normalized into the installed ProgramGraph; the runtime block remains
-  /// spatial. @p implicit_vars / @p implicit_roles remain in this loader-facing signature for ABI
-  /// compatibility only: the current AMR target rejects every non-empty selector before storing the
-  /// block because no typed implicit-source Program primitive consumes it.
-  /// DO NOT call directly: go through the free function add_compiled_model(AmrSystem&, ...).
-  /// @throws std::runtime_error if the system is already built.
-  /// DEFAULT VISIBILITY (POPS_EXPORT): the ONLY method called by the header template
-  /// add_compiled_model(AmrSystem&) (cf. amr_dsl_block.hpp). A generated .so loader (DSL
-  /// "production" path on the AMR side, emit_cpp_native_loader(target="amr_system") / add_native_block) inlines this
-  /// template and must resolve this symbol from the already-loaded _pops module; compiled with
-  /// -fvisibility=hidden (pybind11), the module would not export it without this annotation and the dlopen
-  /// of the loader would fail. Symmetric with the POPS_EXPORT methods of System (grid_context/install_block).
+  /// Retired deferred-builder ABI fence. It always fails before mutation; generated loaders must
+  /// publish the complete PreparedAmrSystemBlock below so no metadata-only runtime can survive.
   POPS_EXPORT void set_compiled_block(
       int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder<Dim> runtime_builder,
       const std::string& name = std::string(), bool recon_prim = false,
@@ -366,6 +344,28 @@ class AmrSystem {
       const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0,
       double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
+
+  /// Atomically retain one complete generated spatial package. No deferred builder, legacy
+  /// runtime block, or dimension-erased fallback is published by this route.
+  POPS_EXPORT void install_prepared_amr_block(PreparedBlock block);
+
+  /// Materialize every level-bound operator, auxiliary owner, halo provider and flux ledger for
+  /// the current exact hierarchy generation. A topology mutation invalidates the prior graph and
+  /// this operation prepares a complete replacement before publication.
+  POPS_EXPORT void refresh_prepared_amr_levels();
+
+  /// Evaluate the installed generated operator on one level and atomically publish its residual
+  /// together with the exact face-integrated fluxes used to assemble it.
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level(
+      const runtime::multiblock::BoundaryEvaluationPoint& point);
+  POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
+
+  /// Stable per-level auxiliary storage owned by the prepared hierarchy generation.
+  POPS_EXPORT MultiFab<Dim>& prepared_amr_level_auxiliary(int level);
+  POPS_EXPORT const MultiFab<Dim>& prepared_amr_level_auxiliary(int level) const;
+
+  /// Accumulate the generated block's exact elliptic right-hand side on one live level.
+  POPS_EXPORT void add_prepared_amr_poisson_rhs(int level, MultiFab<Dim>& rhs);
 
   /// Install the same exact-ranked hyperbolic authority as System. Same-level halo exchange and
   /// coarse/fine transfer remain separate hierarchy operations; physical laws are evaluated only
@@ -415,20 +415,19 @@ class AmrSystem {
                                                      int level = 0) const;
 
   /// Internal installation seam for a compiled AMR production package. The .so inlines the header
-  /// template add_compiled_model(AmrSystem&, ...), which materializes a concrete AmrRuntimeBlock at
-  /// lazy build and installs its spatial Program primitives via set_compiled_block. All block counts
-  /// use the same shared hierarchy; no flat-array marshaling or alternate temporal engine is involved.
+  /// template add_compiled_model(AmrSystem&, ...), prepares one complete
+  /// PreparedAmrSystemBlock<Dim>, and publishes it atomically through install_prepared_amr_block.
+  /// No deferred runtime builder, flat-array numerical fallback, or alternate temporal engine is
+  /// involved.
   ///
   /// The _pops host module is PROMOTED to global scope (RTLD_NOLOAD), then the generated package is
-  /// opened RTLD_LOCAL: it can resolve set_compiled_block without exporting its identically named
+  /// opened RTLD_LOCAL: it can resolve the exact package installation symbol without exporting its
   /// generated templates to later semantic artifacts. The ABI key baked in the package
   /// (pops_native_abi_key) is compared to the module's (abi_key()) -- mismatch => clear error (no
   /// silent UB at the C++ boundary). Same scheme guard-rails as System (upstream validation).
   ///
-  /// MULTI-BLOCK (capstone v): add_native_block CAN now be called several times (or mixed
-  /// with native add_block) -> the compiled blocks co-exist on the shared hierarchy via AmrRuntime
-  /// (the loader recompiled against this header provides the runtime builder; cf. set_compiled_block). The
-  /// name then INDEXES the block (set_density/mass/density), like add_block.
+  /// The exact generated core currently accepts one complete package; a second package fails before
+  /// mutation rather than constructing a metadata-only or dimension-erased multi-block route.
   /// time accepts canonical Program-authoring tokens {explicit, euler, ssprk3, imex}; the spatial
   /// loader never executes one of those methods. In particular, ``imex`` requires a typed implicit
   /// Program primitive and has no backward-Euler/Newton fallback. The multirate stride and partial
@@ -443,9 +442,9 @@ class AmrSystem {
   /// @param name block name: cosmetic in mono-block, INDEXES the block in multi-block (set_density/
   ///             mass/density; must be unique and non-empty from the 2nd block on, like add_block).
   /// @param positivity_floor  Zhang-Shu positivity floor of the block (ADC-322): the .so flat ABI now
-  ///             carries it (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so a
-  ///             loader regenerated against this header floors the Density-role face states like a
-  ///             native add_block. 0 (default) = inactive, bit-identical.
+  ///             carries it (pops_install_native_amr -> add_compiled_model -> prepared package), so
+  ///             a loader regenerated against this header floors the Density-role face states like
+  ///             a native add_block. 0 (default) = inactive, bit-identical.
   void add_native_block(const std::string& name, const std::string& so_path,
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
@@ -781,14 +780,14 @@ class AmrSystem {
   /// macro-step body; the cadence + per-block RuntimeParams stores live HERE on the Impl, NOT in the
   /// .so closure, so a value change reaches the captured context and a later checkpoint can reach
   /// them). A generated AMR Program .so resolves these POPS_EXPORT seams from the globally promoted
-  /// host while the generated package remains RTLD_LOCAL, exactly like set_compiled_block on the
-  /// native AMR loader.
+  /// host while the generated package remains RTLD_LOCAL, exactly like the exact spatial-package
+  /// installation seam on the native AMR loader.
   /// @{
   /// Install the mandatory macro-step body. AmrSystem::step, advance and step_cfl reject before lazy
   /// hierarchy construction or any other mutation while it is absent. An empty std::function is
   /// rejected: there is no public temporal route that silently clears the whole-system Program.
-  /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
-  /// set_compiled_block. The closure executes the normalized ProgramGraph on the hierarchy through
+  /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary. The closure
+  /// executes the normalized ProgramGraph on the hierarchy through
   /// an AmrProgramContext (the AMR counterpart of ProgramContext).
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Install the companion callback that republishes Program-owned accepted clocks/history whenever

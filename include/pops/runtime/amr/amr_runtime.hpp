@@ -35,7 +35,8 @@ void append_level_spatial_contract(
         .scalar(level.layout.ratio_from_parent[axis])
         .scalar(level.layout.rank_space.origin()[axis])
         .scalar(level.layout.rank_space.extent()[axis])
-        .scalar(level.local_rank[axis])
+        // The collective spatial identity describes one global hierarchy. The process-local
+        // coordinate is authenticated separately by each field/provider binding.
         .scalar(level.ghosts[axis]);
   contract.scalar(static_cast<std::uint8_t>(level.layout.distribution_mode))
       .scalar(level.components)
@@ -61,7 +62,7 @@ std::string exact_runtime_spatial_contract(
     throw std::invalid_argument("AMR runtime spatial identity must be non-empty");
   ExactContractBuilder contract;
   contract.text("pops.amr-runtime-spatial-contract")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(static_cast<std::uint32_t>(Dim))
       .text(spatial_identity)
       .scalar(topology_epoch)

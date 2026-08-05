@@ -1,11 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
 
+#include <cstdint>
+#include <array>
+#include <limits>
+#include <memory>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -21,6 +28,14 @@ struct AdvectionModel {
   static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
   Law law{};
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.generated-amr.scalar-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
 
   static pops::VariableSet conservative_vars() {
     return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
@@ -61,6 +76,90 @@ AdvectionModel<Dim> advection_model() {
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
 }
 
+template <int Dim>
+struct RenamedAdvectionModel : AdvectionModel<Dim> {
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative,
+            {"renamed_u"},
+            1,
+            {pops::VariableRole::Custom},
+            {"transported_density"}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive,
+            {"renamed_u"},
+            1,
+            {pops::VariableRole::Custom},
+            {"transported_density"}};
+  }
+};
+
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+pops::amr::tagging::ClusterResult<Dim> centered_cluster(
+    const pops::amr::hierarchy::LevelLayout<Dim>& parent) {
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = parent.domain().lo[axis] + 2;
+    upper[axis] = parent.domain().hi[axis] - 2;
+  }
+  const pops::mesh::BoxArray<Dim> boxes(std::vector<pops::Box<Dim>>{pops::Box<Dim>{lower, upper}});
+  pops::amr::tagging::ClusterOptions<Dim> options;
+  options.min_efficiency = 0.7;
+  for (int axis = 0; axis < Dim; ++axis) {
+    options.min_box_size[static_cast<std::size_t>(axis)] = 1;
+    options.max_box_size[static_cast<std::size_t>(axis)] = 16;
+  }
+  options.budget = {16, 256, 8192, 64, 1U << 20};
+  pops::amr::tagging::ClusterResultIdentity<Dim> identity{
+      "test.generated-amr.cluster", parent.exact_identity(), options, {}, boxes.boxes()};
+  return {boxes, std::move(identity)};
+}
+
+template <int Dim>
+void publish_centered_fine_level(pops::AmrSystem<Dim>& system) {
+  auto* engine = system.engine();
+  ASSERT_NE(engine, nullptr);
+  std::array<int, Dim> ratio_components{};
+  ratio_components.fill(2);
+  const pops::amr::RefinementRatio<Dim> ratio(ratio_components);
+  const pops::amr::regridding::RegridPreparationBudget budget{
+      .clustered_parent_layout = {16, 120},
+      .fine_layout = {16, 120},
+      .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()},
+  };
+  auto prepared =
+      engine->prepare_regrid(0, ratio, centered_cluster(engine->hierarchy().layout(0)), budget);
+  ASSERT_FALSE(prepared.removes_fine_level());
+  ASSERT_TRUE(prepared.fine_layout().has_value());
+  pops::MultiFab<Dim> child(
+      prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
+      engine->hierarchy().state(0).local_rank(), engine->hierarchy().state(0).ncomp(),
+      engine->hierarchy().state(0).ghosts());
+  child.set_val(pops::Real(1));
+  engine->publish_regrid(0, std::move(prepared), std::move(child));
+}
+
+template <int Dim>
+pops::runtime::multiblock::BoundaryEvaluationPoint point(int level) {
+  return {.clock = "test-clock",
+          .tick = 0,
+          .level = level,
+          .substep = 0,
+          .stage = 0,
+          .stage_fraction = {0, 1},
+          .dt = 0.01,
+          .physical_time = 0.0};
+}
+
 static_assert(pops::PreparedAmrSystemBlock<1>::dimension == 1);
 static_assert(pops::PreparedAmrSystemBlock<2>::dimension == 2);
 static_assert(pops::PreparedAmrSystemBlock<3>::dimension == 3);
@@ -85,6 +184,31 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
     EXPECT_EQ(prepared.ghosts[axis], 2);
 }
 
+TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::RealVector<Dim> other_velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    other_velocity[axis] = pops::Real(axis + 2);
+  const auto first = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+  const auto second = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", AdvectionModel<Dim>{pops::nd::ScalarAdvection<Dim>::prepare(other_velocity)},
+      "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+  EXPECT_NE(first.collective_contract, second.collective_contract);
+}
+
+TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesVariableNamesRolesAndUserRoles) {
+  constexpr int Dim = pops::kNativeDimension;
+  const AdvectionModel<Dim> model = advection_model<Dim>();
+  RenamedAdvectionModel<Dim> renamed;
+  renamed.law = model.law;
+  const auto first = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", model, "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+  const auto second = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", renamed, "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+  EXPECT_NE(first.collective_contract, second.collective_contract);
+}
+
 TEST(GeneratedAmrSystemBlock, RejectsUnpreparedOptionalAuthorities) {
   constexpr int Dim = pops::kNativeDimension;
   EXPECT_THROW((void)pops::prepare_compiled_amr_system_block<Dim>(
@@ -97,17 +221,122 @@ TEST(GeneratedAmrSystemBlock, RejectsUnpreparedOptionalAuthorities) {
                std::invalid_argument);
 }
 
-TEST(GeneratedAmrSystemBlock, MissingFacadeSeamFailsBeforeMutation) {
+TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
   pops::AmrSystem<Dim> system(config);
   ASSERT_EQ(system.n_blocks(), 0);
 
-  EXPECT_THROW(pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod",
-                                             "rusanov", "conservative", "explicit", 1.4),
-               std::runtime_error);
-  EXPECT_EQ(system.n_blocks(), 0);
-  EXPECT_TRUE(system.block_names().empty());
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit", 1.4, 2, 1);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+
+  ASSERT_EQ(system.n_blocks(), 1);
+  ASSERT_EQ(system.n_levels(), 1);
+  pops::MultiFab<Dim>* const auxiliary = &system.prepared_amr_level_auxiliary(0);
+  const auto& state = system.engine()->hierarchy().state(0);
+  pops::MultiFab<Dim> poisson_rhs(state.layout(), state.distribution(), state.local_rank(), 1,
+                                  state.ghosts());
+  poisson_rhs.set_val(pops::Real(0));
+  system.add_prepared_amr_poisson_rhs(0, poisson_rhs);
+  EXPECT_EQ(pops::reduce_max_local(poisson_rhs), pops::Real(0));
+  const auto& evaluation = system.evaluate_prepared_amr_level(point<Dim>(0));
+  EXPECT_EQ(evaluation.point, point<Dim>(0));
+  EXPECT_EQ(evaluation.spatial_contract, system.engine()->spatial_contract());
+  EXPECT_EQ(evaluation.topology_epoch, system.engine()->topology_epoch());
+  EXPECT_EQ(evaluation.materialization_generation, system.engine()->materialization_generation());
+  EXPECT_EQ(evaluation.residual.ncomp(), 1);
+  EXPECT_EQ(evaluation.residual.layout(), system.engine()->hierarchy().state(0).layout());
+  EXPECT_EQ(evaluation.integrated_face_fluxes.size(),
+            system.engine()->hierarchy().state(0).local_size());
+  EXPECT_EQ(&system.prepared_amr_level_evaluation(0), &evaluation);
+  const pops::AmrSystem<Dim>& const_system = system;
+  EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(0), auxiliary);
+}
+
+TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(3));
+  (void)system.evaluate_prepared_amr_level(point<Dim>(0));
+
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+
+  ASSERT_EQ(system.n_levels(), 2);
+  EXPECT_EQ(pops::reduce_max_local(system.prepared_amr_level_auxiliary(0)), pops::Real(3));
+  EXPECT_THROW((void)system.prepared_amr_level_evaluation(0), std::logic_error);
+  pops::MultiFab<Dim>* const fine_auxiliary = &system.prepared_amr_level_auxiliary(1);
+  const auto& fine = system.evaluate_prepared_amr_level(point<Dim>(1));
+  EXPECT_EQ(fine.point, point<Dim>(1));
+  EXPECT_EQ(fine.spatial_contract, system.engine()->spatial_contract());
+  EXPECT_EQ(fine.topology_epoch, system.engine()->topology_epoch());
+  EXPECT_EQ(fine.materialization_generation, system.engine()->materialization_generation());
+  EXPECT_EQ(fine.residual.layout(), system.engine()->hierarchy().state(1).layout());
+  EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
+  const pops::AmrSystem<Dim>& const_system = system;
+  EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(1), fine_auxiliary);
+}
+
+TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
+                                "conservative", "explicit", 1.4, 2, 1);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.install_program_step([](double) {});
+
+  constexpr double cfl = 0.4;
+  const double dt = system.step_cfl(cfl, 1.0e-12);
+  const double expected = cfl * (1.0 / 16.0) * 2.0 / static_cast<double>(Dim);
+  EXPECT_NEAR(dt, expected, 1.0e-12);
+  EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
+}
+
+TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbacks) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.install_program_step([](double) {});
+
+  int callback_count = 0;
+  const std::string bound_label =
+      pops::n_ranks() == 1 ? "shared" : (pops::my_rank() == 0 ? "rank-zero" : "rank-other");
+  system.add_dt_bound(bound_label, [&callback_count] {
+    ++callback_count;
+    return 0.5;
+  });
+
+  const double locally_invalid_cfl = pops::n_ranks() > 1 && pops::my_rank() != 0 ? 0.4 : -0.4;
+  EXPECT_ANY_THROW((void)system.step_cfl(locally_invalid_cfl));
+  EXPECT_EQ(callback_count, 0);
+
+  if (pops::n_ranks() == 1) {
+    EXPECT_NO_THROW((void)system.step_cfl(0.4));
+    EXPECT_EQ(callback_count, 1);
+  } else {
+    EXPECT_THROW((void)system.step_cfl(0.4), std::invalid_argument);
+    EXPECT_EQ(callback_count, 0);
+  }
 }
 
 }  // namespace
