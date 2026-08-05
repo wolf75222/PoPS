@@ -112,6 +112,16 @@ class SystemBoundaryRegistry {
     return found == boundaries_.end() ? nullptr : &found->second;
   }
 
+  const std::map<std::string, InstalledBoundary>& boundaries() const noexcept {
+    return boundaries_;
+  }
+
+  const std::map<std::string, std::string>& state_routes() const noexcept { return state_routes_; }
+
+  const std::map<std::string, std::string>& field_storage_routes() const noexcept {
+    return field_storage_routes_;
+  }
+
   InstalledBoundary& boundary(const std::string& name) {
     const auto found = boundaries_.find(name);
     if (found == boundaries_.end())

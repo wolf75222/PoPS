@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include <pops/mesh/layout/nd/box_array.hpp>
-#include <pops/mesh/layout/nd/distribution.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cstddef>

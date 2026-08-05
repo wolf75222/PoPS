@@ -4,7 +4,6 @@
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
-#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
@@ -19,11 +18,9 @@
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
-#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
-#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
 #include <functional>
@@ -58,10 +55,20 @@
 
 namespace pops {
 
+class FieldNullspaceProvider;
+struct FieldLogicalTimePoint;
+template <int Dim>
+struct CompiledFieldBoundaryKernel;
+
 class ObserverMpiLane;
 namespace runtime::program {
 class AmrProgramContext;
 }
+
+namespace runtime::field {
+struct PreparedFieldSolverSpec;
+struct FieldTopologyReportRow;
+}  // namespace runtime::field
 
 /// Exact read-only backend configuration retained for one resolved AMR field solver.
 struct AmrFieldSolverConfiguration {
@@ -546,7 +553,7 @@ class AmrSystem {
                                        const std::vector<std::string>& field_keys,
                                        const std::vector<int>& field_components);
   POPS_EXPORT void set_field_boundary_kernel(const std::string& provider_slot,
-                                             const CompiledFieldBoundaryKernel& kernel);
+                                             const CompiledFieldBoundaryKernel<Dim>& kernel);
   POPS_EXPORT void set_field_logical_timepoint(const std::string& provider_slot,
                                                const FieldLogicalTimePoint& point);
   POPS_EXPORT void set_field_boundary_parameters(const std::string& provider_slot,
