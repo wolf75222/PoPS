@@ -64,14 +64,20 @@ def _fake_module(path: Path, dimension: int = 2) -> ModuleType:
     return module
 
 
-def test_selection_is_single_dimension_and_idempotent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_selection_is_single_exact_dimension_and_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dimension: int
 ) -> None:
     extension = tmp_path / "_pops.so"
     extension.write_bytes(b"native")
-    variant = _fake_variant(extension)
-    module = _fake_module(extension)
-    monkeypatch.setattr(selector, "_variant_from_manifest", lambda dimension: variant)
+    variant = _fake_variant(extension, dimension=dimension)
+    module = _fake_module(extension, dimension=dimension)
+
+    def variant_for(requested_dimension: int) -> selector._Variant:
+        assert requested_dimension == dimension
+        return variant
+
+    monkeypatch.setattr(selector, "_variant_from_manifest", variant_for)
 
     def load(path: Path) -> ModuleType:
         assert path == extension
@@ -80,13 +86,13 @@ def test_selection_is_single_dimension_and_idempotent(
 
     monkeypatch.setattr(selector, "_load_global", load)
 
-    assert selector.select_native_dimension(2) is module
-    assert selector.select_native_dimension(2) is module
-    assert selector.selected_native_dimension() == 2
+    assert selector.select_native_dimension(dimension) is module
+    assert selector.select_native_dimension(dimension) is module
+    assert selector.selected_native_dimension() == dimension
     assert selector.selected_native_module(required=True) is module
     assert pops._pops is module
     with pytest.raises(RuntimeError, match="cannot switch"):
-        selector.select_native_dimension(3)
+        selector.select_native_dimension(1 if dimension != 1 else 2)
 
 
 def test_failed_post_dlopen_verification_hides_module_and_poisons_process(
