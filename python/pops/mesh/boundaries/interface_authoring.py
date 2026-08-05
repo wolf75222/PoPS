@@ -82,6 +82,59 @@ class BlockInterfaceSide:
 
 
 @dataclass(frozen=True, slots=True)
+class TangentialTransform:
+    """Executable right-to-left transform over the ``Dim - 1`` face tangents.
+
+    Tangents are numbered by increasing spatial-axis order after removing the
+    endpoint normal axis.  ``None`` at the interface-authoring layer selects
+    the identity transform after the layout has supplied its exact dimension.
+    """
+
+    right_tangent_for_left: tuple[int, ...]
+    right_tangent_sign: tuple[int, ...]
+    right_tangent_offset: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        permutation = self.right_tangent_for_left
+        tangent_count = len(permutation) if isinstance(permutation, tuple) else -1
+        if tangent_count < 0 or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in permutation):
+            raise TypeError("TangentialTransform permutation must be an integer tuple")
+        if sorted(permutation) != list(range(tangent_count)):
+            raise ValueError("TangentialTransform permutation must be a bijection")
+        signs = self.right_tangent_sign
+        if not isinstance(signs, tuple) or len(signs) != tangent_count or any(
+                isinstance(value, bool) or not isinstance(value, int) or value not in (-1, 1)
+                for value in signs):
+            raise TypeError("TangentialTransform signs must contain one +/-1 per tangent")
+        offsets = self.right_tangent_offset
+        if not isinstance(offsets, tuple) or len(offsets) != tangent_count or any(
+                isinstance(value, bool) or not isinstance(value, (int, float)) or
+                not math.isfinite(float(value)) for value in offsets):
+            raise TypeError("TangentialTransform offsets must be finite and cover every tangent")
+
+    @classmethod
+    def identity(cls, dimension: int) -> TangentialTransform:
+        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+            raise ValueError("TangentialTransform dimension must be 1, 2, or 3")
+        tangent_count = dimension - 1
+        return cls(tuple(range(tangent_count)), (1,) * tangent_count,
+                   (0.0,) * tangent_count)
+
+    @property
+    def dimension(self) -> int:
+        return len(self.right_tangent_for_left) + 1
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "right_tangent_for_left": list(self.right_tangent_for_left),
+            "right_tangent_sign": list(self.right_tangent_sign),
+            "right_tangent_offset": [float(value) for value in self.right_tangent_offset],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ConservativeInterface:
     """One shared NumericalFlux authority authored before validate/resolve.
 
@@ -95,9 +148,8 @@ class ConservativeInterface:
     right: BlockInterfaceSide
     numerical_flux: Any
     permutation: tuple[int, ...]
-    tangential_orientation: str = "aligned"
+    tangential_transform: TangentialTransform | None = None
     right_normal_translation: float = 0.0
-    right_tangential_offset: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or _NAME.fullmatch(self.name) is None:
@@ -108,25 +160,24 @@ class ConservativeInterface:
             raise TypeError("ConservativeInterface endpoints must be BlockInterfaceSide values")
         if self.left.state == self.right.state:
             raise ValueError("ConservativeInterface endpoints must use distinct block states")
-        if self.left.boundary.axis.index != self.right.boundary.axis.index or \
-                self.left.boundary.outward_sign != -self.right.boundary.outward_sign:
+        if self.left.boundary.outward_sign != -self.right.boundary.outward_sign:
             raise ValueError(
-                "ConservativeInterface boundaries must be opposite faces of the same axis")
+                "ConservativeInterface boundaries must have opposite outward orientations")
         if not isinstance(self.permutation, tuple) or not self.permutation or any(
                 isinstance(value, bool) or not isinstance(value, int) or value < 0
                 for value in self.permutation):
             raise TypeError("ConservativeInterface.permutation must be a non-empty integer tuple")
         if sorted(self.permutation) != list(range(len(self.permutation))):
             raise ValueError("ConservativeInterface.permutation must be a bijection")
-        if self.tangential_orientation not in {"aligned", "reversed"}:
-            raise ValueError(
-                "ConservativeInterface.tangential_orientation must be aligned or reversed")
-        for name in ("right_normal_translation", "right_tangential_offset"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise TypeError("ConservativeInterface.%s must be a finite real" % name)
-            if not math.isfinite(float(value)):
-                raise ValueError("ConservativeInterface.%s must be finite" % name)
+        if self.tangential_transform is not None and not isinstance(
+                self.tangential_transform, TangentialTransform):
+            raise TypeError(
+                "ConservativeInterface.tangential_transform must be TangentialTransform or None")
+        if isinstance(self.right_normal_translation, bool) or not isinstance(
+                self.right_normal_translation, (int, float)):
+            raise TypeError("ConservativeInterface.right_normal_translation must be finite")
+        if not math.isfinite(float(self.right_normal_translation)):
+            raise ValueError("ConservativeInterface.right_normal_translation must be finite")
         _component_data(self.numerical_flux)
 
     def attach(self, left_plan: Any, right_plan: Any) -> ConservativeInterface:
@@ -179,16 +230,17 @@ class ConservativeInterface:
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_type": "conservative_block_interface",
             "name": self.name,
             "left": self.left.to_data(),
             "right": self.right.to_data(),
             "numerical_flux": _component_data(self.numerical_flux),
             "permutation": list(self.permutation),
-            "tangential_orientation": self.tangential_orientation,
+            "tangential_transform": (
+                "identity" if self.tangential_transform is None
+                else self.tangential_transform.to_data()),
             "right_normal_translation": float(self.right_normal_translation),
-            "right_tangential_offset": float(self.right_tangential_offset),
         }
 
     canonical_identity = to_data
@@ -248,7 +300,6 @@ class ConservativeInterface:
         )
         from .ghost_plan_types import (
             InterfaceAffineMapping, InterfacePermutation, InterfaceSide, MultiBlockInterface,
-            TangentialOrientation,
         )
 
         left_name, right_name = self._block_name(self.left), self._block_name(self.right)
@@ -270,6 +321,18 @@ class ConservativeInterface:
         left_boundary, right_boundary = self._boundary(self.left), self._boundary(self.right)
         left_layout = layout_plan.layout_for(self.left.state)
         right_layout = layout_plan.layout_for(self.right.state)
+        left_native = layout_plan.normalized(left_layout).native_spatial_layout
+        right_native = layout_plan.normalized(right_layout).native_spatial_layout
+        if left_native is None or right_native is None:
+            raise TypeError(
+                "ConservativeInterface requires exact native spatial layouts at both endpoints")
+        if left_native.dimension != right_native.dimension:
+            raise ValueError("ConservativeInterface endpoints have different spatial dimensions")
+        dimension = left_native.dimension
+        tangent = self.tangential_transform or TangentialTransform.identity(dimension)
+        if tangent.dimension != dimension:
+            raise ValueError(
+                "ConservativeInterface tangential transform rank differs from its layouts")
 
         def interface_handle(local_id: str, kind: str) -> Handle:
             return Handle(local_id, kind=kind, owner=owner)
@@ -299,11 +362,10 @@ class ConservativeInterface:
                 self.permutation),
             InterfaceAffineMapping(
                 interface_handle(self.name + "_mapping", "interface_mapping"),
-                tangential_orientation=TangentialOrientation(self.tangential_orientation),
+                right_tangent_for_left=tangent.right_tangent_for_left,
+                right_tangent_sign=tangent.right_tangent_sign,
+                right_tangent_offset=tangent.right_tangent_offset,
                 right_normal_translation=float(self.right_normal_translation),
-                right_tangential_scale=(
-                    1.0 if self.tangential_orientation == "aligned" else -1.0),
-                right_tangential_offset=float(self.right_tangential_offset),
             ),
         )
         binding = BoundaryComponentBinding(
@@ -366,4 +428,4 @@ class ConservativeInterface:
         return tuple(updates.get(block.name, block) for block in blocks)
 
 
-__all__ = ["BlockInterfaceSide", "ConservativeInterface"]
+__all__ = ["BlockInterfaceSide", "ConservativeInterface", "TangentialTransform"]

@@ -336,10 +336,11 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& interface,
              const py::dict& binding, const std::string& parameters_json,
              const std::string& target_json, const py::dict& execution) {
-            auto route = pops::python::detail::interface_route_from_python(interface, left_block,
-                                                                           right_block, level);
-            auto spec = pops::python::detail::interface_flux_spec_from_python(
-                interface, binding, parameters_json, target_json, execution);
+            auto route = pops::python::detail::interface_route_from_python<pops::kNativeDimension>(
+                interface, left_block, right_block, level);
+            auto spec =
+                pops::python::detail::interface_flux_spec_from_python<pops::kNativeDimension>(
+                    interface, binding, parameters_json, target_json, execution);
             system.install_interface_flux_component(std::move(route), std::move(spec),
                                                     std::move(component));
           },

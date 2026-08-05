@@ -48,12 +48,34 @@ from pops.mesh.boundaries import (
     SameLevelHaloMPI,
     SignDependence,
     SonicPolicy,
+    TangentialTransform,
 )
 from pops.model import Handle, OwnerKind, OwnerPath
 
 
 SHARED = OwnerPath.shared("ghost.fixtures")
 CASE = OwnerPath.case("main")
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_interface_mapping_identity_has_exact_rank(dimension):
+    mapping = InterfaceAffineMapping.identity(
+        _h("identity_%dd" % dimension, "interface_mapping"), dimension)
+    tangent_count = dimension - 1
+    assert mapping.dimension == dimension
+    assert mapping.right_tangent_for_left == tuple(range(tangent_count))
+    assert mapping.right_tangent_sign == (1,) * tangent_count
+    assert mapping.right_tangent_offset == (0.0,) * tangent_count
+
+
+def test_three_dimensional_tangential_transform_is_a_real_permutation():
+    transform = TangentialTransform((1, 0), (-1, 1), (2.5, -3.0))
+    assert transform.dimension == 3
+    assert transform.to_data() == {
+        "right_tangent_for_left": [1, 0],
+        "right_tangent_sign": [-1, 1],
+        "right_tangent_offset": [2.5, -3.0],
+    }
 
 
 class _ExecutableBoundaryAuthority:
@@ -390,7 +412,7 @@ def _interface(
         _h("coupling", "multiblock_interface", CASE), left, right,
         _h("shared_flux", "conservative_flux", CASE),
         InterfacePermutation(_h("axis_permutation", "interface_permutation"), (0,)),
-        InterfaceAffineMapping(_h("geometry_map", "interface_mapping")))
+        InterfaceAffineMapping.identity(_h("geometry_map", "interface_mapping"), 2))
 
 
 def test_all_explicit_producer_protocols_and_shared_interface_flux():
@@ -442,7 +464,7 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
             _h("bad", "multiblock_interface", CASE), interface.left, same_direction,
             _h("bad_flux", "conservative_flux", CASE),
             InterfacePermutation(_h("bad_permutation", "interface_permutation"), (0,)),
-            InterfaceAffineMapping(_h("bad_mapping", "interface_mapping")))
+            InterfaceAffineMapping.identity(_h("bad_mapping", "interface_mapping"), 2))
 
     wrong_region = _region("wrong_wall", boundary=topology.physical[1])
     with pytest.raises(ValueError, match="physical ghost provider does not cover"):

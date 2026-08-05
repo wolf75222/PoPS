@@ -319,13 +319,6 @@ class InterfaceSide:
                 "trace_operation": self.trace_operation.value,
                 "required_depth": self.required_depth}
 
-class TangentialOrientation(str, Enum):
-    """Orientation of right-face samples in the canonical left-face order."""
-
-    ALIGNED = "aligned"
-    REVERSED = "reversed"
-
-
 @dataclass(frozen=True, slots=True)
 class InterfacePermutation:
     """Executable component permutation, not merely a provenance Handle."""
@@ -356,50 +349,72 @@ class InterfacePermutation:
 
 @dataclass(frozen=True, slots=True)
 class InterfaceAffineMapping:
-    """Exact 2-D axis-aligned map from the right face into the left frame.
+    """Exact ranked map from the right face into the canonical left-face frame.
 
     The mapping is deliberately executable data.  The Handle authenticates its
     provenance; it does not stand in for values the native scheduler would have
-    to guess.
+    to guess. Tangent ordinals follow increasing spatial-axis order with the
+    normal axis removed, so the same value is executable in 1-D, 2-D and 3-D.
     """
 
     handle: Handle
-    tangential_orientation: TangentialOrientation = TangentialOrientation.ALIGNED
+    right_tangent_for_left: tuple[int, ...] = ()
+    right_tangent_sign: tuple[int, ...] = ()
+    right_tangent_offset: tuple[float, ...] = ()
     right_normal_translation: float = 0.0
-    right_tangential_scale: float = 1.0
-    right_tangential_offset: float = 0.0
 
     def __post_init__(self) -> None:
         _handle(self.handle, where="InterfaceAffineMapping.handle",
                 kinds=frozenset(("interface_mapping",)))
-        if not isinstance(self.tangential_orientation, TangentialOrientation):
+        permutation = self.right_tangent_for_left
+        signs = self.right_tangent_sign
+        offsets = self.right_tangent_offset
+        if not isinstance(permutation, tuple) or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in permutation):
             raise TypeError(
-                "InterfaceAffineMapping.tangential_orientation must be a "
-                "TangentialOrientation"
+                "InterfaceAffineMapping.right_tangent_for_left must be an integer tuple"
             )
-        values = (
-            self.right_normal_translation,
-            self.right_tangential_scale,
-            self.right_tangential_offset,
-        )
-        if any(isinstance(value, bool) or not isinstance(value, (int, float))
-               or not math.isfinite(float(value)) for value in values):
-            raise TypeError("InterfaceAffineMapping coefficients must be finite real values")
-        expected_scale = (
-            1.0 if self.tangential_orientation is TangentialOrientation.ALIGNED else -1.0
-        )
-        if float(self.right_tangential_scale) != expected_scale:
+        tangent_count = len(permutation)
+        if sorted(permutation) != list(range(tangent_count)):
             raise ValueError(
-                "InterfaceAffineMapping tangential scale must exactly match its orientation"
-            )
+                "InterfaceAffineMapping.right_tangent_for_left must be a bijection")
+        if not isinstance(signs, tuple) or len(signs) != tangent_count or any(
+                isinstance(value, bool) or not isinstance(value, int) or value not in (-1, 1)
+                for value in signs):
+            raise TypeError(
+                "InterfaceAffineMapping.right_tangent_sign must contain one +/-1 per tangent")
+        if not isinstance(offsets, tuple) or len(offsets) != tangent_count:
+            raise TypeError(
+                "InterfaceAffineMapping.right_tangent_offset must cover every tangent")
+        values = (self.right_normal_translation, *offsets)
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+               not math.isfinite(float(value)) for value in values):
+            raise TypeError("InterfaceAffineMapping coefficients must be finite real values")
+
+    @classmethod
+    def identity(cls, handle: Handle, dimension: int) -> InterfaceAffineMapping:
+        if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+            raise ValueError("InterfaceAffineMapping dimension must be 1, 2, or 3")
+        tangent_count = dimension - 1
+        return cls(
+            handle,
+            right_tangent_for_left=tuple(range(tangent_count)),
+            right_tangent_sign=(1,) * tangent_count,
+            right_tangent_offset=(0.0,) * tangent_count,
+        )
+
+    @property
+    def dimension(self) -> int:
+        return len(self.right_tangent_for_left) + 1
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
             "handle": self.handle.canonical_identity(),
-            "tangential_orientation": self.tangential_orientation.value,
+            "right_tangent_for_left": list(self.right_tangent_for_left),
+            "right_tangent_sign": list(self.right_tangent_sign),
+            "right_tangent_offset": [float(value) for value in self.right_tangent_offset],
             "right_normal_translation": float(self.right_normal_translation),
-            "right_tangential_scale": float(self.right_tangential_scale),
-            "right_tangential_offset": float(self.right_tangential_offset),
         }
 
 
@@ -502,5 +517,5 @@ __all__ = [
     "CornerConstraint", "CornerMode", "CornerPolicy", "GhostCoverageManifest",
     "GhostDepthCapability", "GhostDepthRequirement", "GhostRegion", "GhostStencilManifest",
     "InterfaceAffineMapping", "InterfacePermutation", "InterfaceSide",
-    "InterfaceTraceOperation", "MultiBlockInterface", "TangentialOrientation",
+    "InterfaceTraceOperation", "MultiBlockInterface",
 ]
