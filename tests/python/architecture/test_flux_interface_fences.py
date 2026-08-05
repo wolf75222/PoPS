@@ -34,7 +34,8 @@ def test_spatial_operators_own_geometric_measure_exactly_once():
     assert "apply_face_measure" in combined
     assert ".density" not in combined
     assert "checked_density()" in combined
-    assert "evaluate_numerical_flux_at" in combined
+    assert "evaluate_axis_flux<Axis>" in combined
+    assert "evaluate_numerical_flux_at" not in combined
     assert "rf * F[" not in combined
     assert "alpha * F[" not in combined
 
