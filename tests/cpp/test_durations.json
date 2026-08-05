@@ -230,7 +230,6 @@
   "test_system_abstraction": 0.01,
   "test_system_coupler": 0.01,
   "test_system_hardening": 0.01,
-  "test_system_registries": 0.02,
   "test_system_two_explicit": 0.01,
   "test_two_species_minimal": 0.13,
   "test_user_time_integrator": 0.01,

@@ -1299,11 +1299,6 @@ sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
-name = "test_system_registries"
-sources = ["tests/cpp/unit/runtime/test_system_registries.cpp"]
-labels = ["unit", "runtime", "fast"]
-
-[[cpp.suite]]
 name = "test_prepared_field_solver_nd"
 sources = ["tests/cpp/unit/runtime/test_prepared_field_solver_nd.cpp"]
 labels = ["unit", "runtime", "elliptic", "components", "fast"]

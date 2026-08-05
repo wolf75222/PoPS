@@ -1,6 +1,6 @@
 // Coupled multi-block field solve (Spec 3 section 12.3, criterion 24; ADC-457).
 //
-// SystemFieldSolver::assemble_poisson_rhs_from_blocks assembles the system Poisson RHS as
+// The exact-ranked field plan assembles the system Poisson RHS as
 // f = Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at once (indexed by block index;
 // a nullptr entry uses the block's live state) -- the SIMULTANEOUS multi-target counterpart of the
 // single-target assemble_poisson_rhs. System::solve_fields_from_blocks wraps it (solve + aux derive),

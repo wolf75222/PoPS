@@ -272,7 +272,7 @@ static_assert(EllipticSolver<DistributedFFTSolver>,
 /// DistributionMapping(1, np) -> box on one owner rank). The whole box<->slab transpose is HIDDEN inside
 /// solve(): the System path (RHS assembly via add_poisson_rhs, the phi->aux derivation loop aligned on
 /// fab(li), fill_boundary, the device_fence ordering) keeps reading rhs()/phi() on the SAME layout as the
-/// aux, so system_field_solver.hpp needs no change beyond selecting this type.
+/// aux, so the prepared exact field backend needs no alternate storage path.
 ///
 /// Remap mechanics (the box lives ENTIRELY on the owner rank, so this is a scatter/gather, NOT a
 /// symmetric alltoall): solve() (1) the owner packs its full Nx*Ny rhs fab into per-slab contiguous
@@ -360,8 +360,8 @@ class RemappedFFTSolver {
   // rhs into per-rank nyl_ x Nx_ slabs; (2) PoissonFFT::solve runs its internal MPI_Alltoall (y<->x
   // transpose) + FFT on each slab; (3) MPI_Gather the phi slabs back onto the owner. Then the owner fills
   // periodic ghosts on the System layout (intra-box wrap, no messages -> deadlock-free). The caller's
-  // device_fence() after ell_solve() (system_field_solver.hpp) covers the GPU read of the centered grad
-  // phi, identical to the PoissonFFTSolver path. Mode k=0 set to zero (phi with zero mean).
+  // the caller's fence after the accepted solve covers the GPU read of the centered gradient,
+  // identical to the PoissonFFTSolver path. Mode k=0 is set to zero (zero-mean phi).
   void solve() {
     rhs_.sync_host();
     // box-major rhs lives ENTIRELY on owner_rank_; each rank ends up with one nyl_ x Nx_ slab.
@@ -426,8 +426,8 @@ class RemappedFFTSolver {
     // phi of the aux derivation reads the i+-1 / j+-1 ghosts).
     fill_boundary(phi_, geom_.domain, Periodicity{true, true});
     // PR #254 managed-buffer / device-ordering discipline: owner-only device_fence so the host gather +
-    // ghost wrap are settled before phi() is read on the device. The caller's device_fence() after
-    // ell_solve() (system_field_solver.hpp) already brackets the grad-phi read, so this is belt-and-
+    // ghost wrap are settled before phi() is read on the device. The exact field backend's fence
+    // already brackets the gradient read, so this is belt-and-
     // suspenders, but it self-documents the ordering at the solver seam. Gated on the owner because only
     // it holds a fab (no-op on the empty ranks); no-op on the CPU/Serial backend.
     if (my_rank() == owner_rank_)
