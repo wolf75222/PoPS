@@ -17,6 +17,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -150,6 +151,33 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
   return std::move(contract).release();
 }
 
+template <int Dim, class Model>
+Real source_frequency(const Model& model, const MultiFab<Dim>& state,
+                      const MultiFab<Dim>& auxiliary) {
+  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
+                                        model, state.fab(local).view(), auxiliary.fab(local).view(),
+                                        values.fab(local).view()});
+  const Real frequency = reduce_max(values);
+  if (!std::isfinite(frequency) || frequency < Real(0))
+    throw std::runtime_error("generated AMR source frequency is invalid");
+  return frequency;
+}
+
+template <int Dim, class Model>
+Real stability_dt(const Model& model, const MultiFab<Dim>& state, const MultiFab<Dim>& auxiliary) {
+  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), generated_system_detail::MaterializeStabilityDt<Dim, Model>{
+                                        model, state.fab(local).view(), auxiliary.fab(local).view(),
+                                        values.fab(local).view()});
+  const Real dt = reduce_min(values);
+  if (!std::isfinite(dt) || !(dt > Real(0)))
+    throw std::runtime_error("generated AMR stability dt is invalid");
+  return dt;
+}
+
 }  // namespace generated_amr_detail
 
 /// One exact generated spatial specialization bound to a live AMR level generation.
@@ -168,6 +196,16 @@ class PreparedGeneratedAmrLevelBlock {
                                  std::string state_identity, std::string provider_identity,
                                  std::string collective_contract, Evaluator evaluator,
                                  Speed maximum_speed, PoissonRhs poisson_rhs)
+      : PreparedGeneratedAmrLevelBlock(runtime, level, std::move(state_identity),
+                                       std::move(provider_identity), std::move(collective_contract),
+                                       std::move(evaluator), std::move(maximum_speed),
+                                       std::move(poisson_rhs), {}, {}) {}
+
+  PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level,
+                                 std::string state_identity, std::string provider_identity,
+                                 std::string collective_contract, Evaluator evaluator,
+                                 Speed maximum_speed, PoissonRhs poisson_rhs,
+                                 Speed source_frequency, Speed stability_dt)
       : runtime_(&runtime),
         level_(level),
         state_identity_(std::move(state_identity)),
@@ -176,6 +214,8 @@ class PreparedGeneratedAmrLevelBlock {
         evaluator_(std::move(evaluator)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
+        source_frequency_(std::move(source_frequency)),
+        stability_dt_(std::move(stability_dt)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
     if (level_ >= runtime.hierarchy().num_levels() || state_identity_.empty() ||
@@ -207,6 +247,20 @@ class PreparedGeneratedAmrLevelBlock {
     poisson_rhs_(runtime_->hierarchy().state(level_), rhs);
   }
 
+  std::optional<Real> source_frequency() const {
+    require_live_();
+    if (!source_frequency_)
+      return std::nullopt;
+    return source_frequency_(runtime_->hierarchy().state(level_));
+  }
+
+  std::optional<Real> stability_dt() const {
+    require_live_();
+    if (!stability_dt_)
+      return std::nullopt;
+    return stability_dt_(runtime_->hierarchy().state(level_));
+  }
+
  private:
   void require_live_() const {
     if (runtime_ == nullptr || level_ >= runtime_->hierarchy().num_levels() ||
@@ -224,6 +278,8 @@ class PreparedGeneratedAmrLevelBlock {
   Evaluator evaluator_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
+  Speed source_frequency_;
+  Speed stability_dt_;
   std::uint64_t topology_epoch_ = 0;
   std::uint64_t materialization_generation_ = 0;
 };
@@ -363,10 +419,27 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
       generated_system_detail::add_poisson_rhs<Dim>(model, state, rhs);
     };
+    typename PreparedGeneratedAmrLevelBlock<Dim>::Speed source_frequency_bound;
+    if constexpr (requires(const Model& value, const typename Model::State& state,
+                           const typename Model::Aux& aux) {
+                    value.source_frequency(state, aux);
+                  }) {
+      source_frequency_bound = [model, auxiliary](const MultiFab<Dim>& state) {
+        return source_frequency<Dim>(model, state, *auxiliary);
+      };
+    }
+    typename PreparedGeneratedAmrLevelBlock<Dim>::Speed stability_dt_bound;
+    if constexpr (requires(const Model& value, const typename Model::State& state,
+                           const typename Model::Aux& aux) { value.stability_dt(state, aux); }) {
+      stability_dt_bound = [model, auxiliary](const MultiFab<Dim>& state) {
+        return stability_dt<Dim>(model, state, *auxiliary);
+      };
+    }
     std::string contract = level_contract(runtime, context, provider_identity);
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, std::move(context.state_identity), provider_identity, std::move(contract),
-        std::move(evaluator), std::move(speed), std::move(poisson_rhs));
+        std::move(evaluator), std::move(speed), std::move(poisson_rhs),
+        std::move(source_frequency_bound), std::move(stability_dt_bound));
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
