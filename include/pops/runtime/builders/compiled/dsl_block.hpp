@@ -4,6 +4,8 @@
 #pragma once
 
 #include <pops/core/model/physical_model.hpp>
+#include <pops/mesh/topology/boundary_topology.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
@@ -42,6 +44,7 @@ struct CompiledSystemBlockPreparation {
   Model model;
   CompiledSystemBlockRoutes routes;
   Geometry<Dim> geometry;
+  BoundaryTopology<Dim> topology;
   MultiFab<Dim>* auxiliary = nullptr;
 };
 
@@ -117,6 +120,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
 
   PreparedSystemBlock<Dim> prepared = compiled_system_detail::invoke_package_preparer(
       Request{name, std::move(model), std::move(routes), system.prepared_block_geometry(),
+              BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()),
               &system.prepared_block_auxiliary()});
 
   // Authoritative structural metadata comes from compile-time model facts and the resolved install

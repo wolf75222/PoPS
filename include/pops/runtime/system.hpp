@@ -348,6 +348,9 @@ class System {
   /// Immutable exact geometry consumed by an out-of-line generated block preparer. Returning a
   /// value prevents a native package from retaining a reference into the facade implementation.
   POPS_EXPORT Geometry<Dim> prepared_block_geometry() const;
+  /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
+  /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
+  POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
   /// Stable shared auxiliary-field owner captured by prepared block kernels. The field object keeps
   /// its address when its component storage is widened before block commit.
   POPS_EXPORT MultiFab<Dim>& prepared_block_auxiliary();

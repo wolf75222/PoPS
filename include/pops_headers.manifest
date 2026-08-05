@@ -207,6 +207,7 @@ sdk-support pops/runtime/builders/block/prepared_boundary_defaults.hpp
 sdk-root pops/runtime/builders/compiled/amr_dsl_block.hpp
 sdk-root pops/runtime/builders/compiled/dsl_block.hpp
 sdk-support pops/runtime/builders/compiled/flat_grid.hpp
+sdk-support pops/runtime/builders/compiled/generated_system_block.hpp
 sdk-root pops/runtime/builders/compiled/model_runtime_params.hpp
 sdk-support pops/runtime/builders/compiled/native_loader.hpp
 test-only pops/runtime/builders/factory/brick_catalog.hpp

@@ -263,6 +263,11 @@ Geometry<Dim> System<Dim>::prepared_block_geometry() const {
 }
 
 template <int Dim>
+std::array<bool, Dim> System<Dim>::prepared_block_periodicity() const {
+  return p_->periodicity;
+}
+
+template <int Dim>
 void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   require_assembling(p_->lifecycle_, "install_prepared_block");
   validate_prepared_block(prepared);
@@ -469,6 +474,8 @@ template void System<kNativeDimension>::discard_interface_flux_components();
 template std::size_t System<kNativeDimension>::interface_evaluation_count(const std::string&,
                                                                           int) const;
 template Geometry<kNativeDimension> System<kNativeDimension>::prepared_block_geometry() const;
+template std::array<bool, kNativeDimension>
+System<kNativeDimension>::prepared_block_periodicity() const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
 template void System<kNativeDimension>::ensure_aux_width(int);

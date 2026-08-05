@@ -309,6 +309,7 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '#include <string>\n'
             '#include <utility>\n'
             '#include <pops/runtime/dynamic/abi_key.hpp>\n'
+            '#include <pops/core/foundation/native_dimension.hpp>\n'
             '#include <pops/runtime/builders/compiled/model_runtime_params.hpp>\n'
             '#include <pops/physics/bricks/bricks.hpp>\n'
             '#include <pops/core/state/variables.hpp>\n')
@@ -348,11 +349,10 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
         )
         ell_field_attach_lines += (
             '  s->register_elliptic_field(name, "%s", '
-            'std::array<int, %d>{%s}, %d);\n'
+            'std::vector<int>{%s}, %d);\n'
             '  s->set_block_elliptic_field(name, "%s", std::move(named_elliptic_rhs_%d));\n'
             % (
                 fld,
-                len(components),
                 ", ".join(str(component) for component in components),
                 gradient_sign,
                 fld,
@@ -373,11 +373,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                    const char* time, double gamma, int substeps,\n'
                    '                                    int evolve, int stride, const double* params,\n'
                    '                                    int nparams, double pos_floor) {\n'
-                   '  pops::System* s = reinterpret_cast<pops::System*>(sys);\n'
+                   '  using NativeSystem = pops::System<pops::kNativeDimension>;\n'
+                   '  auto* s = reinterpret_cast<NativeSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
+                   '  pops::add_compiled_model<pops::kNativeDimension>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, evolve != 0, stride,\n'
                    '                                                    pos_floor);\n'
@@ -395,11 +396,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                        const double* params, int nparams,\n'
                    '                                        double pos_floor, double weno_epsilon,\n'
                    '                                        bool wave_speed_cache) {\n'
-                   '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
+                   '  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n'
+                   '  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
+                   '  pops::add_compiled_model<pops::kNativeDimension>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
@@ -412,9 +414,22 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                 '}\n'
                 'POPS_LOADER_API const char* pops_compiled_param_names() { return "%s"; }\n'
                 % ",".join(node.name for node in m.runtime_param_nodes()))
+    package_preparer = ""
+    if target == "system":
+        package_preparer = (
+            '\nnamespace pops_generated {\n'
+            'static_assert(ProdModel::dimension == pops::kNativeDimension,\n'
+            '              "generated model rank differs from the selected native artifact");\n'
+            'inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n'
+            '    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n'
+            '  return pops::prepare_generated_system_block(std::move(request));\n'
+            '}\n'
+            '}  // namespace pops_generated\n'
+        )
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
+            + package_preparer
             + key
             + install
             + _emit_metadata(m, "pops_generated::ProdModel")
