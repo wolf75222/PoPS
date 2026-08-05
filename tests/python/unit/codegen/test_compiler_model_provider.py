@@ -134,7 +134,8 @@ def test_facade_and_formula_carrier_share_one_minimal_flux_provider_pack():
     assert "true, 1" in source
     assert "static constexpr int n_flux_providers = 1;" in source
     assert "flux_provider_requirements" in source
-    assert "flux(const State& U, const auto& a, int dir)" in source
+    assert "template <int Axis>\n  POPS_HD State flux(const State& U, const auto& a)" in source
+    assert "static constexpr int dimension = 2;" in source
     assert "a.template flux_provider<1>()" in source
 
 
