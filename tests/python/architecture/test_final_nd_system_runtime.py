@@ -13,6 +13,7 @@ AMR_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 SPATIAL_DOMAIN = ROOT / "include/pops/runtime/config/spatial_domain.hpp"
 SYSTEM_DOMAIN = ROOT / "include/pops/runtime/system/system_domain.hpp"
 BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
+BOUNDARY_REGISTRY = ROOT / "include/pops/runtime/system/system_boundary_registry.hpp"
 LAYOUT_TRANSFER = ROOT / "src/runtime/system/system_layout_transfer.cpp"
 BINDING_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 CORE_BINDING = ROOT / "python/bindings/core/init/init_core.cpp"
@@ -166,6 +167,24 @@ def test_amr_hierarchy_config_carries_one_ranked_row_per_transition() -> None:
     assert "regrid_margin" not in binding
     assert "ranked_extents_from_python<kNativeDimension>" in binding
     assert "2 + 2 * Dim" in detail
+
+
+def test_boundary_installation_registry_is_ranked_and_transactional() -> None:
+    source = _read(BOUNDARY_REGISTRY)
+    assert "template <int Dim>" in source
+    assert "PreparedHyperbolicBoundary<Dim>" in source
+    assert "prepare_hyperbolic_boundary<Dim>" in source
+    assert "void discard_transaction() noexcept" in source
+    assert "with_converted_fixed_states" in source
+    for legacy in (
+        "PreparedBoundaryPlan",
+        "PreparedGridBoundarySession",
+        "PeriodicIdentification2D",
+        "Box2D",
+        "Fab2D",
+        "kNativeDimension",
+    ):
+        assert legacy not in source
 
 
 def test_layout_transfer_is_generic_and_instantiated_only_for_the_artifact() -> None:
