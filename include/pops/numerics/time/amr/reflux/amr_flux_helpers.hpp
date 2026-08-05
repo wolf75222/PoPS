@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <stdexcept>
-
 namespace pops::numerics::time::amr {
 
 namespace detail {
