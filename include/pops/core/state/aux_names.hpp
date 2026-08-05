@@ -1,51 +1,57 @@
 /// @file
-/// @brief HOST-ONLY canonical aux name<->component table: the C++ mirror of AUX_CANONICAL
-///        (python/pops/dsl.py). Generated from the SAME single source as pops::Aux -- the base
-///        contract (phi/grad_x/grad_y, components 0..2) plus the POPS_AUX_FIELDS X-macro
-///        (B_z=3, T_e=4) -- so it cannot drift from the device layout. Lets a C++ caller resolve a
-///        CANONICAL aux field by name without going through the Python facade (ADC-291), and lets a
-///        test pin the C++<->Python coherence. NOT included by device kernels: it uses
-///        std::string_view (host-only). The model-NAMED fields (extra[k] = component
-///        kAuxNamedBase + k) are intentionally NOT in this table: they carry no canonical meaning
-///        and are resolved per block by name on the facade side.
+/// @brief Host-only exact-ranked canonical aux name/component tables.
 
 #pragma once
 
+#include <pops/core/state/state.hpp>
+
+#include <array>
+#include <cstddef>
 #include <string_view>
 #include <utility>
 
-#include <pops/core/state/state.hpp>
-
 namespace pops {
 
-/// CANONICAL aux name -> component table (mirror of AUX_CANONICAL on the DSL side). The base-contract
-/// names are wired explicitly (components 0..2, NOT part of POPS_AUX_FIELDS); the EXTRA fields come
-/// from the X-macro (single source). Adding a canonical extra field = 1 line in POPS_AUX_FIELDS, this
-/// table follows automatically.
-inline constexpr std::pair<std::string_view, int> kAuxCanonicalNames[] = {
-    {"phi", 0},
-    {"grad_x", 1},
-    {"grad_y", 2},
-#define POPS_AUX_NAME_ENTRY(name, idx) {#name, idx},
-    POPS_AUX_FIELDS(POPS_AUX_NAME_ENTRY)
-#undef POPS_AUX_NAME_ENTRY
-};
+namespace detail {
 
-/// Component of the CANONICAL aux field @p name, or -1 if @p name is not a canonical field (it may
-/// then be a model-NAMED field, resolved per block by the facade). HOST-only constexpr.
+inline constexpr std::array<std::string_view, 3> kAuxGradientNames = {"grad_x", "grad_y", "grad_z"};
+
+template <int Dim>
+constexpr auto make_aux_canonical_names() {
+  using layout = AuxComponentLayout<Dim>;
+  std::array<std::pair<std::string_view, int>, layout::named_begin> result{};
+  result[static_cast<std::size_t>(layout::phi)] = {"phi", layout::phi};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[static_cast<std::size_t>(layout::gradient_begin + axis)] = {
+        kAuxGradientNames[static_cast<std::size_t>(axis)], layout::gradient_begin + axis};
+  result[static_cast<std::size_t>(layout::b_z)] = {"B_z", layout::b_z};
+  result[static_cast<std::size_t>(layout::t_e)] = {"T_e", layout::t_e};
+  return result;
+}
+
+}  // namespace detail
+
+template <int Dim>
+inline constexpr auto kAuxCanonicalNamesFor = detail::make_aux_canonical_names<Dim>();
+
+/// Canonical table of this compiled native artifact.
+inline constexpr auto kAuxCanonicalNames = kAuxCanonicalNamesFor<kNativeDimension>;
+
+/// Component of canonical field `name` for rank `Dim`, or -1 for a model-named/unknown field.
+template <int Dim = kNativeDimension>
 constexpr int aux_canonical_index(std::string_view name) {
-  for (const auto& [n, c] : kAuxCanonicalNames)
-    if (n == name)
-      return c;
+  for (const auto& [canonical_name, component] : kAuxCanonicalNamesFor<Dim>)
+    if (canonical_name == name)
+      return component;
   return -1;
 }
 
-/// Inverse: CANONICAL name of component @p comp, or an empty view if @p comp is not a canonical
-/// component (e.g. a model-named field at kAuxNamedBase + k). HOST-only constexpr.
-constexpr std::string_view aux_canonical_name(int comp) {
-  for (const auto& [n, c] : kAuxCanonicalNames)
-    if (c == comp)
-      return n;
+/// Canonical field name at `component` for rank `Dim`, or an empty view outside that prefix.
+template <int Dim = kNativeDimension>
+constexpr std::string_view aux_canonical_name(int component) {
+  for (const auto& [canonical_name, canonical_component] : kAuxCanonicalNamesFor<Dim>)
+    if (canonical_component == component)
+      return canonical_name;
   return {};
 }
 

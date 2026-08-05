@@ -7,9 +7,8 @@
 ///   HyperbolicPhysicalModel: complete hyperbolic brick (flux + conversions + Variables).
 ///   HyperbolicModel: compat alias for HyperbolicPhysicalModel.
 ///
-/// Aux INVARIANT: every PhysicalModel receives an pops::Aux (phi, grad phi, extra fields).
-/// Generalizing the auxiliary to an arbitrary Model::Aux is possible later; today
-/// the contract says exactly what load_aux builds.
+/// Aux INVARIANT: `PhysicalModelFor<M, Dim>` receives exactly `AuxState<Dim>`; the public
+/// `PhysicalModel` concept binds that contract to the immutable native build rank.
 ///
 /// device INVARIANT: the concept methods (flux, source, ...) must be POPS_HD if
 /// they are called in kernels. The concept does not check it -- that is the
@@ -17,7 +16,7 @@
 
 #pragma once
 
-#include <pops/core/state/state.hpp>  // Aux: the contract fixes the auxiliary to pops::Aux
+#include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // Variables: mandatory contract of the hyperbolic model
 
@@ -42,55 +41,61 @@
 // (aux in the flux) and the self-gravitating compressible fluid (aux in the
 // source) under one same spatial operator.
 //
-// Aux contract (slice, see milestone 4): the auxiliary is FIXED to pops::Aux (phi, grad
-// phi). This is what load_aux builds and all the spatial operator provides;
-// the concept therefore requires it explicitly (M::Aux == pops::Aux) rather than letting
-// one believe that a model could declare an arbitrary auxiliary that the code would
-// never fill. Generalizing load_aux<Model> to an arbitrary Model::Aux remains
-// possible later; meanwhile the contract says exactly what the code provides.
+// Aux contract: the model and its field loader carry one immutable compile-time rank. The build
+// facade names AuxState<kNativeDimension> as pops::Aux, while generic core proofs use AuxState<Dim>
+// directly. No arbitrary Model::Aux can pass the contract without matching that exact rank.
 
 namespace pops {
 
 /// Width of the aux channel a model CONSUMES.
 ///
-/// Returns `M::n_aux` if the model declares it (extra fields: B_z, T_e...), otherwise
-/// `kAuxBaseComps` (= 3: phi/grad_x/grad_y). Drives the number of components that
-/// load_aux reads and that the system allocates. A model without n_aux -> 3 -> bit-identical
-/// to history (extra Aux fields at 0, never read).
+/// Returns `M::n_aux` if the model declares it, otherwise the exact ranked base width
+/// (`phi + Dim gradients`).
 /// Lives in this header (contract) and not in the spatial operator, so that
 /// CompositeModel can propagate n_aux without pulling in all the numerics.
 // POPS_HD : aux_comps() est evaluee a la compilation (argument de template non-type
 // load_aux<aux_comps<Model>()>) DANS les kernels device (cf. spatial_operator_eb.hpp). Sous nvcc,
 // appeler une constexpr __host__ depuis une fonction __host__ __device__ est refuse (#20013-D) ;
 // la marquer POPS_HD la rend callable des deux cotes. Hors nvcc, POPS_HD est vide -> constexpr pur.
-template <class M>
-POPS_HD constexpr int aux_comps() {
+template <class M, int Dim>
+POPS_HD constexpr int aux_comps_for() {
   if constexpr (requires { M::n_aux; })
     return M::n_aux;
   else
-    return kAuxBaseComps;
+    return kAuxBaseCompsFor<Dim>;
+}
+
+/// Auxiliary width of a model in this compiled native artifact.
+template <class M>
+POPS_HD constexpr int aux_comps() {
+  return aux_comps_for<M, kNativeDimension>();
 }
 
 /// Minimal contract of a physical model.
 ///
-/// Requires: State, Aux == pops::Aux, n_vars, flux(u,a,dir), max_wave_speed(u,a,dir),
+/// Requires: State, Aux == AuxState<Dim>, a valid ranked aux width, n_vars, flux(u,a,dir),
 /// source(u,a), elliptic_rhs(u). All these methods must be POPS_HD if called
 /// in kernels (not checked by the concept; responsibility of the author).
 /// Finite-volume execution additionally instantiates the hyperbolic methods with the exact
 /// BoundFluxProviders<Model> protocol; Aux remains the pointwise source/implicit carrier.
 /// Do not confuse with HyperbolicPhysicalModel which adds the variables and conversions.
-template <class M>
-concept PhysicalModel =
+template <class M, int Dim>
+concept PhysicalModelFor =
     requires(const M m, const typename M::State u, const typename M::Aux a, int dir) {
       typename M::State;
       typename M::Aux;
-      requires std::same_as<typename M::Aux, Aux>;
+      requires std::same_as<typename M::Aux, AuxState<Dim>>;
+      requires(aux_comps_for<M, Dim>() >= kAuxBaseCompsFor<Dim>);
+      requires(aux_comps_for<M, Dim>() <= kAuxMaxCompsFor<Dim>);
       { M::n_vars } -> std::convertible_to<int>;
       { m.flux(u, a, dir) } -> std::same_as<typename M::State>;
       { m.max_wave_speed(u, a, dir) } -> std::convertible_to<Real>;
       { m.source(u, a) } -> std::same_as<typename M::State>;
       { m.elliptic_rhs(u) } -> std::convertible_to<Real>;
     };
+
+template <class M>
+concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
 
 // ---------------------------------------------------------------------------------------------
 // OPTIONAL TIME STEP BOUNDS of the model contract (audit 2026-06, "step_cfl" workstream).
