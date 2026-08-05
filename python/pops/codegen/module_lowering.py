@@ -274,10 +274,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     def _b_field_operator(op: Any) -> None:
         outputs: tuple[Any, ...] = tuple(cast(
             Iterable[Any], getattr(op.signature.output, "components", ())))
-        if len(outputs) == 2 or len(outputs) > 3:
+        if len(outputs) > 4:
             raise ValueError(
-                "compile_problem: field_operator %r outputs must have length 1 or 3; the runtime "
-                "cannot register %d outputs yet" % (op.name, len(outputs)))
+                "compile_problem: field_operator %r outputs may contain one scalar and at most "
+                "three ranked gradients; got %d outputs" % (op.name, len(outputs)))
         if not outputs:
             raise ValueError(
                 "compile_problem: field_operator %r must declare at least one output" % op.name)

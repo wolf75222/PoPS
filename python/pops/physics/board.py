@@ -592,9 +592,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         operator is attached, a scalar ``model.field(name)`` is a one-component
         field space.  Once exactly one field operator materializes that unknown,
         the operator outputs become the storage components: a ``FieldOutput``
-        contributes one scalar and a ``GradientOutput`` contributes its two
-        Cartesian components.  The derivation is structural and applies to any
-        model; no physics-family or field-name branch participates.
+        contributes one scalar and a ``GradientOutput`` contributes one component
+        per ranked Cartesian axis.  The derivation is structural and applies to
+        any model; no physics-family or dimensional branch participates.
         """
         if self._multi_module is not None:
             return self._multi_module.field_spaces()
@@ -618,7 +618,12 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     if isinstance(output, FieldOutput):
                         values.append(output.name)
                     elif isinstance(output, GradientOutput):
-                        values.extend((output.name + "_x", output.name + "_y"))
+                        values.extend(
+                            output.name + "_" + axis_name
+                            for axis_name in self._ranked_frame_axes(
+                                where="field %r GradientOutput" % name
+                            )
+                        )
                     else:
                         raise TypeError(
                             "field %r output %s has no solved-field storage protocol"
@@ -1195,6 +1200,18 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     # --- introspection ---
 
     # --- internals ---
+    def _ranked_frame_axes(self, *, where: str) -> tuple[str, ...]:
+        """Return the one canonical axis prefix carried by this model's typed frame."""
+        frame_axes = None if self._frame is None else getattr(self._frame, "axes", None)
+        if not isinstance(frame_axes, tuple):
+            raise ValueError(
+                "%s requires a bounded Cartesian frame so its dimension is unambiguous" % where
+            )
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame_axes}, where=where + " frame"
+        )
+        return tuple(axes)
+
     def _to_expr(self, node: Any) -> Any:
         """Resolve a board node to an :mod:`pops.dsl` expression in this model's context."""
         if isinstance(node, _bm.Partial):
@@ -1207,26 +1224,28 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     "gradient field handle %r belongs to another physics model"
                     % (field.name,))
             aux_name = self._gradient_aux(field.name, node.axis)
-            expr = self._dsl.aux(aux_name)
+            expr = self.aux(aux_name)
             if node.scale != 1.0:
                 expr = node.scale * expr
             return expr
         if isinstance(node, _bm.Gradient):
-            raise TypeError("a gradient is a vector; use grad(field).x / .y")
+            raise TypeError("a gradient is a vector; select one of the model frame axes")
         if isinstance(node, _bm.Laplacian):
             raise TypeError("a laplacian only appears as a field-solve operator")
         return node  # already a dsl Expr / Var / number
 
-    @staticmethod
-    def _gradient_aux(field_name: Any, axis: Any) -> Any:
-        """Canonical gradient aux name of ``field_name`` along ``axis`` (0=x, 1=y)."""
+    def _gradient_aux(self, field_name: Any, axis: Any) -> Any:
+        """Canonical gradient aux name of ``field_name`` along one ranked axis."""
         field_name = require_name(field_name, "gradient field name")
-        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1):
-            raise ValueError("gradient axis must be integer 0 (x) or 1 (y); got %r" % (axis,))
+        axes = self._ranked_frame_axes(where="gradient")
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(len(axes)):
+            raise ValueError(
+                "gradient axis must belong to the model's ranked frame; got %r" % (axis,)
+            )
+        axis_name = axes[axis]
         if field_name == "phi":
-            return "grad_x" if axis == 0 else "grad_y"
-        # generic fields keep a <field>_grad_x / _grad_y convention
-        return "%s_grad_%s" % (field_name, "x" if axis == 0 else "y")
+            return "grad_" + axis_name
+        return "%s_grad_%s" % (field_name, axis_name)
 
     def _require_state_handle(self, handle: Any, where: str, *, optional: bool = False) -> Any:
         """Validate an ``on=`` state without accepting a same-named foreign handle."""

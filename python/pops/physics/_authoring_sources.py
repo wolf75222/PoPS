@@ -39,8 +39,8 @@ class _SourceMixin(_HyperbolicModel):
         gradient_sign: int = 1,
     ) -> None:
         """Declare a NAMED elliptic field (ADC-419): an elliptic solve ``operator(field) = rhs(U)``
-        whose solution + derived quantities populate the NAMED aux fields @p aux (default
-        ``["phi", "grad_x", "grad_y"]``, the canonical electrostatic triple). @p rhs is an Expr of
+        whose solution + derived quantities populate the NAMED aux fields @p aux.  The first entry
+        is the scalar field and any remaining entries are its ranked Cartesian gradient. @p rhs is an Expr of
         cons / primitives / aux / params (the elliptic right-hand side assembled from the state, the
         same surface as set_elliptic_rhs). @p operator names the elliptic operator (only ``"poisson"``
         is hosted by the runtime today). A named elliptic field is OPT-IN; the unnamed default stays in
@@ -68,19 +68,28 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError("elliptic_field('%s'): already declared" % name)
         if name in self._local_transforms:
             raise ValueError("elliptic_field('%s'): name collides with a local_transform" % name)
-        aux = list(aux) if aux is not None else ["phi", "grad_x", "grad_y"]
+        if aux is None:
+            axes = tuple(self._flux)
+            if not axes:
+                raise ValueError(
+                    "elliptic_field('%s'): aux= is required when no ranked flux declares the "
+                    "model dimension" % name
+                )
+            aux = ["phi", *("grad_" + axis for axis in axes)]
+        else:
+            aux = list(aux)
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
-        if len(aux) == 2 or len(aux) > 3:
+        if len(aux) > 4:
             raise ValueError(
-                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
-                "cannot register %d outputs yet" % (name, len(aux)))
+                "elliptic_field('%s'): aux may contain one scalar and at most three ranked "
+                "gradient components; got %d outputs" % (name, len(aux)))
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
         if len(aux) == 1 and gradient_sign != 1:
             raise ValueError(
-                "elliptic_field('%s'): gradient_sign=-1 requires two gradient outputs" % name)
+                "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % name)
         for a in aux:
             if not (isinstance(a, str) and a.isidentifier()):
                 raise ValueError("elliptic_field('%s'): aux field %r is not a valid identifier"
@@ -92,9 +101,11 @@ class _SourceMixin(_HyperbolicModel):
         # field would compile to an undefined local -> reject it loud (the default set_elliptic_rhs has
         # the same surface). A source/flux READING the named field's solved aux is the supported pattern;
         # it is the named-elliptic RHS itself that must be a function of U only.
-        rhs_aux = rhs.deps() & (set(AUX_CANONICAL) | set(self.aux_extra_names) | {"phi", "grad_x",
-                                                                                 "grad_y", "B_z",
-                                                                                 "T_e"})
+        rhs_aux = rhs.deps() & (
+            set(AUX_CANONICAL)
+            | set(self.aux_extra_names)
+            | {"phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e"}
+        )
         if rhs_aux:
             raise ValueError("elliptic_field('%s'): rhs may not read aux fields %s; the elliptic "
                              "right-hand side is a function of the conservative state only (the same "

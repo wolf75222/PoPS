@@ -64,15 +64,33 @@ class _HierarchyPolicyContext:
         return policy
 
 
+def _layout_dimension(layout: Any) -> int:
+    """Read one authenticated rank from an authoring or normalized layout."""
+    normalized = getattr(layout, "normalized_geometry", None)
+    geometry = normalized() if callable(normalized) else getattr(layout, "geometry", None)
+    if geometry is None:
+        mesh = getattr(layout, "mesh", None)
+        frame = None if mesh is None else getattr(mesh, "frame", None)
+        axes = None if frame is None else getattr(frame, "axes", None)
+        dimension = None if axes is None else len(axes)
+    else:
+        dimension = getattr(geometry, "dimension", None)
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise TypeError("cell-centred field layout has no exact Cartesian rank")
+    return dimension
+
+
 def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, Any], int]:
     from pops.fields.outputs import FieldOutput, GradientOutput
 
     operator = request.operator
     outputs = tuple(operator.outputs)
     components = request.output_components
-    if len(components) not in (1, 3):
+    dimension = _layout_dimension(request.layout)
+    if len(components) not in (1, 1 + dimension):
         raise TypeError(
-            "cell-centred output must be one potential component or potential plus two gradients"
+            "cell-centred output must be one scalar or that scalar plus exactly %d ranked "
+            "gradient components" % dimension
         )
     if len(components) == 1:
         if len(outputs) != 1 or not isinstance(outputs[0], FieldOutput):
@@ -90,6 +108,15 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
         gradient_sign = outputs[1].sign
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError("resolved GradientOutput sign must be exactly -1 or 1")
+        expected = (
+            outputs[0].name,
+            *(outputs[1].name + "_" + axis for axis in ("x", "y", "z")[:dimension]),
+        )
+        if components != expected:
+            raise ValueError(
+                "resolved GradientOutput components %r differ from the ranked layout route %r"
+                % (components, expected)
+            )
     potential_source = outputs[0].source
     if potential_source is not None and potential_source != operator.unknown:
         raise ValueError("FieldOutput source disagrees with the FieldOperator solved unknown")

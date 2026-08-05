@@ -127,7 +127,12 @@ class _EllipticAuthoringMixin(_BoardModel):
             aux_names = [output_tuple[0].name]
             gradient_sign = 1
             if len(output_tuple) == 2 and isinstance(output_tuple[1], GradientOutput):
-                aux_names.extend((output_tuple[1].name + "_x", output_tuple[1].name + "_y"))
+                aux_names.extend(
+                    output_tuple[1].name + "_" + axis_name
+                    for axis_name in self._ranked_frame_axes(
+                        where="field_operator %r GradientOutput" % name
+                    )
+                )
                 gradient_sign = output_tuple[1].sign
             elif len(output_tuple) != 1:
                 raise ValueError(

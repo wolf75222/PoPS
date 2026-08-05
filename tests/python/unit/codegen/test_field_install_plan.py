@@ -240,7 +240,9 @@ def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() ->
 def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
     target: str, sign: int,
 ) -> None:
-    model = Model("signed-gradient-%s-%d" % (target, sign))
+    model = Model(
+        "signed-gradient-%s-%d" % (target, sign), frame=_LAYOUT.mesh.frame
+    )
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
     operator = model.field_operator(
