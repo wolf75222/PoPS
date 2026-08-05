@@ -10,6 +10,7 @@
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/system_block_closures.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -64,20 +65,7 @@ class SystemBlockStore {
     PreparedPointResidual flux_only_core_prepared;
   };
 
-  /// Type-erased attachment point for one separately authenticated shared-interface provider.
-  /// Its implementation may be dimension-specific, but its contract and all state storage remain
-  /// exact-ranked. The generic block registry never synthesizes interface geometry itself.
-  struct InterfaceProvider {
-    std::function<void(const evaluation_point&, const std::vector<field_type*>&,
-                       const std::vector<field_type*>&, const std::vector<int>&)>
-        evaluate_rhs;
-    std::function<void(const evaluation_point&, const std::vector<field_type*>&,
-                       const std::vector<field_type*>&, const std::vector<int>&)>
-        evaluate_core;
-    std::function<std::size_t(const std::string&, int)> evaluation_count;
-    std::function<bool(int)> has_interfaces;
-    std::function<void()> discard;
-  };
+  using InterfaceProvider = SystemInterfaceProvider<Dim>;
 
   struct BlockState {
     std::string name;
@@ -185,12 +173,7 @@ class SystemBlockStore {
       if (states[block] == nullptr)
         continue;
       const bool only_flux = !flux_only.empty() && flux_only[block] != 0;
-      PointResidual& closure =
-          only_flux ? blocks[block].rhs_flux_only_at_point : blocks[block].rhs_at_point;
-      if (!closure)
-        throw std::runtime_error("System block '" + blocks[block].name +
-                                 "' lacks a dimension-qualified residual provider");
-      closure(point, *states[block], *residuals[block]);
+      evaluate_rhs_core(point, block, *states[block], *residuals[block], only_flux);
     }
   }
 

@@ -1,779 +1,639 @@
+/// @file
+/// @brief Exact compile-time-ranked execution boundary for generated Uniform Programs.
+
 #pragma once
 
+#include <pops/core/foundation/types.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/runtime/config/runtime_params.hpp>
+#include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/system.hpp>
+
 #include <algorithm>
-#include <array>
-#include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <limits>
-#include <memory>
 #include <map>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>     // Real, POPS_HD
-#include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope (per-node timing, ADC-459)
-#include <pops/runtime/program/step_transaction.hpp>
-#include <pops/runtime/program/wire_ids.hpp>   // stable compiled-Program numeric protocol
-#include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
-#include <pops/mesh/execution/for_each.hpp>  // for_each_cell (per-cell coeff / reconstruct kernels + negated divergence copy)
-#include <pops/mesh/geometry/geometry.hpp>  // Geometry (mesh metric of the Laplacian / gradient)
-#include <pops/mesh/layout/field_distribution.hpp>  // FieldDistribution
-#include <pops/mesh/storage/fab2d.hpp>              // Array4 / ConstArray4 (per-cell handles)
-#include <pops/mesh/storage/mf_arith.hpp>           // saxpy (linear combine over a MultiFab)
-#include <pops/mesh/storage/multifab.hpp>           // MultiFab
-#include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/solve_report_consensus.hpp>
-#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
-#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
-#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
-#include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
-#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
-#include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
-#include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
-#include <pops/runtime/program/program_execution_services.hpp>
-#include <pops/runtime/system.hpp>  // System (the runtime this facade forwards to)
+namespace pops::runtime::program {
 
-/// @file
-/// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
-///        Program during sim.step(dt) (epic ADC-399, ADC-401 Phase 2b).
+/// A generated Program and its Uniform runtime have one immutable native rank.
 ///
-/// It REIMPLEMENTS NOTHING. Each method forwards to an existing pops::System primitive:
-///   install(fn)          -> System::install_program_step(fn)   (registers the macro-step body)
-///   solve_fields()       -> System::solve_fields()             (elliptic solve + aux at current U)
-///   solve_fields_from_state(b, U) -> System::solve_fields_from_state(b, U) (aux at a stage state)
-///   n_blocks()           -> System::n_blocks()
-///   state(b)             -> System::block_state(b)             (the block's live MultiFab, zero-copy)
-///   rhs_into(b, U, R, rate_id) -> System::block_rhs_into_at(...) (point-qualified -div F + S)
-///   neg_div_flux_default_into(b, U, R, rate_id) -> point-qualified -div F with no source
-///   axpy(U, a, R)        -> pops::saxpy(U, a, R)                (U <- U + a R, device-dispatched)
-///
-/// The Program composes the chain (e.g. Forward Euler = solve_fields(); for each block:
-/// rhs_into(b, U, R, rate_id); axpy(U, dt, R)) and installs it via install(...). The .so NEVER touches
-/// System::Impl / Array4 / fill_boundary / the elliptic solver / Kokkos / MPI / CFL / substeps.
-///
-/// IDIOM: ProgramContext is a plain (non-template) class holding a System*. A generated .so receives
-/// the typed System facade across the authenticated dlopen boundary and asks the shared provider
-/// factory to construct this topology/storage provider; it reaches per-block storage through the
-/// System's public accessors because System::Impl is private to the _pops translation unit.
-namespace pops {
-namespace runtime {
-namespace program {
-
-class ProgramContext : public ProgramExecutionServices<ProgramContext> {
+/// The context never decodes a dimension tag, infers a missing axis, or substitutes a legacy
+/// two-dimensional grid provider.  Every state, scratch, history and cache value is a
+/// `MultiFab<Dim>` copied from an already-authenticated runtime layout.  Operations whose providers
+/// have not yet crossed the exact-ranked boundary fail before touching storage.
+template <int Dim>
+class ProgramContext {
  public:
-  explicit ProgramContext(System* sys) : sys_(sys) {}
+  static_assert(Dim >= 1 && Dim <= 3, "ProgramContext only supports dimensions 1, 2, and 3");
 
-  /// Start one generated Program body.  The native stepper supplies the accepted local dt; every
-  /// boundary evaluation in the body derives its physical time from this exact value and the
-  /// authored rational stage fraction.
+  static constexpr int dimension = Dim;
+  using runtime_type = System<Dim>;
+  using field_type = MultiFab<Dim>;
+  using runtime_state_type = ProgramRuntimeState<Dim>;
+
+  struct FieldStageOverride {
+    int program_block = -1;
+    const field_type* state = nullptr;
+  };
+
+  struct RhsGroupRequest {
+    RhsGroupRequest(int block_value, field_type* state_value, field_type* rhs_value,
+                    int rate_id_value, int flux_only_value)
+        : block(block_value),
+          state(state_value),
+          rhs(rhs_value),
+          rate_id(rate_id_value),
+          flux_only(flux_only_value) {}
+
+    int block = -1;
+    field_type* state = nullptr;
+    field_type* rhs = nullptr;
+    int rate_id = -1;
+    int flux_only = 0;
+  };
+
+  struct CouplingStateOverride {
+    int program_block = -1;
+    field_type* state = nullptr;
+  };
+
+  explicit ProgramContext(runtime_type* system) : system_(system) {
+    if (system_ == nullptr)
+      throw std::invalid_argument("ProgramContext requires a non-null ranked System");
+  }
+
+  void install(std::function<void(double)> step) const {
+    system_->install_program_step(std::move(step));
+  }
+
   void begin_step(double dt) const {
     if (!std::isfinite(dt) || dt <= 0.0)
-      throw std::invalid_argument("Program boundary clock requires a finite positive dt");
+      throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
     stage_time_ = amr::Rational(0, 1);
-    logical_phase_begin_ = amr::Rational(0, 1);
-    logical_phase_span_ = amr::Rational(1, 1);
-    logical_physical_time_offset_ = 0.0;
   }
 
- private:
-  SolveOutcome program_execution_solve_fields_outcome_() const {
-    // No count_kernel() here: System's private in-place default provider seam already counts it.
-    // The from_state/from_blocks/named seams below do not, so those routes count explicitly.
-    sys_->prepare_default_field_publication_storage_();
-    return run_field_solve_transaction_([&]() { return sys_->solve_fields_in_place_(); });
-  }
-  /// Per-stage field solve (ADC-409): re-solve the elliptic fields and re-fill the shared aux from
-  /// block @p b's STAGE state @p u_stage (not its live state), so a field-coupled multi-stage
-  /// Program's stage k reads phi solved from stage k's own state. Forwards to
-  /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
-  /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
-  SolveOutcome program_execution_solve_fields_from_state_outcome_(int b, MultiFab& u_stage) const {
-    count_kernel();
-    sys_->prepare_default_field_publication_storage_();
-    return run_field_solve_transaction_(
-        [&]() { return sys_->solve_fields_from_state_in_place_(sys_block(b), u_stage); });
-  }
-  SolveOutcome program_execution_field_solve_from_state_at_outcome_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int b, MultiFab& u_stage) const {
-    count_kernel();
-    if (provider_slot.empty())
-      throw std::invalid_argument(
-          "System::solve_fields_from_state_at requires an exact provider slot");
-    sys_->prepare_named_field_publication_storage_(provider_slot);
-    return run_field_solve_transaction_([&]() {
-      return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
-                                                        u_stage);
-    });
-  }
-  /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
-  /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
-  /// Poisson RHS is Sum_s elliptic_rhs_s(U_s), every coupled block reading its OWN stage state (not a
-  /// single-target override). @p u_stages is indexed BY BLOCK INDEX (size == n_blocks()); a nullptr
-  /// entry uses that block's live state. Forwards to System::solve_fields_from_blocks. The codegen
-  /// Manual callers may provide the historical pointer vector. Generated Programs use the exact-IR
-  /// initializer-list overload below, which fills the same context-owned workspace without allocating
-  /// a pointer vector in the step body. This is the multi-target counterpart of solve_fields_from_state.
-  SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
-      const std::vector<const MultiFab*>& u_stages) const {
-    count_kernel();
-    // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
-    // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
-    // re-slot each Program entry p at its name-matched System index sys_block(p) (Spec 3 criterion 23,
-    // ADC-457). Even an order-matching Program carries an explicit identity map.
-    const std::vector<int>& block_map = sys_->program_block_map();
-    if (block_map.empty())
-      throw block_map_error_(
-          "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
-          "installed; positional block identity is not supported");
-    if (u_stages.size() < block_map.size())
-      throw block_map_error_("ProgramContext::solve_fields_from_blocks: received " +
-                             std::to_string(u_stages.size()) +
-                             " Program stage slots for an explicit block map with " +
-                             std::to_string(block_map.size()) + " entries");
-    FieldSolveWorkspace& workspace = manual_default_field_solve_workspace_();
-    fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/false);
-    // Iterate the PROGRAM block indices [0, m.size()) -- NOT u_stages.size(), which is the larger
-    // SYSTEM block count. The codegen sizes u_stages to ctx.n_blocks() but only fills Program slots
-    // [0, n_program_blocks); when the System has MORE blocks than the Program declares (a subset
-    // install), walking the System-sized range would re-map the nullptr padding through the identity
-    // fallthrough and clobber real entries. m[p] is Program block p's System index (install-validated
-    // in range); the unlisted System slots stay nullptr = their live state. sys_block validates every
-    // mapped value before it is used as a vector index.
-    sys_->prepare_default_field_publication_storage_();
-    return run_field_solve_transaction_(
-        [&]() { return solve_default_field_workspace_(workspace); });
+  void configure_primary_clock(const std::string& clock) const {
+    clock_schedule_.configure_primary_clock(clock);
+    primary_clock_ = clock;
   }
 
-  /// Allocation-free generated route. The shared Program service already authenticated the exact IR
-  /// identity, provider field, ordered block pack and runtime layouts; Uniform owns only publication
-  /// storage and terminal System dispatch.
-  SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
-      const std::vector<const MultiFab*>& runtime_stages) const {
-    count_kernel();
-    sys_->prepare_named_field_publication_storage_(field);
-    return run_field_solve_transaction_([&]() {
-      return sys_->solve_fields_from_blocks_at_in_place_(point, field, runtime_stages);
-    });
+  void declare_clock_relation(const std::string& parent, const std::string& child,
+                              int count) const {
+    clock_schedule_.declare_relation(parent, child, count);
   }
 
-  struct FieldSolveWorkspace {
-    std::vector<int> program_to_system;
-    std::vector<const MultiFab*> program_stages;
-    std::vector<const MultiFab*> system_stages;
-  };
-
-  struct FieldPublicationTransaction {
-    System* system = nullptr;
-    bool active = false;
-
-    void validate_accept() {
-      if (!active || system == nullptr)
-        throw std::logic_error("Program field publication has no staged candidate");
-      system->validate_field_publication_candidate();
-    }
-
-    void accept() noexcept {
-      if (!active || system == nullptr)
-        std::terminate();
-      system->accept_field_publication_candidate();
-      system = nullptr;
-      active = false;
-    }
-
-    void rollback() noexcept {
-      if (!active)
-        return;
-      try {
-        if (system == nullptr)
-          std::terminate();
-        system->rollback_field_publication_transaction();
-      } catch (...) {
-        std::terminate();
-      }
-      release();
-    }
-
-    void release() noexcept {
-      system = nullptr;
-      active = false;
-    }
-  };
-
-  struct FieldSolveWorkspaceRegistry {
-    FieldSolveWorkspace manual_default;
-    FieldPublicationTransaction publication;
-  };
-
-  void capture_field_publication_(FieldPublicationTransaction& transaction) const {
-    // SystemFieldSolver's uniform reductions use MPI_COMM_WORLD, so this transaction must
-    // authenticate and release on that exact communicator rather than inventing a private lane.
-    if (all_reduce_max(transaction.active ? 1L : 0L) != 0)
-      throw std::logic_error(
-          "ProgramContext field solves are sequential until their SolveOutcome is consumed");
-    if (all_reduce_max(sys_->field_publication_transaction_active_() ? 1L : 0L) != 0)
-      throw std::logic_error(
-          "System field solves are sequential until their prior SolveOutcome is consumed");
-
-    long capture_failure_local = 0;
-    try {
-      sys_->begin_field_publication_transaction();
-    } catch (...) {
-      capture_failure_local = 1;
-    }
-    if (all_reduce_max(capture_failure_local) != 0) {
-      try {
-        sys_->rollback_field_publication_transaction();
-      } catch (...) {
-        std::terminate();
-      }
-      throw std::runtime_error(
-          "ProgramContext field publication snapshot failed on at least one MPI rank");
-    }
-    transaction.system = sys_;
-    transaction.active = true;
+  void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
+    if (denominator <= 0 || numerator < 0 || numerator > denominator)
+      throw std::invalid_argument("ProgramContext stage time is outside [0, 1]");
+    stage_time_ = amr::Rational(numerator, denominator);
   }
 
-  template <class Solve>
-  SolveOutcome run_field_solve_transaction_(Solve&& solve) const {
-    if (!field_solve_workspace_registry_)
-      throw std::logic_error("Program field-solve workspace registry is unavailable");
-    const std::shared_ptr<FieldSolveWorkspaceRegistry> registry = field_solve_workspace_registry_;
-    FieldPublicationTransaction& transaction = registry->publication;
-    capture_field_publication_(transaction);
-
-    SolveReport report;
-    std::exception_ptr solve_error;
-    long solve_failure_local = 0;
-    try {
-      report = std::forward<Solve>(solve)();
-    } catch (...) {
-      solve_error = std::current_exception();
-      solve_failure_local = 1;
-    }
-    if (all_reduce_max(solve_failure_local) != 0) {
-      transaction.rollback();
-      if (n_ranks() == 1 && solve_error != nullptr)
-        std::rethrow_exception(solve_error);
-      throw std::runtime_error("ProgramContext field solver failed on at least one MPI rank");
-    }
-    const bool malformed = !solve_report_is_publishable(report, std::numeric_limits<int>::max());
-    if (all_reduce_max(malformed ? 1L : 0L) != 0) {
-      transaction.rollback();
-      throw std::runtime_error("ProgramContext field solver published a malformed SolveReport");
-    }
-    ExactSolveReportConsensusScratch consensus;
-    if (!consensus.agrees(report)) {
-      transaction.rollback();
-      throw std::runtime_error("ProgramContext field solver report differs between MPI ranks");
-    }
-    if (!report.solved_value_available()) {
-      // The uniform backends already restore their potential warm start on a failed report. This
-      // outer graph transaction additionally restores the complete shared aux channel before the
-      // failure can be inspected or acted upon.
-      transaction.rollback();
-      return SolveOutcome::collective_world(std::move(report));
-    }
-
-    long staging_failure_local = 0;
-    try {
-      sys_->stage_field_publication_candidate();
-    } catch (...) {
-      staging_failure_local = 1;
-    }
-    if (all_reduce_max(staging_failure_local) != 0) {
-      transaction.rollback();
-      throw std::runtime_error(
-          "ProgramContext field candidate staging failed on at least one MPI rank");
-    }
-
-    // Aux and every backend potential now contain the previous accepted state. The shared registry
-    // keeps the callback context alive even if a direct C++ caller moves the outcome beyond this
-    // ProgramContext; only collective Accept restores the staged candidate.
-    return SolveOutcome::collective_world(
-        std::move(report),
-        SolveOutcome::PublicationHooks{
-            &transaction,
-            [](void* context) noexcept {
-              static_cast<FieldPublicationTransaction*>(context)->accept();
-            },
-            nullptr,
-            [](void* context) noexcept {
-              static_cast<FieldPublicationTransaction*>(context)->rollback();
-            },
-            std::static_pointer_cast<void>(registry),
-            [](void* context) {
-              static_cast<FieldPublicationTransaction*>(context)->validate_accept();
-            }});
-  }
-
-  void prepare_field_solve_structure_(FieldSolveWorkspace& workspace) const {
-    const std::vector<int>& block_map = sys_->program_block_map();
-    if (block_map.empty())
-      throw block_map_error_(
-          "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
-          "installed; positional block identity is not supported");
-    const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
-    const bool unchanged = workspace.program_to_system == block_map &&
-                           workspace.program_stages.size() == block_map.size() &&
-                           workspace.system_stages.size() == system_blocks;
-    if (unchanged)
-      return;
-
-    // Authenticate the complete map before releasing a previously valid workspace.  A malformed map
-    // cannot leave a partially reconfigured context behind.
-    for (std::size_t p = 0; p < block_map.size(); ++p) {
-      const int mapped = sys_block(static_cast<int>(p));
-      for (std::size_t previous = 0; previous < p; ++previous) {
-        if (block_map[previous] == mapped)
-          throw block_map_error_("ProgramContext::solve_fields_from_blocks: Program blocks " +
-                                 std::to_string(previous) + " and " + std::to_string(p) +
-                                 " both map to System block " + std::to_string(mapped));
-      }
-    }
-    workspace.program_to_system.assign(block_map.begin(), block_map.end());
-    workspace.program_stages.assign(block_map.size(), nullptr);
-    workspace.system_stages.assign(system_blocks, nullptr);
-  }
-
-  void require_program_stage_layout_(int program_block, const MultiFab& stage) const {
-    const MultiFab& live = sys_->block_state(sys_block(program_block));
-    if (!field_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
-      throw std::invalid_argument(
-          "Program simultaneous field solve requires each stage state to match its block's exact "
-          "distributed layout");
-    const int qualified_system_block = sys_block(program_block);
-    for (int other = 0; other < sys_->n_blocks(); ++other) {
-      if (other == qualified_system_block)
-        continue;
-      if (&stage == &sys_->block_state(other))
-        throw std::invalid_argument(
-            "Program stage override cannot borrow another block's live state");
-    }
-  }
-
-  void fill_manual_field_stages_(FieldSolveWorkspace& workspace,
-                                 const std::vector<const MultiFab*>& stages,
-                                 bool require_exact_size) const {
-    prepare_field_solve_structure_(workspace);
-    const std::size_t required = workspace.program_to_system.size();
-    if ((require_exact_size && stages.size() != required) ||
-        (!require_exact_size && stages.size() < required))
-      throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks: stage vector size mismatch");
-    std::fill(workspace.program_stages.begin(), workspace.program_stages.end(), nullptr);
-    for (std::size_t p = 0; p < required; ++p) {
-      const MultiFab* stage = stages[p];
-      if (stage != nullptr)
-        require_program_stage_layout_(static_cast<int>(p), *stage);
-      workspace.program_stages[p] = stage;
-    }
-  }
-
-  FieldSolveWorkspace& manual_default_field_solve_workspace_() const {
-    if (!field_solve_workspace_registry_)
-      throw std::logic_error("Program field-solve workspace registry is unavailable");
-    FieldSolveWorkspace& workspace = field_solve_workspace_registry_->manual_default;
-    prepare_field_solve_structure_(workspace);
-    return workspace;
-  }
-
-  SolveReport solve_default_field_workspace_(FieldSolveWorkspace& workspace) const {
-    std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
-    for (std::size_t p = 0; p < workspace.program_to_system.size(); ++p) {
-      const int mapped = workspace.program_to_system[p];
-      workspace.system_stages[static_cast<std::size_t>(mapped)] = workspace.program_stages[p];
-    }
-    return sys_->solve_fields_from_blocks_in_place_(workspace.system_stages);
-  }
-
-  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(int stage) const {
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+      throw std::logic_error("ProgramContext boundary evaluation has no prepared clock and dt");
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
             0,
             stage,
-            evaluation_stage,
+            stage_time_,
             current_dt_,
-            static_cast<double>(physical_time()) + logical_physical_time_offset_ +
-                stage_time_.value() * current_dt_};
+            physical_time() + stage_time_.value() * current_dt_};
   }
 
-  friend class ProgramExecutionServices<ProgramContext>;
+  int n_blocks() const { return system_->n_blocks(); }
 
-  void program_execution_install_(std::function<void(double)> step) const {
-    sys_->install_program_step(std::move(step));
-  }
-
-  void program_execution_rhs_into_(int /*program_block*/, int runtime_block, MultiFab& state,
-                                   MultiFab& rhs, int rate_id) const {
-    sys_->block_rhs_into_at(program_execution_boundary_point_(rate_id), runtime_block, state, rhs);
-  }
-  bool program_execution_has_boundary_linearization_(int runtime_block) const {
-    return sys_->block_has_boundary_linearization(runtime_block);
-  }
-  void program_execution_require_cartesian_generated_operator_(int runtime_block,
-                                                               const std::string& operation) const {
-    sys_->require_cartesian_generated_operator(runtime_block, operation);
-  }
-  void program_execution_rhs_core_into_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
-      MultiFab& rhs, bool flux_only, const PreparedGridBoundarySession* boundary) const {
-    if (boundary == nullptr)
-      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only);
-    else
-      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only, *boundary);
-  }
-  void program_execution_boundary_residual_into_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
-      MultiFab& residual, const PreparedGridBoundarySession* boundary) const {
-    if (boundary == nullptr)
-      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual);
-    else
-      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual, *boundary);
-  }
-  void program_execution_boundary_jvp_into_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
-      const MultiFab& direction, MultiFab& result,
-      const PreparedGridBoundarySession* boundary) const {
-    if (boundary == nullptr)
-      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result);
-    else
-      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result, *boundary);
-  }
-  void program_execution_neg_div_flux_default_into_(int /*program_block*/, int runtime_block,
-                                                    MultiFab& state, MultiFab& rhs,
-                                                    int rate_id) const {
-    sys_->block_neg_div_flux_into_at(program_execution_boundary_point_(rate_id), runtime_block,
-                                     state, rhs);
-  }
-  void program_execution_neg_div_named_flux_into_(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
-                                                  MultiFab& divergence_scratch,
-                                                  const ExecutionLane* lane) const {
-    const GridContext context = sys_->grid_context();
-    if (lane == nullptr) {
-      fill_ghosts(flux_x, context.geom.domain, context.bc);
-      fill_ghosts(flux_y, context.geom.domain, context.bc);
-    } else {
-      fill_ghosts(flux_x, context.geom.domain, context.bc, *lane);
-      fill_ghosts(flux_y, context.geom.domain, context.bc, *lane);
-    }
-    if (!field_layout_matches_(divergence_scratch, rhs, 1, 0))
-      throw std::invalid_argument(
-          "Program named-flux divergence scratch must match the RHS distributed layout");
-    for (int component = 0; component < rhs.ncomp(); ++component) {
-      apply_divergence(flux_x, flux_y, context.geom, divergence_scratch, component, component);
-      for (int local = 0; local < rhs.local_size(); ++local) {
-        const ConstArray4 divergence = divergence_scratch.fab(local).const_array();
-        Array4 result = rhs.fab(local).array();
-        const int output_component = component;
-        for_each_cell(rhs.box(local), [=] POPS_HD(int i, int j) {
-          result(i, j, output_component) = -divergence(i, j, 0);
-        });
-      }
-    }
-  }
-  void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
-    count_kernel(static_cast<std::int64_t>(batch.requests.size()));
-    sys_->block_rhs_group(program_execution_boundary_point_(batch.group_id), batch.runtime_blocks,
-                          batch.states, batch.rhs, batch.flux_only);
-  }
-  void program_execution_source_default_into_(int runtime_block, MultiFab& state,
-                                              MultiFab& rhs) const {
-    sys_->block_source_into(runtime_block, state, rhs);
-  }
-  void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
-    sys_->block_project(runtime_block, state);
-  }
-  std::optional<std::vector<Real>> program_execution_projection_balance_integrals_(
-      int runtime_block, const MultiFab& state) const {
-    // The public polar diagnostic path has no exact per-cell volume provider yet. Keep automatic
-    // evidence absent instead of relabelling Cartesian dx*dy as a polar measure; authored balance
-    // terms remain available and the future selector must fail closed on this missing producer.
-    if (sys_->program_is_polar())
-      return std::nullopt;
-    const GridContext context = sys_->grid_context(runtime_block);
-    const Real cell_measure = context.geom.dx() * context.geom.dy();
-    if (!std::isfinite(static_cast<double>(cell_measure)) || cell_measure <= Real(0))
+  int sys_block(int program_block) const {
+    const std::vector<int>& map = system_->program_block_map();
+    if (map.empty())
       throw std::runtime_error(
-          "Uniform Program projection balance requires a positive finite cell measure");
-    RelativeCellMeasure measure;
-    if (context.domain_mask != nullptr) {
-      measure.active_cells = context.domain_mask;
-      measure.inverse_volume_fraction = context.eb_inverse_volume_fraction;
+          "ProgramContext has no explicit program-to-runtime block map; positional identity is "
+          "not supported");
+    if (program_block < 0 || program_block >= static_cast<int>(map.size()))
+      throw std::out_of_range("ProgramContext block is outside the authenticated map");
+    const int runtime_block = map[static_cast<std::size_t>(program_block)];
+    if (runtime_block < 0 || runtime_block >= system_->n_blocks())
+      throw std::runtime_error("ProgramContext block map targets an absent runtime block");
+    return runtime_block;
+  }
+
+  field_type& state(int program_block) const { return system_->block_state(sys_block(program_block)); }
+  field_type& aux() const { return system_->prepared_block_auxiliary(); }
+
+  field_type rhs_scratch_like(const field_type& prototype) const {
+    return make_scratch_(prototype, prototype.ncomp(), prototype.ghosts());
+  }
+
+  field_type scratch_state_like(const field_type& prototype) const {
+    return make_scratch_(prototype, prototype.ncomp(), prototype.ghosts());
+  }
+
+  field_type& rhs_scratch(std::int64_t value_id, int subslot,
+                          const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype,
+                               prototype.ncomp(), prototype.ghosts());
+  }
+
+  field_type& scratch_state(std::int64_t value_id, int subslot,
+                            const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::State, value_id, subslot, prototype,
+                               prototype.ncomp(), prototype.ghosts());
+  }
+
+  field_type& scalar_scratch(std::int64_t value_id, int subslot,
+                             const field_type& prototype, int ncomp = 1,
+                             int ghost_depth = 1) const {
+    if (ncomp < 1 || ghost_depth < 0)
+      throw std::invalid_argument(
+          "ProgramContext scalar scratch requires positive components and non-negative ghosts");
+    Extent<Dim> ghosts{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = ghost_depth;
+    return persistent_scratch_(ScratchKind::Scalar, value_id, subslot, prototype, ncomp, ghosts);
+  }
+
+  field_type alloc_scalar_field(int ncomp = 1, int ghost_depth = 1) const {
+    return scalar_field_like_(state(0), ncomp, ghost_depth);
+  }
+
+  void rhs_into(int program_block, field_type& state_value, field_type& rhs,
+                int rate_id) const {
+    require_rate_identity_(rate_id);
+    count_kernel_();
+    system_->block_rhs_into_at(boundary_evaluation_point(rate_id), sys_block(program_block),
+                               state_value, rhs);
+  }
+
+  void neg_div_flux_default_into(int program_block, field_type& state_value, field_type& rhs,
+                                 int rate_id) const {
+    require_rate_identity_(rate_id);
+    count_kernel_();
+    system_->block_neg_div_flux_into_at(boundary_evaluation_point(rate_id),
+                                        sys_block(program_block), state_value, rhs);
+  }
+
+  void source_default_into(int program_block, field_type& state_value, field_type& rhs) const {
+    count_kernel_();
+    system_->block_source_into(sys_block(program_block), state_value, rhs);
+  }
+
+  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
+    require_rate_identity_(group_id);
+    if (requests.size() == 0)
+      throw std::invalid_argument("ProgramContext RHS group cannot be empty");
+    std::vector<int> blocks;
+    std::vector<field_type*> states;
+    std::vector<field_type*> residuals;
+    std::vector<int> flux_only;
+    blocks.reserve(requests.size());
+    states.reserve(requests.size());
+    residuals.reserve(requests.size());
+    flux_only.reserve(requests.size());
+    std::vector<int> rates;
+    rates.reserve(requests.size());
+    for (const RhsGroupRequest& request : requests) {
+      require_rate_identity_(request.rate_id);
+      if (request.rate_id == group_id || request.state == nullptr || request.rhs == nullptr ||
+          (request.flux_only != 0 && request.flux_only != 1) ||
+          std::find(rates.begin(), rates.end(), request.rate_id) != rates.end())
+        throw std::invalid_argument("ProgramContext RHS group contains an invalid request");
+      rates.push_back(request.rate_id);
+      blocks.push_back(sys_block(request.block));
+      states.push_back(request.state);
+      residuals.push_back(request.rhs);
+      flux_only.push_back(request.flux_only);
     }
-    std::vector<Real> result(static_cast<std::size_t>(state.ncomp()), Real(0));
-    for (int component = 0; component < state.ncomp(); ++component)
-      result[static_cast<std::size_t>(component)] =
-          cell_measure * pops::reduce_sum(state, component, measure);
-    return result;
+    count_kernel_(static_cast<std::int64_t>(requests.size()));
+    system_->block_rhs_group(boundary_evaluation_point(group_id), blocks, states, residuals,
+                             flux_only);
   }
-  Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
-  Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
-    return sys_->block_max_speed(runtime_block, state);
+
+  void require_cartesian_generated_operator(int program_block,
+                                             const std::string& operation) const {
+    system_->require_cartesian_generated_operator(sys_block(program_block), operation);
   }
-  bool program_execution_is_polar_geometry_() const { return sys_->program_is_polar(); }
-  Real program_execution_radial_origin_() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
+
+  void apply_projection(int program_block, field_type& state_value) const {
+    count_kernel_();
+    system_->block_project(sys_block(program_block), state_value);
   }
-  Real program_execution_radial_spacing_() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr()
-                                    : sys_->grid_context().geom.dx();
+
+  Real max_wave_speed(int program_block, const field_type& state_value) const {
+    return system_->block_max_speed(sys_block(program_block), state_value);
   }
-  void program_execution_apply_polar_tensor_(MultiFab& out, MultiFab& in, const MultiFab* a_xx,
-                                             const MultiFab* a_yy, const MultiFab* a_xy,
-                                             const MultiFab* a_yx) const {
-    if (!sys_->program_is_polar())
-      throw std::logic_error("Cartesian Program provider cannot execute a polar tensor stencil");
-    if (a_xx == nullptr) {
-      if (a_yy != nullptr || a_xy != nullptr || a_yx != nullptr)
-        throw std::logic_error("isotropic polar Program Laplacian received a partial tensor");
-      if (!polar_unit_rr_ || !field_layout_matches_(*polar_unit_rr_, in, 1, 1) || !polar_unit_tt_ ||
-          !field_layout_matches_(*polar_unit_tt_, in, 1, 1)) {
-        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_rr_->set_val(Real(1));
-        polar_unit_tt_->set_val(Real(1));
-      }
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
-                         polar_unit_tt_.get(), nullptr, nullptr);
-      return;
+
+  Real hmin() const { return system_->cfl_min_dx(); }
+  RuntimeParams program_params(int program_block) const {
+    return system_->program_params(program_block);
+  }
+
+  void axpy(field_type& destination, Real factor, const field_type& source) const {
+    count_kernel_();
+    pops::saxpy(destination, factor, source);
+  }
+
+  void axpy(field_type& destination, Real factor, const field_type& source, Real,
+            std::initializer_list<ExactCoefficientTerm>) const {
+    axpy(destination, factor, source);
+  }
+
+  void lincomb(field_type& destination, Real left_factor, const field_type& left,
+               Real right_factor, const field_type& right) const {
+    count_kernel_();
+    pops::lincomb(destination, left_factor, left, right_factor, right);
+  }
+
+  void lincomb(field_type& destination, Real left_factor, const field_type& left,
+               Real right_factor, const field_type& right, Real,
+               std::initializer_list<ExactCoefficientTerm>,
+               std::initializer_list<ExactCoefficientTerm>) const {
+    lincomb(destination, left_factor, left, right_factor, right);
+  }
+
+  void commit_many(
+      std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+    std::vector<field_type*> targets;
+    std::vector<std::optional<field_type>> snapshots;
+    targets.reserve(commits.size());
+    snapshots.reserve(commits.size());
+    for (const auto& [target, source] : commits) {
+      if (target == nullptr || source == nullptr)
+        throw std::invalid_argument("ProgramContext commit contains null storage");
+      if (std::find(targets.begin(), targets.end(), target) != targets.end())
+        throw std::invalid_argument("ProgramContext commit contains a duplicate target");
+      require_same_field_contract_(*target, *source, "ProgramContext commit");
+      targets.push_back(target);
+      snapshots.emplace_back(target == source ? std::nullopt
+                                               : std::optional<field_type>(*source));
     }
-    apply_polar_tensor(in, sys_->program_polar_geometry(), out, a_xx, a_yy, a_xy, a_yx);
-  }
-
-  struct LogicalEvaluationRollback {
-    double parent_dt = 0.0;
-    amr::Rational stage{0, 1};
-    amr::Rational phase_begin{0, 1};
-    amr::Rational phase_span{1, 1};
-    double physical_time_offset = 0.0;
-  };
-
-  GridContext program_execution_default_grid_context_() const { return sys_->grid_context(); }
-  GridContext program_execution_block_grid_context_(int owner) const {
-    return sys_->grid_context(sys_block(owner));
-  }
-  bool program_execution_owns_operator_authority_(OperatorFingerprint authority) const {
-    return sys_ != nullptr && sys_->program_owns_operator_authority(authority);
-  }
-  OperatorFingerprint program_execution_operator_topology_(const MultiFab& prototype) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const GridContext context = sys_->grid_context();
-    OperatorFingerprint topology =
-        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
-    if (sys_->program_is_polar())
-      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
-    else
-      ::pops::detail::fingerprint_geometry(topology, context.geom);
-    ::pops::detail::fingerprint_boundary(topology, context.bc);
-    if (context.boundary_plan) {
-      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->identity());
-      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->state_identity());
-      ::pops::detail::fingerprint_mix(
-          topology, static_cast<std::uint64_t>(context.boundary_plan->required_depth()));
-    } else {
-      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
-    }
-    return topology;
-  }
-  OperatorEvaluationSnapshot program_execution_operator_evaluation_snapshot_(
-      OperatorFingerprint authority, OperatorFingerprint topology, OperatorFingerprint resources,
-      std::uint64_t revision) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
-    const double evaluation_time = static_cast<double>(physical_time()) +
-                                   logical_physical_time_offset_ +
-                                   stage_time_.value() * current_dt_;
-    return {authority,
-            revision,
-            static_cast<std::int64_t>(macro_step()),
-            evaluation_stage.numerator,
-            evaluation_stage.denominator,
-            std::bit_cast<std::uint64_t>(current_dt_),
-            std::bit_cast<std::uint64_t>(evaluation_time),
-            UINT64_C(1),
-            topology,
-            resources};
-  }
-  MultiFab& program_execution_assembly_target_(MultiFab& field, std::string_view) const {
-    return field;
-  }
-  MultiFab& program_execution_assembly_source_(MultiFab& field, std::string_view) const {
-    return field;
-  }
-  MultiFab& program_execution_linear_solution_(MultiFab& field) const { return field; }
-  MultiFab& program_execution_state_(int runtime_block) const {
-    return sys_->block_state(runtime_block);
-  }
-  MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
-    return sys_->alloc_scalar_field(n_comp, n_ghost);
-  }
-  std::size_t program_execution_apply_coupling_(
-      Real dt, const std::vector<MultiFab*>& runtime_states) const {
-    return sys_->apply_coupling_operators(dt, runtime_states);
-  }
-  void program_execution_register_history_storage_(const HistoryRegistration& registration) const {
-    sys_->register_history(registration.name, registration.lag, registration.ncomp,
-                           registration.qualified ? registration.runtime_owner : -1,
-                           registration.state_identity, registration.space_identity,
-                           registration.clock_identity, registration.interpolation_identity);
-  }
-  MultiFab& program_execution_read_history_storage_(const HistoryRegistration& registration,
-                                                    int lag, HistoryReadMode /*mode*/) const {
-    return sys_->read_history(registration.name, lag);
-  }
-  bool program_execution_history_initialized_storage_(
-      const HistoryRegistration& registration) const {
-    return sys_->history_initialized(registration.name);
-  }
-  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
-                                                    int lag) const {
-    return sys_->history_slot_dt(registration.name, lag);
-  }
-  void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
-                                                          bool initialized) const {
-    sys_->set_history_initialized(registration.name, initialized);
-  }
-  HistoryStorePlan program_execution_history_store_plan_(
-      const HistoryRegistration& /*registration*/) const {
-    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
-      return {true, static_cast<Real>(current_dt_)};
-    return {true, std::nullopt};
-  }
-  void program_execution_store_history_storage_(const HistoryRegistration& registration,
-                                                const MultiFab& value,
-                                                const std::optional<Real>& outgoing_dt) const {
-    if (outgoing_dt)
-      sys_->store_history(registration.name, value, static_cast<double>(*outgoing_dt));
-    else
-      sys_->store_history(registration.name, value);
-  }
-  bool program_execution_history_supports_selective_rotation_() const noexcept { return true; }
-  HistoryRotationAction program_execution_history_rotation_action_() const noexcept {
-    return HistoryRotationAction::Rotate;
-  }
-  void program_execution_defer_history_rotation_() const noexcept {}
-  void program_execution_rotate_history_storage_(const std::string& clock_identity) const {
-    if (clock_identity.empty())
-      sys_->rotate_histories();
-    else
-      sys_->rotate_histories(clock_identity);
-  }
-  CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
-    return sys_->program_cache();
-  }
-  ProgramResourceTopology program_execution_resource_topology_() const {
-    return {0, 0, 1, sys_->n_blocks()};
-  }
-  int program_execution_resource_level_() const noexcept { return 0; }
-  void program_execution_select_resource_level_(int /*level*/) const noexcept {}
-  ProgramResourceStorage program_execution_resource_storage_() const noexcept {
-    return {PreparedVectorDistribution::Distributed, FieldDistribution::Distributed, 0};
-  }
-  std::vector<Real> program_execution_resource_cell_measures_() const {
-    const Geometry geometry = sys_->grid_context().geom;
-    return {geometry.dx() * geometry.dy()};
-  }
-  void program_execution_publish_axpy_(MultiFab&, Real, const MultiFab&) const noexcept {}
-  void program_execution_publish_exact_axpy_(
-      MultiFab&, Real, const MultiFab&, Real,
-      std::initializer_list<ExactCoefficientTerm>) const noexcept {}
-  void program_execution_publish_lincomb_(MultiFab&, Real, const MultiFab&, Real,
-                                          const MultiFab&) const noexcept {}
-  void program_execution_publish_exact_lincomb_(
-      MultiFab&, Real, const MultiFab&, Real, const MultiFab&, Real,
-      std::initializer_list<ExactCoefficientTerm>,
-      std::initializer_list<ExactCoefficientTerm>) const noexcept {}
-
-  double program_execution_logical_parent_dt_() const noexcept { return current_dt_; }
-  LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const noexcept {
-    return {current_dt_, stage_time_, logical_phase_begin_, logical_phase_span_,
-            logical_physical_time_offset_};
-  }
-  void program_execution_apply_logical_evaluation_(
-      const LogicalEvaluationInterval& interval) const {
-    const double child_offset =
-        logical_physical_time_offset_ + static_cast<double>(interval.iteration) * interval.child_dt;
-    if (!std::isfinite(child_offset))
-      throw std::overflow_error("Program logical evaluation child window is not finite");
-    const amr::Rational child_span = logical_phase_span_ * interval.child_span;
-    const amr::Rational child_begin =
-        logical_phase_begin_ + logical_phase_span_ * interval.child_begin;
-
-    current_dt_ = interval.child_dt;
-    stage_time_ = amr::Rational(0, 1);
-    logical_phase_begin_ = child_begin;
-    logical_phase_span_ = child_span;
-    logical_physical_time_offset_ = child_offset;
-  }
-  void program_execution_restore_logical_evaluation_(
-      const LogicalEvaluationRollback& rollback) const noexcept {
-    current_dt_ = rollback.parent_dt;
-    stage_time_ = rollback.stage;
-    logical_phase_begin_ = rollback.phase_begin;
-    logical_phase_span_ = rollback.phase_span;
-    logical_physical_time_offset_ = rollback.physical_time_offset;
-  }
-  void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
-  void program_execution_validate_commit_candidates_(
-      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
-    for (const auto& [target, candidate] : commits)
-      for (int block = 0; block < sys_->n_blocks(); ++block)
-        if (target == &sys_->block_state(block)) {
-          sys_->validate_program_state_publication_candidate(block, *candidate);
+    std::size_t candidate = 0;
+    for (const auto& [target, source] : commits) {
+      const field_type& value = snapshots[candidate] ? *snapshots[candidate] : *source;
+      for (int block = 0; block < system_->n_blocks(); ++block)
+        if (target == &system_->block_state(block)) {
+          system_->validate_program_state_publication_candidate(block, value);
           break;
         }
+      ++candidate;
+    }
+    candidate = 0;
+    for (const auto& [target, source] : commits) {
+      if (target != source)
+        *target = std::move(*snapshots[candidate]);
+      ++candidate;
+    }
   }
-  ProgramRuntimeState& program_execution_runtime_state_() const {
-    return sys_->program_runtime_state_();
+
+  void apply_coupling_operators(
+      Real dt, std::initializer_list<CouplingStateOverride> candidates) const {
+    std::vector<field_type*> runtime_states(static_cast<std::size_t>(system_->n_blocks()), nullptr);
+    for (const CouplingStateOverride& candidate : candidates) {
+      const int block = sys_block(candidate.program_block);
+      if (candidate.state == nullptr || runtime_states[static_cast<std::size_t>(block)] != nullptr)
+        throw std::invalid_argument("ProgramContext coupling candidates are incomplete or aliased");
+      runtime_states[static_cast<std::size_t>(block)] = candidate.state;
+    }
+    if (std::find(runtime_states.begin(), runtime_states.end(), nullptr) != runtime_states.end())
+      throw std::invalid_argument("ProgramContext coupling requires every runtime block candidate");
+    count_kernel_(static_cast<std::int64_t>(system_->apply_coupling_operators(dt, runtime_states)));
   }
-  ProgramClockCoordinate program_execution_clock_coordinate_() const {
-    return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
+
+  Real sum_component(const field_type& field, int component) const {
+    return pops::reduce_sum(field, component);
   }
-  void program_execution_record_balance_term_(const std::string& route, const std::string& term,
-                                              Real value) const {
-    sys_->record_program_balance_term(route, term, value);
+  Real max_component(const field_type& field, int component) const {
+    return pops::reduce_max(field, component);
   }
-  bool program_execution_balance_consumer_is_due_(const std::string& contract,
-                                                  const std::string& route, int every_n) const {
-    return sys_->program_balance_consumer_is_due(contract, route, every_n);
+  Real min_component(const field_type& field, int component) const {
+    return pops::reduce_min(field, component);
   }
-  System& program_execution_field_facade_() const { return *sys_; }
+  Real norm2(int, const field_type& field) const {
+    return std::sqrt(pops::dot(field, field, 0));
+  }
+  Real norm_inf(int, const field_type& field) const {
+    return pops::reduce_norm_inf(field, 0);
+  }
+  Real dot(int, const field_type& left, const field_type& right) const {
+    return pops::dot(left, right, 0);
+  }
+
+  void fill_boundary(field_type&) const {
+    field_type::require_communication("ProgramContext::fill_boundary");
+  }
+  template <class Lane>
+  void fill_boundary(field_type&, const Lane&) const {
+    field_type::require_communication("ProgramContext::fill_boundary");
+  }
+
+  void register_history(const std::string& name, int lag, int ncomp = -1,
+                        int program_owner = -1, const std::string& state_identity = {},
+                        const std::string& space_identity = {},
+                        const std::string& clock_identity = {},
+                        const std::string& interpolation_identity = {}) const {
+    if (name.empty() || lag < 1)
+      throw std::invalid_argument("ProgramContext history requires a name and positive lag");
+    const int owner = program_owner < 0 ? 0 : sys_block(program_owner);
+    const field_type& prototype = system_->block_state(owner);
+    const int components = ncomp < 0 ? prototype.ncomp() : ncomp;
+    if (components < 1)
+      throw std::invalid_argument("ProgramContext history component count must be positive");
+    auto& history = runtime_state().hist_;
+    const int ring_depth = lag + 1;
+    const auto existing = history.histories.find(name);
+    if (existing != history.histories.end()) {
+      if (history.depth.at(name) != ring_depth || history.owner.at(name) != owner ||
+          existing->second.front().ncomp() != components ||
+          history.state_identity.at(name) != state_identity ||
+          history.space_identity.at(name) != space_identity ||
+          history.clock_identity.at(name) != clock_identity ||
+          history.interpolation_identity.at(name) != interpolation_identity)
+        throw std::runtime_error("ProgramContext history identity changed after registration");
+      return;
+    }
+    std::vector<field_type> ring;
+    ring.reserve(static_cast<std::size_t>(ring_depth));
+    for (int slot = 0; slot < ring_depth; ++slot)
+      ring.push_back(make_scratch_(prototype, components, prototype.ghosts()));
+    history.histories.emplace(name, std::move(ring));
+    history.depth[name] = ring_depth;
+    history.initialized[name] = false;
+    history.fill_count[name] = 0;
+    history.store_pending[name] = false;
+    history.owner[name] = owner;
+    history.state_identity[name] = state_identity;
+    history.space_identity[name] = space_identity;
+    history.clock_identity[name] = clock_identity;
+    history.interpolation_identity[name] = interpolation_identity;
+    history.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(ring_depth), Real(0));
+  }
+
+  field_type& history(const std::string& name, int lag, int ncomp = -1) const {
+    auto& manager = runtime_state().hist_;
+    auto found = manager.histories.find(name);
+    if (found == manager.histories.end() || lag < 0 || lag >= manager.depth.at(name))
+      throw std::out_of_range("ProgramContext history slot is absent");
+    field_type& result = found->second[static_cast<std::size_t>(lag)];
+    if (ncomp >= 0 && result.ncomp() != ncomp)
+      throw std::invalid_argument("ProgramContext history component contract differs");
+    if (!manager.initialized.at(name))
+      throw std::runtime_error("ProgramContext history has not been initialized");
+    return result;
+  }
+
+  field_type& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    auto& manager = runtime_state().hist_;
+    auto found = manager.histories.find(name);
+    if (found == manager.histories.end() || lag < 0 || lag >= manager.depth.at(name))
+      throw std::out_of_range("ProgramContext history slot is absent");
+    field_type& result = found->second[static_cast<std::size_t>(lag)];
+    if (ncomp >= 0 && result.ncomp() != ncomp)
+      throw std::invalid_argument("ProgramContext history component contract differs");
+    return result;
+  }
+
+  void store_history(const std::string& name, const field_type& value) const {
+    store_history_(name, value, std::nullopt);
+  }
+  void store_history(const std::string& name, const field_type& value, double dt) const {
+    if (!std::isfinite(dt) || dt <= 0.0)
+      throw std::invalid_argument("ProgramContext history dt must be finite and positive");
+    store_history_(name, value, static_cast<Real>(dt));
+  }
+  void rotate_histories() const { runtime_state().hist_.rotate(); }
+  void rotate_histories(const std::string& clock) const { runtime_state().hist_.rotate(clock); }
+
+  bool cache_should_update(int node_id, int every_n) const {
+    const bool due = runtime_state().cache_.is_due(node_id, macro_step(), every_n);
+    runtime_state().profiler_.count(due ? "cache_misses" : "cache_hits");
+    return due;
+  }
+  void cache_store_aux(int node_id) const {
+    runtime_state().cache_.store(node_id, aux(), macro_step());
+  }
+  void cache_restore_aux(int node_id) const { runtime_state().cache_.restore_into(node_id, aux()); }
+  void cache_store_scratch(int node_id, const field_type& scratch) const {
+    runtime_state().cache_.store(node_id, scratch, macro_step());
+  }
+  void cache_restore_scratch(int node_id, field_type& scratch) const {
+    runtime_state().cache_.restore_into(node_id, scratch);
+  }
+  void cache_accumulate_dt(int node_id, Real dt) const {
+    runtime_state().cache_.accumulate_dt(node_id, dt);
+  }
+  Real cache_effective_dt(int node_id, Real dt) const {
+    return runtime_state().cache_.effective_dt(node_id, dt);
+  }
+
+  bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
+                              const std::string& stage_identity, int level) const {
+    return schedule_coordinate_(kind, clock, stage_identity, level).has_value();
+  }
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind,
+                       const std::string& clock, const std::string& stage_identity,
+                       int level) const {
+    if (node_id < 0 || every_n <= 0)
+      throw std::invalid_argument("ProgramContext schedule has an invalid node or period");
+    const auto coordinate = schedule_coordinate_(kind, clock, stage_identity, level);
+    return coordinate && coordinate->value % every_n == 0;
+  }
+  bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
+                         const std::string& stage_identity, int level) const {
+    const auto coordinate = schedule_coordinate_(kind, clock, stage_identity, level);
+    return coordinate && coordinate->value == 0;
+  }
+  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
+    if (node_id < 0)
+      throw std::invalid_argument("ProgramContext schedule decision has an invalid node");
+    return runtime_state().profiler_.schedule_decision(due, cache_backed);
+  }
+  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
+                                                   const std::string& child, int count) const {
+    return clock_schedule_.subcycle(parent, child, count);
+  }
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
+                                   int step, Real offset) const {
+    clock_schedule_.synchronize_sample_and_hold(source, target, step,
+                                                static_cast<double>(offset));
+  }
+
+  int macro_step() const { return system_->macro_step(); }
+  Real physical_time() const { return static_cast<Real>(system_->time()); }
+
+  void record_scalar(const std::string& name, Real value) const {
+    runtime_state().record_diagnostic(name, value);
+  }
+  void record_balance_term(const std::string& route, const std::string& term, Real value) const {
+    system_->record_program_balance_term(route, term, value);
+  }
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route,
+                               int every_n) const {
+    return system_->program_balance_consumer_is_due(contract, route, every_n);
+  }
+  void note_automatic_balance_capture_due(bool due) const {
+    runtime_state().note_automatic_balance_capture_due(due, "ProgramContext");
+  }
+  void note_step_projection(const std::string& name) const {
+    runtime_state().note_step_projection(name);
+  }
+
+  void profile_record(const std::string& name,
+                      std::chrono::steady_clock::time_point start) const {
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    runtime_state().profiler_.record(name, std::chrono::duration<double>(elapsed).count());
+  }
+
+  runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
+
+  [[noreturn]] SolveOutcome solve_fields() const { unavailable_field_provider_(); }
+  [[noreturn]] SolveOutcome solve_fields_from_state(int, field_type&) const {
+    unavailable_field_provider_();
+  }
+  [[noreturn]] SolveOutcome solve_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+      field_type&) const {
+    unavailable_field_provider_();
+  }
+  [[noreturn]] SolveOutcome solve_fields_from_blocks(
+      const std::vector<const field_type*>&) const {
+    unavailable_field_provider_();
+  }
+  [[noreturn]] SolveOutcome solve_fields_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint&, std::int64_t, std::string_view,
+      std::initializer_list<FieldStageOverride>) const {
+    unavailable_field_provider_();
+  }
+
+  bool is_polar_geometry() const noexcept { return false; }
+  [[noreturn]] Real radial_origin() const { unavailable_polar_provider_(); }
+  [[noreturn]] Real radial_spacing() const { unavailable_polar_provider_(); }
+
+ private:
+  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
+  using ScratchKey = std::tuple<ScratchKind, std::int64_t, int>;
+
+  static void require_rate_identity_(int rate_id) {
+    if (rate_id < 0)
+      throw std::invalid_argument("ProgramContext rate identity must be non-negative");
+  }
+
+  static void require_same_field_contract_(const field_type& left, const field_type& right,
+                                           const char* operation) {
+    if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
+        left.local_rank() != right.local_rank() || left.ncomp() != right.ncomp() ||
+        left.ghosts() != right.ghosts())
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the same exact ranked field contract");
+  }
+
+  static field_type make_scratch_(const field_type& prototype, int ncomp,
+                                  const Extent<Dim>& ghosts) {
+    field_type result(prototype.layout(), prototype.distribution(), prototype.local_rank(), ncomp,
+                      ghosts);
+    result.set_val(Real(0));
+    return result;
+  }
+
+  static field_type scalar_field_like_(const field_type& prototype, int ncomp,
+                                       int ghost_depth) {
+    if (ncomp < 1 || ghost_depth < 0)
+      throw std::invalid_argument(
+          "ProgramContext scalar field requires positive components and non-negative ghosts");
+    Extent<Dim> ghosts{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = ghost_depth;
+    return make_scratch_(prototype, ncomp, ghosts);
+  }
+
+  field_type& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                  const field_type& prototype, int ncomp,
+                                  const Extent<Dim>& ghosts) const {
+    if (value_id < 0 || subslot < 0)
+      throw std::invalid_argument("ProgramContext scratch identity must be non-negative");
+    const ScratchKey key{kind, value_id, subslot};
+    auto [entry, inserted] = scratch_.try_emplace(key);
+    field_type& result = entry->second;
+    if (inserted || result.layout() != prototype.layout() ||
+        result.distribution() != prototype.distribution() ||
+        result.local_rank() != prototype.local_rank() || result.ncomp() != ncomp ||
+        result.ghosts() != ghosts)
+      result = make_scratch_(prototype, ncomp, ghosts);
+    else
+      result.set_val(Real(0));
+    return result;
+  }
+
+  void store_history_(const std::string& name, const field_type& value,
+                      std::optional<Real> dt) const {
+    auto& manager = runtime_state().hist_;
+    auto found = manager.histories.find(name);
+    if (found == manager.histories.end())
+      throw std::out_of_range("ProgramContext history is not registered");
+    require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+    found->second.front() = value;
+    if (!manager.initialized.at(name))
+      for (std::size_t slot = 1; slot < found->second.size(); ++slot)
+        found->second[slot] = value;
+    manager.initialized[name] = true;
+    manager.store_pending[name] = true;
+    if (dt)
+      manager.slot_dt[name][0] = *dt;
+  }
+
+  std::optional<ScheduleCoordinate> schedule_coordinate_(
+      ScheduleDomainKind kind, const std::string& clock, const std::string& stage_identity,
+      int level) const {
+    return clock_schedule_.coordinate(kind, clock, stage_identity, level, 0,
+                                      static_cast<std::int64_t>(macro_step()));
+  }
+
+  void count_kernel_(std::int64_t count = 1) const {
+    runtime_state().profiler_.count("kernels", count);
+  }
+
+  [[noreturn]] static void unavailable_field_provider_() {
+    throw std::runtime_error(
+        "ProgramContext field solve requires a dimension-qualified prepared field provider");
+  }
+  [[noreturn]] static void unavailable_polar_provider_() {
+    throw std::runtime_error(
+        "ProgramContext polar operation is outside the exact Cartesian ranked core");
+  }
+
+  runtime_type* system_ = nullptr;
   mutable double current_dt_ = 0.0;
-  mutable amr::Rational logical_phase_begin_{0, 1};
-  mutable amr::Rational logical_phase_span_{1, 1};
-  mutable double logical_physical_time_offset_ = 0.0;
-  mutable std::shared_ptr<MultiFab> polar_unit_rr_;
-  mutable std::shared_ptr<MultiFab> polar_unit_tt_;
-  mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
-      std::make_shared<FieldSolveWorkspaceRegistry>();
-  System* sys_;
+  mutable amr::Rational stage_time_{0, 1};
+  mutable std::string primary_clock_;
+  mutable ClockScheduleState clock_schedule_;
+  mutable std::map<ScratchKey, field_type> scratch_;
 };
 
-template <>
-struct ProgramExecutionProviderFor<System> {
-  using type = ProgramContext;
-};
+template <int Dim>
+std::shared_ptr<ProgramContext<Dim>> make_program_execution_provider(System<Dim>* system) {
+  return std::make_shared<ProgramContext<Dim>>(system);
+}
 
-}  // namespace program
-}  // namespace runtime
-}  // namespace pops
+template <int Dim>
+ProgramContext<Dim> make_program_execution_view(System<Dim>* system) {
+  return ProgramContext<Dim>(system);
+}
+
+}  // namespace pops::runtime::program

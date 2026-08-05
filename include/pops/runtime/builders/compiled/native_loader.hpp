@@ -74,8 +74,8 @@ inline void verify_runtime_params(pops::dynlib::handle handle, const std::vector
   }
 }
 
-template <typename ImplT>
-void add_native_block(System* system, ImplT*, const std::string& name, const std::string& so_path,
+template <int Dim>
+void add_native_block(System<Dim>* system, const std::string& name, const std::string& so_path,
                       const std::string& limiter, const std::string& riemann,
                       const std::string& recon, const std::string& time, double gamma, int substeps,
                       bool evolve, int stride, const std::vector<double>& params,
@@ -128,7 +128,7 @@ void add_native_block(System* system, ImplT*, const std::string& name, const std
   verify_block_route_manifest(handle, context);
   verify_runtime_params(handle, params, context);
 
-  using install_fn = void (*)(void*, const char*, const char*, const char*, const char*,
+  using install_fn = void (*)(System<Dim>*, const char*, const char*, const char*, const char*,
                               const char*, double, int, int, int, const double*, int, double);
   auto install = reinterpret_cast<install_fn>(pops::dynlib::sym(handle, "pops_install_native"));
   if (install == nullptr) {
@@ -137,8 +137,8 @@ void add_native_block(System* system, ImplT*, const std::string& name, const std
                              ": pops_install_native is missing; rebuild artifact");
   }
   const double* data = params.empty() ? nullptr : params.data();
-  install(static_cast<void*>(system), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-          time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, data,
+  install(system, name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(), time.c_str(), gamma,
+          substeps, evolve ? 1 : 0, stride, data,
           static_cast<int>(params.size()), positivity_floor);
   // The installed closures execute code owned by the package, so the handle stays loaded.
 }
