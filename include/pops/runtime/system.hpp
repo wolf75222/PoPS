@@ -19,6 +19,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/system_block_closures.hpp>
 
 #include <array>
 #include <cstddef>
@@ -51,7 +52,6 @@ class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
 template <int Dim>
 struct CompiledFieldBoundaryKernel;
-struct BlockClosures;
 template <int Dim>
 class PreparedSystemLayoutTransfer;
 
@@ -140,9 +140,7 @@ struct FieldTopologyReportRow;
 }  // namespace runtime::field
 
 namespace runtime::multiblock {
-struct AxisAlignedInterface;
 struct BoundaryEvaluationPoint;
-struct PreparedInterfaceFluxSpec;
 }  // namespace runtime::multiblock
 
 /// Exact compile-time-ranked mesh authority shared by every block of one uniform runtime.
@@ -335,34 +333,24 @@ class System {
                                                const std::string& provider_slot);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
-  /// Install one exact two-sided NumericalFlux component after both endpoint blocks have been
-  /// materialized but before bind freezes the runtime.  The route is evaluated atomically by the
-  /// compiled Program's grouped RHS path; neither endpoint owns a one-sided callback.
-  POPS_EXPORT void install_interface_flux_component(
-      runtime::multiblock::AxisAlignedInterface route,
-      runtime::multiblock::PreparedInterfaceFluxSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
+  /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
+  /// block has been materialized. Interface geometry remains private to that provider; the generic
+  /// System never rebuilds a two-dimensional axis route from scalar metadata.
+  POPS_EXPORT void install_interface_provider(SystemInterfaceProvider<Dim> provider);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
   POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
                                                      int level = 0) const;
-  /// Installs a block from already-built closures (cf. add_compiled_model). The
-  /// cons/prim descriptors carry the names AND the roles (M::conservative_vars()), used
-  /// by inter-species couplings.
-  POPS_EXPORT void install_block(
-      const std::string& name, int ncomp, const VariableSet& cons_vars,
-      const VariableSet& prim_vars, double gamma, BlockClosures closures,
-      std::function<Real(const MultiFab<Dim>&)> max_speed,
-      std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> poisson_rhs, int substeps,
-      bool evolve, int stride = 1);
-  /// Guarantees that the state U of block @p name carries at least @p n_ghost ghosts (width of the
-  /// spatial stencil). WENO5 reads 3 ghosts, > the 2 allocated by install_block; called by add_compiled_model
-  /// (header) with block_n_ghost(limiter) AFTER install_block, so the native compiled path
-  /// (loader .so) accepts weno5 -- SAME mechanism as add_block. No-op if U already has enough ghosts
-  /// (all catalogue routes with <= 2 ghosts): allocation and data bit-identical to history.
-  /// POPS_EXPORT:
-  /// called by the header template add_compiled_model -> must be exported for the loader .so.
-  POPS_EXPORT void set_block_ghosts(const std::string& name, int n_ghost);
+  /// Commit one complete prepared block image. Every callback and exact-ranked storage requirement
+  /// is validated before the block registry or shared auxiliary field is mutated.
+  POPS_EXPORT void install_prepared_block(PreparedSystemBlock<Dim> block);
+
+  /// Immutable exact geometry consumed by an out-of-line generated block preparer. Returning a
+  /// value prevents a native package from retaining a reference into the facade implementation.
+  POPS_EXPORT Geometry<Dim> prepared_block_geometry() const;
+  /// Stable shared auxiliary-field owner captured by prepared block kernels. The field object keeps
+  /// its address when its component storage is widened before block commit.
+  POPS_EXPORT MultiFab<Dim>& prepared_block_auxiliary();
   /// @}
 
   /// Configures the shared Poisson.
@@ -618,29 +606,6 @@ class System {
   /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
   using CellBatchRecovery = UniformCellRecovery;
-  /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
-  /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
-  /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
-  POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                        CellRecovery cons_to_prim);
-
-  /// Installs the generation-qualified host/Uniform batch consumer used by
-  /// get_primitive_state. The callback owns one warm-start slot per local cell and publishes the
-  /// materialized primitive array only after the complete batch succeeds. Every supported builder
-  /// must install it; a missing callback is an explicit incomplete-provider refusal.
-  POPS_EXPORT void set_block_batch_recovery(const std::string& name,
-                                            CellBatchRecovery batch_cons_to_prim);
-
-  /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
-  /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the
-  /// min admissible step (HasStabilityDt trait, bound dt <= dt_adm*substeps/stride, without cfl).
-  /// EMPTY functions = the block imposes no bound (historical step policy, bit-identical).
-  /// Called by add_block and by the template add_compiled_model (cf. dsl_block.hpp) with the
-  /// compiled closures of block_builder (make_source_frequency / make_stability_dt).
-  /// POPS_EXPORT: resolved by the native loader through dlopen.
-  POPS_EXPORT void set_block_dt_bounds(const std::string& name,
-                                       std::function<Real(const MultiFab<Dim>&)> source_frequency,
-                                       std::function<Real(const MultiFab<Dim>&)> stability_dt);
 
   /// Adds a GLOBAL time-step bound, evaluated ONCE per step_cfl (host):
   /// dt <= fn() when fn() > 0 and finite (otherwise the bound does not constrain this step).
@@ -700,6 +665,14 @@ class System {
   /// through the SAME add_coupled_source path (bit-identical numerics), and the declared contracts are
   /// recorded for coupled_operators(). An empty (unchecked) contract is equivalent to add_coupled_source.
   void add_coupling_operator(const CouplingOperator& op);
+
+  /// Install one executable coupling that was prepared by an authenticated dimension-qualified
+  /// package. The operator receives the simultaneous candidate-state pack selected by Program.
+  POPS_EXPORT void install_prepared_coupling_operator(
+      const std::string& label, CouplingOperatorView view,
+      std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
+      double constant_frequency = 0.0,
+      std::function<Real()> maximum_frequency = {});
 
   /// Read-only view of the registered coupling operators (ADC-595): label + declared conservation /
   /// frequency contracts, in registration order, so a Program or a runtime report can enumerate the
