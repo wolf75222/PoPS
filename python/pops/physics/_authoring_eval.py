@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from pops._cartesian_axes import axis_name, flattened_axis_values
 from pops._ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
 
 from .aux import roles_for
@@ -67,10 +68,10 @@ class _EvalMixin(_HyperbolicModel):
         return env
 
     def flux(self, U: Any, aux: Any, dir: Any) -> Any:
-        """Physical flux in direction dir (0=x, 1=y), evaluated as a host-side oracle."""
+        """Physical flux on one authenticated ranked axis, evaluated as a host oracle."""
         state = self._host_state_array(U, where="flux")
         env = self._env(state, aux)
-        comps = self._flux["x" if dir == 0 else "y"]
+        comps = self._flux[axis_name(dir, self._flux, where="flux")]
         sample_shape = state.shape[1:]
         return np.stack(
             [np.broadcast_to(np.asarray(c.eval(env)), sample_shape) for c in comps], axis=0)
@@ -80,7 +81,7 @@ class _EvalMixin(_HyperbolicModel):
         (legacy); WITHOUT set_eigenvalues, ``max(|smin|, |smax|)`` of the explicit signed speeds
         (set_wave_speeds), an exact mirror of the C++ emission."""
         env = self._env(U, aux)
-        key = "x" if dir == 0 else "y"
+        key = axis_name(dir, self._flux, where="max_wave_speed")
         if not self._eig.get(key) and self._ws_jacobian is not None:
             lo, hi = self._ws_jacobian_value(U, env, key)
             return max(float(np.max(np.abs(lo))), float(np.max(np.abs(hi))))
@@ -166,7 +167,7 @@ class _EvalMixin(_HyperbolicModel):
         explicit pair (set_wave_speeds) if declared, otherwise min/max of the eigenvalues (legacy
         path, which requires 'p' to be EMITTED but remains evaluable here)."""
         env = self._env(U, aux)
-        key = "x" if dir == 0 else "y"
+        key = axis_name(dir, self._flux, where="wave_speeds_value")
         if self._wave_speeds is not None:
             lo, hi = self._wave_speeds[key]
             return (np.asarray(lo.eval(env), dtype=float),
@@ -199,20 +200,18 @@ class _EvalMixin(_HyperbolicModel):
         known = (set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
                  | set(self.aux_extra_names))  # named aux fields (aux_field): ADC-70
         used = set()
-        groups = [self._flux.get("x", []), self._flux.get("y", []),
-                  self._eig.get("x", []), self._eig.get("y", []), self._source or [],
+        groups = [*self._flux.values(), *self._eig.values(), self._source or [],
                   [e for e in (self._stab_speed, self._stab_dt, self._src_freq)
                    if e is not None],
                   self._proj or [],  # projection ponctuelle post-pas (ADC-177)
                   [e for row in (self._src_jac or []) for e in row]]
         if self._wave_speeds is not None:
-            groups.append(list(self._wave_speeds["x"]) + list(self._wave_speeds["y"]))
+            groups.append(flattened_axis_values(self._wave_speeds))
         if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            for d in ("x", "y"):
+            for d in self._ws_jacobian["rows"]:
                 groups.append([e for row in self._ws_jacobian["rows"][d] for e in row])
         if self._roe_rows is not None:
-            groups.append(self._roe_rows["x"])
-            groups.append(self._roe_rows["y"])
+            groups.extend(self._roe_rows.values())
         for exprs in self._source_terms.values():  # NAMED sources (source_term)
             groups.append(exprs)
         for mat in self._linear_sources.values():  # NAMED linear operators (linear_source)
@@ -220,7 +219,7 @@ class _EvalMixin(_HyperbolicModel):
         for transform in self._local_transforms.values():
             groups.append(list(transform["expressions"]) + [transform["valid_if"]])
         for flx in self._flux_terms.values():  # NAMED fluxes (flux_term, ADC-419)
-            groups.append(list(flx["x"]) + list(flx["y"]))
+            groups.append(flattened_axis_values(flx))
         from pops._ir.visitors import _dependencies
         used |= _dependencies(self.prim_defs.values())
         for grp in groups:
@@ -249,7 +248,7 @@ class _EvalMixin(_HyperbolicModel):
             if self._roe:
                 raise ValueError("model '%s': enable_roe() and roe_dissipation(...) declared "
                                  "together -- a single provider of the roe_dissipation hook" % self.name)
-            for key in ("x", "y"):
+            for key in self._roe_rows:
                 for e in self._roe_rows[key]:
                     _roe_validate(e, False)
         # linear_source coefficients stay linear in U (defensive re-check: also caught at declaration).
@@ -321,7 +320,7 @@ class _EvalMixin(_HyperbolicModel):
         def finite(x: Any) -> bool:
             return bool(np.all(np.isfinite(np.asarray(x, dtype=float))))
 
-        for d, dn in ((0, "x"), (1, "y")):
+        for d, dn in enumerate(self._flux):
             if not finite(self.flux(U, a, d)):
                 failures.append("flux %s non-finite on the samples" % dn)
         if self._source is not None and not finite(self.source_value(U, a)):
@@ -331,7 +330,7 @@ class _EvalMixin(_HyperbolicModel):
             if not finite(self._elliptic.eval(env)):
                 failures.append("elliptic_rhs non-finite on the samples")
         env = self._env(U, a)
-        for d in ("x", "y"):
+        for d in self._eig:
             for k, e in enumerate(self._eig.get(d, [])):
                 lam = np.asarray(e.eval(env), dtype=float)
                 if np.iscomplexobj(lam):
@@ -339,14 +338,14 @@ class _EvalMixin(_HyperbolicModel):
                 elif not finite(lam):
                     failures.append("eigenvalue %s[%d] non-finite" % (d, k))
         if self._wave_speeds is not None:
-            for d in ("x", "y"):
+            for d in self._wave_speeds:
                 lo = np.asarray(self._wave_speeds[d][0].eval(env), dtype=float)
                 hi = np.asarray(self._wave_speeds[d][1].eval(env), dtype=float)
                 if not (finite(lo) and finite(hi)):
                     failures.append("wave_speeds %s (explicit) non-finite" % d)
                 elif bool(np.any(lo > hi)):
                     failures.append("wave_speeds %s (explicit): smin > smax on some samples" % d)
-        for d, dn in ((0, "x"), (1, "y")):
+        for d, dn in enumerate(self._flux):
             mws = self.max_wave_speed(U, a, d)
             if not np.isfinite(mws) or mws < 0:
                 failures.append("max_wave_speed %s non-finite or negative (%r)" % (dn, mws))

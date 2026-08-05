@@ -106,7 +106,7 @@ def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
     with pytest.raises(RuntimeError, match="frozen"):
         model._dsl.primitive("late", 1)
     with pytest.raises(RuntimeError, match="frozen"):
-        model._dsl._m.set_flux([1], [1])
+        model._dsl._m.set_flux(x=[1], y=[1])
     with pytest.raises(TypeError):
         model._states["late"] = object()
     with pytest.raises(RuntimeError, match="frozen"):

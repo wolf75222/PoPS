@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops._cartesian_axes import flattened_axis_values
 from ._modelpkg import model as _model
 from .aux import AUX_CANONICAL, roles_for
 from pops._ir.visitors import _dependencies
@@ -105,25 +106,20 @@ class _OperatorViewMixin(_HyperbolicModel):
         def reads_fields(exprs: Any) -> bool:
             return bool(self._aux_requirements(exprs))
 
-        stability_exprs = [
-            *self._eig.get("x", ()),
-            *self._eig.get("y", ()),
-        ]
+        stability_exprs = flattened_axis_values(self._eig)
         if self._wave_speeds is not None:
-            stability_exprs.extend(self._wave_speeds["x"])
-            stability_exprs.extend(self._wave_speeds["y"])
+            stability_exprs.extend(flattened_axis_values(self._wave_speeds))
         if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            for direction in ("x", "y"):
+            for direction in self._ws_jacobian["rows"]:
                 stability_exprs.extend(
                     expression
                     for row in self._ws_jacobian["rows"][direction]
                     for expression in row
                 )
         if self._roe_rows is not None:
-            stability_exprs.extend(self._roe_rows["x"])
-            stability_exprs.extend(self._roe_rows["y"])
+            stability_exprs.extend(flattened_axis_values(self._roe_rows))
         if self._roe_jacobian is not None:
-            for direction in ("x", "y"):
+            for direction in self._roe_jacobian:
                 stability_exprs.extend(
                     expression
                     for row in self._roe_jacobian[direction]
@@ -133,8 +129,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         # Flux divergence (grid_operator: State -> Rate(State)).
         if self._flux:
             exprs = [
-                *self._flux.get("x", ()),
-                *self._flux.get("y", ()),
+                *flattened_axis_values(self._flux),
                 *stability_exprs,
             ]
             rf = reads_fields(exprs)
@@ -150,8 +145,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         for nm in sorted(self._flux_terms):
             term = self._flux_terms[nm]
             exprs = [
-                *term.get("x", ()),
-                *term.get("y", ()),
+                *flattened_axis_values(term),
                 *stability_exprs,
             ]
             rf = reads_fields(exprs)

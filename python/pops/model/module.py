@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Any
 from weakref import ref
 
+from pops._cartesian_axes import canonical_axis_mapping
+
 from ._module_freeze import ModuleFreezable
 from .operators import Operator, validate_operator_signature
 from .handles import Handle, OperatorHandle, ParamHandle, StateHandle
@@ -312,16 +314,19 @@ class Module(ModuleFreezable):
             "sources": tuple(contract["sources"]),
         }
 
-    def eigenvalues(self, x: Any, y: Any) -> Any:
+    def eigenvalues(self, **directions: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
         IR expressions over the state. Carried so a pure Module is a self-contained, compilable model
         (lowered to ``dsl.Model.eigenvalues``)."""
         self._guard_mutable("declare eigenvalues")
-        x_values, y_values = tuple(x), tuple(y)
-        self._eigenvalues = {"x": x_values, "y": y_values}
+        values = canonical_axis_mapping(directions, where="Module.eigenvalues")
+        self._eigenvalues = {
+            axis: tuple(expressions) for axis, expressions in values.items()
+        }
         # An inspection result is deliberately detached.  Mutating a value returned during
         # authoring must never rewrite the Module behind its public setter.
-        return {"x": list(x_values), "y": list(y_values)}
+        return {axis: list(expressions)
+                for axis, expressions in self._eigenvalues.items()}
 
     def set_wave_speed_provider(self, kind: Any) -> str:
         """Record the one detached source kind that emits signed wave speeds.

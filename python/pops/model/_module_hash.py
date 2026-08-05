@@ -27,7 +27,7 @@ def module_content_hash(module: Any) -> str:
         "eigenvalues": None if module._eigenvalues is None else {
             direction: [canonical_hash_data(value)
                         for value in module._eigenvalues[direction]]
-            for direction in ("x", "y")
+            for direction in module._eigenvalues
         },
         "wave_speed_provider": module._wave_speed_provider,
         # Registry order is semantic: it determines stable OperatorId values.

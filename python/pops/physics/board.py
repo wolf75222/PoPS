@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops._cartesian_axes import canonical_axis_mapping
+
 from .. import math as _bm
 from .._ir import _wrap
 from .board_handles import (FieldHandle, FluxHandle,
@@ -656,9 +658,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
              waves: Any = None) -> Any:
         """Declare the physical flux and (optionally) its characteristic speeds.
 
-        ``components`` and ``waves`` are keyed by typed axes, never direction strings.  The current
-        native route supports Cartesian2D; the public mapping contract extends without another
-        method when more dimensions are installed.
+        ``components`` and ``waves`` are keyed by typed axes, never direction strings. Their count
+        follows the inferred frame rank and every lowering stage iterates the same canonical axes.
         """
         name = require_name(name, "flux name")
         self._require_state_handle(state, "flux", optional=False)
@@ -673,28 +674,41 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if self._multi_module is None and self._fluxes:
             raise ValueError("flux %r cannot replace already declared physical flux %r"
                              % (name, next(iter(self._fluxes))))
-        axes = {axis.name: axis for axis in frame.axes}
-        if set(axes) != {"x", "y"}:
-            raise ValueError("the installed native flux route requires an exact Cartesian2D frame")
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame.axes}, where="flux frame"
+        )
         h = FluxHandle(name, is_default=True, owner=self.owner_path)
-        x_values = normalize_sequence(
-            components[axes["x"]], "flux x expressions", nonempty=True)
-        y_values = normalize_sequence(
-            components[axes["y"]], "flux y expressions", nonempty=True)
+        axis_values = {
+            axis_name: normalize_sequence(
+                components[axis], "flux %s expressions" % axis_name, nonempty=True
+            )
+            for axis_name, axis in axes.items()
+        }
         expected = len(state.components) if self._multi_module is not None else self._dsl._m.n_vars
-        if len(x_values) != expected or len(y_values) != expected:
-            raise ValueError("flux(%r) needs %d expression(s) per direction; got %d/%d"
-                             % (name, expected, len(x_values), len(y_values)))
+        wrong = {axis: len(values) for axis, values in axis_values.items()
+                 if len(values) != expected}
+        if wrong:
+            raise ValueError(
+                "flux(%r) needs %d expression(s) on every ranked axis; got %r"
+                % (name, expected, wrong)
+            )
         wave_values = None
         if waves is not None:
             if not isinstance(waves, Mapping) or set(waves) != set(frame.axes):
                 raise TypeError("flux waves must map every typed frame axis exactly once")
-            wave_values = (
-                normalize_sequence(waves[axes["x"]], "flux x waves", nonempty=True),
-                normalize_sequence(waves[axes["y"]], "flux y waves", nonempty=True))
-            if len(wave_values[0]) != expected or len(wave_values[1]) != expected:
-                raise ValueError("flux(%r) needs %d wave(s) per direction; got %d/%d"
-                                 % (name, expected, len(wave_values[0]), len(wave_values[1])))
+            wave_values = {
+                axis_name: normalize_sequence(
+                    waves[axis], "flux %s waves" % axis_name, nonempty=True
+                )
+                for axis_name, axis in axes.items()
+            }
+            wrong = {axis: len(values) for axis, values in wave_values.items()
+                     if len(values) != expected}
+            if wrong:
+                raise ValueError(
+                    "flux(%r) needs %d wave(s) on every ranked axis; got %r"
+                    % (name, expected, wrong)
+                )
         if self._multi_module is not None:
             from pops.model import Rate, Signature
 
@@ -713,15 +727,13 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     name=route,
                     kind="grid_operator",
                     signature=Signature((state.space,), Rate(state.space)),
-                    expr={
-                        "x": [self._to_expr(value) for value in x_values],
-                        "y": [self._to_expr(value) for value in y_values],
-                    },
+                    expr={axis: [self._to_expr(value) for value in values]
+                          for axis, values in axis_values.items()},
                 )
                 if wave_values is not None:
                     proposed = {
-                        "x": tuple(self._to_expr(value) for value in wave_values[0]),
-                        "y": tuple(self._to_expr(value) for value in wave_values[1]),
+                        axis: tuple(self._to_expr(value) for value in values)
+                        for axis, values in wave_values.items()
                     }
                     existing = module._eigenvalues
                     if existing is not None and repr(existing) != repr(proposed):
@@ -739,13 +751,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         hyp = self._dsl._m
         with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
                           (hyp, "_eig"), (self, "_fluxes")):
-            x_exprs = [_wrap(self._to_expr(value)) for value in x_values]
-            y_exprs = [_wrap(self._to_expr(value)) for value in y_values]
-            self._dsl.flux(x_exprs, y_exprs)
+            expressions = {
+                axis: [_wrap(self._to_expr(value)) for value in values]
+                for axis, values in axis_values.items()
+            }
+            self._dsl.flux(**expressions)
             if wave_values is not None:
-                self._dsl.eigenvalues(
-                    [_wrap(self._to_expr(value)) for value in wave_values[0]],
-                    [_wrap(self._to_expr(value)) for value in wave_values[1]])
+                self._dsl.eigenvalues(**{
+                    axis: [_wrap(self._to_expr(value)) for value in values]
+                    for axis, values in wave_values.items()
+                })
             self._fluxes[name] = h
         return h
 
@@ -760,20 +775,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError(
                 "flux_value does not implicitly select a species flux; inspect the compiled "
                 "multi-state operator instead")
-        axes = None if self._frame is None else self._frame.axes
-        if not isinstance(axes, tuple) or axis not in axes:
+        frame_axes = None if self._frame is None else self._frame.axes
+        if not isinstance(frame_axes, tuple) or axis not in frame_axes:
             raise ValueError("flux_value axis must be one of the Model frame's typed axes")
-        # The native formula backend has canonical Cartesian directions 0=x and 1=y.  Frame axis
-        # iteration order is presentation data, not a direction selector: a valid typed frame may
-        # expose ``(y, x)`` while its flux mapping is still keyed by axis identity.  Resolve by the
-        # same canonical axis name used by ``flux()`` so host oracles cannot silently swap physics.
-        directions = {"x": 0, "y": 1}
-        name = getattr(axis, "name", None)
-        if name not in directions:
-            raise ValueError(
-                "flux_value requires an installed Cartesian x/y axis identity")
+        axes = canonical_axis_mapping(
+            {candidate.name: candidate for candidate in frame_axes},
+            where="flux_value frame",
+        )
+        directions = {candidate: index for index, candidate in enumerate(axes.values())}
         return self._dsl.eval_flux(
-            state, {} if aux is None else aux, directions[name])
+            state, {} if aux is None else aux, directions[axis])
 
     def projection(self, expressions: Any) -> None:
         """Install one native pointwise state projection expression per component."""
@@ -852,17 +863,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if not isinstance(values, Mapping) or set(values) != set(frame.axes):
             raise TypeError(
                 "wave_speeds values must map every typed frame axis exactly once")
-        axes = {axis.name: axis for axis in frame.axes}
-        if set(axes) != {"x", "y"}:
-            raise ValueError(
-                "the installed native wave-speed route requires an exact Cartesian2D frame")
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame.axes}, where="wave_speeds frame"
+        )
 
         from pops.model import Handle
 
         converted = {}
-        for name in ("x", "y"):
+        for name, axis in axes.items():
             pair = normalize_sequence(
-                values[axes[name]], "wave_speeds %s signed pair" % name, nonempty=True)
+                values[axis], "wave_speeds %s signed pair" % name, nonempty=True)
             if len(pair) != 2:
                 raise ValueError(
                     "wave_speeds %s axis requires exactly (s_min, s_max); got %d value(s)"
@@ -882,28 +892,27 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
         hyp = self._dsl._m
         with atomic_attrs((hyp, "_wave_speeds")):
-            self._dsl.wave_speeds(x=converted["x"], y=converted["y"])
+            self._dsl.wave_speeds(**converted)
         self._invalidate_authoring_views()
 
     def wave_speeds_from_jacobian(
         self,
-        x: Any = None,
-        y: Any = None,
+        *,
         eig: str = "numeric",
         blocks: Any = None,
         fd_eps: Any = None,
         eig_max_iter: Any = None,
         im_tol: Any = None,
+        **jacobians: Any,
     ) -> None:
         """Install generic signed wave speeds from the full flux Jacobian."""
         self._dsl.wave_speeds_from_jacobian(
-            x=x,
-            y=y,
             eig=eig,
             blocks=blocks,
             fd_eps=fd_eps,
             eig_max_iter=eig_max_iter,
             im_tol=im_tol,
+            **jacobians,
         )
         self._invalidate_authoring_views()
 

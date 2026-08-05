@@ -121,19 +121,18 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.set_conservative_from(exprs)
 
     # --- flux: symbolic DECLARATOR vs numpy EVALUATOR (DISTINCT names, settled decision) ---
-    def flux(self, x: Any, y: Any) -> None:
-        """Symbolic DECLARATOR of the physical flux (delegates to set_flux). x/y: lists of Expr, one
-        per conservative component. DO NOT confuse with the numpy evaluator eval_flux."""
-        self._m.set_flux(x, y)
+    def flux(self, **directions: Any) -> None:
+        """Declare one physical-flux vector on every inferred Cartesian axis."""
+        self._m.set_flux(**directions)
 
-    def flux_term(self, name: Any, x: Any, y: Any) -> None:
+    def flux_term(self, name: Any, **directions: Any) -> None:
         """NAMED physical flux F_name(U, primitives, aux, params): exactly n_cons expressions per
         direction (delegates to HyperbolicModel.flux_term). Opt-in -- emitted only when a compiled time
         Program selects it (ctx.rhs(..., fluxes=[name, ...])), never folded into the historical -div F.
         name='default' is the backward-compatible alias of m.flux(...): ctx.rhs(fluxes=['default']) is
         byte-identical to the historical flux-only RHS. A Program requesting several named fluxes
         assembles -div of their SUM."""
-        self._m.flux_term(name, x, y)
+        self._m.flux_term(name, **directions)
 
     def eval_flux(self, U: Any, aux: Any, dir: Any) -> Any:
         """numpy EVALUATOR of the physical flux (debug / host proto; delegates to HyperbolicModel.flux).
@@ -147,23 +146,30 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         collision) against an oracle without compiling."""
         return self._m.source_value(U, aux)
 
-    def eigenvalues(self, x: Any, y: Any) -> None:
-        """Eigenvalues (characteristic speeds) per direction (delegates to set_eigenvalues)."""
-        self._m.set_eigenvalues(x, y)
+    def eigenvalues(self, **directions: Any) -> None:
+        """Declare characteristic speeds on every inferred Cartesian axis."""
+        self._m.set_eigenvalues(**directions)
 
-    def wave_speeds(self, x: Any, y: Any) -> None:
+    def wave_speeds(self, **directions: Any) -> None:
         """Explicit SIGNED wave speeds per direction: x = (smin_x, smax_x), y = (smin_y,
         smax_y). Emits ``wave_speeds(U, aux, dir, smin, smax)`` on the brick WITHOUT requiring a
         primitive 'p': riemann='hll' becomes available for a model without pressure (moment
         system, isothermal...). Takes priority over the historical path (eigenvalues + 'p'); if
         eigenvalues is not declared, max_wave_speed (Rusanov / CFL) derives from ``max(|smin|, |smax|)``.
         Delegates to set_wave_speeds; cf. HyperbolicModel.set_wave_speeds."""
-        self._m.set_wave_speeds(x, y)
+        self._m.set_wave_speeds(**directions)
         self._invalidate_authoring_views()
 
-    def wave_speeds_from_jacobian(self, x: Any = None, y: Any = None, eig: str = "numeric",
-                                  blocks: Any = None, fd_eps: Any = None,
-                                  eig_max_iter: Any = None, im_tol: Any = None) -> None:
+    def wave_speeds_from_jacobian(
+        self,
+        *,
+        eig: str = "numeric",
+        blocks: Any = None,
+        fd_eps: Any = None,
+        eig_max_iter: Any = None,
+        im_tol: Any = None,
+        **jacobians: Any,
+    ) -> None:
         """EXACT signed wave speeds from the eigenvalues of the flux jacobian (delegates to
         set_wave_speeds_from_jacobian, see its full contract): x/y = dF/dU as Expr (None =
         AUTODIFF of the declared flux via flux_jacobian); eig = 'numeric' | 'fd' (finite differences
@@ -174,8 +180,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         per-eigenvalue iteration cap and the relative imaginary-part tolerance. ``im_tol=None`` uses
         the strict native machine-roundoff floor, ``im_tol=0`` requests exact-zero classification,
         and every explicit non-negative value participates in the compile cache key."""
-        self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps,
-                                              eig_max_iter=eig_max_iter, im_tol=im_tol)
+        self._m.set_wave_speeds_from_jacobian(
+            eig=eig,
+            blocks=blocks,
+            fd_eps=fd_eps,
+            eig_max_iter=eig_max_iter,
+            im_tol=im_tol,
+            **jacobians,
+        )
         self._invalidate_authoring_views()
 
     def eval_wave_speeds(self, U: Any, aux: Any, dir: Any) -> Any:

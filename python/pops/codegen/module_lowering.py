@@ -188,10 +188,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         coverage_rows.append(LoweringCoverageRow(
             "aux:%s" % a.name, "lowered", ("dsl:aux:%s" % a.name,)))
     if module._eigenvalues is not None:
-        m.eigenvalues(
-            x=_body_for_state(module._eigenvalues["x"]),
-            y=_body_for_state(module._eigenvalues["y"]),
-        )
+        m.eigenvalues(**{
+            axis: _body_for_state(values)
+            for axis, values in module._eigenvalues.items()
+        })
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
     else:
@@ -258,12 +258,12 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     def _b_grid_operator(op: Any) -> None:
         body = _body_for_state(op.body)
         if op.name in ("flux", "flux_default"):
-            m.flux(x=body["x"], y=body["y"])
+            m.flux(**body)
         elif op.name == fallback_default:
-            m.flux(x=body["x"], y=body["y"])
-            m.flux_term(op.name, x=body["x"], y=body["y"])
+            m.flux(**body)
+            m.flux_term(op.name, **body)
         else:
-            m.flux_term(op.name, x=body["x"], y=body["y"])
+            m.flux_term(op.name, **body)
 
     def _b_local_source(op: Any) -> None:
         m.source_term(op.name, _body_for_state(op.body))

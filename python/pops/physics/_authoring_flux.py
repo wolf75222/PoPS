@@ -16,6 +16,7 @@ from pops._ir.ops import left, right
 from pops._dense_spectral import DENSE_SPECTRAL
 
 from ._scalars import exact_physics_scalar
+from pops._cartesian_axes import axis_name, canonical_axis_mapping
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -26,10 +27,30 @@ else:
 class _FluxMixin(_HyperbolicModel):
     """Physical flux, eigenvalues, signed wave speeds, and the flux Jacobian."""
 
-    def set_flux(self, x: Any, y: Any) -> None: self._flux = {"x": list(x), "y": list(y)}
-    def set_eigenvalues(self, x: Any, y: Any) -> None: self._eig = {"x": list(x), "y": list(y)}
+    def set_flux(self, **directions: Any) -> None:
+        values = {
+            name: list(values)
+            for name, values in canonical_axis_mapping(
+                directions, where="set_flux"
+            ).items()
+        }
+        for authority in (self._eig, self._wave_speeds or {}):
+            if authority and tuple(authority) != tuple(values):
+                raise ValueError("set_flux axis set differs from an existing stability provider")
+        self._flux = values
 
-    def flux_term(self, name: str, x: Any, y: Any) -> None:
+    def set_eigenvalues(self, **directions: Any) -> None:
+        values = {
+            name: list(values)
+            for name, values in canonical_axis_mapping(
+                directions, where="set_eigenvalues"
+            ).items()
+        }
+        if not self._flux or tuple(values) != tuple(self._flux):
+            raise ValueError("set_eigenvalues must cover the exact set_flux axis set")
+        self._eig = values
+
+    def flux_term(self, name: str, **directions: Any) -> None:
         """Declare a NAMED physical flux F_name(U, primitives, aux, params): exactly n_cons
         expressions per direction (x= the x-flux, y= the y-flux), free to depend on cons / primitives /
         aux / aux_field / params / constants -- the same dependency surface as set_flux. A named flux is
@@ -45,13 +66,23 @@ class _FluxMixin(_HyperbolicModel):
             raise ValueError("flux_term(%r): declare conservative_vars(...) first" % (name,))
         if not isinstance(name, str) or not name:
             raise ValueError("flux_term: name must be a non-empty string")
-        x = [_wrap(e) for e in x]
-        y = [_wrap(e) for e in y]
-        if len(x) != n or len(y) != n:
-            raise ValueError("flux_term('%s'): %d/%d expressions (x/y) for %d conservative variables"
-                             % (name, len(x), len(y), n))
+        values = {
+            axis: [_wrap(expression) for expression in expressions]
+            for axis, expressions in canonical_axis_mapping(
+                directions, where="flux_term(%r)" % name
+            ).items()
+        }
+        if self._flux and tuple(values) != tuple(self._flux):
+            raise ValueError("flux_term axis set must exactly match the default flux")
+        wrong = {axis: len(expressions) for axis, expressions in values.items()
+                 if len(expressions) != n}
+        if wrong:
+            raise ValueError(
+                "flux_term(%r) requires %d expressions on every ranked axis; got %r"
+                % (name, n, wrong)
+            )
         if name == "default":
-            self._flux = {"x": x, "y": y}   # equivalent to m.flux(...) -- the legacy default flux
+            self._flux = values
             return
         if not name.isidentifier():
             raise ValueError("flux_term('%s'): name must be a valid identifier "
@@ -60,9 +91,9 @@ class _FluxMixin(_HyperbolicModel):
             raise ValueError("flux_term('%s'): already declared" % name)
         if name in self._local_transforms:
             raise ValueError("flux_term('%s'): name collides with a local_transform" % name)
-        self._flux_terms[name] = {"x": x, "y": y}
+        self._flux_terms[name] = values
 
-    def set_wave_speeds(self, x: Any, y: Any) -> None:
+    def set_wave_speeds(self, **directions: Any) -> None:
         """Explicit SIGNED wave speeds per direction: x = (smin_x, smax_x), y = (smin_y,
         smax_y), expressions of cons / prims / aux. Emits ``wave_speeds(U, aux, dir, smin, smax)``
         on the generated brick WITHOUT requiring a primitive 'p': riemann='hll' becomes available for
@@ -73,31 +104,42 @@ class _FluxMixin(_HyperbolicModel):
         eigenvalues) when both exist. WITHOUT a call: strictly historical emission.
         If set_eigenvalues is NOT called, max_wave_speed (Rusanov / CFL) is derived from
         ``max(|smin|, |smax|)`` over the two expressions of the direction."""
-        x, y = tuple(x), tuple(y)
-        if len(x) != 2 or len(y) != 2:
-            raise ValueError("set_wave_speeds : expected x=(smin, smax) and y=(smin, smax) "
-                             "(got x=%d expression(s), y=%d)" % (len(x), len(y)))
+        values = canonical_axis_mapping(directions, where="set_wave_speeds")
+        if not self._flux or tuple(values) != tuple(self._flux):
+            raise ValueError("set_wave_speeds must cover the exact set_flux axis set")
+        pairs = {axis: tuple(pair) for axis, pair in values.items()}
+        wrong = {axis: len(pair) for axis, pair in pairs.items() if len(pair) != 2}
+        if wrong:
+            raise ValueError(
+                "set_wave_speeds requires (smin, smax) on every ranked axis; got %r"
+                % wrong
+            )
         if self._ws_jacobian is not None:
             raise ValueError("set_wave_speeds : set_wave_speeds_from_jacobian already declared -- one "
                              "single wave_speeds provider")
-        self._wave_speeds = {"x": (_wrap(x[0]), _wrap(x[1])),
-                             "y": (_wrap(y[0]), _wrap(y[1]))}
+        self._wave_speeds = {
+            axis: (_wrap(pair[0]), _wrap(pair[1])) for axis, pair in pairs.items()
+        }
 
-    def set_wave_speeds_from_jacobian(self, x: Any = None, y: Any = None,
-                                      eig: str = "numeric", blocks: Any = None,
-                                      fd_eps: Any = None, eig_max_iter: Any = None,
-                                      im_tol: Any = None) -> None:
+    def set_wave_speeds_from_jacobian(
+        self,
+        *,
+        eig: str = "numeric",
+        blocks: Any = None,
+        fd_eps: Any = None,
+        eig_max_iter: Any = None,
+        im_tol: Any = None,
+        **jacobians: Any,
+    ) -> None:
         """EXACT signed wave speeds: smin/smax = extremes of the flux jacobian's eigenvalues
         A = dF/dU, computed NUMERICALLY per cell (pops::real_eig_minmax, Francis QR
         on a bounded stack buffer). Emits
         ``wave_speeds(U, aux, dir, smin, smax)`` (core HLL gate) and, without set_eigenvalues,
         ``max_wave_speed`` = ``max(|smin|, |smax|)`` over the same blocks.
 
-        @p x, @p y : n_vars x n_vars matrices of expressions dA[i][j] = dF_dir[i]/dU[j]. None
-        (default) = AUTODIFF of the declared flux via flux_jacobian(dir) (dsl.diff, primitives
-        expanded by the chain rule) -- the jacobian can then not desynchronize from the
-        flux. Providing explicit x/y only makes sense to bypass autodiff (hand-simplified
-        forms); check_model then confronts them against the flux finite differences.
+        Axis keywords are optional n_vars x n_vars matrices of expressions dA[i][j] =
+        dF_axis[i]/dU[j].  Supplying none derives every ranked axis by autodiff; supplying any
+        requires the exact same canonical axis set as the physical flux.
 
         @p eig : "numeric" (default) = jacobian entries emitted as formulas, per-block
         eigenvalues at runtime; "fd" = jacobian built BY COLUMNS from the finite differences of the
@@ -166,11 +208,25 @@ class _FluxMixin(_HyperbolicModel):
                 raise ValueError("set_wave_speeds_from_jacobian.im_tol must be non-negative "
                                  "(got %r)" % (im_tol,))
         nv = self.n_vars
-        if (x is None) != (y is None):
-            raise ValueError("set_wave_speeds_from_jacobian : provide x AND y, or neither (autodiff)")
-        if eig == "fd" and x is not None:
-            raise ValueError("set_wave_speeds_from_jacobian : eig='fd' builds the jacobian from "
-                             "finite differences of the compiled flux -- x/y make no sense here")
+        if not self._flux:
+            raise ValueError(
+                "set_wave_speeds_from_jacobian requires set_flux(...) first"
+            )
+        axis_names = tuple(self._flux)
+        explicit_jacobians = (
+            canonical_axis_mapping(jacobians, where="set_wave_speeds_from_jacobian")
+            if jacobians else None
+        )
+        if explicit_jacobians is not None and tuple(explicit_jacobians) != axis_names:
+            raise ValueError(
+                "set_wave_speeds_from_jacobian axis set must exactly match set_flux"
+            )
+        if eig == "fd" and explicit_jacobians is not None:
+            raise ValueError(
+                "set_wave_speeds_from_jacobian eig='fd' derives every ranked Jacobian from "
+                "the compiled flux"
+            )
+
         def norm_blocks(blk: Any, label: str) -> list:
             blk = [list(int(i) for i in b) for b in blk]
             seen = set()
@@ -193,16 +249,20 @@ class _FluxMixin(_HyperbolicModel):
             return blk
 
         if blocks is None:
-            per_dir = {"x": [list(range(nv))], "y": [list(range(nv))]}
+            per_dir = {axis: [list(range(nv))] for axis in axis_names}
         elif isinstance(blocks, dict):
-            if set(blocks) != {"x", "y"}:
-                raise ValueError("set_wave_speeds_from_jacobian : blocks dict expected with "
-                                 "keys 'x' and 'y' (got %r)" % sorted(blocks))
-            per_dir = {k: norm_blocks(blocks[k], k) for k in ("x", "y")}
+            if set(blocks) != set(axis_names):
+                raise ValueError(
+                    "set_wave_speeds_from_jacobian blocks must map every ranked axis; got %r"
+                    % sorted(blocks)
+                )
+            per_dir = {axis: norm_blocks(blocks[axis], axis) for axis in axis_names}
         else:
-            shared = norm_blocks(blocks, "x and y")
-            per_dir = {"x": shared, "y": [list(b) for b in shared]}
-        for key in ("x", "y"):
+            shared = norm_blocks(blocks, "all ranked axes")
+            per_dir = {
+                axis: [list(block) for block in shared] for axis in axis_names
+            }
+        for key in axis_names:
             for block_index, block in enumerate(per_dir[key]):
                 DENSE_SPECTRAL.require(
                     len(block),
@@ -222,19 +282,18 @@ class _FluxMixin(_HyperbolicModel):
         # constructing O(n_vars^2) expressions and eventually reaching a C++ static_assert.
         rows = {}
         if eig == "numeric":
-            if x is None:
-                if not self._flux:
-                    raise ValueError("set_wave_speeds_from_jacobian : call set_flux(...) first "
-                                     "(jacobian autodiff)")
-                rows = {"x": self.flux_jacobian(0), "y": self.flux_jacobian(1)}
+            if explicit_jacobians is None:
+                rows = {
+                    axis: self.flux_jacobian(axis) for axis in axis_names
+                }
             else:
-                for key, mat in (("x", x), ("y", y)):
+                for key, mat in explicit_jacobians.items():
                     if len(mat) != nv or any(len(r) != nv for r in mat):
                         raise ValueError("set_wave_speeds_from_jacobian : jacobian %s expected "
                                          "%d x %d" % (key, nv, nv))
                     rows[key] = [[_wrap(e) for e in r] for r in mat]
         self._ws_jacobian = {"rows": rows or None, "eig": eig, "blocks": per_dir,
-                             "explicit": x is not None,
+                             "explicit": explicit_jacobians is not None,
                              # ADC-617: None -> the historical 1e-6 literal, emitted verbatim (byte-
                              # identical). Enters model_hash's ws_jac part so a change busts the cache.
                              "fd_eps": fd_eps,
@@ -254,8 +313,7 @@ class _FluxMixin(_HyperbolicModel):
         e.g. HyperbolicModel._env)."""
         if not self._flux:
             raise ValueError("flux_jacobian : call set_flux(...) first")
-        from pops.codegen.cpp_writer import _dir_key  # lazy: keep physics codegen-free at import
-        key = _dir_key(dir)
+        key = axis_name(dir, self._flux, where="flux_jacobian")
         comps = self._flux.get(key, [])
         if len(comps) != self.n_vars:
             raise ValueError("flux_jacobian : flux %s expected with %d components (got %d)"
