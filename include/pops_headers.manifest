@@ -128,6 +128,7 @@ api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/dense_eig.hpp
 api pops/numerics/nonlinear/local_nonlinear_collective.hpp
+api pops/numerics/nonlinear/newton_options.hpp
 api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/domain.hpp
