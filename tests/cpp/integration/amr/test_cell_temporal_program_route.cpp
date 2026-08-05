@@ -1,205 +1,298 @@
 #include <gtest/gtest.h>
 
-#include <pops/core/model/physical_model.hpp>
-#include <pops/core/state/state.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <limits>
-#include <memory>
-#include <numbers>
-#include <numeric>
-#include <string>
-#include <vector>
-
-#if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
-#endif
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 using namespace pops;
 using namespace pops::runtime::program;
 
 namespace {
 
-struct LinearTransportModel {
-  using State = StateVec<1>;
-  using Prim = State;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
+void ensure_runtime() {
+  static Kokkos::ScopeGuard guard;
+}
 
-  Real velocity_x = Real(0.7);
-  Real velocity_y = Real(-0.2);
+template <int Dim>
+Extent<Dim> test_extents() {
+  Extent<Dim> extents{};
+  for (int axis = 0; axis < Dim; ++axis)
+    extents[axis] = axis + 2;
+  return extents;
+}
 
-  POPS_HD State flux(const State& state, const auto&, int axis) const {
-    return State{(axis == 0 ? velocity_x : velocity_y) * state[0]};
-  }
-  POPS_HD Real max_wave_speed(const State&, const auto&, int axis) const {
-    const Real velocity = axis == 0 ? velocity_x : velocity_y;
-    return velocity < Real(0) ? -velocity : velocity;
-  }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-  POPS_HD Prim to_primitive(const State& state) const { return state; }
-  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
+template <int Dim>
+Extent<Dim> unit_extent() {
+  Extent<Dim> extents{};
+  for (int axis = 0; axis < Dim; ++axis)
+    extents[axis] = 1;
+  return extents;
+}
 
-  [[nodiscard]] static constexpr PreparedProviderIdentity
-  transport_model_provider_identity() noexcept {
-    return {"pops.test.program-cell-local-transport", 1};
+template <int Dim>
+RealVector<Dim> physical_lower() {
+  RealVector<Dim> lower{};
+  for (int axis = 0; axis < Dim; ++axis)
+    lower[axis] = Real(axis);
+  return lower;
+}
+
+template <int Dim>
+RealVector<Dim> physical_upper() {
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = Real(axis + 2);
+  return upper;
+}
+
+template <int Dim>
+class ExactRankedTransportRuntime {
+ public:
+  static constexpr int dimension = Dim;
+  using field_type = MultiFab<Dim>;
+
+  ExactRankedTransportRuntime()
+      : domain_(Box<Dim>::from_extents(test_extents<Dim>())),
+        layout_(std::vector<Box<Dim>>{domain_}),
+        rank_space_(Index<Dim>{}, unit_extent<Dim>()),
+        distribution_(mesh::Distribution<Dim>::partitioned(layout_, rank_space_,
+                                                           std::vector<Index<Dim>>{Index<Dim>{}})),
+        state_(layout_, distribution_, Index<Dim>{}, 2, unit_extent<Dim>()),
+        geometry_(
+            Geometry<Dim>::from_bounds(domain_, physical_lower<Dim>(), physical_upper<Dim>())) {
+    periodicity_.fill(true);
+    state_.set_val(Real(0));
+    const auto values = state_.fab(0).view();
+    same_level_cell_temporal_detail::for_each_index(
+        domain_, [&](const Index<Dim>& index, std::size_t) {
+          for (int component = 0; component < state_.ncomp(); ++component)
+            values(index, component) = initial_value(index, component);
+        });
   }
-  void serialize_exact_transport_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(velocity_x).scalar(velocity_y);
+
+  [[nodiscard]] std::uint64_t topology_epoch() const noexcept { return topology_epoch_; }
+  [[nodiscard]] std::uint64_t materialization_generation() const noexcept {
+    return materialization_generation_;
   }
-  static VariableSet conservative_vars() {
-    return {VariableKind::Conservative, {"u"}, 1, {VariableRole::Scalar}};
+  [[nodiscard]] std::size_t same_level_cell_block_count() const noexcept { return 1; }
+  [[nodiscard]] int same_level_cell_level_count() const noexcept { return 1; }
+  [[nodiscard]] field_type& same_level_cell_state() noexcept { return state_; }
+  [[nodiscard]] const Geometry<Dim>& same_level_cell_geometry() const noexcept { return geometry_; }
+  [[nodiscard]] const std::array<bool, Dim>& same_level_cell_periodicity() const noexcept {
+    return periodicity_;
   }
-  static VariableSet primitive_vars() {
-    return {VariableKind::Primitive, {"u"}, 1, {VariableRole::Scalar}};
+  [[nodiscard]] std::string_view same_level_cell_state_identity() const noexcept {
+    return "test://exact-ranked/state";
   }
+  [[nodiscard]] std::string_view same_level_cell_flux_provider_identity() const noexcept {
+    return "test://exact-ranked/negative-flux-divergence";
+  }
+  [[nodiscard]] std::string_view same_level_cell_flux_parameter_contract() const noexcept {
+    return "test.exact-ranked-spatial-contract.v1";
+  }
+  [[nodiscard]] bool same_level_cell_has_prepared_boundary_plan() const noexcept { return false; }
+
+  void capture_same_level_negative_flux_divergence(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, field_type& state,
+      field_type& residual, const std::array<field_type*, Dim>& fluxes) {
+    last_point_ = point;
+    ++capture_count_;
+    residual.set_val(Real(0));
+    const auto residual_view = residual.fab(0).view();
+    same_level_cell_temporal_detail::for_each_index(
+        domain_, [&](const Index<Dim>& index, std::size_t) {
+          for (int component = 0; component < state.ncomp(); ++component)
+            residual_view(index, component) = residual_value(index, component);
+        });
+    for (int axis = 0; axis < Dim; ++axis) {
+      fluxes[axis]->set_val(Real(0));
+      const Box<Dim> faces = fluxes[axis]->box(0);
+      const auto flux_view = fluxes[axis]->fab(0).view();
+      same_level_cell_temporal_detail::for_each_index(
+          faces, [&](const Index<Dim>& index, std::size_t) {
+            for (int component = 0; component < state.ncomp(); ++component)
+              flux_view(index, component) = flux_value(axis, index, component);
+          });
+    }
+  }
+
+  [[nodiscard]] static Real initial_value(const Index<Dim>& index, int component) {
+    Real value = Real(component + 1);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(axis + 1) * Real(index[axis] + 1) * Real(0.1);
+    return value;
+  }
+
+  [[nodiscard]] static Real residual_value(const Index<Dim>& index, int component) {
+    Real value = Real(component + 1) * Real(0.25);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(index[axis] + 1) * Real(0.01);
+    return value;
+  }
+
+  [[nodiscard]] static Real flux_value(int axis, const Index<Dim>& index, int component) {
+    Real value = Real(100 * (axis + 1) + 10 * component);
+    for (int coordinate = 0; coordinate < Dim; ++coordinate)
+      value += Real(coordinate + 1) * Real(index[coordinate]) * Real(0.01);
+    return value;
+  }
+
+  [[nodiscard]] int capture_count() const { return capture_count_; }
+  [[nodiscard]] const runtime::multiblock::BoundaryEvaluationPoint& last_point() const {
+    return last_point_;
+  }
+  void bump_materialization_generation() { ++materialization_generation_; }
+  void replace_field_metadata_without_generation() {
+    state_ = field_type(layout_, distribution_, Index<Dim>{}, state_.ncomp(), Extent<Dim>{});
+  }
+
+ private:
+  Box<Dim> domain_;
+  mesh::BoxArray<Dim> layout_;
+  mesh::RankSpace<Dim> rank_space_;
+  mesh::Distribution<Dim> distribution_;
+  field_type state_;
+  Geometry<Dim> geometry_;
+  std::array<bool, Dim> periodicity_{};
+  std::uint64_t topology_epoch_ = 17;
+  std::uint64_t materialization_generation_ = 31;
+  int capture_count_ = 0;
+  runtime::multiblock::BoundaryEvaluationPoint last_point_{};
 };
 
-static_assert(PhysicalModel<LinearTransportModel>);
-static_assert(detail::ExactAmrTransportModelProvider<LinearTransportModel>);
+template <int Dim>
+using ExactProvider =
+    PreparedSameLevelTransportEulerStageFluxProvider<Dim, ExactRankedTransportRuntime<Dim>>;
 
-std::vector<double> initial_state(int n) {
-  std::vector<double> state(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (static_cast<double>(i) + 0.5) / static_cast<double>(n);
-      const double y = (static_cast<double>(j) + 0.5) / static_cast<double>(n);
-      state[static_cast<std::size_t>(j) * static_cast<std::size_t>(n) +
-            static_cast<std::size_t>(i)] =
-          1.0 + 0.1 * std::sin(2.0 * std::numbers::pi * x) * std::cos(2.0 * std::numbers::pi * y);
-    }
-  return state;
+static_assert(SameLevelCellTemporalRuntime<1, ExactRankedTransportRuntime<1>>);
+static_assert(SameLevelCellTemporalRuntime<2, ExactRankedTransportRuntime<2>>);
+static_assert(SameLevelCellTemporalRuntime<3, ExactRankedTransportRuntime<3>>);
+static_assert(CellTemporalStageFluxProvider<ExactProvider<1>>);
+static_assert(CellTemporalStageFluxProvider<ExactProvider<2>>);
+static_assert(CellTemporalStageFluxProvider<ExactProvider<3>>);
+static_assert(CellTemporalRungBatchLifecycle<ExactProvider<1>>);
+static_assert(CellTemporalAcceptedBoundaryLifecycle<ExactProvider<3>>);
+
+template <int Dim>
+std::string execute_exact_ranked_provider() {
+  ExactRankedTransportRuntime<Dim> runtime;
+  const CellTemporalPartitionAcceptedState partition =
+      prepare_same_level_transport_euler_partition<Dim>(runtime, 0, 100, 0);
+  auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
+      runtime.topology_epoch(), runtime.materialization_generation(), 0, 0, partition.cells.size(),
+      runtime.same_level_cell_state().ncomp());
+  ExactProvider<Dim> provider(runtime, partition, ledger, "test.clock.exact-ranked");
+  PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider));
+  const std::string exact_contract = executor.exact_contract();
+
+  executor.begin_attempt(2);
+  executor.advance_to_barrier();
+  executor.commit();
+  device_fence();
+
+  EXPECT_EQ(runtime.capture_count(), 2);
+  EXPECT_EQ(runtime.last_point().level, 0);
+  EXPECT_EQ(runtime.last_point().tick, 1);
+  EXPECT_DOUBLE_EQ(runtime.last_point().dt, 0.01);
+  EXPECT_EQ(ledger->publication_generation(), 1u);
+  EXPECT_EQ(ledger->begin_tick(), 0);
+  EXPECT_EQ(ledger->end_tick(), 2);
+  EXPECT_EQ(ledger->tick_denominator(), 100);
+
+  const MultiFab<Dim>& state = runtime.same_level_cell_state();
+  const Box<Dim>& box = state.box(0);
+  const auto values = state.fab(0).view();
+  same_level_cell_temporal_detail::for_each_index(
+      box, [&](const Index<Dim>& index, std::size_t cell) {
+        for (int component = 0; component < state.ncomp(); ++component) {
+          EXPECT_DOUBLE_EQ(
+              values(index, component),
+              ExactRankedTransportRuntime<Dim>::initial_value(index, component) +
+                  Real(0.02) * ExactRankedTransportRuntime<Dim>::residual_value(index, component));
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> high = index;
+            ++high[axis];
+            EXPECT_DOUBLE_EQ(
+                ledger->integrated_flux(cell, {axis, SameLevelCellFaceSide::Low}, component),
+                Real(0.02) * ExactRankedTransportRuntime<Dim>::flux_value(axis, index, component));
+            EXPECT_DOUBLE_EQ(
+                ledger->integrated_flux(cell, {axis, SameLevelCellFaceSide::High}, component),
+                Real(0.02) * ExactRankedTransportRuntime<Dim>::flux_value(axis, high, component));
+          }
+        }
+      });
+  return exact_contract;
 }
 
-std::shared_ptr<AmrProgramContext> install_cell_local_program(AmrSystem& system) {
-  system.install_program_step([](double) {});
-  if (!system.uses_runtime_engine() || system.engine() == nullptr)
-    throw std::runtime_error("cell-local Program test requires a materialized AMR runtime");
-  auto context = std::make_shared<AmrProgramContext>(system.engine(), &system);
-  context->configure_primary_clock("test.clock.cell-local");
-  context->prepare_same_level_cell_temporal_execution("test.clock.cell-local", 100, 0);
-  context->install([context](double dt) { context->advance_same_level_cell_temporal(dt); },
-                   context);
-  system.set_program_block_map({0});
-  return context;
-}
+template <int Dim>
+void prove_rollback_and_generation_authentication() {
+  ExactRankedTransportRuntime<Dim> runtime;
+  const CellTemporalPartitionAcceptedState partition =
+      prepare_same_level_transport_euler_partition<Dim>(runtime, 0, 100, 0);
+  auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
+      runtime.topology_epoch(), runtime.materialization_generation(), 0, 0, partition.cells.size(),
+      runtime.same_level_cell_state().ncomp());
+  MultiFab<Dim> accepted = runtime.same_level_cell_state();
+  ExactProvider<Dim> provider(runtime, partition, ledger, "test.clock.exact-ranked");
+  PreparedBatchedCellTemporalExecutor executor(partition, std::move(provider));
 
-double state_sum(AmrSystem& system) {
-  const std::vector<double> values = system.density("tracer");
-  return std::accumulate(values.begin(), values.end(), 0.0);
+  executor.begin_attempt(1);
+  executor.advance_to_barrier();
+  executor.rollback();
+  const auto accepted_view = accepted.fab(0).view();
+  const auto live_view = runtime.same_level_cell_state().fab(0).view();
+  same_level_cell_temporal_detail::for_each_index(
+      accepted.box(0), [&](const Index<Dim>& index, std::size_t) {
+        for (int component = 0; component < accepted.ncomp(); ++component)
+          EXPECT_DOUBLE_EQ(live_view(index, component), accepted_view(index, component));
+      });
+  EXPECT_EQ(ledger->publication_generation(), 0u);
+
+  executor.begin_attempt(1);
+  executor.advance_to_barrier();
+  runtime.bump_materialization_generation();
+  EXPECT_THROW(executor.commit(), std::runtime_error);
+  EXPECT_EQ(ledger->publication_generation(), 0u);
+
+  ExactRankedTransportRuntime<Dim> layout_runtime;
+  const CellTemporalPartitionAcceptedState layout_partition =
+      prepare_same_level_transport_euler_partition<Dim>(layout_runtime, 0, 100, 0);
+  auto layout_ledger = std::make_shared<SameLevelCellIntegratedFluxLedger<Dim>>(
+      layout_runtime.topology_epoch(), layout_runtime.materialization_generation(), 0, 0,
+      layout_partition.cells.size(), layout_runtime.same_level_cell_state().ncomp());
+  ExactProvider<Dim> layout_provider(layout_runtime, layout_partition, layout_ledger,
+                                     "test.clock.exact-ranked");
+  PreparedBatchedCellTemporalExecutor layout_executor(layout_partition, std::move(layout_provider));
+  layout_runtime.replace_field_metadata_without_generation();
+  EXPECT_THROW(layout_executor.begin_attempt(1), std::runtime_error);
+  EXPECT_EQ(layout_ledger->publication_generation(), 0u);
 }
 
 }  // namespace
 
 TEST(test_cell_temporal_program_route,
-     installed_program_commits_exact_ticks_state_and_conservative_face_ledger) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-  constexpr int n = 8;
-  AmrSystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.level_count = 1;
-  config.regrid_every = 0;
-  config.periodicity = {true, true};
-
-  AmrSystem system(config);
-  add_compiled_model(system, "tracer", LinearTransportModel{}, "none", "rusanov", "conservative",
-                     "euler");
-  system.set_density("tracer", initial_state(n));
-  const auto context = install_cell_local_program(system);
-  const double sum_before = state_sum(system);
-  const std::vector<double> state_before = system.density("tracer");
-
-  system.step(0.01);
-
-  EXPECT_NE(system.density("tracer"), state_before);
-  EXPECT_NEAR(state_sum(system), sum_before,
-              64.0 * std::numeric_limits<double>::epsilon() * std::abs(sum_before));
-  const auto manifest = system.program_temporal_partition_manifest();
-  ASSERT_FALSE(manifest.empty());
-  EXPECT_EQ(manifest.front()[1], "cell_local");
-  EXPECT_EQ(manifest.front()[2], kSameLevelTransportEulerStageFluxProvider);
-  EXPECT_EQ(manifest.front()[4], "1");
-  EXPECT_EQ(manifest.front()[5], "100");
-
-  const SameLevelCellIntegratedFluxLedger& ledger = context->accepted_same_level_cell_flux_ledger();
-  EXPECT_EQ(ledger.begin_tick(), 0);
-  EXPECT_EQ(ledger.end_tick(), 1);
-  EXPECT_EQ(ledger.publication_generation(), 1u);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const std::size_t cell = static_cast<std::size_t>(j * n + i);
-      const std::size_t right = static_cast<std::size_t>(j * n + (i + 1) % n);
-      const std::size_t upper = static_cast<std::size_t>(((j + 1) % n) * n + i);
-      EXPECT_DOUBLE_EQ(ledger.integrated_flux(cell, SameLevelCellFace::XHigh, 0),
-                       ledger.integrated_flux(right, SameLevelCellFace::XLow, 0));
-      EXPECT_DOUBLE_EQ(ledger.integrated_flux(cell, SameLevelCellFace::YHigh, 0),
-                       ledger.integrated_flux(upper, SameLevelCellFace::YLow, 0));
-    }
+     executes_one_exact_algorithm_in_one_two_and_three_dimensions) {
+  ensure_runtime();
+  const std::string one = execute_exact_ranked_provider<1>();
+  const std::string two = execute_exact_ranked_provider<2>();
+  const std::string three = execute_exact_ranked_provider<3>();
+  EXPECT_NE(one, two);
+  EXPECT_NE(two, three);
+  EXPECT_NE(one, three);
 }
 
 TEST(test_cell_temporal_program_route,
-     invalid_tick_outer_rollback_and_same_topology_restart_remain_atomic) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-  constexpr int n = 8;
-  AmrSystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.level_count = 1;
-  config.regrid_every = 0;
-  config.periodicity = {true, true};
-
-  AmrSystem system(config);
-  add_compiled_model(system, "tracer", LinearTransportModel{}, "none", "rusanov", "conservative",
-                     "euler");
-  system.set_density("tracer", initial_state(n));
-  const auto context = install_cell_local_program(system);
-  system.step(0.01);
-
-  const std::vector<double> accepted_state = system.density("tracer");
-  const std::vector<std::uint8_t> accepted_bytes = system.program_accepted_state();
-  const double accepted_time = system.time();
-  const int accepted_step = system.macro_step();
-  const auto accepted_ledger = context->accepted_same_level_cell_flux_ledger().accepted_state();
-
-  EXPECT_THROW(system.step(0.015), std::invalid_argument);
-  EXPECT_EQ(system.density("tracer"), accepted_state);
-  EXPECT_EQ(system.program_accepted_state(), accepted_bytes);
-  EXPECT_DOUBLE_EQ(system.time(), accepted_time);
-  EXPECT_EQ(system.macro_step(), accepted_step);
-  EXPECT_EQ(context->accepted_same_level_cell_flux_ledger().publication_generation(),
-            accepted_ledger.publication_generation);
-
-  system.begin_step_transaction();
-  system.step(0.01);
-  system.rollback_step_transaction();
-  EXPECT_EQ(system.density("tracer"), accepted_state);
-  EXPECT_EQ(system.program_accepted_state(), accepted_bytes);
-  EXPECT_DOUBLE_EQ(system.time(), accepted_time);
-  EXPECT_EQ(system.macro_step(), accepted_step);
-  EXPECT_THROW(context->accepted_same_level_cell_flux_ledger(), std::logic_error);
-
-  system.step(0.01);
-  EXPECT_EQ(context->accepted_same_level_cell_flux_ledger().publication_generation(), 1u);
-  const std::vector<std::uint8_t> restart_bytes = system.program_accepted_state();
-  system.begin_restart_transaction();
-  system.restore_checkpoint_accepted_state(restart_bytes);
-  system.commit_restart_transaction();
-  EXPECT_THROW(context->accepted_same_level_cell_flux_ledger(), std::logic_error);
-  EXPECT_NO_THROW(system.step(0.01));
-  EXPECT_EQ(context->accepted_same_level_cell_flux_ledger().publication_generation(), 1u);
+     rollback_and_materialization_generation_remain_atomic_in_every_dimension) {
+  ensure_runtime();
+  prove_rollback_and_generation_authentication<1>();
+  prove_rollback_and_generation_authentication<2>();
+  prove_rollback_and_generation_authentication<3>();
 }
