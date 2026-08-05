@@ -2,8 +2,7 @@
 
 #include <limits>
 
-#include <pops/mesh/boundary/prepared_boundary_component.hpp>
-#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions compatibility validation only
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
@@ -88,7 +87,6 @@ struct AmrRuntimeBlock;
 // set_block_elliptic_field): a std::function with an incomplete-type parameter is legal as long as it is
 // only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
-class PreparedBoundaryPlan;
 class AmrFieldSolverProvider;
 namespace runtime::amr {
 template <int Dim>
@@ -117,10 +115,13 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
 
   AmrSystemConfig() { this->shape = runtime_config_detail::filled_extent<Dim>(128); }
 
-  int regrid_every = 20;            ///< re-refinement every N steps (0 = never after init)
-  int level_count = 2;              ///< maximum active hierarchy depth (>= 1)
-  int regrid_grow = 2;              ///< tag lookahead/dilation from the resolved hierarchy
-  int regrid_margin = 2;            ///< proper-nesting buffer from the resolved hierarchy
+  int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
+  int level_count = 2;    ///< maximum active hierarchy depth (>= 1)
+  /// Exact level-to-level hierarchy graph. Each table contains one ranked row per transition;
+  /// ratios are >= 2 and buffers/lookaheads are >= 0 component-wise.
+  std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
+  std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
+  std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
   bool explicit_bootstrap = false;  ///< coarse-only start; BootstrapPlan creates fine levels
   /// OWNERSHIP POLICY of the coarse level (cf. AmrCouplerMP::replicated_coarse).
   /// false (DEFAULT, historical): coarse mono-box REPLICATED on all ranks. The coarse Poisson
@@ -237,6 +238,7 @@ class AmrSystem {
   static_assert(Dim >= 1 && Dim <= 3, "AmrSystem only supports dimensions 1, 2, and 3");
 
  public:
+  using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
   static constexpr int dimension = Dim;
 
   explicit AmrSystem(const AmrSystemConfig<Dim>& cfg);
@@ -341,33 +343,22 @@ class AmrSystem {
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0,
       double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
 
-  /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
-  /// selects the N-level AmrRuntime route, whose Program RHS composes same-level MPI, the authored
-  /// coarse/fine transfer authority, and these physical faces.
-  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
-                                         int required_depth,
-                                         const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values,
-                                         const std::vector<std::string>& face_identities,
-                                         const std::vector<std::string>& component_roles,
-                                         const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {},
-                                         PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
-  /// model-aware physical-law plan; they never restore a legacy component-wise translation.
-  POPS_EXPORT void install_boundary_plan(
+  /// Install the same exact-ranked hyperbolic authority as System. Same-level halo exchange and
+  /// coarse/fine transfer remain separate hierarchy operations; physical laws are evaluated only
+  /// by this retained model-qualified object.
+  POPS_EXPORT void install_hyperbolic_boundary(
       const std::string& name, const std::string& identity, int required_depth,
       const std::vector<std::string>& face_types, const std::vector<double>& face_values,
       const std::vector<std::string>& face_identities,
-      const std::vector<std::string>& component_roles,
-      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-      PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications,
+      const std::vector<std::string>& component_roles, const std::string& state_identity,
       const std::vector<std::string>& face_representations = {},
       const std::vector<std::string>& face_converter_identities = {},
       const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
       const std::vector<std::vector<double>>& face_analytic_literals = {},
       const std::vector<std::string>& face_analytic_clocks = {});
+  POPS_EXPORT void install_prepared_hyperbolic_boundary(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::string& state_identity, std::shared_ptr<const HyperbolicBoundary> boundary);
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);
@@ -376,19 +367,7 @@ class AmrSystem {
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
   /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
-  POPS_EXPORT void discard_boundary_plans();
-  POPS_EXPORT void install_ghost_boundary_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_boundary_flux_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_residual_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_jvp_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void discard_hyperbolic_boundaries();
   POPS_EXPORT void install_amr_tagger_component(
       runtime::amr::PreparedTaggerSpec spec, std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_amr_clustering_component(
@@ -613,7 +592,7 @@ class AmrSystem {
                                   const std::string& space, const std::string& centering,
                                   const std::vector<double>& components);
   void register_analytic_gaussian(const std::string& subject, const std::string& block,
-                                  double center_x, double center_y, double background,
+                                  const RealVector<Dim>& center, double background,
                                   double amplitude, double inverse_width);
   void register_analytic_expression(const std::string& subject, const std::string& block,
                                     const std::string& space, const std::string& centering,

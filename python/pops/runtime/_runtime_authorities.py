@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
-def _boundary_face_ordinal(value: Any, *, where: str) -> int:
+def _boundary_face_ordinal(value: Any, *, dimension: int, where: str) -> int:
     if not isinstance(value, dict):
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
     orientation = value.get("orientation")
@@ -21,9 +21,9 @@ def _boundary_face_ordinal(value: Any, *, where: str) -> int:
     axis = orientation["axis"]
     side = orientation["side"]
     outward_sign = orientation["outward_sign"]
-    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1) \
+    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(dimension) \
             or side not in {"lower", "upper"}:
-        raise ValueError("%s is not one 2D Cartesian face" % where)
+        raise ValueError("%s is not one dimension-%d Cartesian face" % (where, dimension))
     expected_sign = -1 if side == "lower" else 1
     if isinstance(outward_sign, bool) or not isinstance(outward_sign, int) \
             or outward_sign != expected_sign:
@@ -31,7 +31,9 @@ def _boundary_face_ordinal(value: Any, *, where: str) -> int:
     return 2 * axis + (0 if side == "lower" else 1)
 
 
-def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -> list[list[int]]:
+def _periodic_identification_rows(
+    data: dict[str, Any], face_types: list[str], *, dimension: int,
+) -> list[list[int]]:
     raw = data.get("periodic_identifications", [])
     if not isinstance(raw, list):
         raise TypeError("prepared periodic_identifications must be a list")
@@ -48,21 +50,26 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         target_face = row["target_face"]
         if isinstance(source_face, bool) or not isinstance(source_face, int) \
                 or isinstance(target_face, bool) or not isinstance(target_face, int) \
-                or source_face not in range(4) or target_face not in range(4) \
+                or source_face not in range(2 * dimension) \
+                or target_face not in range(2 * dimension) \
                 or source_face == target_face:
-            raise ValueError("prepared periodic endpoints must be distinct face ordinals 0..3")
+            raise ValueError(
+                "prepared periodic endpoints must be distinct ranked face ordinals")
         if _boundary_face_ordinal(
-                row["source"], where="periodic[%d].source" % index) != source_face \
+                row["source"], dimension=dimension,
+                where="periodic[%d].source" % index) != source_face \
                 or _boundary_face_ordinal(
-                    row["target"], where="periodic[%d].target" % index) != target_face:
+                    row["target"], dimension=dimension,
+                    where="periodic[%d].target" % index) != target_face:
             raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
         permutation = row["permutation"]
         signs = row["signs"]
         if not isinstance(permutation, list) or any(
                 isinstance(value, bool) or not isinstance(value, int)
-                for value in permutation) or sorted(permutation) != [0, 1]:
-            raise ValueError("prepared periodic permutation must be the exact 2D permutation")
-        if not isinstance(signs, list) or len(signs) != 2 \
+                for value in permutation) or sorted(permutation) != list(range(dimension)):
+            raise ValueError(
+                "prepared periodic permutation must be the exact ranked permutation")
+        if not isinstance(signs, list) or len(signs) != dimension \
                 or any(isinstance(value, bool) or not isinstance(value, int)
                        or value not in (-1, 1) for value in signs):
             raise ValueError("prepared periodic signs must contain one -1/+1 per source axis")
@@ -79,12 +86,14 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         if claimed & endpoints:
             raise ValueError("one prepared face belongs to multiple periodic identifications")
         claimed.update(endpoints)
-        if permutation != [0, 1] or signs != [1, 1]:
+        is_mapped = permutation != list(range(dimension)) or signs != [1] * dimension
+        if is_mapped:
             mapped += 1
-        rows.append([
-            source_face, target_face,
-            int(permutation[0]), int(permutation[1]), int(signs[0]), int(signs[1]),
-        ])
+            rows.append([
+                source_face, target_face,
+                *(int(value) for value in permutation),
+                *(int(value) for value in signs),
+            ])
     periodic_faces = {
         ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
     }
@@ -99,7 +108,11 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
 
 
 def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
-    compiled_by_name = {row.name: row for row in install_plan.artifact.blocks}
+    artifact = install_plan.artifact
+    dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+        raise TypeError("runtime boundary installation requires one exact resolved dimension")
+    compiled_by_name = {row.name: row for row in artifact.blocks}
     reports = {}
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_boundary_plan", None)
@@ -155,9 +168,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise TypeError("compiled block lacks an authenticated positive n_vars")
         faces = first.get("faces")
-        if not isinstance(faces, list) or len(faces) != 4 \
-                or [row.get("ordinal") for row in faces] != [0, 1, 2, 3]:
-            raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
+        expected_faces = list(range(2 * dimension))
+        if not isinstance(faces, list) or len(faces) != 2 * dimension \
+                or [row.get("ordinal") for row in faces] != expected_faces:
+            raise ValueError(
+                "prepared boundary plan must contain canonical axis-major rows for dimension %d"
+                % dimension)
         types = [row.get("type") for row in faces]
         if any(value not in {
                 "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external",
@@ -262,7 +278,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         required_depth = first.get("required_depth")
         if isinstance(required_depth, bool) or not isinstance(required_depth, int):
             raise TypeError("prepared boundary required_depth must be an exact integer")
-        periodic_identifications = _periodic_identification_rows(first, types)
+        periodic_identifications = _periodic_identification_rows(
+            first, types, dimension=dimension)
         base_arguments = (
             block.name,
             str(first.get("identity")),

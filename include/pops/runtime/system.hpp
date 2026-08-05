@@ -12,9 +12,9 @@
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
-#include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
-#include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (native package seam)
+#include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/config/spatial_domain.hpp>
@@ -50,6 +50,7 @@
 namespace pops {
 
 class ObserverMpiLane;
+struct BlockClosures;
 template <int Dim>
 class PreparedSystemLayoutTransfer;
 
@@ -169,6 +170,7 @@ class System {
 
  public:
   static constexpr int dimension = Dim;
+  using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
 
   explicit System(const SystemConfig<Dim>& cfg);
   ~System();
@@ -295,50 +297,24 @@ class System {
   static std::string abi_key();
 
   /// @name Native compiled-model seam
-  /// To wire a DSL-generated model by COMPOSING at COMPILATION time (production Kokkos + MPI + AMR
-  /// binary), via the free template pops::add_compiled_model<Model> of
-  /// pops/runtime/dsl_block.hpp: it builds the closures with block_builder.hpp on the REAL
-  /// CONTEXT of the System (grid_context) -- so the block runs the same path as add_block (fill_boundary
-  /// = MPI halos, assemble_rhs device), without copying the arrays.
   /// @{
-  /// DEFAULT VISIBILITY (POPS_EXPORT): grid_context / install_block / ensure_aux_width are the
-  /// only methods called by the header template add_compiled_model. A generated loader .so (DSL
-  /// "production" path, cf. emit_cpp_native_loader / add_native_block) inlines this template and must
-  /// resolve these symbols from the already loaded _pops module. Compiled with -fvisibility=hidden (pybind11),
-  /// the module would not export them without this annotation and the loader's dlopen would fail.
-  POPS_EXPORT GridContext grid_context();  ///< Legacy unqualified context (no resolved block plan)
-  /// Block-qualified context used by generated packages.  It captures the exact prepared boundary
-  /// authority installed before block construction, so two blocks may use different physical data.
-  POPS_EXPORT GridContext grid_context(const std::string& name);
-  /// Index-qualified twin for an already authenticated Program block map.
-  POPS_EXPORT GridContext grid_context(int block);
-  /// Install one executable built-in hyperbolic ghost plan. Face identities remain block/owner
-  /// qualified and component roles declare reflection behavior; no component index is interpreted.
-  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
-                                         int required_depth,
-                                         const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values,
-                                         const std::vector<std::string>& face_identities,
-                                         const std::vector<std::string>& component_roles,
-                                         const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {},
-                                         PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload. Physical laws and component transforms remain model-aware; the
-  /// additional table only identifies periodic face pairs whose coordinate map is not the
-  /// axis-aligned translation represented by the exact ranked topology.
-  POPS_EXPORT void install_boundary_plan(
+  /// Install the one model-qualified hyperbolic boundary retained by a block. The parser accepts
+  /// exactly 2*Dim oriented faces; mapped periodic identifications and additive boundary
+  /// residual/JVP components belong to separately qualified providers and cannot be smuggled into
+  /// this Cartesian core.
+  POPS_EXPORT void install_hyperbolic_boundary(
       const std::string& name, const std::string& identity, int required_depth,
       const std::vector<std::string>& face_types, const std::vector<double>& face_values,
       const std::vector<std::string>& face_identities,
-      const std::vector<std::string>& component_roles,
-      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-      PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications,
+      const std::vector<std::string>& component_roles, const std::string& state_identity,
       const std::vector<std::string>& face_representations = {},
       const std::vector<std::string>& face_converter_identities = {},
       const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
       const std::vector<std::vector<double>>& face_analytic_literals = {},
       const std::vector<std::string>& face_analytic_clocks = {});
+  POPS_EXPORT void install_prepared_hyperbolic_boundary(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::string& state_identity, std::shared_ptr<const HyperbolicBoundary> boundary);
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
@@ -348,22 +324,7 @@ class System {
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
-  POPS_EXPORT void discard_boundary_plans();
-  /// Attach one explicitly qualified native boundary operation to an already installed block plan.
-  /// The LoadedComponent was authenticated by the component loader; the plan rechecks its exact
-  /// component/manifest/interface identity before preparing the typed table.
-  POPS_EXPORT void install_ghost_boundary_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_boundary_flux_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_residual_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_jvp_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void discard_hyperbolic_boundaries();
   /// Install one exact two-sided NumericalFlux component after both endpoint blocks have been
   /// materialized but before bind freezes the runtime.  The route is evaluated atomically by the
   /// compiled Program's grouped RHS path; neither endpoint owns a one-sided callback.
@@ -647,16 +608,11 @@ class System {
   /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
   using CellBatchRecovery = UniformCellRecovery;
-  using CharacteristicNoInflowFill = PreparedBoundaryPlan::CharacteristicNoInflowFill;
   /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
                                         CellRecovery cons_to_prim);
-  /// Finalize a requested characteristic no-inflow face with the exact compiled block model.
-  /// Plans that did not request the route and models without the prepared Jacobian both refuse it.
-  POPS_EXPORT void set_block_characteristic_no_inflow(const std::string& name,
-                                                      CharacteristicNoInflowFill fill);
 
   /// Installs the generation-qualified host/Uniform batch consumer used by
   /// get_primitive_state. The callback owns one warm-start slot per local cell and publishes the
@@ -878,8 +834,8 @@ class System {
                                          const std::vector<std::vector<std::string>>& opcodes,
                                          const std::vector<std::vector<double>>& literals,
                                          const std::vector<std::string>& input_sources);
-  std::int64_t set_analytic_gaussian_state(const std::string& name, double center_x,
-                                           double center_y, double background, double amplitude,
+  std::int64_t set_analytic_gaussian_state(const std::string& name, const RealVector<Dim>& center,
+                                           double background, double amplitude,
                                            double inverse_width);
   int n_vars(const std::string& name) const;
   /// Variable names of a block (introspection): kind = "conservative" | "primitive".
@@ -987,25 +943,9 @@ class System {
                                    const std::vector<MultiFab<Dim>*>& states,
                                    const std::vector<MultiFab<Dim>*>& rhs,
                                    const std::vector<int>& flux_only);
-  POPS_EXPORT bool block_has_boundary_linearization(int b) const;
   POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           int b, MultiFab<Dim>& U, MultiFab<Dim>& R,
                                           bool flux_only);
-  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          int b, MultiFab<Dim>& U, MultiFab<Dim>& R, bool flux_only,
-                                          const PreparedGridBoundarySession& boundary);
-  POPS_EXPORT void block_boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
-      MultiFab<Dim>& C);
-  POPS_EXPORT void block_boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
-      MultiFab<Dim>& C, const PreparedGridBoundarySession& boundary);
-  POPS_EXPORT void block_boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
-      const MultiFab<Dim>& V, MultiFab<Dim>& J);
-  POPS_EXPORT void block_boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
-      const MultiFab<Dim>& V, MultiFab<Dim>& J, const PreparedGridBoundarySession& boundary);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The

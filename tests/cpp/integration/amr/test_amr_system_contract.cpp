@@ -84,25 +84,12 @@ TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeAmrFillPatchConstru
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
 #endif
-  AmrSystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.regrid_every = 0;
-  cfg.periodicity = {false, false};
-  AmrSystem system(cfg);
-  const std::string state_identity = "case::block::tracer::state::U";
-  system.install_block_state_route("tracer", state_identity);
-  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
-                                            std::array<int, 2>{{1, 1}}};
-
-  EXPECT_THROW(
-      system.install_boundary_plan(
-          "tracer", "case::block::tracer::boundary", 1,
-          {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
-          {"case::block::tracer::xlo", "case::block::tracer::xhi", "case::block::tracer::ylo",
-           "case::block::tracer::yhi"},
-          {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi}),
-      std::runtime_error);
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::block::tracer::xlo", "case::block::tracer::xhi", "case::block::tracer::ylo",
+       "case::block::tracer::yhi"},
+      {"Scalar"}, true);
+  EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
 }
 
 TEST(test_amr_system_contract, Runs) {

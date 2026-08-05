@@ -230,6 +230,7 @@ sdk-support pops/runtime/config/platform_manifest.hpp
 abi pops/runtime/config/route_ids.hpp
 sdk-root pops/runtime/config/runtime_params.hpp
 api pops/runtime/config/spatial_domain.hpp
+api pops/runtime/multiblock/evaluation_point.hpp
 sdk-support pops/runtime/context/aux_layout.hpp
 sdk-support pops/runtime/context/field_context.hpp
 sdk-support pops/runtime/context/grid_context.hpp

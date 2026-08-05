@@ -506,16 +506,16 @@ class GhostProducerPlan:
         for identification in self.topology.periodic:
             orientation = identification.orientation
             dimension = len(orientation.permutation)
-            if dimension != 2:
-                if orientation.permutation != tuple(range(dimension)) or any(
-                        sign != 1 for sign in orientation.signs):
-                    raise NotImplementedError(
-                        "the installed native provider executes signed/permuted periodic "
-                        "identifications in exactly two dimensions"
-                    )
-                # Preserve the historical translation-only lowering for non-2D providers. Their
-                # native runtimes already derive ordinary axis periodicity from the face table.
+            if orientation.permutation == tuple(range(dimension)) and all(
+                    sign == 1 for sign in orientation.signs):
+                # Ordinary per-axis periodicity is already represented by the ranked face table.
+                # Keeping a second endpoint row would recreate the retired 2D topology authority.
                 continue
+            if dimension != 2:
+                raise NotImplementedError(
+                    "signed/permuted periodic identifications require a capability-qualified "
+                    "topology provider for the exact compiled dimension"
+                )
             periodic_identifications.append({
                 "source": identification.source.canonical_identity(),
                 "target": identification.target.canonical_identity(),
