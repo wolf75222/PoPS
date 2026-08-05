@@ -40,6 +40,10 @@ def test_uniform_and_amr_facades_have_one_visible_ranked_template() -> None:
     assert "class AmrSystem<2>" not in amr
     assert "struct SystemConfig<2>" not in system
     assert "struct AmrSystemConfig<2>" not in amr
+    assert "implicit_stepper.hpp" not in system
+    assert "implicit_stepper.hpp" not in amr
+    assert "numerics/nonlinear/newton_options.hpp" in system
+    assert "numerics/nonlinear/newton_options.hpp" in amr
 
 
 def test_ranked_domain_is_one_authority_from_config_through_storage() -> None:

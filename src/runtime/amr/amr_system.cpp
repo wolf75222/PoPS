@@ -22,7 +22,7 @@
 #include <pops/runtime/dynamic/model_registry.hpp>  // validate_transport: single-source transport rejection (ADC-331)
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
 #include <pops/numerics/fv/flux_failure.hpp>
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/core/state/aux_names.hpp>  // canonical B_z component shared with the device Aux layout
 
 #include <algorithm>  // std::find
