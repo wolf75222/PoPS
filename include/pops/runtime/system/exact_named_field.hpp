@@ -42,7 +42,7 @@ class ExactNamedField final {
         output_(output),
         geometry_(geometry),
         accepted_(layout, distribution, local_rank, 1, unit_ghosts_()),
-        solver_(std::make_unique<CartesianFieldSolverBackend<Dim>>(
+        solver_(std::make_unique<CartesianCgFieldSolverBackend<Dim>>(
             geometry, layout, distribution, local_rank, std::move(topology), std::move(options))),
         rhs_by_block_(block_count) {
     validate_();

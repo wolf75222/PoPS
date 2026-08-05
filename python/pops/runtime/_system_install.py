@@ -23,7 +23,11 @@ from pops.runtime.defaults import (
     numerical_defaults_report,
 )
 from pops.runtime._engine_descriptors import (
-    Spatial, Explicit, DivEpsGrad, CompositeRhs, ChargeDensitySource,
+    Spatial,
+    Explicit,
+    DivEpsGrad,
+    CompositeRhs,
+    ChargeDensitySource,
 )
 from pops.runtime.routes import (
     check_riemann_requirement_contract as _check_riemann_requirement_contract,
@@ -32,7 +36,9 @@ from pops.runtime.routes import (
 
 # Typed Poisson wall / bc lowerers are split out for the 500-line cap (ADC-550).
 from pops.runtime._system_install_lowering import (  # noqa: F401
-    _lower_bc, _lower_wall, _mg_kwargs, _weno_kwargs,
+    _cartesian_cg_kwargs,
+    _lower_bc,
+    _weno_kwargs,
 )
 
 if TYPE_CHECKING:
@@ -52,9 +58,18 @@ def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
 class _SystemInstall(_System):
     """Equation/coupling installation methods of System."""
 
-    def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
-                     substeps: Any = None, names: Any = None, evolve: bool = True,
-                     stride: Any = None, _bind_params: Any = None) -> Any:
+    def add_equation(
+        self,
+        name: Any,
+        model: Any,
+        spatial: Any = None,
+        time: Any = None,
+        substeps: Any = None,
+        names: Any = None,
+        evolve: bool = True,
+        stride: Any = None,
+        _bind_params: Any = None,
+    ) -> Any:
         """Install a native model or one compiled production package.
 
         Sole Python block-installation seam below ``pops.bind``. The documented PUBLIC path is the typed
@@ -82,22 +97,41 @@ class _SystemInstall(_System):
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         _reject_unpublished_newton_diagnostics(time, where="System.add_equation")
-        nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
-        nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
+        nsub = positive_int(
+            substeps if substeps is not None else getattr(time, "substeps", 1),
+            where="System.add_equation.substeps",
+        )
+        nstride = positive_int(
+            stride if stride is not None else getattr(time, "stride", 1),
+            where="System.add_equation.stride",
+        )
 
         if isinstance(model, ModelSpec):
             rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
-                time, spatial, where="System.add_equation")
-            self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-                              nsub, evolve, nstride,
-                              getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
-                              getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-                              rel_tol, abs_tol, fd_eps,
-                              getattr(time, "newton_diagnostics", False),
-                              damping,
-                              positivity_floor,
-                              getattr(spatial, "wave_speed_cache", False),
-                              **_weno_kwargs(spatial))
+                time, spatial, where="System.add_equation"
+            )
+            self._s.add_block(
+                name,
+                model,
+                spatial.limiter,
+                spatial.flux,
+                spatial.recon,
+                time.kind,
+                nsub,
+                evolve,
+                nstride,
+                getattr(time, "implicit_vars", []),
+                getattr(time, "implicit_roles", []),
+                getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
+                rel_tol,
+                abs_tol,
+                fd_eps,
+                getattr(time, "newton_diagnostics", False),
+                damping,
+                positivity_floor,
+                getattr(spatial, "wave_speed_cache", False),
+                **_weno_kwargs(spatial),
+            )
             return
 
         # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
@@ -107,36 +141,38 @@ class _SystemInstall(_System):
                 "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
                 "only by a private native ModelSpec, available on the internal native "
                 "engine API (not part of the pops.bind surface). The compiled model (.so) does not "
-                "carry the mask.")
+                "carry the mask."
+            )
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
         # Non-default values would be ignored SILENTLY -> explicit rejection.
-        if (getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)
-                != NEWTON_DEFAULT_MAX_ITERS
-                or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)
-                != NEWTON_DEFAULT_REL_TOL
-                or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)
-                != NEWTON_DEFAULT_ABS_TOL
-                or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)
-                != NEWTON_DEFAULT_FD_EPS
-                or getattr(time, "newton_diagnostics", False)
-                or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)
-                != NEWTON_DEFAULT_DAMPING):
+        if (
+            getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS) != NEWTON_DEFAULT_MAX_ITERS
+            or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL) != NEWTON_DEFAULT_REL_TOL
+            or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL) != NEWTON_DEFAULT_ABS_TOL
+            or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS) != NEWTON_DEFAULT_FD_EPS
+            or getattr(time, "newton_diagnostics", False)
+            or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING) != NEWTON_DEFAULT_DAMPING
+        ):
             raise ValueError(
                 "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
                 "diagnostics/damping) are carried only by a composed native model "
                 "(ModelSpec), available on the internal native engine API (not part of the "
-                "pops.bind surface). The compiled model (.so) ABI does not carry them.")
+                "pops.bind surface). The compiled model (.so) ABI does not carry them."
+            )
 
         if not isinstance(model, CompiledModel):
             raise TypeError(
                 "add_equation: model must be a private ModelSpec or detached CompiledModel; got %r"
-                % type(model).__name__)
+                % type(model).__name__
+            )
 
         compiled = model
         # Names guard: length checked early (the C++ also raises, but we diagnose here).
         if names is not None and len(names) != compiled.n_vars:
-            raise ValueError("add_equation: names= has %d names but block '%s' has %d variables"
-                             % (len(names), name, compiled.n_vars))
+            raise ValueError(
+                "add_equation: names= has %d names but block '%s' has %d variables"
+                % (len(names), name, compiled.n_vars)
+            )
 
         # NAMED aux fields (ADC-70 phase 1): table name -> block component, from the ORDERED names of
         # the compiled model (k-th name = component dsl.AUX_NAMED_BASE + k, mirror of the C++ emission).
@@ -204,31 +240,58 @@ class _SystemInstall(_System):
             if "uniform" not in spatial.external_flux_supported_layouts:
                 raise ValueError(
                     "add_equation: external Riemann brick %r does not support uniform layouts"
-                    % spatial.external_flux_id)
+                    % spatial.external_flux_id
+                )
             if runtime_names:
                 raise ValueError(
-                    "add_equation: external Riemann ABI v2 does not transport model RuntimeParams")
+                    "add_equation: external Riemann ABI v2 does not transport model RuntimeParams"
+                )
             if spatial.external_flux_model_identity != compiled.model_hash:
                 raise ValueError(
                     "add_equation: external Riemann brick %r targets model %r, not %r"
-                    % (spatial.external_flux_id, spatial.external_flux_model_identity,
-                       compiled.model_hash))
+                    % (
+                        spatial.external_flux_id,
+                        spatial.external_flux_model_identity,
+                        compiled.model_hash,
+                    )
+                )
             if spatial.external_flux_native_abi_key != compiled.abi_key:
                 raise ValueError(
                     "add_equation: external Riemann brick %r was built for a different native ABI"
-                    % spatial.external_flux_id)
+                    % spatial.external_flux_id
+                )
             self._s._install_external_riemann_block(
-                name, spatial.external_flux_library_path, spatial.external_flux_id,
-                spatial.external_flux_library_sha256, spatial.limiter, spatial.recon,
-                time.kind, gamma, nsub, evolve, nstride, compiled.n_vars, compiled.n_aux,
+                name,
+                spatial.external_flux_library_path,
+                spatial.external_flux_id,
+                spatial.external_flux_library_sha256,
+                spatial.limiter,
+                spatial.recon,
+                time.kind,
+                gamma,
+                nsub,
+                evolve,
+                nstride,
+                compiled.n_vars,
+                compiled.n_aux,
                 compiled.model_hash,
                 positivity_floor,
                 weno_epsilon,
             )
         else:
             self._s._install_native_block(
-                name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-                gamma, nsub, evolve, nstride, bind_values, positivity_floor,
+                name,
+                compiled.so_path,
+                spatial.limiter,
+                spatial.flux,
+                spatial.recon,
+                time.kind,
+                gamma,
+                nsub,
+                evolve,
+                nstride,
+                bind_values,
+                positivity_floor,
             )
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
@@ -239,77 +302,99 @@ class _SystemInstall(_System):
         self.add_equation(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
-    def set_poisson(self, rhs: Any = "charge_density", solver: Any = None,
-                    bc: Any = None, wall: Any = None,
-                    epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
-                    max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
-                    post_smooth: Any = None, bottom_sweeps: Any = None,
-                    coarse_threshold: Any = None) -> Any:
-        """Configure the shared Poisson solve with typed boundary and wall selectors.
+    def set_poisson(
+        self,
+        rhs: Any = "charge_density",
+        solver: Any = None,
+        bc: Any = None,
+        abs_tol: Any = None,
+        rel_tol: Any = None,
+        max_iterations: Any = None,
+    ) -> Any:
+        """Configure the uniform constant-coefficient Poisson solve.
 
-        ``solver=None`` keeps the exact-ranked Cartesian runtime's explicit native default
-        (``geometric_mg``). ``bc`` accepts a typed native boundary descriptor; omission keeps
-        automatic boundary selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
-        :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Strings and a separate
-        ``wall_radius`` are deliberately absent: every descriptor owns its complete data.
+        ``solver=None`` keeps the exact-ranked Cartesian runtime's explicit ``cartesian_cg``
+        default. ``bc`` accepts a typed native boundary descriptor; omission keeps
+        automatic boundary selection. A :class:`pops.solvers.elliptic.CartesianCG` descriptor
+        owns its exact tolerance and iteration controls. Variable/tensor coefficients, reaction,
+        embedded boundaries and ``GeometricMG`` belong to the AMR field-provider route.
         """
         if solver is None:
             solver = self._s.poisson_solver()
+        elif getattr(solver, "scheme", None) == "cartesian_cg":
+            authored = solver.cg_options()
+            if any(value is not None for value in (abs_tol, rel_tol, max_iterations)):
+                raise ValueError(
+                    "System.set_poisson CartesianCG owns its controls; do not duplicate them"
+                )
+            abs_tol = authored["abs_tol"]
+            rel_tol = authored["rel_tol"]
+            max_iterations = authored["max_iterations"]
+            solver = solver.scheme
         bc_token = "auto" if bc is None else _lower_bc(bc)
-        wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
         self._set_poisson_native(
-            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
-            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, rel_tol=rel_tol,
-            max_cycles=max_cycles, min_coarse=min_coarse, pre_smooth=pre_smooth,
-            post_smooth=post_smooth, bottom_sweeps=bottom_sweeps,
-            coarse_threshold=coarse_threshold)
+            rhs=rhs,
+            solver=solver,
+            bc=bc_token,
+            abs_tol=abs_tol,
+            rel_tol=rel_tol,
+            max_iterations=max_iterations,
+        )
 
-    def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
-                            wall_radius: Any = 0.0, epsilon: Any = 1.0,
-                            abs_tol: Any = 0.0, rel_tol: Any = None,
-                            max_cycles: Any = None, min_coarse: Any = None,
-                            pre_smooth: Any = None, post_smooth: Any = None,
-                            bottom_sweeps: Any = None, coarse_threshold: Any = None) -> Any:
+    def _set_poisson_native(
+        self,
+        *,
+        rhs: Any,
+        solver: Any,
+        bc: Any,
+        abs_tol: Any = None,
+        rel_tol: Any = None,
+        max_iterations: Any = None,
+    ) -> Any:
         """Private token-level seam used only after typed authoring has been lowered."""
         _guard_assembling(self, "set_poisson")
-        if not isinstance(bc, str) or not isinstance(wall, str):
-            raise TypeError("_set_poisson_native requires native bc and wall tokens")
+        if not isinstance(bc, str):
+            raise TypeError("_set_poisson_native requires one native boundary token")
         rhs = _resolve_route("poisson_rhs", rhs, context="set_poisson")
         solver = _resolve_route("field_solver", solver, context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
-        wall = _resolve_route("wall", wall, context="set_poisson")
-        self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
-                            wall_radius=native_real(
-                                wall_radius, where="System.set_poisson.wall_radius"),
-                            epsilon=native_real(epsilon, where="System.set_poisson.epsilon"),
-                            abs_tol=native_real(abs_tol, where="System.set_poisson.abs_tol"),
-                            **_mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth,
-                                         post_smooth, bottom_sweeps, coarse_threshold))
+        controls = _cartesian_cg_kwargs(rel_tol, max_iterations)
+        if abs_tol is not None:
+            controls["abs_tol"] = native_real(abs_tol, where="System.set_poisson.abs_tol")
+        self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, **controls)
 
-    def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = None,
-                           wall: Any = None) -> Any:
+    def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = None) -> Any:
         """EPM: configures the system elliptic model (Poisson is its current instance).
         model = pops.elliptic(operator=pops.div_eps_grad(eps), rhs=pops.composite_rhs(),
         output=pops.electric_field_from_potential()). set_poisson(...) remains the equivalent shortcut.
 
-        Operator: div(eps grad) with CONSTANT eps (eps != 1 supported: eps lap phi = f); variable
-        eps(x) is plugged in via set_epsilon_field. Right-hand side: composite_rhs() = GENERIC sum
+        The uniform exact-ranked route implements only the unit-coefficient Laplacian. Right-hand
+        side: composite_rhs() = GENERIC sum
         of the elliptic bricks carried by the blocks (charge q n, background alpha (n-n0), gravity
-        coupling sign 4piG (rho-rho0)); charge_density() is its usual case. Diffusion / projection (other
-        operator) would require a variable-coefficient solver (refinement not available)."""
-        if not isinstance(model.operator, DivEpsGrad):  # freeze ADC-592: the delegated set_poisson guards
-            raise NotImplementedError("add_elliptic_model: only the div_eps_grad operator (Poisson) "
-                                      "is supported; diffusion / projection -> refinement (solver)")
+        coupling sign 4piG (rho-rho0)); charge_density() is its usual case. Other coefficients and
+        operators require an explicitly capable AMR field provider."""
+        if not isinstance(
+            model.operator, DivEpsGrad
+        ):  # freeze ADC-592: the delegated set_poisson guards
+            raise NotImplementedError(
+                "add_elliptic_model: only the div_eps_grad operator (Poisson) "
+                "is supported; diffusion / projection -> refinement (solver)"
+            )
         if not isinstance(model.rhs, CompositeRhs):
-            raise NotImplementedError("add_elliptic_model: rhs must be composite_rhs() (sum of the "
-                                      "per-block bricks) or charge_density() (its usual case)")
-        kind = solver.kind if solver is not None else None
+            raise NotImplementedError(
+                "add_elliptic_model: rhs must be composite_rhs() (sum of the "
+                "per-block bricks) or charge_density() (its usual case)"
+            )
+        if native_real(model.operator.epsilon, where="add_elliptic_model.operator.epsilon") != 1.0:
+            raise ValueError(
+                "add_elliptic_model: uniform CartesianCG requires the unit coefficient; "
+                "use the exact AMR field-provider contract for other coefficients"
+            )
         # Honest token: "composite" for a generic right-hand side, "charge_density" (alias,
         # bit-identical) when all blocks carry a charge density. Both take the
         # SAME numerical path on the C++ side (sum of each block's elliptic bricks).
         rhs_tok = "charge_density" if type(model.rhs) is ChargeDensitySource else "composite"
-        self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall,
-                         epsilon=model.operator.epsilon)
+        self.set_poisson(rhs=rhs_tok, solver=solver, bc=bc)
 
     def add_coupling(self, coupling: Any) -> Any:
         """Add an inter-species coupling (operator-split, applied after transport):
@@ -329,18 +414,23 @@ class _SystemInstall(_System):
         from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
 
         if isinstance(coupling, CompiledCoupledSource):
-            args = coupling_operator_args(coupling, getattr(coupling, "conserved_roles", ()),
-                                          getattr(coupling, "created_roles", ()))
+            args = coupling_operator_args(
+                coupling,
+                getattr(coupling, "conserved_roles", ()),
+                getattr(coupling, "created_roles", ()),
+            )
             self._s.add_coupling_operator(*args)
             return
         preset = lower_named_coupling(coupling, self._s.block_gamma)
         if preset is None:
             raise TypeError(
                 "add_coupling expects a private named-coupling engine descriptor or "
-                "CompiledCoupledSource")
+                "CompiledCoupledSource"
+            )
         # Validate the DECLARED contract symbolically (Python); the C++ revalidates at registration. A
         # created role (ionization) may net-source, so compile without verify_conservation.
         preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
-        args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
-                                      frequency=preset.frequency)
+        args = coupling_operator_args(
+            preset.source.compile(), preset.conserved, preset.created, frequency=preset.frequency
+        )
         self._s.add_coupling_operator(*args)

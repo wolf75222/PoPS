@@ -34,6 +34,12 @@ inline constexpr int kPolarTensorKrylovDefaultMaxIters = 400;
 inline constexpr int kSchurKrylovPolarMaxIters = 600;
 inline constexpr Real kKrylovBreakdownTiny = Real(1e-300);
 
+// Exact-ranked constant-coefficient Cartesian conjugate-gradient defaults. These belong to the
+// uniform System backend and are intentionally distinct from geometric multigrid V-cycle knobs.
+inline constexpr Real kCartesianCGDefaultRelTol = Real(1e-10);
+inline constexpr Real kCartesianCGDefaultAbsTol = Real(0);
+inline constexpr int kCartesianCGDefaultMaxIterations = 2000;
+
 // Geometric multigrid defaults.
 inline constexpr Real kMGDefaultRelTol = Real(1e-8);
 inline constexpr int kMGDefaultMaxCycles = 50;
@@ -172,7 +178,8 @@ struct EffectiveBlockOptions {
 
 struct EffectivePoissonOptions {
   std::string rhs = "charge_density";
-  std::string solver = "geometric_mg";
+  std::string solver = "cartesian_cg";
+  std::string solver_option_schema = "pops.system.cartesian-cg-options@1";
   std::string bc = "auto";
   std::string wall = "none";
   double wall_radius = 0.0;
@@ -181,6 +188,7 @@ struct EffectivePoissonOptions {
   // reports (and runs) the historical V-cycle. Populated from the resolved GeometricMgOptions.
   double rel_tol = static_cast<double>(kMGDefaultRelTol);
   double abs_tol = static_cast<double>(kMGDefaultAbsTol);
+  int max_iterations = kCartesianCGDefaultMaxIterations;
   int max_cycles = kMGDefaultMaxCycles;
   int min_coarse = kMGDefaultMinCoarse;
   int pre_smooth = kMGDefaultPreSmooth;

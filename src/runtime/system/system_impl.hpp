@@ -63,11 +63,11 @@ struct System<Dim>::Impl {
   double t = 0.0;
   int macro_step_ = 0;
   std::string last_dt_reason_;
-  std::string poisson_solver_ = "geometric_mg";
+  std::string poisson_solver_ = "cartesian_cg";
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;
-  double poisson_rel_tol_ = 1.0e-10;
-  int poisson_max_iterations_ = 2000;
+  double poisson_rel_tol_ = static_cast<double>(kCartesianCGDefaultRelTol);
+  int poisson_max_iterations_ = kCartesianCGDefaultMaxIterations;
 
   using exact_field_type = runtime::system::ExactNamedField<Dim>;
   using component_field_solver_type = runtime::field::PreparedFieldSolverComponent<Dim>;

@@ -143,10 +143,10 @@ def test_set_poisson_refuses_unknown_routes_and_untyped_selectors_before_bind():
         system().set_poisson(bc="bogus")
     with pytest.raises(ValueError, match="poisson_rhs"):
         system().set_poisson(rhs="bogus")
-    with pytest.raises(TypeError, match="string selectors"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'wall'"):
         system().set_poisson(wall="bogus")
     # A valid typed boundary lowers before the private native call.
-    system().set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+    system().set_poisson(rhs="charge_density", solver="cartesian_cg", bc=Periodic())
 
 
 def test_user_flux_stays_a_plain_token():

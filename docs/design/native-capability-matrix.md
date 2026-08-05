@@ -236,7 +236,9 @@ Supported native routes include:
   AMR regrid migration and checkpoint/restart do not persist such slots, and manual in-place Program
   writes, backend parity, and performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
-- Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
+- Elliptic `CartesianCG` on a uniform 1D/2D/3D `System`, `GeometricMG`/FAC on AMR, and FFT on
+  its separately qualified uniform periodic constant-coefficient route. `GeometricMG` is not an
+  alias for the uniform CG backend.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
 - A native C++ `amr:cell_local_temporal_transport` route partially proves scientific consumption of

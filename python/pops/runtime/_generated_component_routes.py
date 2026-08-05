@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 3
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = 'b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66'
+COMPONENT_CATALOG_SHA256 = '43357f9ddb2df44452242552d368a58625b6f2cab4f3ddb542de761f2db17cdd'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef'
 
-ROUTE_REGISTRY_SIGNATURE = 'v3:b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3'
+ROUTE_REGISTRY_SIGNATURE = 'v3:ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -81,7 +81,11 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                   ('polar',
                    'pops::PolarPoissonSolver',
                    ('polar geometry',),
-                   ('annular polar only (r_min > 0)',))),
+                   ('annular polar only (r_min > 0)',)),
+                  ('cartesian_cg',
+                   'pops::elliptic::nd::CartesianPoissonSolver<Dim>',
+                   ('uniform Cartesian layout', 'constant-coefficient Poisson operator'),
+                   ('no AMR, screened operator, embedded boundary, or dynamic boundary',))),
  'poisson_bc': (('auto', 'resolved from the wall/periodic system config', (), ()),
                 ('periodic', 'pops::fill_boundary(periodic)', (), ()),
                 ('dirichlet', 'pops::PhysicalBc(dirichlet)', (), ()),
@@ -145,7 +149,11 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
              'superbee': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True}},
  'recon': {'conservative': {}, 'primitive': {}},
  'time': {'explicit': {}, 'ssprk3': {}, 'euler': {}, 'imex': {}, 'imexrk_ars222': {}},
- 'field_solver': {'geometric_mg': {}, 'fft': {}, 'fft_spectral': {}, 'polar': {}},
+ 'field_solver': {'geometric_mg': {},
+                  'fft': {},
+                  'fft_spectral': {},
+                  'polar': {},
+                  'cartesian_cg': {}},
  'poisson_bc': {'auto': {}, 'periodic': {}, 'dirichlet': {}, 'neumann': {}},
  'layout': {'uniform': {}, 'amr': {}},
  'transport': {'exb': {'n_vars': 1,
@@ -192,7 +200,7 @@ ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
           'ids': ('kExplicitSsprk2', 'kSsprk3', 'kForwardEuler', 'kImex', 'kImexRkArs222')},
  'field_solver': {'enum': 'FieldSolverRouteId',
                   'table': 'kFieldSolverRoutes',
-                  'ids': ('kGeometricMg', 'kFft', 'kFftSpectral', 'kPolar')},
+                  'ids': ('kGeometricMg', 'kFft', 'kFftSpectral', 'kPolar', 'kCartesianCg')},
  'poisson_bc': {'enum': 'PoissonBcRouteId',
                 'table': 'kPoissonBcRoutes',
                 'ids': ('kAuto', 'kPeriodic', 'kDirichlet', 'kNeumann')},

@@ -136,7 +136,9 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
   if (!closures.rhs_into || !closures.rhs_flux_only || !closures.source_only ||
       !closures.rhs_at_point || !closures.rhs_flux_only_at_point || !closures.rhs_core_at_point ||
       !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
-      !closures.rhs_flux_only_core_at_point_prepared || !block.maximum_speed ||
+      !closures.rhs_flux_only_core_at_point_prepared ||
+      !closures.prepare_generated_state_at_point ||
+      !closures.prepare_generated_state_at_point_prepared || !block.maximum_speed ||
       !block.poisson_rhs || !block.primitive_to_conservative || !block.conservative_to_primitive ||
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
@@ -333,6 +335,10 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
       std::move(prepared.closures.boundary_residual_at_point_prepared);
   candidate.boundary_jvp_at_point_prepared =
       std::move(prepared.closures.boundary_jvp_at_point_prepared);
+  candidate.prepare_generated_state_at_point =
+      std::move(prepared.closures.prepare_generated_state_at_point);
+  candidate.prepare_generated_state_at_point_prepared =
+      std::move(prepared.closures.prepare_generated_state_at_point_prepared);
   candidate.boundary = boundary;
   candidate.state_identity = state_identity;
 
@@ -449,7 +455,7 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
     options.absolute_tolerance = static_cast<Real>(configured->second.absolute_tolerance);
     options.relative_tolerance = static_cast<Real>(configured->second.relative_tolerance);
     options.maximum_iterations = configured->second.maximum_iterations;
-    backend = std::make_unique<runtime::system::CartesianFieldSolverBackend<Dim>>(
+    backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
         p_->geom, p_->ba, p_->dm, p_->local_rank, topology, std::move(options),
         configured->second.exact_identity);
   }

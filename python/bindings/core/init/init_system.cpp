@@ -343,7 +343,8 @@ void bind_system_program(py::class_<System>& cls) {
       .def("mark_bound", &System::mark_bound)
       .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver (geometry-specific default: geometric_mg Cartesian, polar on a ring). install_program
+      // solver; the geometry-specific default is cartesian_cg on a uniform Cartesian domain).
+      // install_program
       // reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
@@ -443,7 +444,7 @@ void bind_system_checkpoint(py::class_<System>& cls) {
 }
 
 // Physics wiring: inter-species couplings, Poisson/field config, geometry (disc),
-// epsilon/reaction/magnetic/aux fields, and state initialization.
+// magnetic/aux fields, and state initialization.
 void bind_system_physics(py::class_<System>& cls) {
   // The named inter-species couplings (add_ionization / add_collision / add_thermal_exchange) are no
   // longer bound (ADC-595): they are Python presets lowering to add_coupling_operator. A new coupling
@@ -558,33 +559,15 @@ void bind_system_physics(py::class_<System>& cls) {
           "set_poisson", &System::set_poisson,
           "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
           "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
-          "historical "
-          "alias). solver: 'geometric_mg' (any case, wall included) | 'fft' (periodic, "
-          "discrete stencil; n = 2^k for the fast FFT, otherwise direct DFT O(n^2)) | "
-          "'fft_spectral' "
-          "(periodic, continuous symbol -(kx^2+ky^2)). bc: 'auto' | 'periodic' | 'dirichlet' | "
-          "'neumann'. wall: 'none' | "
-          "'circle' (conducting wall centered at (L/2, L/2), radius wall_radius). epsilon: "
-          "CONSTANT permittivity of div(eps grad phi) = f (for variable eps(x): "
-          "set_epsilon_field). "
-          "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative "
-          "criterion, "
-          "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
-          "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
-          "the native kMG* constants so an omitting call is bit-identical to the historical "
-          "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
-          "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
-          "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
-          "bit-identical to the historical hierarchy; inert for the FFT solver.",
-          py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
-          py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
-          py::arg("rel_tol") = static_cast<double>(kMGDefaultRelTol),
-          py::arg("max_cycles") = kMGDefaultMaxCycles, py::arg("min_coarse") = kMGDefaultMinCoarse,
-          py::arg("pre_smooth") = kMGDefaultPreSmooth,
-          py::arg("post_smooth") = kMGDefaultPostSmooth,
-          py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
-          py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
+          "historical alias). solver: 'cartesian_cg', the exact-ranked uniform "
+          "constant-coefficient backend. GeometricMG belongs to AmrSystem MG/FAC. "
+          "bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. "
+          "abs_tol / rel_tol / max_iterations are the only CartesianCG solve controls.",
+          py::arg("rhs") = "charge_density", py::arg("solver") = "cartesian_cg",
+          py::arg("bc") = "auto",
+          py::arg("abs_tol") = static_cast<double>(kCartesianCGDefaultAbsTol),
+          py::arg("rel_tol") = static_cast<double>(kCartesianCGDefaultRelTol),
+          py::arg("max_iterations") = kCartesianCGDefaultMaxIterations)
       .def(
           "register_configured_field_solver_provider",
           [](System& system, const std::string& family_route, const std::string& provider_route,
@@ -694,25 +677,6 @@ void bind_system_physics(py::class_<System>& cls) {
       // the mask of any analytic level set and is all 1.0 when none is installed.
       .def("disc_mask",
            [](const System& s) { return to_ranked_field(s.disc_mask(), s.spatial_shape()); })
-      .def(
-          "set_epsilon_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_epsilon_field(flat(arr));
-          },
-          py::arg("eps"))
-      .def(
-          "set_epsilon_anisotropic_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> eps_x,
-             py::array_t<double, py::array::c_style | py::array::forcecast> eps_y) {
-            s.set_epsilon_anisotropic_field(flat(eps_x), flat(eps_y));
-          },
-          py::arg("eps_x"), py::arg("eps_y"))
-      .def(
-          "set_reaction_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_reaction_field(flat(arr));
-          },
-          py::arg("kappa"))
       .def(
           "set_magnetic_field",
           [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {

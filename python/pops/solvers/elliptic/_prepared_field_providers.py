@@ -1,8 +1,10 @@
 """Ready elliptic field-solver providers built on the generic field protocol.
 
-This is the only Python module that interprets GeometricMG, CompositeFAC and FFT option schemas.
+This is the only Python module that interprets CartesianCG, GeometricMG, CompositeFAC and FFT
+option schemas.
 The registry, field compiler and runtime installers consume opaque authenticated bindings.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -11,12 +13,25 @@ from typing import Any
 
 
 _MG_KEYS = {
-    "rel_tol", "abs_tol", "max_cycles", "min_coarse", "pre_smooth",
-    "post_smooth", "bottom_sweeps", "coarse_threshold",
+    "rel_tol",
+    "abs_tol",
+    "max_cycles",
+    "min_coarse",
+    "pre_smooth",
+    "post_smooth",
+    "bottom_sweeps",
+    "coarse_threshold",
 }
+_CARTESIAN_CG_KEYS = {"rel_tol", "abs_tol", "max_iterations"}
 _FAC_KEYS = {
-    "max_iters", "fine_sweeps", "rel_tol", "abs_tol", "coarse_rel_tol",
-    "coarse_abs_tol", "coarse_cycles", "verbose",
+    "max_iters",
+    "fine_sweeps",
+    "rel_tol",
+    "abs_tol",
+    "coarse_rel_tol",
+    "coarse_abs_tol",
+    "coarse_cycles",
+    "verbose",
 }
 _FAC_DEFAULTS = {
     "max_iters": 30,
@@ -40,10 +55,7 @@ def _hierarchy_policy_identity(facts: Any, *, where: str) -> str:
     policy_id = authority.get("policy_id")
     if type(policy_id) is not str or not policy_id:
         raise TypeError("%s hierarchy policy requires an exact identity" % where)
-    if (
-        type(authority.get("interface_version")) is not int
-        or authority["interface_version"] < 1
-    ):
+    if type(authority.get("interface_version")) is not int or authority["interface_version"] < 1:
         raise TypeError("%s hierarchy policy requires a positive exact interface version" % where)
     if type(authority.get("option_schema")) is not str or not authority["option_schema"]:
         raise TypeError("%s hierarchy policy requires an exact option schema" % where)
@@ -84,14 +96,24 @@ def _resolved_mg_options(value: Any, *, where: str) -> dict[str, Any]:
         "max_cycles": _native_int(value["max_cycles"], where=where + ".max_cycles", minimum=1),
         "min_coarse": _native_int(value["min_coarse"], where=where + ".min_coarse", minimum=1),
         "pre_smooth": _native_int(value["pre_smooth"], where=where + ".pre_smooth", minimum=0),
-        "post_smooth": _native_int(
-            value["post_smooth"], where=where + ".post_smooth", minimum=0
-        ),
+        "post_smooth": _native_int(value["post_smooth"], where=where + ".post_smooth", minimum=0),
         "bottom_sweeps": _native_int(
             value["bottom_sweeps"], where=where + ".bottom_sweeps", minimum=0
         ),
         "coarse_threshold": _native_int(
             value["coarse_threshold"], where=where + ".coarse_threshold", minimum=0
+        ),
+    }
+
+
+def _resolved_cartesian_cg_options(value: Any, *, where: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _CARTESIAN_CG_KEYS:
+        raise TypeError("%s must contain the exact Cartesian-CG option schema" % where)
+    return {
+        "rel_tol": _native_real(value["rel_tol"], where=where + ".rel_tol", positive=True),
+        "abs_tol": _native_real(value["abs_tol"], where=where + ".abs_tol"),
+        "max_iterations": _native_int(
+            value["max_iterations"], where=where + ".max_iterations", minimum=1
         ),
     }
 
@@ -104,14 +126,10 @@ def _resolved_fac_options(value: Any, *, where: str) -> dict[str, Any]:
     result = dict(_FAC_DEFAULTS)
     for name in ("max_iters", "fine_sweeps", "coarse_cycles"):
         if value[name] is not None:
-            result[name] = _native_int(
-                value[name], where="%s.%s" % (where, name), minimum=1
-            )
+            result[name] = _native_int(value[name], where="%s.%s" % (where, name), minimum=1)
     for name in ("rel_tol", "coarse_rel_tol"):
         if value[name] is not None:
-            lowered = _native_real(
-                value[name], where="%s.%s" % (where, name), positive=True
-            )
+            lowered = _native_real(value[name], where="%s.%s" % (where, name), positive=True)
             if lowered >= 1.0:
                 raise ValueError("%s.%s must be in (0, 1)" % (where, name))
             result[name] = lowered
@@ -142,21 +160,20 @@ def _builtin_topology(facts: Any) -> dict[str, Any]:
 
 
 def _geometric_mg_resolver(
-    options: Mapping[str, Any], facts: Any, where: str,
+    options: Mapping[str, Any],
+    facts: Any,
+    where: str,
 ) -> Any:
     if set(options) != {"mg", "fac"}:
         raise TypeError("%s geometric-MG provider options have an invalid shape" % where)
     mg = _resolved_mg_options(options["mg"], where=where + ".mg")
     fac_authored = options["fac"]
     if facts.target == "system":
-        if fac_authored is not None:
-            raise ValueError("%s composite-FAC options require an AMR hierarchy" % where)
-        native = {
-            "factory_route": "geometric_mg",
-            "schema_identity": "pops.system.geometric-mg-options@1",
-            "options": mg,
-        }
-    elif facts.target == "amr_system":
+        raise ValueError(
+            "%s GeometricMG is reserved for the native MG/FAC AMR route; "
+            "use pops.solvers.elliptic.CartesianCG() for a uniform System" % where
+        )
+    if facts.target == "amr_system":
         fac = _resolved_fac_options(fac_authored, where=where + ".fac")
         native = {
             "factory_route": "geometric_mg",
@@ -168,10 +185,49 @@ def _geometric_mg_resolver(
         }
     else:
         raise ValueError(
-            "%s geometric-MG provider does not implement target %r"
-            % (where, facts.target)
+            "%s geometric-MG provider does not implement target %r" % (where, facts.target)
         )
     return _resolution(native, _builtin_topology(facts))
+
+
+def _cartesian_cg_resolver(
+    options: Mapping[str, Any],
+    facts: Any,
+    where: str,
+) -> Any:
+    if facts.target != "system":
+        raise ValueError(
+            "%s CartesianCG implements only a uniform System; use GeometricMG() on AMR" % where
+        )
+    native = {
+        "factory_route": "cartesian_cg",
+        "schema_identity": "pops.system.cartesian-cg-options@1",
+        "options": _resolved_cartesian_cg_options(options, where=where),
+    }
+    return _resolution(native, _builtin_topology(facts))
+
+
+def _validate_cartesian_cg(use: Any, where: str) -> None:
+    facts = use.facts
+    if facts.target != "system" or facts.layout.get("kind") != "uniform":
+        raise ValueError("%s CartesianCG requires one uniform System layout" % where)
+    if facts.layout.get("levels") != 1 or facts.layout.get("adaptive"):
+        raise ValueError("%s CartesianCG requires exactly one non-adaptive level" % where)
+    if _hierarchy_policy_identity(facts, where=where) != _LEVEL_LOCAL_HIERARCHY_POLICY:
+        raise ValueError("%s CartesianCG requires a level-local hierarchy" % where)
+    if facts.operator.get("principal") != "scalar-laplacian" or facts.operator.get("screened"):
+        raise ValueError("%s CartesianCG implements only constant-coefficient Poisson" % where)
+    if facts.layout.get("embedded_boundary"):
+        raise ValueError("%s CartesianCG requires a full-material Cartesian topology" % where)
+    if (
+        facts.boundary.get("dynamic")
+        or facts.boundary.get("dependent")
+        or facts.boundary.get("iterate_dependent")
+        or facts.nonlinear
+    ):
+        raise ValueError(
+            "%s CartesianCG does not implement dynamic, dependent, or nonlinear boundaries" % where
+        )
 
 
 def _validate_geometric_mg(use: Any, where: str) -> None:
@@ -179,9 +235,7 @@ def _validate_geometric_mg(use: Any, where: str) -> None:
     hierarchy = _hierarchy_policy_identity(facts, where=where)
     levels = facts.layout.get("levels", 0)
     if use.options.get("fac") is not None and (
-        facts.target != "amr_system"
-        or hierarchy != _COMPOSITE_HIERARCHY_POLICY
-        or levels < 2
+        facts.target != "amr_system" or hierarchy != _COMPOSITE_HIERARCHY_POLICY or levels < 2
     ):
         raise ValueError(
             "%s authored CompositeFAC requires a composite multi-level AMR backend" % where
@@ -219,18 +273,17 @@ def _validate_fft(use: Any, where: str) -> None:
     facts = use.facts
     if facts.target != "system" or facts.layout.get("kind") != "uniform":
         raise ValueError("%s FFT provider requires a single uniform System layout" % where)
-    if (
-        _hierarchy_policy_identity(facts, where=where)
-        != _LEVEL_LOCAL_HIERARCHY_POLICY
-    ):
+    if _hierarchy_policy_identity(facts, where=where) != _LEVEL_LOCAL_HIERARCHY_POLICY:
         raise ValueError("%s FFT provider requires a level-local hierarchy" % where)
     if facts.operator.get("screened"):
         raise ValueError("%s FFT provider does not implement a screened operator" % where)
     if facts.layout.get("embedded_boundary"):
         raise ValueError("%s FFT provider requires a full-material topology" % where)
     faces = facts.boundary.get("faces")
-    if not isinstance(faces, tuple) or not faces or any(
-        not isinstance(face, Mapping) or face.get("type") != "periodic" for face in faces
+    if (
+        not isinstance(faces, tuple)
+        or not faces
+        or any(not isinstance(face, Mapping) or face.get("type") != "periodic" for face in faces)
     ):
         raise ValueError("%s FFT provider requires fully periodic boundaries" % where)
     if facts.boundary.get("dynamic") or facts.boundary.get("dependent"):
@@ -246,7 +299,7 @@ def _validate_fft(use: Any, where: str) -> None:
         raise ValueError("%s FFT provider requires a power-of-two cell count on every axis" % where)
 
 
-def _register_ready_providers() -> tuple[Any, Any]:
+def _register_ready_providers() -> tuple[Any, Any, Any]:
     # Lazy import preserves the solvers authoring layer's import-time DAG.  Concrete provider
     # registration occurs only when a descriptor is prepared for field lowering.
     from pops.fields._prepared_field_solver_registry import (
@@ -255,55 +308,84 @@ def _register_ready_providers() -> tuple[Any, Any]:
         register_prepared_field_solver_provider as register,
     )
 
-    geometric = register(Provider(
-        provider_id="pops.field-solver.geometric-mg",
-        version=1,
-        resolver_id="pops.field-solver.geometric-mg.resolve@1",
-        installer_id="pops.field-solver.geometric-mg.install@1",
-        use_policy=UsePolicy(
-            "pops.field-solver.geometric-mg.use",
-            1,
-            {
-                "targets": ("system", "amr_system"),
-                "operators": ("poisson", "screened-poisson"),
-                "hierarchy_policies": (
-                    "pops.field-hierarchy.level-local@1",
-                    "pops.field-hierarchy.composite@1",
-                ),
-                "amr_boundary_dependencies": (
-                    "level-qualified-state@1",
-                    "level-qualified-field@1",
-                    "logical-timepoint@1",
-                ),
-            },
-            _validate_geometric_mg,
-        ),
-        resolver=_geometric_mg_resolver,
-        native_installer=_install_configured,
-    ))
-    fft = register(Provider(
-        provider_id="pops.field-solver.fft",
-        version=1,
-        resolver_id="pops.field-solver.fft.resolve@1",
-        installer_id="pops.field-solver.fft.install@1",
-        use_policy=UsePolicy(
-            "pops.field-solver.fft.use",
-            1,
-            {
-                "targets": ("system",),
-                "layout": "uniform-power-of-two",
-                "boundary": "fully-periodic",
-                "operator": "poisson",
-            },
-            _validate_fft,
-        ),
-        resolver=_fft_resolver,
-        native_installer=_install_configured,
-    ))
-    return geometric, fft
+    cartesian_cg = register(
+        Provider(
+            provider_id="pops.field-solver.cartesian-cg",
+            version=1,
+            resolver_id="pops.field-solver.cartesian-cg.resolve@1",
+            installer_id="pops.field-solver.cartesian-cg.install@1",
+            use_policy=UsePolicy(
+                "pops.field-solver.cartesian-cg.use",
+                1,
+                {
+                    "targets": ("system",),
+                    "layout": "uniform",
+                    "operators": ("poisson",),
+                    "boundary": "static-cartesian",
+                },
+                _validate_cartesian_cg,
+            ),
+            resolver=_cartesian_cg_resolver,
+            native_installer=_install_configured,
+        )
+    )
+    geometric = register(
+        Provider(
+            provider_id="pops.field-solver.geometric-mg",
+            version=1,
+            resolver_id="pops.field-solver.geometric-mg.resolve@1",
+            installer_id="pops.field-solver.geometric-mg.install@1",
+            use_policy=UsePolicy(
+                "pops.field-solver.geometric-mg.use",
+                1,
+                {
+                    "targets": ("amr_system",),
+                    "operators": ("poisson", "screened-poisson"),
+                    "hierarchy_policies": (
+                        "pops.field-hierarchy.level-local@1",
+                        "pops.field-hierarchy.composite@1",
+                    ),
+                    "amr_boundary_dependencies": (
+                        "level-qualified-state@1",
+                        "level-qualified-field@1",
+                        "logical-timepoint@1",
+                    ),
+                },
+                _validate_geometric_mg,
+            ),
+            resolver=_geometric_mg_resolver,
+            native_installer=_install_configured,
+        )
+    )
+    fft = register(
+        Provider(
+            provider_id="pops.field-solver.fft",
+            version=1,
+            resolver_id="pops.field-solver.fft.resolve@1",
+            installer_id="pops.field-solver.fft.install@1",
+            use_policy=UsePolicy(
+                "pops.field-solver.fft.use",
+                1,
+                {
+                    "targets": ("system",),
+                    "layout": "uniform-power-of-two",
+                    "boundary": "fully-periodic",
+                    "operator": "poisson",
+                },
+                _validate_fft,
+            ),
+            resolver=_fft_resolver,
+            native_installer=_install_configured,
+        )
+    )
+    return cartesian_cg, geometric, fft
 
 
-_GEOMETRIC_MG_PROVIDER, _FFT_PROVIDER = _register_ready_providers()
+_CARTESIAN_CG_PROVIDER, _GEOMETRIC_MG_PROVIDER, _FFT_PROVIDER = _register_ready_providers()
+
+
+def cartesian_cg_field_solver_provider() -> Any:
+    return _CARTESIAN_CG_PROVIDER
 
 
 def geometric_mg_field_solver_provider() -> Any:
@@ -314,4 +396,8 @@ def fft_field_solver_provider() -> Any:
     return _FFT_PROVIDER
 
 
-__all__ = ["fft_field_solver_provider", "geometric_mg_field_solver_provider"]
+__all__ = [
+    "cartesian_cg_field_solver_provider",
+    "fft_field_solver_provider",
+    "geometric_mg_field_solver_provider",
+]

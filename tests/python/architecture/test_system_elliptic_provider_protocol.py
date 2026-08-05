@@ -1,4 +1,5 @@
 """The exact-ranked System field protocol has one open extension seam."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,6 +13,8 @@ EXACT_BACKEND = ROOT / "include/pops/runtime/system/exact_field_solver_backend.h
 PREPARED_COMPONENT = ROOT / "include/pops/runtime/system/prepared_field_solver_component.hpp"
 FIELD_PLANS = ROOT / "src/runtime/system/system_field_plans.cpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
+SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
+SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 
 
 def _read(path: Path) -> str:
@@ -30,7 +33,7 @@ def test_builtin_and_component_backends_share_one_ranked_protocol() -> None:
     source = _read(EXACT_BACKEND)
     assert "template <int Dim>" in source
     assert "class ExactFieldSolverBackend" in source
-    assert "class CartesianFieldSolverBackend final" in source
+    assert "class CartesianCgFieldSolverBackend final" in source
     assert "class ComponentFieldSolverBackend final" in source
     for operation in (
         "field_type& rhs()",
@@ -65,3 +68,29 @@ def test_install_resolves_configured_and_component_providers_by_qualified_slot()
     assert "backend_provider_route" in install
     assert "SystemFieldSolver" not in plans
     assert "SystemFieldSolver" not in install
+
+
+def test_uniform_configured_backend_has_one_honest_cartesian_cg_schema() -> None:
+    plans = _read(FIELD_PLANS)
+    assert 'family_route != "cartesian_cg"' in plans
+    assert '"pops.system.cartesian-cg-options@1"' in plans
+    assert 'exact_int_option(options, "max_iterations")' in plans
+    for geometric_mg_option in (
+        'exact_int_option(options, "max_cycles")',
+        'exact_int_option(options, "min_coarse")',
+        'exact_int_option(options, "pre_smooth")',
+    ):
+        assert geometric_mg_option not in plans
+    assert "GeometricMG is reserved for the AMR MG/FAC route" in plans
+
+
+def test_uniform_surface_does_not_advertise_amr_only_operator_coefficients() -> None:
+    header = _read(SYSTEM_HEADER)
+    binding = _read(SYSTEM_BINDING)
+    for ghost_api in (
+        "set_epsilon_field",
+        "set_epsilon_anisotropic_field",
+        "set_reaction_field",
+    ):
+        assert ghost_api not in header
+        assert ghost_api not in binding

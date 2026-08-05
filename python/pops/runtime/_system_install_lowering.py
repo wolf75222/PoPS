@@ -7,6 +7,7 @@ module-level lowerers ``_lower_wall`` / ``_lower_bc`` that turn a typed
 
 Pure lowering: no ``_pops`` import, no numeric work.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -23,18 +24,20 @@ def _lower_wall(wall: Any) -> Any:
     if isinstance(wall, str):
         raise TypeError(
             "set_poisson: wall must be a typed pops.mesh.geometry.NoWall or Disc descriptor; "
-            "string selectors are not accepted")
+            "string selectors are not accepted"
+        )
     lower_wall = getattr(wall, "lower_wall", None)
     if lower_wall is None:
         raise TypeError(
             "set_poisson: wall must be a typed pops.mesh.geometry wall (NoWall / Disc), got %s"
-            % type(wall).__name__)
+            % type(wall).__name__
+        )
     lowered = lower_wall()
-    if (not isinstance(lowered, tuple) or len(lowered) != 2
-            or not isinstance(lowered[0], str)):
+    if not isinstance(lowered, tuple) or len(lowered) != 2 or not isinstance(lowered[0], str):
         raise TypeError(
             "%s.lower_wall() must return the private native (token, radius) pair"
-            % type(wall).__name__)
+            % type(wall).__name__
+        )
     return lowered
 
 
@@ -47,38 +50,38 @@ def _lower_bc(bc: Any) -> Any:
     if isinstance(bc, str):
         raise TypeError(
             "set_poisson: bc must be a typed native boundary descriptor "
-            "(Dirichlet / Neumann / Periodic); string selectors are not accepted")
+            "(Dirichlet / Neumann / Periodic); string selectors are not accepted"
+        )
     token = getattr(bc, "bc", None)  # native _Boundary brick carries its token on .bc
     if isinstance(token, str):
         return token
     raise TypeError(
         "set_poisson: bc must be a typed native boundary descriptor "
-        "(Dirichlet / Neumann / Periodic), got %s" % type(bc).__name__)
+        "(Dirichlet / Neumann / Periodic), got %s" % type(bc).__name__
+    )
 
 
-__all__ = ["_lower_wall", "_lower_bc"]
+__all__ = ["_cartesian_cg_kwargs", "_lower_wall", "_lower_bc", "_weno_kwargs"]
 
 
 def _weno_kwargs(spatial):
     """ADC-645: WENO5(epsilon=...) rides along the Spatial; None (the default) forwards NOTHING so
     the native ABI keeps its kWenoEpsilon default (byte-identical historical call)."""
     weps = getattr(spatial, "weno_epsilon", None)
-    return {} if weps is None else {
-        "weno_epsilon": native_real(weps, where="System.add_equation.weno_epsilon")}
+    return (
+        {}
+        if weps is None
+        else {"weno_epsilon": native_real(weps, where="System.add_equation.weno_epsilon")}
+    )
 
 
-def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_sweeps,
-               coarse_threshold):
-    """ADC-613/644: the GeometricMG V-cycle knobs, forwarded ONLY when set (None = unspecified ->
-    not passed -> the native kMG*-sourced default, bit-identical); coarse_threshold is the ADC-644
-    total-cell coarsening ceiling (0 = disabled)."""
+def _cartesian_cg_kwargs(rel_tol, max_iterations):
+    """Forward only authored exact-ranked Cartesian-CG controls to the native seam."""
     out = {}
     if rel_tol is not None:
         out["rel_tol"] = native_real(rel_tol, where="System.set_poisson.rel_tol")
-    for key, val in (("max_cycles", max_cycles), ("min_coarse", min_coarse),
-                     ("pre_smooth", pre_smooth), ("post_smooth", post_smooth),
-                     ("bottom_sweeps", bottom_sweeps),
-                     ("coarse_threshold", coarse_threshold)):
-        if val is not None:
-            out[key] = int(val)
+    if max_iterations is not None:
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
+            raise TypeError("System.set_poisson.max_iterations must be a Python int")
+        out["max_iterations"] = max_iterations
     return out

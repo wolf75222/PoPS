@@ -824,6 +824,12 @@ silently), or are assumed scope boundaries.
   complete azimuthal line and the complete radial column on a same rank, so it raises if `n_ranks() > 1` or if
   `ba.size() != 1`. They are not advertised as an exact-ranked `System` backend.
 
+- The final exact-ranked uniform `System` names its iterative Poisson backend `CartesianCG`. Its
+  authenticated provider schema contains only `rel_tol`, `abs_tol`, and `max_iterations`, the three
+  values consumed by the compile-time-ranked 1D/2D/3D CG kernel. `GeometricMG` is reserved for the
+  actual AMR MG/FAC route and is rejected for a uniform `System`; no token is silently remapped to a
+  different algorithm.
+
 These safeguards are deliberate: they transform a SIGSEGV in Release (absent box, assert disappeared) into
 a readable error.
 

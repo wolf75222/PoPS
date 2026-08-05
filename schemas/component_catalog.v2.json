@@ -806,6 +806,21 @@
           ],
           "aliases": [],
           "metadata": {}
+        },
+        {
+          "token": "cartesian_cg",
+          "wire_id": 4,
+          "cpp_id": "kCartesianCg",
+          "native_entry": "pops::elliptic::nd::CartesianPoissonSolver<Dim>",
+          "requirements": [
+            "uniform Cartesian layout",
+            "constant-coefficient Poisson operator"
+          ],
+          "limitations": [
+            "no AMR, screened operator, embedded boundary, or dynamic boundary"
+          ],
+          "aliases": [],
+          "metadata": {}
         }
       ]
     },

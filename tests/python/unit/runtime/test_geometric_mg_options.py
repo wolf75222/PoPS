@@ -4,9 +4,8 @@ Two tiers:
   * descriptor-only (no ``_pops``): the default reconciliation to the native kMG* constants, the
     resolved mg_options() mapping, and the STRUCTURAL refusal of the un-wired Chebyshev smoother /
     out-of-domain tolerances;
-  * runtime (``_pops`` built): the effective options report equals the numerical defaults report for
-    a default GeometricMG() (bit-identity), an override is visible in the report AND changes the
-    elliptic residual/cycles, and out-of-domain values refuse at the native seam.
+  * runtime (``_pops`` built): a uniform System reports and executes CartesianCG, and explicitly
+    refuses GeometricMG instead of mapping that name onto the CG implementation.
 """
 
 import pytest
@@ -86,7 +85,7 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
         Relative(0.0)
 
 
-# --- runtime tier (needs _pops) ----------------------------------------------
+# --- runtime-family separation tier (needs _pops) ----------------------------
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
@@ -106,89 +105,36 @@ def _sim(**poisson):
     return sim
 
 
-def test_effective_default_equals_numerical_defaults_report():
-    """Bit-identity: a System that never touches the knobs reports the native kMG* defaults."""
+def test_uniform_system_reports_cartesian_cg_defaults():
+    """A uniform System must never advertise its CG kernel as geometric multigrid."""
     sim = _sim()
     report = sim.inspect().to_dict()["options"]
     poisson = report["poisson"]
-    mg = report["defaults"]["mg"]
-    assert poisson["rel_tol"] == pytest.approx(mg["rel_tol"])
-    assert poisson["max_cycles"] == mg["max_cycles"]
-    assert poisson["min_coarse"] == mg["min_coarse"]
-    assert poisson["pre_smooth"] == mg["pre_smooth"]
-    assert poisson["post_smooth"] == mg["post_smooth"]
-    assert poisson["bottom_sweeps"] == mg["bottom_sweeps"]
-    # ADC-644: coarse_threshold defaults to the disabled sentinel 0 (bit-identical hierarchy).
-    assert poisson["coarse_threshold"] == mg["coarse_threshold"] == 0
-    assert poisson["smoother"] == "red_black_gauss_seidel"
+    cg = report["defaults"]["cartesian_cg"]
+    assert poisson["solver"] == "cartesian_cg"
+    assert poisson["solver_option_schema"] == "pops.system.cartesian-cg-options@1"
+    assert poisson["rel_tol"] == pytest.approx(cg["rel_tol"])
+    assert poisson["abs_tol"] == pytest.approx(cg["abs_tol"])
+    assert poisson["max_iterations"] == cg["max_iterations"]
 
 
-def test_override_visible_in_effective_report():
-    sim = _sim(rel_tol=1e-4, max_cycles=7, min_coarse=4, pre_smooth=3, post_smooth=1,
-               bottom_sweeps=80, coarse_threshold=16)
+def test_cartesian_cg_override_visible_in_effective_report():
+    sim = _sim(rel_tol=1e-4, max_iterations=7)
     poisson = sim.inspect().to_dict()["options"]["poisson"]
     assert poisson["rel_tol"] == pytest.approx(1e-4)
-    assert poisson["max_cycles"] == 7
-    assert poisson["min_coarse"] == 4
-    assert poisson["pre_smooth"] == 3
-    assert poisson["post_smooth"] == 1
-    assert poisson["bottom_sweeps"] == 80
-    assert poisson["coarse_threshold"] == 16  # ADC-644
+    assert poisson["max_iterations"] == 7
 
 
-def test_override_changes_the_v_cycle_count():
-    """A one-cycle cap reaches the native solver and is reported as a rejected attempt.
-
-    The default 1e-8 stop converges in a few cycles; capping max_cycles at 1 cannot satisfy that
-    tolerance. The fallible solve contract must expose that iteration limit instead of publishing
-    the unconverged candidate."""
-    import numpy as np
-
-    sim = _sim(max_cycles=1)
-    rho = np.zeros((16, 16))
-    rho[8, 8] = 1.0
-    rho[4, 4] = -1.0
-    sim.set_density("ion", rho)
-    configured = sim.inspect().to_dict()
-    assert configured["options"]["poisson"]["max_cycles"] == 1
-    with pytest.raises(RuntimeError, match=r"status=iteration_limit.*action=reject_attempt"):
-        sim.solve_fields()
-
-
-def test_coarse_threshold_changes_the_hierarchy():
-    """ADC-644 live behavior: a positive coarse_threshold actually stops coarsening.
-
-    The native profiler reports the actual MG level count.  A ceiling of n*n disables coarsening at
-    the root and must therefore report fewer levels than the default deep hierarchy.  This is a
-    structural witness; unlike comparing one converged potential, it remains valid when the root
-    bottom solve happens to make both numerical answers identical."""
-    import numpy as np
-
-    def _levels(**poisson):
-        sim = _sim(max_cycles=50, **poisson)
-        rho = np.zeros((16, 16))
-        rho[8, 8] = 1.0
-        rho[4, 4] = -1.0
-        sim.set_density("ion", rho)
-        with sim.profile() as profile:
-            sim.solve_fields()
-        return profile.summary().by_elliptic()["mg_levels"]
-
-    deep = _levels()  # default: coarsen down to min_coarse
-    shallow = _levels(coarse_threshold=16 * 16)  # ceiling at root: no coarsening
-    assert deep > shallow == 1, "coarse_threshold must reach the native hierarchy"
+def test_uniform_system_refuses_geometric_mg_instead_of_aliasing_it():
+    with pytest.raises((RuntimeError, ValueError), match="GeometricMG.*AMR"):
+        _sim(solver="geometric_mg")
 
 
 def test_native_set_poisson_refuses_out_of_domain():
     with pytest.raises((RuntimeError, ValueError)):
         _sim(rel_tol=0.0)
     with pytest.raises((RuntimeError, ValueError)):
-        _sim(max_cycles=0)
-    with pytest.raises((RuntimeError, ValueError)):
-        _sim(min_coarse=0)
-    # ADC-644: a negative coarse_threshold is refused (0 = disabled is valid).
-    with pytest.raises((RuntimeError, ValueError)):
-        _sim(coarse_threshold=-1)
+        _sim(max_iterations=0)
 
 
 def main():
@@ -199,10 +145,9 @@ def main():
     test_coarse_threshold_default_disabled_and_override()
     test_chebyshev_smoother_refuses_structurally()
     test_out_of_domain_cycles_and_tolerance_refuse()
-    test_effective_default_equals_numerical_defaults_report()
-    test_override_visible_in_effective_report()
-    test_override_changes_the_v_cycle_count()
-    test_coarse_threshold_changes_the_hierarchy()
+    test_uniform_system_reports_cartesian_cg_defaults()
+    test_cartesian_cg_override_visible_in_effective_report()
+    test_uniform_system_refuses_geometric_mg_instead_of_aliasing_it()
     test_native_set_poisson_refuses_out_of_domain()
     print("OK  ADC-613 GeometricMG options")
 

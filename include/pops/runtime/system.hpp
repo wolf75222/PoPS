@@ -167,7 +167,7 @@ struct SystemConfig : RuntimeSpatialDomain<Dim> {
 /// ne.source = "none";
 /// ne.elliptic = "charge";
 /// sys.add_block("ne", ne, "minmod", "rusanov", "conservative", "explicit");
-/// sys.set_poisson("charge_density", "geometric_mg");
+/// sys.set_poisson("charge_density", "cartesian_cg");
 ///
 /// sys.set_density("ne", rho0);             // rho0: initial density, flattened row-major (n*n)
 /// const double dt = sys.step_cfl(0.4);     // one CFL-limited step of the coupled system
@@ -358,34 +358,16 @@ class System {
 
   /// Configures the shared Poisson.
   /// @param rhs    only mode: "charge_density", f = sum_s elliptic_rhs_s(u_s)
-  /// @param solver "geometric_mg" (any case, wall included) | "fft" (periodic, n = 2^k)
+  /// @param solver "cartesian_cg", the exact-ranked constant-coefficient uniform solver.
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
-  /// @param wall   "none" | "circle": conducting wall at (L/2, L/2), radius wall_radius
-  /// @param epsilon CONSTANT permittivity of the operator div(eps grad phi) = f. eps != 1 solves
-  ///                eps lap phi = f (i.e. lap phi = f/eps). For a VARIABLE permittivity eps(x),
-  ///                cf. set_epsilon_field (variable-coefficient operator, GeometricMG).
-  /// @param abs_tol ABSOLUTE floor of the stopping criterion of the GeometricMG V-cycle (same units as the
-  ///                residual). Default 0: purely relative criterion, historical behavior unchanged.
-  ///                Set > 0 (problem scale), it makes solve_fields exit without cycling OUT OF
-  ///                STEP on an already-converged state. No effect on the FFT solver (direct).
-  /// @param rel_tol RELATIVE residual stop of the GeometricMG V-cycle (residual <= max(rel_tol*r0,
-  ///                abs_tol)). Default kMGDefaultRelTol (1e-8): the historical V-cycle criterion.
-  /// @param max_cycles V-cycle cap. Default kMGDefaultMaxCycles (50).
-  /// @param min_coarse Stop coarsening below this per-axis cell count. Default kMGDefaultMinCoarse (2).
-  /// @param pre_smooth Pre-smoothing Gauss-Seidel sweeps (nu1). Default kMGDefaultPreSmooth (2).
-  /// @param post_smooth Post-smoothing Gauss-Seidel sweeps (nu2). Default kMGDefaultPostSmooth (2).
-  /// @param bottom_sweeps Coarsest-grid Gauss-Seidel sweeps (nbottom). Default kMGDefaultBottomSweeps (50).
-  ///                The GeometricMG knobs (ADC-613) default to the kMG* constants, so a call that
-  ///                omits them builds and drives the historical V-cycle bit-for-bit; they are inert
-  ///                for the FFT solver (direct, no iterative tolerance).
+  /// @param abs_tol Absolute residual floor of CartesianCG.
+  /// @param rel_tol Relative residual tolerance of CartesianCG.
+  /// @param max_iterations CartesianCG iteration cap.
   void set_poisson(const std::string& rhs = "charge_density",
-                   const std::string& solver = "geometric_mg", const std::string& bc = "auto",
-                   const std::string& wall = "none", double wall_radius = 0.0, double epsilon = 1.0,
-                   double abs_tol = 0.0, double rel_tol = static_cast<double>(kMGDefaultRelTol),
-                   int max_cycles = kMGDefaultMaxCycles, int min_coarse = kMGDefaultMinCoarse,
-                   int pre_smooth = kMGDefaultPreSmooth, int post_smooth = kMGDefaultPostSmooth,
-                   int bottom_sweeps = kMGDefaultBottomSweeps,
-                   int coarse_threshold = kMGDefaultCoarseThreshold);
+                   const std::string& solver = "cartesian_cg", const std::string& bc = "auto",
+                   double abs_tol = static_cast<double>(kCartesianCGDefaultAbsTol),
+                   double rel_tol = static_cast<double>(kCartesianCGDefaultRelTol),
+                   int max_iterations = kCartesianCGDefaultMaxIterations);
   /// Materialize one immutable provider instance from an already registered family. Provider-owned
   /// code authenticates and decodes @p options; the System core only stores the returned route.
   POPS_EXPORT std::string register_configured_field_solver_provider(
@@ -461,8 +443,8 @@ class System {
                            const std::string& nullspace_provider_identity,
                            const PreparedProviderOptions& options);
 
-  /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
-  /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
+  /// Configured field (Poisson) solver token. A uniform System reports ``cartesian_cg``; the
+  /// ``geometric_mg`` token belongs to AmrSystem MG/FAC. Read by install_program for the
   /// Spec criterion-24 solver requirement check (a field operator that requires a named solver is
   /// rejected at install when the configured solver does not match) and exposed for introspection.
   std::string poisson_solver() const;
@@ -515,29 +497,6 @@ class System {
   /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> disc_mask() const;
-
-  /// Sets a VARIABLE permittivity eps(x), n*n row-major field (> 0), at the cell CENTER.
-  /// The system Poisson operator becomes div(eps grad phi) = f, eps CARRIED BY THE OPERATOR
-  /// (harmonic face coefficient, order 2) without 1/eps scaling of the right-hand side. Only
-  /// the 'geometric_mg' solver supports it; requesting it with 'fft' (constant coefficient) raises an
-  /// error. Takes precedence over the constant permittivity of set_poisson. Call before solve_fields.
-  void set_epsilon_field(const std::vector<double>& eps);
-
-  /// Sets an ANISOTROPIC permittivity eps_x(x), eps_y(x), two n*n row-major fields (> 0), at the CENTER
-  /// of the cells. The system Poisson operator becomes div(diag(eps_x, eps_y) grad phi) = f:
-  /// faces normal to x carry eps_x, those normal to y carry eps_y (harmonic face coefficients,
-  /// order 2), CARRIED BY THE OPERATOR without 1/eps scaling of the right-hand side.
-  /// eps_x == eps_y gives back the isotropic operator div(eps grad phi). Only 'geometric_mg' supports it;
-  /// requesting it with 'fft' (constant coefficient) raises an error. Call before solve_fields.
-  void set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
-                                     const std::vector<double>& eps_y);
-
-  /// Enables a REACTION term kappa(x) >= 0: the system Poisson operator goes from
-  /// div(eps grad phi) = f to div(eps grad phi) - kappa phi = f (SCREENED Poisson / Helmholtz;
-  /// kappa = 1/lambda_D^2 for Debye screening). n*n row-major field, carried by the operator
-  /// GeometricMG (diagonal kappa, restricted to coarse levels). Only 'geometric_mg' supports it
-  /// (error with 'fft'). Composable with set_epsilon_field. kappa = 0 everywhere => Poisson unchanged.
-  void set_reaction_field(const std::vector<double>& kappa);
 
   /// Sets an out-of-plane magnetic field B_z(x, y) SHARED by the blocks, n*n row-major. Populates the
   /// extra aux component (B_z channel) read by the models that declare it (n_aux > 3);

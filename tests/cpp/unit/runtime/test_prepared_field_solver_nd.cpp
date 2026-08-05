@@ -5,9 +5,9 @@
 template class pops::runtime::field::PreparedFieldSolverComponent<1>;
 template class pops::runtime::field::PreparedFieldSolverComponent<2>;
 template class pops::runtime::field::PreparedFieldSolverComponent<3>;
-template class pops::runtime::system::CartesianFieldSolverBackend<1>;
-template class pops::runtime::system::CartesianFieldSolverBackend<2>;
-template class pops::runtime::system::CartesianFieldSolverBackend<3>;
+template class pops::runtime::system::CartesianCgFieldSolverBackend<1>;
+template class pops::runtime::system::CartesianCgFieldSolverBackend<2>;
+template class pops::runtime::system::CartesianCgFieldSolverBackend<3>;
 template class pops::runtime::system::ComponentFieldSolverBackend<1>;
 template class pops::runtime::system::ComponentFieldSolverBackend<2>;
 template class pops::runtime::system::ComponentFieldSolverBackend<3>;

@@ -3,20 +3,23 @@
 The elliptic solve ``div(eps grad phi) = rhs`` is configured by a TYPED descriptor with a rich
 parameter surface, not the bare string ``solver="geometric_mg"``:
 
-* :class:`GeometricMG` -- geometric multigrid, configured by a typed smoother
+* :class:`CartesianCG` -- the exact-ranked constant-coefficient Cartesian conjugate-gradient
+  solver used by a uniform :class:`System`;
+* :class:`GeometricMG` -- geometric multigrid for the AMR MG/FAC route, configured by a typed smoother
   (:class:`pops.solvers.options.Chebyshev` / :class:`~pops.solvers.options.RedBlackGaussSeidel`),
   a typed coarse solver (:class:`~pops.solvers.options.DirectSmallGrid`), a typed convergence
   tolerance (:class:`pops.solvers.tolerances.Relative` / :class:`~pops.solvers.tolerances.Absolute`)
-  and a V-cycle cap (``max_cycles``). It declares its capabilities (uniform / amr / mpi / gpu /
+  and a V-cycle cap (``max_cycles``). It declares its AMR / MPI / GPU /
   variable_epsilon) so an unsupported route is refused before the runtime is touched.
 * :class:`FFT` -- the real ``pops::PoissonFFTSolver`` (periodic BC, constant coefficient,
   power-of-two grid); ``available()`` reports ``partial`` for those route constraints (not
-  because it is unimplemented) and points at :class:`GeometricMG` for the general case.
+  because it is unimplemented) and points at :class:`CartesianCG` for the non-spectral uniform case.
 
-Both are inert (Spec 5 sec.6): they record the choice and answer ``available`` / ``lower`` /
-``inspect``; the C++ kernel performs the multigrid V-cycles. The ``scheme`` attribute mirrors
+All are inert (Spec 5 sec.6): they record the choice and answer ``available`` / ``lower`` /
+``inspect``; the C++ kernels perform the solve. The ``scheme`` attribute mirrors
 the runtime token so the install path's solver-token resolution keeps working.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -47,6 +50,142 @@ _MG_DEFAULT_PRE_SMOOTH = 2
 _MG_DEFAULT_POST_SMOOTH = 2
 _MG_DEFAULT_BOTTOM_SWEEPS = 50
 _MG_DEFAULT_COARSE_THRESHOLD = 0
+
+_CARTESIAN_CG_DEFAULT_REL_TOL = 1e-10
+_CARTESIAN_CG_DEFAULT_ABS_TOL = 0.0
+_CARTESIAN_CG_DEFAULT_MAX_ITERATIONS = 2000
+
+
+class CartesianCG(Descriptor):
+    """Exact-ranked Cartesian conjugate gradient for one uniform ``System``.
+
+    The native backend solves the constant-coefficient cell-centred Poisson operator over a
+    compile-time rank in ``{1, 2, 3}``.  It is deliberately distinct from
+    :class:`GeometricMG`: selecting this descriptor commits a CG algorithm and only the three
+    controls that the native CG actually consumes.
+    """
+
+    category = "elliptic_solver"
+    native_id = "pops::elliptic::nd::CartesianPoissonSolver<Dim>"
+    scheme = "cartesian_cg"
+
+    def __init__(
+        self,
+        tolerance: Any = None,
+        max_iterations: int = _CARTESIAN_CG_DEFAULT_MAX_ITERATIONS,
+    ) -> None:
+        if tolerance is None:
+            tolerance = Relative(_CARTESIAN_CG_DEFAULT_REL_TOL)
+        if not isinstance(tolerance, _TOLERANCES):
+            raise TypeError(
+                "CartesianCG(tolerance=) must be a Relative / Absolute descriptor, not %r"
+                % (tolerance,)
+            )
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
+            raise TypeError(
+                "CartesianCG(max_iterations=) must be a Python int; got %r" % (max_iterations,)
+            )
+        if max_iterations < 1:
+            raise ValueError("CartesianCG(max_iterations=) must be >= 1; got %d" % max_iterations)
+        self.tolerance = tolerance
+        self.max_iterations = int(max_iterations)
+
+    @property
+    def name(self) -> str:
+        return self.scheme
+
+    def capabilities(self) -> Any:
+        return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
+
+    def _resolved_tolerance(self) -> tuple[float, float]:
+        if isinstance(self.tolerance, Relative):
+            floor = self.tolerance.floor.abs_floor if self.tolerance.floor is not None else 0.0
+            return float(self.tolerance.rel), float(floor)
+        return _CARTESIAN_CG_DEFAULT_REL_TOL, float(self.tolerance.abs_tol)
+
+    def cg_options(self) -> dict[str, Any]:
+        rel_tol, abs_tol = self._resolved_tolerance()
+        return {
+            "rel_tol": rel_tol,
+            "abs_tol": abs_tol,
+            "max_iterations": self.max_iterations,
+        }
+
+    def native_cg_options(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "cartesian_cg_options",
+            **self.cg_options(),
+        }
+
+    def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
+        from ._prepared_field_providers import cartesian_cg_field_solver_provider
+
+        return cartesian_cg_field_solver_provider(), self.cg_options()
+
+    def options(self) -> dict[str, Any]:
+        return {
+            "tolerance": self.tolerance.name,
+            "max_iterations": self.max_iterations,
+        }
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "scheme": self.scheme,
+            "tolerance": {
+                "type": type(self.tolerance).__name__,
+                "options": self.tolerance.options(),
+            },
+            "max_iterations": self.max_iterations,
+        }
+
+    def validate(self, context: Any = None) -> ReportTree:
+        rel_tol, abs_tol = self._resolved_tolerance()
+        report = ReportTree(
+            phase="validation",
+            severity="info",
+            code="validation.elliptic_solver.report",
+            source="elliptic_solver",
+            owner=self,
+            evidence={"descriptor": self.name, "scheme": self.scheme},
+        )
+        if rel_tol <= 0.0:
+            report = report.error(
+                "elliptic_solver",
+                "rel_tol_out_of_domain",
+                "CartesianCG relative tolerance must be > 0; got %r." % rel_tol,
+                context={"rel_tol": rel_tol},
+            )
+        if abs_tol < 0.0:
+            report = report.error(
+                "elliptic_solver",
+                "abs_tol_out_of_domain",
+                "CartesianCG absolute tolerance must be >= 0; got %r." % abs_tol,
+                context={"abs_tol": abs_tol},
+            )
+        return report
+
+    def lower(self, context: Any = None) -> Any:
+        self.validate(context).raise_if_error()
+        from pops.descriptors_report import LoweredDescriptor
+
+        return LoweredDescriptor(
+            name=self.name,
+            category=self.category,
+            native_id=self.native_id,
+            options=self.options(),
+            scheme=self.scheme,
+            extra={
+                "tolerance": self.tolerance.lower(context),
+                "cg_options": self.native_cg_options(),
+            },
+        )
+
+    def inspect(self) -> Any:
+        view = super().inspect()
+        view["scheme"] = self.scheme
+        view["available"] = True
+        return view
 
 
 def native_geometric_mg_defaults() -> dict[str, Any]:
@@ -79,36 +218,50 @@ class GeometricMG(Descriptor):
     loud (Spec 5 sec.7). The descriptor is inert: it records the configuration and answers the
     protocol; the C++ multigrid kernel runs the V-cycles.
 
-    ADC-613 wires these knobs END TO END: ``pops.compile`` / ``pops.bind`` lower the descriptor to
-    ``System.set_poisson``, which forwards the resolved scalars to the native ``GeometricMG`` ctor +
-    ``solve(rel_tol, max_cycles, abs_tol)``. The defaults are the native ``kMG*`` constants, so
-    ``GeometricMG()`` reproduces the historical V-cycle bit-for-bit. Only the Gauss-Seidel smoother
-    and the Gauss-Seidel bottom solve are wired natively; :meth:`validate` refuses the (never-wired)
-    ``Chebyshev`` smoother STRUCTURALLY rather than silently ignoring it.
+    ``pops.compile`` / ``pops.bind`` lower this descriptor only to the AMR MG/FAC provider. The
+    defaults are the native ``kMG*`` constants. Only the Gauss-Seidel smoother and bottom solve are
+    wired natively; :meth:`validate` refuses the (never-wired) ``Chebyshev`` smoother structurally
+    rather than silently ignoring it. A uniform ``System`` uses :class:`CartesianCG` instead.
     """
 
     category = "elliptic_solver"
     native_id = "pops::GeometricMG"
     scheme = "geometric_mg"
 
-    def __init__(self, smoother: Any = None, coarse: Any = None, tolerance: Any = None,
-                 max_cycles: int = _MG_DEFAULT_MAX_CYCLES, min_coarse: int = _MG_DEFAULT_MIN_COARSE,
-                 pre_sweeps: int = _MG_DEFAULT_PRE_SMOOTH,
-                 post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
-                 bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
-                 fac: Any = None) -> None:
+    def __init__(
+        self,
+        smoother: Any = None,
+        coarse: Any = None,
+        tolerance: Any = None,
+        max_cycles: int = _MG_DEFAULT_MAX_CYCLES,
+        min_coarse: int = _MG_DEFAULT_MIN_COARSE,
+        pre_sweeps: int = _MG_DEFAULT_PRE_SMOOTH,
+        post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
+        bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
+        fac: Any = None,
+    ) -> None:
         # Default smoother is the natively-wired RedBlackGaussSeidel (ADC-613): the native V-cycle
         # uses a Gauss-Seidel smoother, so this keeps GeometricMG() working. Chebyshev stays a
         # selectable descriptor but validate() refuses it (no native Chebyshev smoother yet).
-        self.smoother = _check(smoother, _SMOOTHERS, "smoother",
-                               "pops.solvers.options.RedBlackGaussSeidel()", RedBlackGaussSeidel())
-        self.coarse = _check(coarse, _COARSE, "coarse",
-                             "pops.solvers.options.DirectSmallGrid()", DirectSmallGrid())
+        self.smoother = _check(
+            smoother,
+            _SMOOTHERS,
+            "smoother",
+            "pops.solvers.options.RedBlackGaussSeidel()",
+            RedBlackGaussSeidel(),
+        )
+        self.coarse = _check(
+            coarse, _COARSE, "coarse", "pops.solvers.options.DirectSmallGrid()", DirectSmallGrid()
+        )
         # Default tolerance = the native relative criterion (kMGDefaultRelTol) with NO absolute
         # floor (abs_tol 0), i.e. the historical purely-relative V-cycle stop.
-        self.tolerance = _check(tolerance, _TOLERANCES, "tolerance",
-                                "pops.solvers.tolerances.Relative()",
-                                Relative(_MG_DEFAULT_REL_TOL))
+        self.tolerance = _check(
+            tolerance,
+            _TOLERANCES,
+            "tolerance",
+            "pops.solvers.tolerances.Relative()",
+            Relative(_MG_DEFAULT_REL_TOL),
+        )
         self.max_cycles = _check_positive_int(max_cycles, "max_cycles", minimum=1)
         self.min_coarse = _check_positive_int(min_coarse, "min_coarse", minimum=1)
         self.pre_sweeps = _check_positive_int(pre_sweeps, "pre_sweeps", minimum=0)
@@ -120,7 +273,8 @@ class GeometricMG(Descriptor):
         if fac is not None and not isinstance(fac, CompositeFAC):
             raise TypeError(
                 "GeometricMG(fac=) must be a pops.solvers.options.CompositeFAC "
-                "descriptor or None, not %r; use CompositeFAC()." % (fac,))
+                "descriptor or None, not %r; use CompositeFAC()." % (fac,)
+            )
         self.fac = fac
 
     @property
@@ -128,9 +282,17 @@ class GeometricMG(Descriptor):
         return "geometric_mg"
 
     def capabilities(self) -> Any:
-        return CapabilitySet(capability_map(uniform=True, amr=True, mpi=True, gpu=True,
-                                            variable_epsilon=True, screened=True,
-                                            periodic_bc=True, wall_bc=True))
+        return CapabilitySet(
+            capability_map(
+                amr=True,
+                mpi=True,
+                gpu=True,
+                variable_epsilon=True,
+                screened=True,
+                periodic_bc=True,
+                wall_bc=True,
+            )
+        )
 
     def _prepared_field_solver(self) -> tuple[Any, dict[str, Any]]:
         """Bind through the same authenticated provider protocol as external solvers."""
@@ -257,28 +419,37 @@ class GeometricMG(Descriptor):
         unsupported sub-option refuses, never drops. Out-of-domain tolerances are rejected too.
         """
         report = ReportTree(
-            phase="validation", severity="info", code="validation.elliptic_solver.report",
-            source="elliptic_solver", owner=self,
+            phase="validation",
+            severity="info",
+            code="validation.elliptic_solver.report",
+            source="elliptic_solver",
+            owner=self,
             evidence={"descriptor": self.name, "scheme": self.scheme},
         )
         if isinstance(self.smoother, Chebyshev):
             report = report.error(
-                "elliptic_solver", "smoother_not_wired",
+                "elliptic_solver",
+                "smoother_not_wired",
                 "GeometricMG smoother %r has no native C++ kernel: the native V-cycle uses a "
                 "Gauss-Seidel smoother. Use RedBlackGaussSeidel()." % self.smoother.name,
                 context={"smoother": self.smoother.name},
-                alternatives=["pops.solvers.options.RedBlackGaussSeidel()"])
+                alternatives=["pops.solvers.options.RedBlackGaussSeidel()"],
+            )
         rel_tol, abs_tol = self._resolved_tolerance()
         if rel_tol <= 0.0:
             report = report.error(
-                "elliptic_solver", "rel_tol_out_of_domain",
+                "elliptic_solver",
+                "rel_tol_out_of_domain",
                 "GeometricMG relative tolerance must be > 0; got %r." % rel_tol,
-                context={"rel_tol": rel_tol})
+                context={"rel_tol": rel_tol},
+            )
         if abs_tol < 0.0:
             report = report.error(
-                "elliptic_solver", "abs_tol_out_of_domain",
+                "elliptic_solver",
+                "abs_tol_out_of_domain",
                 "GeometricMG absolute floor must be >= 0; got %r." % abs_tol,
-                context={"abs_tol": abs_tol})
+                context={"abs_tol": abs_tol},
+            )
         return report
 
     def lower(self, context: Any = None) -> Any:
@@ -286,16 +457,23 @@ class GeometricMG(Descriptor):
         # realisable natively (never a silent drop of Chebyshev / a degenerate tolerance).
         self.validate(context).raise_if_error()
         from pops.descriptors_report import LoweredDescriptor
+
         return LoweredDescriptor(
-            name=self.name, category=self.category, native_id=self.native_id,
-            options=self.options(), scheme=self.scheme,
-            extra={"smoother": self.smoother.lower(context),
-                   "coarse": self.coarse.lower(context),
-                   "tolerance": self.tolerance.lower(context),
-                   "mg_options": self.native_mg_options(),
-                   # ADC-645: exact authoring identity plus the canonical backend-option carrier.
-                   "fac": (self.fac.lower(context) if self.fac is not None else None),
-                   "fac_options": self.amr_fac_options()})
+            name=self.name,
+            category=self.category,
+            native_id=self.native_id,
+            options=self.options(),
+            scheme=self.scheme,
+            extra={
+                "smoother": self.smoother.lower(context),
+                "coarse": self.coarse.lower(context),
+                "tolerance": self.tolerance.lower(context),
+                "mg_options": self.native_mg_options(),
+                # ADC-645: exact authoring identity plus the canonical backend-option carrier.
+                "fac": (self.fac.lower(context) if self.fac is not None else None),
+                "fac_options": self.amr_fac_options(),
+            },
+        )
 
     def inspect(self) -> Any:
         view = super().inspect()
@@ -354,13 +532,15 @@ class FFT(Descriptor):
             return Availability.no(
                 "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG().",
                 missing=["uniform layout", "periodic boundary"],
-                alternatives=["pops.solvers.elliptic.GeometricMG()"])
+                alternatives=["pops.solvers.elliptic.GeometricMG()"],
+            )
         return Availability.partial(
             "the FFT Poisson solver requires a periodic boundary, a constant-coefficient "
             "operator (no wall / embedded boundary) and a power-of-two grid; under MPI it uses "
             "the remapped FFT route",
             missing=["periodic BC", "constant coefficient", "power-of-two grid"],
-            alternatives=["pops.solvers.elliptic.GeometricMG()"])
+            alternatives=["pops.solvers.elliptic.CartesianCG()"],
+        )
 
     def inspect(self) -> Any:
         view = super().inspect()
@@ -425,7 +605,8 @@ def _check(value: Any, allowed: Any, param: str, suggestion: str, default: Any) 
         return value
     raise TypeError(
         "GeometricMG(%s=) must be a %s descriptor, not %r; use %s."
-        % (param, " / ".join(c.__name__ for c in allowed), value, suggestion))
+        % (param, " / ".join(c.__name__ for c in allowed), value, suggestion)
+    )
 
 
-__all__ = ["GeometricMG", "FFT"]
+__all__ = ["CartesianCG", "GeometricMG", "FFT"]

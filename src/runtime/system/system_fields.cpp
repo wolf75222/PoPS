@@ -286,30 +286,28 @@ std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
 
 template <int Dim>
 void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
-                              const std::string& bc, const std::string& wall, double wall_radius,
-                              double epsilon, double abs_tol, double rel_tol, int max_cycles,
-                              int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
-                              int coarse_threshold) {
+                              const std::string& bc, double abs_tol, double rel_tol,
+                              int max_iterations) {
   require_assembling(p_->lifecycle_, "set_poisson");
-  if (rhs != "charge_density")
-    throw std::invalid_argument("System exact Poisson supports the charge_density RHS route");
-  if (solver != "geometric_mg" && solver != "cartesian_cg")
+  if (rhs != "charge_density" && rhs != "composite")
     throw std::invalid_argument(
-        "System exact ND Poisson supports geometric_mg/cartesian_cg provider routes");
-  if (wall != "none" || wall_radius != 0.0 || epsilon != 1.0)
+        "System exact Poisson supports charge_density or composite RHS routes");
+  if (solver == "geometric_mg")
     throw std::invalid_argument(
-        "System exact Cartesian Poisson does not approximate wall or variable-medium providers");
-  if (!std::isfinite(abs_tol) || abs_tol < 0.0 || !std::isfinite(rel_tol) || rel_tol < 0.0 ||
-      max_cycles < 1 || min_coarse < 1 || pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 ||
-      coarse_threshold < 0)
+        "GeometricMG is reserved for AMR MG/FAC; uniform System uses cartesian_cg");
+  if (solver != "cartesian_cg")
+    throw std::invalid_argument(
+        "System exact ND Poisson supports only the cartesian_cg provider route");
+  if (!std::isfinite(abs_tol) || abs_tol < 0.0 || !std::isfinite(rel_tol) || rel_tol <= 0.0 ||
+      max_iterations < 1)
     throw std::invalid_argument("System exact Poisson controls are invalid");
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
-  (void)poisson_options(topology, bc, rel_tol, abs_tol, max_cycles);
+  (void)poisson_options(topology, bc, rel_tol, abs_tol, max_iterations);
   p_->poisson_solver_ = solver;
   p_->poisson_bc_ = bc;
   p_->poisson_abs_tol_ = abs_tol;
   p_->poisson_rel_tol_ = rel_tol;
-  p_->poisson_max_iterations_ = max_cycles;
+  p_->poisson_max_iterations_ = max_iterations;
   p_->default_field_.reset();
 }
 
@@ -954,9 +952,7 @@ template void System<kNativeDimension>::set_primitive_state(const std::string&,
                                                             const std::vector<double>&);
 template std::vector<double> System<kNativeDimension>::get_primitive_state(const std::string&);
 template void System<kNativeDimension>::set_poisson(const std::string&, const std::string&,
-                                                    const std::string&, const std::string&, double,
-                                                    double, double, double, int, int, int, int, int,
-                                                    int);
+                                                    const std::string&, double, double, int);
 template SolveReport System<kNativeDimension>::solve_fields_in_place_();
 template SolveReport System<kNativeDimension>::solve_fields_from_state_in_place_(
     int, const MultiFab<kNativeDimension>&);

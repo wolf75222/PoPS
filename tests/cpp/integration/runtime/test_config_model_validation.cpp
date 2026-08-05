@@ -41,8 +41,17 @@ namespace {
 template <class T>
 concept HasPublicFreezeRestore = requires(T& value) { value.pops_freeze_restore(false); };
 
+template <class T>
+concept HasUniformVariableEllipticCoefficient = requires(T& value, std::vector<double> field) {
+  value.set_epsilon_field(field);
+  value.set_epsilon_anisotropic_field(field, field);
+  value.set_reaction_field(field);
+};
+
 static_assert(!HasPublicFreezeRestore<ModelSpec>,
               "ModelSpec.freeze() must be irreversible through its public C++ API");
+static_assert(!HasUniformVariableEllipticCoefficient<System>,
+              "uniform System must not advertise coefficients unsupported by CartesianCG");
 
 // true si @p f leve un std::runtime_error DONT le message contient @p frag : on ne se contente pas du
 // refus, on verifie que c'est le BON refus (le champ manquant nomme), donc un message lisible.
@@ -119,28 +128,6 @@ TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
     }
     EXPECT_TRUE(ok) << "System config valide construit (nx == 16)";
   }
-}
-
-TEST(ConfigModelValidation, SystemRejectsAmbiguousDiffusionCoefficientShapes) {
-  const std::vector<double> scalar(8 * 8, 2.0);
-  const std::vector<double> diagonal_x(8 * 8, 3.0);
-  const std::vector<double> diagonal_y(8 * 8, 4.0);
-
-  System scalar_first(SystemConfig{8, 1.0, Periodicity{false, false}});
-  scalar_first.set_epsilon_field(scalar);
-  EXPECT_TRUE(
-      raises_with([&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
-                  "cannot be combined"));
-
-  System diagonal_first(SystemConfig{8, 1.0, Periodicity{false, false}});
-  diagonal_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y);
-  EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); }, "cannot be combined"));
-
-  // Reconfiguration within the same exact shape is intentional and remains available while the
-  // System is assembling; only a physically ambiguous shape change is rejected.
-  EXPECT_NO_THROW(scalar_first.set_epsilon_field(std::vector<double>(8 * 8, 5.0)));
-  EXPECT_NO_THROW(diagonal_first.set_epsilon_anisotropic_field(std::vector<double>(8 * 8, 6.0),
-                                                               std::vector<double>(8 * 8, 7.0)));
 }
 
 // ================================================================================================

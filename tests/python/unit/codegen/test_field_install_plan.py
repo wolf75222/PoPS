@@ -29,7 +29,7 @@ from pops.math import Laplacian, elliptic_terms, laplacian
 from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.solvers.options import CompositeFAC
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
@@ -115,11 +115,13 @@ def _field(model: Model, name: str, rhs: object):
     )
 
 
-def _disc(condition: object, *, singular: bool = False) -> FieldDiscretization:
+def _disc(
+    condition: object, *, singular: bool = False, solver: object | None = None,
+) -> FieldDiscretization:
     return FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(), condition),),
-        solver=GeometricMG(),
+        solver=CartesianCG() if solver is None else solver,
         nullspace=ConstantNullspace() if singular else None,
         gauge=MeanValueGauge(0) if singular else None,
     )
@@ -256,7 +258,13 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
     )
     problem = Case(name="signed-gradient-case-%s-%d" % (target, sign))
     problem.block("material", model)
-    problem.field(operator, _disc(Dirichlet(0.0)))
+    problem.field(
+        operator,
+        _disc(
+            Dirichlet(0.0),
+            solver=GeometricMG() if target == "amr_system" else CartesianCG(),
+        ),
+    )
 
     plan = capture_field_plans(
         problem, lambda value: value, target=target, layout=_LAYOUT)["potential"]

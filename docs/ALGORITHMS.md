@@ -2382,7 +2382,8 @@ of this page. The goal is not to present a partial capability as complete.
 | smooth zones, high precision | WENO5-Z + SSPRK3 | order 5, low dissipation (section 3, 4) |
 | stiff source (Lorentz, relaxation) | local IMEX, or global Schur condensation | implicit, no exploding time step (section 5, 13) |
 | periodic Poisson, $n = 2^k$ | `poisson_fft_solver` | direct, $O(N \log N)$ (section 10) |
-| Poisson with wall, Dirichlet, or $\varepsilon(x)$ | `geometric_mg` | multigrid, arbitrary geometry (section 9, 11) |
+| uniform constant-coefficient Cartesian Poisson | `CartesianCG` | exact-ranked 1D/2D/3D CG; static periodic/Dirichlet/Neumann BC (section 12) |
+| AMR Poisson / variable $\varepsilon(x)$ | `GeometricMG` + FAC | genuine multigrid hierarchy, not an alias for uniform CG (section 9, 11) |
 | full-tensor Cartesian operator | prepared GMRES or BiCGStab with an explicit provider | generic, no matrix assembly (section 12) |
 | full-tensor polar operator | dedicated metric-aware polar Krylov solver | polar measure and radial line preconditioner (section 16) |
 | localized feature (front, ring) | structured `pops.layouts.AMR` descriptor | adaptive refinement, conservative reflux (section 17 to 19) |

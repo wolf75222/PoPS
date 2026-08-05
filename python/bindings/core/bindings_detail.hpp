@@ -387,6 +387,11 @@ inline py::dict numerical_defaults_report_to_dict() {
   krylov["schur_polar_max_iters"] = kSchurKrylovPolarMaxIters;
   krylov["breakdown_tiny"] = static_cast<double>(kKrylovBreakdownTiny);
 
+  py::dict cartesian_cg;
+  cartesian_cg["rel_tol"] = static_cast<double>(kCartesianCGDefaultRelTol);
+  cartesian_cg["abs_tol"] = static_cast<double>(kCartesianCGDefaultAbsTol);
+  cartesian_cg["max_iterations"] = kCartesianCGDefaultMaxIterations;
+
   py::dict mg;
   mg["rel_tol"] = static_cast<double>(kMGDefaultRelTol);
   mg["max_cycles"] = kMGDefaultMaxCycles;
@@ -479,6 +484,9 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kPolarTensorKrylovDefaultMaxIters", "public_knob");
   klass("kSchurKrylovPolarMaxIters", "public_knob");
   klass("kKrylovBreakdownTiny", "internal_default");
+  klass("kCartesianCGDefaultRelTol", "public_knob");
+  klass("kCartesianCGDefaultAbsTol", "public_knob");
+  klass("kCartesianCGDefaultMaxIterations", "public_knob");
   klass("kMGDefaultRelTol", "public_knob");
   klass("kMGDefaultMaxCycles", "public_knob");
   klass("kMGDefaultAbsTol", "public_knob");
@@ -531,6 +539,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   out["source"] = "pops.runtime.numerical_defaults";
   out["newton"] = newton;
   out["krylov"] = krylov;
+  out["cartesian_cg"] = cartesian_cg;
   out["mg"] = mg;
   out["fac"] = fac;
   out["fft"] = fft;
@@ -631,12 +640,14 @@ inline py::dict effective_poisson_options_to_dict(const EffectivePoissonOptions&
   py::dict d;
   d["rhs"] = p.rhs;
   d["solver"] = p.solver;
+  d["solver_option_schema"] = p.solver_option_schema;
   d["bc"] = p.bc;
   d["wall"] = p.wall;
   d["wall_radius"] = p.wall_radius;
   d["epsilon"] = p.epsilon;
   d["rel_tol"] = p.rel_tol;  // ADC-613: effective GeometricMG V-cycle knobs
   d["abs_tol"] = p.abs_tol;
+  d["max_iterations"] = p.max_iterations;
   d["max_cycles"] = p.max_cycles;
   d["min_coarse"] = p.min_coarse;
   d["pre_smooth"] = p.pre_smooth;

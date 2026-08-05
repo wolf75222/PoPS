@@ -148,14 +148,16 @@ enum class FieldSolverRouteId : int {
   kFft = 1,
   kFftSpectral = 2,
   kPolar = 3,
+  kCartesianCg = 4,
 };
 inline constexpr RouteInfo kFieldSolverRoutes[] = {
   {0, "geometric_mg", "pops::GeometricMG", "", ""},
   {1, "fft", "pops::PoissonFFTSolver", "periodic bc,constant coefficient", "walls / variable epsilon not wired; non power-of-two grid falls back to O(n^2) DFT"},
   {2, "fft_spectral", "pops::PoissonFFTSolver(spectral)", "periodic bc,constant coefficient", "walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)"},
   {3, "polar", "pops::PolarPoissonSolver", "polar geometry", "annular polar only (r_min > 0)"},
+  {4, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
 };
-inline constexpr const char* kFieldSolverRouteTokensCsv = "geometric_mg|fft|fft_spectral|polar";
+inline constexpr const char* kFieldSolverRouteTokensCsv = "geometric_mg|fft|fft_spectral|polar|cartesian_cg";
 
 enum class PoissonBcRouteId : int {
   kAuto = 0,
@@ -310,9 +312,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 3;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3";
-inline constexpr const char* kRouteRegistrySignature = "v3:b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3";
+inline constexpr const char* kComponentCatalogSha256 = "43357f9ddb2df44452242552d368a58625b6f2cab4f3ddb542de761f2db17cdd";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef";
+inline constexpr const char* kRouteRegistrySignature = "v3:ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

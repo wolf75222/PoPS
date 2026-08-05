@@ -40,7 +40,7 @@ else:
 FROZEN_STRUCTURAL = frozenset({
     # blocks / field problems / aux LAYOUT
     "add_equation", "_install_native_block",
-    "set_poisson", "set_epsilon_field", "set_epsilon_anisotropic_field", "set_reaction_field",
+    "set_poisson",
     "set_aux_field_halo_component", "set_electron_temperature_from", "register_elliptic_field",
     "set_block_elliptic_field", "set_compiled_block",
     # inter-species couplings

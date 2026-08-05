@@ -2059,6 +2059,8 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
   report.topology.periodicity.reserve(Dim);
   for (int axis = 0; axis < Dim; ++axis)
     report.topology.periodicity.push_back(p_->cfg.periodicity[axis]);
+  report.poisson.solver = "geometric_mg";
+  report.poisson.solver_option_schema = "pops.amr.field-solver-options.geometric-mg@1";
   report.blocks.reserve(p_->blocks.size());
   for (const typename Impl::BlockSpec& block : p_->blocks) {
     EffectiveBlockOptions row;

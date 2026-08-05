@@ -38,16 +38,16 @@ class ExactFieldSolverBackend {
 };
 
 template <int Dim>
-class CartesianFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
+class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
  public:
   static constexpr int dimension = Dim;
   using field_type = typename ExactFieldSolverBackend<Dim>::field_type;
 
-  CartesianFieldSolverBackend(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
-                              const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
-                              BoundaryTopology<Dim> topology,
-                              elliptic::nd::CartesianPoissonOptions<Dim> options,
-                              std::string identity = "pops.field-solver.cartesian-cg@1")
+  CartesianCgFieldSolverBackend(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+                                const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
+                                BoundaryTopology<Dim> topology,
+                                elliptic::nd::CartesianPoissonOptions<Dim> options,
+                                std::string identity = "pops.field-solver.cartesian-cg@1")
       : identity_(std::move(identity)),
         solver_(geometry, layout, distribution, local_rank, std::move(topology),
                 std::move(options)) {

@@ -23,6 +23,9 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kPolarTensorKrylovDefaultMaxIters": "public_knob",
     "kSchurKrylovPolarMaxIters": "public_knob",
     "kKrylovBreakdownTiny": "internal_default",
+    "kCartesianCGDefaultRelTol": "public_knob",
+    "kCartesianCGDefaultAbsTol": "public_knob",
+    "kCartesianCGDefaultMaxIterations": "public_knob",
     "kMGDefaultRelTol": "public_knob",
     "kMGDefaultMaxCycles": "public_knob",
     "kMGDefaultAbsTol": "public_knob",
@@ -87,6 +90,11 @@ def _static_report() -> dict:
             "polar_tensor_max_iters": 400,
             "schur_polar_max_iters": 600,
             "breakdown_tiny": 1e-300,
+        },
+        "cartesian_cg": {
+            "rel_tol": 1e-10,
+            "abs_tol": 0.0,
+            "max_iterations": 2000,
         },
         "mg": {
             "rel_tol": 1e-8,

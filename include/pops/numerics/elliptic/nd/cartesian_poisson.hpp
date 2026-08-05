@@ -8,6 +8,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <array>
 #include <cmath>
@@ -28,9 +29,9 @@ struct CartesianPoissonOptions {
 
   std::array<CartesianBoundaryKind, 2 * Dim> boundaries{};
   std::array<Real, 2 * Dim> boundary_values{};
-  Real relative_tolerance = Real{1e-10};
-  Real absolute_tolerance = Real{0};
-  int maximum_iterations = 2000;
+  Real relative_tolerance = kCartesianCGDefaultRelTol;
+  Real absolute_tolerance = kCartesianCGDefaultAbsTol;
+  int maximum_iterations = kCartesianCGDefaultMaxIterations;
 
   static CartesianPoissonOptions from_topology(
       const BoundaryTopology<Dim>& topology,
@@ -358,7 +359,7 @@ class CartesianPoissonSolver {
   }
 
   void validate_options_() const {
-    if (!finite_(options_.relative_tolerance) || options_.relative_tolerance < Real(0) ||
+    if (!finite_(options_.relative_tolerance) || options_.relative_tolerance <= Real(0) ||
         !finite_(options_.absolute_tolerance) || options_.absolute_tolerance < Real(0) ||
         options_.maximum_iterations < 1)
       throw std::invalid_argument("Cartesian Poisson iteration controls are invalid");

@@ -45,16 +45,17 @@ class FluidState:
     production packages carry their own immutable transport parameters.
     """
 
-    def __init__(self,
-                 kind: str = "compressible",
-                 gamma: Any = PHYSICAL_DEFAULT_GAMMA,
-                 cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
-                 vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
+    def __init__(
+        self,
+        kind: str = "compressible",
+        gamma: Any = PHYSICAL_DEFAULT_GAMMA,
+        cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+        vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR,
+    ) -> None:
         self.kind = kind
         self.gamma = exact_real(gamma, where="FluidState.gamma")
         self.cs2 = exact_real(cs2, where="FluidState.cs2")
-        self.vacuum_floor = exact_real(
-            vacuum_floor, where="FluidState.vacuum_floor", minimum=0)
+        self.vacuum_floor = exact_real(vacuum_floor, where="FluidState.vacuum_floor", minimum=0)
 
     @classmethod
     def compressible(cls, gamma: Any = PHYSICAL_DEFAULT_GAMMA) -> Any:
@@ -68,9 +69,11 @@ class FluidState:
         return cls(kind="compressible", gamma=gamma)
 
     @classmethod
-    def isothermal(cls,
-                   cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
-                   vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> Any:
+    def isothermal(
+        cls,
+        cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+        vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR,
+    ) -> Any:
         """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
 
         This private constructor builds the same inert engine value as
@@ -100,11 +103,13 @@ class IsothermalFlux:
     authenticated BindSchema vector instead of a second mutable parameter channel.
     """
 
-    def __init__(self, cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
-                 vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
+    def __init__(
+        self,
+        cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
+        vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR,
+    ) -> None:
         self.cs2 = exact_real(cs2, where="IsothermalFlux.cs2")
-        self.vacuum_floor = exact_real(
-            vacuum_floor, where="IsothermalFlux.vacuum_floor", minimum=0)
+        self.vacuum_floor = exact_real(vacuum_floor, where="IsothermalFlux.vacuum_floor", minimum=0)
 
 
 # --- Source bricks ------------------------------------------------------
@@ -160,9 +165,9 @@ class ChargeDensity:
 class BackgroundDensity:
     """Neutralizing background f = alpha (n - n0)."""
 
-    def __init__(self,
-                 alpha: Any = PHYSICAL_DEFAULT_ALPHA,
-                 n0: Any = PHYSICAL_DEFAULT_BACKGROUND_N0) -> None:
+    def __init__(
+        self, alpha: Any = PHYSICAL_DEFAULT_ALPHA, n0: Any = PHYSICAL_DEFAULT_BACKGROUND_N0
+    ) -> None:
         self.alpha = exact_real(alpha, where="BackgroundDensity.alpha")
         self.n0 = exact_real(n0, where="BackgroundDensity.n0")
 
@@ -170,10 +175,12 @@ class BackgroundDensity:
 class GravityCoupling:
     """Self-consistent coupling f = sign 4piG (rho - rho0). sign = +1 gravity, -1 plasma."""
 
-    def __init__(self,
-                 sign: Any = PHYSICAL_DEFAULT_GRAVITY_SIGN,
-                 four_pi_G: Any = PHYSICAL_DEFAULT_FOUR_PI_G,
-                 rho0: Any = PHYSICAL_DEFAULT_GRAVITY_RHO0) -> None:
+    def __init__(
+        self,
+        sign: Any = PHYSICAL_DEFAULT_GRAVITY_SIGN,
+        four_pi_G: Any = PHYSICAL_DEFAULT_FOUR_PI_G,
+        rho0: Any = PHYSICAL_DEFAULT_GRAVITY_RHO0,
+    ) -> None:
         self.sign = exact_real(sign, where="GravityCoupling.sign")
         self.four_pi_G = exact_real(four_pi_G, where="GravityCoupling.four_pi_G")
         self.rho0 = exact_real(rho0, where="GravityCoupling.rho0")
@@ -205,7 +212,8 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
         elif state.kind == "isothermal":
             spec.cs2 = native_real(state.cs2, where="Model.cs2")
             spec.vacuum_floor = native_real(
-                getattr(state, "vacuum_floor", 0.0), where="Model.vacuum_floor")
+                getattr(state, "vacuum_floor", 0.0), where="Model.vacuum_floor"
+            )
             if not isinstance(transport, IsothermalFlux):
                 raise ValueError("FluidState(isothermal) requires transport=IsothermalFlux()")
         else:
@@ -237,8 +245,10 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
         spec.source = "potential_magnetic"
         spec.qom = native_real(source.charge, where="Model.qom")
     else:
-        raise ValueError("source: NoSource | PotentialForce | GravityForce | MagneticLorentzForce "
-                         "| PotentialMagneticForce")
+        raise ValueError(
+            "source: NoSource | PotentialForce | GravityForce | MagneticLorentzForce "
+            "| PotentialMagneticForce"
+        )
 
     if isinstance(elliptic, ChargeDensity):
         spec.elliptic = "charge"
@@ -312,20 +322,16 @@ def electric_field_from_potential() -> Any:
     return ElectricFieldFromPotential()
 
 
-def elliptic(unknown: Any = "phi", operator: Any = None, rhs: Any = None,
-             output: Any = None) -> Any:
+def elliptic(
+    unknown: Any = "phi", operator: Any = None, rhs: Any = None, output: Any = None
+) -> Any:
     """Compose an EPM. Poisson = elliptic(operator=div_eps_grad(), rhs=charge_density(),
     output=electric_field_from_potential()). The right-hand side can be composite_rhs() (GENERIC
     sum of the per-block elliptic bricks: charge, background, gravity); charge_density() is
     the usual case (alias)."""
-    return EllipticModel(unknown, operator or DivEpsGrad(), rhs or CompositeRhs(),
-                         output or ElectricFieldFromPotential())
-
-
-class EllipticSolver:
-    """Elliptic solver: 'geometric_mg' (any case, wall) | 'fft' (periodic, n = 2^k, discrete
-    stencil) | 'fft_spectral' (periodic, continuous symbol -(kx^2+ky^2): fidelity to spectral
-    references such as poisson_fft.m, exact on sinusoids)."""
-
-    def __init__(self, kind: str = "geometric_mg") -> None:
-        self.kind = kind
+    return EllipticModel(
+        unknown,
+        operator or DivEpsGrad(),
+        rhs or CompositeRhs(),
+        output or ElectricFieldFromPotential(),
+    )

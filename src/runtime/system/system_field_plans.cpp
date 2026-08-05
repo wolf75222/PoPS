@@ -47,26 +47,24 @@ struct ConfiguredFieldOptions {
 
 ConfiguredFieldOptions decode_configured_field_options(std::string_view family_route,
                                                        const PreparedProviderOptions& options) {
-  if (family_route != "geometric_mg" && family_route != "cartesian_cg")
+  if (family_route == "geometric_mg")
+    throw std::invalid_argument(
+        "GeometricMG is reserved for the AMR MG/FAC route; uniform System requires cartesian_cg");
+  if (family_route != "cartesian_cg")
     throw std::invalid_argument("System exact-ranked field solver family is unknown: " +
                                 std::string(family_route));
-  if (options.schema_identity != "pops.system.geometric-mg-options@1" || options.values.size() != 8)
+  if (options.schema_identity != "pops.system.cartesian-cg-options@1" ||
+      options.values.size() != 3)
     throw std::invalid_argument(
         "System exact-ranked field solver received an incompatible option schema");
 
   ConfiguredFieldOptions result;
   result.relative_tolerance = exact_option<double>(options, "rel_tol");
   result.absolute_tolerance = exact_option<double>(options, "abs_tol");
-  result.maximum_iterations = exact_int_option(options, "max_cycles");
-  const int minimum_coarse = exact_int_option(options, "min_coarse");
-  const int pre_smooth = exact_int_option(options, "pre_smooth");
-  const int post_smooth = exact_int_option(options, "post_smooth");
-  const int bottom_sweeps = exact_int_option(options, "bottom_sweeps");
-  const int coarse_threshold = exact_int_option(options, "coarse_threshold");
+  result.maximum_iterations = exact_int_option(options, "max_iterations");
   if (!std::isfinite(result.relative_tolerance) || result.relative_tolerance <= 0.0 ||
       !std::isfinite(result.absolute_tolerance) || result.absolute_tolerance < 0.0 ||
-      result.maximum_iterations < 1 || minimum_coarse < 1 || pre_smooth < 0 || post_smooth < 0 ||
-      bottom_sweeps < 0 || coarse_threshold < 0)
+      result.maximum_iterations < 1)
     throw std::invalid_argument(
         "System exact-ranked field solver options are outside their exact domain");
   return result;

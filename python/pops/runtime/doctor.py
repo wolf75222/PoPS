@@ -40,7 +40,7 @@ def _descriptor_tokens() -> Any:
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.riemann import riemann
-    from pops.solvers.elliptic import FFT, GeometricMG
+    from pops.solvers.elliptic import CartesianCG, FFT, GeometricMG
 
     def _available(namespace: Any) -> Any:
         names = []
@@ -68,6 +68,7 @@ def _descriptor_tokens() -> Any:
     # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
     # GeometricMG plus the FFT discrete / spectral schemes.
     poisson = {
+        "cartesian_cg": CartesianCG().name,
         "geometric_mg": GeometricMG().name,
         "fft": FFT().scheme,
         "fft_spectral": FFT(spectral=True).scheme,

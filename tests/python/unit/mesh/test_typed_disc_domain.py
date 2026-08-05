@@ -12,6 +12,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # (1) LOWERING -- pure, no engine. Tokens remain private implementation output.
 # --------------------------------------------------------------------------------------------
 
+
 def test_wall_lowers_to_private_native_tokens():
     assert Disc(radius=0.4).lower_wall() == ("circle", 0.4)
     with pytest.raises(ValueError, match="explicit center is not supported"):
@@ -57,9 +58,9 @@ def test_lowering_rejects_bad_inputs():
     with pytest.raises(TypeError):
         lower_transport_mask(42)
     with pytest.raises(TypeError):
-        HalfPlane().lower_wall()           # a half-plane is not a Poisson wall
+        HalfPlane().lower_wall()  # a half-plane is not a Poisson wall
     with pytest.raises(ValueError):
-        Disc(radius=-1.0)                  # radius must be > 0
+        Disc(radius=-1.0)  # radius must be > 0
     with pytest.raises(ValueError):
         DiscDomain(center=(0, 0), radius=0.0)  # radius must be > 0
     with pytest.raises(ValueError, match="exactly two"):
@@ -101,15 +102,16 @@ def test_descriptors_inspect_and_available_honestly():
 try:
     import numpy as np
     import pops
-    from pops.runtime._engine_descriptors import Dirichlet
     import pops._pops  # noqa: F401
+
     _HAVE_ENGINE = True
 except ImportError:  # pragma: no cover - environment without the build
     _HAVE_ENGINE = False
 
 
 requires_engine = pytest.mark.skipif(
-    not _HAVE_ENGINE, reason="compiled pops extension absent (PYTHONPATH / build?)")
+    not _HAVE_ENGINE, reason="compiled pops extension absent (PYTHONPATH / build?)"
+)
 
 
 def _build(n=32, L=1.0):
@@ -137,35 +139,14 @@ def test_runtime_rejects_untyped_disc_and_mode_selectors():
 
 
 @requires_engine
-def test_set_poisson_accepts_typed_circle_wall():
-    system = _build()
-    system.set_poisson(
-        rhs="charge_density", solver="geometric_mg",
-        bc=Dirichlet(), wall=Disc(radius=0.4))
-    assert system.poisson_solver() == "geometric_mg"
-
-
-@requires_engine
-def test_set_poisson_typed_no_wall_matches_omission():
-    explicit = _build()
-    omitted = _build()
-    explicit.set_poisson(bc=Dirichlet(), wall=NoWall())
-    omitted.set_poisson(bc=Dirichlet())
-    assert explicit.poisson_solver() == omitted.poisson_solver() == "geometric_mg"
-
-
-@requires_engine
-def test_set_poisson_rejects_untyped_boundary_and_wall_selectors():
-    with pytest.raises(TypeError, match="wall must be a typed"):
-        _build().set_poisson(wall=12345)
-    with pytest.raises(ValueError, match="explicit center is not supported"):
-        _build().set_poisson(wall=Disc(center=(0.25, 0.25), radius=0.4))
-    with pytest.raises(TypeError, match="string selectors"):
-        _build().set_poisson(wall="none")
+def test_uniform_set_poisson_has_no_wall_selector():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'wall'"):
+        _build().set_poisson(wall=NoWall())
     with pytest.raises(TypeError, match="string selectors"):
         _build().set_poisson(bc="dirichlet")
     with pytest.raises(TypeError, match="wall_radius"):
         _build().set_poisson(wall_radius=0.4)
     from pops.runtime._system_install import _lower_wall
+
     with pytest.raises(TypeError, match="string selectors"):
         _lower_wall("circle")

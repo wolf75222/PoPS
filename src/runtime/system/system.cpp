@@ -336,6 +336,12 @@ EffectiveOptionsReport System<Dim>::effective_options_report() const {
   report.topology.periodicity.reserve(Dim);
   for (int axis = 0; axis < Dim; ++axis)
     report.topology.periodicity.push_back(p_->periodicity[axis]);
+  report.poisson.solver = p_->poisson_solver_;
+  report.poisson.solver_option_schema = "pops.system.cartesian-cg-options@1";
+  report.poisson.bc = p_->poisson_bc_;
+  report.poisson.rel_tol = p_->poisson_rel_tol_;
+  report.poisson.abs_tol = p_->poisson_abs_tol_;
+  report.poisson.max_iterations = p_->poisson_max_iterations_;
 
   report.blocks.reserve(p_->sp.size());
   for (const typename Impl::Species& block : p_->sp) {
