@@ -24,7 +24,7 @@ from pops.analytic import (
     maximum,
     minimum,
 )
-from pops.frames import Cartesian2D
+from pops.frames import Cartesian
 from pops.params.use_sites import ParamUse, resolve_param_use
 
 
@@ -51,15 +51,23 @@ def _geometry_coordinates(values: Any, *, where: str) -> tuple[float, ...]:
     )
 
 
-def _cartesian_coordinates(frame: Any) -> tuple[ScalarExpr, ScalarExpr]:
-    """Return analytic coordinates after authenticating a Cartesian authoring frame."""
+def _cartesian_coordinates(frame: Any) -> tuple[ScalarExpr, ...]:
+    """Return every coordinate after authenticating the inferred Cartesian rank."""
     coordinate_system = getattr(frame, "coordinates", frame)
-    if not isinstance(coordinate_system, Cartesian2D):
-        raise TypeError("level-set geometry requires a typed Cartesian2D frame")
+    if not isinstance(coordinate_system, Cartesian):
+        raise TypeError("level-set geometry requires a typed Cartesian frame")
     return coordinates(frame)
 
 
-def _frame_center(frame: Any) -> tuple[float, float]:
+def _planar_coordinates(frame: Any, *, where: str) -> tuple[ScalarExpr, ScalarExpr]:
+    """Authenticate a provider whose geometry is intrinsically planar."""
+    values = _cartesian_coordinates(frame)
+    if len(values) != 2:
+        raise TypeError("%s requires a two-dimensional Cartesian frame" % where)
+    return values[0], values[1]
+
+
+def _frame_center(frame: Any) -> tuple[float, ...]:
     lower = getattr(frame, "lower", None)
     upper = getattr(frame, "upper", None)
     if lower is None or upper is None:
@@ -68,12 +76,13 @@ def _frame_center(frame: Any) -> tuple[float, float]:
         )
     checked_lower = _geometry_coordinates(lower, where="Disc.level_set(frame.lower)")
     checked_upper = _geometry_coordinates(upper, where="Disc.level_set(frame.upper)")
-    if len(checked_lower) != 2 or len(checked_upper) != 2:
-        raise ValueError("Disc.level_set frame bounds must contain exactly two coordinates")
+    coordinate_count = len(_cartesian_coordinates(frame))
+    if len(checked_lower) != coordinate_count or len(checked_upper) != coordinate_count:
+        raise ValueError("Disc.level_set frame bounds must match the Cartesian rank")
     if any(high <= low for low, high in zip(checked_lower, checked_upper, strict=True)):
         raise ValueError("Disc.level_set frame upper bounds must be greater than lower bounds")
     return tuple((low + high) * 0.5 for low, high in zip(
-        checked_lower, checked_upper, strict=True))  # type: ignore[return-value]
+        checked_lower, checked_upper, strict=True))
 
 
 class _GeometryPreviewSurface:
@@ -230,7 +239,7 @@ class Disc(Geometry):
 
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this disc to ``frame`` with the convention ``phi < 0`` inside."""
-        x_value, y_value = _cartesian_coordinates(frame)
+        x_value, y_value = _planar_coordinates(frame, where="Disc.level_set(frame)")
         center = self.center if self.center is not None else _frame_center(frame)
         cx, cy = center
         return LevelSet(hypot(x_value - cx, y_value - cy) - self.radius)
@@ -256,7 +265,7 @@ class HalfPlane(Geometry):
 
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this half-plane to ``frame``; the side opposite the normal is active."""
-        x_value, y_value = _cartesian_coordinates(frame)
+        x_value, y_value = _planar_coordinates(frame, where="HalfPlane.level_set(frame)")
         px, py = self.point
         nx, ny = self.normal
         return LevelSet((x_value - px) * nx + (y_value - py) * ny)
