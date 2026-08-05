@@ -18,7 +18,7 @@ Reference / witness value classes
   EigWitness, StateRef, RuntimeParamRef
 
 Internal operator nodes and helpers (board + DSL)
-  grad, dx, dy, div, laplacian, ddt, rate, unknown, integral,
+  grad, dx, dy, dz, div, laplacian, ddt, rate, unknown, integral,
   sqrt (flux-DSL canonical), board_sqrt (board delegate to pops.dsl.sqrt),
   abs_, sign,
   eig_max_im, eig_lmin, eig_lmax, eig_all_real, eig_real_status,
@@ -58,7 +58,7 @@ from .ops import (
     eig_max_im, eig_lmin, eig_lmax, eig_all_real, eig_real_status,
     left, right,
     # board
-    grad, norm, dx, dy, laplacian, div, ddt, rate, unknown, integral,
+    grad, norm, dx, dy, dz, laplacian, div, ddt, rate, unknown, integral,
     board_sqrt,
 )
 
@@ -87,7 +87,7 @@ __all__ = [
     "sqrt", "abs_", "sign", "minimum", "maximum",
     "eig_max_im", "eig_lmin", "eig_lmax", "eig_all_real", "eig_real_status",
     "left", "right",
-    "grad", "norm", "dx", "dy", "laplacian", "div", "ddt", "rate", "unknown", "integral",
+    "grad", "norm", "dx", "dy", "dz", "laplacian", "div", "ddt", "rate", "unknown", "integral",
     "board_sqrt",
     # helpers
     "diff",
