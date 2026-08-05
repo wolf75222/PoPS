@@ -17,7 +17,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.physics._facade import Model
 from pops.physics._model import HyperbolicModel
-from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
+from pops.physics.aux import AUX_NAMED_MAX, aux_layout, aux_total_n_aux
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem, System
 from tests.python.support.explicit_program import install_forward_euler_program
@@ -44,22 +44,27 @@ def build_decay_model():
 
 def test_form():
     """Channel width, emitted reads and declaration rejections require no compiler."""
-    assert aux_total_n_aux([], []) == 3
-    assert aux_total_n_aux([], ["kappa"]) == 6
-    assert aux_total_n_aux([], ["kappa", "sigma"]) == 7
-    assert aux_total_n_aux(["B_z"], ["kappa"]) == 6
-    assert AUX_NAMED_BASE == 5
+    layout = aux_layout(2)
+    assert aux_total_n_aux([], [], dimension=2) == 3
+    assert aux_total_n_aux([], ["kappa"], dimension=2) == 6
+    assert aux_total_n_aux([], ["kappa", "sigma"], dimension=2) == 7
+    assert aux_total_n_aux(["B_z"], ["kappa"], dimension=2) == 6
+    assert layout.named_base == 5
 
     model = HyperbolicModel("decay")
     (density,) = model.conservative_vars("n")
+    zero = 0.0 * density
+    model.set_flux(x=[zero], y=[zero])
     kappa = model.aux_field("kappa")
     model.set_source([-(kappa * density)])
     source = model.emit_cpp_source(name="GenDecaySrc")
     assert "static constexpr int n_aux = 6;" in source
-    assert "const pops::Real kappa = a.extra_field(0);" in source
+    assert "const pops::Real kappa = a.template flux_provider<5>();" in source
 
     plain = HyperbolicModel("plain")
     (plain_density,) = plain.conservative_vars("n")
+    plain_zero = 0.0 * plain_density
+    plain.set_flux(x=[plain_zero], y=[plain_zero])
     plain.set_source([0.0 * plain_density])
     plain_source = plain.emit_cpp_source(name="GenPlainSrc")
     assert "n_aux" not in plain_source

@@ -91,7 +91,7 @@ int main() {
   for (int k=0;k<4;++k){
     pops::StateVec<1> u{}; u[0]=S[k];
     for (int j=0;j<4;++j){
-      pops::Aux a{}; a.grad_x=A[j][0]; a.grad_y=A[j][1];
+      pops::Aux a{}; a.gradient<0>()=A[j][0]; a.gradient<1>()=A[j][1];
       for (int dir=0; dir<2; ++dir){
         upd(ref.flux(u,a,dir)[0], gen.flux(u,a,dir)[0]);
         upd(ref.max_wave_speed(u,a,dir), gen.max_wave_speed(u,a,dir));

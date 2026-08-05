@@ -4,7 +4,8 @@ Quand une formule du modele symbolique lit un champ aux SUPPLEMENTAIRE (aux('B_z
 generee declare `static constexpr int n_aux = 4` : CompositeModel le propage (cf. test_aux_composite)
 et le runtime System dimensionne/peuple le canal aux partage (cf. test_aux_runtime_bz). Un modele qui
 ne lit que phi/grad_x/grad_y reste a la largeur de base (pas de n_aux emis -> bit-identique). On
-verifie : (1) le helper aux_n_aux ; (2) l'emission conditionnelle de n_aux ; (3) la retro-compat ;
+verifie : (1) le helper aux_total_n_aux ; (2) l'emission conditionnelle de n_aux ;
+(3) la retro-compat ;
 (4) la validation des noms ; (5) si un compilateur est present, que la brique B_z compile et lit B_z.
 """
 from tests.python.support.requirements import require_native_or_skip
@@ -13,7 +14,7 @@ import shutil
 import subprocess
 import tempfile
 
-from pops.physics.aux import aux_n_aux
+from pops.physics.aux import aux_total_n_aux
 from pops.physics._model import HyperbolicModel
 
 from tests.python.support.requirements import repo_include
@@ -21,26 +22,30 @@ INCLUDE = repo_include()
 
 
 def main():
-    # (1) helper aux_n_aux : largeur canonique du canal aux.
-    assert aux_n_aux([]) == 3
-    assert aux_n_aux(["grad_x", "grad_y"]) == 3
-    assert aux_n_aux(["B_z"]) == 4
-    assert aux_n_aux(["grad_x", "B_z"]) == 4
-    print("OK  aux_n_aux : base=3, B_z=4")
+    # (1) The channel width belongs to the exact native rank.
+    assert aux_total_n_aux([], [], dimension=2) == 3
+    assert aux_total_n_aux(["grad_x", "grad_y"], [], dimension=2) == 3
+    assert aux_total_n_aux(["B_z"], [], dimension=2) == 4
+    assert aux_total_n_aux(["grad_x", "B_z"], [], dimension=2) == 4
+    print("OK  aux_total_n_aux(2D) : base=3, B_z=4")
 
     # (2) une source qui lit B_z -> brique avec n_aux = 4.
     m = HyperbolicModel("mag")
     (nn,) = m.conservative_vars("n")
+    zero = 0.0 * nn
+    m.set_flux(x=[zero], y=[zero])
     bz = m.aux("B_z")
     m.set_source([bz * nn])  # S = B_z * n
     src = m.emit_cpp_source(name="GenBzSrc")
     assert "static constexpr int n_aux = 4;" in src, "n_aux=4 absent de la source B_z"
-    assert "const pops::Real B_z = a.B_z;" in src, "lecture a.B_z absente"
+    assert "const pops::Real B_z = a.template flux_provider<3>();" in src
     print("OK  emit_cpp_source(B_z) declare n_aux = 4")
 
     # (3) retro-compat : une source qui ne lit que grad n'emet PAS de n_aux.
     m2 = HyperbolicModel("plain")
     (n2,) = m2.conservative_vars("n")
+    zero2 = 0.0 * n2
+    m2.set_flux(x=[zero2], y=[zero2])
     gx = m2.aux("grad_x")
     m2.set_source([gx * n2])
     src2 = m2.emit_cpp_source(name="GenPlainSrc")
@@ -49,11 +54,11 @@ def main():
 
     # (4) validation : un nom aux inconnu est rejete (doit etre une composante de pops::Aux).
     try:
-        aux_n_aux(["n_e"])  # nom absent de la disposition canonique
-        raise AssertionError("aux_n_aux aurait du lever ValueError sur un nom inconnu")
+        aux_total_n_aux(["n_e"], [], dimension=2)
+        raise AssertionError("aux_total_n_aux aurait du lever ValueError sur un nom inconnu")
     except ValueError:
         pass
-    print("OK  aux_n_aux rejette un nom aux inconnu")
+    print("OK  aux_total_n_aux rejette un nom aux inconnu")
 
     # (5) compile-check : la brique B_z compile et lit bien B_z (sur les vrais en-tetes pops).
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
@@ -81,7 +86,10 @@ def main():
         exe = os.path.join(tmp, "bz")
         with open(cpp, "w") as f:
             f.write(harness)
-        subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
+        subprocess.run([
+            cxx, "-std=c++20", "-O2", "-DPOPS_NATIVE_DIM=2",
+            "-I", INCLUDE, cpp, "-o", exe,
+        ], check=True)
         out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
     val = float(out.strip())
     assert abs(val - 1.0) < 1e-12, "GenBzSrc::apply ne lit pas B_z (S=%g, attendu 1.0)" % val
