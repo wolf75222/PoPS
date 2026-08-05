@@ -9,12 +9,14 @@ Contents
 --------
 _AUX_BASE_COMPS, _AUX_CANONICAL, _AUX_NAMED_BASE   -- aux channel constants
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
+_ranked_axes, _axis_values                          -- exact Cartesian-rank helpers
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
 from typing import Any
 
+from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
     _count_cons_denoms,
@@ -59,6 +61,21 @@ def _roles_for(names: Any, override: Any = None) -> list:
     if len(override) != len(names):
         raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
     return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
+
+
+def _ranked_axes(model: Any) -> tuple[str, ...]:
+    """Return the model's one canonical x[/y[/z]] rank authority."""
+    return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
+
+
+def _axis_values(model: Any, values: Any, *, where: str) -> list:
+    """Flatten one exact-ranked carrier in the physical-flux axis order."""
+    axes = _ranked_axes(model)
+    if not isinstance(values, dict) or tuple(values) != axes:
+        raise ValueError(
+            "%s must cover the exact emitted axis set %s" % (where, axes)
+        )
+    return [item for axis in axes for item in values[axis]]
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +129,14 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
 
 
 def _jac_entries(model: Any) -> list:
-    """Entries (Expr) of the Jacobian sub-blocks of both directions (wave_speeds 'numeric'
+    """Entries (Expr) of every ranked Jacobian sub-block (wave_speeds 'numeric'
     path). Drives the dead-code elimination of max_wave_speed / wave_speeds."""
     ws = model._ws_jacobian
     out = []
-    for key in ("x", "y"):
+    axes = _ranked_axes(model)
+    if tuple(ws["blocks"]) != axes or tuple(ws["rows"]) != axes:
+        raise ValueError("wave-speed Jacobian must cover the exact emitted axis set %s" % (axes,))
+    for key in axes:
         rows = ws["rows"][key]
         for b in ws["blocks"][key]:
             for gi in b:
