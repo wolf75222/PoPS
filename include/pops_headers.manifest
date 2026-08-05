@@ -52,6 +52,7 @@ api pops/diagnostics/fallback_diagnostics.hpp
 api pops/diagnostics/runtime_diagnostics.hpp
 api pops/mesh/boundary/boundary_component_executor.hpp
 api pops/mesh/boundary/fill_boundary.hpp
+api pops/mesh/boundary/halo_exchange.hpp
 api pops/mesh/boundary/halo_schedule.hpp
 api pops/mesh/boundary/nd_boundary_schedule.hpp
 api pops/mesh/boundary/periodicity.hpp

@@ -14,11 +14,12 @@ using namespace pops::test::nd;
 
 TEST(test_fill_boundary_cache, prepared_schedule_is_deterministic_and_reusable) {
   const Box<3> domain = cube<3>(-2, 1);
-  const BoxArray<3> layout = BoxArray<3>::from_domain(domain, axis_sizes<3>(2, 4));
+  const BoxArray<3> layout = BoxArray<3>::from_domain(domain, Extent<3>{2, 4, 4});
   const auto distribution = Distribution<3>::replicated(layout, one_rank_space<3>());
   HostMultiFab<3> fields(layout, distribution, Index<3>{}, 1, Extent<3>{1, 1, 1});
   std::array<bool, 3> periodic{true, false, true};
-  const HaloScheduleBudget budget{{layout.size(), 1}, 1024, 2048, 64};
+  const HaloScheduleBudget budget{{layout.size(), 1}, 1024, 2048, 64,
+                                  layout.size(),      4096, 4096, 4096};
 
   const auto first =
       prepare_halo_schedule(fields, domain, BoundaryTopology<3>::axis_periodic(periodic), budget);
@@ -42,7 +43,7 @@ TEST(test_fill_boundary_cache, deep_periodic_wrap_has_no_single_period_limit) {
   HostMultiFab<1> fields(layout, distribution, Index<1>{}, 1, Extent<1>{5});
   fill_valid_encoded(fields, Real{-200});
   const auto topology = BoundaryTopology<1>::axis_periodic(std::array<bool, 1>{true});
-  const HaloScheduleBudget budget{{1, 0}, 32, 32, 7};
+  const HaloScheduleBudget budget{{1, 0}, 32, 32, 7, 1, 256, 256, 256};
   fill_boundary(fields, domain, topology, budget);
 
   for (int coordinate = -1; coordinate <= 10; ++coordinate) {
@@ -57,10 +58,12 @@ TEST(test_fill_boundary_cache, deep_periodic_wrap_has_no_single_period_limit) {
 
 TEST(test_fill_boundary_cache, finite_preparation_budget_is_enforced) {
   const Box<2> domain = cube<2>(0, 3);
-  const BoxArray<2> layout = BoxArray<2>::from_domain(domain, std::array<int, 2>{2, 2});
+  const BoxArray<2> layout = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
   const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
   HostMultiFab<2> fields(layout, distribution, Index<2>{}, 1, Extent<2>{1, 1});
-  EXPECT_THROW((void)prepare_halo_schedule(fields, domain, BoundaryTopology<2>::physical(),
-                                           HaloScheduleBudget{{layout.size(), 6}, 0, 64, 1}),
-               std::length_error);
+  EXPECT_THROW(
+      (void)prepare_halo_schedule(
+          fields, domain, BoundaryTopology<2>::physical(),
+          HaloScheduleBudget{{layout.size(), 6}, 0, 64, 1, layout.size(), 4096, 4096, 4096}),
+      std::length_error);
 }

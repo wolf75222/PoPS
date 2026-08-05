@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/mesh/boundary/halo_schedule.hpp>
+#include <pops/mesh/boundary/halo_exchange.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -54,12 +54,37 @@ void fill_boundary(MultiFab<Dim, MemorySpace>& fields, const HaloSchedule<Dim>& 
   Kokkos::fence();
 }
 
+/// Execute one prepared asynchronous transport synchronously.  Callers that overlap interior work
+/// invoke `exchange.begin(fields, lane)` and `exchange.complete(fields, lane)` directly.
+template <int Dim, class MemorySpace>
+void fill_boundary(MultiFab<Dim, MemorySpace>& fields, HaloExchange<Dim, MemorySpace>& exchange,
+                   const ExecutionLane& lane) {
+  exchange.execute(fields, lane);
+}
+
+/// Materialize a one-shot prepared transport on an explicit owning lane.
+template <int Dim, class MemorySpace>
+void fill_boundary(MultiFab<Dim, MemorySpace>& fields, const HaloSchedule<Dim>& schedule,
+                   const ExecutionLane& lane, HaloExchangeContext context) {
+  HaloExchange<Dim, MemorySpace> exchange(schedule, lane, context);
+  exchange.execute(fields, lane);
+}
+
 /// Prepare and synchronously replay an ordinary Cartesian (axis-translation) topology.
 template <int Dim, class MemorySpace>
 void fill_boundary(MultiFab<Dim, MemorySpace>& fields, const Box<Dim>& domain,
                    const BoundaryTopology<Dim>& topology, HaloScheduleBudget budget) {
   const HaloSchedule<Dim> schedule = prepare_halo_schedule(fields, domain, topology, budget);
   fill_boundary(fields, schedule);
+}
+
+/// Prepare and execute one exact-ranked distributed halo transport.
+template <int Dim, class MemorySpace>
+void fill_boundary(MultiFab<Dim, MemorySpace>& fields, const Box<Dim>& domain,
+                   const BoundaryTopology<Dim>& topology, HaloScheduleBudget budget,
+                   const ExecutionLane& lane, HaloExchangeContext context) {
+  const HaloSchedule<Dim> schedule = prepare_halo_schedule(fields, domain, topology, budget);
+  fill_boundary(fields, schedule, lane, context);
 }
 
 }  // namespace pops

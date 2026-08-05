@@ -799,6 +799,10 @@ if(POPS_HAS_MPI)
   set_tests_properties(test_mpi_nd_translation_completion_failstop_np1 PROPERTIES
     PASS_REGULAR_EXPRESSION "POPS_ND_COMPLETION_FAILSTOP_OBSERVED"
     TIMEOUT 20)
+  pops_add_mpi_standalone_suite(test_mpi_halo_exchange_completion_failstop RANKS 1)
+  set_tests_properties(test_mpi_halo_exchange_completion_failstop_np1 PROPERTIES
+    PASS_REGULAR_EXPRESSION "POPS_HALO_PUBLICATION_FAILSTOP_OBSERVED"
+    TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
@@ -828,6 +832,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
@@ -874,6 +879,7 @@ if(POPS_HAS_MPI)
     test_mpi_array_reduce
     test_mpi_multiblock_interface_scheduler
     test_mpi_nd_translation_exchange
+    test_mpi_halo_exchange
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary

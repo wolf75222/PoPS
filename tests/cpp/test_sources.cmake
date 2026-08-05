@@ -152,6 +152,8 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_mbox_parity "tests/cpp/integration/mpi/test_mp
 set(POPS_CPP_TEST_SOURCE_test_mpi_multiblock_interface_scheduler "tests/cpp/integration/mpi/test_mpi_multiblock_interface_scheduler.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_nd_translation_completion_failstop "tests/cpp/integration/mpi/test_mpi_nd_translation_completion_failstop.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_nd_translation_exchange "tests/cpp/integration/mpi/test_mpi_nd_translation_exchange.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_halo_exchange_completion_failstop "tests/cpp/integration/mpi/test_mpi_halo_exchange_completion_failstop.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_halo_exchange "tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_poisson "tests/cpp/integration/mpi/test_mpi_poisson.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_polar_schur "tests/cpp/integration/mpi/test_mpi_polar_schur.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_redistribute "tests/cpp/integration/mpi/test_mpi_redistribute.cpp")

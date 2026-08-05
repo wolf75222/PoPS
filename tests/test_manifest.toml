@@ -903,6 +903,18 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_halo_exchange_completion_failstop"
+sources = ["tests/cpp/integration/mpi/test_mpi_halo_exchange_completion_failstop.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1]
+
+[[cpp.suite]]
+name = "test_mpi_halo_exchange"
+sources = ["tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_patch_range"
 sources = ["tests/cpp/unit/mesh/test_patch_range.cpp"]
 labels = ["unit", "mesh", "fast"]

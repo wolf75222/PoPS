@@ -8,6 +8,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,10 @@ struct HaloScheduleBudget {
   std::size_t box_image_pairs = 0;
   std::size_t jobs = 0;
   std::size_t periodic_images = 0;
+  std::size_t peer_plans = 0;
+  std::size_t local_elements = 0;
+  std::size_t send_elements = 0;
+  std::size_t receive_elements = 0;
 };
 
 template <int Dim>
@@ -34,6 +39,8 @@ struct HaloJob {
   std::size_t destination_box = 0;
   Box<Dim> destination_region{};
   Index<Dim> source_from_destination{};
+  std::size_t offset = 0;
+  std::size_t elements = 0;
 
   bool operator==(const HaloJob&) const = default;
 };
@@ -42,6 +49,7 @@ template <int Dim>
 struct HaloPeerPlan {
   Index<Dim> peer{};
   std::vector<HaloJob<Dim>> jobs{};
+  std::size_t elements = 0;
 
   bool operator==(const HaloPeerPlan&) const = default;
 };
@@ -52,6 +60,13 @@ inline std::size_t checked_product(std::size_t left, std::size_t right, const ch
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
     throw std::length_error(operation);
   return left * right;
+}
+
+inline void checked_add(std::size_t& total, std::size_t value, std::size_t limit,
+                        const char* operation) {
+  if (total > limit || value > limit - total)
+    throw std::length_error(operation);
+  total += value;
 }
 
 inline int checked_index(std::int64_t value, const char* operation) {
@@ -166,11 +181,14 @@ Index<Dim> negate(const Index<Dim>& value) {
 }
 
 template <int Dim>
-HaloPeerPlan<Dim>& peer_plan(std::vector<HaloPeerPlan<Dim>>& plans, const Index<Dim>& peer) {
+HaloPeerPlan<Dim>& peer_plan(std::vector<HaloPeerPlan<Dim>>& plans, const Index<Dim>& peer,
+                             std::size_t limit) {
   for (HaloPeerPlan<Dim>& plan : plans)
     if (plan.peer == peer)
       return plan;
-  plans.push_back(HaloPeerPlan<Dim>{peer, {}});
+  if (plans.size() >= limit || plans.size() >= plans.max_size())
+    throw std::length_error("pops::HaloSchedule peer plan budget exceeded");
+  plans.push_back(HaloPeerPlan<Dim>{peer, {}, 0});
   return plans.back();
 }
 
@@ -180,24 +198,29 @@ HaloPeerPlan<Dim>& peer_plan(std::vector<HaloPeerPlan<Dim>>& plans, const Index<
 template <int Dim>
 class HaloSchedule {
  public:
+  static constexpr int dimension = Dim;
+
   using job_type = HaloJob<Dim>;
   using peer_plan_type = HaloPeerPlan<Dim>;
 
   HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
-               BoundaryTopology<Dim> topology, HaloScheduleBudget budget)
+               BoundaryTopology<Dim> topology, int ncomp, HaloScheduleBudget budget)
       : layout_(layout),
         distribution_(distribution),
         local_rank_(local_rank),
         domain_(domain),
         ghosts_(ghosts),
-        topology_(topology) {
+        topology_(topology),
+        ncomp_(ncomp) {
     if (!distribution_.matches_layout(layout_))
       throw std::invalid_argument("pops::HaloSchedule distribution does not match its layout");
     if (!distribution_.rank_space().contains(local_rank_))
       throw std::out_of_range("pops::HaloSchedule local rank is outside the rank space");
     if (!layout_.tiles_exactly(domain_, budget.layout))
       throw std::invalid_argument("pops::HaloSchedule layout must tile the domain exactly");
+    if (ncomp_ < 1)
+      throw std::invalid_argument("pops::HaloSchedule component count must be positive");
 
     std::size_t image_count = 0;
     const std::array<std::size_t, Dim> image_count_by_axis =
@@ -229,14 +252,18 @@ class HaloSchedule {
             const Box<Dim> source_region = region.shift(source_from_destination);
             if (!layout_[source].contains(source_region))
               throw std::logic_error("pops::HaloSchedule generated an invalid source region");
-            jobs.push_back(job_type{source, destination, region, source_from_destination});
+            jobs.push_back(job_type{source, destination, region, source_from_destination, 0,
+                                    checked_elements_(region)});
           }
         }
       }
     }
 
+    canonical_jobs_ = jobs;
     for (const job_type& job : jobs)
-      classify_(job);
+      classify_(job, budget);
+    sort_peer_plans_(send_);
+    sort_peer_plans_(receive_);
   }
 
   const mesh::BoxArray<Dim>& layout() const noexcept { return layout_; }
@@ -245,42 +272,91 @@ class HaloSchedule {
   const Box<Dim>& domain() const noexcept { return domain_; }
   const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
   const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
+  int ncomp() const noexcept { return ncomp_; }
+  const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_jobs_; }
   const std::vector<job_type>& local_jobs() const noexcept { return local_; }
   const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
   const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
+  std::size_t local_elements() const noexcept { return local_elements_; }
+  std::size_t send_elements() const noexcept { return send_elements_; }
+  std::size_t receive_elements() const noexcept { return receive_elements_; }
 
   bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
 
   void require_local_execution() const {
     if (has_remote_jobs())
       throw std::logic_error(
-          "pops::HaloSchedule contains remote ND jobs; this build has no production ND transport");
+          "pops::HaloSchedule remote jobs require a prepared HaloExchange and owning "
+          "ExecutionLane");
   }
 
   template <class MemorySpace>
   void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
     if (fields.layout() != layout_ || fields.distribution() != distribution_ ||
-        fields.local_rank() != local_rank_ || fields.ghosts() != ghosts_)
+        fields.local_rank() != local_rank_ || fields.ghosts() != ghosts_ ||
+        fields.ncomp() != ncomp_)
       throw std::invalid_argument("pops::HaloSchedule does not match the destination MultiFab");
   }
 
  private:
-  void classify_(const job_type& job) {
+  std::size_t checked_elements_(const Box<Dim>& region) const {
+    const std::int64_t cells = region.numPts();
+    if (cells <= 0 || static_cast<std::uint64_t>(cells) > std::numeric_limits<std::size_t>::max() /
+                                                              static_cast<std::size_t>(ncomp_))
+      throw std::overflow_error("pops::HaloSchedule payload size exceeds size_t");
+    return static_cast<std::size_t>(cells) * static_cast<std::size_t>(ncomp_);
+  }
+
+  void classify_(job_type job, const HaloScheduleBudget& budget) {
     const bool source_local = distribution_.is_local(job.source_box, local_rank_);
     const bool destination_local = distribution_.is_local(job.destination_box, local_rank_);
     if (source_local && destination_local) {
-      local_.push_back(job);
+      job.offset = local_elements_;
+      halo_schedule_detail::checked_add(local_elements_, job.elements, budget.local_elements,
+                                        "pops::HaloSchedule local element budget exceeded");
+      local_.push_back(std::move(job));
       return;
     }
     if (distribution_.replicated())
       throw std::logic_error("pops::HaloSchedule replicated ownership classification is invalid");
     if (source_local) {
-      halo_schedule_detail::peer_plan(send_, distribution_.owner(job.destination_box))
-          .jobs.push_back(job);
+      const Index<Dim>& peer = distribution_.owner(job.destination_box);
+      require_peer_budget_(send_, peer, budget.peer_plans);
+      peer_plan_type& plan = halo_schedule_detail::peer_plan(send_, peer, budget.peer_plans);
+      job.offset = plan.elements;
+      halo_schedule_detail::checked_add(plan.elements, job.elements, budget.send_elements,
+                                        "pops::HaloSchedule peer send elements exceed budget");
+      halo_schedule_detail::checked_add(send_elements_, job.elements, budget.send_elements,
+                                        "pops::HaloSchedule send element budget exceeded");
+      plan.jobs.push_back(std::move(job));
     } else if (destination_local) {
-      halo_schedule_detail::peer_plan(receive_, distribution_.owner(job.source_box))
-          .jobs.push_back(job);
+      const Index<Dim>& peer = distribution_.owner(job.source_box);
+      require_peer_budget_(receive_, peer, budget.peer_plans);
+      peer_plan_type& plan = halo_schedule_detail::peer_plan(receive_, peer, budget.peer_plans);
+      job.offset = plan.elements;
+      halo_schedule_detail::checked_add(plan.elements, job.elements, budget.receive_elements,
+                                        "pops::HaloSchedule peer receive elements exceed budget");
+      halo_schedule_detail::checked_add(receive_elements_, job.elements, budget.receive_elements,
+                                        "pops::HaloSchedule receive element budget exceeded");
+      plan.jobs.push_back(std::move(job));
     }
+  }
+
+  void require_peer_budget_(const std::vector<peer_plan_type>& plans, const Index<Dim>& peer,
+                            std::size_t limit) const {
+    if (std::any_of(plans.begin(), plans.end(),
+                    [&peer](const peer_plan_type& plan) { return plan.peer == peer; }))
+      return;
+    if (send_.size() > limit || receive_.size() >= limit - send_.size())
+      throw std::length_error("pops::HaloSchedule peer plan budget exceeded");
+  }
+
+  void sort_peer_plans_(std::vector<peer_plan_type>& plans) const {
+    std::sort(plans.begin(), plans.end(),
+              [this](const peer_plan_type& left, const peer_plan_type& right) {
+                return distribution_.rank_space().linear_rank(left.peer) <
+                       distribution_.rank_space().linear_rank(right.peer);
+              });
   }
 
   mesh::BoxArray<Dim> layout_{};
@@ -289,9 +365,14 @@ class HaloSchedule {
   Box<Dim> domain_{};
   Extent<Dim> ghosts_{};
   BoundaryTopology<Dim> topology_{};
+  int ncomp_ = 0;
+  std::vector<job_type> canonical_jobs_{};
   std::vector<job_type> local_{};
   std::vector<peer_plan_type> send_{};
   std::vector<peer_plan_type> receive_{};
+  std::size_t local_elements_ = 0;
+  std::size_t send_elements_ = 0;
+  std::size_t receive_elements_ = 0;
 };
 
 template <int Dim, class MemorySpace>
@@ -299,9 +380,10 @@ HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields
                                         const Box<Dim>& domain,
                                         const BoundaryTopology<Dim>& topology,
                                         HaloScheduleBudget budget) {
-  return HaloSchedule<Dim>{fields.layout(), fields.distribution(), fields.local_rank(),
-                           domain,          fields.ghosts(),       topology,
-                           budget};
+  return HaloSchedule<Dim>{fields.layout(),     fields.distribution(),
+                           fields.local_rank(), domain,
+                           fields.ghosts(),     topology,
+                           fields.ncomp(),      budget};
 }
 
 }  // namespace pops
