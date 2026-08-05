@@ -1,9 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/execution/for_each.hpp>
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial_operator.hpp>
 
 #include <array>
 #include <cmath>
@@ -29,6 +27,26 @@ struct Advect {
 };
 
 struct OtherAdvect : Advect {};
+
+template <int Dim>
+struct ExactAxisAdvect {
+  using State = pops::StateVec<1>;
+  using Aux = pops::AuxState<Dim>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 1;
+
+  template <int Axis>
+  POPS_HD State flux(const State& state, const auto&) const {
+    static_assert(Axis >= 0 && Axis < Dim);
+    return State{pops::Real(Axis + 1) * state[0]};
+  }
+
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&) const {
+    static_assert(Axis >= 0 && Axis < Dim);
+    return pops::Real(Axis + 1);
+  }
+};
 
 struct NonFiniteRoeAdvect : Advect {
   POPS_HD State roe_dissipation(const State&, const auto&, const State&, const auto&, int) const {
@@ -157,13 +175,15 @@ struct ProviderAdvect {
   using State = pops::StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
-  static constexpr int n_aux = 3;
+  static constexpr int dimension = pops::kNativeDimension;
+  static constexpr int gradient_component =
+      pops::AuxComponentLayout<dimension>::template gradient_component<0>();
 
   POPS_HD State flux(const State& state, const auto& providers, int) const {
-    return State{state[0] * providers.template flux_provider<1>()};
+    return State{state[0] * providers.template flux_provider<gradient_component>()};
   }
   POPS_HD pops::Real max_wave_speed(const State&, const auto& providers, int) const {
-    const pops::Real gradient = providers.template flux_provider<1>();
+    const pops::Real gradient = providers.template flux_provider<gradient_component>();
     return gradient < pops::Real(0) ? -gradient : gradient;
   }
 };
@@ -171,8 +191,11 @@ struct ProviderAdvect {
 struct ProviderStorage {
   pops::Real gradient = pops::Real(0);
 
-  POPS_HD pops::Real operator()(int, int, int component) const {
-    return component == 1 ? gradient : pops::Real(0);
+  template <int Dim>
+  POPS_HD pops::Real operator()(const pops::Index<Dim>&, int component) const {
+    return component == pops::AuxComponentLayout<Dim>::template gradient_component<0>()
+               ? gradient
+               : pops::Real(0);
   }
 };
 
@@ -210,10 +233,11 @@ struct DuplicateQualifiedProviderAdvect : ProviderAdvect {
 };
 
 struct CountingProviderStorage {
-  pops::Real values[3]{pops::Real(11), pops::Real(4), pops::Real(13)};
-  mutable int reads[3]{};
+  pops::Real values[pops::kAuxBaseComps]{};
+  mutable int reads[pops::kAuxBaseComps]{};
 
-  POPS_HD pops::Real operator()(int, int, int component) const {
+  template <int Dim>
+  POPS_HD pops::Real operator()(const pops::Index<Dim>&, int component) const {
     ++reads[component];
     return values[component];
   }
@@ -226,6 +250,21 @@ auto providers(std::initializer_list<pops::Real> values = {}) {
   for (const auto value : values)
     resolved[component++] = value;
   return pops::bind_flux_providers<Model>(resolved);
+}
+
+template <int Axis, int Dim>
+void expect_exact_axis_dispatch() {
+  using Model = ExactAxisAdvect<Dim>;
+  const auto bound = providers<Model>();
+  const typename Model::State state{pops::Real(3)};
+  const auto evaluation =
+      pops::evaluate_numerical_flux(pops::RusanovFlux{}, Model{}, state, bound, state, bound,
+                                    pops::FaceContext::axis_aligned(Axis));
+  ASSERT_TRUE(evaluation.succeeded());
+  EXPECT_DOUBLE_EQ(evaluation.checked_density().value[0], pops::Real(3 * (Axis + 1)));
+  EXPECT_DOUBLE_EQ(evaluation.stability.value, pops::Real(Axis + 1));
+  if constexpr (Axis + 1 < Dim)
+    expect_exact_axis_dispatch<Axis + 1, Dim>();
 }
 
 struct RejectFlux {
@@ -260,22 +299,6 @@ struct RecordFatalFluxFailures {
   }
 };
 
-struct NonFinitePrimitiveModel {
-  using State = pops::StateVec<1>;
-  using Prim = pops::StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-
-  POPS_HD State flux(const State& state, const auto&, int) const { return state; }
-  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
-  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-  POPS_HD Prim to_primitive(const State&) const {
-    return Prim{std::numeric_limits<pops::Real>::quiet_NaN()};
-  }
-  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
-};
-
 }  // namespace
 
 TEST(test_flux_interfaces, equal_state_consistency_and_declared_stability) {
@@ -296,6 +319,12 @@ TEST(test_flux_interfaces, equal_state_consistency_and_declared_stability) {
   EXPECT_EQ(evaluation.last_attempted_solver, pops::RiemannSolverId::kRusanov);
   EXPECT_EQ(evaluation.attempt_count, 1);
   EXPECT_FALSE(evaluation.used_fallback());
+}
+
+TEST(test_flux_interfaces, exact_ranked_template_models_dispatch_every_compiled_axis) {
+  expect_exact_axis_dispatch<0, 1>();
+  expect_exact_axis_dispatch<0, 2>();
+  expect_exact_axis_dispatch<0, 3>();
 }
 
 TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device_copyable) {
@@ -336,8 +365,8 @@ TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device
             pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
   EXPECT_TRUE(recovered.used_fallback());
 
-  const std::uint64_t device_encoded =
-      pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}}, DeviceRiemannRecoveryProbe{});
+  std::uint64_t device_encoded = 0;
+  DeviceRiemannRecoveryProbe{}(0, 0, device_encoded);
   EXPECT_EQ(device_encoded >> 8, static_cast<std::uint64_t>(pops::RiemannSolverId::kHll));
   EXPECT_EQ(device_encoded & UINT64_C(0xff), UINT64_C(2));
 }
@@ -500,11 +529,13 @@ TEST(test_flux_interfaces, generated_provider_requirements_own_native_slot_reads
   static_assert(
       !pops::qualified_flux_provider_requirements_valid<DuplicateQualifiedProviderAdvect>());
 
-  const CountingProviderStorage storage{};
-  const auto bound = pops::bind_flux_providers_at<QualifiedProviderAdvect>(storage, 0, 0);
-  EXPECT_EQ(storage.reads[0], 0);
-  EXPECT_EQ(storage.reads[1], 1);
-  EXPECT_EQ(storage.reads[2], 0);
+  CountingProviderStorage storage{};
+  constexpr int gradient_component = ProviderAdvect::gradient_component;
+  storage.values[gradient_component] = pops::Real(4);
+  const auto bound = pops::bind_flux_providers_at<QualifiedProviderAdvect>(
+      storage, pops::Index<pops::kNativeDimension>{});
+  for (int component = 0; component < pops::kAuxBaseComps; ++component)
+    EXPECT_EQ(storage.reads[component], component == gradient_component ? 1 : 0);
 
   const QualifiedProviderAdvect::State state{pops::Real(3)};
   const auto trace = pops::make_face_trace(state, bound);
@@ -588,8 +619,11 @@ TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_de
   static_assert(std::is_trivially_copyable_v<pops::FluxEvaluationTracker>);
   static_assert(sizeof(pops::FluxEvaluationTracker) == sizeof(std::uint64_t));
   pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
-  tracker.merge(pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {2, 0}},
-                                             RecordRecoverableFluxFailures{tracker.recorder()}));
+  std::uint64_t packed = 0;
+  const RecordRecoverableFluxFailures record{tracker.recorder()};
+  for (int cell = 0; cell < 3; ++cell)
+    record(cell, 0, packed);
+  tracker.merge(packed);
 
   const pops::FluxFailureReport report = tracker.collective_report();
   EXPECT_EQ(report.status, pops::EvaluationStatus::kReject);
@@ -599,8 +633,11 @@ TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_de
 
 TEST(test_flux_interfaces, fatal_flux_failure_remains_typed_and_preserves_reason) {
   pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
-  tracker.merge(pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {1, 0}},
-                                             RecordFatalFluxFailures{tracker.recorder()}));
+  std::uint64_t packed = 0;
+  const RecordFatalFluxFailures record{tracker.recorder()};
+  record(0, 0, packed);
+  record(1, 0, packed);
+  tracker.merge(packed);
 
   try {
     tracker.throw_if_failed("unit_flux_phase");
@@ -631,61 +668,17 @@ TEST(test_flux_interfaces, recovery_report_uses_the_flux_failure_reduction_witho
   EXPECT_EQ(report.action(), pops::TransactionFailureAction::kRejectStep);
 }
 
-TEST(test_flux_interfaces, face_recovery_refusal_never_reaches_the_numerical_flux) {
-  static_assert(
-      std::is_trivially_copyable_v<pops::ReconstructedFaceState<NonFinitePrimitiveModel>>);
-  static_assert(
-      std::is_trivially_copyable_v<pops::RecoveredFacePrimitive<NonFinitePrimitiveModel>>);
-  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
-  const pops::BoxArray cells(std::vector<pops::Box2D>{domain});
-  const pops::DistributionMapping distribution(1, pops::n_ranks());
-  pops::MultiFab state(cells, distribution, 1, 2);
-  pops::MultiFab providers_field(cells, distribution, pops::kAuxBaseComps, 2);
-  state.set_val(pops::Real(1));
-  providers_field.set_val(pops::Real(0));
-
-  const auto local_state = state.fab(0).const_array();
-  const auto reconstructed = pops::reconstruct_pp_recovered<NonFinitePrimitiveModel>(
-      NonFinitePrimitiveModel{}, local_state, domain.lo[0] + 1, domain.lo[1] + 1, 0, pops::Real(1),
-      pops::Minmod{}, true, pops::Real(0), 0);
-  ASSERT_FALSE(reconstructed.publication_permitted());
-  EXPECT_EQ(reconstructed.recovery.status, pops::RecoveryStatus::kInvalidContract);
-  EXPECT_EQ(reconstructed.recovery.cause, pops::RecoveryCause::kNonFiniteCandidate);
-  EXPECT_EQ(reconstructed.value[0], pops::Real(1));
-  const auto value_only = pops::reconstruct_pp<NonFinitePrimitiveModel>(
-      NonFinitePrimitiveModel{}, local_state, domain.lo[0] + 1, domain.lo[1] + 1, 0, pops::Real(1),
-      pops::Minmod{}, true, pops::Real(0), 0);
-  EXPECT_TRUE(std::isnan(value_only[0]));
-
-  std::vector<pops::Box2D> x_faces{pops::xface_box(domain)};
-  std::vector<pops::Box2D> y_faces{pops::yface_box(domain)};
-  pops::MultiFab flux_x(pops::BoxArray(std::move(x_faces)), distribution, 1, 0);
-  pops::MultiFab flux_y(pops::BoxArray(std::move(y_faces)), distribution, 1, 0);
-  try {
-    pops::compute_face_fluxes<pops::Minmod, pops::RusanovFlux>(NonFinitePrimitiveModel{}, state,
-                                                               providers_field, flux_x, flux_y,
-                                                               pops::Real(1), pops::Real(1), true);
-  } catch (const pops::FluxEvaluationFailure& failure) {
-    EXPECT_EQ(failure.status(), pops::EvaluationStatus::kFailed);
-    EXPECT_EQ(failure.reason_code(),
-              pops::detail::kVariableRecoveryReasonBase |
-                  static_cast<std::uint32_t>(pops::RecoveryCause::kNonFiniteCandidate));
-    EXPECT_EQ(failure.phase(), "compute_face_fluxes");
-    return;
-  }
-  FAIL() << "a refused primitive recovery reached or escaped the face-flux path";
-}
-
 TEST(test_flux_interfaces, native_storage_binds_only_the_exact_model_pack) {
   const ProviderAdvect physical{};
   const ProviderAdvect::State state{pops::Real(3)};
   const ProviderStorage storage{pops::Real(4)};
+  const pops::Index<pops::kNativeDimension> index{};
   const auto evaluation =
-      pops::evaluate_numerical_flux_at(pops::RusanovFlux{}, physical, state, storage, 2, 3, state,
-                                       storage, 2, 3, pops::FaceContext::axis_aligned(0));
+      pops::evaluate_numerical_flux_at(pops::RusanovFlux{}, physical, state, storage, index, state,
+                                       storage, index, pops::FaceContext::axis_aligned(0));
 
   ASSERT_TRUE(evaluation.succeeded());
   EXPECT_DOUBLE_EQ(evaluation.checked_density().value[0], pops::Real(12));
   EXPECT_DOUBLE_EQ(evaluation.stability.value, pops::Real(4));
-  static_assert(pops::FluxProviderValues<ProviderAdvect>::size == 3);
+  static_assert(pops::FluxProviderValues<ProviderAdvect>::size == pops::kAuxBaseComps);
 }

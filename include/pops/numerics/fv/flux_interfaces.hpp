@@ -8,6 +8,7 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/state.hpp>
+#include <pops/mesh/index/index.hpp>
 
 #include <concepts>
 #include <cstddef>
@@ -164,10 +165,17 @@ template <class Model>
 struct PhysicalFluxView;
 
 template <class Model>
+inline constexpr int physical_model_dimension = [] {
+  if constexpr (requires { Model::dimension; })
+    return static_cast<int>(Model::dimension);
+  return kNativeDimension;
+}();
+
+template <class Model>
 inline constexpr int flux_provider_count = [] {
   if constexpr (requires { Model::n_aux; })
     return static_cast<int>(Model::n_aux);
-  return kAuxBaseComps;
+  return kAuxBaseCompsFor<physical_model_dimension<Model>>;
 }();
 
 template <class Model>
@@ -218,12 +226,15 @@ consteval bool qualified_flux_provider_requirements_valid() {
 /// fixture; a missing component cannot be requested through this interface.
 template <class Model>
 struct FluxProviderValues {
+  static constexpr int dimension = physical_model_dimension<Model>;
   static constexpr int size = flux_provider_count<Model>;
+  static_assert(dimension >= 1 && dimension <= 3,
+                "physical flux provider model dimension must be 1, 2, or 3");
   static_assert(qualified_flux_provider_requirements_valid<Model>(),
                 "generated physical flux provider requirements are invalid");
-  static_assert(size >= kAuxBaseComps,
+  static_assert(size >= kAuxBaseCompsFor<dimension>,
                 "physical flux provider packs must declare the required base providers");
-  static_assert(size <= kAuxMaxComps,
+  static_assert(size <= kAuxMaxCompsFor<dimension>,
                 "physical flux provider pack exceeds the native model capability");
 
   Real values[size]{};
@@ -242,6 +253,7 @@ struct FluxProviderValues {
 template <class Model>
 class BoundFluxProviders {
  public:
+  static constexpr int dimension = physical_model_dimension<Model>;
   static constexpr int value_count = FluxProviderValues<Model>::size;
   BoundFluxProviders() = delete;
   POPS_HD BoundFluxProviders(const BoundFluxProviders&) = default;
@@ -274,12 +286,12 @@ template <class Model, std::size_t Index>
 inline constexpr int qualified_flux_provider_storage_slot =
     Model::flux_provider_requirements[Index].storage_slot;
 
-template <class Model, class Storage, std::size_t... Indices>
+template <class Model, int Dim, class Storage, std::size_t... Indices>
 POPS_HD BoundFluxProviders<Model> bind_qualified_flux_providers_at(
-    const Storage& storage, int i, int j, std::index_sequence<Indices...>) {
+    const Storage& storage, const Index<Dim>& index, std::index_sequence<Indices...>) {
   FluxProviderValues<Model> values{};
   ((values[qualified_flux_provider_storage_slot<Model, Indices>] =
-        storage(i, j, qualified_flux_provider_storage_slot<Model, Indices>)),
+        storage(index, qualified_flux_provider_storage_slot<Model, Indices>)),
    ...);
   return bind_flux_providers<Model>(values);
 }
@@ -289,20 +301,23 @@ POPS_HD BoundFluxProviders<Model> bind_qualified_flux_providers_at(
 /// Bind one exact provider pack directly from native field storage.  The caller supplies a
 /// model-qualified component count at compile time; there is no global Aux object, truncation, or
 /// zero-on-missing branch on this path.
-template <class Model, class Storage>
-POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage, int i, int j) {
+template <class Model, int Dim, class Storage>
+POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage,
+                                                         const Index<Dim>& index) {
+  static_assert(Dim == physical_model_dimension<Model>,
+                "provider storage index rank differs from the physical model rank");
   if constexpr (has_qualified_flux_provider_requirements<Model>) {
     static_assert(qualified_flux_provider_requirements_valid<Model>(),
                   "generated physical flux provider requirements are invalid");
     constexpr std::size_t count = qualified_flux_provider_requirements_valid<Model>()
                                       ? static_cast<std::size_t>(Model::n_flux_providers)
                                       : 0;
-    return detail::bind_qualified_flux_providers_at<Model>(storage, i, j,
+    return detail::bind_qualified_flux_providers_at<Model>(storage, index,
                                                            std::make_index_sequence<count>{});
   } else {
     FluxProviderValues<Model> values{};
     for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
-      values[component] = storage(i, j, component);
+      values[component] = storage(index, component);
     return bind_flux_providers<Model>(values);
   }
 }
@@ -319,10 +334,10 @@ POPS_HD FaceTrace<typename Model::State, BoundFluxProviders<Model>> make_face_tr
   return {state, providers};
 }
 
-template <class Model, class Storage>
+template <class Model, int Dim, class Storage>
 POPS_HD FaceTrace<typename Model::State, BoundFluxProviders<Model>> make_face_trace_at(
-    const typename Model::State& state, const Storage& providers, int i, int j) {
-  return {state, bind_flux_providers_at<Model>(providers, i, j)};
+    const typename Model::State& state, const Storage& providers, const Index<Dim>& index) {
+  return {state, bind_flux_providers_at<Model>(providers, index)};
 }
 
 template <class State>
@@ -444,6 +459,287 @@ POPS_HD IntegratedFaceFlux<State> apply_face_measure(const FluxDensity<State>& d
   return {value};
 }
 
+namespace detail {
+
+template <int Axis, class Model>
+concept ModelFluxAt =
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers) {
+      { model.template flux<Axis>(state, providers) } -> std::same_as<typename Model::State>;
+    } ||
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers) {
+      { model.flux(state, providers, Axis) } -> std::same_as<typename Model::State>;
+    };
+
+template <int Axis, class Model>
+concept ModelMaximumWaveSpeedAt =
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers) {
+      { model.template max_wave_speed<Axis>(state, providers) } -> std::convertible_to<Real>;
+    } ||
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers) {
+      { model.max_wave_speed(state, providers, Axis) } -> std::convertible_to<Real>;
+    };
+
+template <int Axis, class Model>
+concept ModelWaveSpeedsAt =
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers, Real& lower,
+             Real& upper) { model.template wave_speeds<Axis>(state, providers, lower, upper); } ||
+    requires(const Model model, const typename Model::State state,
+             const BoundFluxProviders<Model> providers, Real& lower,
+             Real& upper) { model.wave_speeds(state, providers, Axis, lower, upper); };
+
+template <int Axis, class Model>
+concept ModelContactSpeedAt =
+    requires(const Model model, const typename Model::State left, const typename Model::State right,
+             Real scalar) {
+      {
+        model.template contact_speed<Axis>(left, right, scalar, scalar, scalar, scalar)
+      } -> std::convertible_to<Real>;
+    } ||
+    requires(const Model model, const typename Model::State left, const typename Model::State right,
+             Real scalar) {
+      {
+        model.contact_speed(left, right, scalar, scalar, scalar, scalar, Axis)
+      } -> std::convertible_to<Real>;
+    };
+
+template <int Axis, class Model>
+concept ModelStarStateAt =
+    requires(const Model model, const typename Model::State state, Real scalar) {
+      {
+        model.template hllc_star_state<Axis>(state, scalar, scalar, scalar)
+      } -> std::same_as<typename Model::State>;
+    } || requires(const Model model, const typename Model::State state, Real scalar) {
+      {
+        model.hllc_star_state(state, scalar, scalar, scalar, Axis)
+      } -> std::same_as<typename Model::State>;
+    };
+
+template <int Axis, class Model>
+concept ModelRoeDissipationAt =
+    requires(const Model model, const typename Model::State left,
+             const BoundFluxProviders<Model> left_providers, const typename Model::State right,
+             const BoundFluxProviders<Model> right_providers) {
+      {
+        model.template roe_dissipation<Axis>(left, left_providers, right, right_providers)
+      } -> std::same_as<typename Model::State>;
+    } ||
+    requires(const Model model, const typename Model::State left,
+             const BoundFluxProviders<Model> left_providers, const typename Model::State right,
+             const BoundFluxProviders<Model> right_providers) {
+      {
+        model.roe_dissipation(left, left_providers, right, right_providers, Axis)
+      } -> std::same_as<typename Model::State>;
+    };
+
+template <class Model, int Axis = 0>
+consteval bool flux_all_axes() {
+  if constexpr (!ModelFluxAt<Axis, Model> || !ModelMaximumWaveSpeedAt<Axis, Model>)
+    return false;
+  else if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return flux_all_axes<Model, Axis + 1>();
+  return true;
+}
+
+template <class Model, int Axis = 0>
+consteval bool wave_speeds_all_axes() {
+  if constexpr (!ModelWaveSpeedsAt<Axis, Model>)
+    return false;
+  else if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return wave_speeds_all_axes<Model, Axis + 1>();
+  return true;
+}
+
+template <class Model, int Axis = 0>
+consteval bool hllc_all_axes() {
+  if constexpr (!ModelWaveSpeedsAt<Axis, Model> || !ModelContactSpeedAt<Axis, Model> ||
+                !ModelStarStateAt<Axis, Model>)
+    return false;
+  else if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return hllc_all_axes<Model, Axis + 1>();
+  return true;
+}
+
+template <class Model, int Axis = 0>
+consteval bool roe_all_axes() {
+  if constexpr (!ModelRoeDissipationAt<Axis, Model>)
+    return false;
+  else if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return roe_all_axes<Model, Axis + 1>();
+  return true;
+}
+
+template <class State>
+POPS_HD State invalid_axis_state() {
+  State result{};
+  for (int component = 0; component < State::size(); ++component)
+    result[component] = std::numeric_limits<Real>::quiet_NaN();
+  return result;
+}
+
+template <int Axis, class Model>
+  requires ModelFluxAt<Axis, Model>
+POPS_HD typename Model::State model_flux_at(const Model& model, const typename Model::State& state,
+                                            const BoundFluxProviders<Model>& providers) {
+  if constexpr (requires { model.template flux<Axis>(state, providers); })
+    return model.template flux<Axis>(state, providers);
+  else
+    return model.flux(state, providers, Axis);
+}
+
+template <int Axis, class Model>
+  requires ModelMaximumWaveSpeedAt<Axis, Model>
+POPS_HD Real model_max_wave_speed_at(const Model& model, const typename Model::State& state,
+                                     const BoundFluxProviders<Model>& providers) {
+  if constexpr (requires { model.template max_wave_speed<Axis>(state, providers); })
+    return model.template max_wave_speed<Axis>(state, providers);
+  else
+    return model.max_wave_speed(state, providers, Axis);
+}
+
+template <int Axis = 0, class Model>
+POPS_HD typename Model::State model_flux_at_runtime_axis(const Model& model,
+                                                         const typename Model::State& state,
+                                                         const BoundFluxProviders<Model>& providers,
+                                                         int axis) {
+  if (axis == Axis)
+    return model_flux_at<Axis>(model, state, providers);
+  if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return model_flux_at_runtime_axis<Axis + 1>(model, state, providers, axis);
+  return invalid_axis_state<typename Model::State>();
+}
+
+template <int Axis = 0, class Model>
+POPS_HD Real model_max_wave_speed_at_runtime_axis(const Model& model,
+                                                  const typename Model::State& state,
+                                                  const BoundFluxProviders<Model>& providers,
+                                                  int axis) {
+  if (axis == Axis)
+    return model_max_wave_speed_at<Axis>(model, state, providers);
+  if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return model_max_wave_speed_at_runtime_axis<Axis + 1>(model, state, providers, axis);
+  return std::numeric_limits<Real>::quiet_NaN();
+}
+
+template <int Axis, class Model>
+  requires ModelWaveSpeedsAt<Axis, Model>
+POPS_HD void model_wave_speeds_at(const Model& model, const typename Model::State& state,
+                                  const BoundFluxProviders<Model>& providers, Real& lower,
+                                  Real& upper) {
+  if constexpr (requires { model.template wave_speeds<Axis>(state, providers, lower, upper); })
+    model.template wave_speeds<Axis>(state, providers, lower, upper);
+  else
+    model.wave_speeds(state, providers, Axis, lower, upper);
+}
+
+template <int Axis = 0, class Model>
+  requires ModelWaveSpeedsAt<Axis, Model>
+POPS_HD void model_wave_speeds_at_runtime_axis(const Model& model,
+                                               const typename Model::State& state,
+                                               const BoundFluxProviders<Model>& providers, int axis,
+                                               Real& lower, Real& upper) {
+  if (axis == Axis) {
+    model_wave_speeds_at<Axis>(model, state, providers, lower, upper);
+    return;
+  }
+  if constexpr (Axis + 1 < physical_model_dimension<Model>) {
+    model_wave_speeds_at_runtime_axis<Axis + 1>(model, state, providers, axis, lower, upper);
+    return;
+  }
+  lower = upper = std::numeric_limits<Real>::quiet_NaN();
+}
+
+template <int Axis, class Model>
+  requires ModelContactSpeedAt<Axis, Model>
+POPS_HD Real model_contact_speed_at(const Model& model, const typename Model::State& left,
+                                    const typename Model::State& right, Real pressure_left,
+                                    Real pressure_right, Real speed_left, Real speed_right) {
+  if constexpr (requires {
+                  model.template contact_speed<Axis>(left, right, pressure_left, pressure_right,
+                                                     speed_left, speed_right);
+                })
+    return model.template contact_speed<Axis>(left, right, pressure_left, pressure_right,
+                                              speed_left, speed_right);
+  else
+    return model.contact_speed(left, right, pressure_left, pressure_right, speed_left, speed_right,
+                               Axis);
+}
+
+template <int Axis = 0, class Model>
+  requires ModelContactSpeedAt<Axis, Model>
+POPS_HD Real model_contact_speed_at_runtime_axis(const Model& model,
+                                                 const typename Model::State& left,
+                                                 const typename Model::State& right,
+                                                 Real pressure_left, Real pressure_right,
+                                                 Real speed_left, Real speed_right, int axis) {
+  if (axis == Axis)
+    return model_contact_speed_at<Axis>(model, left, right, pressure_left, pressure_right,
+                                        speed_left, speed_right);
+  if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return model_contact_speed_at_runtime_axis<Axis + 1>(
+        model, left, right, pressure_left, pressure_right, speed_left, speed_right, axis);
+  return std::numeric_limits<Real>::quiet_NaN();
+}
+
+template <int Axis, class Model>
+  requires ModelStarStateAt<Axis, Model>
+POPS_HD typename Model::State model_star_state_at(const Model& model,
+                                                  const typename Model::State& state, Real pressure,
+                                                  Real speed, Real contact) {
+  if constexpr (requires { model.template hllc_star_state<Axis>(state, pressure, speed, contact); })
+    return model.template hllc_star_state<Axis>(state, pressure, speed, contact);
+  else
+    return model.hllc_star_state(state, pressure, speed, contact, Axis);
+}
+
+template <int Axis = 0, class Model>
+  requires ModelStarStateAt<Axis, Model>
+POPS_HD typename Model::State model_star_state_at_runtime_axis(const Model& model,
+                                                               const typename Model::State& state,
+                                                               Real pressure, Real speed,
+                                                               Real contact, int axis) {
+  if (axis == Axis)
+    return model_star_state_at<Axis>(model, state, pressure, speed, contact);
+  if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return model_star_state_at_runtime_axis<Axis + 1>(model, state, pressure, speed, contact, axis);
+  return invalid_axis_state<typename Model::State>();
+}
+
+template <int Axis, class Model>
+  requires ModelRoeDissipationAt<Axis, Model>
+POPS_HD typename Model::State model_roe_dissipation_at(
+    const Model& model, const typename Model::State& left,
+    const BoundFluxProviders<Model>& left_providers, const typename Model::State& right,
+    const BoundFluxProviders<Model>& right_providers) {
+  if constexpr (requires {
+                  model.template roe_dissipation<Axis>(left, left_providers, right,
+                                                       right_providers);
+                })
+    return model.template roe_dissipation<Axis>(left, left_providers, right, right_providers);
+  else
+    return model.roe_dissipation(left, left_providers, right, right_providers, Axis);
+}
+
+template <int Axis = 0, class Model>
+  requires ModelRoeDissipationAt<Axis, Model>
+POPS_HD typename Model::State model_roe_dissipation_at_runtime_axis(
+    const Model& model, const typename Model::State& left,
+    const BoundFluxProviders<Model>& left_providers, const typename Model::State& right,
+    const BoundFluxProviders<Model>& right_providers, int axis) {
+  if (axis == Axis)
+    return model_roe_dissipation_at<Axis>(model, left, left_providers, right, right_providers);
+  if constexpr (Axis + 1 < physical_model_dimension<Model>)
+    return model_roe_dissipation_at_runtime_axis<Axis + 1>(model, left, left_providers, right,
+                                                           right_providers, axis);
+  return invalid_axis_state<typename Model::State>();
+}
+
+}  // namespace detail
+
 /// Narrow physical constitutive interface over a bound provider pack.  Numerical-flux policies see
 /// this value, never the complete runtime Model. Physical laws consume BoundFluxProviders directly;
 /// no global Aux value is reconstructed on the finite-volume path.
@@ -452,12 +748,16 @@ struct PhysicalFluxView {
   using State = typename Model::State;
   using ProviderPack = BoundFluxProviders<Model>;
   using Trace = FaceTrace<State, ProviderPack>;
+  static constexpr int dimension = physical_model_dimension<Model>;
   static constexpr int n_vars = Model::n_vars;
+  static_assert(detail::flux_all_axes<Model>(),
+                "physical model must provide flux and wave speed on every ranked axis");
 
   Model physical;
 
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
-    State result = physical.flux(trace.state, trace.providers, face.axis);
+    State result =
+        detail::model_flux_at_runtime_axis(physical, trace.state, trace.providers, face.axis);
     const Real sign = face.orientation_sign();
     if (sign < Real(0)) {
       for (int component = 0; component < n_vars; ++component)
@@ -467,17 +767,17 @@ struct PhysicalFluxView {
   }
 
   POPS_HD StabilityBound stability(const Trace& trace, const FaceContext& face) const {
-    return {physical.max_wave_speed(trace.state, trace.providers, face.axis),
+    return {detail::model_max_wave_speed_at_runtime_axis(physical, trace.state, trace.providers,
+                                                         face.axis),
             StabilityUnit::kLengthPerTime, StabilityConvention::kNormalSpectralRadius};
   }
 
   POPS_HD void signed_wave_speeds(const Trace& trace, const FaceContext& face, Real& lower,
                                   Real& upper) const
-    requires requires(const Model& model, const State& state, const ProviderPack& providers,
-                      int axis, Real& lo,
-                      Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
+    requires(detail::wave_speeds_all_axes<Model>())
   {
-    physical.wave_speeds(trace.state, trace.providers, face.axis, lower, upper);
+    detail::model_wave_speeds_at_runtime_axis(physical, trace.state, trace.providers, face.axis,
+                                              lower, upper);
     if (face.orientation == FaceOrientation::kNegative) {
       const Real old_lower = lower;
       lower = -upper;
@@ -494,30 +794,26 @@ struct PhysicalFluxView {
   POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
                              Real pressure_right, Real speed_left, Real speed_right,
                              const FaceContext& face) const
-    requires requires(const Model& model, const State& l, const State& r, Real pl, Real pr, Real sl,
-                      Real sr, int axis) { model.contact_speed(l, r, pl, pr, sl, sr, axis); }
+    requires(detail::hllc_all_axes<Model>())
   {
-    return physical.contact_speed(left, right, pressure_left, pressure_right, speed_left,
-                                  speed_right, face.axis);
+    return detail::model_contact_speed_at_runtime_axis(
+        physical, left, right, pressure_left, pressure_right, speed_left, speed_right, face.axis);
   }
 
   POPS_HD State star_state(const State& state, Real pressure, Real speed, Real contact,
                            const FaceContext& face) const
-    requires requires(const Model& model, const State& value, Real p, Real s, Real c, int axis) {
-      model.hllc_star_state(value, p, s, c, axis);
-    }
+    requires(detail::hllc_all_axes<Model>())
   {
-    return physical.hllc_star_state(state, pressure, speed, contact, face.axis);
+    return detail::model_star_state_at_runtime_axis(physical, state, pressure, speed, contact,
+                                                    face.axis);
   }
 
   POPS_HD State roe_dissipation(const Trace& left, const Trace& right,
                                 const FaceContext& face) const
-    requires requires(const Model& model, const State& l, const ProviderPack& lp, const State& r,
-                      const ProviderPack& rp,
-                      int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
+    requires(detail::roe_all_axes<Model>())
   {
-    return physical.roe_dissipation(left.state, left.providers, right.state, right.providers,
-                                    face.axis);
+    return detail::model_roe_dissipation_at_runtime_axis(physical, left.state, left.providers,
+                                                         right.state, right.providers, face.axis);
   }
 };
 
@@ -544,28 +840,13 @@ concept NumericalFlux =
 /// Constitutive capability gates used only during route resolution.  NumericalFlux policies do not
 /// receive these Models; installation wraps a conforming value in the narrow PhysicalFluxView.
 template <class Model>
-concept HasHLLCStructure = requires(
-    const Model& model, const typename Model::State& state, const typename Model::State& other,
-    const BoundFluxProviders<Model>& providers, Real scalar, int axis, Real& lower, Real& upper) {
-  { model.pressure(state) } -> std::convertible_to<Real>;
-  model.wave_speeds(state, providers, axis, lower, upper);
-  {
-    model.contact_speed(state, other, scalar, scalar, scalar, scalar, axis)
-  } -> std::convertible_to<Real>;
-  {
-    model.hllc_star_state(state, scalar, scalar, scalar, axis)
-  } -> std::same_as<typename Model::State>;
-};
+concept HasHLLCStructure = detail::hllc_all_axes<Model>() &&
+                           requires(const Model& model, const typename Model::State& state) {
+                             { model.pressure(state) } -> std::convertible_to<Real>;
+                           };
 
 template <class Model>
-concept HasRoeDissipation =
-    requires(const Model& model, const typename Model::State& left,
-             const BoundFluxProviders<Model>& left_providers, const typename Model::State& right,
-             const BoundFluxProviders<Model>& right_providers, int axis) {
-      {
-        model.roe_dissipation(left, left_providers, right, right_providers, axis)
-      } -> std::same_as<typename Model::State>;
-    };
+concept HasRoeDissipation = detail::roe_all_axes<Model>();
 
 template <class Numerical, class Model>
 POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
@@ -588,14 +869,15 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
   return result.with_single_solver(solver);
 }
 
-template <class Numerical, class Model, class Storage>
+template <class Numerical, class Model, int Dim, class LeftStorage, class RightStorage>
 POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
     const Numerical& numerical, const Model& model, const typename Model::State& left_state,
-    const Storage& left_providers, int left_i, int left_j, const typename Model::State& right_state,
-    const Storage& right_providers, int right_i, int right_j, const FaceContext& face) {
+    const LeftStorage& left_providers, const Index<Dim>& left_index,
+    const typename Model::State& right_state, const RightStorage& right_providers,
+    const Index<Dim>& right_index, const FaceContext& face) {
   return evaluate_numerical_flux(
-      numerical, model, left_state, bind_flux_providers_at<Model>(left_providers, left_i, left_j),
-      right_state, bind_flux_providers_at<Model>(right_providers, right_i, right_j), face);
+      numerical, model, left_state, bind_flux_providers_at<Model>(left_providers, left_index),
+      right_state, bind_flux_providers_at<Model>(right_providers, right_index), face);
 }
 
 }  // namespace pops

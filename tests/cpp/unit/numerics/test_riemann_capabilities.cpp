@@ -23,6 +23,12 @@ using pops::Real;
 
 namespace {
 
+struct PlanarEuler : pops::Euler {
+  static constexpr int dimension = 2;
+
+  explicit PlanarEuler(Real gamma_value) { gamma = gamma_value; }
+};
+
 // ---------------------------------------------------------------------------------------------
 // HookedEuler : pops::Euler + capabilities HLLC/Roe reproduisant EXACTEMENT les formules du chemin
 // canonique (Toro 10.37 pour le contact, moyenne de Roe + Harten pour la dissipation).
@@ -193,7 +199,8 @@ struct DimensionalIsoHLLC {
   static_assert(Dimension >= 1 && Dimension <= 3);
 
   using State = pops::StateVec<Dimension + 2>;
-  using Aux = pops::Aux;
+  using Aux = pops::AuxState<Dimension>;
+  static constexpr int dimension = Dimension;
   static constexpr int n_vars = Dimension + 2;
   static constexpr int tracer_component = Dimension + 1;
   Real cs2 = Real(0.5);
@@ -278,17 +285,14 @@ double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
 }
 
 template <class Policy, class Model>
-typename Model::State face_density(const Policy& policy, const Model& model,
-                                   const typename Model::State& left, const Aux& left_providers,
-                                   const typename Model::State& right, const Aux& right_providers,
-                                   int axis) {
+typename Model::State face_density(
+    const Policy& policy, const Model& model, const typename Model::State& left,
+    const pops::AuxState<pops::physical_model_dimension<Model>>& left_providers,
+    const typename Model::State& right,
+    const pops::AuxState<pops::physical_model_dimension<Model>>& right_providers, int axis) {
   pops::FluxProviderValues<Model> left_values{}, right_values{};
-  left_values[0] = left_providers.phi;
-  left_values[1] = left_providers.grad_x;
-  left_values[2] = left_providers.grad_y;
-  right_values[0] = right_providers.phi;
-  right_values[1] = right_providers.grad_x;
-  right_values[2] = right_providers.grad_y;
+  left_values[pops::AuxComponentLayout<pops::kNativeDimension>::phi] = left_providers.phi;
+  right_values[pops::AuxComponentLayout<pops::kNativeDimension>::phi] = right_providers.phi;
   return pops::evaluate_numerical_flux(
              policy, model, left, pops::bind_flux_providers<Model>(left_values), right,
              pops::bind_flux_providers<Model>(right_values), pops::FaceContext::axis_aligned(axis))
@@ -371,11 +375,11 @@ TEST(test_riemann_capabilities, state_layout_permutation_is_provider_owned) {
 }
 
 TEST(test_riemann_capabilities, orientation_reversal_is_common_to_hllc_and_roe) {
-  pops::Euler model{1.4};
+  PlanarEuler model{1.4};
   const State4 left = cons(1.2, 0.3, -0.1, 1.5, 1.4);
   const State4 right = cons(0.7, -0.2, 0.4, 0.9, 1.4);
-  pops::FluxProviderValues<pops::Euler> values{};
-  const auto providers = pops::bind_flux_providers<pops::Euler>(values);
+  pops::FluxProviderValues<PlanarEuler> values{};
+  const auto providers = pops::bind_flux_providers<PlanarEuler>(values);
   for (int axis = 0; axis < 2; ++axis) {
     const auto positive_face =
         pops::FaceContext::axis_aligned(axis, Real(1), pops::FaceOrientation::kPositive);
@@ -423,10 +427,9 @@ TEST(test_riemann_capabilities, native_isothermal_provider_serves_hllc_and_roe) 
 
   for (int axis = 0; axis < 2; ++axis) {
     const auto physical = model.flux(value, providers, axis);
-    const auto hllc = face_density(pops::HLLCFlux{}, model, value, providers, value, providers,
-                                   axis);
-    const auto roe =
-        face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
+    const auto hllc =
+        face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
+    const auto roe = face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
     EXPECT_LE(maxdiff(hllc, physical), 1e-13);
     EXPECT_LE(maxdiff(roe, physical), 1e-13);
   }
@@ -439,8 +442,7 @@ TEST(test_riemann_capabilities, native_isothermal_contact_is_not_replaced_by_hll
   pops::IsothermalFlux::State left{Real(1), Real(0), Real(2)};
   pops::IsothermalFlux::State right{Real(1), Real(0), Real(-3)};
 
-  const auto hllc =
-      face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
+  const auto hllc = face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
   const auto roe = face_density(pops::RoeFlux{}, model, left, providers, right, providers, 0);
   const auto hll = face_density(pops::HLLFlux{}, model, left, providers, right, providers, 0);
   EXPECT_LE(std::fabs(hllc[2]), 1e-14);
@@ -457,7 +459,7 @@ TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent)
     for (int component = 0; component < Dimension; ++component)
       value[component + 1] = Real(0.2) * Real(component + 1);
     value[DimensionalIsoHLLC<Dimension>::tracer_component] = Real(-0.7);
-    const Aux providers{};
+    const pops::AuxState<Dimension> providers{};
     for (int axis = 0; axis < Dimension; ++axis) {
       const auto numerical =
           face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
@@ -472,7 +474,7 @@ TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent)
 
 TEST(test_riemann_capabilities, three_dimensional_tangential_contact_is_provider_owned) {
   DimensionalIsoHLLC<3> model;
-  const Aux providers{};
+  const pops::AuxState<3> providers{};
 
   for (int axis = 0; axis < 3; ++axis) {
     DimensionalIsoHLLC<3>::State left{}, right{};
