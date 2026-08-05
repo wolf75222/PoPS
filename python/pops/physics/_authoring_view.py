@@ -119,7 +119,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         if self._roe_rows is not None:
             stability_exprs.extend(flattened_axis_values(self._roe_rows))
         if self._roe_jacobian is not None:
-            for direction in self._roe_jacobian:
+            for direction in self._flux:
                 stability_exprs.extend(
                     expression
                     for row in self._roe_jacobian[direction]

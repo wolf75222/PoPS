@@ -170,20 +170,18 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
     if compiler is None:
         pytest.skip("a C++20 compiler is required for exact-ranked emitter syntax")
 
-    sources = []
-    calls = []
     for dimension in (1, 2, 3):
         model = _euler_model(dimension)
         model.enable_hllc()
         model.enable_roe()
-        sources.append(
-            model.emit_cpp_brick(
-                name="Euler%d" % dimension, namespace="rank%d" % dimension
-            )
+        source = model.emit_cpp_brick(
+            name="Euler%d" % dimension, namespace="rank%d" % dimension
         )
-        calls.append("  { rank%d::Euler%d model; rank%d::Euler%d::State state{};"
-                     % (dimension, dimension, dimension, dimension))
-        calls.append("    pops::Aux providers{}; pops::Real lower{}, upper{};")
+        calls = [
+            "  { rank%d::Euler%d model; rank%d::Euler%d::State state{};"
+            % (dimension, dimension, dimension, dimension),
+            "    pops::Aux providers{}; pops::Real lower{}, upper{};",
+        ]
         for axis in range(dimension):
             calls.append("    (void)model.template flux<%d>(state, providers);" % axis)
             calls.append("    (void)model.template max_wave_speed<%d>(state, providers);" % axis)
@@ -200,19 +198,28 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
                 % axis
             )
         calls.append("  }")
-
-    translation_unit = "\n".join((
-        "#include <pops/core/state/variables.hpp>",
-        *sources,
-        "int main() {",
-        *calls,
-        "  return 0;",
-        "}",
-    ))
-    source_path = tmp_path / "ranked_emitters.cpp"
-    executable = tmp_path / "ranked_emitters"
-    source_path.write_text(translation_unit, encoding="utf-8")
-    subprocess.run(
-        [compiler, "-std=c++20", "-O0", "-I", include, source_path, "-o", executable],
-        check=True,
-    )
+        translation_unit = "\n".join((
+            "#include <pops/core/state/variables.hpp>",
+            source,
+            "int main() {",
+            *calls,
+            "  return 0;",
+            "}",
+        ))
+        source_path = tmp_path / ("ranked_emitters_%dd.cpp" % dimension)
+        executable = tmp_path / ("ranked_emitters_%dd" % dimension)
+        source_path.write_text(translation_unit, encoding="utf-8")
+        subprocess.run(
+            [
+                compiler,
+                "-std=c++20",
+                "-O0",
+                "-DPOPS_NATIVE_DIM=%d" % dimension,
+                "-I",
+                include,
+                source_path,
+                "-o",
+                executable,
+            ],
+            check=True,
+        )

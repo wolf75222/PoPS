@@ -45,9 +45,15 @@ def model_hash(model: Any, params: Any = None) -> str:
     # package which is stdlib-only (no C extension).
     from pops.identity.scalar import scalar_data
     from pops._ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
+    from pops._cartesian_axes import canonical_axis_mapping
 
     def _scalar_token(value: Any) -> str:
         return json.dumps(scalar_data(value), sort_keys=True, separators=(",", ":"))
+
+    def _axis_names(mapping: Any, *, where: str) -> tuple[str, ...]:
+        if not mapping:
+            return ()
+        return tuple(canonical_axis_mapping(mapping, where=where))
 
     # --- lazy helpers: resolve at call time, not at import time ---
     def _aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
@@ -98,7 +104,11 @@ def model_hash(model: Any, params: Any = None) -> str:
         parts.append("recovery_admissibility=%s" % ";".join(
             "%s=%r" % (name, recovery_constraints[name])
             for name in m.prim_state if name in recovery_constraints))
-    for d in ("x", "y"):
+    flux_axes = _axis_names(m._flux, where="model_hash flux")
+    eig_axes = _axis_names(m._eig, where="model_hash eigenvalues") if m._eig else ()
+    if eig_axes and eig_axes != flux_axes:
+        raise ValueError("model_hash eigenvalue axes differ from physical flux axes")
+    for d in flux_axes:
         parts.append("flux_%s=%s" % (d, ";".join(repr(e) for e in m._flux.get(d, []))))
         parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in m._eig.get(d, []))))
     parts.append("source=%s" % (";".join(repr(e) for e in m._source) if m._source else ""))
@@ -119,9 +129,18 @@ def model_hash(model: Any, params: Any = None) -> str:
             for k in sorted(m._local_transforms)))
     if getattr(m, "_flux_terms", None):
         parts.append("flux_terms=%s" % ";".join(
-            "%s:x[%s]:y[%s]" % (k,
-                                ",".join(repr(e) for e in m._flux_terms[k]["x"]),
-                                ",".join(repr(e) for e in m._flux_terms[k]["y"]))
+            "%s:%s" % (
+                k,
+                ":".join(
+                    "%s[%s]" % (
+                        axis,
+                        ",".join(repr(e) for e in m._flux_terms[k][axis]),
+                    )
+                    for axis in _axis_names(
+                        m._flux_terms[k], where="model_hash named flux %r" % k
+                    )
+                ),
+            )
             for k in sorted(m._flux_terms)))
     parts.append("cons_from=%s" % (";".join(repr(e) for e in m.cons_from) if m.cons_from else ""))
     parts.append("elliptic=%s" % (repr(m._elliptic) if m._elliptic is not None else ""))
@@ -157,29 +176,37 @@ def model_hash(model: Any, params: Any = None) -> str:
         if riemann_evidence.roe_entropy_delta is not None:
             parts.append("roe_entropy_delta=%s" % riemann_evidence.roe_entropy_delta)
     if getattr(m, "_roe_rows", None) is not None:
-        parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
+        roe_axes = _axis_names(m._roe_rows, where="model_hash Roe rows")
+        parts.append("roe_rows=%s" % ";".join(repr(e) for k in roe_axes
                                               for e in m._roe_rows[k]))
     if getattr(m, "_roe_jacobian", None) is not None:
         from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
         if has_characteristic_no_inflow_provider(m):
             parts.append("characteristic_no_inflow=flux_jacobian_v1")
-        parts.append("roe_jac=%s" % ";".join(repr(e) for k in ("x", "y")
+        roe_jac_axes = _axis_names(
+            {key: value for key, value in m._roe_jacobian.items()
+             if key in ("x", "y", "z")},
+            where="model_hash Roe Jacobian",
+        )
+        parts.append("roe_jac=%s" % ";".join(repr(e) for k in roe_jac_axes
                                              for row in m._roe_jacobian[k] for e in row))
         entropy_fix = m._roe_jacobian.get("entropy_fix")
         if entropy_fix is not None:
             parts.append("roe_jac_entropy_fix=%s" % _scalar_token(entropy_fix))
     if getattr(m, "_wave_speeds", None) is not None:
-        parts.append("wave_speeds=%s" % ";".join(repr(e) for k in ("x", "y")
+        wave_axes = _axis_names(m._wave_speeds, where="model_hash wave speeds")
+        parts.append("wave_speeds=%s" % ";".join(repr(e) for k in wave_axes
                                                  for e in m._wave_speeds[k]))
     if getattr(m, "_ws_jacobian", None) is not None:
         # Model validation guarantees the closed Jacobian carrier shape.  Keep that runtime
         # authority intact while making the mapping contract explicit to the type checker.
         ws = cast(Mapping[str, Any], m._ws_jacobian)
+        ws_axes = _axis_names(ws["blocks"], where="model_hash wave-speed blocks")
         parts.append("ws_jac=%s|%s|%s" % (
             ws["eig"],
             "//".join(";".join(",".join(str(i) for i in b) for b in ws["blocks"][k])
-                      for k in ("x", "y")),
-            ";".join(repr(e) for k in ("x", "y") for row in ws["rows"][k] for e in row)
+                      for k in ws_axes),
+            ";".join(repr(e) for k in ws_axes for row in ws["rows"][k] for e in row)
             if ws["rows"] is not None else ""))
         # ADC-617: fd_eps is EMITTED into the eig='fd' Jacobian, so it MUST enter the model hash or two
         # models differing only in fd_eps would collide on the same cached .so and serve wrong numerics.

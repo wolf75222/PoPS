@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 else:
     _HyperbolicModel = object
 
-_MISSING_AXIS = object()
-
-
 class _RiemannMixin(_HyperbolicModel):
     """HLLC / Roe capability emission and arbitrary-formula hook overrides."""
 
@@ -113,9 +110,7 @@ class _RiemannMixin(_HyperbolicModel):
         )
         self._roe = True
 
-    def roe_dissipation(
-        self, x: Any = _MISSING_AXIS, y: Any = _MISSING_AXIS, **directions: Any
-    ) -> None:
+    def roe_dissipation(self, **directions: Any) -> None:
         """Roe dissipation PROVIDED by the user (outside the fluid-role families): n_vars
         expressions per direction (rows d_i), emitted as the C++ hook
         ``roe_dissipation<Axis>(UL, AL, UR, AR)`` = d (HasRoeDissipation trait; the core does
@@ -129,9 +124,7 @@ class _RiemannMixin(_HyperbolicModel):
         (left(sqrt(rho))*left(u) + right(sqrt(rho))*right(u)) / (left(sqrt(rho)) + right(sqrt(rho))).
         A BARE variable (without a marker) raises at declaration (undetermined state).
 
-        Axis rows are an exact canonical x[/y[/z]] map matching ``set_flux``.  The optional x/y
-        positional-compatible parameters retain the existing two-dimensional facade boundary;
-        exact-ranked callers pass axis keywords.
+        Axis rows are an exact canonical x[/y[/z]] map matching ``set_flux``.
 
         Guards: length n_vars per direction; each variable under left/right; conflict with
         enable_roe (one single provider of the hook) -> error. WITHOUT a call: nothing emitted (bit-identical).
@@ -142,17 +135,6 @@ class _RiemannMixin(_HyperbolicModel):
         if self._roe_jacobian is not None:
             raise ValueError("roe_dissipation : roe_from_jacobian() already declared -- one single "
                              "provider of the roe_dissipation hook")
-        positional_axes = {}
-        if x is not _MISSING_AXIS:
-            positional_axes["x"] = x
-        if y is not _MISSING_AXIS:
-            positional_axes["y"] = y
-        overlap = set(positional_axes) & set(directions)
-        if overlap:
-            raise ValueError(
-                "roe_dissipation received duplicate axis values %s" % sorted(overlap)
-            )
-        directions = {**positional_axes, **directions}
         rows = {
             axis: [_wrap(expression) for expression in expressions]
             for axis, expressions in canonical_axis_mapping(

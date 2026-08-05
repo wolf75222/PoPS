@@ -372,18 +372,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         HyperbolicModel.enable_roe."""
         self._m.enable_roe(entropy_fix=entropy_fix)
 
-    def roe_dissipation(self, x: Any, y: Any) -> None:
-        """Roe dissipation PROVIDED by the user (outside the fluid roles): n_vars expressions per
-        direction (x=, y=), written with m.left(...)/m.right(...) (or dsl.left/right) of the two states,
-        emitted as the C++ hook roe_dissipation(UL, AL, UR, AR, dir). During the 'provided' mode of enable_roe
-        (a single provider: supplying both together raises). The helper m.flux_jacobian assists the writing.
-        Delegates to HyperbolicModel.roe_dissipation (cf. its doc)."""
-        self._m.roe_dissipation(x, y)
+    def roe_dissipation(self, **directions: Any) -> None:
+        """Declare one provided Roe action on every inferred Cartesian axis."""
+        self._m.roe_dissipation(**directions)
 
     def flux_jacobian(self, dir: Any) -> Any:
         """Flux Jacobian A = dF_dir/dU (an n_vars x n_vars matrix of Expr, A[i][j]=d(F_i)/d(U_j)),
         auto-derived from the fluxes declared via dsl.diff (expanded primitives). HELPER for building
-        m.roe_dissipation, emits nothing. @p dir: 0/'x' or 1/'y'. Delegates to HyperbolicModel."""
+        m.roe_dissipation, emits nothing. ``dir`` is a typed ranked name or ordinal."""
         return self._m.flux_jacobian(dir)
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
