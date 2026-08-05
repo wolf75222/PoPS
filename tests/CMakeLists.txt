@@ -432,7 +432,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_capability_report
   test_canonical_identity
   test_box
-  test_fab2d
   test_box_array
   test_multifab
   test_nd_boundary_schedule
@@ -529,7 +528,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_coupled_source
   test_coupling_operator_contract
   test_system_two_explicit
-  test_assembler_driver
   test_amr_layout_guard
   test_system_hardening
   test_implicit_source_nd
@@ -548,7 +546,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_names
   test_aux_halo
   test_aux_coupler_bz
-  test_aux_system_bz
   test_aux_composite
   test_amr_system_bz_pop
   test_amr_system_bz_multibox

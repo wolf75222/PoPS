@@ -413,11 +413,6 @@ sources = ["tests/cpp/integration/runtime/test_aux_runtime_bz.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_aux_system_bz"
-sources = ["tests/cpp/integration/runtime/test_aux_system_bz.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
 name = "test_brick_catalog"
 sources = ["tests/cpp/integration/runtime/test_brick_catalog.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -788,11 +783,6 @@ labels = ["unit", "mesh", "fast"]
 name = "test_scheme_dispatch"
 sources = ["tests/cpp/unit/runtime/test_scheme_dispatch.cpp"]
 labels = ["unit", "runtime", "fast"]
-
-[[cpp.suite]]
-name = "test_fab2d"
-sources = ["tests/cpp/unit/mesh/test_fab2d.cpp"]
-labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
 name = "test_fill_boundary"
@@ -1169,11 +1159,6 @@ labels = ["unit", "runtime", "fast"]
 [[cpp.suite]]
 name = "test_generated_amr_system_block"
 sources = ["tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"]
-labels = ["unit", "runtime", "fast"]
-
-[[cpp.suite]]
-name = "test_assembler_driver"
-sources = ["tests/cpp/unit/runtime/test_assembler_driver.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]

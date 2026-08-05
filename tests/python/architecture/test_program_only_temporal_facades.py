@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
-STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
 REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
 LEGACY_PUBLIC_TIME_SCHEDULER = (
@@ -114,8 +113,8 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
 
 
-def test_static_system_temporal_driver_is_test_only():
-    """The coupling header may assemble operators, never select a time scheme or cadence."""
+def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
+    """The exact-ranked System owns assembly; no static 2D coupling facade remains."""
     production_sources = (
         tuple((ROOT / "include/pops").rglob("*.hpp"))
         + tuple((ROOT / "src").rglob("*.cpp"))
@@ -129,22 +128,13 @@ def test_static_system_temporal_driver_is_test_only():
         if retired_identity.search(path.read_text(encoding="utf-8"))
     }
     assert violations == set()
+    assert not (
+        ROOT / "include/pops/coupling/system/system_coupler.hpp"
+    ).exists()
     assert (
-        "test-only pops/coupling/system/system_coupler.hpp"
-        in HEADERS_MANIFEST.read_text(encoding="utf-8")
+        "pops/coupling/system/system_coupler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
     )
-
-    assembler = STATIC_SYSTEM_ASSEMBLER.read_text(encoding="utf-8")
-    assert "class SystemAssembler" in assembler
-    assert "block_residual(" in assembler
-    for temporal_authority in (
-        "advance_subcycled(",
-        "step_adaptive(",
-        "step_cfl(",
-        "SSPRK2Step",
-        "ImplicitSourceStepper",
-    ):
-        assert temporal_authority not in assembler
 
     reference = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
     assert "class ReferenceSystemDriver" in reference
@@ -213,9 +203,12 @@ def test_public_coupling_headers_are_spatial_only():
         )
     assert violations == set()
 
-    single = (PUBLIC_COUPLING_ROOT / "single/coupler.hpp").read_text(encoding="utf-8")
-    assert "void solve_fields(const MultiFab& U)" in single
-    assert "void assemble_residual(MultiFab& state, MultiFab& residual)" in single
+    retired_single = PUBLIC_COUPLING_ROOT / "single/coupler.hpp"
+    assert not retired_single.exists()
+    assert (
+        "pops/coupling/single/coupler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
 
 
 def test_local_implicit_solve_has_one_typed_options_route():
@@ -228,9 +221,9 @@ def test_local_implicit_solve_has_one_typed_options_route():
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
     source = AMR_SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
-        "void AmrSystem::step(double dt)",
-        "void AmrSystem::advance(double dt, int nsteps)",
-        "double AmrSystem::step_cfl(",
+        "void AmrSystem<Dim>::step(double dt)",
+        "void AmrSystem<Dim>::advance(double dt, int nsteps)",
+        "double AmrSystem<Dim>::step_cfl(",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
@@ -238,8 +231,10 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
         assert "runtime->step(" not in body
         assert "runtime->advance(" not in body
 
-    assert "run_program_cadence_(dt)" in _function_body(source, "void AmrSystem::step(double dt)")
-    assert "run_program_cadence_(dt)" in _function_body(source, "double AmrSystem::step_cfl(")
+    step = _function_body(source, "void AmrSystem<Dim>::step(double dt)")
+    step_cfl = _function_body(source, "double AmrSystem<Dim>::step_cfl(")
+    assert "dispatch_cadence_step(" in step
+    assert "step(selected)" in step_cfl
 
 
 def test_amr_program_cfl_does_not_require_native_advance_closures():

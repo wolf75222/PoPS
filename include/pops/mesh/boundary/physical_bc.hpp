@@ -1,89 +1,150 @@
 /// @file
-/// @brief PHYSICAL boundary conditions at the domain edge (BCType, BCRec, fill_physical_bc,
-///        fill_ghosts).
-///
-/// fill_boundary already fills the INTERIOR and periodic ghosts; here we fill the ghosts that
-/// fall OUTSIDE the domain on non-periodic faces. Foextrap: zero-order extrapolation
-/// (zero gradient), ghost = mirror interior cell (outflow / order-0 wall). Dirichlet: value
-/// imposed at the FACE, ghost = 2 v - mirror interior (the ghost/interior average equals v at the face).
-/// fill_ghosts composes both in the right order (interior/periodic THEN physical edge) and
-/// fills the corners via x-faces then y-faces over the full extension. The edge kernels are
-/// device-clean NAMED FUNCTORS (nvcc limitation).
+/// @brief Prepared compile-time-ranked physical boundary fills for scalar and vector fields.
 
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/boundary/fill_boundary.hpp>
-#include <pops/parallel/execution_lane.hpp>
+#include <pops/mesh/boundary/nd_boundary_schedule.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/index/real_vector.hpp>
+#include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
-#include <algorithm>
+#include <Kokkos_Core.hpp>
+
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
-#include <string>
+#include <utility>
 
 namespace pops {
 
-/// Boundary condition type for a face: Periodic (handled by fill_boundary), Foextrap (zero gradient,
-/// outflow/order-0 wall), Dirichlet (value imposed at the face by reflection).
-enum class BCType { Periodic, Foextrap, Dirichlet, Robin, External };
-
-/// Boundary conditions for the FOUR faces of the domain (type + associated Dirichlet value). Default
-/// is all periodic (xlo_val... ignored for non-Dirichlet faces).
-struct BCRec {
-  BCType xlo = BCType::Periodic, xhi = BCType::Periodic;
-  BCType ylo = BCType::Periodic, yhi = BCType::Periodic;
-  Real xlo_val = 0, xhi_val = 0, ylo_val = 0, yhi_val = 0;
-  Real xlo_alpha = 0, xlo_beta = 1, xhi_alpha = 0, xhi_beta = 1;
-  Real ylo_alpha = 0, ylo_beta = 1, yhi_alpha = 0, yhi_beta = 1;
-  Real dx = 1, dy = 1;
+/// Native affine laws applied at one physical face.  Periodicity belongs exclusively to
+/// BoundaryTopology<Dim>; it is deliberately not duplicated here.
+enum class PhysicalBoundaryKind : unsigned char {
+  external,
+  constant_extrapolation,
+  dirichlet,
+  neumann,
+  robin,
 };
 
-namespace detail {
-// A physical halo can be deeper than the complete domain (for example, a one-cell axis with a
-// fourth-order reconstruction). A single mirror then points through the opposite boundary instead
-// of into valid storage. Represent every reflection as u(out) = scale*u(mapped) + offset and compose
-// reflections until mapped is valid. This gives the usual first-layer formula exactly, while making
-// arbitrary-depth Dirichlet and Robin extensions independent of previously written ghost cells.
-struct BoundaryFaceData {
-  BCType type;
-  Real value;
-  Real alpha;
-  Real beta;
+/// alpha*u + beta*du/dn = value at a physical face.  Dirichlet consumes value, Neumann consumes
+/// the outward derivative in value, and constant extrapolation consumes no coefficients.
+struct PhysicalBoundaryFace {
+  PhysicalBoundaryKind kind = PhysicalBoundaryKind::external;
+  Real value = Real(0);
+  Real alpha = Real(0);
+  Real beta = Real(1);
+
+  bool operator==(const PhysicalBoundaryFace&) const = default;
 };
 
-struct BoundarySample1D {
-  int source;
-  Real scale;
-  Real offset;
+/// Exact-ranked physical laws plus the topology which owns periodic faces.
+template <int Dim>
+class PhysicalBoundaryConditions {
+ public:
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PhysicalBoundaryConditions only supports dimensions 1, 2, and 3");
+  static constexpr std::size_t face_count = static_cast<std::size_t>(2 * Dim);
+
+  PhysicalBoundaryConditions(BoundaryTopology<Dim> topology,
+                             std::array<PhysicalBoundaryFace, face_count> faces,
+                             RealVector<Dim> spacing)
+      : topology_(std::move(topology)), faces_(std::move(faces)), spacing_(spacing) {
+    validate_();
+  }
+
+  const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
+  const RealVector<Dim>& spacing() const noexcept { return spacing_; }
+  const PhysicalBoundaryFace& at(Face<Dim> face) const noexcept {
+    return faces_[static_cast<std::size_t>(face.ordinal())];
+  }
+
+  bool operator==(const PhysicalBoundaryConditions&) const = default;
+
+ private:
+  static bool finite_(Real value) noexcept {
+    return value == value && value != std::numeric_limits<Real>::infinity() &&
+           value != -std::numeric_limits<Real>::infinity();
+  }
+
+  void validate_() const {
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!finite_(spacing_[axis]) || !(spacing_[axis] > Real(0)))
+        throw std::invalid_argument(
+            "physical boundary conditions require finite positive spacing on every axis");
+      for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
+        const PhysicalBoundaryFace& law = at(face);
+        if (topology_.is_periodic(face)) {
+          if (law.kind != PhysicalBoundaryKind::external)
+            throw std::invalid_argument(
+                "periodic topology faces cannot also carry a physical boundary law");
+          continue;
+        }
+        if (law.kind == PhysicalBoundaryKind::external)
+          continue;
+        if (!finite_(law.value))
+          throw std::invalid_argument("physical boundary values must be finite");
+        if (law.kind == PhysicalBoundaryKind::robin && (!finite_(law.alpha) || !finite_(law.beta)))
+          throw std::invalid_argument("Robin boundary coefficients must be finite");
+      }
+    }
+  }
+
+  BoundaryTopology<Dim> topology_;
+  std::array<PhysicalBoundaryFace, face_count> faces_{};
+  RealVector<Dim> spacing_{};
 };
 
-POPS_HD inline BoundarySample1D boundary_sample_1d(int index, int lo, int hi, BoundaryFaceData low,
-                                                   BoundaryFaceData high, Real h) {
+namespace physical_boundary_detail {
+
+struct AffineSample {
+  int source = 0;
+  Real scale = Real(1);
+  Real offset = Real(0);
+};
+
+POPS_HD inline bool is_native(PhysicalBoundaryKind kind) {
+  return kind != PhysicalBoundaryKind::external;
+}
+
+/// Map an arbitrary-depth ghost coordinate to a valid coordinate and compose every crossed face
+/// as one affine transform.  The loop is independent of spatial rank and handles domains shorter
+/// than their halo depth without reading a previously written ghost cell.
+POPS_HD inline AffineSample sample_axis(int index, int lo, int hi, PhysicalBoundaryFace low,
+                                        PhysicalBoundaryFace high, Real spacing) {
   std::int64_t current = index;
   Real scale = Real(1);
   Real offset = Real(0);
   while (current < lo || current > hi) {
     const bool below = current < lo;
-    const BoundaryFaceData face = below ? low : high;
+    const PhysicalBoundaryFace law = below ? low : high;
     const std::int64_t boundary = below ? lo : hi;
-    if (face.type == BCType::Foextrap) {
+    if (law.kind == PhysicalBoundaryKind::constant_extrapolation) {
       current = boundary;
       break;
     }
 
     const std::int64_t layer = below ? boundary - current : current - boundary;
-    const Real distance = (Real(2) * static_cast<Real>(layer) - Real(1)) * h;
-    Real face_scale = Real(-1);
-    Real face_offset = Real(2) * face.value;
-    if (face.type == BCType::Robin) {
-      const Real denominator = face.alpha / Real(2) + face.beta / distance;
-      face_scale = -(face.alpha / Real(2) - face.beta / distance) / denominator;
-      face_offset = face.value / denominator;
+    const Real distance = (Real(2) * static_cast<Real>(layer) - Real(1)) * spacing;
+    Real face_scale = Real(1);
+    Real face_offset = Real(0);
+    if (law.kind == PhysicalBoundaryKind::dirichlet) {
+      face_scale = Real(-1);
+      face_offset = Real(2) * law.value;
+    } else if (law.kind == PhysicalBoundaryKind::neumann) {
+      face_offset = law.value * distance;
+    } else if (law.kind == PhysicalBoundaryKind::robin) {
+      const Real denominator = law.alpha / Real(2) + law.beta / distance;
+      face_scale = -(law.alpha / Real(2) - law.beta / distance) / denominator;
+      face_offset = law.value / denominator;
     }
+
     offset += scale * face_offset;
     scale *= face_scale;
     current = below ? 2 * boundary - current - 1 : 2 * boundary - current + 1;
@@ -91,278 +152,195 @@ POPS_HD inline BoundarySample1D boundary_sample_1d(int index, int lo, int hi, Bo
   return {static_cast<int>(current), scale, offset};
 }
 
-inline bool is_native_physical_bc(BCType type) {
-  return type == BCType::Foextrap || type == BCType::Dirichlet || type == BCType::Robin;
-}
-
-inline const char* bc_type_name(BCType type) {
-  switch (type) {
-    case BCType::Periodic:
-      return "Periodic";
-    case BCType::Foextrap:
-      return "Foextrap";
-    case BCType::Dirichlet:
-      return "Dirichlet";
-    case BCType::Robin:
-      return "Robin";
-    case BCType::External:
-      return "External";
-  }
-  return "unknown";
-}
-
-inline void validate_face_data(BoundaryFaceData face, Real h, const char* axis, const char* side) {
-  if (!is_native_physical_bc(face.type))
-    return;
-  if (face.type != BCType::Foextrap && !std::isfinite(face.value))
-    throw std::invalid_argument(std::string("fill_physical_bc: non-finite ") + axis + side +
-                                " boundary value");
-  if (face.type == BCType::Robin &&
-      (!std::isfinite(face.alpha) || !std::isfinite(face.beta) || !std::isfinite(h) || h <= 0))
-    throw std::invalid_argument(std::string("fill_physical_bc: invalid Robin coefficients or ") +
-                                axis + " spacing on the " + side + " face");
-}
-
-// Host preflight mirrors boundary_sample_1d. It rejects a deep extension which would require data
-// owned by an External/Periodic opposite face, and rejects singular/non-finite Robin transforms
-// before any asynchronous device kernel is launched.
-inline void validate_boundary_sample_1d(std::int64_t index, int lo, int hi, BoundaryFaceData low,
-                                        BoundaryFaceData high, Real h, const char* axis) {
+inline void validate_axis_sample(std::int64_t index, int lo, int hi, PhysicalBoundaryFace low,
+                                 PhysicalBoundaryFace high, Real spacing) {
   std::int64_t current = index;
   Real scale = Real(1);
   Real offset = Real(0);
   while (current < lo || current > hi) {
     const bool below = current < lo;
-    const BoundaryFaceData face = below ? low : high;
+    const PhysicalBoundaryFace law = below ? low : high;
     const std::int64_t boundary = below ? lo : hi;
-    if (!is_native_physical_bc(face.type))
-      throw std::invalid_argument(std::string("fill_physical_bc: deep ") + axis +
-                                  " halo reaches a " + bc_type_name(face.type) +
-                                  " face whose values are not owned by the physical BC fill");
-    if (face.type == BCType::Foextrap)
+    if (!is_native(law.kind))
+      throw std::invalid_argument(
+          "deep physical boundary extension reaches an externally owned opposite face");
+    if (law.kind == PhysicalBoundaryKind::constant_extrapolation)
       return;
 
     const std::int64_t layer = below ? boundary - current : current - boundary;
-    const Real distance = (Real(2) * static_cast<Real>(layer) - Real(1)) * h;
-    Real face_scale = Real(-1);
-    Real face_offset = Real(2) * face.value;
-    if (face.type == BCType::Robin) {
-      const Real denominator = face.alpha / Real(2) + face.beta / distance;
-      if (!std::isfinite(distance) || distance <= 0 || !std::isfinite(denominator) ||
-          denominator == 0)
-        throw std::invalid_argument(std::string("fill_physical_bc: singular Robin extension on ") +
-                                    axis + (below ? "lo" : "hi") + " face");
-      face_scale = -(face.alpha / Real(2) - face.beta / distance) / denominator;
-      face_offset = face.value / denominator;
+    const Real distance = (Real(2) * static_cast<Real>(layer) - Real(1)) * spacing;
+    Real face_scale = Real(1);
+    Real face_offset = Real(0);
+    if (law.kind == PhysicalBoundaryKind::dirichlet) {
+      face_scale = Real(-1);
+      face_offset = Real(2) * law.value;
+    } else if (law.kind == PhysicalBoundaryKind::neumann) {
+      face_offset = law.value * distance;
+    } else if (law.kind == PhysicalBoundaryKind::robin) {
+      const Real denominator = law.alpha / Real(2) + law.beta / distance;
+      if (!std::isfinite(static_cast<double>(distance)) || !(distance > Real(0)) ||
+          !std::isfinite(static_cast<double>(denominator)) || denominator == Real(0))
+        throw std::invalid_argument("physical boundary preparation found a singular Robin law");
+      face_scale = -(law.alpha / Real(2) - law.beta / distance) / denominator;
+      face_offset = law.value / denominator;
     }
     offset += scale * face_offset;
     scale *= face_scale;
-    if (!std::isfinite(scale) || !std::isfinite(offset))
-      throw std::overflow_error(std::string("fill_physical_bc: non-finite deep ") + axis +
-                                " boundary extension");
+    if (!std::isfinite(static_cast<double>(scale)) || !std::isfinite(static_cast<double>(offset)))
+      throw std::overflow_error("physical boundary preparation produced a non-finite transform");
     current = below ? 2 * boundary - current - 1 : 2 * boundary - current + 1;
   }
 }
 
-inline void validate_axis_extension(int lo, int hi, int ng, BoundaryFaceData low,
-                                    BoundaryFaceData high, Real h, const char* axis) {
-  if (lo > hi)
-    throw std::invalid_argument(std::string("fill_physical_bc: empty ") + axis + " domain");
-  validate_face_data(low, h, axis, "lo");
-  validate_face_data(high, h, axis, "hi");
-  for (int k = 1; k <= ng; ++k) {
-    if (is_native_physical_bc(low.type))
-      validate_boundary_sample_1d(static_cast<std::int64_t>(lo) - k, lo, hi, low, high, h, axis);
-    if (is_native_physical_bc(high.type))
-      validate_boundary_sample_1d(static_cast<std::int64_t>(hi) + k, lo, hi, low, high, h, axis);
-  }
-}
+template <int Dim>
+struct ApplyPhysicalRegion {
+  FieldView<Real, Dim> values{};
+  Box<Dim> domain{};
+  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  RealVector<Dim> spacing{};
+  BoundaryRegionPlan<Dim> plan{};
+  int first_component = 0;
+  int component_count = 0;
 
-inline void validate_periodic_pairs(const BCRec& bc) {
-  if ((bc.xlo == BCType::Periodic) != (bc.xhi == BCType::Periodic) ||
-      (bc.ylo == BCType::Periodic) != (bc.yhi == BCType::Periodic))
-    throw std::invalid_argument(
-        "fill_physical_bc: periodicity must be declared on both faces of an axis");
-}
+  POPS_HD void operator()(const Index<Dim>& destination) const {
+    Index<Dim> source = destination;
 
-// NAMED FUNCTORS (not POPS_HD lambdas) keep the boundary path device-clean under nvcc. Component
-// range [c0, c1) is either the complete channel or one per-field aux component.
-struct BCFaceXKernel {
-  Array4 a;
-  int c0, c1, lo, hi;
-  BoundaryFaceData low, high;
-  Real h;
-  POPS_HD void operator()(int i, int j) const {
-    const BoundarySample1D sample = boundary_sample_1d(i, lo, hi, low, high, h);
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = sample.scale * a(sample.source, j, c) + sample.offset;
-  }
-};
-
-struct BCFaceYKernel {
-  Array4 a;
-  int c0, c1, lo, hi;
-  BoundaryFaceData low, high;
-  Real h;
-  POPS_HD void operator()(int i, int j) const {
-    const BoundarySample1D sample = boundary_sample_1d(j, lo, hi, low, high, h);
-    for (int c = c0; c < c1; ++c)
-      a(i, j, c) = sample.scale * a(i, sample.source, c) + sample.offset;
+    Real scale = Real(1);
+    Real offset = Real(0);
+    for (std::size_t operation = 0; operation < plan.operation_count; ++operation) {
+      const BoundaryOperation<Dim>& op = plan.operations[operation];
+      if (op.kind != BoundaryFaceKind::physical)
+        continue;
+      const int axis = op.face.axis;
+      const PhysicalBoundaryFace low =
+          faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::lower}.ordinal())];
+      const PhysicalBoundaryFace high =
+          faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::upper}.ordinal())];
+      const AffineSample sample = sample_axis(destination[axis], domain.lo[axis], domain.hi[axis],
+                                              low, high, spacing[axis]);
+      source[axis] = sample.source;
+      offset = sample.scale * offset + sample.offset;
+      scale *= sample.scale;
+    }
+    for (int component = first_component; component < first_component + component_count;
+         ++component)
+      values(destination, component) = scale * values(source, component) + offset;
   }
 };
-}  // namespace detail
 
-/// Fills the OUT-OF-domain ghosts of the NON-periodic faces of @p mf according to @p bc (Foextrap or
-/// Dirichlet), for the COMPONENT RANGE [c0, c1). No-op if there is no ghost or everything is periodic.
-/// PRECONDITION: fill_boundary has already filled the interior/periodic (the x-faces read the y/theta
-/// ghosts already filled to extend the radial BC into the halo, and the y-faces read the x ghosts for
-/// the corners). CORNERS of the 9-point stencil: the x-face BC is extended to the EXTENDED j range
-/// (y/theta ghosts included), so that the corner (x-physical CROSSED with y-periodic/neighbor) -- read
-/// by the cross terms of a 9-point operator (e.g. PolarTensorKrylovSolver) -- is correct even in
-/// MULTI-BOX. The all-component entry point fill_physical_bc(mf, domain, bc) and the single-component
-/// override fill_physical_bc(mf, domain, bc, comp) (ADC-369, per-field aux halo) both delegate here.
-inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRec& bc, int c0,
-                                   int c1) {
-  const int ng = mf.n_grow();
-  if (ng == 0)
-    return;
-  detail::validate_periodic_pairs(bc);
-  // All periodic: fill_boundary has already done everything, nothing to read/write here (and we
-  // avoid a useless barrier on the hot path of the periodic multigrid).
-  if (bc.xlo == BCType::Periodic && bc.xhi == BCType::Periodic && bc.ylo == BCType::Periodic &&
-      bc.yhi == BCType::Periodic)
-    return;
-  // A malformed range is an authoring/programming error.  Clamping used to turn an invalid
-  // per-field component into a partial fill or a silent no-op, which is especially dangerous when
-  // different model fields own different boundary laws.  Internal callers pass either the exact
-  // full channel or one validated component, so rejecting here keeps every valid route unchanged.
-  if (c0 < 0 || c1 < 0 || c0 >= c1 || c1 > mf.ncomp())
+}  // namespace physical_boundary_detail
+
+/// Prepared disjoint face/edge/corner regions and authenticated affine laws.
+template <int Dim>
+class PreparedPhysicalBoundary {
+ public:
+  PreparedPhysicalBoundary(PhysicalBoundaryConditions<Dim> conditions,
+                           BoundarySchedule<Dim> schedule)
+      : conditions_(std::move(conditions)), schedule_(std::move(schedule)) {
+    if (conditions_.topology() != schedule_.topology())
+      throw std::invalid_argument(
+          "prepared physical boundary topology disagrees with its region schedule");
+    validate_transforms_();
+  }
+
+  const PhysicalBoundaryConditions<Dim>& conditions() const noexcept { return conditions_; }
+  const BoundarySchedule<Dim>& schedule() const noexcept { return schedule_; }
+
+  template <class MemorySpace>
+  void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
+    if (fields.ghosts() != schedule_.ghosts())
+      throw std::invalid_argument(
+          "prepared physical boundary ghost extents disagree with the target field");
+    for (const Box<Dim>& patch : fields.layout().boxes())
+      if (!schedule_.domain().contains(patch))
+        throw std::invalid_argument(
+            "prepared physical boundary domain does not contain the target field layout");
+  }
+
+ private:
+  void validate_transforms_() const {
+    const Box<Dim>& domain = schedule_.domain();
+    const Extent<Dim>& ghosts = schedule_.ghosts();
+    for (int axis = 0; axis < Dim; ++axis) {
+      const PhysicalBoundaryFace& low = conditions_.at(Face<Dim>{axis, BoundarySide::lower});
+      const PhysicalBoundaryFace& high = conditions_.at(Face<Dim>{axis, BoundarySide::upper});
+      for (std::int64_t layer = 1; layer <= ghosts[axis]; ++layer) {
+        if (physical_boundary_detail::is_native(low.kind))
+          physical_boundary_detail::validate_axis_sample(
+              static_cast<std::int64_t>(domain.lo[axis]) - layer, domain.lo[axis], domain.hi[axis],
+              low, high, conditions_.spacing()[axis]);
+        if (physical_boundary_detail::is_native(high.kind))
+          physical_boundary_detail::validate_axis_sample(
+              static_cast<std::int64_t>(domain.hi[axis]) + layer, domain.lo[axis], domain.hi[axis],
+              low, high, conditions_.spacing()[axis]);
+      }
+    }
+  }
+
+  PhysicalBoundaryConditions<Dim> conditions_;
+  BoundarySchedule<Dim> schedule_;
+};
+
+template <int Dim>
+PreparedPhysicalBoundary<Dim> prepare_physical_boundary(const Box<Dim>& domain,
+                                                        const Extent<Dim>& ghosts,
+                                                        PhysicalBoundaryConditions<Dim> conditions,
+                                                        BoundaryScheduleBudget budget) {
+  BoundarySchedule<Dim> schedule =
+      prepare_boundary_schedule(domain, ghosts, conditions.topology(), budget);
+  return PreparedPhysicalBoundary<Dim>{std::move(conditions), std::move(schedule)};
+}
+
+/// Fill physical destination regions after the authenticated same-level/periodic halo exchange.
+/// External regions remain untouched.  Component selection is exact and validated before launch.
+template <int Dim, class MemorySpace>
+void fill_physical_boundary(MultiFab<Dim, MemorySpace>& fields,
+                            const PreparedPhysicalBoundary<Dim>& prepared, int first_component,
+                            int component_count) {
+  prepared.authenticate(fields);
+  if (first_component < 0 || component_count < 1 || first_component > fields.ncomp() ||
+      component_count > fields.ncomp() - first_component)
     throw std::out_of_range(
-        "fill_physical_bc: component range must be non-empty and lie inside the MultiFab channel");
-  const detail::BoundaryFaceData xlow{bc.xlo, bc.xlo_val, bc.xlo_alpha, bc.xlo_beta};
-  const detail::BoundaryFaceData xhigh{bc.xhi, bc.xhi_val, bc.xhi_alpha, bc.xhi_beta};
-  const detail::BoundaryFaceData ylow{bc.ylo, bc.ylo_val, bc.ylo_alpha, bc.ylo_beta};
-  const detail::BoundaryFaceData yhigh{bc.yhi, bc.yhi_val, bc.yhi_alpha, bc.yhi_beta};
-  detail::validate_axis_extension(domain.lo[0], domain.hi[0], ng, xlow, xhigh, bc.dx, "x");
-  detail::validate_axis_extension(domain.lo[1], domain.hi[1], ng, ylow, yhigh, bc.dy, "y");
+        "physical boundary component range must be non-empty and inside the target field");
 
-  // Physical edges on DEVICE. Every output reads a mapped VALID cell, never a previous halo layer.
-  // The host preflight above proves that every composed reflection is finite and reaches valid
-  // storage before these asynchronous kernels are launched.
-  for (int li = 0; li < mf.local_size(); ++li) {
-    Fab2D& F = mf.fab(li);
-    const Box2D v = F.box();
-    Array4 a = F.array();
+  const auto& conditions = prepared.conditions();
+  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::lower}.ordinal())] =
+        conditions.at(Face<Dim>{axis, BoundarySide::lower});
+    faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::upper}.ordinal())] =
+        conditions.at(Face<Dim>{axis, BoundarySide::upper});
+  }
 
-    // --- x-faces ---
-    // Periodic y ghosts were filled by fill_boundary and may be used to extend an x BC into a
-    // nine-point corner. At a physical/external y edge they are not initialized yet, so the x pass
-    // stops at the domain; the following y pass produces double-physical corners from initialized
-    // x ghosts, while External corners remain owned by the caller.
-    int jglo = v.lo[1] - ng;
-    int jghi = v.hi[1] + ng;
-    if (bc.ylo != BCType::Periodic)
-      jglo = std::max(jglo, domain.lo[1]);
-    if (bc.yhi != BCType::Periodic)
-      jghi = std::min(jghi, domain.hi[1]);
-    if (detail::is_native_physical_bc(bc.xlo) && v.lo[0] == domain.lo[0]) {
-      for_each_cell(
-          Box2D{{domain.lo[0] - ng, jglo}, {domain.lo[0] - 1, jghi}},
-          detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow, xhigh, bc.dx});
-    }
-    if (detail::is_native_physical_bc(bc.xhi) && v.hi[0] == domain.hi[0]) {
-      for_each_cell(
-          Box2D{{domain.hi[0] + 1, jglo}, {domain.hi[0] + ng, jghi}},
-          detail::BCFaceXKernel{a, c0, c1, domain.lo[0], domain.hi[0], xlow, xhigh, bc.dx});
-    }
-
-    // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
-    int iglo = v.lo[0] - ng;
-    int ighi = v.hi[0] + ng;
-    if (bc.xlo == BCType::External)
-      iglo = std::max(iglo, domain.lo[0]);
-    if (bc.xhi == BCType::External)
-      ighi = std::min(ighi, domain.hi[0]);
-    if (detail::is_native_physical_bc(bc.ylo) && v.lo[1] == domain.lo[1]) {
-      for_each_cell(
-          Box2D{{iglo, domain.lo[1] - ng}, {ighi, domain.lo[1] - 1}},
-          detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow, yhigh, bc.dy});
-    }
-    if (detail::is_native_physical_bc(bc.yhi) && v.hi[1] == domain.hi[1]) {
-      for_each_cell(
-          Box2D{{iglo, domain.hi[1] + 1}, {ighi, domain.hi[1] + ng}},
-          detail::BCFaceYKernel{a, c0, c1, domain.lo[1], domain.hi[1], ylow, yhigh, bc.dy});
+  for (std::size_t local = 0; local < fields.local_size(); ++local) {
+    auto& fab = fields.fab(local);
+    for (const BoundaryRegionPlan<Dim>& plan : prepared.schedule().entries()) {
+      if (!plan.has_physical())
+        continue;
+      bool externally_owned = false;
+      for (std::size_t operation = 0; operation < plan.operation_count; ++operation) {
+        const BoundaryOperation<Dim>& op = plan.operations[operation];
+        if (op.kind == BoundaryFaceKind::physical &&
+            conditions.at(op.face).kind == PhysicalBoundaryKind::external) {
+          externally_owned = true;
+          break;
+        }
+      }
+      if (externally_owned)
+        continue;
+      const Box<Dim> destination = fab.grown_box().intersect(plan.destination);
+      for_each_cell(destination, physical_boundary_detail::ApplyPhysicalRegion<Dim>{
+                                     fab.view(), prepared.schedule().domain(), faces,
+                                     conditions.spacing(), plan, first_component, component_count});
     }
   }
+  Kokkos::fence();
 }
 
-/// Fills the physical-face ghosts of ALL components per @p bc (historical entry point, bit-identical).
-inline void fill_physical_bc(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
-  fill_physical_bc_range(mf, domain, bc, 0, mf.ncomp());
-}
-
-/// ADC-369: fills the physical-face ghosts of a SINGLE component @p comp per @p bc -- the per-field aux
-/// halo override. Applied AFTER the shared aux fill so a model-named field (component kAuxNamedBase+k)
-/// can carry its own boundary policy (foextrap / dirichlet), overriding the shared aux BC for that
-/// component only. It can even override the domain periodicity for that component (a Foextrap/Dirichlet
-/// face re-fills a ghost that the shared periodic wrap had filled). Default paths never call this.
-inline void fill_physical_bc(MultiFab& mf, const Box2D& domain, const BCRec& bc, int comp) {
-  fill_physical_bc_range(mf, domain, bc, comp, comp + 1);
-}
-
-/// Per-field aux halo policy (ADC-369): a UNIFORM boundary policy for ONE model-named aux component,
-/// declared via pops.AuxHalo. It is applied (aux_halo_override + the single-component fill_physical_bc)
-/// to the NON-PERIODIC faces only -- periodic faces (a fully-periodic Cartesian domain, the polar
-/// theta direction) keep their wrap, so a per-field policy never breaks the domain's periodic structure.
-/// type is Foextrap (zero-gradient) or Dirichlet; value is the Dirichlet boundary value (ignored for
-/// Foextrap). Default (no policy declared) leaves the shared aux BC untouched -> bit-identical.
-struct AuxHaloPolicy {
-  BCType type = BCType::Foextrap;
-  Real value = Real(0);
-};
-
-/// Builds the effective override BCRec for a per-field aux halo: starts from the SHARED aux BC @p shared
-/// (so periodic faces stay periodic) and replaces each NON-PERIODIC face with the policy @p p
-/// (type + Dirichlet value). Feeding the result to fill_physical_bc(mf, domain, bc, comp) re-fills only
-/// that component's physical-face ghosts with the field's own policy.
-inline BCRec aux_halo_override(const BCRec& shared, const AuxHaloPolicy& p) {
-  BCRec b = shared;
-  if (b.xlo != BCType::Periodic) {
-    b.xlo = p.type;
-    b.xlo_val = p.value;
-  }
-  if (b.xhi != BCType::Periodic) {
-    b.xhi = p.type;
-    b.xhi_val = p.value;
-  }
-  if (b.ylo != BCType::Periodic) {
-    b.ylo = p.type;
-    b.ylo_val = p.value;
-  }
-  if (b.yhi != BCType::Periodic) {
-    b.yhi = p.type;
-    b.yhi_val = p.value;
-  }
-  return b;
-}
-
-/// COMPLETE ghost filling: fill_boundary (interior + periodic, periodicity deduced from
-/// @p bc) THEN fill_physical_bc (physical edges). Usual entry point before assembling a residual.
-inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
-  detail::validate_periodic_pairs(bc);
-  Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
-  fill_boundary(mf, domain, per);
-  fill_physical_bc(mf, domain, bc);
-}
-
-/// Execution-lane twin: physical faces remain rank-local while same-level/periodic exchange uses
-/// the lane's isolated communicator. It never falls back to MPI_COMM_WORLD.
-inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc,
-                        const ExecutionLane& lane) {
-  detail::validate_periodic_pairs(bc);
-  Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
-  fill_boundary(mf, domain, lane, per);
-  fill_physical_bc(mf, domain, bc);
+template <int Dim, class MemorySpace>
+void fill_physical_boundary(MultiFab<Dim, MemorySpace>& fields,
+                            const PreparedPhysicalBoundary<Dim>& prepared) {
+  fill_physical_boundary(fields, prepared, 0, fields.ncomp());
 }
 
 }  // namespace pops

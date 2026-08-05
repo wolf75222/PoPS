@@ -38,16 +38,13 @@ api pops/core/state/state.hpp
 api pops/core/state/variables.hpp
 api pops/coupling/amr/amr_coupler_mp.hpp
 api pops/coupling/amr/amr_diagnostics.hpp
-api pops/coupling/amr/amr_level_storage.hpp
 api pops/coupling/amr/amr_regrid_coupler.hpp
 api pops/coupling/base/aux_fill.hpp
 api pops/coupling/base/elliptic_rhs.hpp
-api pops/coupling/single/coupler.hpp
 api pops/coupling/source/coupled_source.hpp
 api pops/coupling/source/coupled_source_program.hpp
 api pops/coupling/source/coupling_operator.hpp
 api pops/coupling/system/amr_system_coupler.hpp
-test-only pops/coupling/system/system_coupler.hpp
 api pops/diagnostics/fallback_diagnostics.hpp
 api pops/diagnostics/runtime_diagnostics.hpp
 api pops/mesh/boundary/boundary_component_executor.hpp
@@ -82,7 +79,6 @@ api pops/mesh/layout/patch_box.hpp
 api pops/mesh/layout/rank_space.hpp
 api pops/mesh/layout/refinement.hpp
 api pops/mesh/storage/fab.hpp
-api pops/mesh/storage/fab2d.hpp
 sdk-support pops/mesh/storage/field_replica_consensus.hpp
 api pops/mesh/storage/field_view.hpp
 api pops/mesh/storage/mf_arith.hpp
@@ -178,6 +174,7 @@ api pops/physics/bricks/elliptic.hpp
 api pops/physics/bricks/hyperbolic.hpp
 api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
+api pops/physics/composition/exact_brick_contract.hpp
 api pops/physics/fluids/euler.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 sdk-support pops/runtime/amr/amr_field_solve_transaction.hpp

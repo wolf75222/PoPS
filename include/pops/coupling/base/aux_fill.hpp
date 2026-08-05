@@ -1,49 +1,66 @@
+/// @file
+/// @brief Exact-ranked materialization of prepared auxiliary scalar providers.
+
 #pragma once
 
-#include <pops/core/state/state.hpp>           // kAuxBaseComps
-#include <pops/mesh/index/box2d.hpp>           // Box2D
-#include <pops/mesh/storage/fab2d.hpp>         // Fab2D
-#include <pops/mesh/geometry/geometry.hpp>     // Geometry (x_cell / y_cell)
-#include <pops/mesh/boundary/physical_bc.hpp>  // BCRec / BCType
+#include <pops/core/foundation/types.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/index/real_vector.hpp>
+#include <pops/mesh/storage/field_view.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
-/// @file
-/// @brief Helpers shared by the three couplers (single-block Coupler, SystemAssembler,
-///        AmrSystemCoupler) for the aux channel. Centralizes two bodies that were duplicated
-///        verbatim:
-///          - derive_aux_bc: aux-channel BC derived from the phi BC (periodic preserved,
-///            everything else -> Foextrap).
-///          - fill_bz_box:   kernel that writes B_z(x, y) at component kAuxBaseComps on
-///            a box of a Fab2D, from a given geometry.
-///        PURE extraction: the bodies are taken verbatim (bit-identical). What DIFFERS
-///        between couplers (compile-time vs runtime guard, valid vs grown box, per-level
-///        geometry, call to fill_ghosts) stays on the caller side; only the common content is here.
+#include <Kokkos_Core.hpp>
 
-namespace pops {
-namespace detail {
+#include <cstddef>
+#include <stdexcept>
+#include <type_traits>
 
-/// Aux-channel BC derived from the potential phi BC: a periodic BC stays periodic,
-/// any other becomes Foextrap (order-0 extrapolation). Body taken verbatim from the
-/// three couplers.
-inline BCRec derive_aux_bc(const BCRec& b) {
-  auto t = [](BCType x) { return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap; };
-  BCRec a;
-  a.xlo = t(b.xlo);
-  a.xhi = t(b.xhi);
-  a.ylo = t(b.ylo);
-  a.yhi = t(b.yhi);
-  return a;
+namespace pops::coupling {
+
+enum class AuxiliaryFillRegion : unsigned char { valid, allocated };
+
+namespace auxiliary_fill_detail {
+
+template <int Dim, class Provider>
+struct MaterializeAuxiliaryScalar {
+  FieldView<Real, Dim> output{};
+  Geometry<Dim> geometry;
+  Provider provider;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    output(index, component) = provider(geometry.cell_center(index));
+  }
+};
+
+}  // namespace auxiliary_fill_detail
+
+/// Materialize one device-callable scalar provider over every local exact-ranked patch.
+///
+/// Provider must be a copyable value with `Real operator()(RealVector<Dim>) const` callable on the
+/// active execution backend.  Python authoring is lowered to such a provider before this seam; no
+/// Python callback, std::function, communicator, or runtime rank branch is retained here.
+template <int Dim, class MemorySpace, class Provider>
+void fill_auxiliary_component(MultiFab<Dim, MemorySpace>& auxiliary, const Geometry<Dim>& geometry,
+                              int component, Provider provider,
+                              AuxiliaryFillRegion region = AuxiliaryFillRegion::valid) {
+  static_assert(std::is_copy_constructible_v<Provider>,
+                "auxiliary providers must be copy-constructible execution values");
+  if (component < 0 || component >= auxiliary.ncomp())
+    throw std::out_of_range("auxiliary fill component lies outside the field channel");
+  for (const Box<Dim>& patch : auxiliary.layout().boxes())
+    if (!geometry.domain().contains(patch))
+      throw std::invalid_argument(
+          "auxiliary fill geometry does not contain the exact field layout");
+
+  for (std::size_t local = 0; local < auxiliary.local_size(); ++local) {
+    auto& fab = auxiliary.fab(local);
+    const Box<Dim>& cells = region == AuxiliaryFillRegion::valid ? fab.box() : fab.grown_box();
+    for_each_cell(cells, auxiliary_fill_detail::MaterializeAuxiliaryScalar<Dim, Provider>{
+                             fab.view(), geometry, provider, component});
+  }
+  Kokkos::fence();
 }
 
-/// Writes B_z(x, y) at component kAuxBaseComps on box @p box of fab @p f, sampling
-/// @p bz at the cell centers of geometry @p g. Kernel common to the three couplers:
-/// only the traversed box (valid or grown) and the geometry (global or per-level) differ
-/// on the caller side; the loop body is bit-identical.
-template <class Bz>
-inline void fill_bz_box(Fab2D& f, const Box2D& box, const Geometry& g, const Bz& bz) {
-  for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-    for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-      f(i, j, kAuxBaseComps) = bz(g.x_cell(i), g.y_cell(j));
-}
-
-}  // namespace detail
-}  // namespace pops
+}  // namespace pops::coupling

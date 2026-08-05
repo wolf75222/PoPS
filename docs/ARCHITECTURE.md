@@ -135,7 +135,7 @@ PoPS is organized into five orthogonal layers. A high layer expresses the proble
 
 **Execution (seams).** The execution policy sees minimal exact-ranked views (`Box<Dim>`, `FieldView<Dim>`, scalar and rank), never a second dimension-specific container. `for_each_cell` ([`include/pops/mesh/execution/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp)) iterates the compile-time rank through Kokkos, and [`FieldView`](../include/pops/mesh/storage/field_view.hpp) is the non-owning host/device view. `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) provides rank/size and collectives; exact layout and ownership stay in prepared spatial providers. Halo exchange and field algebra are grid operators that orchestrate these seams.
 
-**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names simple per-block native treatments. Production composition is authored exclusively through `pops.Program`; its immutable normalized `ProgramGraph` is the sole temporal authority for both uniform and AMR execution. `pops.lib.time` presets are ordinary IR builders, and the native integrator/policy types are lowering ingredients rather than alternate production drivers. The single-level [`Coupler`](../include/pops/coupling/single/coupler.hpp) and [`SystemAssembler`](../include/pops/coupling/system/system_coupler.hpp) retain only field preparation and residual assembly; the historical static time driver is now a test-only numerical oracle in `tests/cpp/support/reference_time_scheduler.hpp` and `tests/cpp/support/reference_system_driver.hpp`. `AmrCouplerMP` ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)) and `AmrRuntime` expose AMR state, spatial operators, fields, transfers and reflux services only. The Program places every field solve, residual evaluation, synchronization and state update, so no coupling class chooses a stage tableau or a field-solve cadence. On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program. Source-timescale stability is likewise a Program authority, declared explicitly with `Program.set_dt_bound(...)`; it is not inferred by registering a separate public coupling object. At the lower native layer, the private `CouplingOperator` engine ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) still wraps the flat coupled-source program with its declared conservation metadata and native frequency-bound field for engine validation and read-only introspection. This is an implementation representation consumed by installation/lowering, not a second authoring path. Named physical couplings may be Python presets that build `Model.coupled_rate` plus Program IR; there is no named C++ coupling method per coupling.
+**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). Production composition is authored exclusively through `pops.Program`; its immutable normalized `ProgramGraph` is the sole temporal authority for uniform and AMR execution. The exact-ranked [`System<Dim>`](../include/pops/runtime/system.hpp) and [`AmrSystem<Dim>`](../include/pops/runtime/amr_system.hpp) own field preparation, residual assembly and state publication. There is no separate single-block `Coupler`, static `SystemAssembler`, `Fab2D`, or AMR level-stack authority. [`AmrCouplerMP<Dim>`](../include/pops/coupling/amr/amr_coupler_mp.hpp) is a thin spatial facade over [`AmrRuntime<Dim>`](../include/pops/runtime/amr/amr_runtime.hpp); it never chooses a stage tableau or field-solve cadence. On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program.
 
 
 ## Component contracts and generated catalog
@@ -738,20 +738,14 @@ generic bricks in `CompositeModel<Hyperbolic, Source, Elliptic>`
 ([`include/pops/physics/composition/composite.hpp`](../include/pops/physics/composition/composite.hpp)), or by writing one's own
 struct.
 
-The model is then instantiated behind spatial and field services. For a single-level domain,
-`Coupler<Model, Elliptic = GeometricMG>`
-([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)) provides
-the elliptic solve, auxiliary-field preparation and residual assembly, with `GeometricMG` as the
-default solver. Its separate `solve_fields()` and `assemble_residual()` operations expose no
-timestep, tableau or implicit cadence. For
-multi-patch AMR ExB, `AmrCouplerMP<Model, Elliptic = GeometricMG>`
-([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp))
-owns the hierarchy, Poisson-to-`aux` preparation, regridding and conservative spatial transfers in
-`AmrLevelStack`. `AmrSystemCoupler`
-([`include/pops/coupling/system/amr_system_coupler.hpp`](../include/pops/coupling/system/amr_system_coupler.hpp))
-provides the corresponding shared-field services for multiple species. None of these couplers
-chooses a timestep, a stage tableau or a subcycling order: the normalized `ProgramGraph` places
-their operations on the exact parent/child clocks and owns every state advance.
+The model is instantiated by `System<Dim>` or `AmrSystem<Dim>`, whose compile-time rank is selected
+once from the authored Python domain. Their generated block closures assemble the elliptic source,
+auxiliary fields and residuals over `Box<Dim>`, `Distribution<Dim>` and `MultiFab<Dim>`. The public
+elliptic factory contract is likewise ranked through `EllipticBuildRequest<Dim>`; a backend cannot
+substitute a two-dimensional mapping or field allocation. `AmrCouplerMP<Dim>` and
+`AmrSystemCoupler<Dim>` retain only thin spatial-layout coordination over `AmrRuntime<Dim>`. The
+normalized `ProgramGraph` places every operation on the exact parent/child clocks and owns every
+state advance.
 
 The private native facades `System`
 ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) and `AmrSystem`
