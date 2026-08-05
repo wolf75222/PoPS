@@ -8,6 +8,7 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
@@ -40,6 +41,11 @@ struct Euler {
   static constexpr int n_vars = 4;  ///< number of conserved variables
 
   Real gamma = kPhysicalDefaultGamma;  ///< adiabatic index of the ideal gas
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.euler", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(gamma); }
 
   /// Ideal-gas pressure p = (gamma-1)(E - 1/2 rho |v|^2).
   POPS_HD Real pressure(const State& u) const {

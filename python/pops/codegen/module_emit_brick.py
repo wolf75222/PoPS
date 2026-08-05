@@ -20,6 +20,7 @@ from pops.codegen.module_emit_helpers import (
     _aux_layout,
     _axis_values,
     _codegen_exprs,
+    _exact_brick_contract,
     _jac_entries,
     _live_prims,
     _prim_block,
@@ -240,6 +241,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
         "#include <limits>",
         "#include <Kokkos_MathematicalFunctions.hpp>",
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
         "#include <pops/numerics/spatial/nd/state_schema.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
@@ -289,6 +291,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
+    S += _exact_brick_contract(
+        model,
+        "hyperbolic",
+        dimension=dimension,
+        n_vars=nc,
+        runtime_params=bool(rt_member),
+    )
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant
     # M[k][k] + real_eig_minmax, declarees une fois par couple (field, k). Device-clean (ADC-289).
     S += _eig_witness_helpers(eig_pairs)

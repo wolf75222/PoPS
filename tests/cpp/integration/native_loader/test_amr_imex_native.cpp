@@ -98,6 +98,12 @@ ModelSpec make_pot_spec() {
 struct StiffRelax {
   Real inv_eps = Real(0);
   Real u_eq[4] = {Real(1), Real(0), Real(0), Real(2.5)};  // rho, mx, my, E d'equilibre
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.stiff-relax", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
+  }
   template <class State>
   POPS_HD State apply(const State& u, const Aux&) const {
     State s{};
@@ -177,6 +183,12 @@ using PotModel = pops::CompositeModel<pops::Euler, pops::PotentialForce, pops::B
 struct StiffRelax {
   pops::Real inv_eps = pops::Real(0);
   pops::Real u_eq[4] = {pops::Real(1), pops::Real(0), pops::Real(0), pops::Real(2.5)};
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.stiff-relax", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
+  }
   template <class State>
   POPS_HD State apply(const State& u, const pops::Aux&) const {
     State s{};

@@ -38,6 +38,12 @@ struct DensityAdvection {
   using Prim = State;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
+  static constexpr int dimension = pops::kNativeDimension;
+
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.density-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder&) const {}
 
   POPS_HD State flux(const State& state, const auto&, int direction) const {
     return direction == 0 ? state : State{Real(0)};

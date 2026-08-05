@@ -72,6 +72,12 @@ constexpr double kGamma = 1.4;
 struct StiffMomentumRelax {
   Real inv_eps = Real(0);
   Real e_eq = Real(2.5);  // energie d'equilibre (rho=1, vitesse nulle, p coherent)
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.stiff-momentum-energy-relax", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(inv_eps).scalar(e_eq);
+  }
   template <class State>
   POPS_HD State apply(const State& u, const Aux&) const {
     State s{};
@@ -85,28 +91,21 @@ struct StiffMomentumRelax {
     return s;
   }
 };
-// A genuinely state-independent zero elliptic brick. The deliberately unstable explicit oracle can
-// reach non-finite state without turning an authored zero RHS into `0 * NaN`.
-struct ZeroElliptic {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-
-using StiffModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
+// The canonical state-independent zero RHS remains exact even if the explicit oracle becomes
+// non-finite; it never evaluates an authored `0 * state` expression.
+using StiffModel = CompositeModel<Euler, StiffMomentumRelax, NoElliptic>;
 StiffModel make_stiff(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, ZeroElliptic{}};
+  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, NoElliptic{}};
 }
 
 // Modele EXPLICITE neutre (Euler sans source, charge nulle) : un 2e bloc "voisin" pour exercer le
 // MULTI-BLOCS (hierarchie partagee, Poisson somme) sans raideur. ExB scalaire ne convient pas (1 var) ;
 // on prend un Euler 4 var a source nulle, MEME nombre de variables que le bloc raide (layout coherent).
-using NeutralModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
+using NeutralModel = CompositeModel<Euler, NoSource, NoElliptic>;
 NeutralModel make_neutral() {
-  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, ZeroElliptic{}};
+  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, NoElliptic{}};
 }
 
 // Source scalaire non lineaire utilisee pour rendre la cascade fine -> grossier observable. Pour

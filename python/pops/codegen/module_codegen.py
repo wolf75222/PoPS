@@ -39,6 +39,7 @@ from pops.codegen.module_emit_helpers import (  # noqa: F401
     _aux_component_index,
     _aux_layout,
     _codegen_exprs,
+    _exact_brick_contract,
     _jac_entries,
     _live_prims,
     _prim_block,
@@ -145,6 +146,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     S = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SOURCE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_source)."
         % model.name,
         "// apply(U, a) -> terme source S(U, aux) ; noms aux = champs de pops::Aux (grad_x, grad_y).",
@@ -164,6 +166,13 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     # Without an extra field -> no n_aux emitted -> brick strictly identical to the historical one.
     if na > _aux_layout(model).base_components:
         S.append("  static constexpr int n_aux = %d;" % na)
+    S += _exact_brick_contract(
+        model,
+        "source",
+        dimension=len(_ranked_axes(model)) if model._flux else 0,
+        n_vars=nc,
+        runtime_params=bool(rt_member),
+    )
     S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const pops::Aux& a) const {"
              % (nc, nc))
     src_exprs = [_ir_wrap(e) for e in model._source]
@@ -237,10 +246,18 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
     if model._elliptic is not None:  # elliptic brick generated, otherwise zero rhs (no coupling)
         parts.append(emit_cpp_elliptic(model, name=nm + "Ell", hoist_reciprocals=hoist_reciprocals))
     else:
+        zero_contract = "\n".join(_exact_brick_contract(
+            model,
+            "zero-elliptic-rhs",
+            dimension=len(_ranked_axes(model)),
+            n_vars=nv,
+            runtime_params=False,
+        ))
         parts.append(
-            "namespace pops_generated { struct %sEll {\n"
+            "#include <pops/core/identity/prepared_provider.hpp>\n"
+            "namespace pops_generated { struct %sEll {\n%s\n"
             "  template <class State> POPS_HD pops::Real rhs(const State&) const { return pops::Real(0); }\n"
-            "}; }\n" % nm)
+            "}; }\n" % (nm, zero_contract))
     # NAMED elliptic fields (ADC-428): one SELF-CONTAINED brick per m.elliptic_field, paired with
     # make_poisson_rhs by the native loader and routed to a SECOND elliptic solve. Emitted only when
     # the model declares one -> backward-compatible (no named field => no extra struct, byte-identical
@@ -333,6 +350,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     out = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SECOND MEMBRE elliptique generee depuis '%s' (pops.dsl.emit_cpp_elliptic)."
         % model.name,
         "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
@@ -345,6 +363,13 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     ]
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         out.append(rt_member.rstrip("\n"))
+    out += _exact_brick_contract(
+        model,
+        "elliptic-rhs",
+        dimension=len(_ranked_axes(model)) if model._flux else 0,
+        n_vars=model.n_vars,
+        runtime_params=bool(rt_member),
+    )
     out += [
         "  template <class State>",
         "  POPS_HD pops::Real rhs(const State& U) const {",
@@ -376,6 +401,7 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
     spec = model._elliptic_fields[field]
     rt_member = model._runtime_params_member()  # runtime indices BEFORE any to_cpp()
     out = ["#include <cmath>",
+           "#include <pops/core/identity/prepared_provider.hpp>",
            "#include <pops/numerics/spatial/primitives/state_access.hpp>  // StateVec",
            "// brique de SECOND MEMBRE elliptique NOMMEE '%s' (champ '%s', pops.dsl.elliptic_field)."
            % (struct_name, field)]
@@ -386,6 +412,14 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
             "  using State = pops::StateVec<%d>;" % model.n_vars]
     if rt_member:
         out.append(rt_member.rstrip("\n"))
+    out += _exact_brick_contract(
+        model,
+        "named-elliptic-rhs",
+        dimension=len(_ranked_axes(model)),
+        n_vars=model.n_vars,
+        runtime_params=bool(rt_member),
+        slot=field,
+    )
     out += ["  POPS_HD pops::Real elliptic_rhs(const State& U) const {"]
     out += ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [spec["rhs"]]), hoist_reciprocals)

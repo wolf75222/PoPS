@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
@@ -35,8 +36,14 @@ struct DiffusiveScalar {
   using State = StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
+  static constexpr int dimension = kNativeDimension;
 
   Real nu = Real(0);
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.diffusive-scalar", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(nu); }
 
   POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }

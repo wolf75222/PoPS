@@ -5,8 +5,10 @@
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/physics/composition/exact_brick_contract.hpp>
 
 #include <concepts>
+#include <cstdint>
 #include <limits>
 #include <type_traits>
 
@@ -226,6 +228,29 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
   Hyperbolic hyp{};
   Source src{};
   Elliptic ell{};
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept
+    requires(physics_contract_detail::ExactPhysicsBrickContract<Hyperbolic> &&
+             physics_contract_detail::ExactPhysicsBrickContract<Source> &&
+             physics_contract_detail::ExactPhysicsBrickContract<Elliptic>)
+  {
+    return {"pops.physics.composite-model", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const
+    requires(physics_contract_detail::ExactPhysicsBrickContract<Hyperbolic> &&
+             physics_contract_detail::ExactPhysicsBrickContract<Source> &&
+             physics_contract_detail::ExactPhysicsBrickContract<Elliptic>)
+  {
+    contract.text("pops.physics.composite-model-parameters")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{dimension})
+        .scalar(std::int32_t{n_vars})
+        .scalar(std::int32_t{n_aux});
+    physics_contract_detail::append_exact_brick(contract, "hyperbolic", hyp);
+    physics_contract_detail::append_exact_brick(contract, "source", src);
+    physics_contract_detail::append_exact_brick(contract, "elliptic", ell);
+  }
 
   template <int Axis, class Providers>
     requires composite_detail::FluxAt<Axis, Hyperbolic, Providers>

@@ -8,7 +8,7 @@
 /// Split by category (to match the target tree physics/{hyperbolic,source,elliptic,...}):
 ///   - physics/hyperbolic.hpp: ExBVelocity, CompressibleFlux (= Euler), IsothermalFlux;
 ///   - physics/source.hpp:     NoSource, PotentialForce, GravityForce;
-///   - physics/elliptic.hpp:   ChargeDensity, BackgroundDensity, GravityCoupling;
+///   - physics/elliptic.hpp:   NoElliptic, ChargeDensity, BackgroundDensity, GravityCoupling;
 ///   - physics/composite.hpp:  CompositeModel<Hyperbolic, Source, Elliptic>.
 /// Including this file gives EVERYTHING (as before); including a precise category is now possible.
 ///

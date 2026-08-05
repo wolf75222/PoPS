@@ -13,7 +13,9 @@
 #include <pops/runtime/builders/factory/model_factory.hpp>
 
 #include <cstddef>
+#include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -205,6 +207,13 @@ void check_ranked_cartesian_exb() {
   expect_cartesian_exb_axes<0>(ExBVelocityND<Dim>{Real(2)}, auxiliary);
 }
 
+template <class Model>
+std::string exact_model_parameters(const Model& model) {
+  ExactContractBuilder contract;
+  model.serialize_exact_parameters(contract);
+  return std::move(contract).release();
+}
+
 static_assert(exact_ranked_storage<1>());
 static_assert(exact_ranked_storage<2>());
 static_assert(exact_ranked_storage<3>());
@@ -226,6 +235,9 @@ static_assert(PhysicalModel<RankedAuxModel<kNativeDimension>>);
 static_assert(RankedComposite<1>::dimension == 1);
 static_assert(RankedComposite<2>::dimension == 2);
 static_assert(RankedComposite<3>::dimension == 3);
+static_assert(physics_contract_detail::ExactPhysicsBrickContract<RankedComposite<1>>);
+static_assert(physics_contract_detail::ExactPhysicsBrickContract<RankedComposite<2>>);
+static_assert(physics_contract_detail::ExactPhysicsBrickContract<RankedComposite<3>>);
 static_assert(std::is_same_v<typename RankedComposite<1>::Aux, AuxState<1>>);
 static_assert(std::is_same_v<typename RankedComposite<2>::Aux, AuxState<2>>);
 static_assert(std::is_same_v<typename RankedComposite<3>::Aux, AuxState<3>>);
@@ -264,6 +276,40 @@ TEST(AuxSingleSource, CartesianExBHasOnlyItsAvailablePlanarComponents) {
   check_ranked_cartesian_exb<1>();
   check_ranked_cartesian_exb<2>();
   check_ranked_cartesian_exb<3>();
+}
+
+TEST(AuxSingleSource, CompositeExactContractRecursesThroughEveryBrickParameter) {
+  using Model = CompositeModel<ExBVelocityND<2>, PotentialForceND<2>, BackgroundDensity>;
+  Model baseline{};
+  baseline.hyp.B0 = Real(2);
+  baseline.src.qom = Real(-3);
+  baseline.ell.alpha = Real(4);
+  baseline.ell.n0 = Real(5);
+  const std::string expected = exact_model_parameters(baseline);
+
+  const auto expect_changed = [&](auto mutate) {
+    Model changed = baseline;
+    mutate(changed);
+    EXPECT_NE(exact_model_parameters(changed), expected);
+  };
+  expect_changed([](Model& model) { model.hyp.B0 = Real(7); });
+  expect_changed([](Model& model) { model.src.qom = Real(7); });
+  expect_changed([](Model& model) { model.src.c_rho = 7; });
+  expect_changed([](Model& model) { model.src.c_mx = 7; });
+  expect_changed([](Model& model) { model.src.c_my = 7; });
+  expect_changed([](Model& model) { model.src.c_mz = 7; });
+  expect_changed([](Model& model) { model.src.c_E = 7; });
+  expect_changed([](Model& model) { model.ell.alpha = Real(7); });
+  expect_changed([](Model& model) { model.ell.n0 = Real(7); });
+  expect_changed([](Model& model) { model.ell.c_rho = 7; });
+
+  using NestedSource = CompositeSource<PotentialForceND<2>, MagneticLorentzForceND<2>>;
+  using NestedModel = CompositeModel<ExBVelocityND<2>, NestedSource, NoElliptic>;
+  static_assert(physics_contract_detail::ExactPhysicsBrickContract<NestedModel>);
+  NestedModel nested{};
+  const std::string nested_expected = exact_model_parameters(nested);
+  nested.src.b.qom = Real(9);
+  EXPECT_NE(exact_model_parameters(nested), nested_expected);
 }
 
 TEST(AuxSingleSource, ThreeDimensionalBzLorentzLeavesZMomentumUntouched) {

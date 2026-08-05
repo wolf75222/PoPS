@@ -8,6 +8,8 @@ import pytest
 
 from pops._ir import Var
 from pops.math import sqrt
+from pops.params import RuntimeParam
+from pops.physics._facade import Model
 from pops.physics._model import HyperbolicModel
 from tests.python.support.requirements import repo_include
 
@@ -85,9 +87,13 @@ def _euler_model(dimension: int) -> HyperbolicModel:
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_physical_methods_are_axis_static_and_ranked_from_flux(dimension: int) -> None:
-    source = _scalar_model(dimension).emit_cpp_brick(name="RankedScalar")
+    model = _scalar_model(dimension)
+    source = model.emit_cpp_brick(name="RankedScalar")
 
     assert "static constexpr int dimension = %d;" % dimension in source
+    assert "static constexpr pops::PreparedProviderIdentity provider_identity()" in source
+    assert "serialize_exact_parameters(pops::ExactContractBuilder& contract)" in source
+    assert '.text("%s")' % model._model_hash() in source
     assert "template <int Axis>\n  POPS_HD State flux(" in source
     assert "template <int Axis>\n  POPS_HD pops::Real max_wave_speed(" in source
     assert "template <int Axis>\n  POPS_HD void wave_speeds(" in source
@@ -106,6 +112,22 @@ def test_fd_jacobian_calls_the_same_axis_static_flux() -> None:
     assert "flux<Axis>(Up_, a)" in source
     assert "flux<Axis>(Um_, a)" in source
     assert "flux(Up_, a, dir)" not in source
+
+
+def test_runtime_parameter_values_are_part_of_the_emitted_exact_contract() -> None:
+    authored = Model("exact_runtime_parameter")
+    (state,) = authored.conservative_vars("q")
+    speed = authored.value(authored.param(RuntimeParam("speed", default=2.0)))
+    authored.flux(x=[speed * state], y=[state])
+    authored.eigenvalues(x=[speed + 0 * state], y=[1 + 0 * state])
+    model = authored._m
+    model.set_primitive_state(state)
+    model.set_conservative_from([state])
+
+    source = model.emit_cpp_brick(name="ExactRuntimeParameter")
+    assert "params.count < 0 || params.count > pops::kMaxRuntimeParams" in source
+    assert "contract.scalar(params.values[index]);" in source
+    assert '.text("%s")' % model._model_hash() in source
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
@@ -181,6 +203,8 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
             "  { rank%d::Euler%d model; rank%d::Euler%d::State state{};"
             % (dimension, dimension, dimension, dimension),
             "    pops::Aux providers{}; pops::Real lower{}, upper{};",
+            "    pops::ExactContractBuilder brick_contract;",
+            "    model.serialize_exact_parameters(brick_contract);",
         ]
         for axis in range(dimension):
             calls.append("    (void)model.template flux<%d>(state, providers);" % axis)
@@ -198,8 +222,22 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
                 % axis
             )
         calls.append("  }")
+        calls += [
+            "  { using ExactModel = pops::CompositeModel<rank%d::Euler%d, "
+            "pops::NoSource, pops::BackgroundDensity>;" % (dimension, dimension),
+            "    static_assert(requires(const ExactModel& model, "
+            "pops::ExactContractBuilder& contract) {",
+            "      { ExactModel::provider_identity() } -> "
+            "std::same_as<pops::PreparedProviderIdentity>;",
+            "      model.serialize_exact_parameters(contract);",
+            "    });",
+            "    ExactModel model; pops::ExactContractBuilder contract;",
+            "    model.serialize_exact_parameters(contract);",
+            "    if (contract.view().empty()) return 2;",
+            "  }",
+        ]
         translation_unit = "\n".join((
-            "#include <pops/core/state/variables.hpp>",
+            "#include <pops/physics/bricks/bricks.hpp>",
             source,
             "int main() {",
             *calls,

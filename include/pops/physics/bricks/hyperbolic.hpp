@@ -2,6 +2,7 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/physics/fluids/euler.hpp>  // Euler: reused as the CompressibleFlux hyperbolic brick
 
@@ -62,6 +63,13 @@ struct ExBVelocityND {
   using State = StateVec<1>;
   using Aux = AuxState<Dim>;
   Real B0 = 1;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.exb-velocity-nd", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(B0);
+  }
 
   template <int Axis, class Providers>
   POPS_HD Real velocity(const Providers& providers) const {
@@ -141,6 +149,11 @@ struct ExBVelocityPolar {
   using Aux = AuxState<2>;
   Real B0 = 1;
 
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.exb-velocity-polar", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(B0); }
+
   template <int Axis, class Providers>
   POPS_HD Real velocity(const Providers& providers) const {
     static_assert(Axis >= 0 && Axis < dimension, "polar E x B axis must be radial or azimuthal");
@@ -217,6 +230,12 @@ struct IsothermalFlux {
   /// so the conservative state is untouched (unlike a cell density clamp). <= 0: inactive, and the raw
   /// 1/rho path is taken verbatim (bit-identical, including for rho <= 0).
   Real vacuum_floor = 0;
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.isothermal-flux", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(cs2).scalar(vacuum_floor);
+  }
   /// rho clamped from below by vacuum_floor for the velocity division ONLY. Manual max (device-safe,
   /// no std:: in the kernel path). floor <= 0 -> returns rho unchanged (bit-identical).
   POPS_HD Real velocity_rho(Real rho) const {
@@ -406,6 +425,13 @@ struct IsothermalFluxPolar : IsothermalFlux {
   static constexpr int dimension = 2;
   static constexpr bool planar_polar_capability = true;
   using Aux = AuxState<2>;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.isothermal-flux-polar", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(cs2).scalar(vacuum_floor);
+  }
 
   /// GEOMETRIC curvature source term in a cell of radius r > 0 (ring). See the @file block
   /// above for the derivation. S_geom = (0, (rho v_theta^2 + p)/r, -(rho v_r v_theta)/r),

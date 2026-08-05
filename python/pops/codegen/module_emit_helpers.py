@@ -14,6 +14,7 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pops._aux_layout import aux_layout as _make_aux_layout
@@ -78,6 +79,50 @@ def _axis_values(model: Any, values: Any, *, where: str) -> list:
             "%s must cover the exact emitted axis set %s" % (where, axes)
         )
     return [item for axis in axes for item in values[axis]]
+
+
+def _exact_brick_contract(
+    model: Any,
+    family: str,
+    *,
+    dimension: int,
+    n_vars: int,
+    runtime_params: bool,
+    slot: str = "",
+) -> list[str]:
+    """Emit the host-side semantic contract owned by one generated physics brick."""
+    model_hash = model._model_hash()
+    if not isinstance(model_hash, str) or not model_hash:
+        raise TypeError("generated physics bricks require a non-empty structural model hash")
+    if not isinstance(family, str) or not family or not isinstance(slot, str):
+        raise TypeError("generated physics brick family/slot identities must be strings")
+
+    lines = [
+        "  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() "
+        "noexcept {",
+        "    return {%s, 1};" % json.dumps("pops.codegen.%s-brick" % family),
+        "  }",
+        "  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {",
+        "    contract.text(\"pops.codegen.exact-physics-brick\")",
+        "        .scalar(std::uint32_t{1})",
+        "        .text(%s)" % json.dumps(model_hash),
+        "        .text(%s)" % json.dumps(slot),
+        "        .scalar(std::int32_t{%d})" % dimension,
+        "        .scalar(std::int32_t{%d});" % n_vars,
+    ]
+    if runtime_params:
+        lines += [
+            "    if (params.count < 0 || params.count > pops::kMaxRuntimeParams)",
+            "      throw std::invalid_argument(\"generated physics brick runtime parameter count "
+            "is invalid\");",
+            "    contract.scalar(static_cast<std::int32_t>(params.count));",
+            "    for (int index = 0; index < params.count; ++index)",
+            "      contract.scalar(params.values[index]);",
+        ]
+    else:
+        lines.append("    contract.scalar(std::int32_t{0});")
+    lines += ["  }", ""]
+    return lines
 
 
 # ---------------------------------------------------------------------------

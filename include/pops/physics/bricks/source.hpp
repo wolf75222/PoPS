@@ -4,6 +4,9 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
+#include <pops/physics/composition/exact_brick_contract.hpp>
+
+#include <cstdint>
 
 /// @file
 /// @brief Exact-ranked local source bricks S(U, aux).
@@ -48,6 +51,11 @@ consteval int declared_dimension() {
 
 /// Neutral source. The auxiliary rank is deduced from the exact pointwise carrier.
 struct NoSource {
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.none", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder&) const {}
+
   template <class State, int Dim>
   POPS_HD State apply(const State&, const AuxState<Dim>&) const {
     return State{};
@@ -70,6 +78,19 @@ struct PotentialForceND {
   int c_my = 2;
   int c_mz = 3;
   int c_E = Dim + 1;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.potential-force-nd", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim})
+        .scalar(qom)
+        .scalar(std::int32_t{c_rho})
+        .scalar(std::int32_t{c_mx})
+        .scalar(std::int32_t{c_my})
+        .scalar(std::int32_t{c_mz})
+        .scalar(std::int32_t{c_E});
+  }
 
   template <class State>
   POPS_HD State apply(const State& state, const AuxState<Dim>& auxiliary) const {
@@ -96,6 +117,18 @@ struct GravityForceND {
   int c_my = 2;
   int c_mz = 3;
   int c_E = Dim + 1;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.gravity-force-nd", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim})
+        .scalar(std::int32_t{c_rho})
+        .scalar(std::int32_t{c_mx})
+        .scalar(std::int32_t{c_my})
+        .scalar(std::int32_t{c_mz})
+        .scalar(std::int32_t{c_E});
+  }
 
   template <class State>
   POPS_HD State apply(const State& state, const AuxState<Dim>& auxiliary) const {
@@ -125,6 +158,16 @@ struct MagneticLorentzForceND {
   Real qom = Real(1);
   int c_mx = 1;
   int c_my = 2;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.magnetic-lorentz-force-nd", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim})
+        .scalar(qom)
+        .scalar(std::int32_t{c_mx})
+        .scalar(std::int32_t{c_my});
+  }
 
   template <class State>
   POPS_HD State apply(const State& state, const AuxState<Dim>& auxiliary) const {
@@ -159,6 +202,24 @@ struct CompositeSource {
   static constexpr int n_aux = aux_comps_for<A, dimension>() > aux_comps_for<B, dimension>()
                                    ? aux_comps_for<A, dimension>()
                                    : aux_comps_for<B, dimension>();
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept
+    requires(physics_contract_detail::ExactPhysicsBrickContract<A> &&
+             physics_contract_detail::ExactPhysicsBrickContract<B>)
+  {
+    return {"pops.physics.source.composite", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const
+    requires(physics_contract_detail::ExactPhysicsBrickContract<A> &&
+             physics_contract_detail::ExactPhysicsBrickContract<B>)
+  {
+    contract.text("pops.physics.composite-source-parameters")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{dimension})
+        .scalar(std::int32_t{n_aux});
+    physics_contract_detail::append_exact_brick(contract, "left", a);
+    physics_contract_detail::append_exact_brick(contract, "right", b);
+  }
 
   template <class State>
   POPS_HD State apply(const State& state, const AuxState<dimension>& auxiliary) const {
