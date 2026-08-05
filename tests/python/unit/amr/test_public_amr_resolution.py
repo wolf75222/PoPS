@@ -159,6 +159,17 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     )
     assert config.distribute_coarse is True
     assert config.coarse_max_grid == (7, 7)
+    assert config.transition_ratios == tuple(
+        row.ratio for row in authorities.hierarchy.plan.transitions
+    )
+    assert config.transition_buffers == tuple(
+        row.buffer for row in authorities.hierarchy.plan.transitions
+    )
+    assert config.transition_lookaheads == tuple(
+        row.lookahead for row in authorities.hierarchy.plan.transitions
+    )
+    assert not hasattr(config, "regrid_margin")
+    assert not hasattr(config, "regrid_grow")
     assert config.load_balance_provider[:3] == (
         "space_filling_curve",
         layout.load_balance.load_balance_provider_data()["provider_identity"],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,14 +15,23 @@ from pops.amr import (
     NativeAMRMaterializationKind,
     TransferCapabilities,
 )
-from pops.codegen._amr_plan_validation import _validated_native_materialization
-from pops.mesh import LayoutPlanBuilder
+from pops.codegen._amr_plan_validation import (
+    _physical_axis_contract,
+    _ranked_ghost_depth,
+    _validated_native_materialization,
+)
+from pops.domain import CartesianDomain
+from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
 from pops.mesh._amr.transfer import (
     AccuracyRequirement,
     CELL_CENTERED,
     CELL_SPACE,
     CONSERVATIVE_REPRESENTATION,
     DENSE_STORAGE,
+    FACE_CENTERED,
+    FACE_SPACE,
+    FACE_Z_CENTERED,
+    ORIENTED_FACE_CENTERINGS,
     PHYSICAL,
     PROLONGATION,
     RESTRICTION,
@@ -129,6 +139,74 @@ def _prepared_entry(action=ThirdPartyPhysicalAction()):
         ),
     )
     return requirement, ResolvedTransfer(key, (requirement,), action)
+
+
+def _ranked_face_requirement(dimension, centering):
+    frame = CartesianDomain(
+        "ranked-native-materialization-%d" % dimension,
+        tuple(0.0 for _ in range(dimension)),
+        tuple(1.0 for _ in range(dimension)),
+    ).frame()
+    grid = CartesianGrid(
+        frame=frame,
+        cells=tuple(8 for _ in range(dimension)),
+        periodic=PeriodicAxes(frame.axes),
+    )
+    state = Handle(
+        "face_z", kind="state", owner=OwnerPath.model("ranked-native-materialization")
+    )
+    builder = LayoutPlanBuilder(OWNER)
+    layout = builder.layout("ranked_%d" % dimension, final_amr_layout(grid))
+    builder.assign_state(state, layout)
+    layout_plan = builder.resolve(states=(state,))
+    requirement = TransferRequirement(
+        state,
+        layout,
+        TransferKey(
+            FACE_SPACE,
+            centering,
+            CONSERVATIVE_REPRESENTATION,
+            DENSE_STORAGE,
+            PROLONGATION,
+        ),
+        PHYSICAL,
+        AccuracyRequirement(
+            order=2,
+            ghost_depth=tuple(1 for _ in range(dimension)),
+            dimension=dimension,
+            refinement_ratio=tuple(2 for _ in range(dimension)),
+            conservative=True,
+        ),
+    )
+    return SimpleNamespace(layout_plan=layout_plan), requirement
+
+
+def test_face_centering_contract_exports_z_and_uses_layout_axis_names() -> None:
+    assert tuple(axis.name for axis in ORIENTED_FACE_CENTERINGS) == (
+        "face_x",
+        "face_y",
+        "face_z",
+    )
+    plan, requirement = _ranked_face_requirement(3, FACE_Z_CENTERED)
+
+    axis, axis_kind, dimension = _physical_axis_contract(plan, requirement)
+
+    assert axis == (FACE_SPACE.qualified_id, FACE_Z_CENTERED.qualified_id)
+    assert axis_kind == "face"
+    assert dimension == 3
+    assert _ranked_ghost_depth((2,), dimension=dimension, where="test") == (2, 2, 2)
+    assert _ranked_ghost_depth((1, 2, 3), dimension=dimension, where="test") == (1, 2, 3)
+
+
+def test_face_centering_must_belong_to_the_exact_layout_axes() -> None:
+    plan, requirement = _ranked_face_requirement(2, FACE_Z_CENTERED)
+
+    _, axis_kind, dimension = _physical_axis_contract(plan, requirement)
+
+    assert axis_kind is None
+    assert dimension == 2
+    with pytest.raises(ValueError, match="face_x/face_y/face_z"):
+        _ranked_face_requirement(3, FACE_CENTERED)
 
 
 def test_unrelated_third_party_action_crosses_validation_and_closed_preparation():

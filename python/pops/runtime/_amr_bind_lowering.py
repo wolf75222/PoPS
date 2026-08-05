@@ -169,6 +169,26 @@ def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _install_native_hierarchy_config(
+    config: Any, lowering: Any, *, dimension: int
+) -> None:
+    """Install every hierarchy-v2 transition without reducing ranked facts to scalars."""
+    from pops.mesh._amr.hierarchy_native import PreparedHierarchyNativeLowering
+
+    if type(lowering) is not PreparedHierarchyNativeLowering:
+        raise TypeError(
+            "native AMR config requires an exact PreparedHierarchyNativeLowering"
+        )
+    if lowering.dimension != dimension:
+        raise ValueError(
+            "native AMR hierarchy dimension differs from the selected config specialization"
+        )
+    config.level_count = lowering.level_count
+    config.transition_ratios = tuple(tuple(row) for row in lowering.transition_ratios)
+    config.transition_buffers = tuple(tuple(row) for row in lowering.transition_buffers)
+    config.transition_lookaheads = tuple(lowering.transition_lookaheads)
+
+
 def amr_config_from_layout(
     layout: Any,
     *,
@@ -192,9 +212,9 @@ def amr_config_from_layout(
     cfg.lower = lower
     cfg.upper = upper
     cfg.periodicity = periodicity
-    cfg.level_count = native_hierarchy.level_count
-    cfg.regrid_margin = native_hierarchy.nesting_buffer
-    cfg.regrid_grow = native_hierarchy.nesting_lookahead
+    _install_native_hierarchy_config(
+        cfg, native_hierarchy, dimension=len(cells)
+    )
     cfg.regrid_every = _regrid_every(data)
     cfg.explicit_bootstrap = True
 

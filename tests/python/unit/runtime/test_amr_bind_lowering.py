@@ -8,11 +8,12 @@ from types import SimpleNamespace
 import pops
 import pytest
 
-from pops.amr import AMRRegrid
+from pops.amr import AMRRegrid, PreparedHierarchyNativeLowering
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh.grid import CartesianGrid, PeriodicAxes
 from pops.runtime._amr_bind_lowering import (
+    _install_native_hierarchy_config,
     _native_amr_grid_values,
     _physical_patch_bounds,
     _regrid_every,
@@ -57,6 +58,50 @@ def test_native_regrid_lowering_preserves_explicit_frozen_and_scheduled_policies
     assert _regrid_every({"regrid": AMRRegrid.frozen().to_data()}) == 0
     scheduled = AMRRegrid(schedule=every(3, clock=Clock("macro")))
     assert _regrid_every({"regrid": scheduled.to_data()}) == 3
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_native_config_installs_every_ranked_hierarchy_transition(dimension: int) -> None:
+    ratios = (
+        tuple(2 + axis for axis in range(dimension)),
+        tuple(3 + axis for axis in range(dimension)),
+    )
+    buffers = (
+        tuple(1 + axis for axis in range(dimension)),
+        tuple(2 + axis for axis in range(dimension)),
+    )
+    lowering = PreparedHierarchyNativeLowering(
+        {"provider": "test-ranked-hierarchy"},
+        dimension,
+        3,
+        ratios,
+        buffers,
+        (1, 2),
+    )
+    config = SimpleNamespace()
+
+    _install_native_hierarchy_config(config, lowering, dimension=dimension)
+
+    assert config.level_count == 3
+    assert config.transition_ratios == ratios
+    assert config.transition_buffers == buffers
+    assert config.transition_lookaheads == (1, 2)
+    assert not hasattr(config, "regrid_margin")
+    assert not hasattr(config, "regrid_grow")
+
+
+def test_native_config_refuses_hierarchy_from_another_specialization() -> None:
+    lowering = PreparedHierarchyNativeLowering(
+        {"provider": "test-ranked-hierarchy"},
+        3,
+        2,
+        ((2, 2, 2),),
+        ((1, 2, 3),),
+        (1,),
+    )
+
+    with pytest.raises(ValueError, match="config specialization"):
+        _install_native_hierarchy_config(SimpleNamespace(), lowering, dimension=2)
 
 
 def test_frozen_capacity_installs_exact_materialized_prefix() -> None:
