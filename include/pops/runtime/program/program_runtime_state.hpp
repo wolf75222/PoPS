@@ -63,10 +63,13 @@ namespace pops::runtime::program {
 /// is allocated by the owning runtime (it needs the shared block layout), so this struct holds only
 /// storage plus cheap, grid-free bookkeeping and the O(1) rotate. Grid-touching register/read/store/
 /// restore bodies live in the runtime and reach these maps directly. Empty by default.
+template <int Dim>
 struct HistoryManager {
-  std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
-  std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
-  std::map<std::string, bool> initialized;                 // name -> stored at least once
+  static_assert(Dim >= 1 && Dim <= 3, "HistoryManager only supports dimensions 1, 2, and 3");
+
+  std::map<std::string, std::vector<MultiFab<Dim>>> histories;  // name -> ring (newest at [0])
+  std::map<std::string, int> depth;                             // name -> ring length (max lag + 1)
+  std::map<std::string, bool> initialized;                      // name -> stored at least once
   /// Number of authentic accepted stores currently represented by logical ring slots. The first
   /// store cold-fills deeper slots with copies for multistep evaluation, but advances this count by
   /// one only. Saturates at depth; selective checkpoint replay is valid only at full depth.
@@ -173,7 +176,9 @@ struct AutomaticBalanceKey {
 /// self-contained (grid-free) logic is exposed as methods with Program-subsystem-worded errors; the
 /// grid-touching history / cache bodies delegate their STORAGE to hist_ / cache_ from the runtime. See
 /// the file header for the shared Uniform/AMR contract (which fields each runtime uses).
+template <int Dim>
 struct ProgramRuntimeState {
+  static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
   /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
   /// before mutation.
@@ -341,10 +346,10 @@ struct ProgramRuntimeState {
   Profiler profiler_;
   /// SCHEDULER VALUE CACHE (ADC-458), UNIFORM ONLY. The held-node cache (every(N).hold / accumulate_dt)
   /// keyed by IR node id; the uniform checkpoint serializes it. Empty on AMR (cache seam not wired).
-  CacheManager cache_;
+  CacheManager<Dim> cache_;
   /// MULTISTEP HISTORY (ADC-406a), UNIFORM ONLY. Ring buffers for multistep schemes; the uniform
   /// checkpoint serializes them. Empty on AMR (history seam not wired).
-  HistoryManager hist_;
+  HistoryManager<Dim> hist_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
 
@@ -362,8 +367,8 @@ struct ProgramRuntimeState {
     std::vector<int> block_map;
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
-    CacheManager cache;
-    HistoryManager history;
+    CacheManager<Dim> cache;
+    HistoryManager<Dim> history;
     bool artifact_backed = false;
   };
 
@@ -436,7 +441,7 @@ struct ProgramRuntimeState {
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
     cache_.clear();
-    hist_ = HistoryManager{};
+    hist_ = HistoryManager<Dim>{};
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
