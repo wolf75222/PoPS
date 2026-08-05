@@ -1,577 +1,241 @@
+/// @file
+/// @brief Allocation-free compile-time-ranked Cartesian Poisson operator kernels.
+
 #pragma once
 
-/// @file
-/// @brief Free functions of the elliptic operator: apply_laplacian (matvec), poisson_residual
-///        (residual), gs_color/gs_smooth (red-black Gauss-Seidel smoother), zero_conductor (embedded Dirichlet).
-///
-/// Layer: `include/pops/numerics/elliptic/poisson`.
-/// Role: low-level bricks of the geometric multigrid (geometric_mg.hpp) and prepared matrix-free
-/// Krylov providers. The operator is provided as FREE FUNCTIONS (not a type): no concept constrains
-/// them. GLOBAL convention: we solve L(phi) = -div(A grad phi) + kappa phi = f_phys;
-/// internally the kernels assemble L_int = div(A grad phi) - kappa phi and poisson_residual returns
-/// res = f - L_int.
-/// Contract: all optional coefficients default to nullptr and THEN give back EXACTLY the bit-identical
-/// historical path -- mask (embedded boundary, pins phi=0 in the conductor), coef
-/// (Shortley-Weller cut-cell weights, order 2 at the boundary), eps/eps_y (variable permittivity, isotropic or
-/// diagonal anisotropic, harmonic face mean), kappa (reaction term), a_xy/a_yx (FULL tensor,
-/// EXPLICIT cross terms, A possibly non-symmetric).
-///
-/// Invariants:
-/// - FACE permittivity = HARMONIC mean of the two adjacent centers (continuous normal flux, correct
-///   even for discontinuous eps); the cross term uses the ARITHMETIC mean (not a normal flux);
-/// - the gs_smooth smoother stays 5 POINTS (diagonal block): the cross terms a_xy/a_yx are EXPLICIT,
-///   carried only by the residual -> for strongly non-symmetric A the GS V-cycle may NOT
-///   converge (a prepared GMRES/BiCGStab solve is then required, cf. generic_krylov.hpp);
-/// - the kernels are NAMED FUNCTORS (and not POPS_HD lambdas) because they are first-instantiated from an
-///   external TU: an extended lambda would break the device kernel emission under nvcc;
-/// - the red-black sweep is parallelizable (a red cell depends only on black cells).
-
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 
+#include <Kokkos_Core.hpp>
+
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
+#include <string>
 
-namespace pops {
+namespace pops::elliptic::mg {
 
 namespace detail {
-struct CopyBoundaryViewKernel {
-  Array4 dst;
-  ConstArray4 src;
-  int component;
-  POPS_HD void operator()(int i, int j) const { dst(i, j, component) = src(i, j, component); }
-};
-}  // namespace detail
 
-inline BCRec homogeneous_field_bc(const BCRec& bc) {
-  BCRec out = bc;
-  out.xlo_val = out.xhi_val = out.ylo_val = out.yhi_val = Real(0);
-  return out;
-}
+template <int Dim>
+struct CopyScalarKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
 
-inline void copy_field_valid(const MultiFab& source, MultiFab& destination) {
-  if (source.ncomp() != destination.ncomp() ||
-      source.box_array().boxes() != destination.box_array().boxes() ||
-      source.dmap().ranks() != destination.dmap().ranks())
-    throw std::runtime_error("field boundary operator view is not co-distributed with its source");
-  for (int li = 0; li < destination.local_size(); ++li) {
-    Array4 dst = destination.fab(li).array();
-    const ConstArray4 src = source.fab(li).const_array();
-    for (int c = 0; c < destination.ncomp(); ++c)
-      for_each_cell(destination.box(li), detail::CopyBoundaryViewKernel{dst, src, c});
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, 0) = source(index, 0);
   }
-}
+};
 
-/// Synchronize only the valid cells that can feed a one-cell ghost exchange or a physical closure.
-/// The dynamic smoother reads interior neighbours directly from the live iterate, so copying the
-/// complete valid field before every red/black colour would be pure bandwidth.  One-cell boundary
-/// bands are sufficient for physical faces, periodic wraps and neighbouring-box halo exchange.
-inline void copy_field_boundary_band(const MultiFab& source, MultiFab& destination) {
-  if (source.ncomp() != destination.ncomp() ||
-      source.box_array().boxes() != destination.box_array().boxes() ||
-      source.dmap().ranks() != destination.dmap().ranks())
-    throw std::runtime_error("field boundary work view is not co-distributed with its source");
-  for (int li = 0; li < destination.local_size(); ++li) {
-    Array4 dst = destination.fab(li).array();
-    const ConstArray4 src = source.fab(li).const_array();
-    const Box2D v = destination.box(li);
-    for (int c = 0; c < destination.ncomp(); ++c) {
-      for_each_cell(Box2D{{v.lo[0], v.lo[1]}, {v.lo[0], v.hi[1]}},
-                    detail::CopyBoundaryViewKernel{dst, src, c});
-      if (v.hi[0] != v.lo[0])
-        for_each_cell(Box2D{{v.hi[0], v.lo[1]}, {v.hi[0], v.hi[1]}},
-                      detail::CopyBoundaryViewKernel{dst, src, c});
-      if (v.hi[0] - v.lo[0] > 1) {
-        for_each_cell(Box2D{{v.lo[0] + 1, v.lo[1]}, {v.hi[0] - 1, v.lo[1]}},
-                      detail::CopyBoundaryViewKernel{dst, src, c});
-        if (v.hi[1] != v.lo[1])
-          for_each_cell(Box2D{{v.lo[0] + 1, v.hi[1]}, {v.hi[0] - 1, v.hi[1]}},
-                        detail::CopyBoundaryViewKernel{dst, src, c});
-      }
+template <int Dim>
+struct AddScalarKernel {
+  FieldView<Real, Dim> values{};
+  Real increment = Real(0);
+
+  POPS_HD void operator()(const Index<Dim>& index) const { values(index, 0) += increment; }
+};
+
+template <int Dim>
+struct NegativeLaplacianKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  Real inverse_spacing_squared[Dim]{};
+  Real reaction = Real(0);
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Real value = reaction * source(index, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = index;
+      Index<Dim> upper = index;
+      --lower[axis];
+      ++upper[axis];
+      value += (Real(2) * source(index, 0) - source(lower, 0) - source(upper, 0)) *
+               inverse_spacing_squared[axis];
     }
-  }
-}
-
-inline MultiFab& prepare_field_residual_view(
-    MultiFab& iterate, MultiFab* operator_view, const Geometry& geom, const BCRec& bc,
-    const CompiledFieldBoundaryKernel* kernel = nullptr,
-    const FieldBoundaryExecutionContext* context = nullptr) {
-  if (kernel == nullptr) {
-    fill_ghosts(iterate, geom.domain, bc);
-    return iterate;  // constant BCRec fast path: historical in-place ghost fill, no copy/indirection
-  }
-  if (context == nullptr || operator_view == nullptr)
-    throw std::runtime_error(
-        "compiled field boundary residual is missing its context or persistent operator view");
-  copy_field_valid(iterate, *operator_view);
-  fill_ghosts(*operator_view, geom.domain, bc);
-  for (int face = 0; face < 4; ++face)
-    kernel->prepare_residual_view(face, iterate, *operator_view, geom, *context);
-  return *operator_view;
-}
-
-inline MultiFab& prepare_field_jvp_view(const MultiFab& iterate, const MultiFab& direction,
-                                        MultiFab* direction_view, const Geometry& geom,
-                                        const BCRec& bc,
-                                        const CompiledFieldBoundaryKernel* kernel = nullptr,
-                                        const FieldBoundaryExecutionContext* context = nullptr) {
-  if (direction_view == nullptr)
-    throw std::runtime_error("field boundary JVP is missing its persistent direction view");
-  copy_field_valid(direction, *direction_view);
-  fill_ghosts(*direction_view, geom.domain, homogeneous_field_bc(bc));
-  if (kernel != nullptr) {
-    if (context == nullptr)
-      throw std::runtime_error("compiled field boundary JVP is missing its execution context");
-    for (int face = 0; face < 4; ++face)
-      kernel->prepare_jvp_view(face, iterate, direction, *direction_view, geom, *context);
-  }
-  return *direction_view;
-}
-
-inline MultiFab& prepare_field_smoother_view(MultiFab& iterate, MultiFab* boundary_view,
-                                             const Geometry& geom, const BCRec& bc,
-                                             const CompiledFieldBoundaryKernel* kernel,
-                                             const FieldBoundaryExecutionContext* context) {
-  if (kernel == nullptr) {
-    fill_ghosts(iterate, geom.domain, bc);
-    return iterate;
-  }
-  if (context == nullptr || boundary_view == nullptr)
-    throw std::runtime_error(
-        "compiled field boundary smoother is missing its context or persistent work view");
-  copy_field_boundary_band(iterate, *boundary_view);
-  fill_ghosts(*boundary_view, geom.domain, bc);
-  for (int face = 0; face < 4; ++face)
-    kernel->prepare_residual_view(face, iterate, *boundary_view, geom, *context);
-  return *boundary_view;
-}
-
-// Harmonic mean of two center permittivities -> face permittivity.
-// Guard against division by 0 if both centers are zero (inactive cell).
-POPS_HD inline Real eps_harmonic(Real ec, Real ev) {
-  const Real s = ec + ev;
-  return s > Real(0) ? Real(2) * ec * ev / s : Real(0);
-}
-
-namespace detail {
-// Weights of the FOUR faces (xm, xp, ym, yp) at (i,j) for the FACE permittivity path (he), with or
-// without cut-cell. Each face = HARMONIC mean of the two adjacent centers (eps_x for x faces,
-// eps_y for y faces); in cut-cell (hc) the face Shortley-Weller weight is multiplied by its
-// permittivity, otherwise 1/h^2 (idx2 / idy2) is applied. Free POPS_HD functor (device-clean) shared
-// by the three he kernels (apply / residual / smoother); body STRICTLY identical to the three
-// original copies -> bit-identical output. Output by reference (wxm/wxp/wym/wyp).
-POPS_HD inline void face_weights(const ConstArray4& ep, const ConstArray4& ey, int i, int j,
-                                 Real idx2, Real idy2, bool hc, const ConstArray4& cf, Real& wxm,
-                                 Real& wxp, Real& wym, Real& wyp) {
-  const Real ec = ep(i, j);   // eps_x at center (x faces)
-  const Real ecy = ey(i, j);  // eps_y at center (y faces); == ec when isotropic
-  const Real exm = eps_harmonic(ec, ep(i - 1, j));
-  const Real exp = eps_harmonic(ec, ep(i + 1, j));
-  const Real eym = eps_harmonic(ecy, ey(i, j - 1));
-  const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
-  if (hc) {  // cut-cell: eps_face multiplies each Shortley-Weller weight
-    wxm = cf(i, j, 0) * exm;
-    wxp = cf(i, j, 1) * exp;
-    wym = cf(i, j, 2) * eym;
-    wyp = cf(i, j, 3) * eyp;
-  } else {  // 5-point stencil with variable face coefficient
-    wxm = exm * idx2;
-    wxp = exp * idx2;
-    wym = eym * idy2;
-    wyp = eyp * idy2;
-  }
-}
-
-// Divergence of the CROSS FLUXES of the full tensor at (i,j): d_x(Axy d_y phi) + d_y(Ayx d_x phi),
-// discretized by finite volumes (9-point stencil) as described in the header. Returns the
-// contribution to be ADDED to div(A grad phi). Free POPS_HD functor (device-clean) shared by
-// apply_laplacian and poisson_residual; face coefficient = ARITHMETIC mean. hxy/hyx
-// guard each half-term: an ABSENT coefficient (field not provided) contributes 0 without deref.
-POPS_HD inline Real cross_div(const ConstArray4& p, bool hxy, const ConstArray4& axy, bool hyx,
-                              const ConstArray4& ayx, int i, int j, Real idx, Real idy) {
-  Real out = Real(0);
-  if (hxy) {  // x faces: cross flux = Axy_face * (d_y phi)_face, tangential averaged over 4 corners.
-    const Real axy_xp = Real(0.5) * (axy(i, j) + axy(i + 1, j));
-    const Real axy_xm = Real(0.5) * (axy(i, j) + axy(i - 1, j));
-    const Real dyf_xp =
-        (p(i, j + 1) + p(i + 1, j + 1) - p(i, j - 1) - p(i + 1, j - 1)) * (Real(0.25) * idy);
-    const Real dyf_xm =
-        (p(i - 1, j + 1) + p(i, j + 1) - p(i - 1, j - 1) - p(i, j - 1)) * (Real(0.25) * idy);
-    out += (axy_xp * dyf_xp - axy_xm * dyf_xm) * idx;
-  }
-  if (hyx) {  // y faces: cross flux = Ayx_face * (d_x phi)_face.
-    const Real ayx_yp = Real(0.5) * (ayx(i, j) + ayx(i, j + 1));
-    const Real ayx_ym = Real(0.5) * (ayx(i, j) + ayx(i, j - 1));
-    const Real dxf_yp =
-        (p(i + 1, j) + p(i + 1, j + 1) - p(i - 1, j) - p(i - 1, j + 1)) * (Real(0.25) * idx);
-    const Real dxf_ym =
-        (p(i + 1, j - 1) + p(i + 1, j) - p(i - 1, j - 1) - p(i - 1, j)) * (Real(0.25) * idx);
-    out += (ayx_yp * dxf_yp - ayx_ym * dxf_ym) * idy;
-  }
-  return out;
-}
-
-// NAMED FUNCTORS (and not POPS_HD lambdas) for the Poisson operator and Gauss-Seidel smoother kernels.
-// Same reasons as the rest of the elliptic path (#93, recipe #64): these kernels are
-// first-instantiated from the MG V-cycle pulled from an external TU (harness / native loader); an extended
-// lambda there breaks the device kernel emission under nvcc (null kernel-stub -> Cuda segfault in
-// Release -O without -g). Body STRICTLY identical to the former lambdas (same he/hc/hk branches,
-// same stencil) -> bit-identical residual and potential on CPU and device.
-
-// L = div(A grad phi) - kappa phi (apply_laplacian). cf/ep/ey/ka unused if the flag is false.
-// hxy/hyx => FULL tensor: we ADD the cross fluxes d_x(Axy d_y phi) + d_y(Ayx d_x phi) (idx/idy
-// = 1/dx, 1/dy; axy/ayx = off-diagonal coefficients at center). hxy=hyx=false => bit-identical.
-struct ApplyLaplacianKernel {
-  ConstArray4 p;
-  Array4 L;
-  Real idx2, idy2, idx, idy;
-  bool hc;
-  ConstArray4 cf;
-  bool he;
-  ConstArray4 ep, ey;
-  bool hk;
-  ConstArray4 ka;
-  bool hxy, hyx;
-  ConstArray4 axy, ayx;
-  int c;  // component the matvec acts on; 0 for the scalar Poisson path (bit-identical 2-arg access)
-  POPS_HD void operator()(int i, int j) const {
-    if (he) {  // face permittivity (harmonic), with or without cut-cell (coefficient path: comp 0 only)
-      Real wxm, wxp, wym, wyp;
-      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
-      L(i, j) = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) + wym * p(i, j - 1) -
-                (wxm + wxp + wym + wyp) * p(i, j);
-    } else if (hc)  // cut-cell coefficient path (comp 0 only)
-      L(i, j) = cf(i, j, 1) * p(i + 1, j) + cf(i, j, 0) * p(i - 1, j) + cf(i, j, 3) * p(i, j + 1) +
-                cf(i, j, 2) * p(i, j - 1) - cf(i, j, 4) * p(i, j);
-    else  // bare 5-point stencil, applied PER COMPONENT (c); c==0 => the scalar path, bit-identical.
-      L(i, j, c) = (p(i + 1, j, c) - 2 * p(i, j, c) + p(i - 1, j, c)) * idx2 +
-                   (p(i, j + 1, c) - 2 * p(i, j, c) + p(i, j - 1, c)) * idy2;
-    // FULL block: ADDITIVE cross fluxes (after the diagonal stencil). hxy=hyx=false => +0, bit-identical.
-    if (hxy || hyx)
-      L(i, j) += cross_div(p, hxy, axy, hyx, ayx, i, j, idx, idy);
-    // Helmholtz / screened operator: L phi = div(A grad phi) - kappa phi.
-    if (hk)
-      L(i, j) -= ka(i, j) * p(i, j);
+    destination(index, 0) = value;
   }
 };
 
-// res = f - L phi on active cells, 0 on conductor cells (poisson_residual).
-// hx => FULL tensor: ADDITIVE cross fluxes (cf. ApplyLaplacianKernel). hx=false => bit-identical.
-struct PoissonResidualKernel {
-  ConstArray4 p, ff;
-  Array4 r;
-  Real idx2, idy2, idx, idy;
-  bool hm;
-  ConstArray4 mk;
-  bool hc;
-  ConstArray4 cf;
-  bool he;
-  ConstArray4 ep, ey;
-  bool hk;
-  ConstArray4 ka;
-  bool hxy, hyx;
-  ConstArray4 axy, ayx;
-  POPS_HD void operator()(int i, int j) const {
-    if (hm && mk(i, j) == Real(0)) {
-      r(i, j) = 0;
-      return;
+template <int Dim>
+struct ResidualKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> iterate{};
+  FieldView<const Real, Dim> right_hand_side{};
+  Real inverse_spacing_squared[Dim]{};
+  Real reaction = Real(0);
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Real image = reaction * iterate(index, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = index;
+      Index<Dim> upper = index;
+      --lower[axis];
+      ++upper[axis];
+      image += (Real(2) * iterate(index, 0) - iterate(lower, 0) - iterate(upper, 0)) *
+               inverse_spacing_squared[axis];
     }
-    Real lap;
-    if (he) {  // face permittivity (harmonic), with or without cut-cell
-      Real wxm, wxp, wym, wyp;
-      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
-      lap = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) + wym * p(i, j - 1) -
-            (wxm + wxp + wym + wyp) * p(i, j);
-    } else if (hc)
-      lap = cf(i, j, 1) * p(i + 1, j) + cf(i, j, 0) * p(i - 1, j) + cf(i, j, 3) * p(i, j + 1) +
-            cf(i, j, 2) * p(i, j - 1) - cf(i, j, 4) * p(i, j);
-    else
-      lap = (p(i + 1, j) - 2 * p(i, j) + p(i - 1, j)) * idx2 +
-            (p(i, j + 1) - 2 * p(i, j) + p(i, j - 1)) * idy2;
-    // FULL block: ADDITIVE cross fluxes (after the diagonal stencil). hxy=hyx=false => +0, bit-identical.
-    if (hxy || hyx)
-      lap += cross_div(p, hxy, axy, hyx, ayx, i, j, idx, idy);
-    // res = f - L phi, L phi = div(A grad phi) - kappa phi = lap - kappa phi.
-    r(i, j) = ff(i, j) - lap + (hk ? ka(i, j) * p(i, j) : Real(0));
+    destination(index, 0) = right_hand_side(index, 0) - image;
   }
 };
-}  // namespace detail
 
-// a_xy/a_yx: off-diagonal coefficients (FULL tensor). nullptr => cross term absent
-// (bit-identical diagonal/Poisson operator). Ghosts (1 layer) assumed filled by the caller.
-inline void apply_laplacian(const MultiFab& phi, const Geometry& geom, MultiFab& lap,
-                            const MultiFab* coef = nullptr, const MultiFab* eps = nullptr,
-                            const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr,
-                            const MultiFab* a_xy = nullptr, const MultiFab* a_yx = nullptr) {
-  const Real idx2 = Real(1) / (geom.dx() * geom.dx());
-  const Real idy2 = Real(1) / (geom.dy() * geom.dy());
-  const Real idx = Real(1) / geom.dx();
-  const Real idy = Real(1) / geom.dy();
-  for (int li = 0; li < phi.local_size(); ++li) {
-    const ConstArray4 p = phi.fab(li).const_array();
-    Array4 L = lap.fab(li).array();
-    const Box2D v = lap.box(li);
-    const bool hc = coef != nullptr;
-    const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
-    const bool he = eps != nullptr;
-    const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
-    // eps_y==nullptr => isotropic: y faces read the same field as the x faces (eps_x).
-    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
-    const bool hk = kappa != nullptr;  // reaction term -kappa phi
-    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
-    const bool hxy = a_xy != nullptr;  // Axy cross half-term (x faces)
-    const bool hyx = a_yx != nullptr;  // Ayx cross half-term (y faces)
-    const ConstArray4 axy = hxy ? a_xy->fab(li).const_array() : ConstArray4{};
-    const ConstArray4 ayx = hyx ? a_yx->fab(li).const_array() : ConstArray4{};
-    // Bare 5-point matvec acts on EVERY component (a vector / state matrix-free operator: the
-    // condensed-Schur block unknown). The coefficient / cross / Helmholtz branches are single-component
-    // (the scalar Poisson operator), so they run for component 0 only; nc==1 reproduces the old
-    // single-pass, bit-identical scalar path.
-    const int nc = (he || hc || hk || hxy || hyx) ? 1 : lap.ncomp();
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(v, detail::ApplyLaplacianKernel{p, L, idx2, idy2, idx, idy, hc, cf, he, ep, ey,
-                                                    hk, ka, hxy, hyx, axy, ayx, c});
-  }
-}
+template <int Dim>
+struct DampedJacobiKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> iterate{};
+  FieldView<const Real, Dim> right_hand_side{};
+  Real inverse_spacing_squared[Dim]{};
+  Real inverse_diagonal = Real(0);
+  Real relaxation = Real(2) / Real(3);
+  Real reaction = Real(0);
 
-/// Exact Newton correction operator `K d = -R'(phi)d` for
-/// `R(phi)=f-L(phi)+C(phi)`: the volume/ghost part contributes `L'(phi)d`, and the generated
-/// additive launcher contributes `-C'(phi)d`.  Newton consequently solves `K delta = R` and tries
-/// `phi + delta`.  Interior coefficients are linear and reuse apply_laplacian; the generated
-/// boundary JVP first materializes direction ghosts from the nonlinear closure evaluated at
-/// @p iterate and its exact logical TimePoint.
-inline void apply_laplacian_jvp(const MultiFab& iterate, const MultiFab& direction,
-                                const Geometry& geom, const BCRec& bc, MultiFab& output,
-                                const CompiledFieldBoundaryKernel* kernel,
-                                const FieldBoundaryExecutionContext* context,
-                                MultiFab* direction_view = nullptr, const MultiFab* coef = nullptr,
-                                const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
-                                const MultiFab* eps_y = nullptr, const MultiFab* a_xy = nullptr,
-                                const MultiFab* a_yx = nullptr) {
-  MultiFab& view =
-      prepare_field_jvp_view(iterate, direction, direction_view, geom, bc, kernel, context);
-  apply_laplacian(view, geom, output, coef, eps, kappa, eps_y, a_xy, a_yx);
-  if (kernel != nullptr)
-    for (int face = 0; face < 4; ++face)
-      kernel->apply_jvp(face, iterate, direction, output, geom, *context);
-}
-
-namespace detail {
-// Centered finite-volume divergence of a cell-centered vector flux: the x-flux is read from
-// component @c cx of fx and the y-flux from component @c cy of fy:
-//   div(i,j) = (fx(i+1,j,cx) - fx(i-1,j,cx)) / (2 dx) + (fy(i,j+1,cy) - fy(i,j-1,cy)) / (2 dy),
-// second order, the exact inverse of the centered gradient (field_postprocess). Named functor
-// (and not an POPS_HD lambda) for the same reason as the other elliptic kernels (#93): it is
-// first-instantiated from an external TU (the compiled time-program .so) and an extended lambda
-// breaks the device kernel emission under nvcc. half_idx/half_idy = 1/(2 dx), 1/(2 dy).
-struct DivergenceKernel {
-  ConstArray4 fx, fy;
-  Array4 div;
-  Real half_idx, half_idy;
-  int cx, cy;
-  POPS_HD void operator()(int i, int j) const {
-    div(i, j) = (fx(i + 1, j, cx) - fx(i - 1, j, cx)) * half_idx +
-                (fy(i, j + 1, cy) - fy(i, j - 1, cy)) * half_idy;
-  }
-};
-}  // namespace detail
-
-// Centered FV divergence of a cell-centered vector flux into div_out (component 0):
-//   div = d fx/dx + d fy/dy, centered (the matching inverse of the centered gradient). The x-flux is
-// read from component @p cx of @p fx and the y-flux from component @p cy of @p fy, so the 2-component
-// output of the centered gradient (field_postprocess: d/dx in component 0, d/dy in component 1) can be
-// fed back as a SINGLE field passed for both arguments (apply_divergence(g, g, geom, out, 0, 1)) to
-// recover the 5-point Laplacian, or two distinct single-component fluxes with cx = cy = 0. Ghosts (1
-// layer) assumed filled by the caller. Mirrors apply_laplacian's structure (one local-fab loop, named
-// functor). Generated condensed Programs emit the metric-aware equivalent for their fused RHS.
-inline void apply_divergence(const MultiFab& fx, const MultiFab& fy, const Geometry& geom,
-                             MultiFab& div_out, int cx = 0, int cy = 0) {
-  const Real half_idx = Real(1) / (Real(2) * geom.dx());
-  const Real half_idy = Real(1) / (Real(2) * geom.dy());
-  for (int li = 0; li < div_out.local_size(); ++li) {
-    const ConstArray4 fxv = fx.fab(li).const_array();
-    const ConstArray4 fyv = fy.fab(li).const_array();
-    Array4 d = div_out.fab(li).array();
-    for_each_cell(div_out.box(li),
-                  detail::DivergenceKernel{fxv, fyv, d, half_idx, half_idy, cx, cy});
-  }
-}
-
-// res = f - div(A grad phi) on active cells, 0 on conductor cells.
-// a_xy/a_yx: off-diagonal coefficients (cf. apply_laplacian). nullptr => bit-identical.
-inline void poisson_residual(MultiFab& phi, const MultiFab& f, const Geometry& geom,
-                             const BCRec& bc, MultiFab& res, const MultiFab* mask = nullptr,
-                             const MultiFab* coef = nullptr, const MultiFab* eps = nullptr,
-                             const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr,
-                             const MultiFab* a_xy = nullptr, const MultiFab* a_yx = nullptr,
-                             const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
-                             const FieldBoundaryExecutionContext* boundary_context = nullptr,
-                             MultiFab* boundary_view = nullptr) {
-  MultiFab& operator_view =
-      prepare_field_residual_view(phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
-  const Real idx2 = Real(1) / (geom.dx() * geom.dx());
-  const Real idy2 = Real(1) / (geom.dy() * geom.dy());
-  const Real idx = Real(1) / geom.dx();
-  const Real idy = Real(1) / geom.dy();
-  for (int li = 0; li < operator_view.local_size(); ++li) {
-    const ConstArray4 p = operator_view.fab(li).const_array();
-    const ConstArray4 ff = f.fab(li).const_array();
-    Array4 r = res.fab(li).array();
-    const Box2D v = res.box(li);
-    const bool hm = mask != nullptr;
-    const ConstArray4 mk = hm ? mask->fab(li).const_array() : ConstArray4{};
-    const bool hc = coef != nullptr;
-    const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
-    const bool he = eps != nullptr;
-    const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
-    // eps_y==nullptr => isotropic: y faces read the same field as the x faces (eps_x).
-    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
-    const bool hk = kappa != nullptr;  // reaction term -kappa phi
-    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
-    const bool hxy = a_xy != nullptr;  // Axy cross half-term (x faces)
-    const bool hyx = a_yx != nullptr;  // Ayx cross half-term (y faces)
-    const ConstArray4 axy = hxy ? a_xy->fab(li).const_array() : ConstArray4{};
-    const ConstArray4 ayx = hyx ? a_yx->fab(li).const_array() : ConstArray4{};
-    for_each_cell(v,
-                  detail::PoissonResidualKernel{p,  ff, r,  idx2, idy2, idx, idy, hm,  mk,  hc,
-                                                cf, he, ep, ey,   hk,   ka,  hxy, hyx, axy, ayx});
-  }
-  if (boundary_kernel != nullptr)
-    for (int face = 0; face < 4; ++face)
-      boundary_kernel->add_residual(face, phi, res, geom, *boundary_context);
-}
-
-namespace detail {
-// Red-black Gauss-Seidel smoother on one color (gs_color). p is WRITTEN in place. Body identical to
-// the former lambda -> bit-identical. See the comment of the other kernels (#93) for the motivation
-// of the named functor.
-struct GsColorKernel {
-  Array4 p;
-  ConstArray4 view;
-  ConstArray4 ff;
-  Real idx2, idy2, diag0;
-  int color;
-  bool hm;
-  ConstArray4 mk;
-  bool hc;
-  ConstArray4 cf;
-  bool he;
-  ConstArray4 ep, ey;
-  bool hk;
-  ConstArray4 ka;
-  int ilo, ihi, jlo, jhi;
-  POPS_HD Real read(int i, int j) const {
-    return i >= ilo && i <= ihi && j >= jlo && j <= jhi ? p(i, j) : view(i, j);
-  }
-  POPS_HD void operator()(int i, int j) const {
-    if (((i + j) & 1) != color)
-      return;
-    if (hm && mk(i, j) == Real(0))
-      return;  // conductor: pins phi=0
-    Real off, diag;
-    if (he) {  // face permittivity (harmonic), with or without cut-cell
-      Real wxm, wxp, wym, wyp;
-      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
-      off =
-          wxp * read(i + 1, j) + wxm * read(i - 1, j) + wyp * read(i, j + 1) + wym * read(i, j - 1);
-      diag = wxm + wxp + wym + wyp;
-    } else if (
-        hc) {  // cut-cell stencil (Shortley-Weller); conductor neighbor = phi=0 on the circle
-      off = cf(i, j, 1) * read(i + 1, j) + cf(i, j, 0) * read(i - 1, j) +
-            cf(i, j, 3) * read(i, j + 1) + cf(i, j, 2) * read(i, j - 1);
-      diag = cf(i, j, 4);
-    } else {
-      off = (read(i + 1, j) + read(i - 1, j)) * idx2 + (read(i, j + 1) + read(i, j - 1)) * idy2;
-      diag = diag0;
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Real image = reaction * iterate(index, 0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = index;
+      Index<Dim> upper = index;
+      --lower[axis];
+      ++upper[axis];
+      image += (Real(2) * iterate(index, 0) - iterate(lower, 0) - iterate(upper, 0)) *
+               inverse_spacing_squared[axis];
     }
-    // Reaction term: the operator becomes div(eps grad phi) - kappa phi, so the
-    // diagonal gains +kappa (kappa >= 0 => more diagonally dominant, MG converges better).
-    p(i, j) = (off - ff(i, j)) / (diag + (hk ? ka(i, j) : Real(0)));
+    destination(index, 0) =
+        iterate(index, 0) + relaxation * inverse_diagonal * (right_hand_side(index, 0) - image);
   }
 };
 
-inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom, int color,
-                     const MultiFab* mask, const MultiFab* coef, const MultiFab* eps,
-                     const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr,
-                     const MultiFab* operator_view = nullptr) {
-  const Real idx2 = Real(1) / (geom.dx() * geom.dx());
-  const Real idy2 = Real(1) / (geom.dy() * geom.dy());
-  const Real diag0 = 2 * idx2 + 2 * idy2;
-  for (int li = 0; li < phi.local_size(); ++li) {
-    Array4 p = phi.fab(li).array();
-    const ConstArray4 view =
-        (operator_view == nullptr ? phi : *operator_view).fab(li).const_array();
-    const ConstArray4 ff = f.fab(li).const_array();
-    const Box2D v = phi.box(li);
-    const bool hm = mask != nullptr;
-    const ConstArray4 mk = hm ? mask->fab(li).const_array() : ConstArray4{};
-    const bool hc = coef != nullptr;
-    const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
-    const bool he = eps != nullptr;
-    const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
-    // eps_y==nullptr => isotropic: y faces read the same field as the x faces (eps_x).
-    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
-    const bool hk = kappa != nullptr;  // reaction term -kappa phi (Helmholtz / screened)
-    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
-    for_each_cell(v,
-                  GsColorKernel{p,  view, ff, idx2, idy2, diag0,   color,   hm,      mk,     hc, cf,
-                                he, ep,   ey, hk,   ka,   v.lo[0], v.hi[0], v.lo[1], v.hi[1]});
+template <int Dim, class LeftSpace, class RightSpace>
+void require_same_scalar_layout(const MultiFab<Dim, LeftSpace>& left,
+                                const MultiFab<Dim, RightSpace>& right,
+                                const char* operation) {
+  if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
+      left.local_rank() != right.local_rank() || left.ncomp() != 1 || right.ncomp() != 1)
+    throw std::invalid_argument(std::string(operation) +
+                                " requires one exact scalar ND field layout");
+}
+
+template <int Dim, class MemorySpace>
+void require_unit_halo(const MultiFab<Dim, MemorySpace>& field, const char* operation) {
+  for (int axis = 0; axis < Dim; ++axis)
+    if (field.ghosts()[axis] < 1)
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires at least one ghost cell on every axis");
+}
+
+template <int Dim>
+void inverse_spacing_squared(const Geometry<Dim>& geometry, Real (&result)[Dim]) {
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real spacing = geometry.spacing(axis);
+    if (!std::isfinite(static_cast<double>(spacing)) || !(spacing > Real(0)))
+      throw std::invalid_argument("Poisson operator requires finite positive spacing");
+    const Real inverse = Real(1) / spacing;
+    result[axis] = inverse * inverse;
   }
 }
+
 }  // namespace detail
 
-inline void gs_rb_sweep(MultiFab& phi, const MultiFab& f, const Geometry& geom, const BCRec& bc,
-                        const MultiFab* mask = nullptr, const MultiFab* coef = nullptr,
-                        const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
-                        const MultiFab* eps_y = nullptr,
-                        const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
-                        const FieldBoundaryExecutionContext* boundary_context = nullptr,
-                        MultiFab* boundary_view = nullptr) {
-  MultiFab& red_view =
-      prepare_field_smoother_view(phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
-  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa, eps_y,
-                   &red_view);  // red (GPU kernel)
-  MultiFab& black_view =
-      prepare_field_smoother_view(phi, boundary_view, geom, bc, boundary_kernel, boundary_context);
-  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa, eps_y, &black_view);  // black
+/// Copy valid scalar cells between fields retaining the same exact ranked layout.
+template <int Dim, class SourceSpace, class DestinationSpace>
+void copy_scalar_valid(const MultiFab<Dim, SourceSpace>& source,
+                       MultiFab<Dim, DestinationSpace>& destination) {
+  detail::require_same_scalar_layout(source, destination, "copy_scalar_valid");
+  for (std::size_t local = 0; local < source.local_size(); ++local)
+    for_each_cell(source.box(local), detail::CopyScalarKernel<Dim>{
+                                         destination.fab(local).view(), source.fab(local).view()});
+  Kokkos::fence();
 }
 
-inline void gs_smooth(MultiFab& phi, const MultiFab& f, const Geometry& geom, const BCRec& bc,
-                      int nsweeps, const MultiFab* mask = nullptr, const MultiFab* coef = nullptr,
-                      const MultiFab* eps = nullptr, const MultiFab* kappa = nullptr,
-                      const MultiFab* eps_y = nullptr,
-                      const CompiledFieldBoundaryKernel* boundary_kernel = nullptr,
-                      const FieldBoundaryExecutionContext* boundary_context = nullptr,
-                      MultiFab* boundary_view = nullptr) {
-  for (int s = 0; s < nsweeps; ++s)
-    gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa, eps_y, boundary_kernel, boundary_context,
-                boundary_view);
+/// Add one constant to every valid scalar cell.
+template <int Dim, class MemorySpace>
+void add_scalar_valid(MultiFab<Dim, MemorySpace>& values, Real increment) {
+  if (values.ncomp() != 1)
+    throw std::invalid_argument("add_scalar_valid requires a scalar field");
+  for (std::size_t local = 0; local < values.local_size(); ++local)
+    for_each_cell(values.box(local),
+                  detail::AddScalarKernel<Dim>{values.fab(local).view(), increment});
+  Kokkos::fence();
 }
 
-namespace detail {
-// Pins phi=0 in the conductor cells (mask==0). Named functor (#93); body identical.
-struct ZeroConductorKernel {
-  Array4 p;
-  ConstArray4 mk;
-  POPS_HD void operator()(int i, int j) const {
-    if (mk(i, j) == Real(0))
-      p(i, j) = 0;
+/// Apply ``A u = -laplacian(u) + reaction*u`` after the caller has filled input ghosts.
+template <int Dim, class InputSpace, class OutputSpace>
+void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
+                                  const Geometry<Dim>& geometry,
+                                  MultiFab<Dim, OutputSpace>& output,
+                                  Real reaction = Real(0)) {
+  detail::require_same_scalar_layout(input, output, "apply_poisson_operator_valid");
+  detail::require_unit_halo(input, "apply_poisson_operator_valid");
+  if (!std::isfinite(static_cast<double>(reaction)) || reaction < Real(0))
+    throw std::invalid_argument("Poisson reaction must be finite and non-negative");
+  Real inverse_spacing_squared[Dim]{};
+  detail::inverse_spacing_squared(geometry, inverse_spacing_squared);
+  for (std::size_t local = 0; local < output.local_size(); ++local) {
+    detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(),
+                                                input.fab(local).view(), {}, reaction};
+    for (int axis = 0; axis < Dim; ++axis)
+      kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+    for_each_cell(output.box(local), kernel);
   }
-};
-}  // namespace detail
-
-// Forces phi=0 in the conductor cells (mask==0).
-inline void zero_conductor(MultiFab& phi, const MultiFab& mask) {
-  for (int li = 0; li < phi.local_size(); ++li) {
-    Array4 p = phi.fab(li).array();
-    const ConstArray4 mk = mask.fab(li).const_array();
-    const Box2D v = phi.box(li);
-    for_each_cell(v, detail::ZeroConductorKernel{p, mk});
-  }
+  Kokkos::fence();
 }
 
-}  // namespace pops
+/// Compute ``rhs - A u`` after the caller has filled iterate ghosts.
+template <int Dim, class IterateSpace, class RhsSpace, class ResidualSpace>
+void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
+                            const MultiFab<Dim, RhsSpace>& right_hand_side,
+                            const Geometry<Dim>& geometry,
+                            MultiFab<Dim, ResidualSpace>& residual,
+                            Real reaction = Real(0)) {
+  detail::require_same_scalar_layout(iterate, right_hand_side, "poisson_residual_valid");
+  detail::require_same_scalar_layout(iterate, residual, "poisson_residual_valid");
+  detail::require_unit_halo(iterate, "poisson_residual_valid");
+  if (!std::isfinite(static_cast<double>(reaction)) || reaction < Real(0))
+    throw std::invalid_argument("Poisson reaction must be finite and non-negative");
+  Real inverse_spacing_squared[Dim]{};
+  detail::inverse_spacing_squared(geometry, inverse_spacing_squared);
+  for (std::size_t local = 0; local < residual.local_size(); ++local) {
+    detail::ResidualKernel<Dim> kernel{residual.fab(local).view(),
+                                       iterate.fab(local).view(),
+                                       right_hand_side.fab(local).view(), {}, reaction};
+    for (int axis = 0; axis < Dim; ++axis)
+      kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+    for_each_cell(residual.box(local), kernel);
+  }
+  Kokkos::fence();
+}
+
+/// Submit one allocation-free damped-Jacobi update after iterate ghosts are valid.
+template <int Dim, class IterateSpace, class RhsSpace, class DestinationSpace>
+void damped_jacobi_update_valid(const MultiFab<Dim, IterateSpace>& iterate,
+                                const MultiFab<Dim, RhsSpace>& right_hand_side,
+                                const Geometry<Dim>& geometry,
+                                MultiFab<Dim, DestinationSpace>& destination,
+                                Real relaxation = Real(2) / Real(3),
+                                Real reaction = Real(0)) {
+  detail::require_same_scalar_layout(iterate, right_hand_side, "damped_jacobi_update_valid");
+  detail::require_same_scalar_layout(iterate, destination, "damped_jacobi_update_valid");
+  detail::require_unit_halo(iterate, "damped_jacobi_update_valid");
+  if (!std::isfinite(static_cast<double>(relaxation)) || !(relaxation > Real(0)) ||
+      !(relaxation < Real(2)) || !std::isfinite(static_cast<double>(reaction)) ||
+      reaction < Real(0))
+    throw std::invalid_argument("damped Jacobi controls are invalid");
+  Real inverse_spacing_squared[Dim]{};
+  detail::inverse_spacing_squared(geometry, inverse_spacing_squared);
+  Real diagonal = reaction;
+  for (int axis = 0; axis < Dim; ++axis)
+    diagonal += Real(2) * inverse_spacing_squared[axis];
+  const Real inverse_diagonal = Real(1) / diagonal;
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    detail::DampedJacobiKernel<Dim> kernel{
+        destination.fab(local).view(), iterate.fab(local).view(),
+        right_hand_side.fab(local).view(), {}, inverse_diagonal, relaxation, reaction};
+    for (int axis = 0; axis < Dim; ++axis)
+      kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+    for_each_cell(destination.box(local), kernel);
+  }
+  Kokkos::fence();
+}
+
+}  // namespace pops::elliptic::mg
