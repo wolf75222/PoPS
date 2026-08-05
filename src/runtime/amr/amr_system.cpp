@@ -1325,7 +1325,7 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
     const std::vector<std::string>& component_roles,
     const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
     PreparedBoundaryReadDependencies read_dependencies,
-    std::vector<PeriodicIdentification2D> periodic_identifications,
+    std::vector<PeriodicIdentification<2>> periodic_identifications,
     const std::vector<std::string>& face_representations,
     const std::vector<std::string>& face_converter_identities,
     const std::vector<std::vector<std::string>>& face_analytic_opcodes,

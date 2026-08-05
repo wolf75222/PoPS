@@ -1,4 +1,4 @@
-// ADC-632: RUNTIME-PRIVATE definition of System::Impl and the System-facade helpers, hoisted out
+// ADC-632: RUNTIME-PRIVATE definition of System<kNativeDimension>::Impl and the System-facade helpers, hoisted out
 // of system.cpp so the responsibility-split sibling TUs (system_install / system_fields /
 // system_io / system_profiling / system_program.cpp) share ONE Impl definition. Impl is binding-
 // internal (NOT public API) -> it stays under src/runtime, not include/pops. The formerly
@@ -151,7 +151,7 @@ inline EffectiveBlockOptions make_system_block_options(
   return out;
 }
 
-struct System::Impl {
+struct System<kNativeDimension>::Impl {
   // BLOCK MANAGEMENT extracted into SystemBlockStore (Batch B.3, last P0 extraction from the god-class):
   // the block struct (formerly Species, renamed BlockState), the ordered registry (blocks_.blocks), the
   // by-name access (index / find) and the state marshaling (copy_comp0 / copy_state / write_state) now
@@ -173,7 +173,7 @@ struct System::Impl {
   // and the block closures
   // capture a stable `&aux == &domain_.aux` -> those headers and the MockImpl stay byte-unchanged.
   pops::runtime::system::SystemDomain domain_;
-  SystemConfig& cfg = domain_.cfg;
+  SystemConfig<kNativeDimension>& cfg = domain_.cfg;
   Geometry& geom = domain_.geom;
   bool& polar_ = domain_.polar_;
   PolarGeometry& pgeom_ = domain_.pgeom_;
@@ -282,13 +282,13 @@ struct System::Impl {
 
   // Geometry/layout helpers moved to SystemDomain (ADC-578); thin static forwarders keep the
   // Impl::polar_nr(cfg) / Impl::polar_ntheta(cfg) call sites in this TU unchanged.
-  static int polar_nr(const SystemConfig& c) {
+  static int polar_nr(const SystemConfig<kNativeDimension>& c) {
     return pops::runtime::system::SystemDomain::polar_nr(c);
   }
-  static int polar_ntheta(const SystemConfig& c) {
+  static int polar_ntheta(const SystemConfig<kNativeDimension>& c) {
     return pops::runtime::system::SystemDomain::polar_ntheta(c);
   }
-  static Box2D index_domain(const SystemConfig& c) {
+  static Box2D index_domain(const SystemConfig<kNativeDimension>& c) {
     return pops::runtime::system::SystemDomain::index_domain(c);
   }
   // Number of cells of a cell-defined field (n*n Cartesian / nr*ntheta polar), for the
@@ -300,7 +300,7 @@ struct System::Impl {
   // fields_ / program_driver_ back-pointers read a fully-built layout. The reference aliases above
   // then bind to domain_.*, and fields_(this) / program_driver_(this) capture Impl (bit-identical
   // addresses).
-  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), program_driver_(this) {}
+  explicit Impl(const SystemConfig<kNativeDimension>& c) : domain_(c), fields_(this), program_driver_(this) {}
 
   // Elliptic solve + field derivation (Batch B). OWNS the solvers (ell_/pell_), the Poisson
   // config, the coefficient fields and the aux application buffers (B_z, T_e). owner_ = this: the
@@ -358,7 +358,7 @@ struct System::Impl {
   // kTeComp (canonical T_e component) and apply_te (population of T_e = p/rho of the source block)
   // EXTRACTED into fields_ (SystemFieldSolver): T_e is part of the aux field application.
 
-  static BCRec make_bc(const SystemConfig& c) {
+  static BCRec make_bc(const SystemConfig<kNativeDimension>& c) {
     BCRec b;  // periodic by default
     if (c.geometry == "polar") {
       // POLAR: r (dir 0, xlo/xhi) carries a PHYSICAL BC (wall / free outflow, Foextrap); theta
@@ -597,7 +597,7 @@ struct System::Impl {
     const int gnx = dom.nx(), gny = dom.ny();
     const std::size_t need = static_cast<std::size_t>(ncomp) * gnx * gny;
     if (in.size() != need)
-      throw std::runtime_error("System::set_state : size != ncomp*nr*ntheta (multi-box theta)");
+      throw std::runtime_error("System<kNativeDimension>::set_state : size != ncomp*nr*ntheta (multi-box theta)");
     for (int li = 0; li < mf.local_size(); ++li) {
       Array4 u = mf.fab(li).array();
       const Box2D v = mf.box(li);
@@ -810,13 +810,13 @@ struct System::Impl {
 };
 
 // Config / geometry / lifecycle guards (formerly anonymous-namespace, now header-inline).
-// Geometry is carried only by the internal config (CartesianGrid -> SystemConfig / advanced
+// Geometry is carried only by the internal config (CartesianGrid -> SystemConfig<kNativeDimension> / advanced
 // pops.mesh.PolarMesh). "cartesian" is the historical bit-identical kernel path; "polar" is the
 // global ring (r, theta) wired into System.step: polar transport (assemble_rhs_polar) +
 // polar Poisson (PolarPoissonSolver) + aux in local basis (e_r, e_theta). We validate HERE the radial
 // bounds of the ring (r_max > r_min >= 0); pops.mesh.PolarMesh already validates them, but a caller
-// that builds SystemConfig internally must also be protected. Any other token is an error.
-inline void check_geometry(const SystemConfig& c) {
+// that builds SystemConfig<kNativeDimension> internally must also be protected. Any other token is an error.
+inline void check_geometry(const SystemConfig<kNativeDimension>& c) {
   if (c.geometry == "cartesian")
     return;
   if (c.geometry == "polar") {
@@ -838,7 +838,7 @@ inline void check_geometry(const SystemConfig& c) {
     // theta bands -- we require 1 <= theta_boxes <= ntheta (at least one azimuthal cell per band) AND
     // theta_boxes DIVIDES ntheta (EQUAL bands: the per-box split must not depend on the remainder,
     // and the periodic ring stitches back cleanly). pops.mesh.PolarMesh already validates on the
-    // Python side; a caller that builds SystemConfig internally is protected here.
+    // Python side; a caller that builds SystemConfig<kNativeDimension> internally is protected here.
     const int nth = c.ntheta > 0 ? c.ntheta : c.n;
     if (c.theta_boxes < 1)
       throw std::runtime_error(
@@ -860,14 +860,14 @@ inline void check_geometry(const SystemConfig& c) {
                            "advanced pops.mesh.PolarMesh descriptor");
 }
 
-// UPSTREAM configuration guard (ADC-299): validate the SystemConfig invariants BEFORE constructing
+// UPSTREAM configuration guard (ADC-299): validate the SystemConfig<kNativeDimension> invariants BEFORE constructing
 // Impl. Impl's constructor already derives the geometry, the box array, the distribution mapping and
 // allocates the shared aux MultiFab -- all sized from c.n. An invalid n / L does not crash there, it
 // silently builds a DEGENERATE grid (empty box, dx = L/0 = +inf or negative dx) that only surfaces
 // far downstream; we reject it here so the error names the real cause. n / L were wholly unchecked on
 // the Cartesian path (check_geometry returns immediately for "cartesian"); the geometry token and the
 // polar ring / nr / theta_boxes invariants stay in check_geometry, called last.
-inline void validate_system_config(const SystemConfig& c) {
+inline void validate_system_config(const SystemConfig<kNativeDimension>& c) {
   if (c.n < 1)
     throw std::runtime_error("System : n >= 1 required (cells per direction) ; got n = " +
                              std::to_string(c.n));
@@ -893,7 +893,7 @@ inline void require_assembling(const pops::runtime::system::SystemLifecycle& lif
                                const char* what) {
   if (lifecycle.frozen())
     throw std::runtime_error(
-        std::string("System::") + what +
+        std::string("System<kNativeDimension>::") + what +
         ": the composition is frozen once pops.bind completes (runtime lifecycle 'bound'); declare "
         "it on the pops.Case (blocks / field problems / AMR layout / source stage / refinement / "
         "solver routes / aux layout / installed Program) and lower it with pops.compile(...) + "

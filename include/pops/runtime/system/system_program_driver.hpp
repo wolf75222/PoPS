@@ -35,21 +35,21 @@
 /// - PER-BLOCK CFL FORMULA (substeps-aware, post-#121): dt <= cfl * h * substeps_b / (stride_b * w_b);
 ///   the global dt is the min over the evolving blocks.
 ///
-/// Since System::Impl stays PRIVATE to python/system.cpp, this helper is a TEMPLATE parameterized on the
+/// Since System<kNativeDimension>::Impl stays PRIVATE to python/system.cpp, this helper is a TEMPLATE parameterized on the
 /// real Impl type (same technique as system_field_solver / native_loader): python/system.cpp instantiates
-/// it with System::Impl after defining Impl. owner_ is an Impl* (the helper lifetime is subordinate to
-/// that of Impl). System::step and step_cfl delegate here after the facade's fail-before-mutation guard.
+/// it with System<kNativeDimension>::Impl after defining Impl. owner_ is an Impl* (the helper lifetime is subordinate to
+/// that of Impl). System<kNativeDimension>::step and step_cfl delegate here after the facade's fail-before-mutation guard.
 
 namespace pops::runtime::system {
 
 /// SystemProgramDriver<Impl>: see the contract above. All methods are MEMBERS because they share
 /// Program cadence and stability-bound evaluation; accesses to the SHARED state of Impl go through
 /// owner_-> verbatim.
-/// Templated on Impl to stay free of any dependency on the (private) definition of System::Impl.
+/// Templated on Impl to stay free of any dependency on the (private) definition of System<kNativeDimension>::Impl.
 template <class Impl>
 class SystemProgramDriver {
  public:
-  /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
+  /// @param owner back-pointer to System<kNativeDimension>::Impl (lifetime subordinate to that of Impl).
   explicit SystemProgramDriver(Impl* owner) : owner_(owner) {}
 
   /// Step bound from PER-CELL COUPLED FREQUENCIES (CoupledSource.frequency with an Expr,
@@ -120,7 +120,7 @@ class SystemProgramDriver {
                      : std::min(P->geom.dx(), P->geom.dy());
   }
 
-  /// GLOBAL step bounds (System::add_dt_bound): multi-block coupling, Schur/Poisson, AMR/scheduler.
+  /// GLOBAL step bounds (System<kNativeDimension>::add_dt_bound): multi-block coupling, Schur/Poisson, AMR/scheduler.
   /// One HOST evaluation per step and per bound; <= 0 or non-finite = does not constrain this step
   /// (neutralized to +inf BEFORE the global min). ALL_REDUCE_MIN mandatory: the callback is
   /// evaluated PER RANK (it may read a rank-local state); without the global min each rank would
@@ -173,7 +173,7 @@ class SystemProgramDriver {
   /// One macro-step of length @p dt through the installed whole-system Program.
   void step(double dt) {
     Impl* P = owner_;
-    P->program_.require_step_installed("System::step");
+    P->program_.require_step_installed("System<kNativeDimension>::step");
     run_program_cadence(dt);
   }
 
@@ -192,7 +192,7 @@ class SystemProgramDriver {
   ///   - the CFL speed itself can be the declared STABILITY speed (HasStabilitySpeed
   ///     trait): s.max_speed is then wired onto stability_speed (cf. make_max_speed).
   /// Then the GLOBAL bounds (P->dt_bounds_: multi-block coupling, Schur/Poisson, AMR/scheduler,
-  /// set by System::add_dt_bound): dt <= fn() each, one HOST evaluation per step (no per-cell
+  /// set by System<kNativeDimension>::add_dt_bound): dt <= fn() each, one HOST evaluation per step (no per-cell
   /// callback). A block / a system WITHOUT optional bounds keeps a step STRICTLY identical to
   /// history (empty functions are not queried). The ACTIVE bound of the last step is consultable via
   /// last_dt_bound() ("transport:<block>", "source_frequency:<block>",
@@ -204,7 +204,7 @@ class SystemProgramDriver {
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0) {
     Impl* P = owner_;
-    P->program_.require_step_installed("System::step_cfl");
+    P->program_.require_step_installed("System<kNativeDimension>::step_cfl");
     SolveReport field_report;
     std::exception_ptr field_error;
     long field_failed_local = 0;
@@ -217,15 +217,15 @@ class SystemProgramDriver {
     if (all_reduce_max(field_failed_local) != 0) {
       if (n_ranks() == 1 && field_error != nullptr)
         std::rethrow_exception(field_error);
-      throw std::runtime_error("System::step_cfl field solver failed on at least one MPI rank");
+      throw std::runtime_error("System<kNativeDimension>::step_cfl field solver failed on at least one MPI rank");
     }
     const long malformed_local =
         solve_report_is_publishable(field_report, std::numeric_limits<int>::max()) ? 0L : 1L;
     if (all_reduce_max(malformed_local) != 0)
-      throw std::runtime_error("System::step_cfl field solver published a malformed SolveReport");
+      throw std::runtime_error("System<kNativeDimension>::step_cfl field solver published a malformed SolveReport");
     ExactSolveReportConsensusScratch field_report_consensus;
     if (!field_report_consensus.agrees(field_report))
-      throw std::runtime_error("System::step_cfl field solver report differs between MPI ranks");
+      throw std::runtime_error("System<kNativeDimension>::step_cfl field solver report differs between MPI ranks");
 
     SolveOutcome field_outcome = SolveOutcome::collective_world(std::move(field_report));
     const SolveConsumption field_action =
@@ -239,7 +239,7 @@ class SystemProgramDriver {
       if (field_action == SolveConsumption::kRejectAttempt)
         throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
                                                     field_report.reason);
-      throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+      throw std::runtime_error(std::string("System<kNativeDimension>::step_cfl field evaluation failed: status=") +
                                field_report.status_name() + " action=" +
                                field_report.action_name() + " reason=" + field_report.reason);
     }
@@ -315,11 +315,11 @@ class SystemProgramDriver {
     // this step, global all_reduce_max, dt <= cfl / max(mu). Same reason "coupled_source:<label>" as the
     // constant. No per-cell source -> no-op (bit-identical).
     apply_coupled_freq_expr_bounds(cfl, dt, &reason);
-    // GLOBAL bounds (System::add_dt_bound): all_reduce_min over the registered bounds, tracking the
+    // GLOBAL bounds (System<kNativeDimension>::add_dt_bound): all_reduce_min over the registered bounds, tracking the
     // winning reason (see apply_global_dt_bounds for the MPI deadlock-safety rationale).
     apply_global_dt_bounds(dt, &reason);
     // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When the installed Program
-    // exported one (System::install_program stored program_.dt_bound_), it TIGHTENS dt to the min of the
+    // exported one (System<kNativeDimension>::install_program stored program_.dt_bound_), it TIGHTENS dt to the min of the
     // native CFL dt above and the program's own bound. No program / no bound -> the closure is empty and
     // dt is the native CFL UNCHANGED. The native CFL logic above is left intact: this only reduces dt.
     // MPI-SAFE: program_.dt_bound_ runs the SAME collective reduction (block_max_speed / reductions) on
@@ -338,7 +338,7 @@ class SystemProgramDriver {
       reason = "degenerate";
     }
     if (std::isnan(max_dt) || max_dt <= 0.0)
-      throw std::invalid_argument("System::step_cfl max_dt must be positive or +infinity");
+      throw std::invalid_argument("System<kNativeDimension>::step_cfl max_dt must be positive or +infinity");
     if (std::isfinite(max_dt)) {
       if (max_dt < dt) {
         dt = max_dt;
@@ -346,9 +346,9 @@ class SystemProgramDriver {
       }
     }
     if (std::isnan(min_dt) || min_dt < 0.0)
-      throw std::invalid_argument("System::step_cfl min_dt must be finite and >= 0");
+      throw std::invalid_argument("System<kNativeDimension>::step_cfl min_dt must be finite and >= 0");
     if (dt < min_dt)
-      throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
+      throw std::runtime_error("System<kNativeDimension>::step_cfl stability bound is below declared min_dt");
     last_dt_reason_ = std::move(reason);
     // CFL remains a native bound calculation, but the accepted advance is exclusively the Program.
     run_program_cadence(dt);
@@ -357,7 +357,7 @@ class SystemProgramDriver {
 
   /// Name of the ACTIVE bound (the one that fixed dt) of the last step_cfl: "transport:<block>",
   /// "source_frequency:<block>", "stability_dt:<block>", "global:<label>", "degenerate", or "" if
-  /// no step_cfl has run yet. Diagnostic (System::last_dt_bound).
+  /// no step_cfl has run yet. Diagnostic (System<kNativeDimension>::last_dt_bound).
   const std::string& last_dt_reason() const { return last_dt_reason_; }
   void restore_last_dt_reason(std::string reason) { last_dt_reason_ = std::move(reason); }
 

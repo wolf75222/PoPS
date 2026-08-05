@@ -3,7 +3,7 @@
 // header system_impl.hpp; the responsibility split (install / fields / io / profiling / program)
 // moves the remaining method bodies into sibling TUs that all include system_impl.hpp. This file
 // keeps: abi_key, the ctor/dtor/move, mark_bound / lifecycle_state, and the thin step forwards.
-#include "system_impl.hpp"  // ADC-632: System::Impl + shared facade helpers (runtime-private)
+#include "system_impl.hpp"  // ADC-632: System<kNativeDimension>::Impl + shared facade helpers (runtime-private)
 
 // native_loader.hpp templates instantiate on Impl; included AFTER system_impl.hpp so the Impl
 // definition is complete (the historical "templates instantiated lower down" ordering, per-TU).
@@ -18,53 +18,53 @@ POPS_EXPORT std::string abi_key() {
 }
 
 // Convenience static method (Python binding + add_native_block): delegates to the module's free key.
-std::string System::abi_key() {
+std::string System<kNativeDimension>::abi_key() {
   return pops::abi_key();
 }
 
-System::System(const SystemConfig& c) {
+System<kNativeDimension>::System(const SystemConfig<kNativeDimension>& c) {
   validate_system_config(c);  // BEFORE any allocation/derivation (Impl builds geom/ba/dm/aux)
   p_ = std::make_unique<Impl>(c);
 }
-System::~System() = default;
-System::System(System&&) noexcept = default;
-System& System::operator=(System&&) noexcept = default;
+System<kNativeDimension>::~System() = default;
+System<kNativeDimension>::System(System&&) noexcept = default;
+System& System<kNativeDimension>::operator=(System&&) noexcept = default;
 
 // Program cadence and native CFL-bound evaluation live in program_driver_. The public facade keeps
 // the accepted-step transaction and profiling boundary.
-void System::step(double dt) {
-  p_->program_.require_step_installed("System::step");
+void System<kNativeDimension>::step(double dt) {
+  p_->program_.require_step_installed("System<kNativeDimension>::step");
   p_->program_.begin_step_projection_report();
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
   p_->execute_step_transaction([&] { p_->program_driver_.step(dt); });
 }
-void System::advance(double dt, int nsteps) {
-  p_->program_.require_step_installed("System::advance");
+void System<kNativeDimension>::advance(double dt, int nsteps) {
+  p_->program_.require_step_installed("System<kNativeDimension>::advance");
   for (int i = 0; i < nsteps; ++i)
     step(dt);
 }
-void System::begin_step_transaction() {
+void System<kNativeDimension>::begin_step_transaction() {
   if (p_->external_step_transaction_)
-    throw std::runtime_error("System::begin_step_transaction: transaction already active");
+    throw std::runtime_error("System<kNativeDimension>::begin_step_transaction: transaction already active");
   p_->external_step_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
   p_->external_step_transaction_committed_ = false;
 }
-void System::commit_step_transaction() {
+void System<kNativeDimension>::commit_step_transaction() {
   if (!p_->external_step_transaction_)
-    throw std::runtime_error("System::commit_step_transaction: no active transaction");
+    throw std::runtime_error("System<kNativeDimension>::commit_step_transaction: no active transaction");
   if (p_->external_step_transaction_committed_)
-    throw std::runtime_error("System::commit_step_transaction: transaction already committed");
+    throw std::runtime_error("System<kNativeDimension>::commit_step_transaction: transaction already committed");
   p_->external_step_transaction_committed_ = true;
 }
-std::map<std::string, double> System::step_change_l2() const {
+std::map<std::string, double> System<kNativeDimension>::step_change_l2() const {
   if (!p_->external_step_transaction_)
-    throw std::runtime_error("System::step_change_l2 requires an active external step transaction");
+    throw std::runtime_error("System<kNativeDimension>::step_change_l2 requires an active external step transaction");
   if (p_->polar_)
-    throw std::runtime_error("System::step_change_l2 does not yet define the polar cell measure");
+    throw std::runtime_error("System<kNativeDimension>::step_change_l2 does not yet define the polar cell measure");
   const auto& previous = p_->external_step_transaction_->states;
   if (previous.size() != p_->sp.size())
-    throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
+    throw std::runtime_error("System<kNativeDimension>::step_change_l2 snapshot composition mismatch");
   RelativeCellMeasure measure;
   if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
     measure.active_cells = &p_->domain_mask_;
@@ -80,21 +80,21 @@ std::map<std::string, double> System::step_change_l2() const {
   }
   return result;
 }
-void System::finalize_step_transaction() {
+void System<kNativeDimension>::finalize_step_transaction() {
   if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
-    throw std::runtime_error("System::finalize_step_transaction: no committed transaction");
+    throw std::runtime_error("System<kNativeDimension>::finalize_step_transaction: no committed transaction");
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
-void System::rollback_step_transaction() {
+void System<kNativeDimension>::rollback_step_transaction() {
   if (!p_->external_step_transaction_)
-    throw std::runtime_error("System::rollback_step_transaction: no active transaction");
+    throw std::runtime_error("System<kNativeDimension>::rollback_step_transaction: no active transaction");
   p_->external_step_transaction_->restore(*p_);
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
-double System::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
-  p_->program_.require_step_installed("System::step_cfl");
+double System<kNativeDimension>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+  p_->program_.require_step_installed("System<kNativeDimension>::step_cfl");
   p_->program_.begin_step_projection_report();
   return p_->execute_step_transaction(
       [&] { return p_->program_driver_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
@@ -102,7 +102,7 @@ double System::step_cfl(double cfl, double speed_floor, double max_dt, double mi
 
 // System clock (IO v1, audit wave 2): macro_step is REQUIRED by the restart (the
 // hold-then-catch-up stride cadence reads macro_step % stride; t alone is not enough).
-int System::macro_step() const {
+int System<kNativeDimension>::macro_step() const {
   return p_->macro_step_;
 }
 
@@ -114,7 +114,7 @@ int System::macro_step() const {
 // it needs no extra state (and SystemProgramDriver never reads lifecycle_ -> no MockImpl impact). The new
 // checkpointed / finalized phases (SystemLifecycle) are reachable only through explicit transitions
 // with no current caller, so the observable strings above are preserved bit-for-bit.
-void System::mark_bound() {
+void System<kNativeDimension>::mark_bound() {
   if (p_->lifecycle_.frozen())
     p_->lifecycle_.to_bound();  // raises the canonical second-bind refusal before any collective
   // All resolved field plans have now been installed and no named backend has been
@@ -123,19 +123,19 @@ void System::mark_bound() {
   p_->fields_.require_field_plan_consensus();
   if (!p_->block_state_identities_.empty() && p_->block_state_identities_.size() != p_->sp.size())
     throw std::runtime_error(
-        "System::mark_bound: block state routes do not exactly cover materialized blocks");
+        "System<kNativeDimension>::mark_bound: block state routes do not exactly cover materialized blocks");
   for (const auto& block : p_->sp)
     if (!p_->block_state_identities_.empty() &&
         (block.state_identity.empty() ||
          p_->block_state_identities_.find(block.name) == p_->block_state_identities_.end()))
       throw std::runtime_error(
-          "System::mark_bound: materialized block lacks its exact state route");
+          "System<kNativeDimension>::mark_bound: materialized block lacks its exact state route");
   for (const auto& [name, plan] : p_->boundary_plans_) {
     auto found = std::find_if(p_->sp.begin(), p_->sp.end(),
                               [&name](const Impl::Species& block) { return block.name == name; });
     if (found == p_->sp.end())
       throw std::runtime_error(
-          "System::mark_bound: prepared boundary plan references unknown block '" + name + "'");
+          "System<kNativeDimension>::mark_bound: prepared boundary plan references unknown block '" + name + "'");
     const SpatialProviderGeometry geometry = p_->geometry_mode_ == GeometryMode::None
                                                  ? found->base_spatial_geometry
                                                  : spatial_provider_geometry(p_->geometry_mode_);
@@ -145,27 +145,27 @@ void System::mark_bound() {
     if (plan->requires_characteristic_no_inflow() &&
         !supports(SpatialProviderOperation::CharacteristicNoInflow))
       throw std::runtime_error(
-          "System::mark_bound: block '" + name +
+          "System<kNativeDimension>::mark_bound: block '" + name +
           "' has characteristic no-inflow without a qualified spatial provider");
     if (plan->has_component_boundaries() &&
         !supports(SpatialProviderOperation::BoundaryLinearization))
       throw std::runtime_error(
-          "System::mark_bound: block '" + name +
+          "System<kNativeDimension>::mark_bound: block '" + name +
           "' has a native boundary component without a geometry-aware provider");
     if (plan->ncomp() != found->ncomp)
       throw std::runtime_error(
-          "System::mark_bound: prepared boundary component count differs from block '" + name +
+          "System<kNativeDimension>::mark_bound: prepared boundary component count differs from block '" + name +
           "'");
     const auto axis_periodicity = plan->axis_aligned_periodicity();
     if (axis_periodicity) {
       if (!same_periodicity(*axis_periodicity, p_->per_))
         throw std::runtime_error(
-            "System::mark_bound: prepared boundary plan periodicity disagrees with the domain "
+            "System<kNativeDimension>::mark_bound: prepared boundary plan periodicity disagrees with the domain "
             "topology for block '" +
             name + "'");
     } else if (p_->per_.x || p_->per_.y) {
       throw std::runtime_error(
-          "System::mark_bound: an axis-permuted boundary plan cannot be combined with an "
+          "System<kNativeDimension>::mark_bound: an axis-permuted boundary plan cannot be combined with an "
           "axis-periodic domain topology for block '" +
           name + "'");
     }
@@ -182,7 +182,7 @@ void System::mark_bound() {
   }
   p_->lifecycle_.to_bound();  // Assembling -> Bound; throws the same message on a second bind
 }
-std::string System::lifecycle_state() const {
+std::string System<kNativeDimension>::lifecycle_state() const {
   // "running" stays DERIVED from the macro-step counter (the stepper never touches lifecycle_), so
   // the observable three strings are unchanged; the new checkpointed / finalized states surface only
   // when explicitly transitioned (no current caller).
@@ -191,10 +191,10 @@ std::string System::lifecycle_state() const {
 // SCHEDULER VALUE CACHE (ADC-458): the System-owned CacheManager every ProgramContext forwards to. The
 // .so resolves this across the dlopen boundary (POPS_EXPORT), so the step closure's cache_store_aux /
 // cache_should_update reach the SAME manager the checkpoint serializes.
-POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() {
+POPS_EXPORT pops::runtime::program::CacheManager& System<kNativeDimension>::program_cache() {
   return p_->program_.cache_;
 }
-int System::nx() const {
+int System<kNativeDimension>::nx() const {
   return p_->cfg.n;
 }
 // SLOW axis of the field (rows of the (ny, nx) array). We read it from the INDEX domain (dom = nx() x ny()),
@@ -202,21 +202,21 @@ int System::nx() const {
 // UNCHANGED); polar dom = nr x ntheta -> nx() == nr (fast, i), ny() == ntheta (slow, j). It is this
 // dimension that sizes the numpy array on the bindings side: a polar field has nx()*ny() = nr*ntheta
 // values, and with nr != ntheta the square reshape (nx, nx) overflows the buffer (teardown bug).
-int System::ny() const {
+int System<kNativeDimension>::ny() const {
   return p_->dom.ny();
 }
-double System::time() const {
+double System<kNativeDimension>::time() const {
   return p_->t;
 }
-int System::n_species() const {
+int System<kNativeDimension>::n_species() const {
   return p_->blocks_.size();
 }
-std::vector<std::string> System::block_names() const {
+std::vector<std::string> System<kNativeDimension>::block_names() const {
   // SINGLE block registry (store), populated by the native install paths.
   return p_->blocks_.names();
 }
 
-EffectiveOptionsReport System::effective_options_report() const {
+EffectiveOptionsReport System<kNativeDimension>::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "system";
   report.topology.periodic_x = p_->per_.x;

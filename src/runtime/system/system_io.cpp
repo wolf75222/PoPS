@@ -5,7 +5,7 @@
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include <cmath>
 
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include "system_impl.hpp"  // ADC-632: shared System<kNativeDimension>::Impl + facade helpers (runtime-private)
 
 #include <cmath>
 #include <exception>
@@ -13,12 +13,12 @@
 
 namespace pops {
 
-void System::set_clock(double t, int macro_step) {
+void System<kNativeDimension>::set_clock(double t, int macro_step) {
   try {
     if (macro_step < 0)
-      throw std::runtime_error("System::set_clock : macro_step >= 0 (restart)");
+      throw std::runtime_error("System<kNativeDimension>::set_clock : macro_step >= 0 (restart)");
     if (!std::isfinite(t))
-      throw std::runtime_error("System::set_clock : time must be finite");
+      throw std::runtime_error("System<kNativeDimension>::set_clock : time must be finite");
     p_->program_.consume_cadence_clock_restore(t, macro_step, "System");
   } catch (...) {
     p_->program_.cancel_cadence_clock_restore();
@@ -28,17 +28,17 @@ void System::set_clock(double t, int macro_step) {
   p_->macro_step_ = macro_step;
 }
 
-void System::store_history(const std::string& name, const MultiFab& value) {
+void System<kNativeDimension>::store_history(const std::string& name, const MultiFab& value) {
   store_history(name, value, static_cast<double>(p_->program_.last_dt_));
 }
 
-void System::store_history(const std::string& name, const MultiFab& value, double outgoing_dt) {
+void System<kNativeDimension>::store_history(const std::string& name, const MultiFab& value, double outgoing_dt) {
   if (!std::isfinite(outgoing_dt) || outgoing_dt < 0.0)
     throw std::runtime_error(
-        "System::store_history: outgoing logical-clock dt must be finite and non-negative");
+        "System<kNativeDimension>::store_history: outgoing logical-clock dt must be finite and non-negative");
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::store_history: unknown history '" + name +
+    throw std::runtime_error("System<kNativeDimension>::store_history: unknown history '" + name +
                              "' (register it first)");
   std::vector<MultiFab>& ring = it->second;
   // Copy the valid cells of value into the current slot [0] (identical layout: ring slots and the
@@ -67,15 +67,15 @@ void System::store_history(const std::string& name, const MultiFab& value, doubl
   p_->program_.hist_.store_pending[name] = true;
 }
 
-void System::rotate_histories() {
+void System<kNativeDimension>::rotate_histories() {
   // Shift each ring one step at the end of a macro-step (O(1) std::swap chain, buffer recycled into
   // slot [0]); the grid-free ring bookkeeping lives in the extracted Program subsystem (ADC-594).
   p_->program_.hist_.rotate();
 }
 
-void System::rotate_histories(const std::string& clock_identity) {
+void System<kNativeDimension>::rotate_histories(const std::string& clock_identity) {
   if (clock_identity.empty())
-    throw std::runtime_error("System::rotate_histories: clock identity must be non-empty");
+    throw std::runtime_error("System<kNativeDimension>::rotate_histories: clock identity must be non-empty");
   p_->program_.hist_.rotate(clock_identity);
 }
 
@@ -83,47 +83,47 @@ void System::rotate_histories(const std::string& clock_identity) {
 // facade (sim.checkpoint / sim.restart) gathers and restores them DIRECTLY -- reusing the SAME global
 // gather (gather_global) / scatter (write_state) machinery as the block state, so the round-trip is
 // MPI-safe and bit-identical under np>1. No .so checkpoint_extra ABI is needed for the buffers.
-std::vector<std::string> System::history_names() const {
+std::vector<std::string> System<kNativeDimension>::history_names() const {
   // enumeration lives in the extracted Program subsystem (ADC-594)
   return p_->program_.hist_.names();
 }
-int System::history_depth(const std::string& name) const {
+int System<kNativeDimension>::history_depth(const std::string& name) const {
   auto it = p_->program_.hist_.depth.find(name);
   if (it == p_->program_.hist_.depth.end())
-    throw std::runtime_error("System::history_depth: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_depth: unknown history '" + name + "'");
   return it->second;
 }
-int System::history_ncomp(const std::string& name) const {
+int System<kNativeDimension>::history_ncomp(const std::string& name) const {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::history_ncomp: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_ncomp: unknown history '" + name + "'");
   return it->second[0].ncomp();
 }
-std::vector<double> System::history_global(const std::string& name, int slot) const {
+std::vector<double> System<kNativeDimension>::history_global(const std::string& name, int slot) const {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::history_global: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_global: unknown history '" + name + "'");
   const std::vector<MultiFab>& ring = it->second;
   if (slot < 0 || slot >= static_cast<int>(ring.size()))
-    throw std::runtime_error("System::history_global: slot=" + std::to_string(slot) +
+    throw std::runtime_error("System<kNativeDimension>::history_global: slot=" + std::to_string(slot) +
                              " out of range for history '" + name + "' (depth " +
                              std::to_string(ring.size()) + ")");
   device_fence();
   return gather_global(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), nx(), ny());
 }
-bool System::history_initialized(const std::string& name) const {
+bool System<kNativeDimension>::history_initialized(const std::string& name) const {
   auto it = p_->program_.hist_.initialized.find(name);
   if (it == p_->program_.hist_.initialized.end())
-    throw std::runtime_error("System::history_initialized: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_initialized: unknown history '" + name + "'");
   return it->second;
 }
-int System::history_fill_count(const std::string& name) const {
+int System<kNativeDimension>::history_fill_count(const std::string& name) const {
   auto it = p_->program_.hist_.fill_count.find(name);
   if (it == p_->program_.hist_.fill_count.end())
-    throw std::runtime_error("System::history_fill_count: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_fill_count: unknown history '" + name + "'");
   return it->second;
 }
-void System::restore_history(const std::string& name, int slot, const std::vector<double>& values) {
+void System<kNativeDimension>::restore_history(const std::string& name, int slot, const std::vector<double>& values) {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end()) {
     // The program will re-register the ring on its first post-restart step, but we restore BEFORE that
@@ -134,7 +134,7 @@ void System::restore_history(const std::string& name, int slot, const std::vecto
   }
   std::vector<MultiFab>& ring = it->second;
   if (slot < 0)
-    throw std::runtime_error("System::restore_history: slot=" + std::to_string(slot) +
+    throw std::runtime_error("System<kNativeDimension>::restore_history: slot=" + std::to_string(slot) +
                              " must be >= 0 for history '" + name + "'");
   if (slot >= static_cast<int>(ring.size())) {
     // A deeper slot than currently registered: grow the ring (zero-filled tail) so it fits, matching
@@ -154,22 +154,22 @@ void System::restore_history(const std::string& name, int slot, const std::vecto
   // scatter that places each local band at its global indices -- matching how history_global gathers.
   p_->write_state(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), values);
 }
-void System::set_history_initialized(const std::string& name, bool initialized) {
+void System<kNativeDimension>::set_history_initialized(const std::string& name, bool initialized) {
   auto it = p_->program_.hist_.initialized.find(name);
   if (it == p_->program_.hist_.initialized.end())
-    throw std::runtime_error("System::set_history_initialized: unknown history '" + name +
+    throw std::runtime_error("System<kNativeDimension>::set_history_initialized: unknown history '" + name +
                              "' (restore its slots first)");
   it->second = initialized;
   p_->program_.hist_.fill_count[name] = initialized ? p_->program_.hist_.depth.at(name) : 0;
   p_->program_.hist_.store_pending[name] = false;
 }
-void System::restore_history_fill_count(const std::string& name, int fill_count) {
+void System<kNativeDimension>::restore_history_fill_count(const std::string& name, int fill_count) {
   auto depth = p_->program_.hist_.depth.find(name);
   if (depth == p_->program_.hist_.depth.end())
-    throw std::runtime_error("System::restore_history_fill_count: unknown history '" + name +
+    throw std::runtime_error("System<kNativeDimension>::restore_history_fill_count: unknown history '" + name +
                              "' (restore its slots first)");
   if (fill_count < 0 || fill_count > depth->second)
-    throw std::runtime_error("System::restore_history_fill_count: fill count " +
+    throw std::runtime_error("System<kNativeDimension>::restore_history_fill_count: fill count " +
                              std::to_string(fill_count) + " is outside [0, " +
                              std::to_string(depth->second) + "] for history '" + name + "'");
   p_->program_.hist_.fill_count[name] = fill_count;
@@ -182,12 +182,12 @@ void System::restore_history_fill_count(const std::string& name, int fill_count)
 // per-slot outgoing interval is serialized alongside so restart can replay the recomputed slots with
 // the exact dt sequence (variable-dt histories round-trip bit-for-bit). rebuild_history_slots
 // reconstructs the missing slots by re-stepping the installed Program from the nearest older slot.
-double System::history_slot_dt(const std::string& name, int slot) const {
+double System<kNativeDimension>::history_slot_dt(const std::string& name, int slot) const {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::history_slot_dt: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::history_slot_dt: unknown history '" + name + "'");
   if (slot < 0 || slot >= static_cast<int>(it->second.size()))
-    throw std::runtime_error("System::history_slot_dt: slot=" + std::to_string(slot) +
+    throw std::runtime_error("System<kNativeDimension>::history_slot_dt: slot=" + std::to_string(slot) +
                              " out of range for history '" + name + "' (depth " +
                              std::to_string(it->second.size()) + ")");
   auto dt_it = p_->program_.hist_.slot_dt.find(name);
@@ -196,18 +196,18 @@ double System::history_slot_dt(const std::string& name, int slot) const {
   return static_cast<double>(dt_it->second[static_cast<std::size_t>(slot)]);
 }
 
-void System::restore_history_slot_dt(const std::string& name, int slot, double dt) {
+void System<kNativeDimension>::restore_history_slot_dt(const std::string& name, int slot, double dt) {
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::restore_history_slot_dt: unknown history '" + name +
+    throw std::runtime_error("System<kNativeDimension>::restore_history_slot_dt: unknown history '" + name +
                              "' (restore its slots first)");
   if (slot < 0)
-    throw std::runtime_error("System::restore_history_slot_dt: slot=" + std::to_string(slot) +
+    throw std::runtime_error("System<kNativeDimension>::restore_history_slot_dt: slot=" + std::to_string(slot) +
                              " must be >= 0 for history '" + name + "'");
   const Real native_dt = static_cast<Real>(dt);
   if (!std::isfinite(dt) || dt < 0.0 || !std::isfinite(static_cast<double>(native_dt)))
     throw std::runtime_error(
-        "System::restore_history_slot_dt: dt must be finite and >= 0 for "
+        "System<kNativeDimension>::restore_history_slot_dt: dt must be finite and >= 0 for "
         "history '" +
         name + "'");
   std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
@@ -216,7 +216,7 @@ void System::restore_history_slot_dt(const std::string& name, int slot, double d
   dts[static_cast<std::size_t>(slot)] = native_dt;
 }
 
-int System::rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots) {
+int System<kNativeDimension>::rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots) {
   // Contract (ADC-626): the STORED slots of ring `name` are already restored (restore_history), the
   // per-slot outgoing dt is restored (restore_history_slot_dt), and the SAME Program the checkpoint
   // recorded is
@@ -226,10 +226,10 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
   // the installed Program forward, capturing the intermediate owner states.
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::rebuild_history_slots: unknown history '" + name + "'");
+    throw std::runtime_error("System<kNativeDimension>::rebuild_history_slots: unknown history '" + name + "'");
   if (!p_->program_.step_)
     throw std::runtime_error(
-        "System::rebuild_history_slots: no compiled Program is installed; the ring cannot be "
+        "System<kNativeDimension>::rebuild_history_slots: no compiled Program is installed; the ring cannot be "
         "replayed "
         "(install_program before restart, or checkpoint the ring with Dense())");
   std::vector<MultiFab>& ring = it->second;
@@ -238,13 +238,13 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
   std::sort(anchors.begin(), anchors.end());
   anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
   if (anchors.empty() || anchors.back() != depth - 1)
-    throw std::runtime_error("System::rebuild_history_slots: the oldest slot " +
+    throw std::runtime_error("System<kNativeDimension>::rebuild_history_slots: the oldest slot " +
                              std::to_string(depth - 1) + " of history '" + name +
                              "' is not stored; the ring is unreconstructable (nothing older to "
                              "replay it from). The persistence policy must store the oldest slot.");
   if (anchors.front() != 0)
     throw std::runtime_error(
-        "System::rebuild_history_slots: the newest slot 0 of history '" + name +
+        "System<kNativeDimension>::rebuild_history_slots: the newest slot 0 of history '" + name +
         "' is not stored; slots newer than the first anchor are unbracketed. The persistence "
         "policy must store the newest slot.");
   // A fully-stored ring (Dense): nothing to recompute.
@@ -253,19 +253,19 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
     return 0;
   if (p_->program_.substeps_ != 1 || p_->program_.stride_ != 1)
     throw std::runtime_error(
-        "System::rebuild_history_slots: selective replay requires Program cadence "
+        "System<kNativeDimension>::rebuild_history_slots: selective replay requires Program cadence "
         "(substeps=1, stride=1); checkpoint this ring with Dense() for a subcycled or held "
         "Program");
   if (!p_->program_.authorizes_history_replay(name, depth))
     throw std::runtime_error(
-        "System::rebuild_history_slots: selective replay for history '" + name +
+        "System<kNativeDimension>::rebuild_history_slots: selective replay for history '" + name +
         "' lacks the installed Program's validated native authority; compile this ring with a "
         "selective checkpoint policy or use Dense()");
   const auto owner_it = p_->program_.hist_.owner.find(name);
   if (owner_it == p_->program_.hist_.owner.end() || owner_it->second < 0 ||
       owner_it->second >= static_cast<int>(p_->sp.size()))
     throw std::runtime_error(
-        "System::rebuild_history_slots: selective replay requires an exact owner-qualified "
+        "System<kNativeDimension>::rebuild_history_slots: selective replay requires an exact owner-qualified "
         "keep_history ring (legacy/unowned history '" +
         name + "' must use Dense())");
   const std::size_t owner = static_cast<std::size_t>(owner_it->second);
@@ -301,7 +301,7 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
       const Real replay_dt = dts[static_cast<std::size_t>(j + 1)];
       if (!std::isfinite(static_cast<double>(replay_dt)) || replay_dt <= Real(0))
         throw std::runtime_error(
-            "System::rebuild_history_slots: every replayed outgoing dt must be finite and > 0 "
+            "System<kNativeDimension>::rebuild_history_slots: every replayed outgoing dt must be finite and > 0 "
             "before Program execution");
     }
   }
@@ -331,7 +331,7 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
       // value needs no Program execution. The interval from slot j+1 to j is dts[j+1].
       for (int j = older - 1; j > newer; --j) {
         p_->program_.last_dt_ = dts[static_cast<std::size_t>(j + 1)];
-        p_->program_.run_balance_replay("System::rebuild_history_slots", [&] {
+        p_->program_.run_balance_replay("System<kNativeDimension>::rebuild_history_slots", [&] {
           p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]));
         });
         reconstructed[static_cast<std::size_t>(j)] =
@@ -369,14 +369,14 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
 // seam accessors (POPS_EXPORT) against it, load the generated package locally, fail-loud on ABI-key
 // mismatch, then call pops_install_program(this), whose shared facade factory selects the provider
 // and installs the macro-step closure. The .so stays loaded for the process lifetime.
-POPS_EXPORT void System::install_program(const std::string& so_path) {
+POPS_EXPORT void System<kNativeDimension>::install_program(const std::string& so_path) {
   require_assembling(p_->lifecycle_,
                      "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
-    throw std::runtime_error("System::install_program: LoadLibrary('" + so_path +
+    throw std::runtime_error("System<kNativeDimension>::install_program: LoadLibrary('" + so_path +
                              "'): " + pops::dynlib::last_error());
   }
 #else
@@ -393,7 +393,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
     throw std::runtime_error(
-        "System::install_program: dlopen('" + so_path + "'): " + pops::dynlib::last_error() +
+        "System<kNativeDimension>::install_program: dlopen('" + so_path + "'): " + pops::dynlib::last_error() +
         " (the pops::System seam accessors must be exported and the host module promoted "
         "globally; cf. POPS_EXPORT)");
   }
@@ -401,7 +401,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_abi_key"));
   if (!key_fn) {
     pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_program_abi_key missing from '" +
+    throw std::runtime_error("System<kNativeDimension>::install_program: pops_program_abi_key missing from '" +
                              so_path +
                              "' (regenerate the problem module with the current pops headers)");
   }
@@ -410,7 +410,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   if (loader_key != module_key) {
     pops::dynlib::close(h);
     throw std::runtime_error(
-        "System::install_program: compiled program ABI mismatch: expected '" + module_key +
+        "System<kNativeDimension>::install_program: compiled program ABI mismatch: expected '" + module_key +
         "', got '" + loader_key +
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
@@ -422,13 +422,13 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     if (!manifest_fn) {
       pops::dynlib::close(h);
       throw std::runtime_error(
-          "System::install_program: pops_program_route_manifest missing; regenerate artifact");
+          "System<kNativeDimension>::install_program: pops_program_route_manifest missing; regenerate artifact");
     }
     try {
       const char* raw = manifest_fn();
       if (!raw || raw[0] == '\0')
         throw std::runtime_error(
-            "System::install_program: pops_program_route_manifest returned empty data");
+            "System<kNativeDimension>::install_program: pops_program_route_manifest returned empty data");
       pops::verify_route_manifest(std::string(raw), "install_program");
     } catch (...) {
       pops::dynlib::close(h);
@@ -447,7 +447,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto install = reinterpret_cast<void (*)(System*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {
     pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_install_program missing from '" +
+    throw std::runtime_error("System<kNativeDimension>::install_program: pops_install_program missing from '" +
                              so_path + "'");
   }
   // Mandatory install-time requirement validation. The complete owner-qualified metadata table is
@@ -470,7 +470,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       for (const auto& aux : pops::runtime::program::required_aux(op.requirements)) {
         if (!p_->fields_.provides_aux(aux)) {
           throw std::runtime_error(
-              "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
+              "System<kNativeDimension>::install_program: operator '" + op.name + "' requires aux field '" + aux +
               "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
               "set_electron_temperature_from, before install_program)");
         }
@@ -508,7 +508,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   if (program_has_dt_bound && !dt_bound) {
     pops::dynlib::close(h);
     throw std::runtime_error(
-        "System::install_program: Program declares a dt bound but pops_program_dt_bound is "
+        "System<kNativeDimension>::install_program: Program declares a dt bound but pops_program_dt_bound is "
         "missing; regenerate the System artifact");
   }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
@@ -535,7 +535,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     if (!block_count || !block_name) {
       pops::dynlib::close(h);
       throw std::runtime_error(
-          "System::install_program: compiled Program '" + so_path +
+          "System<kNativeDimension>::install_program: compiled Program '" + so_path +
           "' does not export the required block identity table "
           "(pops_program_block_count + pops_program_block_name). Positional Program-to-System "
           "binding has been removed; regenerate the Program library with the current PoPS "
@@ -609,7 +609,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       seed_program_params(block, defaults);
     p_->program_.operator_authorities_ = operator_authorities;
     install(this);
-    p_->program_.require_exact_artifact_step_install(previous_install, "System::install_program:");
+    p_->program_.require_exact_artifact_step_install(previous_install, "System<kNativeDimension>::install_program:");
 
     p_->program_.block_map_ = std::move(program_block_map);
     for (const auto& [block, defaults] : program_param_defaults)
@@ -642,37 +642,37 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
 // the facade (sim.checkpoint / sim.restart) gathers and restores it DIRECTLY -- reusing the SAME global
 // gather (gather_global, via copy_state) / scatter (write_state) machinery as the block state and the
 // history rings, so the round-trip is MPI-safe and bit-identical under np>1. Mirrors the history seam.
-std::vector<int> System::program_cache_nodes() const {
+std::vector<int> System<kNativeDimension>::program_cache_nodes() const {
   return p_->program_.cache_.node_ids();
 }
-std::string System::program_cache_name(int node_id) const {
+std::string System<kNativeDimension>::program_cache_name(int node_id) const {
   return p_->program_.cache_.name_of(node_id);
 }
-int System::program_cache_last_update_step(int node_id) const {
+int System<kNativeDimension>::program_cache_last_update_step(int node_id) const {
   return p_->program_.cache_.last_update_step(node_id);
 }
-double System::program_cache_accumulated_dt(int node_id) const {
+double System<kNativeDimension>::program_cache_accumulated_dt(int node_id) const {
   return static_cast<double>(p_->program_.cache_.accumulated_dt_of(node_id));
 }
-int System::program_cache_ncomp(int node_id) const {
+int System<kNativeDimension>::program_cache_ncomp(int node_id) const {
   return p_->program_.cache_.ncomp_of(node_id);
 }
-int System::program_cache_ngrow(int node_id) const {
+int System<kNativeDimension>::program_cache_ngrow(int node_id) const {
   return p_->program_.cache_.ngrow_of(node_id);
 }
-std::vector<double> System::program_cache_global(int node_id) const {
+std::vector<double> System<kNativeDimension>::program_cache_global(int node_id) const {
   // Reuse the Impl multi-box gather (copy_state -> gather_global): the cache value is co-distributed
   // with block 0's storage (ba/dm), so this is the SAME component-major gather state_global / history_
   // global use (device_fence + all_reduce). All ranks call it; @throws if @p node_id is absent.
   const MultiFab& v = p_->program_.cache_.value_of(node_id);
   return p_->copy_state(v, v.ncomp());
 }
-void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
+void System<kNativeDimension>::restore_program_cache(int node_id, int ncomp, int ngrow, int last_update_step,
                                    double accumulated_dt, const std::string& name,
                                    const std::vector<double>& values) {
   if (p_->sp.empty())
     throw std::runtime_error(
-        "System::restore_program_cache: no block exists yet; the cache value is co-distributed "
+        "System<kNativeDimension>::restore_program_cache: no block exists yet; the cache value is co-distributed "
         "with "
         "block 0's storage (replay the composition before restart)");
   // Allocate a value co-distributed with block 0 (ba/dm, @p ncomp comps, @p ngrow ghosts -- the SAME

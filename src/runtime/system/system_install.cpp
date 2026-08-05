@@ -1,9 +1,9 @@
 // ADC-632: install/composition seam of the System facade -- the structural setters guarded by
 // require_assembling (blocks, aux, elliptic/reaction/epsilon fields, disc domain, geometry mode,
 // coupled sources) plus install_program. This TU is the
-// subdivision of system.cpp that instantiates the production package loader after System::Impl is complete.
+// subdivision of system.cpp that instantiates the production package loader after System<kNativeDimension>::Impl is complete.
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include "system_impl.hpp"  // ADC-632: shared System<kNativeDimension>::Impl + facade helpers (runtime-private)
 
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>
@@ -17,7 +17,7 @@
 
 namespace pops {
 
-void System::add_block(const std::string& name, const ModelSpec& model, const std::string& limiter,
+void System<kNativeDimension>::add_block(const std::string& name, const ModelSpec& model, const std::string& limiter,
                        const std::string& riemann, const std::string& recon,
                        const std::string& time, int substeps, bool evolve, int stride,
                        const std::vector<std::string>& implicit_vars,
@@ -32,15 +32,15 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // means a silent Euler + Poisson-charge composition.
   detail::validate_model_spec(model);
   if (substeps < 1)
-    throw std::runtime_error("System::add_block : substeps >= 1");
+    throw std::runtime_error("System<kNativeDimension>::add_block : substeps >= 1");
   if (stride < 1)
-    throw std::runtime_error("System::add_block : stride >= 1");
+    throw std::runtime_error("System<kNativeDimension>::add_block : stride >= 1");
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
-    throw std::runtime_error("System::add_block : positivity_floor >= 0 and finite (0 = inactive)");
+    throw std::runtime_error("System<kNativeDimension>::add_block : positivity_floor >= 0 and finite (0 = inactive)");
   // Validation of the NEWTON OPTIONS POD (ADC-214): range check shared with AmrSystem::add_block
   // (validate_newton_options, in implicit_stepper.hpp). Whether non-default options are ALLOWED
   // (the time='imex' gate below) stays here -- it differs from the AMR path.
-  validate_newton_options(newton, "System::add_block");
+  validate_newton_options(newton, "System<kNativeDimension>::add_block");
   // @p time carries the Program authoring treatment and, in explicit, the RK SCHEME: "explicit" = SSPRK2
   // (canonical default), "ssprk3" = SSPRK3 (order 3), "euler" = ForwardEuler (order 1, fidelity to
   // first-order references -- validation), "imex" = explicit transport + local backward-Euler implicit
@@ -49,18 +49,18 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   if (time != "explicit" && time != "ssprk3" && time != "euler" && time != "imex" &&
       time != "imexrk_ars222")
     throw std::runtime_error(
-        "System::add_block : time 'explicit'|'ssprk3'|'euler'|'imex'|'imexrk_ars222' "
+        "System<kNativeDimension>::add_block : time 'explicit'|'ssprk3'|'euler'|'imex'|'imexrk_ars222' "
         "(received '" +
         time + "')");
   if (recon != "conservative" && recon != "primitive")
-    throw std::runtime_error("System::add_block : recon 'conservative' | 'primitive' (received '" +
+    throw std::runtime_error("System<kNativeDimension>::add_block : recon 'conservative' | 'primitive' (received '" +
                              recon + "')");
   const bool imexrk = (time == "imexrk_ars222");
   const bool imex = (time == "imex" || imexrk);  // both go through the implicit source step
   const bool recon_prim = (recon == "primitive");
   if (newton_diagnostics)
     throw std::runtime_error(
-        "System::add_block : newton_diagnostics=true is unavailable on the Program-only System "
+        "System<kNativeDimension>::add_block : newton_diagnostics=true is unavailable on the Program-only System "
         "runtime because no typed implicit Program consumer publishes that report");
   // Wave speed cache (opt-in): only engages for the HLL residual. Requesting it
   // elsewhere would be SILENTLY without effect -> explicit error (no silent ignore). The polar path has
@@ -68,17 +68,17 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   if (wave_speed_cache) {
     if (riemann != "hll")
       throw std::runtime_error(
-          "System::add_block : wave_speed_cache requires riemann='hll' (the wave "
+          "System<kNativeDimension>::add_block : wave_speed_cache requires riemann='hll' (the wave "
           "speed cache only applies to the HLL flux ; received riemann='" +
           riemann + "')");
     if (imex)
       throw std::runtime_error(
-          "System::add_block : wave_speed_cache not supported with time='" + time +
+          "System<kNativeDimension>::add_block : wave_speed_cache not supported with time='" + time +
           "' (the cached residual is not available to an implicit Program ; use time "
           "'explicit'/'ssprk3'/'euler')");
     if (P->polar_)
       throw std::runtime_error(
-          "System::add_block : wave_speed_cache not supported on the polar "
+          "System<kNativeDimension>::add_block : wave_speed_cache not supported on the polar "
           "geometry (ring)");
     // EMBEDDED-BOUNDARY transport mode already active: its geometry-qualified residuals do not carry
     // the cache -> requesting it would be WITHOUT EFFECT. Explicit
@@ -86,19 +86,19 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     // rejected by set_disc_domain / set_geometry_mode.
     if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
       throw std::runtime_error(
-          "System::add_block : wave_speed_cache incompatible with an active "
+          "System<kNativeDimension>::add_block : wave_speed_cache incompatible with an active "
           "embedded-boundary transport mode (staircase/cutcell) ; the cache is only "
           "wired on the full Cartesian residual (remove wave_speed_cache or mode='none')");
     P->ws_cache_block_ = true;  // a block requested the cache -> locks the switch to disc mode
   }
   // Canonical Program-authoring spelling retained for reports and Program normalization. Spatial
   // block construction never decodes it into a second time integrator.
-  const std::string method = route_token(parse_time_route(time, "System::add_block"));
+  const std::string method = route_token(parse_time_route(time, "System<kNativeDimension>::add_block"));
   // The implicit mask (implicit_vars / implicit_roles) applies only to the IMEX source step. Requesting
   // it in explicit is an ERROR (no silent ignore): the explicit has no implicit step.
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
     throw std::runtime_error(
-        "System::add_block : implicit_vars / implicit_roles require time='imex' "
+        "System<kNativeDimension>::add_block : implicit_vars / implicit_roles require time='imex' "
         "(the implicit mask applies only to the IMEX source step ; received time='" +
         time + "')");
   // IMEX-RK ARS(2,2,2): FULLY implicit source (the stage consistency relation assumes a homogeneous
@@ -106,7 +106,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // partial mask stays available on time='imex' (local backward-Euler).
   if (imexrk && (!implicit_vars.empty() || !implicit_roles.empty()))
     throw std::runtime_error(
-        "System::add_block : implicit_vars / implicit_roles (partial IMEX mask) unsupported by "
+        "System<kNativeDimension>::add_block : implicit_vars / implicit_roles (partial IMEX mask) unsupported by "
         "time='imexrk_ars222' (its source is FULLY implicit). Use time='imex' for a "
         "partial mask, or remove implicit_vars / implicit_roles.");
   // Same rules for the Newton options/diagnostics: they only drive the IMEX source step.
@@ -114,7 +114,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   const bool newton_non_default = newton_options_non_default(newton, newton_diagnostics);
   if (!imex && newton_non_default)
     throw std::runtime_error(
-        "System::add_block : the Newton options (newton_max_iters/rel_tol/"
+        "System<kNativeDimension>::add_block : the Newton options (newton_max_iters/rel_tol/"
         "abs_tol/fd_eps/diagnostics) require time='imex' (received time='" +
         time + "')");
 
@@ -122,15 +122,15 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // non-default value would be silently ignored -> refuse loud. Cartesian, staircase and cut-cell
   // paths all carry the same value. The polar builder is still separate and therefore rejects it.
   if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
-    throw std::runtime_error("System::add_block : finite weno_epsilon > 0 required");
+    throw std::runtime_error("System<kNativeDimension>::add_block : finite weno_epsilon > 0 required");
   if (weno_epsilon != static_cast<double>(kWenoEpsilon)) {
     if (limiter != "weno5")
       throw std::runtime_error(
-          "System::add_block : weno_epsilon applies to limiter='weno5' only (received limiter='" +
+          "System<kNativeDimension>::add_block : weno_epsilon applies to limiter='weno5' only (received limiter='" +
           limiter + "')");
     if (P->polar_)
       throw std::runtime_error(
-          "System::add_block : weno_epsilon is wired on the cartesian path only (the polar "
+          "System<kNativeDimension>::add_block : weno_epsilon is wired on the cartesian path only (the polar "
           "builder keeps the default kWenoEpsilon; wiring it is a follow-up)");
   }
 
@@ -152,7 +152,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     // we reject it explicitly rather than silently running the transport alone.
     if (imex)
       throw std::runtime_error(
-          "System::add_block (polar) : time='" + time +
+          "System<kNativeDimension>::add_block (polar) : time='" + time +
           "' (IMEX / IMEX-RK ARS(2,2,2)) unsupported "
           "(ring : coupling by explicit local source, no stiff source to handle implicitly "
           "at this stage). Use 'explicit'/'ssprk3'.");
@@ -280,7 +280,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   if (synthesized_boundary_plan) {
     if (!P->boundary_plans_.emplace(name, synthesized_boundary_plan).second)
       throw std::logic_error(
-          "System::add_block cannot publish a synthesized plan over a prepared boundary plan");
+          "System<kNativeDimension>::add_block cannot publish a synthesized plan over a prepared boundary plan");
     published_synthesized_boundary = true;
   }
   try {
@@ -311,27 +311,27 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
 
 // Real grid context (mesh + BC + aux): used by the add_compiled_model template to build
 // the closures of a compiled production model on the real System fields (without marshaling).
-POPS_EXPORT GridContext System::grid_context() {
+POPS_EXPORT GridContext System<kNativeDimension>::grid_context() {
   return p_->grid_ctx();
 }
 
-POPS_EXPORT GridContext System::grid_context(const std::string& name) {
+POPS_EXPORT GridContext System<kNativeDimension>::grid_context(const std::string& name) {
   return p_->grid_ctx(name);
 }
 
-POPS_EXPORT GridContext System::grid_context(int block) {
+POPS_EXPORT GridContext System<kNativeDimension>::grid_context(int block) {
   if (block < 0 || block >= static_cast<int>(p_->sp.size()))
-    throw std::out_of_range("System::grid_context block index is out of range");
+    throw std::out_of_range("System<kNativeDimension>::grid_context block index is out of range");
   return p_->grid_ctx(p_->sp[static_cast<std::size_t>(block)].name);
 }
 
-POPS_EXPORT void System::install_block_state_route(const std::string& name,
+POPS_EXPORT void System<kNativeDimension>::install_block_state_route(const std::string& name,
                                                    const std::string& state_identity) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_block_state_route");
   if (!P->sp.empty())
     throw std::runtime_error(
-        "System::install_block_state_route must precede block materialization");
+        "System<kNativeDimension>::install_block_state_route must precede block materialization");
   if (name.empty() || state_identity.empty() || P->block_state_identities_.count(name) != 0)
     throw std::runtime_error(
         "System block state route requires unique non-empty block/state identities");
@@ -341,7 +341,7 @@ POPS_EXPORT void System::install_block_state_route(const std::string& name,
   P->block_state_identities_.emplace(name, state_identity);
 }
 
-POPS_EXPORT void System::install_boundary_plan(const std::string& name, const std::string& identity,
+POPS_EXPORT void System<kNativeDimension>::install_boundary_plan(const std::string& name, const std::string& identity,
                                                int required_depth,
                                                const std::vector<std::string>& face_types,
                                                const std::vector<double>& face_values,
@@ -355,14 +355,14 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
                         std::move(read_dependencies), {});
 }
 
-POPS_EXPORT void System::install_boundary_plan(
+POPS_EXPORT void System<kNativeDimension>::install_boundary_plan(
     const std::string& name, const std::string& identity, int required_depth,
     const std::vector<std::string>& face_types, const std::vector<double>& face_values,
     const std::vector<std::string>& face_identities,
     const std::vector<std::string>& component_roles,
     const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
     PreparedBoundaryReadDependencies read_dependencies,
-    std::vector<PeriodicIdentification2D> periodic_identifications,
+    std::vector<PeriodicIdentification<2>> periodic_identifications,
     const std::vector<std::string>& face_representations,
     const std::vector<std::string>& face_converter_identities,
     const std::vector<std::vector<std::string>>& face_analytic_opcodes,
@@ -372,23 +372,23 @@ POPS_EXPORT void System::install_boundary_plan(
   using BoundaryPlanMap = decltype(P->boundary_plans_);
   using BoundaryPlanNode = typename BoundaryPlanMap::node_type;
   BoundaryPlanNode prepared = analytic::collectively_prepare_exact_analytic_request(
-      "System::install_boundary_plan",
+      "System<kNativeDimension>::install_boundary_plan",
       [&]() -> BoundaryPlanNode {
         require_assembling(P->lifecycle_, "install_boundary_plan");
         if (name.empty() || state_identity.empty())
           throw std::runtime_error(
-              "System::install_boundary_plan requires block and state-qualified identities");
+              "System<kNativeDimension>::install_boundary_plan requires block and state-qualified identities");
         const auto state_route = P->block_state_identities_.find(name);
         if (state_route == P->block_state_identities_.end() ||
             state_route->second != state_identity)
           throw std::runtime_error(
-              "System::install_boundary_plan state differs from the exact block state route");
+              "System<kNativeDimension>::install_boundary_plan state differs from the exact block state route");
         if (P->boundary_plans_.count(name) != 0)
-          throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
+          throw std::runtime_error("System<kNativeDimension>::install_boundary_plan duplicate block '" + name + "'");
         for (const auto& [_, installed] : P->boundary_plans_)
           if (installed->state_identity() == state_identity)
             throw std::runtime_error(
-                "System::install_boundary_plan duplicate qualified state identity");
+                "System<kNativeDimension>::install_boundary_plan duplicate qualified state identity");
 
         auto hyperbolic = prepare_hyperbolic_boundary<2>(
             face_types, face_values, face_identities, component_roles,
@@ -410,10 +410,10 @@ POPS_EXPORT void System::install_boundary_plan(
       });
   const auto published = P->boundary_plans_.insert(std::move(prepared));
   if (!published.inserted)
-    throw std::logic_error("System::install_boundary_plan lost its prepared publication slot");
+    throw std::logic_error("System<kNativeDimension>::install_boundary_plan lost its prepared publication slot");
 }
 
-POPS_EXPORT void System::install_field_storage_route(const std::string& field_identity,
+POPS_EXPORT void System<kNativeDimension>::install_field_storage_route(const std::string& field_identity,
                                                      const std::string& provider_slot) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_storage_route");
@@ -423,49 +423,49 @@ POPS_EXPORT void System::install_field_storage_route(const std::string& field_id
         "System field storage route requires unique non-empty qualified identities");
 }
 
-POPS_EXPORT void System::discard_boundary_plans() {
+POPS_EXPORT void System<kNativeDimension>::discard_boundary_plans() {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "discard_boundary_plans");
   if (!P->sp.empty())
     throw std::runtime_error(
-        "System::discard_boundary_plans is restricted to a failed pre-block transaction");
+        "System<kNativeDimension>::discard_boundary_plans is restricted to a failed pre-block transaction");
   P->boundary_plans_.clear();
   P->block_state_identities_.clear();
   P->field_storage_routes_.clear();
 }
 
-POPS_EXPORT void System::install_ghost_boundary_component(
+POPS_EXPORT void System<kNativeDimension>::install_ghost_boundary_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_ghost_boundary_component");
   if (P->polar_)
     throw std::runtime_error(
-        "System::install_ghost_boundary_component: polar transport has no native boundary "
+        "System<kNativeDimension>::install_ghost_boundary_component: polar transport has no native boundary "
         "component provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
-        "System::install_ghost_boundary_component: embedded-boundary transport has no "
+        "System<kNativeDimension>::install_ghost_boundary_component: embedded-boundary transport has no "
         "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
     throw std::runtime_error(
-        "System::install_ghost_boundary_component requires an installed block boundary plan");
+        "System<kNativeDimension>::install_ghost_boundary_component requires an installed block boundary plan");
   found->second->install_ghost_component(std::move(spec), std::move(component));
 }
 
-POPS_EXPORT void System::install_boundary_flux_component(
+POPS_EXPORT void System<kNativeDimension>::install_boundary_flux_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_flux_component");
   if (P->polar_)
     throw std::runtime_error(
-        "System::install_boundary_flux_component: polar transport has no post-Riemann boundary "
+        "System<kNativeDimension>::install_boundary_flux_component: polar transport has no post-Riemann boundary "
         "flux provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
-        "System::install_boundary_flux_component: embedded-boundary transport has no "
+        "System<kNativeDimension>::install_boundary_flux_component: embedded-boundary transport has no "
         "geometry-aware post-Riemann provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
@@ -473,18 +473,18 @@ POPS_EXPORT void System::install_boundary_flux_component(
   found->second->install_flux_component(std::move(spec), std::move(component));
 }
 
-POPS_EXPORT void System::install_field_boundary_residual_component(
+POPS_EXPORT void System<kNativeDimension>::install_field_boundary_residual_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_residual_component");
   if (P->polar_)
     throw std::runtime_error(
-        "System::install_field_boundary_residual_component: polar transport has no native field "
+        "System<kNativeDimension>::install_field_boundary_residual_component: polar transport has no native field "
         "boundary provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
-        "System::install_field_boundary_residual_component: embedded-boundary transport has no "
+        "System<kNativeDimension>::install_field_boundary_residual_component: embedded-boundary transport has no "
         "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
@@ -493,18 +493,18 @@ POPS_EXPORT void System::install_field_boundary_residual_component(
   found->second->install_residual_component(std::move(spec), std::move(component));
 }
 
-POPS_EXPORT void System::install_field_boundary_jvp_component(
+POPS_EXPORT void System<kNativeDimension>::install_field_boundary_jvp_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_jvp_component");
   if (P->polar_)
     throw std::runtime_error(
-        "System::install_field_boundary_jvp_component: polar transport has no native field "
+        "System<kNativeDimension>::install_field_boundary_jvp_component: polar transport has no native field "
         "boundary provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
-        "System::install_field_boundary_jvp_component: embedded-boundary transport has no "
+        "System<kNativeDimension>::install_field_boundary_jvp_component: embedded-boundary transport has no "
         "geometry-aware native boundary-component provider");
   const auto found = P->boundary_plans_.find(name);
   if (found == P->boundary_plans_.end())
@@ -512,7 +512,7 @@ POPS_EXPORT void System::install_field_boundary_jvp_component(
   found->second->install_jvp_component(std::move(spec), std::move(component));
 }
 
-POPS_EXPORT void System::install_interface_flux_component(
+POPS_EXPORT void System<kNativeDimension>::install_interface_flux_component(
     runtime::multiblock::AxisAlignedInterface route,
     runtime::multiblock::PreparedInterfaceFluxSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
@@ -520,7 +520,7 @@ POPS_EXPORT void System::install_interface_flux_component(
   require_assembling(P->lifecycle_, "install_interface_flux_component");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
-        "System::install_interface_flux_component: embedded-boundary transport has no "
+        "System<kNativeDimension>::install_interface_flux_component: embedded-boundary transport has no "
         "signed-mask or cut-cell shared-interface provider");
   if (route.identity.empty() || spec.interface_identity != route.identity)
     throw std::invalid_argument("System shared-interface route/spec identity mismatch");
@@ -544,12 +544,12 @@ POPS_EXPORT void System::install_interface_flux_component(
       });
 }
 
-POPS_EXPORT std::size_t System::interface_evaluation_count(const std::string& identity,
+POPS_EXPORT std::size_t System<kNativeDimension>::interface_evaluation_count(const std::string& identity,
                                                            int level) const {
   return p_->blocks_.interface_evaluation_count(identity, level);
 }
 
-POPS_EXPORT void System::discard_interface_flux_components() {
+POPS_EXPORT void System<kNativeDimension>::discard_interface_flux_components() {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "discard_interface_flux_components");
   P->blocks_.discard_interface_fluxes();
@@ -557,14 +557,14 @@ POPS_EXPORT void System::discard_interface_flux_components() {
 
 // Installs a block from already-built closures (by dispatch_model on the add_block side, or by
 // block_builder on the add_compiled_model side). Centralizes the creation of the species (U, names, scheme).
-POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
+POPS_EXPORT void System<kNativeDimension>::install_block(const std::string& name, int ncomp,
                                        const VariableSet& cons_vars, const VariableSet& prim_vars,
                                        double gamma, BlockClosures closures,
                                        std::function<Real(const MultiFab&)> max_speed,
                                        std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
                                        int substeps, bool evolve, int stride) {
   if (stride < 1)
-    throw std::runtime_error("System::install_block : stride >= 1");
+    throw std::runtime_error("System<kNativeDimension>::install_block : stride >= 1");
   Impl* P = p_.get();
   const SpatialProviderGeometry active_geometry =
       P->geometry_mode_ == GeometryMode::None ? closures.base_spatial_geometry
@@ -573,19 +573,19 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
     return closures.spatial_provider.supports({kNativeDimension, active_geometry, operation});
   };
   if (!supports_active(SpatialProviderOperation::Residual))
-    throw std::runtime_error("System::install_block: block '" + name +
+    throw std::runtime_error("System<kNativeDimension>::install_block: block '" + name +
                              "' has no numerical provider for the active spatial geometry");
   const auto boundary_plan = P->boundary_plans_.find(name);
   if (boundary_plan != P->boundary_plans_.end() &&
       boundary_plan->second->requires_characteristic_no_inflow() &&
       !supports_active(SpatialProviderOperation::CharacteristicNoInflow))
-    throw std::runtime_error("System::install_block: block '" + name +
+    throw std::runtime_error("System<kNativeDimension>::install_block: block '" + name +
                              "' has no characteristic no-inflow provider for the active spatial "
                              "geometry");
   if (boundary_plan != P->boundary_plans_.end() &&
       boundary_plan->second->has_component_boundaries() &&
       !supports_active(SpatialProviderOperation::BoundaryLinearization))
-    throw std::runtime_error("System::install_block: embedded-boundary block '" + name +
+    throw std::runtime_error("System<kNativeDimension>::install_block: embedded-boundary block '" + name +
                              "' has a native boundary component without a geometry-aware provider");
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
                                 stride, gamma, std::move(closures.rhs_into), std::move(max_speed),
@@ -652,7 +652,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
 // Width-aware reallocation of a block state (delegates to Impl::set_block_ghosts). Exposed
 // (POPS_EXPORT) so that the add_compiled_model header template (native path, .so loader) can
 // widen the compiled block to block_n_ghost(limiter) -- 3 for weno5 -- as add_block does.
-POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) {
+POPS_EXPORT void System<kNativeDimension>::set_block_ghosts(const std::string& name, int n_ghost) {
   p_->set_block_ghosts(name, n_ghost);
   if (EffectiveBlockOptions* opt = p_->diagnostics_.block_options_ptr(name))
     opt->n_ghost = p_->find(name).U.n_grow();
@@ -660,7 +660,7 @@ POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) 
 
 // OPTIONAL step bounds of a block (model traits): set after install_block, read by
 // step_cfl. Empty functions = the block imposes no bound.
-void System::set_block_dt_bounds(const std::string& name,
+void System<kNativeDimension>::set_block_dt_bounds(const std::string& name,
                                  std::function<Real(const MultiFab&)> source_frequency,
                                  std::function<Real(const MultiFab&)> stability_dt) {
   Impl::Species& s = p_->find(name);  // raises if unknown block
@@ -670,15 +670,15 @@ void System::set_block_dt_bounds(const std::string& name,
 
 // GLOBAL step bound (host, one evaluation per step): multi-block coupling, Schur/Poisson,
 // scheduler, user policy. cf. SystemProgramDriver::step_cfl for the aggregation.
-void System::add_dt_bound(const std::string& label, std::function<double()> fn) {
+void System<kNativeDimension>::add_dt_bound(const std::string& label, std::function<double()> fn) {
   require_assembling(p_->lifecycle_, "add_dt_bound");  // frozen once pops.bind completes (ADC-592)
   if (!fn)
-    throw std::runtime_error("System::add_dt_bound : empty bound function");
+    throw std::runtime_error("System<kNativeDimension>::add_dt_bound : empty bound function");
   p_->dt_bounds_.push_back(Impl::GlobalDtBound{label, std::move(fn)});
 }
 
 // ACTIVE bound of the last step_cfl (step-policy diagnostic). "" before the first step.
-std::string System::last_dt_bound() const {
+std::string System<kNativeDimension>::last_dt_bound() const {
   return p_->program_driver_.last_dt_reason();
 }
 
@@ -686,10 +686,10 @@ std::string System::last_dt_bound() const {
 // bound of block @p name, and its speed w = max(wx, wy). ON DEMAND (two reduction
 // passes, cf. max_wave_speed_hotspot_mf) -- step/step_cfl do not touch it. Block without
 // closure (historical non-rewireable paths, e.g. dynamic) -> EXPLICIT error.
-std::array<double, 3> System::dt_hotspot(const std::string& name) {
+std::array<double, 3> System<kNativeDimension>::dt_hotspot(const std::string& name) {
   Impl::Species& s = p_->find(name);
   if (!s.hotspot)
-    throw std::runtime_error("System::dt_hotspot : block '" + name +
+    throw std::runtime_error("System<kNativeDimension>::dt_hotspot : block '" + name +
                              "' without hotspot diagnostic (non-rewireable add path)");
   Real w = 0;
   int i = -1, j = -1;
@@ -699,12 +699,12 @@ std::array<double, 3> System::dt_hotspot(const std::string& name) {
 
 // Compatibility query for a typed implicit Program diagnostic carrier. The current Program-only
 // System runtime rejects newton_diagnostics=true until a consumer actually publishes this carrier.
-System::SourceNewtonReport System::newton_report(const std::string& name) const {
+System<kNativeDimension>::SourceNewtonReport System<kNativeDimension>::newton_report(const std::string& name) const {
   p_->index(name);  // raises if unknown block
   const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
   if (rp == nullptr)
     throw std::runtime_error(
-        "System::newton_report : no typed implicit Program consumer published diagnostics for "
+        "System<kNativeDimension>::newton_report : no typed implicit Program consumer published diagnostics for "
         "block '" +
         name + "'");
   const NewtonReport& r = *rp;
@@ -720,7 +720,7 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
 }
 
 // Load the sole production package and pass the complete canonical BindSchema vector once.
-void System::add_native_block(const std::string& name, const std::string& so_path,
+void System<kNativeDimension>::add_native_block(const std::string& name, const std::string& so_path,
                               const std::string& limiter, const std::string& riemann,
                               const std::string& recon, const std::string& time, double gamma,
                               int substeps, bool evolve, int stride,
@@ -729,7 +729,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
                      "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
-        "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
+        "System<kNativeDimension>::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_native_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
                                   gamma, substeps, evolve, stride, params, positivity_floor);
   EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
@@ -745,7 +745,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   // The canonical spelling of the typed route (ADC-641), replacing the if (time=="imex")...else "ssprk2"
   // string ladder. Diagnostic-only (EffectiveBlockOptions.time_method); the installed Program route is
   // normalized from @p time itself.
-  opt.time_method = route_token(parse_time_route(time, "System::add_native_block"));
+  opt.time_method = route_token(parse_time_route(time, "System<kNativeDimension>::add_native_block"));
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;
@@ -753,7 +753,7 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   opt.positivity_floor = positivity_floor;
 }
 
-void System::add_external_riemann_block(const std::string& name, const std::string& so_path,
+void System<kNativeDimension>::add_external_riemann_block(const std::string& name, const std::string& so_path,
                                         const std::string& brick_id, const std::string& sha256,
                                         const std::string& limiter, const std::string& recon,
                                         const std::string& time, double gamma, int substeps,
@@ -779,7 +779,7 @@ void System::add_external_riemann_block(const std::string& name, const std::stri
   opt.riemann = brick_id;
   opt.recon = recon;
   opt.time = time;
-  opt.time_method = route_token(parse_time_route(time, "System::add_external_riemann_block"));
+  opt.time_method = route_token(parse_time_route(time, "System<kNativeDimension>::add_external_riemann_block"));
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;
@@ -788,19 +788,19 @@ void System::add_external_riemann_block(const std::string& name, const std::stri
   opt.weno_epsilon = weno_epsilon;
 }
 
-void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
+void System<kNativeDimension>::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
                          const std::string& wall, double wall_radius, double epsilon,
                          double abs_tol, double rel_tol, int max_cycles, int min_coarse,
                          int pre_smooth, int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (!std::isfinite(epsilon) || epsilon == 0.0)
-    throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
+    throw std::runtime_error("System<kNativeDimension>::set_poisson : finite epsilon != 0 required");
   if (p_->polar_ && solver != "polar")
     throw std::runtime_error(
-        "System::set_poisson: polar geometry requires solver='polar'; solver substitution is "
+        "System<kNativeDimension>::set_poisson: polar geometry requires solver='polar'; solver substitution is "
         "forbidden");
   if (!p_->polar_ && solver == "polar")
-    throw std::runtime_error("System::set_poisson: solver='polar' requires polar geometry");
+    throw std::runtime_error("System<kNativeDimension>::set_poisson: solver='polar' requires polar geometry");
   using FieldSolver = field_solver::SystemFieldSolver<Impl>;
   if (solver == "geometric_mg") {
     GeometricMgOptions mg_options;
@@ -817,7 +817,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
     p_->fields_.reconfigure_primary_provider_preset(
         "geometric_mg", FieldSolver::geometric_mg_provider_options(mg_options));
   } else if (solver != "polar" && !p_->fields_.has_elliptic_provider(solver)) {
-    throw std::runtime_error("System::set_poisson: unknown elliptic provider route '" + solver +
+    throw std::runtime_error("System<kNativeDimension>::set_poisson: unknown elliptic provider route '" + solver +
                              "'");
   }
   p_->fields_.p_rhs = rhs;
@@ -832,7 +832,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   p_->fields_.ell_.reset();
 }
 
-POPS_EXPORT std::string System::register_configured_field_solver_provider(
+POPS_EXPORT std::string System<kNativeDimension>::register_configured_field_solver_provider(
     const std::string& family_route, const std::string& provider_route,
     const PreparedProviderOptions& options) {
   require_assembling(p_->lifecycle_, "register_configured_field_solver_provider");
@@ -842,7 +842,7 @@ POPS_EXPORT std::string System::register_configured_field_solver_provider(
   return p_->fields_.register_configured_elliptic_provider(family_route, provider_route, options);
 }
 
-void System::set_field_solver_plan(
+void System<kNativeDimension>::set_field_solver_plan(
     const std::string& provider_slot, const std::string& plan_identity,
     const std::string& provider_identity, const std::string& output_owner_identity,
     const std::string& output_block, const std::string& output_key,
@@ -853,11 +853,11 @@ void System::set_field_solver_plan(
   if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
       output_owner_identity.empty() || output_block.empty() || output_key.empty())
     throw std::runtime_error(
-        "System::set_field_solver_plan requires qualified plan/provider identities");
+        "System<kNativeDimension>::set_field_solver_plan requires qualified plan/provider identities");
   const std::size_t provider_count = provider_identities.size();
   if (provider_count == 0 || provider_blocks.size() != provider_count ||
       provider_keys.size() != provider_count || provider_coefficients.size() != provider_count)
-    throw std::runtime_error("System::set_field_solver_plan invalid provider-pack shape");
+    throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan invalid provider-pack shape");
   const auto finite_native_real = [](double value) {
     if (!std::isfinite(value))
       return false;
@@ -866,14 +866,14 @@ void System::set_field_solver_plan(
   for (std::size_t i = 0; i < provider_count; ++i)
     if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
         !finite_native_real(provider_coefficients[i]))
-      throw std::runtime_error("System::set_field_solver_plan invalid provider-pack entry");
+      throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan invalid provider-pack entry");
   if (backend_provider_route.empty())
-    throw std::runtime_error("System::set_field_solver_plan requires a provider identity");
+    throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan requires a provider identity");
   if (!p_->fields_.has_elliptic_provider(backend_provider_route))
-    throw std::runtime_error("System::set_field_solver_plan names an unregistered provider route");
+    throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan names an unregistered provider route");
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
   if (existing != p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan duplicate provider slot");
   const auto duplicate_output =
       std::find_if(p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
                    [&](const auto& configured) {
@@ -882,7 +882,7 @@ void System::set_field_solver_plan(
                    });
   if (duplicate_output != p_->fields_.named_field_plans_.end())
     throw std::runtime_error(
-        "System::set_field_solver_plan output block/key already belongs to another qualified "
+        "System<kNativeDimension>::set_field_solver_plan output block/key already belongs to another qualified "
         "provider slot");
   field_solver::SystemFieldSolver<Impl>::FieldSolveConfig plan;
   plan.plan_identity = plan_identity;
@@ -898,7 +898,7 @@ void System::set_field_solver_plan(
   plan.backend_provider_identity = backend_provider_route;
   auto [inserted, unique] = p_->fields_.named_field_plans_.emplace(provider_slot, std::move(plan));
   if (!unique)
-    throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_solver_plan duplicate provider slot");
   p_->fields_.invalidate_field_plan_consensus();
   auto registered = p_->fields_.named_fields_.find(provider_slot);
   if (registered != p_->fields_.named_fields_.end()) {
@@ -910,12 +910,12 @@ void System::set_field_solver_plan(
   }
 }
 
-void System::set_field_reaction(const std::string& provider_slot, double reaction) {
+void System<kNativeDimension>::set_field_reaction(const std::string& provider_slot, double reaction) {
   require_assembling(p_->lifecycle_, "set_field_reaction");
   p_->fields_.set_named_reaction(provider_slot, static_cast<Real>(reaction));
 }
 
-POPS_EXPORT std::string System::register_field_solver_provider(
+POPS_EXPORT std::string System<kNativeDimension>::register_field_solver_provider(
     const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
     std::shared_ptr<component::LoadedComponent> topology,
     std::shared_ptr<component::LoadedComponent> solver) {
@@ -924,20 +924,20 @@ POPS_EXPORT std::string System::register_field_solver_provider(
                                                        std::move(topology), std::move(solver));
 }
 
-POPS_EXPORT void System::register_field_nullspace_provider(
+POPS_EXPORT void System<kNativeDimension>::register_field_nullspace_provider(
     std::shared_ptr<const FieldNullspaceProvider> provider) {
   require_assembling(p_->lifecycle_, "register_field_nullspace_provider");
   p_->fields_.register_field_nullspace_provider(std::move(provider));
 }
 
-void System::set_default_field_nullspace(const std::string& nullspace_provider_identity,
+void System<kNativeDimension>::set_default_field_nullspace(const std::string& nullspace_provider_identity,
                                          const PreparedProviderOptions& options) {
   require_assembling(p_->lifecycle_, "set_default_field_nullspace");
   p_->fields_.set_primary_nullspace_provider(
       FieldNullspaceProviderSelection{nullspace_provider_identity, options});
 }
 
-POPS_EXPORT void System::set_field_topology_authority(const std::string& provider_slot,
+POPS_EXPORT void System<kNativeDimension>::set_field_topology_authority(const std::string& provider_slot,
                                                       const std::string& provider_kind,
                                                       const std::string& provenance,
                                                       const std::string& topology_digest) {
@@ -945,12 +945,12 @@ POPS_EXPORT void System::set_field_topology_authority(const std::string& provide
   p_->fields_.set_topology_authority(provider_slot, provider_kind, provenance, topology_digest);
 }
 
-POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> System::field_topology_report(
+POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> System<kNativeDimension>::field_topology_report(
     const std::string& provider_slot) const {
   return p_->fields_.topology_report(provider_slot);
 }
 
-void System::set_field_boundary_plan(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_boundary_plan(const std::string& provider_slot,
                                      const std::vector<std::string>& kind,
                                      const std::vector<double>& alpha,
                                      const std::vector<double>& beta,
@@ -958,7 +958,7 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
   require_assembling(p_->lifecycle_, "set_field_boundary_plan");
   if (kind.size() != 4 || alpha.size() != 4 || beta.size() != 4 || value.size() != 4)
     throw std::runtime_error(
-        "System::set_field_boundary_plan requires four xlo/xhi/ylo/yhi entries");
+        "System<kNativeDimension>::set_field_boundary_plan requires four xlo/xhi/ylo/yhi entries");
   BCRec bc;
   bc.dx = p_->geom.dx();
   bc.dy = p_->geom.dy();
@@ -972,12 +972,12 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
     const Real v = static_cast<Real>(value[face]);
     if (!std::isfinite(alpha[face]) || !std::isfinite(beta[face]) || !std::isfinite(value[face]) ||
         (a == Real(0) && b == Real(0) && kind[face] != "periodic"))
-      throw std::runtime_error("System::set_field_boundary_plan invalid Robin coefficients");
+      throw std::runtime_error("System<kNativeDimension>::set_field_boundary_plan invalid Robin coefficients");
     if (kind[face] == "periodic") {
       *types[face] = BCType::Periodic;
     } else if (kind[face] == "dirichlet" || (kind[face] == "mixed" && b == Real(0))) {
       if (a == Real(0))
-        throw std::runtime_error("System::set_field_boundary_plan Dirichlet alpha is zero");
+        throw std::runtime_error("System<kNativeDimension>::set_field_boundary_plan Dirichlet alpha is zero");
       *types[face] = BCType::Dirichlet;
       *vals[face] = v / a;
     } else if (kind[face] == "neumann" && v == Real(0)) {
@@ -990,14 +990,14 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
       const Real h = face < 2 ? bc.dx : bc.dy;
       if (a / Real(2) + b / h == Real(0))
         throw std::runtime_error(
-            "System::set_field_boundary_plan singular cell-centred Robin denominator");
+            "System<kNativeDimension>::set_field_boundary_plan singular cell-centred Robin denominator");
     } else {
-      throw std::runtime_error("System::set_field_boundary_plan unknown kind '" + kind[face] + "'");
+      throw std::runtime_error("System<kNativeDimension>::set_field_boundary_plan unknown kind '" + kind[face] + "'");
     }
   }
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_boundary_plan unknown provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_plan unknown provider slot");
   auto& plan = plan_it->second;
   plan.explicit_bc = bc;
   plan.has_explicit_bc = true;
@@ -1011,7 +1011,7 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
   p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_boundary_dependencies(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_boundary_dependencies(const std::string& provider_slot,
                                              const std::vector<std::string>& state_blocks,
                                              const std::vector<int>& state_components,
                                              const std::vector<std::string>& field_blocks,
@@ -1020,7 +1020,7 @@ void System::set_field_boundary_dependencies(const std::string& provider_slot,
   require_assembling(p_->lifecycle_, "set_field_boundary_dependencies");
   if (state_blocks.size() != state_components.size() || field_blocks.size() != field_keys.size() ||
       field_blocks.size() != field_components.size())
-    throw std::runtime_error("System::set_field_boundary_dependencies pack shape mismatch");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_dependencies pack shape mismatch");
   const auto invalid_text = [](const auto& value) { return value.empty(); };
   const auto invalid_component = [](int value) { return value < 0; };
   if (std::any_of(state_blocks.begin(), state_blocks.end(), invalid_text) ||
@@ -1028,10 +1028,10 @@ void System::set_field_boundary_dependencies(const std::string& provider_slot,
       std::any_of(field_keys.begin(), field_keys.end(), invalid_text) ||
       std::any_of(state_components.begin(), state_components.end(), invalid_component) ||
       std::any_of(field_components.begin(), field_components.end(), invalid_component))
-    throw std::runtime_error("System::set_field_boundary_dependencies contains invalid entries");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_dependencies contains invalid entries");
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_boundary_dependencies unknown provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_dependencies unknown provider slot");
   auto& plan = plan_it->second;
   plan.boundary_state_blocks = state_blocks;
   plan.boundary_state_components = state_components;
@@ -1048,13 +1048,13 @@ void System::set_field_boundary_dependencies(const std::string& provider_slot,
   p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_boundary_kernel(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_boundary_kernel(const std::string& provider_slot,
                                        const CompiledFieldBoundaryKernel& kernel) {
   require_assembling(p_->lifecycle_, "set_field_boundary_kernel");
   kernel.validate();
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_boundary_kernel unknown provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_kernel unknown provider slot");
   p_->fields_.prepare_program_boundary_kernel_install(provider_slot);
   auto& plan = plan_it->second;
   plan.boundary_kernel = kernel;
@@ -1071,11 +1071,11 @@ void System::set_field_boundary_kernel(const std::string& provider_slot,
   p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_logical_timepoint(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_logical_timepoint(const std::string& provider_slot,
                                          const FieldLogicalTimePoint& point) {
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_logical_timepoint unknown provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_logical_timepoint unknown provider slot");
   auto& plan = plan_it->second;
   plan.boundary_context.point = point;
   if (!plan.has_boundary_kernel || !plan.boundary_kernel.observes_iteration)
@@ -1088,17 +1088,17 @@ void System::set_field_logical_timepoint(const std::string& provider_slot,
   }
 }
 
-void System::set_field_boundary_parameters(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_boundary_parameters(const std::string& provider_slot,
                                            const std::vector<double>& parameters) {
   if (std::any_of(parameters.begin(), parameters.end(), [](double value) {
         return !std::isfinite(value) ||
                !std::isfinite(static_cast<double>(static_cast<Real>(value)));
       }))
     throw std::invalid_argument(
-        "System::set_field_boundary_parameters requires finite native-real values");
+        "System<kNativeDimension>::set_field_boundary_parameters requires finite native-real values");
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_boundary_parameters unknown provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_boundary_parameters unknown provider slot");
   auto& plan = plan_it->second;
   if (!plan.boundary_parameters)
     plan.boundary_parameters = std::make_shared<std::vector<Real>>();
@@ -1117,14 +1117,14 @@ void System::set_field_boundary_parameters(const std::string& provider_slot,
   p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_newton_plan(const std::string& provider_slot, double tolerance,
+void System<kNativeDimension>::set_field_newton_plan(const std::string& provider_slot, double tolerance,
                                    int max_iterations, double linear_tolerance,
                                    int linear_max_iterations, int restart, double armijo,
                                    double minimum_step) {
   require_assembling(p_->lifecycle_, "set_field_newton_plan");
   auto found = p_->fields_.named_field_plans_.find(provider_slot);
   if (found == p_->fields_.named_field_plans_.end())
-    throw std::runtime_error("System::set_field_newton_plan unknown field provider slot");
+    throw std::runtime_error("System<kNativeDimension>::set_field_newton_plan unknown field provider slot");
   FieldNewtonOptions options{
       static_cast<Real>(tolerance),   max_iterations, static_cast<Real>(linear_tolerance),
       linear_max_iterations,          restart,        static_cast<Real>(armijo),
@@ -1142,7 +1142,7 @@ void System::set_field_newton_plan(const std::string& provider_slot, double tole
   p_->fields_.invalidate_field_plan_consensus();
 }
 
-void System::set_field_nullspace(const std::string& provider_slot,
+void System<kNativeDimension>::set_field_nullspace(const std::string& provider_slot,
                                  const std::string& nullspace_provider_identity,
                                  const PreparedProviderOptions& options) {
   require_assembling(p_->lifecycle_, "set_field_nullspace");
@@ -1164,22 +1164,26 @@ GeometryMode parse_geometry_mode(const std::string& mode, const char* err_contex
                            "' (none|staircase|cutcell)");
 }
 
+// Capability-qualified legacy EB provider. Its cut-fraction stencil is deliberately 2D and is
+// outside System<Dim>'s Cartesian core (`supported_dimensions=(2,)`).
+namespace legacy2d_eb_provider {
+
 struct AnalyticLevelSetValueKernel {
   analytic::AnalyticProgramView program;
-  Geometry geometry;
-  Array4 values;
+  Geometry<2> geometry;
+  FieldView<Real, 2> values;
 
-  POPS_HD void operator()(int i, int j) const {
-    values(i, j, 0) = program.eval(geometry.x_cell(i), geometry.y_cell(j));
+  POPS_HD void operator()(const CellIndex<2>& index) const {
+    values(index, 0) = program.eval(index, geometry);
   }
 };
 
 struct AnalyticLevelSetPhysicalGhostKernel {
   analytic::AnalyticProgramView program;
-  Geometry geometry;
-  Box2D domain;
-  Periodicity periodicity;
-  Array4 values;
+  Geometry<2> geometry;
+  Box<2> domain;
+  std::array<bool, 2> periodicity;
+  FieldView<Real, 2> values;
 
   POPS_HD static int periodic_index(int index, int lower, int extent) {
     int offset = (index - lower) % extent;
@@ -1188,58 +1192,70 @@ struct AnalyticLevelSetPhysicalGhostKernel {
     return lower + offset;
   }
 
-  POPS_HD void operator()(int i, int j) const {
-    const bool physical_x = !periodicity.x && (i < domain.lo[0] || i > domain.hi[0]);
-    const bool physical_y = !periodicity.y && (j < domain.lo[1] || j > domain.hi[1]);
-    if (!physical_x && !physical_y)
-      return;
-
-    // A mixed topology can reach a physical corner with the other coordinate outside through a
-    // periodic direction.  Evaluate that corner at the wrapped physical point as well.
-    const int sampled_i = periodicity.x ? periodic_index(i, domain.lo[0], domain.nx()) : i;
-    const int sampled_j = periodicity.y ? periodic_index(j, domain.lo[1], domain.ny()) : j;
-    values(i, j, 0) = program.eval(geometry.x_cell(sampled_i), geometry.y_cell(sampled_j));
+  POPS_HD void operator()(const CellIndex<2>& index) const {
+    bool physical = false;
+    CellIndex<2> sampled = index;
+    for (int axis = 0; axis < 2; ++axis) {
+      const bool periodic = periodicity[static_cast<std::size_t>(axis)];
+      physical = physical ||
+                 (!periodic &&
+                  (index[axis] < domain.lo[axis] || index[axis] > domain.hi[axis]));
+      if (periodic)
+        sampled[axis] = periodic_index(index[axis], domain.lo[axis], domain.length(axis));
+    }
+    if (physical)
+      values(index, 0) = program.eval(sampled, geometry);
   }
 };
 
 struct AnalyticLevelSetFiniteIndicator {
-  ConstArray4 values;
+  FieldView<const Real, 2> values;
 
-  POPS_HD Real operator()(int i, int j) const {
-    return Kokkos::isfinite(values(i, j, 0)) ? Real(0) : Real(1);
+  POPS_HD Real operator()(const CellIndex<2>& index) const {
+    return Kokkos::isfinite(values(index, 0)) ? Real(0) : Real(1);
   }
 };
 
 struct AnalyticLevelSetMaskKernel {
-  ConstArray4 level_set_values;
-  Array4 active_mask;
+  FieldView<const Real, 2> level_set_values;
+  FieldView<Real, 2> active_mask;
 
-  POPS_HD void operator()(int i, int j) const {
-    active_mask(i, j, 0) = level_set_values(i, j, 0) < Real(0) ? Real(1) : Real(0);
+  POPS_HD void operator()(const CellIndex<2>& index) const {
+    active_mask(index, 0) = level_set_values(index, 0) < Real(0) ? Real(1) : Real(0);
   }
 };
 
 struct AnalyticInverseVolumeFractionKernel {
-  ConstArray4 level_set_values;
-  Array4 inverse_volume_fraction;
+  FieldView<const Real, 2> level_set_values;
+  FieldView<Real, 2> inverse_volume_fraction;
   Real dx, dy, kappa_min, cut_theta_min;
 
-  POPS_HD void operator()(int i, int j) const {
-    const Real center = level_set_values(i, j, 0);
+  POPS_HD void operator()(const CellIndex<2>& index) const {
+    const Real center = level_set_values(index, 0);
     if (center >= Real(0)) {
-      inverse_volume_fraction(i, j, 0) = Real(0);
+      inverse_volume_fraction(index, 0) = Real(0);
       return;
     }
+    CellIndex<2> xlo = index;
+    CellIndex<2> xhi = index;
+    CellIndex<2> ylo = index;
+    CellIndex<2> yhi = index;
+    --xlo[0];
+    ++xhi[0];
+    --ylo[1];
+    ++yhi[1];
     const detail::CutFraction fraction = detail::cut_fraction_from_samples(
-        center, level_set_values(i - 1, j, 0), level_set_values(i + 1, j, 0),
-        level_set_values(i, j - 1, 0), level_set_values(i, j + 1, 0), dx, dy, cut_theta_min);
+        center, level_set_values(xlo, 0), level_set_values(xhi, 0),
+        level_set_values(ylo, 0), level_set_values(yhi, 0), dx, dy, cut_theta_min);
     const Real effective = fraction.kappa > kappa_min ? fraction.kappa : kappa_min;
-    inverse_volume_fraction(i, j, 0) = Real(1) / effective;
+    inverse_volume_fraction(index, 0) = Real(1) / effective;
   }
 };
+
+}  // namespace legacy2d_eb_provider
 }  // namespace
 
-void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
+void System<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>& opcodes,
                                     const std::vector<double>& literals, const std::string& mode,
                                     double kappa_min, double face_open_eps, double cut_theta_min) {
   Impl* P = p_.get();
@@ -1249,7 +1265,7 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
     analytic::AnalyticProgram program;
   };
   auto prepared = analytic::collectively_prepare_analytic_request(
-      "System::set_analytic_level_set", {{"mode", mode}},
+      "System<kNativeDimension>::set_analytic_level_set", {{"mode", mode}},
       {{"cut_theta_min", cut_theta_min},
        {"face_open_eps", face_open_eps},
        {"kappa_min", kappa_min}},
@@ -1259,29 +1275,29 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
             !std::isfinite(cut_theta_min) || kappa_min < 0.0 || face_open_eps < 0.0 ||
             cut_theta_min < 0.0)
           throw std::runtime_error(
-              "System::set_analytic_level_set : kappa_min / face_open_eps / cut_theta_min must "
+              "System<kNativeDimension>::set_analytic_level_set : kappa_min / face_open_eps / cut_theta_min must "
               "be finite and >= 0 (0 = keep the current value)");
         if (kappa_min > 1.0 || face_open_eps > 1.0 || cut_theta_min > 1.0)
           throw std::runtime_error(
-              "System::set_analytic_level_set : kappa_min / face_open_eps / "
+              "System<kNativeDimension>::set_analytic_level_set : kappa_min / face_open_eps / "
               "cut_theta_min must be <= 1");
         if (P->polar_)
-          throw std::runtime_error("System::set_analytic_level_set : Cartesian geometry required");
+          throw std::runtime_error("System<kNativeDimension>::set_analytic_level_set : Cartesian geometry required");
         const GeometryMode geometry_mode =
-            parse_geometry_mode(mode, "System::set_analytic_level_set");
+            parse_geometry_mode(mode, "System<kNativeDimension>::set_analytic_level_set");
         if (geometry_mode != GeometryMode::None && P->ws_cache_block_)
           throw std::runtime_error(
-              "System::set_analytic_level_set : mode '" + mode +
+              "System<kNativeDimension>::set_analytic_level_set : mode '" + mode +
               "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
               "cache, only wired on the full Cartesian residual ; remove wave_speed_cache "
               "or use mode='none')");
         if (geometry_mode != GeometryMode::None && P->blocks_.has_interfaces(0))
           throw std::runtime_error(
-              "System::set_analytic_level_set: embedded-boundary transport has no signed-mask or "
+              "System<kNativeDimension>::set_analytic_level_set: embedded-boundary transport has no signed-mask or "
               "cut-cell shared-interface provider");
         for (const auto& block : P->sp)
           if (!supports_geometry_mode(block.spatial_provider, geometry_mode))
-            throw std::runtime_error("System::set_analytic_level_set: block '" + block.name +
+            throw std::runtime_error("System<kNativeDimension>::set_analytic_level_set: block '" + block.name +
                                      "' has no numerical provider for embedded-boundary mode '" +
                                      mode + "'");
         if (geometry_mode != GeometryMode::None) {
@@ -1300,12 +1316,12 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
             if (plan->requires_characteristic_no_inflow() &&
                 !supports(SpatialProviderOperation::CharacteristicNoInflow))
               throw std::runtime_error(
-                  "System::set_analytic_level_set: block '" + name +
+                  "System<kNativeDimension>::set_analytic_level_set: block '" + name +
                   "' has characteristic no-inflow without an embedded-boundary metric provider");
             if (plan->has_component_boundaries() &&
                 !supports(SpatialProviderOperation::BoundaryLinearization))
               throw std::runtime_error(
-                  "System::set_analytic_level_set: block '" + name +
+                  "System<kNativeDimension>::set_analytic_level_set: block '" + name +
                   "' has a native boundary component without an embedded-boundary metric provider");
           }
         }
@@ -1325,9 +1341,11 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
   const GeometryMode gmode = prepared.geometry_mode;
   EbThresholds staged_thresholds = prepared.thresholds;
   analytic::AnalyticProgram staged_program = std::move(prepared.program);
-  MultiFab staged_level_set_values(P->ba, P->dm, 1, 1);
-  MultiFab staged_mask(P->ba, P->dm, 1, 1);
-  MultiFab staged_inverse_volume_fraction(P->ba, P->dm, 1, 0);
+  MultiFab<2> staged_level_set_values(
+      P->ba, P->dm, P->local_rank, 1, runtime_config_detail::filled_extent<2>(1));
+  MultiFab<2> staged_mask(P->ba, P->dm, P->local_rank, 1,
+                          runtime_config_detail::filled_extent<2>(1));
+  MultiFab<2> staged_inverse_volume_fraction(P->ba, P->dm, P->local_rank, 1, Extent<2>{});
   const analytic::AnalyticProgramView view = staged_program.view();
   // Sample each owned valid cell exactly once, then obtain internal and periodic ghosts from the
   // native halo topology.  In particular, a periodic seam must copy the opposite valid value rather
@@ -1335,42 +1353,46 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
   for (int li = 0; li < staged_level_set_values.local_size(); ++li)
     for_each_cell(
         staged_level_set_values.box(li),
-        AnalyticLevelSetValueKernel{view, P->geom, staged_level_set_values.fab(li).array()});
+        legacy2d_eb_provider::AnalyticLevelSetValueKernel{
+            view, P->geom, staged_level_set_values.fab(li).view()});
   fill_boundary(staged_level_set_values, P->dom, P->per_);
 
   // Non-periodic physical ghosts have no halo source.  They retain the analytic extension needed by
   // the centered cut-fraction stencil; mixed-periodic corners wrap only their periodic coordinate.
   for (int li = 0; li < staged_level_set_values.local_size(); ++li)
     for_each_cell(staged_level_set_values.fab(li).grown_box(),
-                  AnalyticLevelSetPhysicalGhostKernel{view, P->geom, P->dom, P->per_,
-                                                      staged_level_set_values.fab(li).array()});
+                  legacy2d_eb_provider::AnalyticLevelSetPhysicalGhostKernel{
+                      view, P->geom, P->dom, {P->per_.x, P->per_.y},
+                      staged_level_set_values.fab(li).view()});
 
   Real local_non_finite = Real(0);
   for (int li = 0; li < staged_level_set_values.local_size(); ++li) {
-    const Box2D sampled = staged_level_set_values.fab(li).grown_box();
+    const Box<2> sampled = staged_level_set_values.fab(li).grown_box();
     local_non_finite = std::max(
         local_non_finite,
-        for_each_cell_reduce_max(sampled, AnalyticLevelSetFiniteIndicator{
-                                              staged_level_set_values.fab(li).const_array()}));
+        for_each_cell_reduce_max(
+            sampled, legacy2d_eb_provider::AnalyticLevelSetFiniteIndicator{
+                         staged_level_set_values.fab(li).view()}));
   }
   if (all_reduce_max(static_cast<double>(local_non_finite)) != 0.0)
     throw std::domain_error(
-        "System::set_analytic_level_set : expression produced a non-finite value on the "
+        "System<kNativeDimension>::set_analytic_level_set : expression produced a non-finite value on the "
         "distributed mesh or mask ghost layer");
 
-  const Real dx = P->geom.dx(), dy = P->geom.dy();
+  const Real dx = P->geom.spacing(0), dy = P->geom.spacing(1);
   for (int li = 0; li < staged_mask.local_size(); ++li) {
-    const ConstArray4 phi = staged_level_set_values.fab(li).const_array();
+    const FieldView<const Real, 2> phi = staged_level_set_values.fab(li).view();
     for_each_cell(staged_mask.fab(li).grown_box(),
-                  AnalyticLevelSetMaskKernel{phi, staged_mask.fab(li).array()});
+                  legacy2d_eb_provider::AnalyticLevelSetMaskKernel{
+                      phi, staged_mask.fab(li).view()});
     for_each_cell(staged_inverse_volume_fraction.box(li),
-                  AnalyticInverseVolumeFractionKernel{
-                      phi, staged_inverse_volume_fraction.fab(li).array(), dx, dy,
+                  legacy2d_eb_provider::AnalyticInverseVolumeFractionKernel{
+                      phi, staged_inverse_volume_fraction.fab(li).view(), dx, dy,
                       staged_thresholds.kappa_min, staged_thresholds.cut_theta_min});
   }
   if (gmode != GeometryMode::None && sum(staged_mask, 0) <= Real(0))
     throw std::domain_error(
-        "System::set_analytic_level_set : active embedded-boundary geometry contains no cells");
+        "System<kNativeDimension>::set_analytic_level_set : active embedded-boundary geometry contains no cells");
 
   // Strong publication boundary: the old signed samples, metrics, thresholds and routing remain
   // untouched if
@@ -1383,13 +1405,13 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
   P->geometry_mode_ = gmode;
 }
 
-void System::set_disc_domain(double cx, double cy, double R, const std::string& mode,
+void System<kNativeDimension>::set_disc_domain(double cx, double cy, double R, const std::string& mode,
                              double kappa_min, double face_open_eps, double cut_theta_min) {
   const std::vector<std::string> opcodes{"x",   "constant", "sub",      "y",  "constant",
                                          "sub", "hypot",    "constant", "sub"};
   const std::vector<double> literals{0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, R, 0.0};
   (void)analytic::collectively_prepare_analytic_request(
-      "System::set_disc_domain", {{"mode", mode}},
+      "System<kNativeDimension>::set_disc_domain", {{"mode", mode}},
       {{"center_x", cx},
        {"center_y", cy},
        {"cut_theta_min", cut_theta_min},
@@ -1400,35 +1422,35 @@ void System::set_disc_domain(double cx, double cy, double R, const std::string& 
         require_assembling(p_->lifecycle_, "set_disc_domain");
         if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(R) || !(R > 0.0))
           throw std::runtime_error(
-              "System::set_disc_domain : finite cx/cy and finite radius R > 0 required");
+              "System<kNativeDimension>::set_disc_domain : finite cx/cy and finite radius R > 0 required");
         return true;
       });
   set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
 }
 
-void System::set_geometry_mode(const std::string& mode) {
+void System<kNativeDimension>::set_geometry_mode(const std::string& mode) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_,
                      "set_geometry_mode");  // frozen once pops.bind completes (ADC-592)
-  const GeometryMode gmode = parse_geometry_mode(mode, "System::set_geometry_mode");
+  const GeometryMode gmode = parse_geometry_mode(mode, "System<kNativeDimension>::set_geometry_mode");
   // An embedded-boundary mode (staircase/cutcell) only makes sense with a fixed domain: otherwise the
   // Program would fall back on the full transport (the mask / level set does not exist), a silent
   // footgun -> we reject.
   if (gmode != GeometryMode::None && !P->eb_set_)
     throw std::runtime_error(
-        "System::set_geometry_mode : embedded-boundary mode '" + mode +
+        "System<kNativeDimension>::set_geometry_mode : embedded-boundary mode '" + mode +
         "' requested without a fixed level-set domain ; install a level set first");
   // wave_speed_cache (ADC-199) is not carried by the embedded-boundary residuals -> explicit
   // rejection rather than a cache silently ignored in staircase/cutcell mode.
   if (gmode != GeometryMode::None && P->ws_cache_block_)
     throw std::runtime_error(
-        "System::set_geometry_mode : mode '" + mode +
+        "System<kNativeDimension>::set_geometry_mode : mode '" + mode +
         "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
         "cache, only wired on the full Cartesian residual ; remove wave_speed_cache "
         "or use mode='none')");
   if (gmode != GeometryMode::None && P->blocks_.has_interfaces(0))
     throw std::runtime_error(
-        "System::set_geometry_mode: embedded-boundary transport has no signed-mask or cut-cell "
+        "System<kNativeDimension>::set_geometry_mode: embedded-boundary transport has no signed-mask or cut-cell "
         "shared-interface provider");
   for (const auto& block : P->sp) {
     const SpatialProviderGeometry geometry = gmode == GeometryMode::None
@@ -1436,7 +1458,7 @@ void System::set_geometry_mode(const std::string& mode) {
                                                  : spatial_provider_geometry(gmode);
     if (!block.spatial_provider.supports(
             {kNativeDimension, geometry, SpatialProviderOperation::Residual}))
-      throw std::runtime_error("System::set_geometry_mode: block '" + block.name +
+      throw std::runtime_error("System<kNativeDimension>::set_geometry_mode: block '" + block.name +
                                "' has no numerical provider for embedded-boundary mode '" + mode +
                                "'");
   }
@@ -1456,19 +1478,19 @@ void System::set_geometry_mode(const std::string& mode) {
       if (plan->requires_characteristic_no_inflow() &&
           !supports(SpatialProviderOperation::CharacteristicNoInflow))
         throw std::runtime_error(
-            "System::set_geometry_mode: block '" + name +
+            "System<kNativeDimension>::set_geometry_mode: block '" + name +
             "' has characteristic no-inflow without an embedded-boundary metric provider");
       if (plan->has_component_boundaries() &&
           !supports(SpatialProviderOperation::BoundaryLinearization))
         throw std::runtime_error(
-            "System::set_geometry_mode: block '" + name +
+            "System<kNativeDimension>::set_geometry_mode: block '" + name +
             "' has a native boundary component without an embedded-boundary metric provider");
     }
   }
   P->geometry_mode_ = gmode;
 }
 
-std::vector<double> System::disc_mask() const {
+std::vector<double> System<kNativeDimension>::disc_mask() const {
   Impl* P = p_.get();
   device_fence();
   const Box2D v = P->dom;
@@ -1482,47 +1504,47 @@ std::vector<double> System::disc_mask() const {
   return gather_global(P->domain_mask_, 1, v.nx(), v.ny());
 }
 
-void System::set_epsilon_field(const std::vector<double>& eps) {
+void System<kNativeDimension>::set_epsilon_field(const std::vector<double>& eps) {
   require_assembling(p_->lifecycle_,
                      "set_epsilon_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(eps.size()) != n * n)
-    throw std::runtime_error("System::set_epsilon_field : size != n*n");
+    throw std::runtime_error("System<kNativeDimension>::set_epsilon_field : size != n*n");
   for (double e : eps)
     if (!(e > 0.0))
-      throw std::runtime_error("System::set_epsilon_field : permittivity eps(x) > 0 required");
+      throw std::runtime_error("System<kNativeDimension>::set_epsilon_field : permittivity eps(x) > 0 required");
   p_->fields_.configure_scalar_diffusion_coefficient(eps);
 }
 
-void System::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
+void System<kNativeDimension>::set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
                                            const std::vector<double>& eps_y) {
   require_assembling(p_->lifecycle_,
                      "set_epsilon_anisotropic_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(eps_x.size()) != n * n || static_cast<int>(eps_y.size()) != n * n)
     throw std::runtime_error(
-        "System::set_epsilon_anisotropic_field : size != n*n (eps_x and eps_y)");
+        "System<kNativeDimension>::set_epsilon_anisotropic_field : size != n*n (eps_x and eps_y)");
   for (double e : eps_x)
     if (!(e > 0.0))
       throw std::runtime_error(
-          "System::set_epsilon_anisotropic_field : permittivity eps_x(x) > 0 required");
+          "System<kNativeDimension>::set_epsilon_anisotropic_field : permittivity eps_x(x) > 0 required");
   for (double e : eps_y)
     if (!(e > 0.0))
       throw std::runtime_error(
-          "System::set_epsilon_anisotropic_field : permittivity eps_y(x) > 0 required");
+          "System<kNativeDimension>::set_epsilon_anisotropic_field : permittivity eps_y(x) > 0 required");
   p_->fields_.configure_diagonal_diffusion_coefficient(eps_x, eps_y);
 }
 
-void System::set_reaction_field(const std::vector<double>& kappa) {
+void System<kNativeDimension>::set_reaction_field(const std::vector<double>& kappa) {
   require_assembling(p_->lifecycle_,
                      "set_reaction_field");  // frozen once pops.bind completes (ADC-592)
   const int n = p_->cfg.n;
   if (static_cast<int>(kappa.size()) != n * n)
-    throw std::runtime_error("System::set_reaction_field : size != n*n");
+    throw std::runtime_error("System<kNativeDimension>::set_reaction_field : size != n*n");
   for (double k : kappa)
     if (!(k >= 0.0))
       throw std::runtime_error(
-          "System::set_reaction_field : reaction term kappa(x) >= 0 required "
+          "System<kNativeDimension>::set_reaction_field : reaction term kappa(x) >= 0 required "
           "(well-posed elliptic operator and convergent multigrid)");
   p_->fields_.p_kappa_field_ = kappa;
   p_->fields_.has_kappa_field_ = true;
@@ -1530,35 +1552,35 @@ void System::set_reaction_field(const std::vector<double>& kappa) {
   p_->fields_.p_nullspace_ready_ = false;
 }
 
-POPS_EXPORT void System::ensure_aux_width(int ncomp) {
+POPS_EXPORT void System<kNativeDimension>::ensure_aux_width(int ncomp) {
   p_->ensure_aux_width(ncomp);
 }
 
-void System::set_magnetic_field(const std::vector<double>& bz) {
+void System<kNativeDimension>::set_magnetic_field(const std::vector<double>& bz) {
   // Expected size of the B_z(x) field row-major (slow axis = 2nd box index, fast axis = 1st):
   //   Cartesian = n * n (square, BIT-IDENTICAL); POLAR = nr * ntheta (ring, i = r fast, cf.
   //   apply_bz / polar set_density). The layout is the SAME as set_density (flat[j * nr + i]).
   if (p_->polar_) {
     const int nr = Impl::polar_nr(p_->cfg), nth = Impl::polar_ntheta(p_->cfg);
     if (static_cast<int>(bz.size()) != nr * nth)
-      throw std::runtime_error("System::set_magnetic_field : size != nr*ntheta (polar)");
+      throw std::runtime_error("System<kNativeDimension>::set_magnetic_field : size != nr*ntheta (polar)");
   } else {
     const int n = p_->cfg.n;
     if (static_cast<int>(bz.size()) != n * n)
-      throw std::runtime_error("System::set_magnetic_field : size != n*n");
+      throw std::runtime_error("System<kNativeDimension>::set_magnetic_field : size != n*n");
   }
   p_->fields_.bz_field_.assign(bz.begin(), bz.end());
   p_->fields_
       .apply_bz();  // apply right away if a block already reads B_z; otherwise keep for ensure_aux_width
 }
 
-void System::set_electron_temperature_from(const std::string& name) {
+void System<kNativeDimension>::set_electron_temperature_from(const std::string& name) {
   require_assembling(p_->lifecycle_,
                      "set_electron_temperature_from");  // frozen once pops.bind completes (ADC-592)
   const int idx = p_->index(name);                      // raises if unknown block
   if (p_->sp[static_cast<std::size_t>(idx)].ncomp != 4)
     throw std::runtime_error(
-        "System::set_electron_temperature_from : block '" + name +
+        "System<kNativeDimension>::set_electron_temperature_from : block '" + name +
         "' must be compressible (4 vars : rho, rho u, rho v, E) for T = p/rho");
   p_->fields_.te_src_ = idx;
   // T_e (canonical comp 4) DERIVED: recomputed at each solve_fields. Inert as long as no block
@@ -1567,8 +1589,8 @@ void System::set_electron_temperature_from(const std::string& name) {
 }
 
 // Expected size of a cell-defined field (Cartesian n*n / polar nr*ntheta). Member of Impl:
-// a free caller could not name the private type System::Impl.
-std::size_t System::Impl::aux_field_cell_count() const {
+// a free caller could not name the private type System<kNativeDimension>::Impl.
+std::size_t System<kNativeDimension>::Impl::aux_field_cell_count() const {
   if (polar_) {
     const int nr = polar_nr(cfg), nth = polar_ntheta(cfg);
     return static_cast<std::size_t>(nr) * nth;
@@ -1576,27 +1598,27 @@ std::size_t System::Impl::aux_field_cell_count() const {
   return static_cast<std::size_t>(cfg.n) * cfg.n;
 }
 
-void System::set_aux_field_component(int comp, const std::vector<double>& field) {
+void System<kNativeDimension>::set_aux_field_component(int comp, const std::vector<double>& field) {
   Impl* P = p_.get();
   // RESERVED components (phi/grad/B_z/T_e): a named aux field starts at kAuxNamedBase (= 5).
   // B_z and T_e keep their dedicated paths -> redirecting message (the Python facade already intercepts
   // the canonical names, this guard covers a direct C++ call).
   if (comp < kAuxNamedBase)
     throw std::runtime_error(
-        "System::set_aux_field : component " + std::to_string(comp) +
+        "System<kNativeDimension>::set_aux_field : component " + std::to_string(comp) +
         " reserved (phi/grad_x/grad_y/B_z/T_e) ; a named aux field starts at index " +
         std::to_string(kAuxNamedBase) +
         " (B_z -> set_magnetic_field, T_e -> "
         "set_electron_temperature_from)");
   const std::size_t expect = P->aux_field_cell_count();
   if (field.size() != expect)
-    throw std::runtime_error("System::set_aux_field : size " + std::to_string(field.size()) +
+    throw std::runtime_error("System<kNativeDimension>::set_aux_field : size " + std::to_string(field.size()) +
                              " != " + std::to_string(expect) + " (grid cells)");
   // The aux channel must be wide enough: a block declaring this field (n_aux = kAuxNamedBase + k + 1) has
   // already called ensure_aux_width at its add time. Otherwise the field would be read by no model -> error.
   if (comp >= P->aux_ncomp_)
     throw std::runtime_error(
-        "System::set_aux_field : the aux channel has only " + std::to_string(P->aux_ncomp_) +
+        "System<kNativeDimension>::set_aux_field : the aux channel has only " + std::to_string(P->aux_ncomp_) +
         " components ; no block declares an aux field at index " + std::to_string(comp) +
         " (add the block that reads it before set_aux_field)");
   field_solver::SystemFieldSolver<Impl>::NamedAuxField f(field.begin(), field.end());
@@ -1604,38 +1626,38 @@ void System::set_aux_field_component(int comp, const std::vector<double>& field)
   p_->fields_.named_aux_[comp] = std::move(f);  // keep for a later reallocation of the channel
 }
 
-void System::set_aux_field_halo_component(int comp, int bc_type, double value) {
+void System<kNativeDimension>::set_aux_field_halo_component(int comp, int bc_type, double value) {
   Impl* P = p_.get();
   if (comp < kAuxNamedBase)
     throw std::runtime_error(
-        "System::set_aux_field (halo) : component " + std::to_string(comp) +
+        "System<kNativeDimension>::set_aux_field (halo) : component " + std::to_string(comp) +
         " reserved (phi/grad_x/grad_y/B_z/T_e) ; a named aux field starts at index " +
         std::to_string(kAuxNamedBase));
   if (comp >= P->aux_ncomp_)
     throw std::runtime_error(
-        "System::set_aux_field (halo) : the aux channel has only " + std::to_string(P->aux_ncomp_) +
+        "System<kNativeDimension>::set_aux_field (halo) : the aux channel has only " + std::to_string(P->aux_ncomp_) +
         " components ; no block declares an aux field at index " + std::to_string(comp));
   // Only the PHYSICAL-face policies are meaningful per field (Foextrap / Dirichlet). A periodic face is
   // a domain property kept by aux_halo_override, so a per-field 'periodic' is not offered.
   if (bc_type != static_cast<int>(BCType::Foextrap) &&
       bc_type != static_cast<int>(BCType::Dirichlet))
-    throw std::runtime_error("System::set_aux_field (halo) : unsupported halo type " +
+    throw std::runtime_error("System<kNativeDimension>::set_aux_field (halo) : unsupported halo type " +
                              std::to_string(bc_type) + " ; use foextrap or dirichlet");
   P->fields_.named_aux_bc_[comp] =
       AuxHaloPolicy{static_cast<BCType>(bc_type), static_cast<Real>(value)};
 }
 
-std::vector<double> System::aux_field_component(int comp) const {
+std::vector<double> System<kNativeDimension>::aux_field_component(int comp) const {
   Impl* P = p_.get();
   if (comp < kAuxNamedBase)
-    throw std::runtime_error("System::aux_field : component " + std::to_string(comp) +
+    throw std::runtime_error("System<kNativeDimension>::aux_field : component " + std::to_string(comp) +
                              " reserved (phi/grad_x/grad_y/B_z/T_e) ; read phi via potential(), a "
                              "named aux field starts "
                              "at index " +
                              std::to_string(kAuxNamedBase));
   if (comp >= P->aux_ncomp_)
     throw std::runtime_error(
-        "System::aux_field : the aux channel has only " + std::to_string(P->aux_ncomp_) +
+        "System<kNativeDimension>::aux_field : the aux channel has only " + std::to_string(P->aux_ncomp_) +
         " components ; no block declares an aux field at index " + std::to_string(comp));
   device_fence();
   // Rank without a box (MPI mono-box): EMPTY return (cf. potential / copy_comp0). The Python facade is
@@ -1652,14 +1674,14 @@ std::vector<double> System::aux_field_component(int comp) const {
   return out;
 }
 
-// The named inter-species couplings (System::add_ionization / add_collision / add_thermal_exchange)
+// The named inter-species couplings (System<kNativeDimension>::add_ionization / add_collision / add_thermal_exchange)
 // are removed (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that emit the
 // same formulas as a generic CoupledSource and register through add_coupling_operator with a declared
 // conservation contract. Impl::couplings / coupled_freqs_ / coupled_freq_exprs_ STORAGE stays untouched
 // (explicit Program lowering consumes operators; SystemProgramDriver::step_cfl reads the bounds); only the
 // entry methods go.
 
-void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
+void System<kNativeDimension>::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
   require_assembling(p_->lifecycle_,
                      "add_coupled_source");  // frozen once pops.bind completes (ADC-592)
@@ -1681,24 +1703,24 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
   const int n_terms = static_cast<int>(out_blocks.size());
   // --- shape validation (before any step, EXPLICIT errors) ------------------------------------
   if (n_terms == 0)
-    throw std::runtime_error("System::add_coupled_source : no source term (out_blocks empty)");
+    throw std::runtime_error("System<kNativeDimension>::add_coupled_source : no source term (out_blocks empty)");
   if (static_cast<int>(in_roles.size()) != n_in)
     throw std::runtime_error(
-        "System::add_coupled_source : in_blocks / in_roles of different sizes");
+        "System<kNativeDimension>::add_coupled_source : in_blocks / in_roles of different sizes");
   if (static_cast<int>(out_roles.size()) != n_terms ||
       static_cast<int>(prog_lens.size()) != n_terms)
     throw std::runtime_error(
-        "System::add_coupled_source : out_blocks / out_roles / prog_lens of different "
+        "System<kNativeDimension>::add_coupled_source : out_blocks / out_roles / prog_lens of different "
         "sizes");
   if (prog_ops.size() != prog_args.size())
     throw std::runtime_error(
-        "System::add_coupled_source : prog_ops / prog_args of different sizes");
+        "System<kNativeDimension>::add_coupled_source : prog_ops / prog_args of different sizes");
   if (n_in + n_const > kCsMaxReg)
     throw std::runtime_error(
-        "System::add_coupled_source : too many registers (inputs + constants > " +
+        "System<kNativeDimension>::add_coupled_source : too many registers (inputs + constants > " +
         std::to_string(kCsMaxReg) + ")");
   if (n_terms > kCsMaxTerms)
-    throw std::runtime_error("System::add_coupled_source : too many source terms (> " +
+    throw std::runtime_error("System<kNativeDimension>::add_coupled_source : too many source terms (> " +
                              std::to_string(kCsMaxTerms) + ")");
   // Resolves role -> component via the CONSERVATIVE descriptor of the block. The role is addressed BY
   // NAME: a canonical role name OR a user-defined role label (index_of(string), ADC-292). An unknown
@@ -1713,7 +1735,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     const int comp = vs.index_of(role);
     if (comp < 0)
       throw std::runtime_error(
-          "System::add_coupled_source : block '" + block + "' does not expose role '" + role +
+          "System<kNativeDimension>::add_coupled_source : block '" + block + "' does not expose role '" + role +
           "' (roles: " + (vs.roles.empty() ? std::string("<none>") : roles_csv(vs)) +
           ", no silent fallback on component 0)");
     return {sidx, comp};
@@ -1740,24 +1762,24 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
         resolve(out_blocks[static_cast<std::size_t>(t)], out_roles[static_cast<std::size_t>(t)]);
     const int len = prog_lens[static_cast<std::size_t>(t)];
     if (len < 0 || len > kCsMaxProg)
-      throw std::runtime_error("System::add_coupled_source : program of term " + std::to_string(t) +
+      throw std::runtime_error("System<kNativeDimension>::add_coupled_source : program of term " + std::to_string(t) +
                                " too long (> " + std::to_string(kCsMaxProg) + ")");
     if (off + len > static_cast<int>(prog_ops.size()))
-      throw std::runtime_error("System::add_coupled_source : prog_lens inconsistent with prog_ops");
+      throw std::runtime_error("System<kNativeDimension>::add_coupled_source : prog_lens inconsistent with prog_ops");
     CsProgram pg;
     pg.len = len;
     for (int k = 0; k < len; ++k) {
       const int opc = prog_ops[static_cast<std::size_t>(off + k)];
       const int a = prog_args[static_cast<std::size_t>(off + k)];
       if (opc < 0 || opc > static_cast<int>(CsOp::Sqrt))
-        throw std::runtime_error("System::add_coupled_source : invalid opcode");
+        throw std::runtime_error("System<kNativeDimension>::add_coupled_source : invalid opcode");
       if (opc == static_cast<int>(CsOp::PushReg) && (a < 0 || a >= n_in + n_const))
         throw std::runtime_error(
-            "System::add_coupled_source : register out of bounds in the program");
+            "System<kNativeDimension>::add_coupled_source : register out of bounds in the program");
       pg.op[k] = opc;
       pg.arg[k] = a;
     }
-    validate_cs_program_stack(pg, "System::add_coupled_source term " + std::to_string(t));
+    validate_cs_program_stack(pg, "System<kNativeDimension>::add_coupled_source term " + std::to_string(t));
     outs[static_cast<std::size_t>(t)] = {s, comp, pg};
     off += len;
   }
@@ -1775,24 +1797,24 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
   if (has_freq_expr) {
     if (freq_prog_ops.size() != freq_prog_args.size())
       throw std::runtime_error(
-          "System::add_coupled_source : freq_prog_ops / freq_prog_args of different "
+          "System<kNativeDimension>::add_coupled_source : freq_prog_ops / freq_prog_args of different "
           "sizes");
     if (static_cast<int>(freq_prog_ops.size()) > kCsMaxProg)
-      throw std::runtime_error("System::add_coupled_source : frequency program too long (> " +
+      throw std::runtime_error("System<kNativeDimension>::add_coupled_source : frequency program too long (> " +
                                std::to_string(kCsMaxProg) + ")");
     freq_pg.len = static_cast<int>(freq_prog_ops.size());
     for (int k = 0; k < freq_pg.len; ++k) {
       const int opc = freq_prog_ops[static_cast<std::size_t>(k)];
       const int a = freq_prog_args[static_cast<std::size_t>(k)];
       if (opc < 0 || opc > static_cast<int>(CsOp::Sqrt))
-        throw std::runtime_error("System::add_coupled_source : invalid opcode in the frequency");
+        throw std::runtime_error("System<kNativeDimension>::add_coupled_source : invalid opcode in the frequency");
       if (opc == static_cast<int>(CsOp::PushReg) && (a < 0 || a >= n_in + n_const))
         throw std::runtime_error(
-            "System::add_coupled_source : register out of bounds in the frequency");
+            "System<kNativeDimension>::add_coupled_source : register out of bounds in the frequency");
       freq_pg.op[k] = opc;
       freq_pg.arg[k] = a;
     }
-    validate_cs_program_stack(freq_pg, "System::add_coupled_source frequency");
+    validate_cs_program_stack(freq_pg, "System<kNativeDimension>::add_coupled_source frequency");
   }
   // CONSTANT declared frequency of the coupling (audit wave 3): registered for the step bound of
   // step_cfl (dt <= cfl/mu on the Program macro-step). <= 0 = no bound. Pushed
@@ -1856,12 +1878,12 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
   P->coupling_.coupled_operators.push_back(std::move(view));
 }
 
-void System::add_coupling_operator(const CouplingOperator& op) {
+void System<kNativeDimension>::add_coupling_operator(const CouplingOperator& op) {
   // Validate the DECLARED conservation contract against the actual output terms BEFORE anything is
   // stored (host, fail-loud): a coupling that declares a role conserved whose terms do not cancel
   // raises here and leaves no partial state (anti-phantom-registration, like add_coupled_source's
   // frequency-bound rule). An unchecked (empty) contract is a no-op check.
-  validate_coupling_contract(op, "System::add_coupling_operator");
+  validate_coupling_contract(op, "System<kNativeDimension>::add_coupling_operator");
   // Lower through the SAME flat path (bit-identical numerics); it pushes an "unchecked" inspect view
   // at its tail. We then replace that view's contract with the DECLARED one so coupled_operators()
   // reports the typed contract rather than "unchecked".
@@ -1869,7 +1891,7 @@ void System::add_coupling_operator(const CouplingOperator& op) {
   p_->coupling_.coupled_operators.back().conservation = op.conservation;
 }
 
-const std::vector<CouplingOperatorView>& System::coupled_operators() const {
+const std::vector<CouplingOperatorView>& System<kNativeDimension>::coupled_operators() const {
   return p_->coupling_.coupled_operators;
 }
 

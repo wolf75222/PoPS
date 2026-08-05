@@ -42,12 +42,12 @@ struct SystemLifecycle {
   /// holds -- the same predicate the old `bound_` bool expressed (Bound / Checkpointed / Finalized).
   bool frozen() const { return phase != LifecyclePhase::Assembling; }
 
-  /// The ONE transition into the frozen state (System::mark_bound). Assembling -> Bound; a second call
+  /// The ONE transition into the frozen state (System<kNativeDimension>::mark_bound). Assembling -> Bound; a second call
   /// throws (a composition binds exactly once), with the SAME message the old bool guard raised.
   void to_bound() {
     if (phase != LifecyclePhase::Assembling)
       throw std::runtime_error(
-          "System::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
+          "System<kNativeDimension>::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
           "exactly once; a fresh run needs a fresh pops.bind)");
     phase = LifecyclePhase::Bound;
   }
@@ -57,10 +57,10 @@ struct SystemLifecycle {
   void to_checkpointed() {
     if (phase == LifecyclePhase::Assembling)
       throw std::runtime_error(
-          "System::to_checkpointed: cannot checkpoint an unbound composition (bind it first)");
+          "System<kNativeDimension>::to_checkpointed: cannot checkpoint an unbound composition (bind it first)");
     if (phase == LifecyclePhase::Finalized)
       throw std::runtime_error(
-          "System::to_checkpointed: the simulation is finalized (terminal); no further transition");
+          "System<kNativeDimension>::to_checkpointed: the simulation is finalized (terminal); no further transition");
     phase = LifecyclePhase::Checkpointed;
   }
 
@@ -70,10 +70,10 @@ struct SystemLifecycle {
   void to_finalized() {
     if (phase == LifecyclePhase::Assembling)
       throw std::runtime_error(
-          "System::to_finalized: cannot finalize an unbound composition (bind it first)");
+          "System<kNativeDimension>::to_finalized: cannot finalize an unbound composition (bind it first)");
     if (phase == LifecyclePhase::Finalized)
       throw std::runtime_error(
-          "System::to_finalized: the simulation is already finalized (terminal)");
+          "System<kNativeDimension>::to_finalized: the simulation is already finalized (terminal)");
     phase = LifecyclePhase::Finalized;
   }
 

@@ -339,14 +339,18 @@ class _AmrSystemInstall(_AmrSystem):
                     )
                 elif route == "gaussian_field":
                     center = source.get("center", {})
-                    if space != "cell" or set(center) != {"x", "y"}:
+                    if space != "cell" or not isinstance(center, Mapping) or not center:
                         raise ValueError(
-                            "pops.bind: gaussian_field requires one cell state and x/y center"
+                            "pops.bind: gaussian_field requires one cell state and ranked center"
                         )
                     self._s._register_analytic_gaussian(
                         subject_id, name or "",
-                        native_binary64(center["x"], where="AMR Gaussian center.x"),
-                        native_binary64(center["y"], where="AMR Gaussian center.y"),
+                        tuple(
+                            native_binary64(
+                                value, where="AMR Gaussian center.%s" % axis,
+                            )
+                            for axis, value in center.items()
+                        ),
                         native_binary64(
                             source["background"], where="AMR Gaussian background"),
                         native_binary64(

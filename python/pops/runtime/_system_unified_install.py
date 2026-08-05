@@ -207,12 +207,16 @@ class _SystemUnifiedInstall(_System):
             return
         if route == "gaussian_field":
             center = source.get("center", {})
-            if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
-                raise ValueError("uniform Gaussian initial source requires x/y center")
+            if not isinstance(center, Mapping) or not center:
+                raise ValueError("uniform Gaussian initial source requires one ranked center")
             self._s._set_analytic_gaussian_state(
                 name,
-                native_binary64(center["x"], where="uniform Gaussian center.x"),
-                native_binary64(center["y"], where="uniform Gaussian center.y"),
+                tuple(
+                    native_binary64(
+                        value, where="uniform Gaussian center.%s" % axis,
+                    )
+                    for axis, value in center.items()
+                ),
                 native_binary64(source["background"], where="uniform Gaussian background"),
                 native_binary64(source["amplitude"], where="uniform Gaussian amplitude"),
                 native_binary64(

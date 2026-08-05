@@ -78,13 +78,18 @@ def validate_initial_source(source: Any, *, where: str) -> str:
         center = source["center"]
         if not isinstance(frame_id, str) or not frame_id:
             raise TypeError("%s Gaussian frame_id must be non-empty" % where)
-        if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
-            raise TypeError("%s Gaussian center must contain exactly x/y" % where)
-        for name, value in (
-            ("center.x", center["x"]), ("center.y", center["y"]),
-            ("background", source["background"]), ("amplitude", source["amplitude"]),
+        if not isinstance(center, Mapping) or not 1 <= len(center) <= 3 \
+                or any(type(axis) is not str or not axis for axis in center):
+            raise TypeError(
+                "%s Gaussian center must map every axis of a 1D/2D/3D frame" % where
+            )
+        scalars = [("center.%s" % axis, value) for axis, value in center.items()]
+        scalars.extend((
+            ("background", source["background"]),
+            ("amplitude", source["amplitude"]),
             ("inverse_width", source["inverse_width"]),
-        ):
+        ))
+        for name, value in scalars:
             native_binary64(value, where="%s.%s" % (where, name))
     elif route == "analytic_expression":
         if not isinstance(source["frame_id"], str) or not source["frame_id"]:

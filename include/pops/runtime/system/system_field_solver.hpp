@@ -52,7 +52,7 @@
 
 /// @file
 /// @brief SystemFieldSolver: the ELLIPTIC SOLVE + FIELD DERIVATION responsibility extracted
-///        from the god-class System::Impl (audit Lot B, cf. docs/SYSTEM_CPP_EXTRACTION_PLAN.md section 2).
+///        from the god-class System<kNativeDimension>::Impl (audit Lot B, cf. docs/SYSTEM_CPP_EXTRACTION_PLAN.md section 2).
 ///        Extracted VERBATIM from python/system.cpp: no change to the numerics, to the order of
 ///        operations, to fill_ghosts/fill_boundary, to device_fence or to tolerance. STRICTLY
 ///        bit-identical -- the code is moved as is, only access to the SHARED members of Impl
@@ -79,8 +79,8 @@
 ///   fabs (local_size()), never fab(0) hardcoded: no-op on a rank without a box, bit-identical to the
 ///   owner. This guard is PRESERVED by the extraction.
 ///
-/// Since System::Impl stays PRIVATE to python/system.cpp, this helper is a TEMPLATE parametrized on the real
-/// Impl type (same technique as native_loader): python/system.cpp instantiates it with System::Impl after
+/// Since System<kNativeDimension>::Impl stays PRIVATE to python/system.cpp, this helper is a TEMPLATE parametrized on the real
+/// Impl type (same technique as native_loader): python/system.cpp instantiates it with System<kNativeDimension>::Impl after
 /// defining Impl. owner_ is an Impl* (the lifetime of the helper is subordinate to that of Impl).
 
 namespace pops {
@@ -168,7 +168,7 @@ namespace field_solver {
 /// SystemFieldSolver<Impl>: see contract above. All methods are MEMBERS (not free
 /// functions) because they share the elliptic state owned by this class; accesses to the SHARED
 /// state of Impl go through owner_-> verbatim. Templated on Impl to stay free of any dependency on the
-/// (private) definition of System::Impl.
+/// (private) definition of System<kNativeDimension>::Impl.
 template <class Impl>
 class SystemFieldSolver {
  public:
@@ -208,7 +208,7 @@ class SystemFieldSolver {
                    DiagonalDiffusionCoefficient<std::vector<double>>>;
   using MaterializedDiffusionCoefficient = DiffusionCoefficient<MultiFab>;
 
-  /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
+  /// @param owner back-pointer to System<kNativeDimension>::Impl (lifetime subordinate to that of Impl).
   explicit SystemFieldSolver(Impl* owner)
       : owner_(owner),
         nullspace_provider_registry_(make_default_field_nullspace_provider_registry()) {
@@ -261,7 +261,7 @@ class SystemFieldSolver {
 
   /// True if the named aux field is provided at install time, for Spec-2 criterion 24 install-time
   /// requirement validation (ADC-446). Only the user-supplied APPLICATION fields can be a hard
-  /// requirement: B_z (System::set_magnetic_field) and T_e (System::set_electron_temperature). The
+  /// requirement: B_z (System<kNativeDimension>::set_magnetic_field) and T_e (System<kNativeDimension>::set_electron_temperature). The
   /// derived fields phi/grad_x/grad_y are always available (the elliptic solver builds lazily from
   /// the default Poisson config), and a generic named aux is keyed only by component C++-side (its
   /// name is not retained), so neither can be a hard failure here -- they return true (cannot block).
@@ -542,7 +542,7 @@ class SystemFieldSolver {
   std::optional<MultiFab> phi_src_polar_;
   NamedAuxField bz_field_;  // field B_z(x) n*n row-major, device-addressable (empty if absent)
   int te_src_ = -1;         // index of the fluid block source of T_e (-1 = none)
-  // NAMED aux fields (ADC-70 phase 1) provided by the user via System::set_aux_field: key =
+  // NAMED aux fields (ADC-70 phase 1) provided by the user via System<kNativeDimension>::set_aux_field: key =
   // canonical component (>= kAuxNamedBase = 5), value = field n*n (cartesian) / nr*ntheta (polar)
   // row-major. PERSISTENT like bz_field_: solve_fields touches ONLY components 0..2 (phi,
   // grad) and 4 (T_e via apply_te), so components >= 5 survive from one step to the next; but a
@@ -1586,7 +1586,7 @@ class SystemFieldSolver {
     for (const auto& [name, field] : named_fields_) {
       if (field.backend || field.nullspace_workspace)
         throw std::logic_error(
-            "System::install_program dynamic field boundaries must be installed before a named "
+            "System<kNativeDimension>::install_program dynamic field boundaries must be installed before a named "
             "field backend is materialized");
       snapshot.registered.emplace(
           name, typename ProgramInstallSnapshot::RegisteredPlan{field.has_plan, field.plan});
@@ -1702,7 +1702,7 @@ class SystemFieldSolver {
   std::shared_ptr<FieldNullspaceProviderRegistry> nullspace_provider_registry_;
 
   /// Invalidate the collective witness after a new plan is added while the low-level C++ facade is
-  /// still assembling.  Python normally validates once in System::mark_bound; the lazy-backend guard
+  /// still assembling.  Python normally validates once in System<kNativeDimension>::mark_bound; the lazy-backend guard
   /// below also covers direct C++ users that intentionally never bind.
   void invalidate_field_plan_consensus() { field_plan_consensus_verified_ = false; }
 
@@ -2247,7 +2247,7 @@ class SystemFieldSolver {
       b.xlo = b.xhi = b.ylo = b.yhi = BCType::Foextrap;
       return b;
     }
-    throw std::runtime_error("System::set_poisson: unknown bc '" + mode + "'");
+    throw std::runtime_error("System<kNativeDimension>::set_poisson: unknown bc '" + mode + "'");
   }
 
   BCRec named_field_bc(const FieldSolveConfig& plan) const {
@@ -2272,7 +2272,7 @@ class SystemFieldSolver {
   /// "Conductor interior" predicate from p_wall / p_wall_radius / cfg.L (cf. wall_predicate);
   /// empty if no wall.
   ActiveRegionProvider2D wall_active() {
-    return detail::wall_predicate(p_wall, p_wall_radius, owner_->cfg.L, "System::set_poisson",
+    return detail::wall_predicate(p_wall, p_wall_radius, owner_->cfg.L, "System<kNativeDimension>::set_poisson",
                                   owner_->cfg.xlo, owner_->cfg.ylo);
   }
   [[nodiscard]] MultiFab materialize_system_coefficient_(const std::vector<double>& values) const {
@@ -2319,7 +2319,7 @@ class SystemFieldSolver {
     // of this composite right-hand side. "composite" names this behavior honestly; "charge_density"
     // stays the historical alias (default, bit-identical) since the usual case is a charge block.
     if (p_rhs != "charge_density" && p_rhs != "composite")
-      throw std::runtime_error("System::set_poisson: unknown rhs '" + p_rhs +
+      throw std::runtime_error("System<kNativeDimension>::set_poisson: unknown rhs '" + p_rhs +
                                "' (valid: " + kPoissonRhsRouteTokensCsv +
                                "; the right-hand side = sum of the "
                                "per-block elliptic bricks)");
@@ -2433,16 +2433,16 @@ class SystemFieldSolver {
     if (pell_)
       return;
     if (p_rhs != "charge_density" && p_rhs != "composite")
-      throw std::runtime_error("System::set_poisson (polar): unknown rhs '" + p_rhs +
+      throw std::runtime_error("System<kNativeDimension>::set_poisson (polar): unknown rhs '" + p_rhs +
                                "' (valid: " + kPoissonRhsRouteTokensCsv + ")");
     if (p_solver != "polar")
       throw std::runtime_error(
-          "System::set_poisson (polar): solver '" + p_solver +
+          "System<kNativeDimension>::set_poisson (polar): solver '" + p_solver +
           "' unsupported on a ring; the polar Poisson is direct (FFT-in-theta + tridiag-in-r). "
           "Request solver='polar' explicitly; implicit solver substitution is forbidden.");
     if (has_variable_diffusion_coefficient() || has_kappa_field_)
       throw std::runtime_error(
-          "System::set_poisson (polar): variable / anisotropic permittivity / reaction unsupported "
+          "System<kNativeDimension>::set_poisson (polar): variable / anisotropic permittivity / reaction unsupported "
           "by the direct polar Poisson (Phase 2b; operator (1/r) d_r(r d_r) + (1/r^2) d_theta^2)");
     // MULTI-BOX GUARD (ADC-67): the DIRECT polar Poisson (FFT-in-theta + tridiag-in-r) requires
     // complete theta ROWS and radial COLUMNS on ONE box (PolarPoissonSolver already rejects

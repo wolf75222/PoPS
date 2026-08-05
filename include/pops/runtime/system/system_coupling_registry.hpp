@@ -12,7 +12,7 @@
 /// @file
 /// @brief The inter-species COUPLING registry of a System (ADC-578).
 ///
-/// Extracted from the inline coupling members of `System::Impl`: the splitting-source operators, the
+/// Extracted from the inline coupling members of `System<kNativeDimension>::Impl`: the splitting-source operators, the
 /// GLOBAL host dt bounds, the constant / per-cell coupled-source frequency bounds, and the typed
 /// coupling-operator inspect views. Grouping them names one subsystem: "the couplings and the step
 /// bounds they impose".
@@ -34,7 +34,7 @@ class MultiFab;
 namespace runtime {
 namespace system {
 
-/// GLOBAL time-step bound (System::add_dt_bound): evaluated ONCE per `step_cfl` (host). Hook for
+/// GLOBAL time-step bound (System<kNativeDimension>::add_dt_bound): evaluated ONCE per `step_cfl` (host). Hook for
 /// non-cell-local constraints (multi-block coupling, Schur/Poisson, scheduler). Empty means no
 /// additional Program macro-step constraint.
 struct GlobalDtBound {
