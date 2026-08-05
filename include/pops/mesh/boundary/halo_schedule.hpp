@@ -33,6 +33,13 @@ struct HaloScheduleBudget {
   std::size_t receive_elements = 0;
 };
 
+/// Exact coverage contract carried by one halo schedule.
+///
+/// Uniform levels tile their complete domain.  Adaptive fine levels deliberately cover only a
+/// disjoint subset; treating that subset as a malformed uniform layout used to make the generic
+/// halo authority unusable for AMR.  Callers must now name the intended coverage at preparation.
+enum class HaloLayoutCoverage : unsigned char { full_domain = 0, sparse_level = 1 };
+
 template <int Dim>
 struct HaloJob {
   std::size_t source_box = 0;
@@ -206,19 +213,35 @@ class HaloSchedule {
   HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
                BoundaryTopology<Dim> topology, int ncomp, HaloScheduleBudget budget)
+      : HaloSchedule(layout, distribution, local_rank, domain, ghosts, topology, ncomp,
+                     HaloLayoutCoverage::full_domain, budget) {}
+
+  HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
+               Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
+               BoundaryTopology<Dim> topology, int ncomp, HaloLayoutCoverage coverage,
+               HaloScheduleBudget budget)
       : layout_(layout),
         distribution_(distribution),
         local_rank_(local_rank),
         domain_(domain),
         ghosts_(ghosts),
         topology_(topology),
-        ncomp_(ncomp) {
+        ncomp_(ncomp),
+        coverage_(coverage) {
     if (!distribution_.matches_layout(layout_))
       throw std::invalid_argument("pops::HaloSchedule distribution does not match its layout");
     if (!distribution_.rank_space().contains(local_rank_))
       throw std::out_of_range("pops::HaloSchedule local rank is outside the rank space");
-    if (!layout_.tiles_exactly(domain_, budget.layout))
-      throw std::invalid_argument("pops::HaloSchedule layout must tile the domain exactly");
+    if (coverage_ == HaloLayoutCoverage::full_domain) {
+      if (!layout_.tiles_exactly(domain_, budget.layout))
+        throw std::invalid_argument("pops::HaloSchedule full-domain layout must tile exactly");
+    } else if (coverage_ == HaloLayoutCoverage::sparse_level) {
+      if (!layout_.is_disjoint_within(domain_, budget.layout))
+        throw std::invalid_argument(
+            "pops::HaloSchedule sparse layout must be disjoint and inside its domain");
+    } else {
+      throw std::invalid_argument("pops::HaloSchedule layout coverage identity is invalid");
+    }
     if (ncomp_ < 1)
       throw std::invalid_argument("pops::HaloSchedule component count must be positive");
 
@@ -272,6 +295,7 @@ class HaloSchedule {
   const Box<Dim>& domain() const noexcept { return domain_; }
   const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
   const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
+  HaloLayoutCoverage coverage() const noexcept { return coverage_; }
   int ncomp() const noexcept { return ncomp_; }
   const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_jobs_; }
   const std::vector<job_type>& local_jobs() const noexcept { return local_; }
@@ -366,6 +390,7 @@ class HaloSchedule {
   Extent<Dim> ghosts_{};
   BoundaryTopology<Dim> topology_{};
   int ncomp_ = 0;
+  HaloLayoutCoverage coverage_ = HaloLayoutCoverage::full_domain;
   std::vector<job_type> canonical_jobs_{};
   std::vector<job_type> local_{};
   std::vector<peer_plan_type> send_{};
@@ -379,11 +404,25 @@ template <int Dim, class MemorySpace>
 HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields,
                                         const Box<Dim>& domain,
                                         const BoundaryTopology<Dim>& topology,
+                                        HaloLayoutCoverage coverage, HaloScheduleBudget budget) {
+  return HaloSchedule<Dim>{fields.layout(),
+                           fields.distribution(),
+                           fields.local_rank(),
+                           domain,
+                           fields.ghosts(),
+                           topology,
+                           fields.ncomp(),
+                           coverage,
+                           budget};
+}
+
+/// Uniform compatibility overload with an explicit final meaning: the layout covers the domain.
+template <int Dim, class MemorySpace>
+HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields,
+                                        const Box<Dim>& domain,
+                                        const BoundaryTopology<Dim>& topology,
                                         HaloScheduleBudget budget) {
-  return HaloSchedule<Dim>{fields.layout(),     fields.distribution(),
-                           fields.local_rank(), domain,
-                           fields.ghosts(),     topology,
-                           fields.ncomp(),      budget};
+  return prepare_halo_schedule(fields, domain, topology, HaloLayoutCoverage::full_domain, budget);
 }
 
 }  // namespace pops

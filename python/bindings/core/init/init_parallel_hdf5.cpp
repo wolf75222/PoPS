@@ -4,6 +4,7 @@
 #include <pops/runtime/output/hdf5_collective.hpp>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -68,12 +69,16 @@ void require_exact_keys(const py::dict& value, std::initializer_list<const char*
       throw py::value_error(std::string(where) + " keys are not exact");
 }
 
-[[nodiscard]] std::pair<std::size_t, std::size_t> exact_pair(const py::handle& value,
-                                                             const char* where) {
+template <std::size_t Dim>
+[[nodiscard]] std::array<std::size_t, Dim> exact_ranked_bounds(const py::handle& value,
+                                                               const char* where) {
   const auto shape = exact_shape(value, where);
-  if (shape.size() != 2)
-    throw py::value_error(std::string(where) + " must contain two extents");
-  return {shape[0], shape[1]};
+  if (shape.size() != Dim)
+    throw py::value_error(std::string(where) + " must match the native spatial dimension " +
+                          std::to_string(Dim));
+  std::array<std::size_t, Dim> result{};
+  std::copy(shape.begin(), shape.end(), result.begin());
+  return result;
 }
 
 }  // namespace
@@ -151,11 +156,12 @@ void init_parallel_hdf5(py::module_& m) {
               const auto piece = py::reinterpret_borrow<py::dict>(piece_item);
               require_exact_keys(piece, {"lower", "upper", "values"},
                                  "native HDF5 piece descriptor");
-              const auto [jlo, ilo] = exact_pair(piece["lower"], "native HDF5 piece lower");
-              const auto [jhi, ihi] = exact_pair(piece["upper"], "native HDF5 piece upper");
+              const auto lower = exact_ranked_bounds<pops::kNativeDimension>(
+                  piece["lower"], "native HDF5 piece lower");
+              const auto upper = exact_ranked_bounds<pops::kNativeDimension>(
+                  piece["upper"], "native HDF5 piece upper");
               result.pieces.push_back(
-                  {jlo, ilo, jhi, ihi,
-                   array_view(piece["values"], owners, "native HDF5 piece values")});
+                  {lower, upper, array_view(piece["values"], owners, "native HDF5 piece values")});
             }
             fields.push_back(std::move(result));
           }

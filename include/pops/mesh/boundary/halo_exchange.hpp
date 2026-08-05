@@ -487,6 +487,7 @@ class HaloExchange {
       for (std::size_t box = 0; box < distribution.box_count(); ++box)
         append_index_(bytes, distribution.owner(box));
     append_box_(bytes, schedule_->domain());
+    append_i64_(bytes, static_cast<int>(schedule_->coverage()));
     for (const BoundaryFaceRecord<Dim>& record : schedule_->topology().faces()) {
       append_i64_(bytes, record.face.axis);
       append_i64_(bytes, static_cast<int>(record.face.side));

@@ -441,6 +441,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_execution
   test_nd_flux_ledger
   test_nd_amr_consumers
+  test_prepared_amr_ghost_fill
   test_nd_amr_runtime
   test_nd_hierarchy_plan
   test_nd_layout
@@ -837,6 +838,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_prepared_amr_ghost_fill 2)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
@@ -884,6 +886,7 @@ if(POPS_HAS_MPI)
     test_mpi_multiblock_interface_scheduler
     test_mpi_nd_translation_exchange
     test_mpi_halo_exchange
+    test_mpi_prepared_amr_ghost_fill
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary

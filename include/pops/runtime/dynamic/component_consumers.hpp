@@ -194,12 +194,65 @@ inline void validate_field_view(const View& view, const char* where) {
   (void)field_point_count(view);
 }
 
+template <int Dim, class View>
+inline void validate_exact_field_view(const View& view, const char* where) {
+  static_assert(Dim >= 1 && Dim <= 3, "native field views support dimensions 1, 2, and 3");
+  if (view.struct_size < sizeof(View) || view.data == nullptr ||
+      view.dimension != static_cast<std::uint32_t>(Dim) || view.component_count == 0 ||
+      view.component_stride <= 0 || !component_text(view.layout_identity) ||
+      !component_text(view.patch_identity) ||
+      (view.scalar_type != POPS_SCALAR_FLOAT32_V1 && view.scalar_type != POPS_SCALAR_FLOAT64_V1) ||
+      (view.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
+       view.memory_space != POPS_MEMORY_SPACE_DEVICE_V1 &&
+       view.memory_space != POPS_MEMORY_SPACE_MANAGED_V1) ||
+      (view.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 &&
+       view.ownership != POPS_FIELD_OWNERSHIP_COMPONENT_BORROWED_V1 &&
+       view.ownership != POPS_FIELD_OWNERSHIP_COMPONENT_OWNED_V1))
+    throw std::invalid_argument(std::string(where) +
+                                " disagrees with the compiled field dimension");
+
+  constexpr auto active_axes = (1u << static_cast<unsigned>(Dim)) - 1u;
+  if ((view.centering == POPS_FIELD_CENTERING_FACE_V1 &&
+       (view.centering_axes == 0 || (view.centering_axes & (view.centering_axes - 1u)) != 0)) ||
+      (view.centering == POPS_FIELD_CENTERING_EDGE_V1 && view.centering_axes == 0) ||
+      ((view.centering == POPS_FIELD_CENTERING_CELL_V1 ||
+        view.centering == POPS_FIELD_CENTERING_NODE_V1) &&
+       view.centering_axes != 0) ||
+      view.centering < POPS_FIELD_CENTERING_CELL_V1 ||
+      view.centering > POPS_FIELD_CENTERING_EDGE_V1 || (view.centering_axes & ~active_axes) != 0)
+    throw std::invalid_argument(std::string(where) + " has invalid centering axes");
+
+  for (std::int32_t axis = 0; axis < Dim; ++axis)
+    if (view.extents[axis] == 0 || view.axis_strides[axis] <= 0 ||
+        view.ghost_lower[axis] >= view.extents[axis] ||
+        view.ghost_upper[axis] >= view.extents[axis] - view.ghost_lower[axis])
+      throw std::invalid_argument(std::string(where) +
+                                  " has invalid extent, stride or ghost widths");
+  for (std::int32_t axis = Dim; axis < 3; ++axis)
+    if (view.extents[axis] != 1 || view.axis_strides[axis] != 0 || view.ghost_lower[axis] != 0 ||
+        view.ghost_upper[axis] != 0)
+      throw std::invalid_argument(std::string(where) + " carries hidden inactive-axis metadata");
+
+  std::size_t points = 1;
+  for (std::int32_t axis = 0; axis < Dim; ++axis) {
+    if (view.extents[axis] > std::numeric_limits<std::size_t>::max() / points)
+      throw std::invalid_argument("native field view extents overflow");
+    points *= view.extents[axis];
+  }
+  (void)points;
+}
+
 template <class View>
 inline void validate_backend_field_view(const View& view, const char* where) {
   validate_field_view(view, where);
-  if (view.dimension != 2)
+  if (view.scalar_type != POPS_SCALAR_FLOAT64_V1)
     throw std::invalid_argument(std::string(where) +
-                                " is not representable by the current 2D backend");
+                                " scalar type differs from the current binary64 backend");
+}
+
+template <int Dim, class View>
+inline void validate_backend_field_view(const View& view, const char* where) {
+  validate_exact_field_view<Dim>(view, where);
   if (view.scalar_type != POPS_SCALAR_FLOAT64_V1)
     throw std::invalid_argument(std::string(where) +
                                 " scalar type differs from the current binary64 backend");
@@ -240,6 +293,14 @@ template <class View>
 inline void validate_execution_field(const PopsExecutionContextV1& context, const View& view,
                                      const char* where) {
   validate_backend_field_view(view, where);
+  if (view.memory_space != context.memory_space || view.scalar_type != context.scalar_type)
+    throw std::invalid_argument(std::string(where) + " disagrees with its execution context");
+}
+
+template <int Dim, class View>
+inline void validate_execution_field(const PopsExecutionContextV1& context, const View& view,
+                                     const char* where) {
+  validate_backend_field_view<Dim>(view, where);
   if (view.memory_space != context.memory_space || view.scalar_type != context.scalar_type)
     throw std::invalid_argument(std::string(where) + " disagrees with its execution context");
 }
@@ -329,6 +390,26 @@ inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
       !same_field_domain(request.left, result.normal_flux) ||
       !same_spatial_domain(request.left, request.normals) ||
       request.normals.component_count != static_cast<std::size_t>(request.left.dimension))
+    throw std::invalid_argument("numerical flux field descriptors disagree");
+  return api.evaluate_faces(state, &request, &result);
+}
+
+template <int Dim>
+inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
+                          const PopsNumericalFluxRequestV1& request,
+                          PopsNumericalFluxResultV1& result) {
+  static_assert(Dim >= 1 && Dim <= 3, "NumericalFlux supports dimensions 1, 2, and 3");
+  require_operation(api.evaluate_faces != nullptr, "evaluate_faces");
+  validate_execution_context(request.execution);
+  validate_logical_time(request.logical_time);
+  validate_execution_field<Dim>(request.execution, request.left, "numerical flux left");
+  validate_execution_field<Dim>(request.execution, request.right, "numerical flux right");
+  validate_execution_field<Dim>(request.execution, request.normals, "numerical flux normals");
+  validate_execution_field<Dim>(request.execution, result.normal_flux, "numerical flux output");
+  if (!same_field_domain(request.left, request.right) ||
+      !same_field_domain(request.left, result.normal_flux) ||
+      !same_spatial_domain(request.left, request.normals) ||
+      request.normals.component_count != static_cast<std::size_t>(Dim))
     throw std::invalid_argument("numerical flux field descriptors disagree");
   return api.evaluate_faces(state, &request, &result);
 }

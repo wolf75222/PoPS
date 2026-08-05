@@ -3,7 +3,6 @@
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
 #include <algorithm>
 #include <cmath>

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from importlib import import_module
+from math import prod
 from pathlib import Path
 from typing import Any, cast
 
@@ -101,17 +102,19 @@ def _rebuild_parallel_snapshot_data(
     rebuilt = []
     for token in sorted(by_token):
         field = by_token[token]
+        dimension = len(field.global_shape)
         valid_boxes = tuple(snapshot.geometry(field.key).boxes)
         expected_cells = sum(
-            (jhi - jlo) * (ihi - ilo)
-            for jlo, ilo, jhi, ihi in valid_boxes
+            prod(hi - lo for lo, hi in zip(
+                box[:dimension], box[dimension:], strict=True))
+            for box in valid_boxes
         )
         row = next(item for item in data["fields"] if item["key"] == field.key.to_data())
         pieces = [piece for rank in gathered for piece in rank["pieces"][token]]
         pieces.sort(key=lambda piece: (
             piece["global_box_index"], piece["owner_rank"],
             piece["array"]["content_sha256"]))
-        active = []
+        occupied: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
         covered_cells = 0
         indices = set()
         for owner, item in enumerate(gathered):
@@ -123,16 +126,12 @@ def _rebuild_parallel_snapshot_data(
                     raise ValueError(
                         "collective replicated field piece must use rank zero as authority")
         for piece in sorted(pieces, key=lambda value: (value["lower"], value["upper"])):
-            jlo, ilo = piece["lower"]
-            jhi, ihi = piece["upper"]
-            if (
-                jlo < 0
-                or ilo < 0
-                or jhi <= jlo
-                or ihi <= ilo
-                or jhi > field.global_shape[0]
-                or ihi > field.global_shape[1]
-            ):
+            lower = tuple(piece["lower"])
+            upper = tuple(piece["upper"])
+            if len(lower) != dimension or len(upper) != dimension or any(
+                    lo < 0 or hi <= lo or hi > extent
+                    for lo, hi, extent in zip(
+                        lower, upper, field.global_shape, strict=True)):
                 raise ValueError("parallel field piece lies outside the global field")
             box_index = piece["global_box_index"]
             if isinstance(box_index, bool) or type(box_index) is not int \
@@ -141,14 +140,18 @@ def _rebuild_parallel_snapshot_data(
             if box_index in indices:
                 raise ValueError("parallel field global_box_index is duplicated across ranks")
             indices.add(box_index)
-            if (jlo, ilo, jhi, ihi) != valid_boxes[box_index]:
+            if lower + upper != valid_boxes[box_index]:
                 raise ValueError(
                     "parallel field piece differs from its indexed exact geometry box")
-            active = [other for other in active if other[1] > jlo]
-            if any(not (ihi <= other[2] or other[3] <= ilo) for other in active):
+            if any(all(
+                    lo < other_hi and other_lo < hi
+                    for lo, hi, other_lo, other_hi in zip(
+                        lower, upper, other_lower, other_upper, strict=True))
+                    for other_lower, other_upper in occupied):
                 raise ValueError("parallel field pieces overlap across ranks")
-            active.append((jlo, jhi, ilo, ihi))
-            covered_cells += (jhi - jlo) * (ihi - ilo)
+            occupied.append((lower, upper))
+            covered_cells += prod(
+                hi - lo for lo, hi in zip(lower, upper, strict=True))
         if covered_cells != expected_cells:
             raise ValueError(
                 "parallel field pieces do not exactly cover the valid geometry boxes")
@@ -566,6 +569,7 @@ def _writer_plan(
                   if global_row["component_names"] else [])
         evidence[name] = {
             "shape": prefix + list(global_row["global_shape"]),
+            "spatial_rank": len(global_row["global_shape"]),
             "dtype": global_row["dtype"],
             "fill": "zero-outside-pieces",
             "pieces": global_row["pieces"],
@@ -882,9 +886,10 @@ class HDF5Writer:
                             dataset = output.require_dataset(
                                 name, shape=shape, dtype=field.array_dtype)
                             for piece in field.pieces:
-                                jlo, ilo = piece.lower
-                                jhi, ihi = piece.upper
-                                dataset[..., jlo:jhi, ilo:ihi] = piece.values
+                                spatial = tuple(
+                                    slice(lo, hi) for lo, hi in zip(
+                                        piece.lower, piece.upper, strict=True))
+                                dataset[(...,) + spatial] = piece.values
                         output.flush()
             except BaseException as exc:
                 io_error = "%s: %s" % (type(exc).__name__, exc)
@@ -999,21 +1004,32 @@ def read_hdf5(path: Any) -> ReopenedOutput:
             value = np.asarray(source[name][...])
             arrays[name] = value
             if "pieces" in evidence:
-                if set(evidence) != {"shape", "dtype", "fill", "pieces"} \
+                if set(evidence) != {
+                    "shape", "spatial_rank", "dtype", "fill", "pieces"
+                } \
                         or evidence["fill"] != "zero-outside-pieces":
                     raise ValueError("HDF5 field evidence schema is not exact")
                 if list(value.shape) != evidence["shape"] \
                         or value.dtype.str != evidence["dtype"]:
                     raise ValueError("HDF5 field shape/dtype differs from its manifest")
-                spatial_shape = tuple(evidence["shape"][-2:])
+                spatial_rank = evidence["spatial_rank"]
+                if isinstance(spatial_rank, bool) or type(spatial_rank) is not int \
+                        or spatial_rank not in (1, 2, 3) \
+                        or len(evidence["shape"]) not in (spatial_rank, spatial_rank + 1):
+                    raise ValueError("HDF5 field spatial rank is not exact")
+                spatial_shape = tuple(evidence["shape"][-spatial_rank:])
                 written = np.zeros(spatial_shape, dtype=np.bool_)
                 for piece in evidence["pieces"]:
-                    jlo, ilo = piece["lower"]
-                    jhi, ihi = piece["upper"]
-                    if np.any(written[jlo:jhi, ilo:ihi]):
+                    lower = tuple(piece["lower"])
+                    upper = tuple(piece["upper"])
+                    if len(lower) != spatial_rank or len(upper) != spatial_rank:
+                        raise ValueError("HDF5 field piece spatial rank differs from its manifest")
+                    spatial = tuple(
+                        slice(lo, hi) for lo, hi in zip(lower, upper, strict=True))
+                    if np.any(written[spatial]):
                         raise ValueError("HDF5 manifest field pieces overlap")
-                    written[jlo:jhi, ilo:ihi] = True
-                    if array_evidence(value[..., jlo:jhi, ilo:ihi]) != piece["array"]:
+                    written[spatial] = True
+                    if array_evidence(value[(...,) + spatial]) != piece["array"]:
                         raise ValueError("HDF5 parallel piece failed verification")
                 gap = np.ascontiguousarray(value[..., ~written])
                 if gap.tobytes() != bytes(gap.nbytes):

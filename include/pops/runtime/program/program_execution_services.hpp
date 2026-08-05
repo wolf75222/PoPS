@@ -37,7 +37,6 @@
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/context/grid_context.hpp>
-#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>

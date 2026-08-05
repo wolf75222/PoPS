@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/parallel/comm.hpp>
 
 namespace pops::runtime::output {
@@ -20,10 +22,8 @@ struct ArrayView {
 };
 
 struct FieldPieceView {
-  std::size_t jlo = 0;
-  std::size_t ilo = 0;
-  std::size_t jhi = 0;
-  std::size_t ihi = 0;
+  std::array<std::size_t, kNativeDimension> lower{};
+  std::array<std::size_t, kNativeDimension> upper{};
   ArrayView values;
 };
 

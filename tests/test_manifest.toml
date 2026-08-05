@@ -794,6 +794,11 @@ sources = ["tests/cpp/unit/mesh/test_fill_boundary.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_amr_ghost_fill"
+sources = ["tests/cpp/unit/amr/test_prepared_amr_ghost_fill.cpp"]
+labels = ["unit", "amr", "mesh", "fast"]
+
+[[cpp.suite]]
 name = "test_copy_schedule_cache"
 sources = ["tests/cpp/unit/mesh/test_copy_schedule_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
@@ -923,6 +928,12 @@ name = "test_mpi_halo_exchange"
 sources = ["tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_prepared_amr_ghost_fill"
+sources = ["tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"]
+labels = ["backend", "mpi", "amr", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_patch_range"
