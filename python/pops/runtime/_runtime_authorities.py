@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
-def _boundary_face_ordinal(value: Any, *, where: str) -> int:
+def _boundary_face_ordinal(value: Any, dimension: int, *, where: str) -> int:
     if not isinstance(value, dict):
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
     orientation = value.get("orientation")
@@ -21,9 +21,9 @@ def _boundary_face_ordinal(value: Any, *, where: str) -> int:
     axis = orientation["axis"]
     side = orientation["side"]
     outward_sign = orientation["outward_sign"]
-    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1) \
+    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(dimension) \
             or side not in {"lower", "upper"}:
-        raise ValueError("%s is not one 2D Cartesian face" % where)
+        raise ValueError("%s is not one rank-%d Cartesian face" % (where, dimension))
     expected_sign = -1 if side == "lower" else 1
     if isinstance(outward_sign, bool) or not isinstance(outward_sign, int) \
             or outward_sign != expected_sign:
@@ -38,6 +38,9 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
     rows = []
     claimed = set()
     mapped = 0
+    if len(face_types) not in (2, 4, 6):
+        raise ValueError("prepared face table must contain exactly 2*Dim rows for Dim in {1,2,3}")
+    dimension = len(face_types) // 2
     required = {
         "source", "target", "source_face", "target_face", "permutation", "signs",
     }
@@ -48,21 +51,26 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         target_face = row["target_face"]
         if isinstance(source_face, bool) or not isinstance(source_face, int) \
                 or isinstance(target_face, bool) or not isinstance(target_face, int) \
-                or source_face not in range(4) or target_face not in range(4) \
+                or source_face not in range(2 * dimension) \
+                or target_face not in range(2 * dimension) \
                 or source_face == target_face:
-            raise ValueError("prepared periodic endpoints must be distinct face ordinals 0..3")
+            raise ValueError(
+                "prepared periodic endpoints must be distinct rank-%d face ordinals" % dimension
+            )
         if _boundary_face_ordinal(
-                row["source"], where="periodic[%d].source" % index) != source_face \
+                row["source"], dimension,
+                where="periodic[%d].source" % index) != source_face \
                 or _boundary_face_ordinal(
-                    row["target"], where="periodic[%d].target" % index) != target_face:
+                    row["target"], dimension,
+                    where="periodic[%d].target" % index) != target_face:
             raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
         permutation = row["permutation"]
         signs = row["signs"]
         if not isinstance(permutation, list) or any(
                 isinstance(value, bool) or not isinstance(value, int)
-                for value in permutation) or sorted(permutation) != [0, 1]:
-            raise ValueError("prepared periodic permutation must be the exact 2D permutation")
-        if not isinstance(signs, list) or len(signs) != 2 \
+                for value in permutation) or sorted(permutation) != list(range(dimension)):
+            raise ValueError("prepared periodic permutation must cover every ranked axis exactly")
+        if not isinstance(signs, list) or len(signs) != dimension \
                 or any(isinstance(value, bool) or not isinstance(value, int)
                        or value not in (-1, 1) for value in signs):
             raise ValueError("prepared periodic signs must contain one -1/+1 per source axis")
@@ -79,16 +87,13 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         if claimed & endpoints:
             raise ValueError("one prepared face belongs to multiple periodic identifications")
         claimed.update(endpoints)
-        if permutation != [0, 1] or signs != [1, 1]:
+        if permutation != list(range(dimension)) or signs != [1] * dimension:
             mapped += 1
-        rows.append([
-            source_face, target_face,
-            int(permutation[0]), int(permutation[1]), int(signs[0]), int(signs[1]),
-        ])
+        rows.append([source_face, target_face, *map(int, permutation), *map(int, signs)])
     periodic_faces = {
         ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
     }
-    if raw and claimed != periodic_faces:
+    if not claimed.issubset(periodic_faces):
         raise ValueError(
             "prepared periodic face types differ from explicit identification endpoints")
     if mapped and len(rows) != 1:
