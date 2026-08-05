@@ -7,6 +7,7 @@
 #include <pops/mesh/storage/fab.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <concepts>
 #include <stdexcept>
@@ -32,15 +33,6 @@ struct ReconstructedFacePair {
 };
 
 namespace reconstruction_detail {
-
-template <int Dim, class Model>
-POPS_HD typename Model::State load_state(const FieldView<const Real, Dim>& field,
-                                         const Index<Dim>& index) {
-  typename Model::State result{};
-  for (int component = 0; component < Model::n_vars; ++component)
-    result[component] = field(index, component);
-  return result;
-}
 
 template <int Axis, int Orientation, int Dim>
 POPS_HD Index<Dim> displaced(Index<Dim> index, int offset) {
@@ -84,7 +76,7 @@ template <int Axis, int Orientation, int Dim, class Model, class Reconstruction>
 POPS_HD StateConversion<typename Model::State> reconstruct_conservative(
     const Model& model, const FieldView<const Real, Dim>& state, const Index<Dim>& source,
     const Reconstruction& reconstruction) {
-  typename Model::State face = load_state<Dim, Model>(state, source);
+  typename Model::State face = pops::load_state<Model>(state, source);
   for (int component = 0; component < Model::n_vars; ++component) {
     const ConservativeComponentSampler<Axis, Orientation, Dim> sample{state, source, component};
     const Real center = sample(0);
@@ -108,18 +100,19 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
   using Primitive = typename Model::Primitive;
 
   if constexpr (CellValueReconstruction<Reconstruction>) {
-    const auto primitive = model.recover(load_state<Dim, Model>(state, source));
+    const auto primitive = model.recover(pops::load_state<Model>(state, source));
     if (!primitive.succeeded())
       return {{}, primitive.status};
     return model.make_conservative(primitive.value);
   } else if constexpr (SlopeReconstruction<Reconstruction>) {
-    const auto center = model.recover(load_state<Dim, Model>(state, source));
+    const auto center = model.recover(pops::load_state<Model>(state, source));
     if (!center.succeeded())
       return {{}, center.status};
-    const auto lower = model.recover(load_state<Dim, Model>(state, displaced<Axis, 1>(source, -1)));
+    const auto lower =
+        model.recover(pops::load_state<Model>(state, displaced<Axis, 1>(source, -1)));
     if (!lower.succeeded())
       return {{}, lower.status};
-    const auto upper = model.recover(load_state<Dim, Model>(state, displaced<Axis, 1>(source, 1)));
+    const auto upper = model.recover(pops::load_state<Model>(state, displaced<Axis, 1>(source, 1)));
     if (!upper.succeeded())
       return {{}, upper.status};
 
@@ -139,7 +132,7 @@ POPS_HD StateConversion<typename Model::State> reconstruct_primitive(
     Primitive values[count]{};
     for (int offset = minimum; offset <= maximum; ++offset) {
       const auto recovered = model.recover(
-          load_state<Dim, Model>(state, displaced<Axis, Orientation>(source, offset)));
+          pops::load_state<Model>(state, displaced<Axis, Orientation>(source, offset)));
       if (!recovered.succeeded())
         return {{}, recovered.status};
       values[offset - minimum] = recovered.value;
