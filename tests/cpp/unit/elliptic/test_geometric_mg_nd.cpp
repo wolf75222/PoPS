@@ -2,6 +2,7 @@
 
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/parallel/comm.hpp>
 
 #include <array>
 #include <cstddef>
@@ -63,7 +64,11 @@ pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes) {
           upper[axis] = Real(1);
         return upper;
       }());
-  const RankSpace<Dim> ranks{Index<Dim>{}, extent<Dim>(1)};
+  Extent<Dim> rank_extent = extent<Dim>(1);
+  rank_extent[0] = pops::n_ranks();
+  Index<Dim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const RankSpace<Dim> ranks{Index<Dim>{}, rank_extent};
   const Distribution<Dim> distribution = Distribution<Dim>::replicated(boxes, ranks);
   std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
   faces.fill(PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(0)});
@@ -74,7 +79,7 @@ pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes) {
   return {geometry,
           std::move(boxes),
           distribution,
-          Index<Dim>{},
+          local_rank,
           PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::physical(), faces, spacing},
           Extent<Dim>{},
           extent<Dim>(1),
