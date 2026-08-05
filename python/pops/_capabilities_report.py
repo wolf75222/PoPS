@@ -1080,16 +1080,16 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             source=source,
         ),
         _row(
-            "mesh:2d_storage_arithmetic",
+            "mesh:nd_storage_arithmetic",
             layout="uniform|amr",
             backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            status="partial",
+            status="available",
             limitation=(
-                "native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
-                "Dim!=2 is rejected by validate_dimension() before runtime"
+                "one compile-time-ranked Index/Box/Fab/MultiFab arithmetic core; the "
+                "resolved artifact retains exactly one dimension in {1,2,3}"
             ),
             source=source,
         ),

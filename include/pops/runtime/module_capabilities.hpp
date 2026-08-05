@@ -267,9 +267,9 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "FFT requires a single uniform periodic mesh, not AMR", "amr", "none",
                        "host", mpi, gpu, "solver=FFT() with layout=AMR", "GeometricMG() on AMR",
                        "use pops.solvers.elliptic.GeometricMG()"),
-      capability_route("mesh:2d_storage_arithmetic", "partial",
-                       "native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
-                       "Dim!=2 is rejected before runtime",
+      capability_route("mesh:nd_storage_arithmetic", "available",
+                       "one compile-time-ranked Index/Box/Fab/MultiFab arithmetic core; the "
+                       "resolved artifact retains exactly one dimension in {1,2,3}",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("amr:refinement_ratio", "partial",
                        "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "

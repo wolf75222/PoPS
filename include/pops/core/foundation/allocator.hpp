@@ -1,5 +1,5 @@
 /// @file
-/// @brief Fab2D storage allocator, selectable at compile time.
+/// @brief Compile-time-ranked Fab storage allocator, selectable at build time.
 ///
 /// Two strategies depending on the build:
 ///   - Kokkos (POPS_HAS_KOKKOS): `ManagedAllocator<T>` backed by `ManagedArena` (a pool of

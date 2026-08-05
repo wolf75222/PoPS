@@ -386,12 +386,10 @@ future validators:
   DFT fallback and expose fallback calls through `poisson_fft_direct_dft_fallback_count()`.
 - `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
   `SolverDefaults`/logger route.
-- `mesh:2d_storage_arithmetic`: the native mesh/storage/arithmetic core is `Box2D`/`Fab2D`
-  2D-only, and `validate_dimension()` rejects `Dim != 2` requests. Separately, the prepared local
-  periodic Cartesian finite-volume provider executes compile-time `Dim=1..3` contiguous patches
-  through the same metric, reconstruction, typed Riemann and conservative-divergence pipeline.
-  Its 1D/3D qualification does not claim 1D/3D `MultiFab`, AMR hierarchy, physical boundaries or
-  runtime binding.
+- `mesh:nd_storage_arithmetic`: one `Index<Dim>`/`Box<Dim>`/`Fab<Dim>`/`MultiFab<Dim>` core is
+  specialized at build time for the resolved artifact dimension (1, 2 or 3). The same retained
+  specialization crosses native layout, storage, arithmetic and runtime binding; there is no
+  parallel 2D storage authority or runtime dimension branch.
 - `amr:refinement_ratio`: native AMR hierarchy, patch ranges, spatial transfers and reflux geometry
   are `ratio=2` only, and `validate_amr_refinement_ratio()` rejects other spatial ratios. Temporal
   parent/child ratios are explicit `ProgramGraph` data; `AmrRuntime` never infers or executes

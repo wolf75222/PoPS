@@ -286,7 +286,7 @@ class Uniform(MeshDescriptor):
 
         return _layout_inspect_dict(
             self,
-            native_features=("layout:Uniform", "layout:AMR", "mesh:2d_storage_arithmetic"),
+            native_features=("layout:Uniform", "layout:AMR", "mesh:nd_storage_arithmetic"),
             amr_report=_layout_amr_report(self),
         )
 
@@ -657,7 +657,7 @@ class AMR(MeshDescriptor):
 
         return _layout_inspect_dict(
             self,
-            native_features=("layout:AMR", "amr:refinement_ratio", "mesh:2d_storage_arithmetic"),
+            native_features=("layout:AMR", "amr:refinement_ratio", "mesh:nd_storage_arithmetic"),
             amr_report=_layout_amr_report(self),
         )
 
