@@ -125,6 +125,33 @@ class AmrRuntime {
     return *load_balance_;
   }
 
+  /// Complete rollback image for an outer accepted-step transaction. The spatial contract is
+  /// re-authenticated against the copied hierarchy and saved generations before publication.
+  struct Snapshot {
+    hierarchy_type hierarchy;
+    std::uint64_t topology_epoch = 0;
+    std::uint64_t materialization_generation = 0;
+    std::string exact_spatial_contract;
+  };
+
+  Snapshot snapshot() const {
+    return {hierarchy_, topology_epoch_, materialization_generation_, exact_spatial_contract_};
+  }
+
+  void restore(const Snapshot& snapshot) {
+    const std::string expected = detail::exact_runtime_spatial_contract(
+        spatial_identity_, snapshot.hierarchy, snapshot.topology_epoch,
+        snapshot.materialization_generation);
+    if (expected != snapshot.exact_spatial_contract)
+      throw std::invalid_argument("AMR runtime rollback snapshot is not authentic");
+    hierarchy_type restored_hierarchy(snapshot.hierarchy);
+    std::string restored_contract(snapshot.exact_spatial_contract);
+    hierarchy_ = std::move(restored_hierarchy);
+    topology_epoch_ = snapshot.topology_epoch;
+    materialization_generation_ = snapshot.materialization_generation;
+    exact_spatial_contract_.swap(restored_contract);
+  }
+
   ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(
       std::size_t parent_level, ::pops::amr::RefinementRatio<Dim> ratio,
       ::pops::amr::tagging::ClusterResult<Dim> clustered,
