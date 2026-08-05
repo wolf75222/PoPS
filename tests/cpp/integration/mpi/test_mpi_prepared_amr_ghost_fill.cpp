@@ -50,10 +50,11 @@ AmrGhostFillBudget budget() {
 
 TEST(test_mpi_prepared_amr_ghost_fill,
      partitioned_parent_and_swapped_fine_ownership_fill_one_exact_candidate) {
+  Kokkos::ScopeGuard kokkos;
   const ExecutionLane control = ExecutionLane::world();
-  ASSERT_EQ(control.size(), 2);
+  ASSERT_EQ(control.size(), 3);
   const int rank = control.rank();
-  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{2}};
+  const RankSpace<1> ranks{Index<1>{0}, Extent<1>{3}};
 
   const Box<1> coarse_domain{Index<1>{0}, Index<1>{7}};
   const BoxArray<1> coarse_layout(
@@ -83,13 +84,17 @@ TEST(test_mpi_prepared_amr_ghost_fill,
   request.field_identity = "state";
   request.budget = budget();
   const auto fill = prepare_amr_ghost_fill(coarse, fine, request, lane);
-  ASSERT_TRUE(fill.has_remote_parent_jobs());
-  ASSERT_TRUE(fill.has_remote_same_level_jobs());
+  EXPECT_EQ(fill.has_remote_parent_jobs(), rank < 2);
+  EXPECT_EQ(fill.has_remote_same_level_jobs(), rank < 2);
 
   runtime::multiblock::BoundaryEvaluationPoint point{};
   point.level = 1;
   fill(fine, point);
 
+  if (rank == 2) {
+    EXPECT_EQ(fine.local_size(), 0U);
+    return;
+  }
   ASSERT_EQ(fine.local_size(), 1U);
   const auto& local = fine.fab(0);
   for (int i = local.grown_box().lo[0]; i <= local.grown_box().hi[0]; ++i) {

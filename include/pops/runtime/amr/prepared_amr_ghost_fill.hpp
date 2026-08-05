@@ -303,6 +303,7 @@ class PreparedAmrGhostFill {
     std::optional<CoarseFineGhostSchedule<Dim>> coarse_fine{};
     std::optional<HaloSchedule<Dim>> same_level{};
     std::optional<HaloExchange<Dim, MemorySpace>> same_level_exchange{};
+    bool remote_parent_collective = false;
     std::vector<ScratchPatch> scratch{};
     std::vector<std::size_t> scratch_by_fine_patch{};
     device_buffer_type local_buffer{};
@@ -528,10 +529,10 @@ class PreparedAmrGhostFill {
         throw std::runtime_error("prepared AMR ghost parent packing failed before MPI publication");
 
 #ifdef POPS_HAS_MPI
-      if (coarse_fine->has_remote_jobs())
+      if (remote_parent_collective)
         exchange_parent();
 #else
-      if (coarse_fine->has_remote_jobs())
+      if (remote_parent_collective)
         throw std::logic_error("distributed AMR ghost fill requires an MPI build");
 #endif
 
@@ -727,6 +728,8 @@ PreparedAmrGhostFill<Dim, MemorySpace> prepare_amr_ghost_fill(
                                                 lane.communicator()))
     throw std::invalid_argument(
         "prepared AMR ghost exact topology/materialization contract differs across ranks");
+  state->remote_parent_collective =
+      all_reduce_max(state->coarse_fine->has_remote_jobs() ? 1L : 0L, lane.communicator()) != 0;
 
   long allocation_failure = 0;
   std::exception_ptr allocation_error;
@@ -742,7 +745,9 @@ PreparedAmrGhostFill<Dim, MemorySpace> prepare_amr_ghost_fill(
     throw std::runtime_error("prepared AMR ghost reusable storage allocation failed collectively");
   }
 
-  if (state->same_level->has_remote_jobs()) {
+  const long remote_same_level_any =
+      all_reduce_max(state->same_level->has_remote_jobs() ? 1L : 0L, lane.communicator());
+  if (remote_same_level_any != 0) {
     HaloExchangeContext context{};
     context.context_generation = prepared_amr_ghost_detail::exchange_generation(
         state->preparation.topology_generation, "AMR topology generation");
