@@ -13,6 +13,7 @@
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <type_traits>
@@ -29,6 +30,30 @@ struct FieldStatusMaximum {
 
   POPS_HD Real operator()(const Index<Dim>& index) const { return status(index); }
 };
+
+/// Device-clean provider storage for laws that explicitly declare no qualified provider rows.
+/// It is selected by capability at compile time and never stands in for a missing authored field.
+template <int Dim>
+struct ProviderFreeStorage {
+  POPS_HD Real operator()(const Index<Dim>&, int) const { return Real(0); }
+};
+
+template <class Model>
+int resolve_positivity_component(Real floor) {
+  if (!(floor > Real(0)))
+    return 0;
+  if (!std::isfinite(floor))
+    throw std::invalid_argument("prepared ND positivity floor must be finite");
+  if constexpr (requires { Model::conservative_vars(); }) {
+    const int component = Model::conservative_vars().index_of(VariableRole::Density);
+    if (component >= 0)
+      return component;
+    throw std::invalid_argument(
+        "prepared ND positivity requires a conservative Density variable");
+  }
+  throw std::invalid_argument(
+      "prepared ND positivity requires conservative-variable introspection");
+}
 
 template <int Axis, int Dim>
 struct CopyFaceAxis {
@@ -56,13 +81,16 @@ struct CopyCellField {
 };
 
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux>
+          class Reconstruction, class NumericalFlux, class ProviderStorage>
 struct MaterializeFaceFlux {
   Model model;
   Metric metric;
   Reconstruction reconstruction;
   NumericalFlux numerical_flux;
+  Real positivity_floor = Real(0);
+  int positivity_component = 0;
   FieldView<const Real, Dim> state{};
+  ProviderStorage providers;
   FaceFieldView<Real, Dim> integrated_fluxes{};
   FaceFieldView<Real, Dim> statuses{};
 
@@ -73,7 +101,7 @@ struct MaterializeFaceFlux {
   }
 
   POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
-    const auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+    auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
     if (traces.left_status != StateConversionStatus::Success) {
       fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
       return;
@@ -86,15 +114,33 @@ struct MaterializeFaceFlux {
     Index<Dim> left_cell = face.coordinate;
     --left_cell[Axis];
     const Index<Dim> right_cell = face.coordinate;
+    if (positivity_floor > Real(0)) {
+      if (traces.left[positivity_component] < positivity_floor) {
+        traces.left = load_state<Model>(state, left_cell);
+        traces.left_status = model.admissibility(traces.left);
+      }
+      if (traces.right[positivity_component] < positivity_floor) {
+        traces.right = load_state<Model>(state, right_cell);
+        traces.right_status = model.admissibility(traces.right);
+      }
+      if (traces.left_status != StateConversionStatus::Success) {
+        fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
+        return;
+      }
+      if (traces.right_status != StateConversionStatus::Success) {
+        fail(face, finite_volume_detail::finite_volume_status(traces.right_status));
+        return;
+      }
+    }
     FaceContext context{};
     if (face[Axis] == integrated_fluxes.cells.lo[Axis])
       context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
     else
       context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
 
-    const auto evaluation =
-        evaluate_axis_flux<Axis>(numerical_flux, model, traces.left, traces.right,
-                                 context.face_measure, context.cell_measure);
+    const auto evaluation = evaluate_numerical_flux_at(
+        numerical_flux, model, traces.left, providers, left_cell, traces.right, providers,
+        right_cell, context);
     if (!evaluation.succeeded()) {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
@@ -136,19 +182,22 @@ struct MaterializeResidual {
 };
 
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux, class MemorySpace>
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
 void materialize_axes(const Model& model, const Metric& metric,
                       const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
-                      const Fab<Dim, MemorySpace>& state,
+                      Real positivity_floor, int positivity_component,
+                      const Fab<Dim, MemorySpace>& state, const ProviderStorage& providers,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses) {
   for_each_face<Axis>(
       state.box(),
-      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux>{
-          model, metric, reconstruction, numerical_flux, state.view(), integrated_fluxes.view(),
-          statuses.view()});
+      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
+                          ProviderStorage>{model, metric, reconstruction, numerical_flux,
+                                           positivity_floor, positivity_component, state.view(),
+                                           providers, integrated_fluxes.view(), statuses.view()});
   if constexpr (Axis + 1 < Dim)
-    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux, state,
+    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux,
+                                          positivity_floor, positivity_component, state, providers,
                                           integrated_fluxes, statuses);
 }
 
@@ -222,11 +271,14 @@ class PreparedCartesianOperator {
   static constexpr ReconstructionVariables reconstruction_variables = Variables;
 
   PreparedCartesianOperator(Model model, Metric metric, Reconstruction reconstruction = {},
-                            NumericalFlux numerical_flux = {})
+                            NumericalFlux numerical_flux = {}, Real positivity_floor = Real(0))
       : model_(std::move(model)),
         metric_(std::move(metric)),
         reconstruction_(std::move(reconstruction)),
-        numerical_flux_(std::move(numerical_flux)) {
+        numerical_flux_(std::move(numerical_flux)),
+        positivity_floor_(positivity_floor),
+        positivity_component_(
+            cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor)) {
     if (metric_.identity().domain.empty())
       throw std::invalid_argument("prepared ND hyperbolic metric domain must be non-empty");
   }
@@ -237,14 +289,39 @@ class PreparedCartesianOperator {
 
   template <class MemorySpace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
-                               FaceField<Dim, MemorySpace>& output) const {
+                               FaceField<Dim, MemorySpace>& output) const
+    requires(flux_provider_count<Model> == 0)
+  {
     require_state_patch_(state);
     cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, state, candidate, statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state,
+        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+
+    cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const Fab<Dim, MemorySpace>& providers,
+                               FaceField<Dim, MemorySpace>& output) const {
+    require_state_patch_(state);
+    require_provider_patch_(state, providers);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+
+    FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state, providers.view(), candidate, statuses);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -285,14 +362,18 @@ class PreparedCartesianOperator {
 
   template <class MemorySpace>
   void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         Fab<Dim, MemorySpace>& residual) const {
+                         Fab<Dim, MemorySpace>& residual) const
+    requires(flux_provider_count<Model> == 0)
+  {
     require_state_patch_(state);
     cartesian_operator_detail::require_residual_output(state, residual, n_vars);
 
     FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
     FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
-        model_, metric_, reconstruction_, numerical_flux_, state, integrated_fluxes, face_statuses);
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state,
+        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, integrated_fluxes, face_statuses);
     const Real face_failure = cartesian_operator_detail::maximum_face_status<0>(face_statuses);
     if (face_failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
@@ -300,8 +381,23 @@ class PreparedCartesianOperator {
   }
 
   template <class MemorySpace>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& providers,
+                         Fab<Dim, MemorySpace>& residual) const {
+    require_state_patch_(state);
+    require_provider_patch_(state, providers);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
+
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    materialize_face_fluxes(state, providers, integrated_fluxes);
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace>
   void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
-                         MultiFab<Dim, MemorySpace>& residual) const {
+                         MultiFab<Dim, MemorySpace>& residual) const
+    requires(flux_provider_count<Model> == 0)
+  {
     if (state.ncomp() != n_vars || residual.ncomp() != n_vars ||
         !(state.layout() == residual.layout()) ||
         !(state.distribution() == residual.distribution()) ||
@@ -313,6 +409,30 @@ class PreparedCartesianOperator {
                                          residual.local_rank(), n_vars, residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       assemble_residual(state.fab(local), candidate.fab(local));
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    cartesian_operator_detail::CopyCellField<Dim>{
+                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), n_vars});
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& providers,
+                         MultiFab<Dim, MemorySpace>& residual) const {
+    require_multifab_layout_(state, residual);
+    if (providers.layout() != state.layout() ||
+        providers.distribution() != state.distribution() ||
+        providers.local_rank() != state.local_rank() ||
+        providers.local_size() != state.local_size() ||
+        providers.ncomp() < flux_provider_count<Model>)
+      throw std::invalid_argument(
+          "prepared ND provider field differs from the state layout or model contract");
+    MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                         residual.local_rank(), n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      assemble_residual(state.fab(local), providers.fab(local), candidate.fab(local));
     for (std::size_t local = 0; local < state.local_size(); ++local)
       for_each_cell(state.box(local),
                     cartesian_operator_detail::CopyCellField<Dim>{
@@ -351,6 +471,27 @@ class PreparedCartesianOperator {
 
  private:
   template <class MemorySpace>
+  void require_multifab_layout_(const MultiFab<Dim, MemorySpace>& state,
+                                const MultiFab<Dim, MemorySpace>& residual) const {
+    if (state.ncomp() != n_vars || residual.ncomp() != n_vars ||
+        !(state.layout() == residual.layout()) ||
+        !(state.distribution() == residual.distribution()) ||
+        !(state.local_rank() == residual.local_rank()) ||
+        state.local_size() != residual.local_size() || state.shares_storage_with(residual))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic MultiFab state and residual layouts differ or alias storage");
+  }
+
+  template <class MemorySpace>
+  void require_provider_patch_(const Fab<Dim, MemorySpace>& state,
+                               const Fab<Dim, MemorySpace>& providers) const {
+    if (!(providers.box() == state.box()) || providers.ncomp() < flux_provider_count<Model> ||
+        !providers.grown_box().contains(state.box().grow(1)))
+      throw std::invalid_argument(
+          "prepared ND provider patch does not cover the model-qualified face traces");
+  }
+
+  template <class MemorySpace>
   void require_state_patch_(const Fab<Dim, MemorySpace>& state) const {
     if (!domain().contains(state.box()))
       throw std::invalid_argument(
@@ -362,6 +503,8 @@ class PreparedCartesianOperator {
   Metric metric_;
   Reconstruction reconstruction_;
   NumericalFlux numerical_flux_;
+  Real positivity_floor_ = Real(0);
+  int positivity_component_ = 0;
 };
 
 template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
@@ -370,9 +513,11 @@ template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
   requires(ConservationLaw<Dim, Model> && PreparedMetricProvider<Dim, Metric> &&
            ReconstructionPolicy<Reconstruction>)
 auto prepare_cartesian_operator(Model model, Metric metric, Reconstruction reconstruction = {},
-                                NumericalFlux numerical_flux = {}) {
+                                NumericalFlux numerical_flux = {},
+                                Real positivity_floor = Real(0)) {
   return PreparedCartesianOperator<Dim, Model, Metric, Reconstruction, NumericalFlux, Variables>(
-      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux));
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
+      positivity_floor);
 }
 
 /// Convenience factory for the canonical Cartesian Geometry authority.
@@ -381,7 +526,8 @@ template <int Dim, class Model, class Reconstruction = NoSlope, class NumericalF
   requires ConservationLaw<Dim, Model>
 auto prepare_cartesian_operator(const Geometry<Dim>& geometry, Model model,
                                 Reconstruction reconstruction = {},
-                                NumericalFlux numerical_flux = {}) {
+                                NumericalFlux numerical_flux = {},
+                                Real positivity_floor = Real(0)) {
   RealVector<Dim> lengths{};
   for (int axis = 0; axis < Dim; ++axis)
     lengths[axis] = geometry.upper()[axis] - geometry.lower()[axis];
@@ -389,7 +535,8 @@ auto prepare_cartesian_operator(const Geometry<Dim>& geometry, Model model,
   auto metric = prepare_metric_provider(geometry.domain(), map);
   return prepare_cartesian_operator<Dim, Model, decltype(metric), Reconstruction, NumericalFlux,
                                     Variables>(
-      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux));
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
+      positivity_floor);
 }
 
 template <int Dim, class MemorySpace>

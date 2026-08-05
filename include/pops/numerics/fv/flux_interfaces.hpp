@@ -470,6 +470,9 @@ concept ModelFluxAt =
     requires(const Model model, const typename Model::State state,
              const BoundFluxProviders<Model> providers) {
       { model.flux(state, providers, Axis) } -> std::same_as<typename Model::State>;
+    } ||
+    requires(const Model model, const typename Model::State state) {
+      { model.template flux<Axis>(state) } -> std::same_as<typename Model::State>;
     };
 
 template <int Axis, class Model>
@@ -481,6 +484,9 @@ concept ModelMaximumWaveSpeedAt =
     requires(const Model model, const typename Model::State state,
              const BoundFluxProviders<Model> providers) {
       { model.max_wave_speed(state, providers, Axis) } -> std::convertible_to<Real>;
+    } ||
+    requires(const Model model, const typename Model::State state) {
+      { model.template max_wave_speed<Axis>(state) } -> std::convertible_to<Real>;
     };
 
 template <int Axis, class Model>
@@ -490,7 +496,10 @@ concept ModelWaveSpeedsAt =
              Real& upper) { model.template wave_speeds<Axis>(state, providers, lower, upper); } ||
     requires(const Model model, const typename Model::State state,
              const BoundFluxProviders<Model> providers, Real& lower,
-             Real& upper) { model.wave_speeds(state, providers, Axis, lower, upper); };
+             Real& upper) { model.wave_speeds(state, providers, Axis, lower, upper); } ||
+    requires(const Model model, const typename Model::State state, Real& lower, Real& upper) {
+      model.template wave_speeds<Axis>(state, lower, upper);
+    };
 
 template <int Axis, class Model>
 concept ModelContactSpeedAt =
@@ -505,6 +514,12 @@ concept ModelContactSpeedAt =
       {
         model.contact_speed(left, right, scalar, scalar, scalar, scalar, Axis)
       } -> std::convertible_to<Real>;
+    } ||
+    requires(const Model model, const typename Model::State left, const typename Model::State right,
+             Real scalar) {
+      {
+        model.template contact_speed<Axis>(left, right, scalar, scalar, scalar, scalar)
+      } -> std::convertible_to<Real>;
     };
 
 template <int Axis, class Model>
@@ -516,6 +531,10 @@ concept ModelStarStateAt =
     } || requires(const Model model, const typename Model::State state, Real scalar) {
       {
         model.hllc_star_state(state, scalar, scalar, scalar, Axis)
+      } -> std::same_as<typename Model::State>;
+    } || requires(const Model model, const typename Model::State state, Real scalar) {
+      {
+        model.template star_state<Axis>(state, scalar, scalar, scalar)
       } -> std::same_as<typename Model::State>;
     };
 
@@ -533,6 +552,12 @@ concept ModelRoeDissipationAt =
              const BoundFluxProviders<Model> right_providers) {
       {
         model.roe_dissipation(left, left_providers, right, right_providers, Axis)
+      } -> std::same_as<typename Model::State>;
+    } ||
+    requires(const Model model, const typename Model::State left,
+             const typename Model::State right) {
+      {
+        model.template roe_dissipation<Axis>(left, right)
       } -> std::same_as<typename Model::State>;
     };
 
@@ -587,8 +612,10 @@ POPS_HD typename Model::State model_flux_at(const Model& model, const typename M
                                             const BoundFluxProviders<Model>& providers) {
   if constexpr (requires { model.template flux<Axis>(state, providers); })
     return model.template flux<Axis>(state, providers);
-  else
+  else if constexpr (requires { model.flux(state, providers, Axis); })
     return model.flux(state, providers, Axis);
+  else
+    return model.template flux<Axis>(state);
 }
 
 template <int Axis, class Model>
@@ -597,8 +624,10 @@ POPS_HD Real model_max_wave_speed_at(const Model& model, const typename Model::S
                                      const BoundFluxProviders<Model>& providers) {
   if constexpr (requires { model.template max_wave_speed<Axis>(state, providers); })
     return model.template max_wave_speed<Axis>(state, providers);
-  else
+  else if constexpr (requires { model.max_wave_speed(state, providers, Axis); })
     return model.max_wave_speed(state, providers, Axis);
+  else
+    return model.template max_wave_speed<Axis>(state);
 }
 
 template <int Axis = 0, class Model>
@@ -632,8 +661,10 @@ POPS_HD void model_wave_speeds_at(const Model& model, const typename Model::Stat
                                   Real& upper) {
   if constexpr (requires { model.template wave_speeds<Axis>(state, providers, lower, upper); })
     model.template wave_speeds<Axis>(state, providers, lower, upper);
-  else
+  else if constexpr (requires { model.wave_speeds(state, providers, Axis, lower, upper); })
     model.wave_speeds(state, providers, Axis, lower, upper);
+  else
+    model.template wave_speeds<Axis>(state, lower, upper);
 }
 
 template <int Axis = 0, class Model>
@@ -692,8 +723,10 @@ POPS_HD typename Model::State model_star_state_at(const Model& model,
                                                   Real speed, Real contact) {
   if constexpr (requires { model.template hllc_star_state<Axis>(state, pressure, speed, contact); })
     return model.template hllc_star_state<Axis>(state, pressure, speed, contact);
-  else
+  else if constexpr (requires { model.hllc_star_state(state, pressure, speed, contact, Axis); })
     return model.hllc_star_state(state, pressure, speed, contact, Axis);
+  else
+    return model.template star_state<Axis>(state, pressure, speed, contact);
 }
 
 template <int Axis = 0, class Model>
@@ -720,8 +753,12 @@ POPS_HD typename Model::State model_roe_dissipation_at(
                                                        right_providers);
                 })
     return model.template roe_dissipation<Axis>(left, left_providers, right, right_providers);
-  else
+  else if constexpr (requires {
+                       model.roe_dissipation(left, left_providers, right, right_providers, Axis);
+                     })
     return model.roe_dissipation(left, left_providers, right, right_providers, Axis);
+  else
+    return model.template roe_dissipation<Axis>(left, right);
 }
 
 template <int Axis = 0, class Model>
