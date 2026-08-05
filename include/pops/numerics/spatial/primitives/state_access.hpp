@@ -7,7 +7,7 @@
 ///     cartesian_operator.hpp).
 ///   - SourceFreeModel<M>: adapter that zeroes the source (explicit IMEX half-step).
 ///   - load_state<Model>: reads the conservative state from a ranked FieldView (POPS_HD).
-///   - load_aux<NComp>: reads the auxiliary (phi, grad, extra fields) from the same authority.
+///   - load_aux<NComp>: reads `AuxState<Dim>` (phi, Dim gradients, extras) from that authority.
 ///
 /// This module carries no grid loop: every entry is POINTWISE (POPS_HD) or a compile-time
 /// model adapter. It is the bottom of the spatial/ dependency DAG and depends only on the core
@@ -52,7 +52,8 @@ struct SourceFreeModel {
   using State = typename M::State;
   using Aux = typename M::Aux;
   static constexpr int n_vars = M::n_vars;
-  static constexpr int n_aux = aux_comps<M>();  // transparent to the wrapped model's aux width
+  static constexpr int n_aux =
+      aux_comps_for<M, Aux::dimension>();  // transparent to the wrapped model's ranked width
   M m;
   template <class Providers>
   POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
@@ -131,40 +132,35 @@ POPS_HD inline typename Model::State load_state(const FieldView<const Real, Dim>
   return u;
 }
 
-/// Read NComp auxiliary components at one compile-time-ranked cell.
+/// Read exactly `NComp` ranked auxiliary components at one cell.
 ///
-/// The first 3 components (phi and the historical x/y gradient slots) are the base contract.
-/// Components >= 3 (B_z, T_e...) are read only if NComp > their canonical index
-/// (if constexpr guard -> zero codegen for NComp = kAuxBaseComps = 3: bit-identical).
-/// The extra fields are governed by POPS_AUX_FIELDS (state.hpp): adding a field =>
-/// 1 line in POPS_AUX_FIELDS, not in this path. POPS_HD.
-//
-// The extra fields are loaded from the SINGLE SOURCE POPS_AUX_FIELDS (state.hpp): each
-// X(name, idx) generates `if constexpr (NComp > idx) x.name = field(index,idx);`, exactly the
-// sequence written by hand before. Adding an extra field => 1 line in POPS_AUX_FIELDS is
-// enough for this device read path to cover it (and the host marshaling, generated from the
-// same table). NComp = kAuxBaseComps: all guards are false -> bit-identical.
-template <int NComp = kAuxBaseComps, int Dim>
-POPS_HD inline Aux load_aux(const FieldView<const Real, Dim>& field, const Index<Dim>& index) {
-  static_assert(NComp >= kAuxBaseComps, "provider pack is missing required base aux fields");
-  static_assert(NComp <= kAuxMaxComps, "provider pack exceeds capacity; never clamp it");
-  Aux x{field(index, 0), field(index, 1), field(index, 2)};
-#define POPS_AUX_LOAD(name, idx) \
-  if constexpr (NComp > (idx))   \
-    x.name = field(index, idx);
-  POPS_AUX_FIELDS(POPS_AUX_LOAD)
-#undef POPS_AUX_LOAD
-  // NAMED aux fields (ADC-70 phase 1): components from kAuxNamedBase (= 5). Loaded
-  // ONLY if the model declares n_aux > kAuxNamedBase (otherwise if constexpr false -> no codegen,
-  // NComp = kAuxBaseComps stays strictly bit-identical). The bound n_extra is known at
-  // compile time (NComp template): the loop is unrolled after the capacity assertion above --
-  // never clamped and never an out-of-bounds access on the C array, device-clean.
-  if constexpr (NComp > kAuxNamedBase) {
-    constexpr int n_extra = NComp - kAuxNamedBase;
-    for (int k = 0; k < n_extra; ++k)
-      x.extra[k] = field(index, kAuxNamedBase + k);
+/// The required prefix is `phi` plus one gradient per axis. Canonical and named extras are loaded
+/// only when present in `NComp`; every offset comes from `AuxComponentLayout<Dim>`. The returned POD
+/// therefore has the same spatial rank as the field view, including when several ranks are
+/// instantiated in one compile-only proof.
+template <int NComp, int Dim>
+POPS_HD inline AuxState<Dim> load_aux(const FieldView<const Real, Dim>& field,
+                                      const Index<Dim>& index) {
+  using layout = AuxComponentLayout<Dim>;
+  static_assert(NComp >= layout::base_components,
+                "provider pack is missing required ranked base aux fields");
+  static_assert(NComp <= layout::max_components,
+                "provider pack exceeds ranked capacity; never clamp it");
+
+  AuxState<Dim> result{};
+  result.phi = field(index, layout::phi);
+  for (int axis = 0; axis < Dim; ++axis)
+    result.gradients[axis] = field(index, layout::gradient_begin + axis);
+  if constexpr (NComp > layout::b_z)
+    result.B_z = field(index, layout::b_z);
+  if constexpr (NComp > layout::t_e)
+    result.T_e = field(index, layout::t_e);
+  if constexpr (NComp > layout::named_begin) {
+    constexpr int named_count = NComp - layout::named_begin;
+    for (int slot = 0; slot < named_count; ++slot)
+      result.extra[slot] = field(index, layout::named_begin + slot);
   }
-  return x;
+  return result;
 }
 
 }  // namespace pops

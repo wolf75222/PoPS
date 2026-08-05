@@ -1,6 +1,4 @@
-// POPS_AUX_FIELDS is the single source for the auxiliary component layout. These tests prove that
-// the ranked device loader and host marshaling agree for every canonical extra field, and that the
-// base-width route leaves extras untouched in 1D, 2D, and 3D.
+// Exact-ranked AuxState and its device loader share one component authority in 1D, 2D, and 3D.
 
 #include <gtest/gtest.h>
 
@@ -9,37 +7,24 @@
 #include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 
 using namespace pops;
 
 namespace {
 
-constexpr int kNExtra = [] {
-  int count = 0;
-#define POPS_AUX_COUNT(name, index) ++count;
-  POPS_AUX_FIELDS(POPS_AUX_COUNT)
-#undef POPS_AUX_COUNT
-  return count;
-}();
+template <int Dim>
+struct RankedAuxModel {
+  using State = StateVec<1>;
+  using Aux = AuxState<Dim>;
+  static constexpr int n_vars = 1;
 
-constexpr int kFullWidth = [] {
-  int width = kAuxBaseComps;
-#define POPS_AUX_WIDTH(name, index) width = (index) + 1 > width ? (index) + 1 : width;
-  POPS_AUX_FIELDS(POPS_AUX_WIDTH)
-#undef POPS_AUX_WIDTH
-  return width;
-}();
-
-Real aux_member(const Aux& auxiliary, int component) {
-  Real value = Real(0);
-#define POPS_AUX_GET(name, index) \
-  if (component == (index))       \
-    value = auxiliary.name;
-  POPS_AUX_FIELDS(POPS_AUX_GET)
-#undef POPS_AUX_GET
-  return value;
-}
+  POPS_HD State flux(const State&, const Aux&, int) const { return {}; }
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+};
 
 template <int Dim>
 Extent<Dim> unit_extent() {
@@ -59,68 +44,114 @@ void seed_components(Fab<Dim>& field, Real base) {
   field.copy_from_host(host);
 }
 
+template <int Axis, int Dim>
+void expect_gradients(const AuxState<Dim>& auxiliary, Real base) {
+  using layout = AuxComponentLayout<Dim>;
+  EXPECT_EQ(auxiliary.template gradient<Axis>(),
+            base + Real(layout::template gradient_component<Axis>()));
+  EXPECT_EQ(auxiliary.template flux_provider<layout::template gradient_component<Axis>()>(),
+            auxiliary.template gradient<Axis>());
+  if constexpr (Axis + 1 < Dim)
+    expect_gradients<Axis + 1>(auxiliary, base);
+}
+
+template <int Axis, int Dim>
+void marshal_gradients(AuxState<Dim>& auxiliary, const std::vector<double>& marshaled) {
+  using layout = AuxComponentLayout<Dim>;
+  auxiliary.template gradient<Axis>() =
+      marshaled[static_cast<std::size_t>(layout::template gradient_component<Axis>())];
+  if constexpr (Axis + 1 < Dim)
+    marshal_gradients<Axis + 1>(auxiliary, marshaled);
+}
+
 template <int Dim>
 void check_device_and_host_marshaling() {
+  using layout = AuxComponentLayout<Dim>;
+  constexpr int full_width = layout::max_components;
   const Box<Dim> box = Box<Dim>::from_extents(unit_extent<Dim>());
-  Fab<Dim> field(box, kFullWidth);
+  Fab<Dim> field(box, full_width);
   seed_components(field, Real(100));
   const auto view = static_cast<const Fab<Dim>&>(field).view();
-  const Aux device = load_aux<kFullWidth>(view, Index<Dim>{});
-  EXPECT_EQ(device.phi, Real(100));
-  EXPECT_EQ(device.grad_x, Real(101));
-  EXPECT_EQ(device.grad_y, Real(102));
-#define POPS_AUX_CHECK_READ(name, index) EXPECT_EQ(aux_member(device, index), Real(100 + (index)));
-  POPS_AUX_FIELDS(POPS_AUX_CHECK_READ)
-#undef POPS_AUX_CHECK_READ
+  const AuxState<Dim> device = load_aux<full_width>(view, Index<Dim>{});
 
-  const std::size_t cell_count = 1;
-  const std::size_t cell = 0;
-  std::vector<double> marshaled(static_cast<std::size_t>(kFullWidth));
-  for (int component = 0; component < kFullWidth; ++component)
-    marshaled[static_cast<std::size_t>(component) * cell_count + cell] = 100 + component;
-  Aux host{};
-  host.phi = marshaled[cell];
-  host.grad_x = marshaled[cell_count + cell];
-  host.grad_y = marshaled[2 * cell_count + cell];
-#define POPS_AUX_MARSHAL(name, index)                 \
-  if (marshaled.size() >= ((index) + 1) * cell_count) \
-    host.name = marshaled[(index) * cell_count + cell];
-  POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
-#undef POPS_AUX_MARSHAL
+  EXPECT_EQ(device.phi, Real(100 + layout::phi));
+  expect_gradients<0>(device, Real(100));
+  EXPECT_EQ(device.B_z, Real(100 + layout::b_z));
+  EXPECT_EQ(device.T_e, Real(100 + layout::t_e));
+  EXPECT_EQ(device.template flux_provider<layout::b_z>(), device.B_z);
+  EXPECT_EQ(device.template flux_provider<layout::t_e>(), device.T_e);
+  EXPECT_EQ(device.template flux_provider<layout::named_begin>(), device.extra[0]);
+  for (int slot = 0; slot < kAuxMaxExtra; ++slot)
+    EXPECT_EQ(device.extra_field(slot), Real(100 + layout::named_begin + slot));
+
+  std::vector<double> marshaled(static_cast<std::size_t>(full_width));
+  for (int component = 0; component < full_width; ++component)
+    marshaled[static_cast<std::size_t>(component)] = 100 + component;
+  AuxState<Dim> host{};
+  host.phi = marshaled[static_cast<std::size_t>(layout::phi)];
+  marshal_gradients<0>(host, marshaled);
+  host.B_z = marshaled[static_cast<std::size_t>(layout::b_z)];
+  host.T_e = marshaled[static_cast<std::size_t>(layout::t_e)];
+  for (int slot = 0; slot < kAuxMaxExtra; ++slot)
+    host.extra[slot] = marshaled[static_cast<std::size_t>(layout::named_begin + slot)];
+
   EXPECT_EQ(host.phi, device.phi);
-  EXPECT_EQ(host.grad_x, device.grad_x);
-  EXPECT_EQ(host.grad_y, device.grad_y);
-#define POPS_AUX_CHECK_EQUAL(name, index) EXPECT_EQ(host.name, device.name);
-  POPS_AUX_FIELDS(POPS_AUX_CHECK_EQUAL)
-#undef POPS_AUX_CHECK_EQUAL
+  expect_gradients<0>(host, Real(100));
+  EXPECT_EQ(host.B_z, device.B_z);
+  EXPECT_EQ(host.T_e, device.T_e);
+  for (int slot = 0; slot < kAuxMaxExtra; ++slot)
+    EXPECT_EQ(host.extra[slot], device.extra[slot]);
 }
 
 template <int Dim>
 void check_base_width_ignores_extra_fields() {
+  using layout = AuxComponentLayout<Dim>;
   const Box<Dim> box = Box<Dim>::from_extents(unit_extent<Dim>());
-  Fab<Dim> field(box, kFullWidth);
+  Fab<Dim> field(box, layout::max_components);
   seed_components(field, Real(999));
   const auto view = static_cast<const Fab<Dim>&>(field).view();
-  const Aux loaded = load_aux<kAuxBaseComps>(view, Index<Dim>{});
-  EXPECT_EQ(loaded.phi, Real(999));
-  EXPECT_EQ(loaded.grad_x, Real(1000));
-  EXPECT_EQ(loaded.grad_y, Real(1001));
-#define POPS_AUX_CHECK_ZERO(name, index) EXPECT_EQ(aux_member(loaded, index), Real(0));
-  POPS_AUX_FIELDS(POPS_AUX_CHECK_ZERO)
-#undef POPS_AUX_CHECK_ZERO
+  const AuxState<Dim> loaded = load_aux<layout::base_components>(view, Index<Dim>{});
+
+  EXPECT_EQ(loaded.phi, Real(999 + layout::phi));
+  expect_gradients<0>(loaded, Real(999));
+  EXPECT_EQ(loaded.B_z, Real(0));
+  EXPECT_EQ(loaded.T_e, Real(0));
+  for (int slot = 0; slot < kAuxMaxExtra; ++slot)
+    EXPECT_EQ(loaded.extra[slot], Real(0));
 }
+
+template <int Dim>
+constexpr bool exact_ranked_storage() {
+  return std::is_trivially_copyable_v<AuxState<Dim>> &&
+         sizeof(AuxState<Dim>) == sizeof(Real) * AuxComponentLayout<Dim>::max_components &&
+         sizeof(AuxState<Dim>::gradients) == sizeof(Real) * Dim;
+}
+
+static_assert(exact_ranked_storage<1>());
+static_assert(exact_ranked_storage<2>());
+static_assert(exact_ranked_storage<3>());
+static_assert(std::is_same_v<Aux, AuxState<kNativeDimension>>);
+static_assert(PhysicalModelFor<RankedAuxModel<1>, 1>);
+static_assert(PhysicalModelFor<RankedAuxModel<2>, 2>);
+static_assert(PhysicalModelFor<RankedAuxModel<3>, 3>);
+static_assert(PhysicalModelFor<SourceFreeModel<RankedAuxModel<1>>, 1>);
+static_assert(PhysicalModelFor<SourceFreeModel<RankedAuxModel<2>>, 2>);
+static_assert(PhysicalModelFor<SourceFreeModel<RankedAuxModel<3>>, 3>);
+static_assert(!PhysicalModelFor<RankedAuxModel<1>, 2>);
+static_assert(PhysicalModel<RankedAuxModel<kNativeDimension>>);
+static_assert(aux_comps_for<RankedAuxModel<1>, 1>() == kAuxBaseCompsFor<1>);
+static_assert(aux_comps_for<RankedAuxModel<2>, 2>() == kAuxBaseCompsFor<2>);
+static_assert(aux_comps_for<RankedAuxModel<3>, 3>() == kAuxBaseCompsFor<3>);
 
 }  // namespace
 
 TEST(AuxSingleSource, RankedDeviceAndHostMarshalingAgree) {
-  static_assert(kNExtra >= 1);
-  static_assert(kFullWidth >= kAuxBaseComps + 1);
   check_device_and_host_marshaling<1>();
   check_device_and_host_marshaling<2>();
   check_device_and_host_marshaling<3>();
 }
 
-TEST(AuxSingleSource, RankedBaseWidthIgnoresExtraFields) {
+TEST(AuxSingleSource, RankedBaseWidthIgnoresOnlyRealExtras) {
   check_base_width_ignores_extra_fields<1>();
   check_base_width_ignores_extra_fields<2>();
   check_base_width_ignores_extra_fields<3>();
