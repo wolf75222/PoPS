@@ -2,6 +2,7 @@
 
 #include <pops/amr/hierarchy/level_layout.hpp>
 #include <pops/amr/transfer/transfer_provider.hpp>
+#include <pops/numerics/time/amr/prepared_coarse_fine_operator.hpp>
 
 #include <array>
 #include <cstddef>
@@ -14,6 +15,8 @@ namespace {
 using pops::Box;
 using pops::FieldView;
 using pops::Index;
+using pops::PreparedCoarseFineOperator;
+using pops::PreparedCoarseFineTransform;
 using pops::Real;
 using pops::amr::transfer::Centering;
 using pops::amr::transfer::ComponentRange;
@@ -22,6 +25,54 @@ using pops::amr::transfer::PreparedTransfer;
 using pops::amr::RefinementRatio;
 using pops::amr::transfer::TransferKind;
 using pops::amr::transfer::TransferProvider;
+
+template <int Dim>
+PreparedCoarseFineOperator<Dim> complete_coarse_fine_operator() {
+  PreparedCoarseFineOperator<Dim> prepared;
+  for (int axis = 0; axis < Dim; ++axis) {
+    prepared.parent_reach[axis] = axis + 1;
+    prepared.minimum_axis_cells[axis] = axis + 2;
+  }
+  prepared.launch_spatial = [](FieldView<Real, Dim>, FieldView<const Real, Dim>, const Box<Dim>&,
+                               const Box<Dim>&, const Box<Dim>&, const Box<Dim>&,
+                               const PreparedCoarseFineTransform<Dim>&, int, bool, bool,
+                               const pops::BoundaryTopology<Dim>&) {};
+  prepared.launch_space_time = [](FieldView<Real, Dim>, FieldView<const Real, Dim>,
+                                  FieldView<const Real, Dim>, const Box<Dim>&, const Box<Dim>&,
+                                  const Box<Dim>&, const Box<Dim>&,
+                                  const PreparedCoarseFineTransform<Dim>&, int, Real, Real, int,
+                                  const pops::BoundaryTopology<Dim>&) {};
+  return prepared;
+}
+
+template <int Dim>
+void expect_prepared_coarse_fine_metadata() {
+  auto prepared = complete_coarse_fine_operator<Dim>();
+  prepared.validate();
+
+  Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = axis + 1;
+  prepared.validate_domain(Box<Dim>{Index<Dim>{}, upper});
+
+  for (int axis = 0; axis < Dim; ++axis)
+    --upper[axis];
+  EXPECT_THROW(prepared.validate_domain(Box<Dim>{Index<Dim>{}, upper}), std::invalid_argument);
+
+  pops::Extent<Dim> ghosts{};
+  pops::Extent<Dim> reach{};
+  std::array<int, Dim> ratios{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    ghosts[axis] = axis + 1;
+    reach[axis] = axis + 2;
+    ratios[static_cast<std::size_t>(axis)] = axis + 2;
+  }
+  const RefinementRatio<Dim> ratio{ratios};
+  const pops::Extent<Dim> growth =
+      pops::detail::checked_coarse_fine_carrier_growth(ghosts, ratio, reach);
+  for (int axis = 0; axis < Dim; ++axis)
+    EXPECT_EQ(growth[axis], ghosts[axis] + reach[axis] * ratio[axis]);
+}
 
 template <int Dim, class F>
 void visit(const Box<Dim>& box, F&& function) {
@@ -346,4 +397,22 @@ TEST(test_nd_transfer, preparation_rejects_missing_stencils_components_aliases_a
   EXPECT_THROW(
       (void)unknown.prepare(valid_source.const_view(), fine.view(), fine_region, ratio, mapping),
       std::invalid_argument);
+}
+
+TEST(test_nd_transfer, prepared_coarse_fine_authority_is_exact_ranked_in_1d_2d_3d) {
+  expect_prepared_coarse_fine_metadata<1>();
+  expect_prepared_coarse_fine_metadata<2>();
+  expect_prepared_coarse_fine_metadata<3>();
+}
+
+TEST(test_nd_transfer,
+     prepared_coarse_fine_authority_fails_closed_on_incomplete_or_overflowing_metadata) {
+  PreparedCoarseFineOperator<2> incomplete;
+  EXPECT_THROW(incomplete.validate(), std::invalid_argument);
+
+  pops::Extent<2> ghosts{1, 1};
+  pops::Extent<2> reach{std::numeric_limits<int>::max(), 1};
+  EXPECT_THROW((void)pops::detail::checked_coarse_fine_carrier_growth(
+                   ghosts, RefinementRatio<2>{2, 2}, reach),
+               std::invalid_argument);
 }

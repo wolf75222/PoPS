@@ -171,19 +171,21 @@ def _deref(tok: Any) -> Any:
     """C++ MultiFab-lvalue argument for a top-level (step-body) field token. Every top-level token is
     already a MultiFab lvalue expression: a state / RHS scratch (``u5``, ``r5``), a history (``h5``) or
     a dereferenced scratch scalar field (``(*sf5)``). The step-body laplacian / gradient / divergence /
-    schur ops take ``pops::MultiFab&`` arguments, so the token passes through unchanged (the apply-block
+    schur ops take exact-ranked ``pops::MultiFab<kNativeDimension>&`` arguments, so the token passes
+    through unchanged (the apply-block
     counterpart is `_apply_in_arg`, which additionally const_casts the lambda's ``in`` param)."""
     return tok
 
 
 def _apply_in_arg(sub: Any, value: Any) -> str:
     """C++ argument for the INPUT field of a laplacian / gradient inside an apply lambda. When the input
-    is the lambda's ``in`` (a const&), const_cast it (ctx.laplacian / gradient take a non-const MultiFab&
+    is the lambda's ``in`` (a const&), const_cast it (ctx.laplacian / gradient take a non-const
+    exact-ranked MultiFab&
     and only write the ghosts, never the valid cells -- the same contract test_generic_krylov relies on);
     a persistent scratch shared_ptr is dereferenced."""
     tok = sub[value.id]
     if tok == "in":
-        return "const_cast<pops::MultiFab&>(in)"
+        return "const_cast<pops::MultiFab<pops::kNativeDimension>&>(in)"
     return "*%s" % tok
 
 
@@ -203,7 +205,7 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any, *, dt_symb
     for value, coeff in terms:
         tok = sub[value.id]
         ref = (
-            "const_cast<pops::MultiFab&>(in)"
+            "const_cast<pops::MultiFab<pops::kNativeDimension>&>(in)"
             if tok == "in"
             else ("*%s" % tok if tok.startswith("sf") else tok)
         )
@@ -346,11 +348,11 @@ def _has_runtime_param(exprs: Any) -> bool:
 
 def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any) -> list:
     """C++ local declarations binding the names the @p exprs reference to per-cell values:
-      - aux fields -> ``const pops::Real <name> = auxA(i, j, <comp>);`` (always, by dependency);
-      - conservative vars -> ``const pops::Real <name> = <state>A(i, j, <idx>);`` (when @p with_cons);
+      - aux fields -> ``const pops::Real <name> = auxA(index, <comp>);`` (always, by dependency);
+      - conservative vars -> ``const pops::Real <name> = <state>A(index, <idx>);`` (when @p with_cons);
       - primitives -> their dsl formula, in declaration order, only the LIVE ones (when @p with_prim).
-    @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its const Array4 is
-    ``<state_var>A``, the aux Array4 is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
+    @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its read FieldView is
+    ``<state_var>A``, the aux FieldView is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
     from pops._ir.visitors import _dependencies
@@ -368,14 +370,14 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     if with_cons:
         for idx, c in enumerate(impl.cons_names):
             if c in cons_needed:
-                lines.append("const pops::Real %s = %sA(i, j, %d);" % (c, state_var, idx))
+                lines.append("const pops::Real %s = %sA(index, %d);" % (c, state_var, idx))
     if with_prim:
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
                 lines.append("const pops::Real %s = %s;" % (p, expr.to_cpp()))
     aux_deps = set(impl.aux_names) | set(getattr(impl, "aux_extra_names", []) or [])
     for name in sorted(deps & aux_deps):
-        lines.append("const pops::Real %s = auxA(i, j, %d);" % (name, _aux_comp(impl, name)))
+        lines.append("const pops::Real %s = auxA(index, %d);" % (name, _aux_comp(impl, name)))
     return lines
 
 
@@ -395,17 +397,23 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
     for_each_cell) so the per-cell lambda captures the trivially-copyable struct by value; the lowered
     ``params.get(idx)`` then reads the CURRENT value (no recompile, mirror of the AOT-native member)."""
     lines = [
-        "pops::MultiFab& %s_aux = ctx.aux();" % out_var,
+        "pops::MultiFab<pops::kNativeDimension>& %s_aux = ctx.aux();" % out_var,
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
-        "  const pops::Array4 outA = %s.fab(li).array();" % out_var,
-        "  const pops::ConstArray4 %sA = %s.fab(li).const_array();" % (state_var, state_var),
-        "  const pops::ConstArray4 auxA = %s_aux.fab(li).const_array();" % out_var,
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = %s.fab(li).view();"
+        % out_var,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %sA = "
+        "std::as_const(%s).fab(li).view();" % (state_var, state_var),
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> auxA = "
+        "std::as_const(%s_aux).fab(li).view();" % out_var,
     ]
     if params_block is not None:
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device
         # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
         lines.append("  const pops::RuntimeParams params = ctx.program_params(%d);" % params_block)
-    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var)
+    lines.append(
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % out_var
+    )
     return lines
 
 
@@ -415,7 +423,7 @@ def _kernel_close() -> list:
 
 # --- per-cell conditional select (spec op 17, ADC-418): model-free for_each_cell kernels --------------
 # `cell_compare` and `where` are pure layout ops over co-distributed MultiFabs (no aux / no model
-# coefficients): they reuse the SAME for_each_cell + Array4 per-fab pattern as the source kernels, but
+# coefficients): they reuse the same for_each_cell + FieldView per-Fab pattern as the source kernels, but
 # bind several read handles (no auxA) and loop over the runtime component count `<out>.ncomp()`. Pairing
 # by local fab index li is sound: a cell_compare mask is alloc_scalar_field (the System (ba, dm)), a
 # where scratch is scratch_state_like(a) (a's (ba, dm)) and the inputs are the same co-distributed
@@ -423,14 +431,17 @@ def _kernel_close() -> list:
 
 
 def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: Any) -> list:
-    """Lower ``cell_compare``: maskA(i,j,0) = fieldA(i,j,0) <cmp> value ? 1 : 0 over the valid cells of
+    """Lower ``cell_compare``: maskA(index,0) = fieldA(index,0) <cmp> value ? 1 : 0 over the valid cells of
     the 1-component mask. Reads component 0 of @p field_var; writes the 0/1 mask into @p mask_var."""
     return [
         "for (int li = 0; li < %s.local_size(); ++li) {" % mask_var,
-        "  const pops::Array4 maskA = %s.fab(li).array();" % mask_var,
-        "  const pops::ConstArray4 fieldA = %s.fab(li).const_array();" % field_var,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % mask_var,
-        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s %s) "
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> maskA = "
+        "%s.fab(li).view();" % mask_var,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> fieldA = "
+        "std::as_const(%s).fab(li).view();" % field_var,
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % mask_var,
+        "    maskA(index, 0) = (fieldA(index, 0) %s %s) "
         "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0);" % (cmp, scalar_cpp(value)),
         "  });",
         "}",
@@ -438,23 +449,29 @@ def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: An
 
 
 def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> list:
-    """Lower ``where``: outA(i,j,c) = maskA(i,j,mc) != 0 ? aA(i,j,c) : bA(i,j,c) COMPONENT-WISE over the
+    """Lower ``where``: outA(index,c) = maskA(index,mc) != 0 ? aA(index,c) : bA(index,c)
+    component-wise over the
     valid cells of @p out_var (out's runtime ncomp). The mask component mc is 0 when the mask is
     1-component (a shared mask) and c when the mask has the SAME ncomp as a/b (a per-component mask) --
     decided per cell from the mask's own ncomp, so both layouts lower with ONE kernel."""
     return [
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
-        "  const pops::Array4 outA = %s.fab(li).array();" % out_var,
-        "  const pops::ConstArray4 maskA = %s.fab(li).const_array();" % mask_var,
-        "  const pops::ConstArray4 aA = %s.fab(li).const_array();" % a_var,
-        "  const pops::ConstArray4 bA = %s.fab(li).const_array();" % b_var,
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = "
+        "%s.fab(li).view();" % out_var,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> maskA = "
+        "std::as_const(%s).fab(li).view();" % mask_var,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> aA = "
+        "std::as_const(%s).fab(li).view();" % a_var,
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> bA = "
+        "std::as_const(%s).fab(li).view();" % b_var,
         "  const int ncomp_ = %s.ncomp();" % out_var,
         "  const int mask_ncomp_ = %s.ncomp();" % mask_var,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var,
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % out_var,
         "    for (int c = 0; c < ncomp_; ++c) {",
         "      const int mc = (mask_ncomp_ == 1) ? 0 : c;",
-        "      outA(i, j, c) = (maskA(i, j, mc) != static_cast<pops::Real>(0)) ? aA(i, j, c) "
-        ": bA(i, j, c);",
+        "      outA(index, c) = (maskA(index, mc) != static_cast<pops::Real>(0)) ? "
+        "aA(index, c) : bA(index, c);",
         "    }",
         "  });",
         "}",
@@ -478,7 +495,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/runtime/program/step_transaction.hpp>
 {prepared_native_component_includes}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
+#include <pops/mesh/storage/field_view.hpp>     // exact-ranked per-cell handles
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
 #include <pops/numerics/linalg/dense_eig.hpp>   // pops::detail::mat_inverse (local dense solve)
 #include <pops/numerics/nonlinear/local_nonlinear_collective.hpp>  // exact failure location
@@ -491,6 +508,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
+#include <utility>                             // std::as_const (read-only field views)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
 {model_helpers}
