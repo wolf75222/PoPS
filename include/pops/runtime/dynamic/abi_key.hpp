@@ -12,7 +12,7 @@
 /// dsl.emit_cpp_native_loader) inlines the pops::add_compiled_model header template and calls
 /// out-of-line methods of pops::System DEFINED in the already-loaded _pops module. The loader and the
 /// module MUST share the same ABI (same headers, same compiler, same standard); otherwise the
-/// memory layout of objects crossing the boundary (System, GridContext, BlockClosures...)
+/// memory layout of exact-ranked objects crossing the boundary (System<Dim>, fields, providers...)
 /// diverges -> SILENT undefined behavior. We make the incompatibility EXPLICIT: the loader exposes
 /// pops_native_abi_key() (key frozen at ITS compilation) and the System compares it against ITS own
 /// abi_key() at load time (add_native_block); a mismatch raises a clear error instead of UB.
@@ -119,7 +119,8 @@
   "compiler=" POPS_ABI_COMPILER                                                            \
   ";std=" POPS_ABI_STR(__cplusplus) ";headers=" POPS_HEADER_SIG ";kokkos=" POPS_ABI_KOKKOS \
                                     ";stdlib=" POPS_ABI_STDLIB ";mpi=" POPS_ABI_MPI        \
-                                    ";mpi_abi=" POPS_ABI_MPI_ID ";dim=" POPS_ABI_STR(POPS_NATIVE_DIM)
+                                    ";mpi_abi=" POPS_ABI_MPI_ID                            \
+                                    ";dim=" POPS_ABI_STR(POPS_NATIVE_DIM)
 
 namespace pops {
 namespace detail {

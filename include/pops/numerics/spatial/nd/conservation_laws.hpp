@@ -4,12 +4,15 @@
 #pragma once
 
 #include <pops/mesh/index/real_vector.hpp>
+#include <pops/core/state/variables.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/spatial/nd/state_schema.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
 #include <cmath>
 #include <concepts>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -56,6 +59,15 @@ class ScalarAdvection {
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Schema::nvars;
 
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.nd.scalar-advection", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(velocity_[axis]);
+  }
+
   ScalarAdvection() = default;
 
   static ScalarAdvection prepare(RealVector<Dim> velocity) {
@@ -96,6 +108,14 @@ class ScalarAdvection {
     return velocity_[Axis] < Real(0) ? -velocity_[Axis] : velocity_[Axis];
   }
 
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"scalar"}, 1, {VariableRole::Scalar}};
+  }
+
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"scalar"}, 1, {VariableRole::Scalar}};
+  }
+
   template <int Axis>
   POPS_HD void wave_speeds(const State&, Real& lower, Real& upper) const {
     static_assert(Axis >= 0 && Axis < Dim,
@@ -118,6 +138,12 @@ class IdealGasEuler {
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Schema::nvars;
 
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.nd.ideal-gas-euler", 1};
+  }
+
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(gamma_); }
+
   IdealGasEuler() = default;
 
   static IdealGasEuler prepare(Real gamma) {
@@ -127,6 +153,34 @@ class IdealGasEuler {
   }
 
   POPS_HD Real gamma() const { return gamma_; }
+
+  static VariableSet conservative_vars() {
+    constexpr std::array<const char*, 3> names{"rho_u", "rho_v", "rho_w"};
+    constexpr std::array<VariableRole, 3> roles{VariableRole::MomentumX, VariableRole::MomentumY,
+                                                VariableRole::MomentumZ};
+    VariableSet result{VariableKind::Conservative, {"rho"}, n_vars, {VariableRole::Density}};
+    for (int axis = 0; axis < Dim; ++axis) {
+      result.names.emplace_back(names[static_cast<std::size_t>(axis)]);
+      result.roles.push_back(roles[static_cast<std::size_t>(axis)]);
+    }
+    result.names.emplace_back("E");
+    result.roles.push_back(VariableRole::Energy);
+    return result;
+  }
+
+  static VariableSet primitive_vars() {
+    constexpr std::array<const char*, 3> names{"u", "v", "w"};
+    constexpr std::array<VariableRole, 3> roles{VariableRole::VelocityX, VariableRole::VelocityY,
+                                                VariableRole::VelocityZ};
+    VariableSet result{VariableKind::Primitive, {"rho"}, n_vars, {VariableRole::Density}};
+    for (int axis = 0; axis < Dim; ++axis) {
+      result.names.emplace_back(names[static_cast<std::size_t>(axis)]);
+      result.roles.push_back(roles[static_cast<std::size_t>(axis)]);
+    }
+    result.names.emplace_back("p");
+    result.roles.push_back(VariableRole::Pressure);
+    return result;
+  }
 
   POPS_HD StateConversion<Primitive> recover(const State& conservative) const {
     StateConversion<Primitive> result{};
