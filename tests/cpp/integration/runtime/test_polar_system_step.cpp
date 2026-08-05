@@ -1,10 +1,9 @@
-// Pas COUPLE POLAIRE (chantier "grille polaire diocotron", Phase 2b) : transport -> Poisson -> aux ->
-// avance, AU NIVEAU C++, sur un anneau global (r, theta). C'est le pendant C++ (rapide, sans Python) du
-// chemin cable dans System::step pour geometry == "polar". Il exerce et valide les MEMES briques que
-// System::step branche :
+// Pas COUPLE POLAIRE autonome : transport -> Poisson -> aux -> avance, AU NIVEAU C++, sur un anneau
+// global (r, theta). Le runtime exact-ranked System est strictement cartésien; ce test conserve la
+// qualification scientifique des briques polaires sans restaurer un second moteur System 2-D :
 //
 //   (1) PolarPoissonSolver : f = q n (charge), resolu sur l'anneau (FFT-en-theta + tridiag-en-r) ;
-//   (2) DERIVATION AUX EN BASE LOCALE (e_r, e_theta), exactement comme System::solve_fields_polar :
+//   (2) DERIVATION AUX EN BASE LOCALE (e_r, e_theta) :
 //         aux[1] = grad_r     = d phi/dr,
 //         aux[2] = grad_theta = (1/r) d phi/d theta  (derivee PHYSIQUE, deja divisee par r),
 //       d'ou la vitesse ExB polaire de ExBVelocityPolar : v_r = -grad_theta/B, v_theta = grad_r/B ;
@@ -16,7 +15,7 @@
 //       transport) modifie reellement la densite (le champ n'est pas gele) ET la vitesse ExB est bien
 //       a divergence ~nulle dans la metrique (sanity : le pas reste borne, n > 0).
 //   (B) CONSERVATION DE MASSE a la machine sur K pas couples (paroi radiale solide). C'est la propriete
-//       que System::step doit garantir (test 4 du livrable).
+//       que l'opérateur polaire autonome doit garantir.
 //
 // Host / Serial-safe : UNE box couvrant l'anneau, n_ranks()==1 dans les 3 jobs CI (PolarPoissonSolver
 // leve proprement sous MPI ; ce test n'est pas enregistre MPI, comme test_polar_poisson_mms).
@@ -39,10 +38,6 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, NoSource, ChargeDensity
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar : MEME derivation aux que System::solve_fields_polar
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/system.hpp>
-
-#include "explicit_system_program.hpp"
 #include "polar_boundary_plan.hpp"
 
 #include <cmath>
@@ -90,8 +85,7 @@ static double min_density(const MultiFab& U, const Box2D& dom) {
   return mn;
 }
 
-// UN pas couple POLAIRE, exactement comme System::step (branche polaire) :
-//   solve_fields_polar (Poisson + aux en base locale) PUIS avance SSPRK3 du transport (paroi radiale).
+// UN pas couple POLAIRE autonome : Poisson + aux en base locale PUIS avance SSPRK3 du transport.
 static void coupled_step(const PolarModel& model, MultiFab& U, MultiFab& aux,
                          PolarPoissonSolver& solver, const PolarGeometry& g, const Box2D& dom,
                          const BCRec& bc, double dt) {
@@ -122,7 +116,7 @@ static void coupled_step(const PolarModel& model, MultiFab& U, MultiFab& aux,
       U, static_cast<Real>(dt));
 }
 
-TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) {
+TEST(PolarCoupledStep, AdvectsDensityAndConservesMassUnderRadialWall) {
   const int nr = 64, nth = 64;
   Box2D dom = Box2D::from_extents(nr, nth);
   PolarGeometry g{dom, kRmin, kRmax};
@@ -218,54 +212,4 @@ TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) 
                             << " finale=" << m1;
   EXPECT_TRUE(minrho1 > 0.0) << "(B) densite devenue negative (pas couple instable) : minrho1="
                              << minrho1;
-}
-
-TEST(PolarSystemStep, BoundProgramUsesPersistentPreparedBoundaryClosures) {
-  SystemConfig config;
-  config.n = 8;
-  config.geometry = "polar";
-  config.nr = 8;
-  config.ntheta = 16;
-  config.r_min = kRmin;
-  config.r_max = kRmax;
-  System system(config);
-
-  ModelSpec model;
-  model.transport = "exb";
-  model.source = "none";
-  model.elliptic = "charge";
-  model.q = kQ;
-  model.B0 = kB0;
-  system.add_block("density", model, "none");
-
-  std::vector<double> density(static_cast<std::size_t>(config.nr * config.ntheta));
-  for (int j = 0; j < config.ntheta; ++j)
-    for (int i = 0; i < config.nr; ++i)
-      density[static_cast<std::size_t>(j * config.nr + i)] =
-          1.0 + 0.1 * std::cos(2.0 * kPiL * (static_cast<double>(j) + 0.5) / config.ntheta);
-  system.set_density("density", density);
-  test::install_forward_euler_program(system);
-  system.mark_bound();
-
-  EXPECT_NO_THROW(system.step(1e-4));
-  for (const double value : system.get_state("density"))
-    EXPECT_TRUE(std::isfinite(value));
-}
-
-TEST(PolarSystemStep, RefusesUnsupportedPostRiemannBoundaryComponentAtInstallation) {
-  SystemConfig config;
-  config.geometry = "polar";
-  config.nr = 8;
-  config.ntheta = 16;
-  config.r_min = kRmin;
-  config.r_max = kRmax;
-  System system(config);
-
-  ModelSpec model;
-  model.transport = "exb";
-  model.source = "none";
-  model.elliptic = "charge";
-  system.add_block("density", model, "none");
-
-  EXPECT_THROW(system.install_boundary_flux_component("density", {}, {}), std::runtime_error);
 }

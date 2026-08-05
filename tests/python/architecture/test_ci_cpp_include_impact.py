@@ -716,10 +716,10 @@ def test_unmapped_path_fails_safe_to_all(tmp_path):
 def test_seam_template_is_a_build_input_selecting_all(tmp_path):
     """A runtime-builder seam ``.cpp.in`` template is a build input -> FULL."""
     outputs, _targets, plan = _run_plan_cpp_explain(
-        tmp_path, ["src/runtime/builders/templates/system_flux_seam.cpp.in"]
+        tmp_path, ["src/runtime/builders/templates/amr_block_flux_seam.cpp.in"]
     )
     assert outputs["cpp_mode"] == "all"
-    assert plan["impact"]["src/runtime/builders/templates/system_flux_seam.cpp.in"]["reason"] == (
+    assert plan["impact"]["src/runtime/builders/templates/amr_block_flux_seam.cpp.in"]["reason"] == (
         "runtime-build-input"
     )
 

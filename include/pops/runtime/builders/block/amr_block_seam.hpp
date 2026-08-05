@@ -9,7 +9,7 @@
 #include <vector>
 
 /// @file
-/// @brief Per-transport block-build seam for AmrSystem (ADC-335 / P0-B), mirror of block_seam.hpp.
+/// @brief Per-transport block-build seam for the AMR runtime (ADC-335 / P0-B).
 ///
 /// The multi-block build resolves each ModelSpec behind a fixed-signature, hidden-visibility,
 /// non-template free function per transport, so the full AMR dispatch product (all transports x flux x

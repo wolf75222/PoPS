@@ -864,10 +864,10 @@ temporal driver. It reads `reference_block_substeps_v`, `reference_block_stride_
 [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
-`!= Prescribed`). The production step choice lives in
-[`runtime/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp): `step_cfl` computes
-the bound, then dispatches the installed normalized graph. Its internal
-`run_program_cadence` mechanically interprets the graph-authored whole-Program cadence
+`!= Prescribed`). The production step choice lives in the exact-ranked
+[`System<Dim>` runtime](../src/runtime/system/system.cpp): `step_cfl` computes the bound, then
+dispatches the installed normalized graph. Its cadence service mechanically interprets the
+graph-authored whole-Program cadence
 $(k+1)\bmod m = 0$; it does not read a block `TimePolicy` or
 construct an alternate schedule. During a due window it publishes the exact starting physical time
 and public macro-step to every internal Program substep. The window is partitioned by explicit
@@ -1654,21 +1654,22 @@ $m=0$ alone) or homogeneous Neumann (Foextrap, $\phi_{-1} = \phi_0$ -> $b_0 \mat
 + two Neumann boundaries: the radial operator has the constant in its kernel (singular tridiagonal); we fix
 the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thomas).
 
-**Code.** [`include/pops/mesh/geometry/geometry.hpp`](../include/pops/mesh/geometry/geometry.hpp)`::PolarGeometry` (ring,
-opt-in via the advanced `pops.mesh.PolarMesh`; `cfg.geometry == "polar"` on the
-[`src/runtime/system/system.cpp`](../src/runtime/system/system.cpp) side). Transport:
+**Code.** [`include/pops/mesh/geometry/geometry.hpp`](../include/pops/mesh/geometry/geometry.hpp)`::PolarGeometry`
+and the following polar solvers remain standalone algorithm components. `pops.mesh.PolarMesh`
+normalizes annular geometry for inspection/output, but the exact-ranked `System<Dim>` accepts only
+Cartesian providers and refuses the annulus before artifact creation. Transport:
 [`include/pops/numerics/spatial/operators/polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp)`::assemble_rhs_polar<Limiter, NumericalFlux>`
 (`PreparedBoundaryPlan`, `recon_prim`), via the named functors `detail::PolarFaceFluxRKernel` (radial
 flux weighted by `r_face`, with `NoFlux` derived from the prepared face laws), `PolarFaceFluxThetaKernel`,
 `PolarAssembleRhsKernel`; the physical source and the geometric source are routed by the concepts
 `PolarHasSource` / `PolarHasGeomSource` (`if constexpr`: zero codegen for a scalar brick,
-ExB path bit-identical). Instantiated via `runtime/block_builder_polar.hpp`, wired in
-`System::step` for `geometry == "polar"`. Poisson:
+ExB path bit-identical). Instantiated directly via `runtime/block_builder_polar.hpp` by standalone
+algorithm tests, not by `System::step`. Poisson:
 [`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp)`::PolarPoissonSolver`
 (FFT-in-theta `fft1d` reused from `poisson_fft.hpp` + complex `thomas_solve` in r; models the
 concept `PolarEllipticSolver` `rhs()/phi()/solve()/residual()/geom()`). The aux is derived in the local
 basis $(e_r, e_\theta)$: `aux[1] = d phi/dr`, `aux[2] = (1/r) d phi/d theta`
-(`block_builder_polar.hpp`, `System::solve_fields_polar`).
+(`block_builder_polar.hpp`).
 
 **Polar tensor operator + generated condensed Program.** When the coupled implicit source goes polar (diocotron at
 high $\omega_c$), the Schur condenses a full tensor operator
@@ -1701,15 +1702,13 @@ RadialLine $\sim$ moderately growing iteration count (isotropic $\times 2$ per g
 tensor $\times 2.4$); Jacobi grows in $1/h^2$ (sanity check / fallback). The cross term and the azimuthal
 coupling are not in the preconditioner (an honest limit, later refinement possible).
 Validation: `test_polar_transport_mms` / `test_polar_mms_vr` (polar transport MMS order 2),
-`test_polar_fluid_transport`, `test_polar_lorentz_source`,
-`test_polar_conservation_radial_flux` (radial wall, mass conserved), `test_polar_poisson_mms`
+`test_polar_fluid_transport`, `test_polar_lorentz_source`, `test_polar_poisson_mms`
 (PolarPoissonSolver, radial order 2), `test_polar_tensor_elliptic_mms` (polar tensor operator),
 `test_time_divergence` (generic matrix-free `div(grad)` Program solve) and
 `test_mpi_polar_schur` (polar tensor solve multi-rank).
-`test_polar_system_step` validates the full polar `System::step` path (field-solve + aux in the local
-basis + SSPRK3 transport + wall). On the Python side: `test_polar_system`, `test_polar_diocotron`,
-`test_polar_rejections`, `test_polar_schur_via_system`, `test_polar_conservation_radial_flux`,
-`test_polar_teardown_stability`.
+`test_polar_system_step` keeps the standalone coupled field-solve + local-basis aux + SSPRK3
+transport + wall oracle without restoring the retired polar `System` engine. Python resolution and
+direct-runtime refusal are covered by `test_layout_plan` and `test_polar_system`.
 
 
 ---
@@ -2038,12 +2037,13 @@ function fill_boundary_end(mf, h):
     unpack(recv buffers via for_each UnpackKernel) -> ghosts
 ```
 
-**Code.** [`mesh/box_array.hpp`](../include/pops/mesh/layout/box_array.hpp) (`BoxArray::from_domain`,
-`split_range`, the vector order is the box identity);
-[`mesh/distribution_mapping.hpp`](../include/pops/mesh/layout/distribution_mapping.hpp)
-(`DistributionMapping`, round-robin `i % nranks` by default, replicated metadata);
-[`mesh/multifab.hpp`](../include/pops/mesh/storage/multifab.hpp) (`MultiFab` allocates only the fabs where
-`dm_[i] == my_rank()`, iterates over `local_size()`, `global_index` / `local_index_of` bridge);
+**Code.** [`mesh/box_array.hpp`](../include/pops/mesh/layout/box_array.hpp)
+(`BoxArray<Dim>::from_domain`, the vector order is the box identity);
+[`mesh/distribution.hpp`](../include/pops/mesh/layout/distribution.hpp)
+(`Distribution<Dim>`, exact ownership over a `RankSpace<Dim>`, with explicit partitioned or
+replicated mode);
+[`mesh/multifab.hpp`](../include/pops/mesh/storage/multifab.hpp) (`MultiFab<Dim>` allocates only its
+local ranked Fabs and preserves the global-to-local box identity);
 [`mesh/fill_boundary.hpp`](../include/pops/mesh/boundary/fill_boundary.hpp) (`fill_boundary_begin` /
 `fill_boundary_end` non-blocking + `fill_boundary` blocking, `HaloExchange` owns the buffers and
 `MPI_Request`, kernels `CopyShiftedKernel` / `PackKernel` / `UnpackKernel` device-clean);

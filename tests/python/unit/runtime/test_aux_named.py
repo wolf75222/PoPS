@@ -1,8 +1,8 @@
 """Named auxiliary-field regression on the native runtime seams.
 
 The final user lifecycle supplies fields through ``Case.field`` and ``pops.bind``.  The native
-runtime still owns the named auxiliary channel installed by that lifecycle, including uniform,
-polar and AMR execution.  These tests keep its shape, rejection, persistence, regrid and isolation
+runtime still owns the named auxiliary channel installed by that lifecycle, including uniform and
+AMR execution.  These tests keep its shape, rejection, persistence, regrid and isolation
 oracles without restoring the retired AOT backend.
 """
 import os
@@ -12,7 +12,6 @@ import tempfile
 import numpy as np
 
 from pops.codegen import Production
-from pops.mesh import PolarMesh
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.physics._facade import Model
@@ -202,33 +201,6 @@ def test_end_to_end():
             assert "sigma" in str(exc) and "kappa" in str(exc)
         else:
             raise AssertionError("an undeclared auxiliary field must be rejected")
-    finally:
-        shutil.rmtree(directory, ignore_errors=True)
-
-
-def test_polar_named_aux():
-    """The polar executor widens and reads the same named auxiliary channel."""
-    if not _have_compiler():
-        return
-
-    directory = tempfile.mkdtemp()
-    try:
-        compiled = _compile_decay(directory, "kpolar.so")
-        nr, ntheta = 16, 16
-        runtime = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=ntheta))
-        runtime.add_equation(
-            "decay", model=compiled, spatial=_spatial(), time=engine.Explicit())
-        runtime.set_density("decay", np.ones((ntheta, nr)))
-
-        before = runtime.aux_field("decay", "kappa")
-        assert before.shape == (ntheta, nr)
-        assert float(np.max(np.abs(before))) == 0.0
-
-        constant = 3.0
-        runtime.set_aux_field("decay", "kappa", constant * np.ones((ntheta, nr)))
-        residual = np.asarray(runtime.eval_rhs("decay"))
-        assert float(np.max(np.abs(residual + constant))) < 1e-12
-        assert float(np.max(np.abs(runtime.aux_field("decay", "kappa") - constant))) < 1e-12
     finally:
         shutil.rmtree(directory, ignore_errors=True)
 

@@ -177,7 +177,8 @@ Supported native routes include:
   polar and embedded/cut-cell geometry remain unavailable. The native selector now authenticates
   these limits with one `dimension x geometry x operation` spatial-provider matrix: a 2D
   staircase/cut-cell residual cannot be mistaken for a metric-aware characteristic or boundary
-  linearization provider, and the polar residual cannot be selected as Cartesian. Post-Riemann
+  linearization provider, and a non-Cartesian coordinate provider is refused before native
+  allocation. Post-Riemann
   transformation is instead an explicit `partial` route: a typed
   `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
   the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
@@ -200,8 +201,8 @@ Supported native routes include:
   typed Roe entropy policy (`riemann.Harten(delta)`, `riemann.NoEntropyFix()`, or provider-owned).
   Missing, unknown, or flag/provider-mismatched evidence fails before native installation, and
   compiled inspection reports every distinct provider/options record instead of collapsing it to a
-  Boolean. Cartesian, AMR and annular-polar dispatch use the same provider identity; the
-  native isothermal provider supplies HLLC/Roe on the polar route while scalar ExB refuses them.
+  Boolean. Cartesian Uniform and AMR dispatch use the same provider identity. The annular
+  `PolarMesh` descriptor is geometry/output-only and is refused before compilation.
   `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
   device-copyable `FluxEvaluation` with typed status, stability bound, reason code, requested/used/
   last solver identity and attempt metadata. A single-solver route remains explicit, while a
@@ -217,7 +218,7 @@ Supported native routes include:
   a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
   last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque
   chain index. System conservative-to-primitive and transactional analytic initial-state
-  materialization plus Cartesian, polar, masked, and embedded-boundary face reconstruction consume
+  materialization plus Cartesian, masked, and embedded-boundary face reconstruction consume
   publication permission before copying a candidate or evaluating a flux. Primitive-to-conservative
   setup conversion similarly publishes only a finite candidate accepted by that prepared inverse
   authority. Accepted AMR regrid prolongation and restriction candidates also pass that

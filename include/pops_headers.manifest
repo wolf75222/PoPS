@@ -206,7 +206,6 @@ sdk-support pops/runtime/analytic/level_set.hpp
 sdk-support pops/runtime/builders/block/amr_block_seam.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
 sdk-support pops/runtime/builders/block/block_builder_polar.hpp
-sdk-support pops/runtime/builders/block/block_seam.hpp
 sdk-support pops/runtime/builders/block/prepared_boundary_defaults.hpp
 sdk-root pops/runtime/builders/compiled/amr_dsl_block.hpp
 sdk-root pops/runtime/builders/compiled/dsl_block.hpp
@@ -277,6 +276,7 @@ sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp
+sdk-support pops/runtime/system/exact_field_solver_backend.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp

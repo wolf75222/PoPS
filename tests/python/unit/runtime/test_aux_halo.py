@@ -73,8 +73,9 @@ def test_capabilities_halo():
     named = capabilities()["aux"]["named"]
     hp = named["halo_policy"]
     assert set(hp["kinds"]) >= {"inherit", "foextrap", "dirichlet"}, hp["kinds"]
-    assert "amr_coarse" in hp["backends"] and "system_polar" in hp["backends"], hp["backends"]
-    print("OK  capabilities : halo_policy (foextrap/dirichlet, system+polar+amr)")
+    assert "amr_coarse" in hp["backends"] and "system_cartesian" in hp["backends"], hp["backends"]
+    assert "system_polar" not in hp["backends"]
+    print("OK  capabilities : halo_policy (foextrap/dirichlet, system+amr)")
 
 
 def _cart_rhs(compiled, n, vx2d, halo):

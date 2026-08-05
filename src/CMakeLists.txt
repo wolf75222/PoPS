@@ -7,18 +7,10 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/runtime/builders/seam_combinations.cmake)
 
 set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
-set(POPS_RUNTIME_SYSTEM_GENERATED_SEAMS "")
 set(POPS_RUNTIME_AMR_GENERATED_SEAMS "")
 foreach(_seam_row IN LISTS POPS_SEAM_COMBINATIONS)
-  string(REPLACE "|" ";" _seam_columns "${_seam_row}")
-  list(GET _seam_columns 1 _seam_side)
-  if(_seam_side STREQUAL "system")
-    pops_generate_seam(
-      "${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_RUNTIME_SYSTEM_GENERATED_SEAMS)
-  else()
-    pops_generate_seam(
-      "${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_RUNTIME_AMR_GENERATED_SEAMS)
-  endif()
+  pops_generate_seam(
+    "${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_RUNTIME_AMR_GENERATED_SEAMS)
 endforeach()
 
 set(POPS_RUNTIME_CORE_SOURCES
@@ -28,12 +20,11 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system.cpp
     runtime/system/system_install.cpp
     runtime/system/system_fields.cpp
+    runtime/system/system_field_plans.cpp
     runtime/system/system_layout_transfer.cpp
     runtime/system/system_io.cpp
     runtime/system/system_profiling.cpp
-    runtime/system/system_program.cpp
-    runtime/system/system_polar.cpp
-    ${POPS_RUNTIME_SYSTEM_GENERATED_SEAMS})
+    runtime/system/system_program.cpp)
 
 set(POPS_RUNTIME_AMR_SOURCES
     runtime/amr/amr_field_solver_builtin.cpp

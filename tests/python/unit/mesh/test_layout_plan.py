@@ -382,17 +382,41 @@ def test_native_dimension_refuses_structurally_before_artifact_creation():
         ThreeDimensionalLayout(), owner=OwnerPath.case("three-dimensional"))
     assert plan.layouts[0].native_spatial_layout.dimension == 3
 
+    from pops.codegen._native_spatial_layout import (
+        NativeSpatialLayoutError,
+        native_spatial_layouts,
+    )
+
+    with pytest.raises(NativeSpatialLayoutError) as error:
+        native_spatial_layouts(plan, supported_dimensions=(2,))
+    assert error.value.code == "native_dimension_unavailable"
+    assert error.value.evidence == {
+        "resolved_dimension": 3,
+        "supported_dimensions": [2],
+    }
+
+
+def test_non_cartesian_native_provider_refuses_before_artifact_creation():
     from pops.codegen._layout_resolution import (
         LayoutCapabilityError,
         resolve_native_spatial_layouts,
     )
+    from pops.mesh import PolarMesh
+
+    plan = normalize_layout_plan(
+        Uniform(PolarMesh(0.2, 1.0, 8, 16)),
+        owner=OwnerPath.case("polar-native-refusal"),
+    )
+    assert plan.layouts[0].geometry.coordinate_system == \
+        "pops://coordinates/polar-annulus-2d@1"
 
     with pytest.raises(LayoutCapabilityError) as error:
         resolve_native_spatial_layouts(plan)
-    assert error.value.evidence["gate"] == "native_dimension_unavailable"
+    assert error.value.evidence["gate"] == "native_coordinate_system_unavailable"
     assert error.value.evidence["refusal"]["evidence"] == {
-        "resolved_dimension": 3,
-        "supported_dimensions": [2],
+        "resolved_coordinate_system": "pops://coordinates/polar-annulus-2d@1",
+        "required_coordinate_system": "pops://coordinates/cartesian-2d@1",
+        "resolved_dimension": 2,
     }
 
 

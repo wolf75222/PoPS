@@ -1,9 +1,9 @@
-"""ADC-593: source-only gates locking native block builders to ONE declarative manifest.
+"""ADC-593: source-only gates locking AMR block builders to ONE declarative manifest.
 
-The _pops extension used to carry ~20 hand-written .cpp files, one per (side, transport, flux) numeric
-combination, and grew by a new file every time a Riemann or reconstruction was added. Those leaves are
-now GENERATED from src/runtime/builders/seam_combinations.cmake (configure_file per row),
-so the growth strategy is a manifest row, not a hand-written file.
+The AMR runtime used to carry one hand-written .cpp per transport/flux combination and grew by a new
+file every time a Riemann or reconstruction was added. Those leaves are generated from
+``src/runtime/builders/seam_combinations.cmake``. Uniform System uses compiled
+``PreparedSystemBlock<Dim>`` providers and deliberately has no legacy seam product.
 
 These gates enforce that invariant WITHOUT a build (source tree only, no _pops import):
 
@@ -35,15 +35,6 @@ GENERATED_CATALOG = (
 # The historical leaf TUs plus the capability-driven isothermal HLLC/Roe leaves are generated. They
 # must not reappear as tracked source files; generating them into the source tree defeats the manifest.
 GENERATED_LEAF_PATHS = (
-    "system/base/system_exb.cpp",
-    "system/isothermal/system_isothermal_rusanov.cpp",
-    "system/isothermal/system_isothermal_hll.cpp",
-    "system/isothermal/system_isothermal_hllc.cpp",
-    "system/isothermal/system_isothermal_roe.cpp",
-    "system/compressible/system_compressible_rusanov.cpp",
-    "system/compressible/system_compressible_hll.cpp",
-    "system/compressible/system_compressible_hllc.cpp",
-    "system/compressible/system_compressible_roe.cpp",
     "amr/block/base/amr_block_exb.cpp",
     "amr/block/base/amr_block_isothermal.cpp",
     "amr/block/compressible/amr_block_compressible_rusanov.cpp",
@@ -113,6 +104,13 @@ def test_manifest_covers_every_former_leaf():
         "the manifest dropped combinations that used to exist (would remove a working route):\n  "
         + "\n  ".join(missing)
     )
+
+
+def test_manifest_contains_only_amr_seams():
+    rows = _manifest_rows()
+    assert rows
+    assert {row["side"] for row in rows} == {"amr_block"}
+    assert all(not row["template"].startswith("system_") for row in rows)
 
 
 # --- Gate (b): every row is a legal route; the manifest cannot invent one -------------------------

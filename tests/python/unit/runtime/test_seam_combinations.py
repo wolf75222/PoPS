@@ -1,10 +1,10 @@
-"""Every generated native transport/flux seam is executable.
+"""Every generated AMR transport/flux seam is executable.
 
 ``src/runtime/builders/seam_combinations.cmake`` is the declarative authority for the
-generated System and AMR builder translation units.  The source-only architecture gate
-checks that manifest against the component registry; this runtime gate complements it by
-advancing every declared route through the final ``add_equation`` engine seam.  A missing
-or miswired generated constructor therefore fails here instead of surviving as dead code.
+generated AMR builder translation units. Uniform System uses compiled
+``PreparedSystemBlock<Dim>`` providers instead of this legacy seam product. The source-only
+architecture gate checks the AMR manifest against the component registry; this runtime gate
+complements it by advancing every declared AMR route.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import pytest
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 import pops.runtime._engine_descriptors as engine
-from pops.runtime._system import AmrSystem, System
+from pops.runtime._system import AmrSystem
 from tests.python.support.explicit_program import install_forward_euler_program
 
 
@@ -75,26 +75,11 @@ def _spatial(transport: str, flux: str | None) -> engine.Spatial:
     )
 
 
-def _seed_density(runtime: System | AmrSystem, name: str, n: int) -> None:
+def _seed_density(runtime: AmrSystem, name: str, n: int) -> None:
     x = (np.arange(n) + 0.5) / n
     xx, yy = np.meshgrid(x, x, indexing="ij")
     density = 1.0 + 0.1 * np.sin(2.0 * math.pi * xx) * np.sin(2.0 * math.pi * yy)
     runtime.set_density(name, density)
-
-
-@pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)
-def test_system_generated_seam_advances(transport: str, flux: str | None) -> None:
-    n = 32
-    runtime = System(n=n, L=1.0, periodicity=(True, True))
-    runtime.add_equation(
-        "block",
-        _model(transport),
-        spatial=_spatial(transport, flux),
-    )
-    _seed_density(runtime, "block", n)
-    install_forward_euler_program(runtime)
-    dt = runtime.step_cfl(0.4)
-    assert math.isfinite(dt) and dt > 0.0
 
 
 @pytest.mark.parametrize(("transport", "flux"), _COMBINATIONS)

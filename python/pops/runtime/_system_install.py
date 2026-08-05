@@ -247,9 +247,9 @@ class _SystemInstall(_System):
                     coarse_threshold: Any = None) -> Any:
         """Configure the shared Poisson solve with typed boundary and wall selectors.
 
-        ``solver=None`` keeps the geometry's explicit native default (``geometric_mg`` on a
-        Cartesian domain, ``polar`` on a polar mesh). ``bc`` accepts a typed native boundary descriptor; omission keeps automatic boundary
-        selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
+        ``solver=None`` keeps the exact-ranked Cartesian runtime's explicit native default
+        (``geometric_mg``). ``bc`` accepts a typed native boundary descriptor; omission keeps
+        automatic boundary selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
         :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Strings and a separate
         ``wall_radius`` are deliberately absent: every descriptor owns its complete data.
         """

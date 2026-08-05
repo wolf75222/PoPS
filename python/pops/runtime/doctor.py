@@ -40,7 +40,6 @@ def _descriptor_tokens() -> Any:
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.riemann import riemann
-    from pops.runtime._generated_component_routes import ROUTE_METADATA
     from pops.solvers.elliptic import FFT, GeometricMG
 
     def _available(namespace: Any) -> Any:
@@ -76,10 +75,6 @@ def _descriptor_tokens() -> Any:
 
     return {
         "riemann": riemann_tokens,
-        "riemann_polar": [
-            token for token in riemann_tokens
-            if ROUTE_METADATA["riemann"].get(token, {}).get("polar_ok", False)
-        ],
         "dsl_limiters": dsl_limiters,
         "poisson": poisson,
     }
@@ -248,8 +243,8 @@ def capabilities() -> Any:
     """OFFICIAL MATRIX of capabilities by facade / geometry / backend (audit 2026-06, wave 2).
 
     SINGLE source of truth consultable by scripts and docs (the audits showed that System,
-    AMR, polar and the DSL backends diverged silently). The entries reflect the GATES
-    actually coded (make_block / dispatch_amr_* / block_builder_polar / dsl._BACKENDS) ; the
+    uniform System, AMR and the DSL backends diverged silently). The entries reflect the gates
+    actually coded by the exact-ranked runtime and ``dsl._BACKENDS``; the
     combinations outside the matrix raise an explicit error on the C++ side (never a silent ignore).
 
     Sec 12: the riemann / limiter / reconstruction / Poisson token lists are DERIVED from the
@@ -268,7 +263,6 @@ def capabilities() -> Any:
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
     tok = _descriptor_tokens()
     riemann_all = list(tok["riemann"])
-    riemann_polar = list(tok["riemann_polar"])
     poisson_mg = tok["poisson"]["geometric_mg"]
     poisson_fft = tok["poisson"]["fft"]
     poisson_fft_spectral = tok["poisson"]["fft_spectral"]
@@ -277,16 +271,8 @@ def capabilities() -> Any:
 
     runtime_env = runtime_environment_report()
     return {
-        # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
-        # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
-        # paired FaceFluxX / FaceFluxY kernels, the 2-component momentum, the 5-point Poisson and the
-        # Box2D / Geometry index space -- not a naming detail. Published as an explicit, introspectable
-        # structured scalar (hard limits are scalars, not prose) so scripts and the limitations doc can
-        # key off it. The polar mesh is a second GEOMETRY at the SAME dimension ((r, theta) is a
-        # 2-index Box2D), so this is a separate top-level key, NOT nested under "geometry". An ND core
-        # (BoxND / GeometryND) is deferred to a future milestone; see
-        # docs/sphinx/reference/known-limitations.md and include/pops/mesh/box2d.hpp.
-        "dimension": 2,
+        # Immutable rank selected by the loaded native artifact before runtime construction.
+        "dimension": runtime_env["dimension"],
         "precision": {
             "real": runtime_env["precision"],
             "real_bytes": runtime_env["real_bytes"],
@@ -296,18 +282,14 @@ def capabilities() -> Any:
         "runtime_environment": runtime_env,
         "riemann": {
             "system_cartesian": riemann_all,
-            "system_polar": riemann_polar,
             "amr": list(riemann_all),
             "notes": {
                 "rusanov": "minimal generic (physical flux + exact provider pack + declared stability bound)",
                 "hll": "generic with signed waves (typed Model.wave_speeds(...) "
-                "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
-                "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
-                "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
+                "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p')",
                 "hllc": "model capability HasHLLCStructure required -- "
                 "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
-                "Euler, passive advected scalars) ; native Euler and isothermal bricks provide it, "
-                "including the annular polar isothermal route. "
+                "Euler, passive advected scalars) ; native Euler and isothermal bricks provide it. "
                 "No component-count/layout inference and no fallback.",
                 "roe": "model capability HasRoeDissipation required "
                 "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
@@ -316,7 +298,7 @@ def capabilities() -> Any:
                 "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
                 "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
                 "exclusive (a single provider of the hook). has_roe covers both ; native Euler "
-                "and isothermal bricks provide the hook, including the annular polar route. "
+                "and isothermal bricks provide the hook. "
                 "No component-count/layout inference and no fallback.",
             },
         },
@@ -336,10 +318,6 @@ def capabilities() -> Any:
                 "IMEX execution requires a typed implicit Program primitive "
                 "(no AMR spatial-runtime fallback)",
                 "Program factories Lie|Strang + hierarchy-scoped Program.solve",
-            ],
-            "system_polar": [
-                "explicit (ssprk2|ssprk3)",
-                "metric-aware explicit Program.solve graph",
             ],
             "newton_options": "options (max_iters/tol/fd_eps/damping) : System route "
             "or typed Program solve; AMR rejects non-default block options and "
@@ -365,14 +343,6 @@ def capabilities() -> Any:
                 "add_dt_bound",
                 "last_dt_bound",
             ],
-            "system_polar": [
-                "transport (max_wave_speed | stability_speed)",
-                "source_frequency",
-                "stability_dt",
-                "coupled_source.frequency",
-                "add_dt_bound",
-                "last_dt_bound",
-            ],
         },
         "poisson": {
             "system_cartesian": [
@@ -380,20 +350,10 @@ def capabilities() -> Any:
                 "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
                 "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral,
             ],
-            "system_polar": [
-                "polar direct (mono-rank, one box) -- clear UPSTREAM REJECT if theta_boxes>1"
-            ],
             "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
-            "system_polar": "ring (r, theta) global ; theta_boxes=1 mono-box (default) OR "
-            "theta_boxes>1 split into theta bands (divides ntheta). MATRIX "
-            "multi-box (ADC-67) : TRANSPORT (assemble_rhs_polar + fill_ghosts "
-            "collective) multi-box OK ; polar Poisson DIRECT mono-box only (upstream "
-            "reject if theta_boxes>1) ; polar tensor Schur stage multi-box. "
-            "get/set state (and eval_rhs/density) reconstruct the global ring "
-            "multi-box ; mono-rank (the direct Poisson refuses MPI).",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
             "refinement_ratio = 2 only (single native AMR invariant, centralized in "
             "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
@@ -403,8 +363,6 @@ def capabilities() -> Any:
             "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
             "solver=GMRES/BiCGStab) ; "
             "authored roles/fields ; generic matrix-free operator",
-            "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
-            "PolarTensorKrylovSolver provider",
             "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
             "one composite tensor solve, then reconstruct-all-levels through the Program",
         },
@@ -453,7 +411,6 @@ def capabilities() -> Any:
                 # set_aux_field(block, name, array) carries the static field. STATIC + persistent.
                 "backends": [
                     "system_cartesian",
-                    "system_polar",
                     "amr_single_block",
                     "amr_multi_block",
                 ],
@@ -465,13 +422,13 @@ def capabilities() -> Any:
                 "halo_radius": 1,
                 "persistent": True,
                 # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
-                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces -- periodic
-                # domain, polar theta -- keep their wrap). Uniform over the 4 faces; per-face asymmetric
-                # BC is a follow-up. Default (no halo) inherits the shared aux BC, bit-identical.
+                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces keep
+                # their wrap). Uniform over physical faces; per-face asymmetric BC is a follow-up.
+                # Default (no halo) inherits the shared aux BC, bit-identical.
                 "halo_policy": {
                     "kinds": ["inherit", "foextrap", "dirichlet"],
                     "faces": "uniform (non-periodic faces ; periodic faces keep their wrap)",
-                    "backends": ["system_cartesian", "system_polar", "amr_coarse"],
+                    "backends": ["system_cartesian", "amr_coarse"],
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "

@@ -619,6 +619,21 @@ def test_uniform_native_config_lowering_preserves_exact_rank(
     )
 
 
+def test_uniform_native_config_lowering_refuses_polar_geometry():
+    from pops.layouts import Uniform
+    from pops.mesh import PolarMesh, normalize_layout_plan
+    from pops.model import OwnerPath
+    from pops.runtime._runtime_mesh_lowering import _uniform_system_values
+
+    normalized = normalize_layout_plan(
+        Uniform(PolarMesh(0.2, 1.0, 8, 16)),
+        owner=OwnerPath.case("polar-lowering-refusal"),
+    ).layouts[0]
+    assert normalized.native_spatial_layout is not None
+    with pytest.raises(NotImplementedError, match=r"SystemConfig<2>.*Cartesian"):
+        _uniform_system_values(normalized.native_spatial_layout)
+
+
 def test_uniform_native_config_lowering_rejects_non_tiling_boxes():
     from pops.mesh import NativeSpatialLayout
     from pops.runtime._runtime_mesh_lowering import _uniform_system_values

@@ -1,8 +1,9 @@
 """pops.mesh.polar -- the global annular polar mesh descriptor (Spec 5 sec.5.9 / sec.8.16.1).
 
 ``PolarMesh`` describes a global ring r in [r_min, r_max] x theta in [0, 2pi), nr x ntheta
-cells. theta is PERIODIC, r carries a PHYSICAL boundary. Axis convention: direction 0 =
-radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C++ side).
+cells. theta is PERIODIC, r carries a PHYSICAL boundary. The descriptor remains useful to
+normalize annular geometry and scientific-output measures; the final exact-ranked native runtime
+accepts Cartesian coordinate providers only and refuses this descriptor before artifact creation.
 """
 
 from __future__ import annotations
@@ -24,18 +25,13 @@ from ._layout_plan_contracts import (
 class PolarMesh(MeshDescriptor):
     """GLOBAL ANNULAR POLAR mesh: r in [r_min, r_max] x theta in [0, 2pi), nr x ntheta cells.
 
-    theta is PERIODIC, r carries a PHYSICAL boundary (wall / outlet). The polar path is
-    wired into ``System.step`` (polar transport + polar Poisson + aux drift in the local
-    basis). Declared capabilities (Spec 5 sec.8.16.1):
+    theta is PERIODIC and r carries a PHYSICAL boundary. This is an inert geometry/output
+    descriptor, not a native execution route: ``pops.resolve`` rejects its non-Cartesian
+    coordinate provider before compilation, and the private ``System(mesh=...)`` bypass has been
+    retired. Standalone polar numerical kernels remain available to C++ algorithm tests.
 
-    - polar TRANSPORT: scalar ExB AND isothermal fluid; Riemann flux 'rusanov' (all
-      transport) AND 'hll' (isothermal fluid only); 'hllc'/'roe' rejected (no polar Euler
-      brick);
-    - DIRECT polar Poisson (PolarPoissonSolver): single-rank, single-box only;
-    - tensorial polar hierarchy-scoped ``Program.solve``: multi-rank/multi-box.
-
-    No AMR, no Cartesian<->polar coupling. ``theta_boxes`` splits the transport into
-    azimuthal bands (1 = single-box, bit-identical to history; must divide ntheta).
+    ``theta_boxes`` records an azimuthal decomposition for deterministic geometry inspection; it
+    must divide ``ntheta``. It does not opt the descriptor into native execution.
     """
 
     category = "mesh"
@@ -86,12 +82,9 @@ class PolarMesh(MeshDescriptor):
             {
                 "geometry": "polar",
                 "dim": self.dim,
-                "scalar_transport": True,
-                "isothermal_fluid": True,
-                "compressible_euler": False,
+                "native_execution": False,
+                "scientific_output_geometry": True,
                 "amr": False,
-                "direct_poisson_mpi": False,
-                "multibox_transport": self.theta_boxes > 1,
             }
         )
 
@@ -126,16 +119,3 @@ class PolarMesh(MeshDescriptor):
                 ],
             },
         }
-
-    def _apply_system_config(self, config: Any) -> None:
-        """Lower this advanced descriptor through the private native-config protocol."""
-        native = self.native_spatial_data()
-        config.shape = (self.nr, self.ntheta)
-        config.lower = (self.r_min, 0.0)
-        config.upper = (self.r_max, math.tau)
-        config.periodicity = tuple(native["periodicity"])
-        config.boxes = tuple(
-            (tuple(row["lower"]), tuple(row["upper_exclusive"]))
-            for row in native["decomposition"]["boxes"]
-        )
-        config.coordinate_system = POLAR_ANNULUS_2D_COORDINATES

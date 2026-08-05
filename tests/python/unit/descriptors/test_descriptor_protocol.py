@@ -128,7 +128,9 @@ def test_available_returns_availability_not_bool():
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
     assert status.status in ("yes", "no", "partial")
-    assert status.ok is True  # a plain mesh is unconditionally available.
+    # The inert annular geometry descriptor remains inspectable even though native execution is
+    # rejected later by the exact coordinate-provider resolve gate.
+    assert status.ok is True
 
 
 def test_lower_is_inert_record_and_never_raises():

@@ -40,7 +40,9 @@ AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
-SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
+RETIRED_SYSTEM_BLOCK_SEAM = (
+    ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
+)
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
@@ -321,13 +323,11 @@ def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures()
 
     closures = GRID_CONTEXT.read_text(encoding="utf-8")
     store = SYSTEM_BLOCK_STORE.read_text(encoding="utf-8")
-    seam = SYSTEM_BLOCK_SEAM.read_text(encoding="utf-8")
     for source in (closures, store):
         assert "advance_masked" not in source
         assert "advance_eb" not in source
         assert "std::function<void(MultiFab&, Real, int)> advance" not in source
-    assert "bool imex;" not in seam
-    assert "std::string method;" not in seam
+    assert not RETIRED_SYSTEM_BLOCK_SEAM.exists()
     assert "bool imex = false;" not in NUMERICAL_DEFAULTS.read_text(encoding="utf-8")
     assert "out.imex" not in SYSTEM_IMPL.read_text(encoding="utf-8")
     assert "opt.imex" not in SYSTEM_INSTALL.read_text(encoding="utf-8")

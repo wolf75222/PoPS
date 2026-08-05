@@ -513,7 +513,8 @@ canonique dérive alors les paires périodiques et les axes physiques complémen
 `CartesianGrid` est l'unique descripteur cartésien public : il n'existe ni descripteur carré
 concurrent, ni raccourci entier/tuple dans les APIs qui demandent une grille. Le domaine, le frame,
 les cellules et la topologie restent donc visibles et authentifiables. `pops.mesh.PolarMesh` demeure
-un descripteur avancé supporté pour l'anneau natif ; il ne constitue pas une seconde route
+un descripteur inerte de géométrie annulaire et de sortie scientifique ; le runtime natif exact-rank
+refuse son fournisseur non cartésien pendant la résolution. Il ne constitue pas une seconde route
 cartésienne et n'est pas réexporté à la racine `pops`.
 
 `Rectangle.preview(geometry=...)` et son raccourci `Rectangle.show(...)` constituent la surface de

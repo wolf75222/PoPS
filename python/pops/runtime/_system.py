@@ -93,12 +93,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     native fallback. Adaptive multirate subcycling has no production facade until it is expressed
     by a typed ``ProgramGraph`` composition.
 
-    GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private
-    ``SystemConfig`` before this engine is constructed. ``mesh=`` is an advanced geometry seam;
-    currently :class:`pops.mesh.PolarMesh` implements its private config-lowering protocol. The
-    polar route is wired in ``System.step`` (polar ExB transport + polar Poisson + aux in the local
-    ``(e_r, e_theta)`` basis). Limits: scalar ExB transport, single-rank, no cartesian/polar
-    coupling."""
+    GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private exact-
+    ranked ``SystemConfig`` before this engine is constructed. The historical ``mesh=`` bypass and
+    its 2-D polar runtime were retired; non-Cartesian providers are refused during resolution rather
+    than entering a second native engine."""
 
     _execution_context: Any
 
@@ -107,20 +105,16 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             config = SystemConfig()
             for k, v in cfg_kw.items():
                 setattr(config, k, v)
-        # The optional advanced geometry descriptor lowers through one deliberately private small
-        # protocol. Ordinary CartesianGrid authoring has already become SystemConfig upstream.
         if mesh is not None:
-            lower = getattr(mesh, "_apply_system_config", None)
-            if not callable(lower):
-                raise TypeError(
-                    "System: advanced mesh must implement the private native-config lowering "
-                    "protocol (currently pops.mesh.PolarMesh); CartesianGrid belongs on a "
-                    "Uniform/AMR layout (got %r)" % type(mesh).__name__)
-            lower(config)
+            raise NotImplementedError(
+                "System(mesh=...) was retired with the legacy 2-D polar runtime; native "
+                "System<Dim> accepts only the exact Cartesian layout resolved before bind "
+                "(got %s)" % type(mesh).__name__
+            )
         # Mark the Kokkos init as imminent: _System(config) allocates Fabs -> Kokkos initializes
         # (lazy) here. Runtime thread environment must therefore be fixed before this allocation.
         _threading._first_system_built = True
-        self._s = _System(config)  # geometry == 'polar' builds a global ring (Phase 2b, cf. PolarMesh)
+        self._s = _System(config)
         # Table of NAMED aux fields per block (ADC-70 phase 1): block -> {name: canonical component}.
         # Filled by add_equation from CompiledModel.aux_extra_names (the component of the k-th name =
         # dsl.AUX_NAMED_BASE + k). The FACADE holds the names: the C++ only manipulates component

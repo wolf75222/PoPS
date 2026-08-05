@@ -235,11 +235,6 @@ Real System<Dim>::cfl_min_dx() const {
 }
 
 template <int Dim>
-bool System<Dim>::program_is_polar() const {
-  return false;
-}
-
-template <int Dim>
 std::string System<Dim>::installed_program_hash() const {
   return p_->program_.installed_hash_;
 }
@@ -409,7 +404,6 @@ template void System<kNativeDimension>::require_cartesian_generated_operator(
 template Real System<kNativeDimension>::block_max_speed(int,
                                                         const MultiFab<kNativeDimension>&) const;
 template Real System<kNativeDimension>::cfl_min_dx() const;
-template bool System<kNativeDimension>::program_is_polar() const;
 template std::string System<kNativeDimension>::installed_program_hash() const;
 template std::string System<kNativeDimension>::poisson_solver() const;
 template void System<kNativeDimension>::set_program_block_map(const std::vector<int>&);

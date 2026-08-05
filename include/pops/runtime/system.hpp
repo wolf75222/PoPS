@@ -234,9 +234,9 @@ class System {
   ///                 adjacent residual cells. Net gain when wave_speeds is expensive (moment hierarchy).
   ///                 BIT-IDENTICAL to the direct HLL path for first-order, MUSCL and WENO reconstruction.
   ///                 false (default) = direct per-cell face evaluation unchanged. Wired
-  ///                 on the FULL cartesian advance only: refused if riemann != 'hll', time IMEX, polar
-  ///                 geometry, or a staircase/cutcell disc transport mode is active (explicit error,
-  ///                 never a silent ignore).
+  ///                 on the full exact-ranked advance only: refused if riemann != 'hll', time IMEX,
+  ///                 or a staircase/cutcell disc transport mode is active (explicit error, never a
+  ///                 silent ignore).
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
                  const std::string& recon = "conservative", const std::string& time = "explicit",
@@ -496,8 +496,7 @@ class System {
   /// reconstruction and reject diffusion, native boundary components and shared interfaces.
   /// The mode is honored by the native transport step. A mode != "none" without a transportable
   /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
-  /// -> error. R > 0 required; cartesian only (polar already bounds the ring by its radial
-  /// walls -> explicit error).
+  /// -> error. R > 0 required.
   ///
   /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (binary face-open
   /// threshold) and @p cut_theta_min (signed-sample fraction clamp) tune the transport metrics. Each
@@ -562,7 +561,7 @@ class System {
   POPS_EXPORT void ensure_aux_width(int ncomp);
 
   /// Sets a NAMED aux field (ADC-70 phase 1) on the canonical component @p comp (>= kAuxNamedBase
-  /// = 5), row-major n*n (cartesian) / nr*ntheta (polar) array. The System does NOT know the
+  /// = 5), flattened over the exact ranked cell layout. The System does NOT know the
   /// names: the FACADE (pops.System.set_aux_field) resolves name -> comp via the block's table (from
   /// CompiledModel.aux_extra_names) and calls this. PERSISTENT STATIC field: stored (re-applied
   /// after a channel reallocation) and populated right away if the channel is wide enough. @throws if
@@ -573,14 +572,14 @@ class System {
   /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
   /// @p bc_type is pops::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value
   /// (ignored for Foextrap). Applied by solve_fields AFTER the shared aux ghost fill, overriding only
-  /// this component's PHYSICAL-face ghosts (periodic faces -- periodic domain, polar theta -- keep their
-  /// wrap). The FACADE (pops.System.set_aux_field(..., halo=pops.AuxHalo(...))) resolves name -> comp and
+  /// this component's PHYSICAL-face ghosts (periodic faces keep their wrap). The FACADE
+  /// (pops.System.set_aux_field(..., halo=pops.AuxHalo(...))) resolves name -> comp and
   /// calls this. No policy declared -> the shared aux BC, bit-identical. @throws on a reserved/too-narrow
   /// component or an unsupported type.
   void set_aux_field_halo_component(int comp, int bc_type, double value);
 
   /// Reads a NAMED aux field (component @p comp >= kAuxNamedBase): valid cells of the aux channel,
-  /// row-major n*n (cartesian) / nr*ntheta (polar). Counterpart of potential() for a named
+  /// flattened over the exact ranked cell layout. Counterpart of potential() for a named
   /// component. Is 0 everywhere as long as no set_aux_field_component has written this component (the aux
   /// channel is initialized to zero and solve_fields never touches components >= kAuxNamedBase).
   std::vector<double> aux_field_component(int comp) const;
@@ -674,8 +673,7 @@ class System {
   POPS_EXPORT void install_prepared_coupling_operator(
       const std::string& label, CouplingOperatorView view,
       std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
-      double constant_frequency = 0.0,
-      std::function<Real()> maximum_frequency = {});
+      double constant_frequency = 0.0, std::function<Real()> maximum_frequency = {});
 
   /// Read-only view of the registered coupling operators (ADC-595): label + declared conservation /
   /// frequency contracts, in registration order, so a Program or a runtime report can enumerate the
@@ -735,8 +733,8 @@ class System {
   /// @{
   /// Solve named @p field's elliptic problem from block @p block_idx's stage state @p U_stage and write
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
-  /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
-  /// is invalid, or the geometry is polar (cartesian only for now).
+  /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered or the block
+  /// index is invalid.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(const std::string& field,
                                                                  int block_idx,
                                                                  const MultiFab<Dim>& U_stage);
@@ -957,14 +955,11 @@ class System {
   /// REUSES the block's wave-speed closure -- it does not recompute the speed. POPS_EXPORT: resolved by
   /// the generated problem.so across the dlopen boundary, like the other seam accessors.
   POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
-  /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) --
-  /// the SAME hmin the native CFL uses (System::step_cfl). A compiled time Program reads it
+  /// The minimum physical cell spacing across every compiled axis -- the same hmin the native CFL
+  /// uses (System::step_cfl). A compiled time Program reads it
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
-  /// Geometry facts consumed by generated metric-aware Program kernels.  These expose mathematical
-  /// mesh data only; the Program never reaches System::Impl or selects a hand-written time scheme.
-  POPS_EXPORT bool program_is_polar() const;
   /// A collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
   /// driver drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence tick
   /// (ADC-542). @p kind selects the reduction over the block's U: per-component

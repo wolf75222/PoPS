@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops._native_facts import NATIVE_SUPPORTED_DIMENSIONS
 
 NATIVE_SUPPORTED_CENTERINGS = ("cell",)
@@ -82,6 +83,43 @@ def native_spatial_layouts(
                 evidence={
                     "resolved_dimension": native.dimension,
                     "supported_dimensions": list(dimensions),
+                },
+            )
+        expected_coordinates, expected_measure = cartesian_geometry_contract(native.dimension)
+        if native.coordinate_system != expected_coordinates:
+            raise NativeSpatialLayoutError(
+                "native_coordinate_system_unavailable",
+                "native ranked execution requires the exact Cartesian-%dD coordinate provider "
+                "%r, not layout %s provider %r"
+                % (
+                    native.dimension,
+                    expected_coordinates,
+                    native.layout_id,
+                    native.coordinate_system,
+                ),
+                layout_id=native.layout_id,
+                evidence={
+                    "resolved_coordinate_system": native.coordinate_system,
+                    "required_coordinate_system": expected_coordinates,
+                    "resolved_dimension": native.dimension,
+                },
+            )
+        if native.cell_measure != expected_measure:
+            raise NativeSpatialLayoutError(
+                "native_cell_measure_unavailable",
+                "native ranked execution requires the exact Cartesian-%dD cell measure %r, "
+                "not layout %s measure %r"
+                % (
+                    native.dimension,
+                    expected_measure,
+                    native.layout_id,
+                    native.cell_measure,
+                ),
+                layout_id=native.layout_id,
+                evidence={
+                    "resolved_cell_measure": native.cell_measure,
+                    "required_cell_measure": expected_measure,
+                    "resolved_dimension": native.dimension,
                 },
             )
         if native.centering not in supported_centerings:

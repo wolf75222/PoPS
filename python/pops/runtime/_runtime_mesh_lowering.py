@@ -11,14 +11,8 @@ import math
 from typing import Any
 
 from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
-from pops._geometry_contracts import POLAR_ANNULUS_2D_COORDINATES
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
-
-
-_NATIVE_COORDINATE_RANKS = {
-    **{"pops://coordinates/cartesian-%dd@1" % rank: rank for rank in (1, 2, 3)},
-    POLAR_ANNULUS_2D_COORDINATES: 2,
-}
 
 
 def _uniform_system_values(
@@ -37,13 +31,15 @@ def _uniform_system_values(
     if type(native_layout) is not NativeSpatialLayout:
         raise TypeError("native uniform lowering requires an exact NativeSpatialLayout")
     dimension = native_layout.dimension
+    expected_coordinates, expected_measure = cartesian_geometry_contract(dimension)
     if (
-        _NATIVE_COORDINATE_RANKS.get(native_layout.coordinate_system) != dimension
+        native_layout.coordinate_system != expected_coordinates
+        or native_layout.cell_measure != expected_measure
         or native_layout.centering != "cell"
     ):
         raise NotImplementedError(
-            "native uniform SystemConfig requires a supported cell-centered coordinate provider "
-            "matching its exact spatial rank"
+            "native uniform SystemConfig<%d> requires the exact cell-centered Cartesian "
+            "coordinate and measure providers" % dimension
         )
     shape = native_layout.shape
     decomposition = native_layout.decomposition

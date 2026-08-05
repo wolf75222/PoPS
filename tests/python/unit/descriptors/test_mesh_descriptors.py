@@ -6,7 +6,6 @@ the canonical ``pops.mesh`` package, and short printable summaries. Pure Python;
 computes on a grid.
 """
 import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -49,11 +48,11 @@ def test_cartesian_options_and_caps():
     assert m.capabilities().to_dict()["dim"] == 2
 
 
-def test_dimension_policy_rejects_non_2d_grids_and_advanced_meshes():
+def test_dimension_policy_rejects_rank_mismatches_and_polar_dim_overrides():
     frame = cartesian_grid(n=8).frame
-    with pytest.raises(TypeError, match="exactly two"):
+    with pytest.raises(TypeError, match="exactly 2"):
         CartesianGrid(frame=frame, cells=(8, 8, 8))
-    with pytest.raises(ValueError, match="dimension=3"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'dim'"):
         PolarMesh(0.1, 1.0, 8, 16, dim=3)
 
 
@@ -67,12 +66,12 @@ def test_polar_validation():
         PolarMesh(0.1, 1.0, 8, 16, theta_boxes=5)  # 5 does not divide 16
 
 
-def test_polar_is_an_advanced_private_config_protocol_not_a_cartesian_alias():
+def test_polar_is_inert_output_geometry_not_a_native_config_bypass():
     mesh = PolarMesh(0.1, 1.0, 8, 16, theta_boxes=4)
-    config = SimpleNamespace()
-    mesh._apply_system_config(config)
-    assert (config.geometry, config.nr, config.ntheta) == ("polar", 8, 16)
-    assert (config.r_min, config.r_max, config.theta_boxes) == (0.1, 1.0, 4)
+    capabilities = mesh.capabilities().to_dict()
+    assert capabilities["native_execution"] is False
+    assert capabilities["scientific_output_geometry"] is True
+    assert not hasattr(mesh, "_apply_system_config")
     assert not hasattr(mesh, "_apply")
 
 
