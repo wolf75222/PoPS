@@ -247,6 +247,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2]
 
 [[cpp.suite]]
+name = "test_mpi_cartesian_poisson_nd"
+sources = ["tests/cpp/integration/mpi/test_mpi_cartesian_poisson_nd.cpp"]
+labels = ["backend", "elliptic", "mpi", "nd", "medium"]
+mpi_nproc = [3]
+
+[[cpp.suite]]
 name = "test_mpi_hdf5_collective"
 sources = ["tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp"]
 labels = ["backend", "mpi", "medium"]

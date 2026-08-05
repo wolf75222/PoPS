@@ -217,9 +217,12 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   const Real eigenvalue = Real{2} * Real{4} * std::sin(pi / Real{cells}) *
                           std::sin(pi / Real{cells}) * inverse_spacing * inverse_spacing;
   fill_rhs(state, geometry, CartesianBoundaryKind::periodic, eigenvalue);
-  provider.set_rhs(0, [](const MultiFab<2>& source, MultiFab<2>& rhs) {
-    elliptic::nd::detail::copy_component(source, 0, rhs, 0);
-  });
+  provider.add_rhs(
+      0,
+      [](const MultiFab<2>& source, MultiFab<2>& rhs) {
+        elliptic::nd::detail::copy_component(source, 0, rhs, 0);
+      },
+      Real(1));
   MultiFab<2> live_aux(layout, distribution, Index<2>{}, 3, Extent<2>{});
   live_aux.set_val(Real{-7});
 

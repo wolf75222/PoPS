@@ -105,6 +105,7 @@ class PreparedFieldSolverComponent final {
   [[nodiscard]] std::string_view collective_contract() const noexcept {
     return collective_contract_;
   }
+  [[nodiscard]] int maximum_iterations() const noexcept { return spec_.max_iterations; }
 
   SolveReport solve(field_type& rhs, field_type& solution, const geometry_type& geometry,
                     const periodicity_type& periodicity) {
@@ -128,10 +129,35 @@ class PreparedFieldSolverComponent final {
       throw std::runtime_error("external FieldSolver request binding failed collectively");
     }
     PopsSolveReportV2 native{};
-    native.struct_size = sizeof(PopsSolveReportV2);
-    const auto& api = solver_component_->table<PopsFieldSolverApiV2>(
-        POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
-    (void)component::solve_field(api, solver_state_, *solver_request_, native);
+    std::exception_ptr solve_error;
+    try {
+      native.struct_size = sizeof(PopsSolveReportV2);
+      const auto& api = solver_component_->table<PopsFieldSolverApiV2>(
+          POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
+      (void)component::solve_field(api, solver_state_, *solver_request_, native);
+    } catch (...) {
+      solve_error = std::current_exception();
+    }
+    if (all_reduce_max(solve_error ? 1L : 0L) != 0) {
+      if (n_ranks() == 1 && solve_error)
+        std::rethrow_exception(solve_error);
+      throw std::runtime_error("external FieldSolver execution failed collectively");
+    }
+
+    ExactContractBuilder report_contract;
+    report_contract.text("pops.runtime.external-field-solver-report")
+        .scalar(std::uint32_t{1})
+        .scalar(native.status)
+        .scalar(native.action)
+        .scalar(native.iterations)
+        .scalar(native.relative_residual)
+        .scalar(native.reference_residual_norm)
+        .scalar(native.residual_norm)
+        .text(native.reason);
+    const std::string exact_report = std::move(report_contract).release();
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"external-field-solver-report", std::string_view(exact_report)}}))
+      throw std::runtime_error("external FieldSolver returned rank-divergent solve reports");
 
     SolveReport report;
     report.iters = native.iterations;
@@ -624,8 +650,20 @@ class PreparedFieldSolverComponent final {
       local.push_back({field.global_index(index), POPS_FIELD_MATERIAL_FULL_V1, {}, {}, {}});
     const auto& api = topology_component_->table<PopsFieldTopologyApiV2>(
         POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, spec_.topology_interface_version);
-    topology_.emplace(component::prepare_field_topology(api, topology_state_, global_topology,
-                                                        local, spec_.execution->view()));
+    std::optional<component::PreparedFieldTopologyV2> prepared;
+    std::exception_ptr topology_error;
+    try {
+      prepared.emplace(component::prepare_field_topology(api, topology_state_, global_topology,
+                                                         local, spec_.execution->view()));
+    } catch (...) {
+      topology_error = std::current_exception();
+    }
+    if (all_reduce_max(topology_error ? 1L : 0L) != 0) {
+      if (n_ranks() == 1 && topology_error)
+        std::rethrow_exception(topology_error);
+      throw std::runtime_error("external FieldTopology preparation failed collectively");
+    }
+    topology_ = std::move(prepared);
   }
 
   void validate_solve_layout_(const field_type& rhs, const field_type& solution,

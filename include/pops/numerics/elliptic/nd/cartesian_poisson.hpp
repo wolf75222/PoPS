@@ -12,7 +12,9 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -220,7 +222,26 @@ class CartesianPoissonSolver {
         image_(layout, distribution, local_rank, 1, Extent<Dim>{}),
         schedule_(prepare_halo_schedule(halo_, geometry.domain(), topology,
                                         detail::exact_halo_budget(layout, geometry.domain(), 1))) {
-    validate_options_();
+    std::exception_ptr validation_error;
+    try {
+      validate_options_();
+    } catch (...) {
+      validation_error = std::current_exception();
+    }
+    if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+      if (n_ranks() == 1 && validation_error)
+        std::rethrow_exception(validation_error);
+      throw std::runtime_error("Cartesian Poisson preparation failed collectively");
+    }
+    const bool distributed_halo = all_reduce_max(schedule_.has_remote_jobs() ? 1L : 0L) != 0;
+    if (distributed_halo) {
+      lane_ = std::make_unique<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+          "pops.cartesian-poisson.nd" + std::to_string(Dim) + "/halo"));
+      HaloExchangeContext context{};
+      context.context_generation = 1;
+      context.schedule_generation = 1;
+      exchange_ = std::make_unique<HaloExchange<Dim>>(schedule_, *lane_, context);
+    }
   }
 
   CartesianPoissonSolver(const CartesianPoissonSolver&) = delete;
@@ -235,8 +256,17 @@ class CartesianPoissonSolver {
   int maximum_iterations() const noexcept { return options_.maximum_iterations; }
 
   SolveReport solve(const field_type& warm_start) {
-    authenticate_(warm_start, "warm start");
-    schedule_.require_local_execution();
+    std::exception_ptr layout_error;
+    try {
+      authenticate_(warm_start, "warm start");
+    } catch (...) {
+      layout_error = std::current_exception();
+    }
+    if (all_reduce_max(layout_error ? 1L : 0L) != 0) {
+      if (n_ranks() == 1 && layout_error)
+        std::rethrow_exception(layout_error);
+      throw std::runtime_error("Cartesian Poisson solve layout validation failed collectively");
+    }
 
     detail::copy_component(warm_start, 0, candidate_, 0);
     if (singular_()) {
@@ -384,7 +414,10 @@ class CartesianPoissonSolver {
   }
 
   void fill_halo_() {
-    fill_boundary(halo_, schedule_);
+    if (exchange_)
+      exchange_->execute(halo_, *lane_);
+    else
+      fill_boundary(halo_, schedule_);
     Real spacing[Dim]{};
     for (int axis = 0; axis < Dim; ++axis)
       spacing[axis] = geometry_.spacing(axis);
@@ -433,6 +466,8 @@ class CartesianPoissonSolver {
   field_type direction_;
   field_type image_;
   HaloSchedule<Dim> schedule_;
+  std::unique_ptr<ExecutionLane> lane_;
+  std::unique_ptr<HaloExchange<Dim>> exchange_;
 };
 
 }  // namespace pops::elliptic::nd

@@ -836,6 +836,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_layout_transfer 2)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
+  set(POPS_MPI_RANKS_test_mpi_cartesian_poisson_nd 3)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
@@ -884,6 +885,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_layout_transfer
     test_mpi_load_balance_authority
     test_mpi_array_reduce
+    test_mpi_cartesian_poisson_nd
     test_mpi_multiblock_interface_scheduler
     test_mpi_nd_translation_exchange
     test_mpi_halo_exchange
