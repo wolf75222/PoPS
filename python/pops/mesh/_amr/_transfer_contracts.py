@@ -71,6 +71,12 @@ CELL_CENTERED = BuiltinTransferAxis("centering", "cell")
 FACE_CENTERED = BuiltinTransferAxis("centering", "face")
 FACE_X_CENTERED = BuiltinTransferAxis("centering", "face_x")
 FACE_Y_CENTERED = BuiltinTransferAxis("centering", "face_y")
+FACE_Z_CENTERED = BuiltinTransferAxis("centering", "face_z")
+ORIENTED_FACE_CENTERINGS = (
+    FACE_X_CENTERED,
+    FACE_Y_CENTERED,
+    FACE_Z_CENTERED,
+)
 NODE_CENTERED = BuiltinTransferAxis("centering", "node")
 CONSERVATIVE_REPRESENTATION = BuiltinTransferAxis("representation", "conservative")
 PRIMITIVE_REPRESENTATION = BuiltinTransferAxis("representation", "primitive")
@@ -607,7 +613,8 @@ class TransferRequirement:
         if space_id == FACE_SPACE.qualified_id and self.accuracy.dimension > 1 \
                 and centering_id == FACE_CENTERED.qualified_id:
             raise ValueError(
-                "multi-dimensional face transfer requires an oriented face_x/face_y centering"
+                "multi-dimensional face transfer requires an oriented face_x/face_y/face_z "
+                "centering"
             )
 
     @property
