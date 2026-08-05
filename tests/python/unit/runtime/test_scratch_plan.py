@@ -385,52 +385,7 @@ def test_persistent_krylov_buffers():
     chk(krylov[0]["per_materialized_level"] is True,
         "AMR multiplicity is explicit: one complete bundle per materialized level")
     chk(plan.conservative is True,
-        "the plan exposes both provider-owned Krylov and topology-dependent MG uncertainty")
-
-    from pops.solvers import preconditioners
-    prepared = build_scratch_plan(
-        _krylov("preconditioned_krylov", preconditioner=preconditioners.GeometricMG()))
-    prepared_krylov = [p for p in prepared.persistent if p["kind"] == "krylov"][0]
-    prepared_resources = [
-        p for p in prepared.persistent if p["kind"] == "multigrid_preconditioner"
-    ]
-    prepared_operator = [
-        p for p in prepared.persistent if p["kind"] == "matrix_free_operator"][0]
-    chk(prepared_krylov["workspace_buffers"] is None
-        and prepared_krylov["workspace_buffers_min"] == 2,
-        "the preconditioned workspace lower bound includes recurrence storage and M(0)")
-    chk(prepared_krylov["prepared_problem_buffers"] == 2,
-        "the preconditioned problem still owns exactly zero and A(0)")
-    chk(prepared_krylov["prepared_problem_operator_session_buffers_min"] == 2,
-        "the preconditioned problem keeps its private two-field operator session")
-    chk(prepared_krylov["workspace_operator_session_buffers_min"] == 2,
-        "the preconditioned workspace keeps a distinct two-field operator session")
-    chk(prepared_krylov["operator_session_buffers_min"] == 4
-        and prepared_krylov["operator_session_buffers_min"]
-        == prepared_krylov["prepared_problem_operator_session_buffers_min"]
-        + prepared_krylov["workspace_operator_session_buffers_min"],
-        "preconditioning does not alias the problem and workspace operator sessions")
-    chk(prepared_krylov["prepared_preconditioner_buffers"] == 2,
-        "an affine prepared preconditioner owns zero and M_raw(0)")
-    chk(prepared_krylov["workspace_scalar_values"] is None
-        and prepared_krylov["collective_values"] is None,
-        "native scalar and collective storage remains provider-owned")
-    chk(prepared_krylov["prepared_core_buffers"] is None
-        and prepared_krylov["prepared_core_buffers_min"] == 10,
-        "the preconditioned core includes workspace, problem, preconditioner and both sessions")
-    chk(prepared_krylov["buffers"] == 11
-        and prepared_krylov["buffers_max"] is None
-        and prepared_operator["buffers"] == prepared_operator["buffers_max"] == 2
-        and prepared_krylov["buffers"] + prepared_operator["buffers"] == 13,
-        "the preconditioned solve exposes eleven fields plus its two-field operator template")
-    chk(prepared_krylov["exact"] is False,
-        "the exact workspace is computed by the native provider at materialization")
-    chk(
-        len(prepared_resources) == 1
-        and prepared_resources[0]["buffers"] == 1
-        and prepared_resources[0]["exact"] is False,
-        "the provider contract contributes its one topology-dependent MG resource",
-    )
+        "the plan exposes provider-owned Krylov workspace uncertainty")
 
 
 def test_persistent_krylov_buffers_descend_nested_subcycles_once():
@@ -463,23 +418,6 @@ def test_persistent_krylov_buffers_descend_nested_subcycles_once():
         "the nested solve's reusable operator template remains a separate two-field owner")
     chk(krylov[0]["operator_id"] == operators[0]["operator_id"],
         "the nested solve references the separately counted shared operator owner")
-
-
-def test_nested_preconditioner_provider_contributes_its_native_header_once():
-    """Provider headers are planned from recursive IR, not a top-level scheme-name branch."""
-    from pops.codegen.program_codegen import emit_cpp_program
-    from pops.solvers import preconditioners
-
-    source = emit_cpp_program(
-        _nested_subcycled_krylov(
-            "nested_preconditioned_krylov",
-            preconditioner=preconditioners.GeometricMG(),
-        )
-    )
-    chk(
-        source.count("#include <pops/runtime/program/coeff_elliptic_ops.hpp>") == 1,
-        "the nested provider's contract contributes one deduplicated native include",
-    )
 
 
 def test_persistent_krylov_buffers_descend_every_structured_region_once():

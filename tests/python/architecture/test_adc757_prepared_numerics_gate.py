@@ -266,25 +266,25 @@ def test_adc757_slice_executes_rebalance_and_bounded_cell_local_runtime_proofs()
     ]
 
 
-def test_adc757_slice_authenticates_the_only_prepared_transport_boundary_authority():
+def test_adc757_slice_authenticates_the_only_ranked_transport_boundary_authority():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
     claimed = {
-        "prepared_boundary_plan_only_transport_authority",
-        "polar_persistent_prepared_boundary_plan",
+        "prepared_hyperbolic_boundary_only_transport_authority",
+        "polar_runtime_capability_honesty",
     }
     assert [row for row in data["check"] if row["requirement"] in claimed] == [
         {
-            "requirement": "prepared_boundary_plan_only_transport_authority",
+            "requirement": "prepared_hyperbolic_boundary_only_transport_authority",
             "polarity": "positive",
             "kind": "pytest",
             "path": "tests/python/architecture/"
             "test_hyperbolic_boundary_authority_ratchet.py",
-            "test": "test_prepared_boundary_plan_is_the_only_native_transport_authority",
+            "test": "test_prepared_hyperbolic_boundary_is_the_only_native_transport_authority",
         },
         {
-            "requirement": "prepared_boundary_plan_only_transport_authority",
+            "requirement": "prepared_hyperbolic_boundary_only_transport_authority",
             "polarity": "refusal",
             "kind": "pytest",
             "path": "tests/python/architecture/"
@@ -292,18 +292,18 @@ def test_adc757_slice_authenticates_the_only_prepared_transport_boundary_authori
             "test": "test_legacy_transport_boundary_authorities_are_deleted",
         },
         {
-            "requirement": "polar_persistent_prepared_boundary_plan",
+            "requirement": "polar_runtime_capability_honesty",
             "polarity": "positive",
-            "target": "test_polar_system_step",
-            "test_regex": "^PolarSystemStep\\."
-            "BoundProgramUsesPersistentPreparedBoundaryClosures$",
+            "kind": "pytest",
+            "path": "tests/python/architecture/test_program_only_temporal_facades.py",
+            "test": "test_standalone_polar_elliptic_algorithms_remain_explicit",
         },
         {
-            "requirement": "polar_persistent_prepared_boundary_plan",
+            "requirement": "polar_runtime_capability_honesty",
             "polarity": "refusal",
-            "target": "test_polar_transport_mms",
-            "test_regex": "^test_polar_transport_mms\\."
-            "RejectsSharedInterfaceFaceOmission$",
+            "kind": "pytest",
+            "path": "tests/python/architecture/test_program_only_temporal_facades.py",
+            "test": "test_polar_runtime_builder_is_retired_until_an_exact_ranked_metric_provider_exists",
         },
     ]
 

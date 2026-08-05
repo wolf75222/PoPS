@@ -240,22 +240,6 @@ def test_constant_nullspace_cg_requires_spd_on_the_complement_and_is_scalar_only
         )
 
 
-def test_constant_nullspace_refuses_uncertified_geometric_mg_preconditioner():
-    program, operator, rhs = _matrix_free()
-    with pytest.raises(NotImplementedError, match="no explicit public certificate"):
-        program.solve(
-            LinearProblem(
-                operator, rhs,
-                properties=LinearOperatorProperties.symmetric_operator(),
-                nullspace=ConstantNullspace(), gauge=MeanValueGauge(0)),
-            solver=GMRES(
-                max_iter=4,
-                restart=2,
-                preconditioner=preconditioners.GeometricMG(),
-            ),
-        )
-
-
 def test_dense_lu_is_executable_only_for_local_linear_problem():
     program, operator, rhs = _matrix_free()
     with pytest.raises((TypeError, ValueError), match="LocalLinear"):

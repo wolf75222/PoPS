@@ -85,14 +85,14 @@ test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
 [[check]]
 requirement = "prepared_boundary_publication"
 polarity = "positive"
-target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.one_dimensional_fixed_and_extrapolated_halos_are_exact$"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.one_dimensional_fixed_and_extrapolated_halos_are_exact$"
 
 [[check]]
 requirement = "prepared_boundary_publication"
 polarity = "refusal"
-target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.analytic_boundary_without_nd_coordinate_provider_is_refused$"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.analytic_boundary_without_nd_coordinate_provider_is_refused$"
 
 [[check]]
 requirement = "post_riemann_boundary_flux"
@@ -219,8 +219,8 @@ test = "test_riemann_recovery_refuses_external_and_forged_native_candidates"
 [[check]]
 requirement = "runtime_recovery_consumer_publication"
 polarity = "positive"
-target = "test_block_builder"
-test_regex = "^test_block_builder\\.cell_primitive_conversion_consumes_prepared_recovery_outcome$"
+target = "test_generated_amr_system_block"
+test_regex = "^GeneratedAmrSystemBlock\\.CellPrimitiveConversionConsumesPreparedRecoveryOutcome$"
 
 [[check]]
 requirement = "runtime_recovery_consumer_publication"
@@ -255,8 +255,8 @@ test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesOnlyAfterPreparedRe
 [[check]]
 requirement = "fallible_primitive_to_conservative_publication"
 polarity = "positive"
-target = "test_block_builder"
-test_regex = "^test_block_builder\\.primitive_to_conservative_publication_roundtrips_before_commit$"
+target = "test_generated_amr_system_block"
+test_regex = "^GeneratedAmrSystemBlock\\.PrimitiveToConservativePublicationRoundtripsBeforeCommit$"
 
 [[check]]
 requirement = "fallible_primitive_to_conservative_publication"
@@ -315,14 +315,14 @@ test_regex = "^test_amr_history_ring\\.RegridRecoveryRefusalRollsBackRemappedHis
 [[check]]
 requirement = "physical_boundary_trace_recovery_publication"
 polarity = "positive"
-target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.physical_fill_preflight_token_commits_one_complete_builtin_transaction$"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.physical_fill_preflight_token_commits_one_complete_builtin_transaction$"
 
 [[check]]
 requirement = "physical_boundary_trace_recovery_publication"
 polarity = "refusal"
-target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.characteristic_boundary_requires_model_qualification_before_physical_mutation$"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.characteristic_boundary_requires_model_qualification_before_physical_mutation$"
 
 [[check]]
 requirement = "terminal_source_recovery_publication"
@@ -451,26 +451,14 @@ test_regex = "^ProgramRuntime\\.EmbeddedBoundaryCapabilitiesRejectUnsupportedPro
 [[check]]
 requirement = "characteristic_boundary_geometry_matrix"
 polarity = "positive"
-target = "test_prepared_boundary_plan"
-test_regex = "^test_prepared_boundary_plan\\.characteristic_metadata_preserves_the_compile_time_rank$"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.characteristic_metadata_preserves_the_compile_time_rank$"
 
 [[check]]
 requirement = "characteristic_boundary_geometry_matrix"
 polarity = "refusal"
 target = "test_spatial_provider_matrix"
 test_regex = "^test_spatial_provider_matrix\\.embedded_metric_residuals_do_not_claim_characteristic_or_linearization$"
-
-[[check]]
-requirement = "polar_metric_spatial_provider_matrix"
-polarity = "positive"
-target = "test_polar_transport_mms"
-test_regex = "^test_polar_transport_mms\\.DivergenceConvergesAtOrderTwoConstantVelocity$"
-
-[[check]]
-requirement = "polar_metric_spatial_provider_matrix"
-polarity = "refusal"
-target = "test_spatial_provider_matrix"
-test_regex = "^test_spatial_provider_matrix\\.polar_metric_provider_is_residual_only$"
 
 [[check]]
 requirement = "measured_load_balance_decision"
@@ -580,30 +568,32 @@ path = "tests/python/architecture/test_adc757_heterogeneous_campaign.py"
 test = "test_adc757_hardware_report_refuses_false_closure"
 
 [[check]]
-requirement = "prepared_boundary_plan_only_transport_authority"
+requirement = "prepared_hyperbolic_boundary_only_transport_authority"
 polarity = "positive"
 kind = "pytest"
 path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
-test = "test_prepared_boundary_plan_is_the_only_native_transport_authority"
+test = "test_prepared_hyperbolic_boundary_is_the_only_native_transport_authority"
 
 [[check]]
-requirement = "prepared_boundary_plan_only_transport_authority"
+requirement = "prepared_hyperbolic_boundary_only_transport_authority"
 polarity = "refusal"
 kind = "pytest"
 path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
 test = "test_legacy_transport_boundary_authorities_are_deleted"
 
 [[check]]
-requirement = "polar_persistent_prepared_boundary_plan"
+requirement = "polar_runtime_capability_honesty"
 polarity = "positive"
-target = "test_polar_system_step"
-test_regex = "^PolarSystemStep\\.BoundProgramUsesPersistentPreparedBoundaryClosures$"
+kind = "pytest"
+path = "tests/python/architecture/test_program_only_temporal_facades.py"
+test = "test_standalone_polar_elliptic_algorithms_remain_explicit"
 
 [[check]]
-requirement = "polar_persistent_prepared_boundary_plan"
+requirement = "polar_runtime_capability_honesty"
 polarity = "refusal"
-target = "test_polar_transport_mms"
-test_regex = "^test_polar_transport_mms\\.RejectsSharedInterfaceFaceOmission$"
+kind = "pytest"
+path = "tests/python/architecture/test_program_only_temporal_facades.py"
+test = "test_polar_runtime_builder_is_retired_until_an_exact_ranked_metric_provider_exists"
 
 [[check]]
 requirement = "prepared_batch_recovery_only_runtime_authority"

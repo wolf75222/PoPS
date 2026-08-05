@@ -462,7 +462,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_fill_boundary_cache
   test_copy_schedule_cache
   test_physical_bc
-  test_prepared_boundary_plan
+  test_prepared_hyperbolic_boundary
   test_prepared_stream_executor
   test_geometry
   test_nd_metric_provider
@@ -514,7 +514,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_public_validation_errors
   test_program_context_schur_free
   test_platform_manifest
-  test_generic_krylov
   test_krylov_workspace_reentrancy
   test_solver_codegen_generated
   test_dispatch_tags
@@ -555,16 +554,10 @@ set(POPS_CPP_STANDARD_TESTS
   test_splitting
   test_imex_ap
   test_ap_limit
-  test_polar_transport_mms
-  test_polar_system_step
-  test_polar_mms_vr
   test_polar_fluid_transport
   test_polar_lorentz_source
-  test_block_builder
   test_block_inverse
-  test_weno5_ssprk3
   test_positivity_floor
-  test_wave_speed_cache_engagement
   test_variable_role
   test_variable_user_role
   test_isothermal_vacuum_floor
@@ -612,16 +605,6 @@ pops_add_gtest_suite(NAME test_config_model_validation SOURCES "${_src}" EXTRA_L
 pops_test_source(_src test_native_aux_named)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
-
-pops_test_source(_src test_flux_failure_loader_transaction)
-pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(
-  NAME test_flux_failure_loader_transaction
-  SOURCES "${_src}"
-  EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system
-  ENABLE_EXPORTS
-  RESOURCE_LOCK native_loader
-  COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_compiled_model_parity)
 pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}")
@@ -808,8 +791,6 @@ if(POPS_HAS_MPI)
     TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_hybrid_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_cutcell_multibox 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
@@ -820,7 +801,6 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
-  set(POPS_MPI_RANKS_test_mpi_amr_prepared_boundary_cf 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
@@ -840,12 +820,10 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_prepared_amr_ghost_fill 3)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
-  set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
   set(POPS_MPI_RANKS_test_mpi_flux_failure_collective 2)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
-  set(POPS_MPI_RANKS_test_generic_krylov 1 2 4)
   set(POPS_MPI_RANKS_test_krylov_workspace_reentrancy 2)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
@@ -857,8 +835,6 @@ if(POPS_HAS_MPI)
 
   set(POPS_CPP_MPI_ONLY_TESTS
     test_mpi_polar_schur
-    test_mpi_mbox_parity
-    test_mpi_hybrid_mbox_parity
     test_mpi_cutcell_multibox
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
@@ -869,7 +845,6 @@ if(POPS_HAS_MPI)
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
     test_mpi_cell_temporal_program_refusal
-    test_mpi_amr_prepared_boundary_cf
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_system_analytic_level_set
@@ -889,7 +864,6 @@ if(POPS_HAS_MPI)
     test_mpi_prepared_amr_ghost_fill
     test_mpi_coupler_inject
     test_mpi_fft_distributed
-    test_mpi_fillboundary
     test_mpi_flux_failure_collective
     test_mpi_poisson
     test_mpi_redistribute
@@ -971,7 +945,6 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
-    test_generic_krylov
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
@@ -1026,12 +999,7 @@ if(POPS_HAS_MPI)
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
-      if(_test STREQUAL "test_generic_krylov")
-        pops_add_mpi_rank_test(
-          ${_test} ${_np}
-          GTEST_FILTER
-            "${POPS_GENERIC_KRYLOV_MPI_FILTER}")
-      elseif(_test STREQUAL "test_krylov_workspace_reentrancy")
+      if(_test STREQUAL "test_krylov_workspace_reentrancy")
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER

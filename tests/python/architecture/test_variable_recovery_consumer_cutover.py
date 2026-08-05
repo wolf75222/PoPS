@@ -7,7 +7,6 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 SYSTEM_FIELDS = ROOT / "src/runtime/system/system_fields.cpp"
-PROGRAM_SERVICES = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 FLUX_FAILURE = ROOT / "include/pops/numerics/fv/flux_failure.hpp"
@@ -114,22 +113,19 @@ def test_runtime_layer_has_no_independent_direct_primitive_recovery():
 
 
 def test_program_terminal_state_publication_validates_every_candidate_before_first_copy():
-    shared = PROGRAM_SERVICES.read_text(encoding="utf-8")
-    commit = _between(
-        shared,
-        "void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits)",
-        "\n  /// Apply every coupled-source operator",
-    )
-    validation = commit.index("program_execution_validate_commit_candidates_(commits)")
-    publication = commit.index("lincomb(*target", validation)
-    assert validation < publication
-
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    assert "validate_program_state_publication_candidate(block, *candidate)" in uniform
+    commit = _between(
+        uniform,
+        "void commit_many(",
+        "\n  void apply_coupling_operators(",
+    )
+    validation = commit.index("validate_program_state_publication_candidate(block, value)")
+    publication = commit.index("*target = std::move(*snapshots[candidate])", validation)
+    assert validation < publication
+    assert "validate_program_state_publication_candidate(block, value)" in uniform
 
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    assert "require_recoverable_block_candidate_(" in amr
-    assert "AMR Program terminal state publication" in amr
+    assert "commit_many(" not in amr
 
 
 def test_nd_face_reconstruction_consumes_typed_conversion_before_flux_evaluation():

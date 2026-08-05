@@ -1378,11 +1378,12 @@ source-stage stepper or System setter exists.
 The prepared footprint carries the exact integer stencil depth, not a 0/1 approximation. Every typed
 operation carries an immutable `StencilAccess` capability and apply regions compose those capabilities
 by maximum depth, without an opcode-name table. `matrix_free_operator(stencil_depth=n)` may declare a
-larger provider halo and is rejected if `n` is smaller than the composed requirement. The wired
-`preconditioners.GeometricMG()` is intentionally scalar-only and is rejected for a multi-component
-operator until a genuinely block-coupled multigrid provider exists; no component-wise fallback is
-performed. Its native controls are validated before allocation, and its cache key authenticates the
-layout, geometry, BC and prepared boundary-plan identity before reuse.
+larger provider halo and is rejected if `n` is smaller than the composed requirement. The legacy
+callback-based `preconditioners.GeometricMG()` Program route has been removed. Exact-ranked
+`GeometricMG<Dim>` remains available as an elliptic field solver; a future Program preconditioner must
+receive the same authenticated ranked geometry, boundary and distribution contract before it can be
+published. `Identity()` remains the built-in Program preconditioner and external prepared providers
+remain available through their authenticated component contract.
 
 **Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
@@ -1657,19 +1658,14 @@ the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thom
 **Code.** [`include/pops/mesh/geometry/geometry.hpp`](../include/pops/mesh/geometry/geometry.hpp)`::PolarGeometry`
 and the following polar solvers remain standalone algorithm components. `pops.mesh.PolarMesh`
 normalizes annular geometry for inspection/output, but the exact-ranked `System<Dim>` accepts only
-Cartesian providers and refuses the annulus before artifact creation. Transport:
-[`include/pops/numerics/spatial/operators/polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp)`::assemble_rhs_polar<Limiter, NumericalFlux>`
-(`PreparedBoundaryPlan`, `recon_prim`), via the named functors `detail::PolarFaceFluxRKernel` (radial
-flux weighted by `r_face`, with `NoFlux` derived from the prepared face laws), `PolarFaceFluxThetaKernel`,
-`PolarAssembleRhsKernel`; the physical source and the geometric source are routed by the concepts
-`PolarHasSource` / `PolarHasGeomSource` (`if constexpr`: zero codegen for a scalar brick,
-ExB path bit-identical). Instantiated directly via `runtime/block_builder_polar.hpp` by standalone
-algorithm tests, not by `System::step`. Poisson:
+Cartesian providers and refuses the annulus before artifact creation. The old dimension-erased
+transport builder and its callback boundary plan have been removed; no public runtime route claims
+polar transport until a metric-aware `Dim`-ranked provider owns geometry, boundaries and storage.
+Poisson:
 [`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp)`::PolarPoissonSolver`
 (FFT-in-theta `fft1d` reused from `poisson_fft.hpp` + complex `thomas_solve` in r; models the
-concept `PolarEllipticSolver` `rhs()/phi()/solve()/residual()/geom()`). The aux is derived in the local
-basis $(e_r, e_\theta)$: `aux[1] = d phi/dr`, `aux[2] = (1/r) d phi/d theta`
-(`block_builder_polar.hpp`).
+concept `PolarEllipticSolver` `rhs()/phi()/solve()/residual()/geom()`). Publishing metric-derived
+auxiliary fields belongs to that future ranked provider rather than to a hidden runtime callback.
 
 **Polar tensor operator + generated condensed Program.** When the coupled implicit source goes polar (diocotron at
 high $\omega_c$), the Schur condenses a full tensor operator

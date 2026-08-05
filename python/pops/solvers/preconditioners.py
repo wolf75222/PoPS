@@ -1,9 +1,10 @@
 """pops.solvers.preconditioners -- the preconditioner brick catalog (Spec 5 sec.5.7).
 
-Identity lowers to the native identity provider and geometric multigrid lowers to
-``pops::GeometricMG``. Unwired Jacobi placeholders are absent. External providers register one
-typed compiler contract plus an authenticated header-only native component, then construct their
-descriptor with ``preconditioners.Prepared(provider, ...)``. This is the ONE public home formerly
+Identity lowers to the exact native identity provider. External providers register one typed
+compiler contract plus an authenticated header-only native component, then construct their
+descriptor with ``preconditioners.Prepared(provider, ...)``. The former callback-based geometric-MG
+Program preconditioner is absent; ``GeometricMG<Dim>`` remains an exact-ranked field solver. This is
+the ONE public home formerly
 parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
 
@@ -34,9 +35,6 @@ from pops.native_components import PreparedNativeComponent
 
 _IDENTITY_PROVIDER = prepared_preconditioner_provider_by_id(
     "pops.preconditioner.identity"
-)
-_GEOMETRIC_MG_PROVIDER = prepared_preconditioner_provider_by_id(
-    "pops.preconditioner.geometric-mg"
 )
 
 
@@ -110,43 +108,8 @@ def _prepared_provider_descriptor(
     )
     return _native_program_preconditioner(provider, **validated)
 
-# ADC-644: the ONLY V-cycle-SHAPE knobs a geometric-multigrid PRECONDITIONER may carry. A Krylov
-# preconditioner must be a FIXED linear map M^{-1} (the same operator on every apply), so the meaningful
-# options are the V-cycle shape (pre/post/bottom sweeps, coarsest-grid floor) and how many composed
-# fixed V-cycles form the map. n_vcycles>1 is still a fixed linear map (N composed V-cycles), so it is
-# allowed; ``tolerance`` / ``max_cycles`` describe an ITERATIVE solve-to-convergence, which makes the
-# trip count -- hence the map -- depend on the input vector (a variable preconditioner that breaks the
-# Krylov recurrences), so they are refused loud.
-_PRECOND_MG_KNOBS = _GEOMETRIC_MG_PROVIDER.option_names
-_PRECOND_MG_ITERATIVE = ("tolerance", "max_cycles")
-
-
-def _geometric_mg_precond(**o: Any) -> Any:
-    """The geometric-multigrid preconditioner descriptor with a VALIDATED V-cycle-shape option set.
-
-    Refuses an UNKNOWN kwarg loud (no silent ``**o`` swallow) and refuses the iterative-solve knobs
-    ``tolerance`` / ``max_cycles`` (a preconditioner is a fixed linear map, not a solve-to-convergence).
-    The accepted knobs (``n_vcycles`` / ``bottom_sweeps`` / ``min_coarse`` >= 1 and
-    ``pre_sweeps`` / ``post_sweeps`` >= 0) are validated by the shared native option schema and
-    carried in the descriptor ``options`` dict; an empty option set (``GeometricMG()``) keeps
-    ``options`` empty so the default V-cycle stays byte-identical.
-    """
-    iterative = [k for k in o if k in _PRECOND_MG_ITERATIVE]
-    if iterative:
-        raise ValueError(
-            "preconditioners.GeometricMG: %s describe an iterative solve-to-convergence, but a Krylov "
-            "preconditioner must be a FIXED linear map (the same M^{-1} on every apply). Use the "
-            "V-cycle-shape knobs %s (n_vcycles composes N fixed V-cycles)."
-            % (sorted(iterative), list(_PRECOND_MG_KNOBS)))
-    opts = _GEOMETRIC_MG_PROVIDER.validate_options(
-        o, where="preconditioners.GeometricMG"
-    )
-    return _native_program_preconditioner(_GEOMETRIC_MG_PROVIDER, **opts)
-
-
 preconditioners = SimpleNamespace(
     Identity=lambda: _native_program_preconditioner(_IDENTITY_PROVIDER),
-    GeometricMG=_geometric_mg_precond,
     Prepared=_prepared_provider_descriptor,
     register=_register_prepared_provider,
     Provider=PreparedPreconditionerProvider,

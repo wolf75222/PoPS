@@ -13,7 +13,8 @@ SYSTEM_RUNTIME = ROOT / "src/runtime/system/system.cpp"
 SYSTEM_CMAKE = ROOT / "src/CMakeLists.txt"
 RETIRED_POLAR_RUNTIME = ROOT / "src/runtime/system/system_polar.cpp"
 RETIRED_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
-SEAM_MANIFEST = ROOT / "src/runtime/builders/seam_combinations.cmake"
+RETIRED_AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
+RETIRED_SEAM_MANIFEST = ROOT / "src/runtime/builders/seam_combinations.cmake"
 RETIRED_PROGRAM_DRIVER = (
     ROOT / "include/pops/runtime/system/system_program_driver.hpp"
 )
@@ -75,15 +76,12 @@ def test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority(
 def test_legacy_polar_system_engine_is_absent_from_the_exact_ranked_runtime() -> None:
     facade = _read(SYSTEM_HEADER)
     sources = _read(SYSTEM_CMAKE)
-    manifest = _read(SEAM_MANIFEST)
-
     assert not RETIRED_POLAR_RUNTIME.exists()
     assert not RETIRED_BLOCK_SEAM.exists()
+    assert not RETIRED_AMR_BLOCK_SEAM.exists()
+    assert not RETIRED_SEAM_MANIFEST.exists()
     assert "runtime/system/system_polar.cpp" not in sources
     assert "POPS_RUNTIME_SYSTEM_GENERATED_SEAMS" not in sources
-    assert "|system|" not in manifest
-    assert "system_flux_seam" not in manifest
-    assert "system_transport_seam" not in manifest
     assert "program_is_polar" not in facade
 
 
@@ -178,11 +176,11 @@ def test_block_store_retains_only_the_ranked_hyperbolic_boundary() -> None:
 
 
 def test_periodicity_rows_are_ranked_and_never_restore_a_2d_core_authority() -> None:
+    assert not LEGACY_BOUNDARY_PLAN.exists()
     sources = {
         path: _read(path)
         for path in (
             PERIODICITY,
-            LEGACY_BOUNDARY_PLAN,
             BINDING_DETAIL,
             SYSTEM_BINDING,
             AMR_BINDING,

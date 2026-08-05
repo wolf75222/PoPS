@@ -22,11 +22,9 @@ using pops::runtime::program::HierarchyTensorSolverBuildRequest;
 using pops::runtime::program::HierarchyTensorSolverExecutionPath;
 using pops::runtime::program::HierarchyTensorSolverProvider;
 using pops::runtime::program::PreparedHierarchyTensorSolver;
-using pops::runtime::program::ProgramExecutionServices;
-
-static_assert(
-    std::is_base_of_v<ProgramExecutionServices<AmrProgramContext>, AmrProgramContext>,
-    "AmrProgramContext must consume the one shared Program execution-service implementation");
+static_assert(std::is_class_v<AmrProgramContext<1>>);
+static_assert(std::is_class_v<AmrProgramContext<2>>);
+static_assert(std::is_class_v<AmrProgramContext<3>>);
 
 class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
  public:
@@ -260,14 +258,6 @@ class FlatIdentityProvider final : public HierarchyTensorSolverProvider {
   }
 };
 
-using ConfigureSolver = void (AmrProgramContext::*)(int, int, const std::string&,
-                                                    const std::string&, const std::string&,
-                                                    const std::vector<std::string>&,
-                                                    const std::string&,
-                                                    const PreparedProviderOptions&) const;
-static_assert(std::is_same_v<decltype(&AmrProgramContext::configure_hierarchy_tensor_solver),
-                             ConfigureSolver>);
-
 TEST(HierarchyTensorSolverProviderContract, BuiltinAdvertisesOnlyItsStructuralEnvelope) {
   const auto registry =
       pops::runtime::program::make_default_hierarchy_tensor_solver_provider_registry();
@@ -447,22 +437,6 @@ TEST(HierarchyTensorSolverProviderContract,
   EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
                    impossible_iterations_solver, controls),
                std::runtime_error);
-}
-
-TEST(HierarchyTensorSolverProviderContract,
-     ProgramContextRegistersADistinctProviderThroughTheRuntimeFacade) {
-  pops::AmrSystem system(pops::AmrSystemConfig{16});
-  AmrProgramContext context(nullptr, &system);
-  context.register_hierarchy_tensor_solver_provider(std::make_shared<DistinctHierarchyProvider>());
-  EXPECT_EQ(system.hierarchy_tensor_solver_provider_registry()
-                ->resolve("pops.test.hierarchy.distinct")
-                ->collective_contract(),
-            "pops.test.hierarchy.distinct@1");
-}
-
-TEST(AmrProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
-  AmrProgramContext context(nullptr, nullptr);
-  EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
 }
 
 TEST(AmrTensorFacSolver, OmittedFacControlsResolveFromNativeOptionsOnly) {

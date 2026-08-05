@@ -301,7 +301,6 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_coupled_fieldsolve": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
         "test_geometric_mg": (2,),
-        "test_generic_krylov": (1, 2, 4),
         "test_krylov_workspace_reentrancy": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
         "test_world_communicator": (1, 2),

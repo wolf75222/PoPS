@@ -7,8 +7,7 @@
 /// brick surface (pops/physics/{hyperbolic,source,elliptic,composite}.hpp) and exposed under the
 /// dedicated namespace pops::validation so it cannot be mistaken for a generic production brick.
 ///
-/// Used in the core C++ tests (tests/test_weno5_ssprk3.cpp) as a reference model for WENO5/SSPRK3;
-/// not used by adc_cases. Kept as a validation brick and as an example illustrating the
+/// Kept as a validation brick and as an example illustrating the
 /// DiffusiveModel trait (nu > 0 enables the parabolic term on the core side).
 ///
 /// There is deliberately no production-namespace alias or compatibility include: validation
@@ -24,8 +23,7 @@ namespace pops::validation {
 /**
  * Scalar advection-diffusion: d_t u + a . grad u = nu Lap u.
  *
- * VALIDATION/REFERENCE brick (not used by adc_cases as of 2026-06-06);
- * kept as an example and as a reference model for tests/test_weno5_ssprk3.cpp.
+ * VALIDATION/REFERENCE brick (not used by production routes).
  *
  * Illustrates the remark "diffusion is just one more flux": we keep the
  * advection PhysicalModel and add only the diffusivity() method. The

@@ -530,14 +530,12 @@ de l'artefact. Un run qui échoue lève une exception ; il ne retourne jamais un
 Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
 sub-flows into the same IR rather than selecting a native `System` stepper branch.
 
-`ProgramContext` and `AmrProgramContext` consume the same `ProgramExecutionServices` authority for
-topology-independent generated operations. In particular, persistent RHS/state/scalar scratch is
-one shared resource service keyed by IR value, sub-slot and active level. Providers expose only the
-authenticated resource identity (topology epoch, process-local materialization generation and
-level); the shared service owns validation, invalidation, exact-layout allocation, zero-on-reuse and
-profiling for both Uniform and AMR execution. Prepared operator capabilities are likewise retained
-as complete evaluation snapshots: a probe re-authenticates the provider clock and topology against
-the exact active snapshot, so a provider transition cannot leave a stale nonzero revision usable.
+`ProgramContext<Dim>` and `AmrProgramContext<Dim>` are the two exact-ranked execution providers.
+Each owns its persistent RHS/state/scalar resources directly, keyed by IR value, sub-slot and active
+level; there is no dimension-erased execution-service authority between generated code and runtime.
+The provider validates topology epoch, process-local materialization generation and exact layout,
+then zeroes reused storage before publication. Prepared operator capabilities are retained as complete
+evaluation snapshots, so a provider transition cannot leave a stale nonzero revision usable.
 
 ### Adaptive runtime execution
 
@@ -624,7 +622,11 @@ fluxes; at coarse/fine interfaces the FluxRegister reflux closes the same balanc
 freezes density during its implicit sub-flow, so any density change comes from the explicitly authored
 transport/coupling sub-flows. The AMR conservation suites validate the resulting ledger at round-off.
 
-**MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_generic_krylov`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
+**MPI distributed proofs.** Exact-ranked halo exchange, AMR compilation, Cartesian Poisson and
+Krylov workspace ownership are exercised by their dedicated MPI suites, including multiple rank
+counts where the manifest declares them. Additive global sums are not bit-exact across rank counts
+because the reduction order changes; topology, pointwise maxima and declared tolerances remain the
+relevant contracts.
 
 **Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). Its current `amrmpi_integrated` harness also requires the installed `ProgramGraph` to consume B_z on both the coarse and fine trajectories. These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner); after a temporal-runtime cutover, their host/source checks do not replace a fresh GH200 run. The ADC-700 refresh is the paired hardware campaign in `benchmarks/adc700/`: it refuses CPU evidence, records the concrete device inventory, compares a pinned pre-cutover native route with the Program-only candidate in ABBA order, and emits a machine-readable report with the `0.98` throughput threshold. The harness makes the proof reproducible but does not itself claim a result until that report is produced on real hardware. A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 

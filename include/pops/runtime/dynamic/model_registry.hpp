@@ -9,8 +9,7 @@
 /// @file
 /// @brief SINGLE registry of builtin MODEL BRICK tags (transport / source / elliptic): the shared
 ///        source of truth for every model dispatch -- detail::dispatch_transport / dispatch_source /
-///        dispatch_elliptic (model_factory.hpp), the polar dispatch (block_builder_polar.hpp) and the
-///        per-transport seams in python/system.cpp / python/amr_system.cpp.
+///        dispatch_elliptic (model_factory.hpp) and the exact-ranked generated System/AMR packages.
 ///
 /// Counterpart of dispatch_tags.hpp (limiters + Riemann fluxes) for the MODEL axis. Before this
 /// header each model dispatch inlined its OWN tag list inside its rejection message: the transport

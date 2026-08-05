@@ -1,5 +1,5 @@
 // Phase 6 (multi-GPU) : echange de halos DISTRIBUE sur device. Identique a
-// tests/cpp/integration/mpi/test_mpi_fillboundary.cpp (remplissage par valeur periodique repliee + verif des ghosts)
+// tests/cpp/integration/mpi/test_mpi_halo_exchange.cpp (transport de halos exact-ranked)
 // mais sous Kokkos+CUDA : MultiFab en memoire unifiee, fill_boundary fait le chemin local (for_each
 // device) + le chemin MPI cross-rang (OpenMPI CUDA-aware). Avec np>1 sur plusieurs GH200, les ghosts
 // viennent de fabs distants -> valide le transfert device-to-device. device_fence() avant la lecture

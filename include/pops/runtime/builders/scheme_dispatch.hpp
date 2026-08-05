@@ -57,9 +57,8 @@ static_assert(detail::kLimiterXMacroCount ==
 
 /// ONE spatial-reconstruction dispatch generator (ADC-640). Routes a typed LimiterRouteId to its
 /// compile-time Limiter policy and invokes @p leaf with std::type_identity<Limiter>{}. The leaf (a generic
-/// lambda) closes over the Flux type and every build argument, so the SAME generator serves System
-/// (build_block<L, Flux>), polar (build_block_polar<L, Flux>) and AMR
-/// (build_amr_block<Model, L, Flux>). Every arm instantiates the leaf, so the
+/// lambda) closes over the Flux type and every build argument, so the SAME generator serves the
+/// exact-ranked uniform and AMR materializers. Every arm instantiates the leaf, so the
 /// reachable build_block<Limiter, Flux, ...> set is IDENTICAL to the hand-written ladders. @p route is
 /// produced by parse_limiter_route at the boundary, AFTER validate_limiter, so the trailing throw is the
 /// historical defense-in-depth guard (unreachable in practice). Host cold-path only: the device kernels

@@ -970,10 +970,12 @@ capacités, sans table centrale de noms d'opérations. `matrix_free_operator(ste
 contrainte explicite pour un provider plus profond : elle est refusée sous le minimum composé et
 transporte autrement tout entier `n >= 0` jusqu'aux allocations natives.
 
-Le préconditionneur livré `preconditioners.GeometricMG()` est un opérateur scalaire : son `phi`, son
-second membre et son V-cycle natifs ont exactement une composante. Il est donc refusé à l'authoring
-pour `ncomp != 1`, avec une seconde garde native ; PoPS ne diagonalise pas silencieusement un problème
-multicomposant. Un tel problème utilise `Identity()` ou un futur provider réellement block-aware.
+Le préconditionneur Program intégré livré est `preconditioners.Identity()`. L'ancienne route callback
+`preconditioners.GeometricMG()` a été retirée lors du cutover exact 1D/2D/3D : le solveur elliptique
+`GeometricMG<Dim>` reste disponible, mais il ne sera republié comme préconditionneur Program que par un
+provider recevant la géométrie, les frontières et la distribution exactes du rang de compilation. Un
+provider externe préparé et authentifié reste possible ; aucun fallback composante-par-composante
+n'est effectué.
 
 À la frontière C++, un solve global ne reçoit jamais un callback brut plus un entier de méthode. Le
 code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinearPreconditioner` et

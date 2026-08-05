@@ -26,8 +26,8 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
     Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
     fakes the engine.
 
-The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
-tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
+The non-symmetric C++ guard and workspace ownership are pinned by the prepared Krylov unit suites;
+the Python witness validates the same authored operator through generated code.
 """
 from tests.python.support.requirements import require_native_or_skip
 from fractions import Fraction

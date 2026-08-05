@@ -1,4 +1,4 @@
-"""ADC-749/757: one prepared native transport-boundary authority remains."""
+"""ADC-749/757: one exact-ranked prepared transport-boundary authority remains."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 PRODUCTION_ROOTS = (ROOT / "include/pops", ROOT / "src/runtime")
 
-# These names denoted executable authorities parallel to PreparedBoundaryPlan.
+# These names denoted executable authorities parallel to PreparedHyperbolicBoundary<Dim>.
 # Closure is a zero-occurrence invariant across production, not a count ledger.
 DELETED_LEGACY_AUTHORITIES = (
     "AmrBoundaryFillAuthority",
@@ -50,6 +50,16 @@ def _occurrences() -> dict[str, dict[str, int]]:
     return counts
 
 
+def test_prepared_hyperbolic_boundary_is_the_only_native_transport_authority() -> None:
+    authority = ROOT / "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
+    source = authority.read_text(encoding="utf-8")
+    assert "template <int Dim>" in source
+    assert "class PreparedHyperbolicBoundary" in source
+    assert "MultiFab<Dim" in source
+    assert "FaceField<Dim" in source
+    assert "PreparedBoundaryPlan" not in source
+
+
 def test_legacy_transport_boundary_authorities_are_deleted() -> None:
     occurrences = _occurrences()
     violations = [
@@ -59,50 +69,41 @@ def test_legacy_transport_boundary_authorities_are_deleted() -> None:
     ]
     assert not violations, (
         "a deleted transport-boundary authority returned; lower the route to "
-        "PreparedBoundaryPlan instead:\n  " + "\n  ".join(violations)
+        "PreparedHyperbolicBoundary<Dim> instead:\n  " + "\n  ".join(violations)
     )
 
 
 def test_native_transport_boundary_is_separate_from_the_polar_metric_specialization() -> None:
-    polar_builder = (
-        ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
-    ).read_text(encoding="utf-8")
     polar_operator = (
         ROOT / "include/pops/numerics/spatial/operators/polar_operator.hpp"
     ).read_text(encoding="utf-8")
     prepared_boundary = (
         ROOT / "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
     ).read_text(encoding="utf-8")
-    amr_runtime = (ROOT / "include/pops/runtime/amr/amr_runtime.hpp").read_text(
+    system_registry = (ROOT / "include/pops/runtime/system/system_boundary_registry.hpp").read_text(
         encoding="utf-8"
     )
+    amr_block = (
+        ROOT / "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp"
+    ).read_text(encoding="utf-8")
 
-    assert "build_block_polar requires a prepared boundary plan" in polar_builder
-    assert "boundary_plan->fill_same_level_and_physical" in polar_builder
     assert "PlanarPolarCoordinateMap" in polar_operator
     assert "prepare_cartesian_operator<2" in polar_operator
     assert "boundary_plan" not in polar_operator
+    assert "template <int Dim>" in prepared_boundary
+    assert "class PreparedHyperbolicBoundary" in prepared_boundary
     assert "apply_physical_flux_conditions" in prepared_boundary
     assert "HyperbolicBoundaryLaw::NoFlux" in prepared_boundary
     assert "ZeroBoundaryFaceFlux<Dim>" in prepared_boundary
     assert "apply_flux_axes_<Axis + 1>" in prepared_boundary
-    system_install = (ROOT / "src/runtime/system/system_install.cpp").read_text(
-        encoding="utf-8"
-    )
-    for operation in (
-        "install_ghost_boundary_component",
-        "install_boundary_flux_component",
-        "install_field_boundary_residual_component",
-        "install_field_boundary_jvp_component",
+    assert "PreparedHyperbolicBoundary<Dim>" in system_registry
+    assert "PreparedHyperbolicBoundary<Dim>" in amr_block
+    for retired in (
+        ROOT / "include/pops/mesh/boundary/prepared_boundary_plan.hpp",
+        ROOT / "include/pops/mesh/boundary/boundary_component_executor.hpp",
+        ROOT / "include/pops/runtime/builders/block/prepared_boundary_defaults.hpp",
     ):
-        body = system_install[system_install.index(f"System::{operation}") :]
-        body = body[: body.index("\n}")]
-        assert "if (P->polar_)" in body
-    assert "block.boundary_plan->fills_all_allocated_physical_ghosts()" in amr_runtime
-    assert (
-        "non-periodic AMR regrid requires a prepared boundary authority for every block"
-        in amr_runtime
-    )
+        assert not retired.exists()
 
 
 def test_resolved_transport_authority_accepts_only_executable_descriptors() -> None:
@@ -172,47 +173,21 @@ def test_post_riemann_flux_is_one_typed_outward_oriented_pipeline_stage() -> Non
     assert route["interface"] == "boundary_flux"
     assert route["operation"] == "transform_faces"
 
-    executor = (
-        ROOT / "include/pops/mesh/boundary/boundary_component_executor.hpp"
-    ).read_text(encoding="utf-8")
-    assert re.search(
-        r"const double outward\s*=\s*static_cast<double>\(workspace\.side\)\s*\*",
-        executor,
+    uniform = (ROOT / "include/pops/runtime/builders/compiled/generated_system_block.hpp").read_text(
+        encoding="utf-8"
     )
-    assert re.search(
-        r"static_cast<Real>\(static_cast<double>\(workspace\.side\)\s*\*\s*outward\)",
-        executor,
+    first_flux = uniform.index("spatial.materialize_face_fluxes")
+    first_boundary = uniform.index("boundary->apply_physical_flux_conditions", first_flux)
+    first_divergence = uniform.index("spatial.assemble_residual_from_face_fluxes", first_boundary)
+    assert first_flux < first_boundary < first_divergence
+
+    amr = (ROOT / "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp").read_text(
+        encoding="utf-8"
     )
-
-    uniform = (
-        ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
-    ).read_text(encoding="utf-8")
-    uniform_stage = uniform[
-        uniform.index("assemble_rhs_without_prepared_interfaces"):
-        uniform.index("struct BlockRhsEval")
-    ]
-    assert uniform_stage.index("compute_face_fluxes") < uniform_stage.index(
-        "transform_grid_boundary_fluxes"
-    ) < uniform_stage.index("mf_eval_rhs")
-    unqualified = uniform[
-        uniform.index("void operator()(MultiFab& U, MultiFab& R) const"):
-        uniform.index(
-            "void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point",
-        )
-    ]
-    assert "has_flux_transformations()" in unqualified
-    assert "requires a BoundaryEvaluationPoint" in unqualified
-    assert "has_omitted_faces()" in unqualified
-    assert "shared-interface flux requires BoundaryEvaluationPoint group authority" in unqualified
-    assert "eval_core_filled(U, R);" in unqualified
-
-    amr = (
-        ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
-    ).read_text(encoding="utf-8")
-    first_flux = amr.index("detail::compute_amr_face_fluxes")
-    first_transform = amr.index("transform_grid_boundary_fluxes", first_flux)
-    first_divergence = amr.index("pops::mf_eval_rhs", first_transform)
-    assert first_flux < first_transform < first_divergence
+    first_flux = amr.index("spatial.materialize_face_fluxes")
+    first_boundary = amr.index("physical_boundary->apply_physical_flux_conditions", first_flux)
+    first_divergence = amr.index("spatial.assemble_residual_from_face_fluxes", first_boundary)
+    assert first_flux < first_boundary < first_divergence
 
 
 def test_no_flux_is_a_builtin_face_law_of_the_same_prepared_pipeline() -> None:
@@ -220,18 +195,13 @@ def test_no_flux_is_a_builtin_face_law_of_the_same_prepared_pipeline() -> None:
     hyperbolic = (
         ROOT / "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
     ).read_text(encoding="utf-8")
-    plan = (
-        ROOT / "include/pops/mesh/boundary/prepared_boundary_plan.hpp"
-    ).read_text(encoding="utf-8")
-    operator = (
-        ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
-    ).read_text(encoding="utf-8")
+    operator = (ROOT / "include/pops/runtime/builders/compiled/generated_system_block.hpp").read_text(
+        encoding="utf-8"
+    )
 
     assert 'condition_type: ClassVar[str] = "no_flux"' in transport
     assert '"no_flux": LowLevelNoFlux' in transport
     assert 'token == "no_flux"' in hyperbolic
-    assert "HyperbolicBoundaryLaw::NoFlux" in plan
-    assert "zero_prepared_boundary_fluxes" in operator
-    assert "has_zero_flux_faces()" in operator
-    assert operator.count("prepared_boundary_face_omission(ctx)") >= 2
-    assert operator.count("PreparedBoundaryFluxFilter{&ctx}") >= 2
+    assert "HyperbolicBoundaryLaw::NoFlux" in hyperbolic
+    assert "boundary->apply_physical_flux_conditions" in operator
+    assert "spatial.assemble_residual_from_face_fluxes" in operator

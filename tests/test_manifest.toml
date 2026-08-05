@@ -157,12 +157,6 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2]
 
 [[cpp.suite]]
-name = "test_mpi_amr_prepared_boundary_cf"
-sources = ["tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
-
-[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -235,12 +229,6 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
-name = "test_mpi_fillboundary"
-sources = ["tests/cpp/integration/mpi/test_mpi_fillboundary.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [4]
-
-[[cpp.suite]]
 name = "test_mpi_flux_failure_collective"
 sources = ["tests/cpp/integration/mpi/test_mpi_flux_failure_collective.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -259,22 +247,10 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2]
 
 [[cpp.suite]]
-name = "test_mpi_hybrid_mbox_parity"
-sources = ["tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
-
-[[cpp.suite]]
 name = "test_mpi_load_balance_authority"
 sources = ["tests/cpp/integration/mpi/test_mpi_load_balance_authority.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2, 4]
-
-[[cpp.suite]]
-name = "test_mpi_mbox_parity"
-sources = ["tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_mpi_multiblock_interface_scheduler"
@@ -375,11 +351,6 @@ labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 [[cpp.suite]]
 name = "test_external_riemann_dispatch"
 sources = ["tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp"]
-labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
-
-[[cpp.suite]]
-name = "test_flux_failure_loader_transaction"
-sources = ["tests/cpp/integration/native_loader/test_flux_failure_loader_transaction.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
@@ -493,11 +464,6 @@ sources = ["tests/cpp/integration/runtime/test_module_metadata.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_polar_system_step"
-sources = ["tests/cpp/integration/runtime/test_polar_system_step.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
 name = "test_profiler"
 sources = ["tests/cpp/integration/runtime/test_profiler.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -547,16 +513,6 @@ labels = ["integration", "runtime", "medium"]
 name = "test_system_two_explicit"
 sources = ["tests/cpp/integration/runtime/test_system_two_explicit.cpp"]
 labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
-name = "test_wave_speed_cache_engagement"
-sources = ["tests/cpp/integration/runtime/test_wave_speed_cache_engagement.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
-name = "test_block_builder"
-sources = ["tests/cpp/unit/codegen/test_block_builder.cpp"]
-labels = ["unit", "codegen", "fast"]
 
 [[cpp.suite]]
 name = "test_block_inverse"
@@ -658,12 +614,6 @@ labels = ["unit", "elliptic", "fast"]
 name = "test_full_tensor_operator"
 sources = ["tests/cpp/unit/elliptic/test_full_tensor_operator.cpp"]
 labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_generic_krylov"
-sources = ["tests/cpp/unit/elliptic/test_generic_krylov.cpp"]
-labels = ["unit", "elliptic", "fast"]
-mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_krylov_workspace_reentrancy"
@@ -1047,11 +997,6 @@ sources = ["tests/cpp/unit/numerics/test_variable_recovery_chain.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
-name = "test_weno5_ssprk3"
-sources = ["tests/cpp/unit/numerics/test_weno5_ssprk3.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
 name = "test_weno_convergence"
 sources = ["tests/cpp/unit/numerics/test_weno_convergence.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -1134,16 +1079,6 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_polar_lorentz_source"
 sources = ["tests/cpp/unit/physics/test_polar_lorentz_source.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_polar_mms_vr"
-sources = ["tests/cpp/unit/physics/test_polar_mms_vr.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_polar_transport_mms"
-sources = ["tests/cpp/unit/physics/test_polar_transport_mms.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
@@ -1269,8 +1204,8 @@ sources = ["tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cp
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_prepared_boundary_plan"
-sources = ["tests/cpp/unit/mesh/test_prepared_boundary_plan.cpp"]
+name = "test_prepared_hyperbolic_boundary"
+sources = ["tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]

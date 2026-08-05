@@ -5,7 +5,7 @@
 // known linear system, proving the lowering is not merely emitted but executes -- and matches the
 // native pops::solve_prepared_affine Richardson route (the same backend the DSL maps onto).
 //
-// OPERATOR: the SAME SPD Helmholtz operator A = I - alpha*Lap (alpha = 0.1) as test_generic_krylov,
+// OPERATOR: the SPD Helmholtz operator A = I - alpha*Lap (alpha = 0.1),
 //   supplied as a value-typed functor. The generated kernel takes the operator as a TEMPLATE
 //   parameter (no std::function indirection in the loop), so the SAME functor drives both the
 //   generated solver and the prepared native Richardson problem.
@@ -51,7 +51,7 @@ using pops::test::kPi;
 
 namespace {
 
-constexpr int kN = 32;        // 32 x 32 periodic grid (same as test_generic_krylov)
+constexpr int kN = 32;        // 32 x 32 periodic grid
 constexpr Real kAlpha = 0.1;  // Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned)
 // omega / tol MUST match scripts/gen_solver_kernel.py (GEN_OMEGA / GEN_ABS_TOL) so the generated and
 // native Richardson loops trace the same iterates and stop at the same residual (parity below).

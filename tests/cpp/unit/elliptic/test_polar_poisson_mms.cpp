@@ -177,9 +177,8 @@ static ErrL2 err_vs_exact(const MultiFab& phi, const PolarGeometry& g, const Box
 // FONCTION HOTE (f_dir / f_neu, static dans cette TU) passee par pointeur de fonction. Un pointeur de
 // fonction HOTE n'est PAS appelable depuis un kernel device (Kokkos::Cuda) : l'appel dans la
 // MDRangePolicy est une instruction illegale (cudaErrorIllegalInstruction au prochain
-// cudaDeviceSynchronize). On remplit donc le RHS cote HOTE, comme le sibling device-propre
-// test_polar_transport_mms (fill_exact = boucle hote, jamais for_each_cell pour des MMS a fonctions
-// hote). Le stockage Fab est en memoire UNIFIEE : la donnee ecrite cote hote est lue par solve()
+// cudaDeviceSynchronize). On remplit donc le RHS cote HOTE, jamais via for_each_cell pour une MMS a
+// fonctions hote. Le stockage Fab est en memoire UNIFIEE : la donnee ecrite cote hote est lue par solve()
 // (algorithme hote) sans copie. PolarPoissonSolver::solve()/residual() font un sync_host() en entree
 // (cf. polar_poisson_solver.hpp) : coherence garantie quel que soit le producteur du RHS. Sous
 // Serie/OpenMP rien ne change ; sous Kokkos Cuda on evite l'appel device invalide.

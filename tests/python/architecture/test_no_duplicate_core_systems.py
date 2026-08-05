@@ -372,17 +372,16 @@ def test_field_handle_is_the_sole_public_field_solve_route():
 
 
 def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
-    """A coupled named-field solve must preserve every qualified block stage."""
+    """The ranked context fails closed instead of consulting a parallel service."""
     context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp")
-    services = _read(
+    retired = (
         REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     )
+    assert not retired.exists()
     assert "representative" not in context
-    assert "workspace.program_to_runtime[program_slot]" in services
-    assert "solve_fields_from_blocks_at_in_place_(point, field, runtime_stages)" in context
-    assert "require_field_evaluation_point_" not in context
-    assert 'require_field_evaluation_point_(point, "Program simultaneous field solve")' in services
-    assert "solve_fields_from_blocks_in_place_(field, runtime_stages)" not in context
+    assert "template <int Dim>" in context
+    assert "SolveOutcome solve_fields_from_blocks_at(" in context
+    assert "unavailable_field_provider_();" in context
     assert "solve_fields_from_state(field, representative" not in context
 
 

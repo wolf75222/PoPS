@@ -5,9 +5,9 @@ The ordinary explicit runtime tests may install the small Programs from
 typed Program primitives: forward Euler cannot stand in for backward Euler,
 partial IMEX, ARS(2,2,2), or nonlinear local solves.
 
-The blocker ledger is intentionally empty.  Coupled sources, polar transport,
-linear IMEX and nonlinear local IMEX now execute through ordinary Programs;
-none borrows a spatial-runtime time integrator.
+The blocker ledger is intentionally empty. Coupled sources, linear IMEX and nonlinear local IMEX
+execute through ordinary Programs. The former dimension-erased polar runtime builder is retired;
+polar algorithms remain standalone until an exact-ranked metric provider owns their topology.
 """
 
 from __future__ import annotations
@@ -32,11 +32,7 @@ AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
-PROGRAM_EXECUTION_SERVICES = (
-    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
-)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
-AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
 RETIRED_SYSTEM_BLOCK_SEAM = (
@@ -54,6 +50,9 @@ AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
 PUBLIC_COUPLING_ROOT = ROOT / "include/pops/coupling"
+POLAR_POISSON = ROOT / "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp"
+POLAR_TENSOR = ROOT / "include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp"
+ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
 
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
@@ -302,33 +301,42 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
 
 
 def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures():
-    for path in (BLOCK_BUILDER, POLAR_BLOCK_BUILDER):
-        source = path.read_text(encoding="utf-8")
-        for legacy_closure in (
-            "AdvanceExplicit",
-            "AdvanceImex",
-            "AdvanceImexRkArs222",
-            "AdvanceExplicitMasked",
-            "AdvanceExplicitEb",
-            "AdvanceImexMasked",
-            "AdvanceImexEb",
-            "PolarAdvanceExplicit",
-        ):
-            assert legacy_closure not in source
+    source = BLOCK_BUILDER.read_text(encoding="utf-8")
+    for legacy_closure in (
+        "AdvanceExplicit",
+        "AdvanceImex",
+        "AdvanceImexRkArs222",
+        "AdvanceExplicitMasked",
+        "AdvanceExplicitEb",
+        "AdvanceImexMasked",
+        "AdvanceImexEb",
+        "PolarAdvanceExplicit",
+    ):
+        assert legacy_closure not in source
 
-    closures = GRID_CONTEXT.read_text(encoding="utf-8")
     store = SYSTEM_BLOCK_STORE.read_text(encoding="utf-8")
-    for source in (closures, store):
-        assert "advance_masked" not in source
-        assert "advance_eb" not in source
-        assert "std::function<void(MultiFab&, Real, int)> advance" not in source
+    assert "advance_masked" not in store
+    assert "advance_eb" not in store
+    assert "std::function<void(MultiFab&, Real, int)> advance" not in store
+    assert "rhs_into" in store
     assert not RETIRED_SYSTEM_BLOCK_SEAM.exists()
     assert "bool imex = false;" not in NUMERICAL_DEFAULTS.read_text(encoding="utf-8")
     assert "out.imex" not in SYSTEM_IMPL.read_text(encoding="utf-8")
     assert "opt.imex" not in SYSTEM_INSTALL.read_text(encoding="utf-8")
     assert 'd["imex"]' not in BINDINGS_DETAIL.read_text(encoding="utf-8")
-    assert "rhs_into" in closures
-    assert "rhs_into" in store
+
+
+def test_polar_runtime_builder_is_retired_until_an_exact_ranked_metric_provider_exists():
+    assert not POLAR_BLOCK_BUILDER.exists()
+    assert not GRID_CONTEXT.exists()
+
+
+def test_standalone_polar_elliptic_algorithms_remain_explicit():
+    assert POLAR_POISSON.exists()
+    assert POLAR_TENSOR.exists()
+    documentation = ALGORITHMS_DOC.read_text(encoding="utf-8")
+    assert "no public runtime route claims" in documentation
+    assert "metric-aware `Dim`-ranked provider" in documentation
 
 
 def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
@@ -342,13 +350,12 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
     assert '"newton_report"' not in binding
     assert "s.newton_report(" not in binding
 
-    for path in (AMR_DSL_BLOCK, AMR_BLOCK_SEAM):
-        source = path.read_text(encoding="utf-8")
-        assert "implicit_components" not in source
-        assert "NewtonOptions" not in source
-        assert "NewtonReport" not in source
-        assert "resolve_implicit_components_amr" not in source
-        assert "resolve_implicit_components_compiled" not in source
+    source = AMR_DSL_BLOCK.read_text(encoding="utf-8")
+    assert "implicit_components" not in source
+    assert "NewtonOptions" not in source
+    assert "NewtonReport" not in source
+    assert "resolve_implicit_components_amr" not in source
+    assert "resolve_implicit_components_compiled" not in source
 
 
 def test_uniform_system_rejects_unpublished_newton_diagnostics_before_allocation():
@@ -373,7 +380,6 @@ def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():
         AMR_SYSTEM_CPP,
         AMR_RUNTIME,
         AMR_DSL_BLOCK,
-        AMR_BLOCK_SEAM,
     ):
         source = path.read_text(encoding="utf-8")
         assert "AmrTimeMethod" not in source
@@ -451,31 +457,6 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "installed whole-system Program" in d2_guard
 
 
-def test_amr_pointwise_status_reduces_every_valid_level_cell():
-    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
-
-    pointwise = _function_body(
-        services,
-        "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
-    )
-    assert "active_mask_from_context_(" in pointwise
-    assert "program_execution_block_grid_context_(block)" in pointwise
-
-    active_mask = _function_body(
-        services,
-        "  static const MultiFab* active_mask_from_context_(",
-    )
-    assert "if (context.domain_mask == nullptr)" in active_mask
-    assert "return context.domain_mask;" in active_mask
-
-    status = _function_body(
-        services,
-        "  Real pointwise_status_max(int block, const MultiFab& status,",
-    )
-    assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
-    assert "pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr})" in status
-
-
 def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():
     """Keep the missing native seams visible instead of silently reaching old engines."""
     for path in (PROGRAM_CONTEXT, AMR_PROGRAM_CONTEXT):
@@ -488,23 +469,19 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
+def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    shared = (
+    retired = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
-    ).read_text(encoding="utf-8")
+    )
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    assert shared.count("struct CouplingStateOverride") == 1
-    assert shared.count("void apply_coupling_operators(") == 1
-    assert "complete candidate pack for every runtime block" in shared
-    assert "cannot alias accepted live states" in shared
-    for source in (uniform, amr):
-        assert "void apply_coupling_operators(" not in source
-        assert source.count("program_execution_apply_coupling_(") == 1
-    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
-    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
-    assert "apply_coupling_operators_at_level(" in runtime
+    assert not retired.exists()
+    assert uniform.count("struct CouplingStateOverride") == 1
+    assert uniform.count("void apply_coupling_operators(") == 1
+    assert "ProgramContext coupling requires every runtime block candidate" in uniform
+    assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "void apply_coupling_operators(" not in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
 

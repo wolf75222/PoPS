@@ -96,13 +96,13 @@ void check_periodic_axes() {
 
 }  // namespace
 
-TEST(test_prepared_boundary_plan, periodic_topology_is_compile_time_ranked) {
+TEST(test_prepared_hyperbolic_boundary, periodic_topology_is_compile_time_ranked) {
   check_periodic_axes<1>();
   check_periodic_axes<2>();
   check_periodic_axes<3>();
 }
 
-TEST(test_prepared_boundary_plan, one_dimensional_fixed_and_extrapolated_halos_are_exact) {
+TEST(test_prepared_hyperbolic_boundary, one_dimensional_fixed_and_extrapolated_halos_are_exact) {
   const Box<1> domain{Index<1>{0}, Index<1>{2}};
   auto state = one_patch_field(domain, 1, Extent<1>{2});
   fill_valid(state, Real(-99), [](const Index<1>& index, int) { return Real(index[0] + 1); });
@@ -116,7 +116,7 @@ TEST(test_prepared_boundary_plan, one_dimensional_fixed_and_extrapolated_halos_a
   EXPECT_EQ(value_at(state, Index<1>{4}, 0), Real(3));
 }
 
-TEST(test_prepared_boundary_plan, three_dimensional_slip_uses_axis_static_component_parity) {
+TEST(test_prepared_hyperbolic_boundary, three_dimensional_slip_uses_axis_static_component_parity) {
   const Box<3> domain = Box<3>::from_extents(Extent<3>{2, 2, 2});
   auto state = one_patch_field(domain, 5, Extent<3>{1, 1, 1});
   fill_valid(state, Real(-99), [](const Index<3>&, int component) { return Real(component + 1); });
@@ -134,7 +134,7 @@ TEST(test_prepared_boundary_plan, three_dimensional_slip_uses_axis_static_compon
   EXPECT_EQ(value_at(state, Index<3>{-1, -1, 0}, 0), Real(-99));
 }
 
-TEST(test_prepared_boundary_plan, no_flux_is_enforced_on_the_post_riemann_face_field) {
+TEST(test_prepared_hyperbolic_boundary, no_flux_is_enforced_on_the_post_riemann_face_field) {
   const Box<2> domain = Box<2>::from_extents(Extent<2>{2, 2});
   const auto boundary =
       prepare_hyperbolic_boundary<2>({"no_flux", "foextrap", "foextrap", "foextrap"},
@@ -156,7 +156,7 @@ TEST(test_prepared_boundary_plan, no_flux_is_enforced_on_the_post_riemann_face_f
   EXPECT_EQ(y_host(host_offset(y_faces.grown_box(), Index<2>{0, 0}, 0)), Real(4));
 }
 
-TEST(test_prepared_boundary_plan,
+TEST(test_prepared_hyperbolic_boundary,
      physical_fill_preflight_token_commits_one_complete_builtin_transaction) {
   const Box<1> domain{Index<1>{0}, Index<1>{2}};
   auto state = one_patch_field(domain, 1, Extent<1>{1});
@@ -170,14 +170,15 @@ TEST(test_prepared_boundary_plan,
   EXPECT_EQ(value_at(state, Index<1>{3}, 0), Real(3));
 }
 
-TEST(test_prepared_boundary_plan, analytic_boundary_without_nd_coordinate_provider_is_refused) {
+TEST(test_prepared_hyperbolic_boundary,
+     analytic_boundary_without_nd_coordinate_provider_is_refused) {
   EXPECT_THROW((void)prepare_hyperbolic_boundary<2>(
                    std::vector<std::string>(4, "foextrap"), std::vector<double>(4, 0.0),
                    identities<2>(), {"Scalar"}, false, {}, {}, {{"literal"}}, {{1.0}}, {""}),
                std::invalid_argument);
 }
 
-TEST(test_prepared_boundary_plan,
+TEST(test_prepared_hyperbolic_boundary,
      characteristic_boundary_requires_model_qualification_before_physical_mutation) {
   const auto characteristic = prepare_hyperbolic_boundary<2>(
       {"characteristic_no_inflow", "foextrap", "foextrap", "foextrap"}, {1.0, 0.0, 0.0, 0.0},
@@ -190,7 +191,7 @@ TEST(test_prepared_boundary_plan,
   EXPECT_EQ(value_at(state, Index<2>{0, 0}, 0), Real(3));
 }
 
-TEST(test_prepared_boundary_plan, characteristic_metadata_preserves_the_compile_time_rank) {
+TEST(test_prepared_hyperbolic_boundary, characteristic_metadata_preserves_the_compile_time_rank) {
   const auto characteristic = prepare_hyperbolic_boundary<3>(
       {"characteristic_no_inflow", "foextrap", "foextrap", "foextrap", "foextrap", "foextrap"},
       {1.0, 0.0, 0.0, 0.0, 0.0, 0.0}, identities<3>(), {"Scalar"});

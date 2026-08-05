@@ -222,21 +222,10 @@ def test_multicomp_codegen(t):
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1
 
 
-def test_multicomp_geometric_mg_preconditioner_is_rejected_before_codegen(t):
+def test_dimension_erased_geometric_mg_preconditioner_is_not_published(t):
+    del t
     from pops.solvers import preconditioners
-
-    try:
-        _mc_program(
-            t, 2,
-            method=krylov.GMRES(
-                max_iter=20, rel_tol=1e-9,
-                preconditioner=preconditioners.GeometricMG()),
-        )
-    except ValueError as exc:
-        assert "preconditioner 'geometric_mg'" in str(exc) and "scalar-only" in str(exc), str(exc)
-    else:
-        raise AssertionError(
-            "scalar GeometricMG must not masquerade as a block preconditioner")
+    assert not hasattr(preconditioners, "GeometricMG")
 
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----

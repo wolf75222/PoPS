@@ -21,9 +21,6 @@ On verifie :
      cutcell, via set_disc_domain / set_geometry_mode) -> erreur explicite dans LES DEUX ORDRES
      (cache puis disque, disque puis cache). Le cache n'est cable que sur l'avance cartesienne pleine.
 
-NOTE : la PREUVE D'ENGAGEMENT (le cache appelle wave_speeds par cellule, pas par face) vit dans le
-test C++ tests/cpp/integration/runtime/test_wave_speed_cache_engagement.cpp (compteur de wave_speeds, calls_on < calls_off) :
-les verifs ON==OFF ci-dessous reussiraient meme si le cache devenait un no-op silencieux.
 Modele natif IsothermalFlux (expose wave_speeds) : aucun compilateur requis.
 """
 from pops.numerics.reconstruction import FirstOrder

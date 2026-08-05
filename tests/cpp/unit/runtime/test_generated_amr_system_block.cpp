@@ -221,6 +221,43 @@ TEST(GeneratedAmrSystemBlock, RejectsUnpreparedOptionalAuthorities) {
                std::invalid_argument);
 }
 
+TEST(GeneratedAmrSystemBlock, CellPrimitiveConversionConsumesPreparedRecoveryOutcome) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+
+  const std::array<double, 1> conservative{2.0};
+  std::array<double, 1> primitive{-9.0};
+  const pops::RecoveryReport accepted =
+      prepared.conservative_to_primitive(conservative.data(), primitive.data());
+  EXPECT_TRUE(accepted.publication_permitted());
+  EXPECT_DOUBLE_EQ(primitive[0], 2.0);
+
+  const std::array<double, 1> invalid{std::numeric_limits<double>::quiet_NaN()};
+  primitive[0] = -9.0;
+  const pops::RecoveryReport rejected =
+      prepared.conservative_to_primitive(invalid.data(), primitive.data());
+  EXPECT_FALSE(rejected.publication_permitted());
+  EXPECT_DOUBLE_EQ(primitive[0], -9.0);
+}
+
+TEST(GeneratedAmrSystemBlock, PrimitiveToConservativePublicationRoundtripsBeforeCommit) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1, 1);
+
+  const std::array<double, 1> primitive{2.0};
+  std::array<double, 1> published{-9.0};
+  EXPECT_NO_THROW(prepared.primitive_to_conservative(primitive.data(), published.data()));
+  EXPECT_DOUBLE_EQ(published[0], 2.0);
+
+  const std::array<double, 1> invalid{std::numeric_limits<double>::quiet_NaN()};
+  published[0] = -9.0;
+  EXPECT_THROW(prepared.primitive_to_conservative(invalid.data(), published.data()),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(published[0], -9.0);
+}
+
 TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

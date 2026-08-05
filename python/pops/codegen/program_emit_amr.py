@@ -71,9 +71,8 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
     ``target='amr_system'`` emits ``pops_install_program_amr``, the entry ``AmrSystem::install_program``
     resolves (it dlopens the .so, validates the ABI key + section-24 requirements, binds the blocks by
-    name, seeds the runtime params, then calls this). It asks the shared facade-to-provider factory
-    for the ``AmrSystem`` execution provider; topology-independent operations come from the one
-    ``ProgramExecutionServices`` implementation. It then installs the recursively subcycled per-level
+    name, seeds the runtime params, then calls this). It asks the exact-ranked facade-to-provider
+    factory for the ``AmrSystem<Dim>`` execution provider. It then installs the recursively subcycled per-level
     macro-step driver: the IDENTICAL lowered ``{body}`` -- the
     one ``pops_install_program`` runs on ``System`` -- wrapped in an explicit level-clock scheduler.
     Its install-time prelude is materialized once per native level, not once per hierarchy: each

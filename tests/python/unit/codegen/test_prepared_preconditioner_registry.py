@@ -278,7 +278,6 @@ def test_problem_compatibility_is_delegated_to_the_provider_use_policy():
     from pops.fields import ConstantNullspace, MeanValueGauge
     from pops.linalg import LinearOperatorProperties, LinearProblem
 
-    none = LinearProblem(object(), object(), nullspace=None).canonical_nullspace_contract()
     constant = LinearProblem(
         object(), object(),
         properties=LinearOperatorProperties.symmetric_operator(),
@@ -289,33 +288,11 @@ def test_problem_compatibility_is_delegated_to_the_provider_use_policy():
         prepared_krylov_method_provider_by_id,
     )
     cg = prepared_krylov_method_provider_by_id("pops.krylov.cg").authority()
-    bicgstab = prepared_krylov_method_provider_by_id("pops.krylov.bicgstab").authority()
-    gmres = prepared_krylov_method_provider_by_id("pops.krylov.gmres").authority()
     identity.validate_use(
         method_provider=cg, components=7, nullspace_contract=constant, where="test"
     )
-
-    geometric = prepared_preconditioner_provider_by_id(
-        "pops.preconditioner.geometric-mg"
-    )
-    geometric.validate_use(
-        method_provider=gmres, components=1, nullspace_contract=none, where="test"
-    )
-    geometric.validate_use(
-        method_provider=bicgstab, components=1, nullspace_contract=none, where="test"
-    )
-    with pytest.raises(ValueError, match="preconditioning placement"):
-        geometric.validate_use(
-            method_provider=cg, components=1, nullspace_contract=none, where="test"
-        )
-    with pytest.raises(ValueError, match="scalar-only"):
-        geometric.validate_use(
-            method_provider=gmres, components=2, nullspace_contract=none, where="test"
-        )
-    with pytest.raises(NotImplementedError, match="nullspace contract"):
-        geometric.validate_use(
-            method_provider=gmres, components=1, nullspace_contract=constant, where="test"
-        )
+    with pytest.raises(NotImplementedError, match="not registered"):
+        prepared_preconditioner_provider_by_id("pops.preconditioner.geometric-mg")
 
 
 def test_header_only_component_detects_any_tree_drift_and_excludes_root_from_identity(tmp_path):

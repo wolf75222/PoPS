@@ -374,7 +374,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
       - each ``scalar_field`` scratch -> a template field refreshed before preparation, then a
         workspace-private deep copy reused across every Krylov iteration (alloc-once per session);
       - ``laplacian(o, i)`` -> ``ctx.laplacian(*o, i)`` (i const_cast when it is the lambda's ``in``,
-        which is logically read-only -- the fill only writes ghosts, as in test_generic_krylov);
+        which is logically read-only -- the fill only writes ghosts);
       - ``rhs_jacvec(out, in, iterate, r0, ...)`` (ADC-431) -> a finite-difference Jacobian-vector
         product over the core residual plus the exact prepared-boundary JVP.  The lambda captures one
         shared ``BoundaryEvaluationPoint`` refreshed from r0's exact stage in the step body, freezing

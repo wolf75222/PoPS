@@ -23,8 +23,8 @@
 // WHO OWNS STEPPING: this state owns the one topology-independent cadence LOOP as well as its fields
 // (step_ / substeps_ / stride_ / dt_bound_). Uniform and AMR lend it only their accepted
 // `(physical_time, macro_step)` cursor by reference; no Impl, grid or hierarchy dependency crosses
-// this boundary. ProgramExecutionServices remains the sole implementation of operations invoked by
-// the installed step closure, while the two runtime drivers merely enter this shared dispatcher.
+// this boundary. Exact-ranked ProgramContext<Dim> remains the sole implementation of operations
+// invoked by the installed step closure, while runtime drivers merely enter this shared dispatcher.
 //
 // GRID BOUNDARY. The self-contained logic (cadence guards, diagnostics, block params, history-ring
 // introspection + rotate, cache passthrough) lives HERE as methods with Program-subsystem-worded
