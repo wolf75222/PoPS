@@ -658,25 +658,21 @@ class AmrSystem {
   void set_aux_field_halo_component(int comp, int bc_type, double value);
 
   /// @name Named multi-elliptic fields (ADC-428)
-  /// A SECOND elliptic solve (beyond the default coarse Poisson) for a user-named field
-  /// (m.elliptic_field("psi", rhs=..., aux=[...])) on the AMR hierarchy. AMR counterpart of
-  /// System::register_elliptic_field / set_block_elliptic_field. The named field owns its RHS (a per-block
-  /// brick), a DEDICATED coarse GeometricMG, and its OWN aux output components; AmrRuntime solves it each
-  /// solve_fields and injects it to the fine levels, so a bare run() leaves it SOLVED. The default Poisson
-  /// path is untouched / bit-identical. The field is registered on the same AmrRuntime engine used for
-  /// every block count. POPS_EXPORT: resolved by the generated AMR .so / native loader across the dlopen
-  /// boundary, like set_compiled_block.
+  /// Exact-ranked API for a SECOND elliptic solve on the AMR hierarchy. Installation is accepted
+  /// only when the selected native specialization owns a dimension-qualified hierarchy field-solver
+  /// provider; the facade never stores an unused contract or falls back to the historical 2-D engine.
   /// @{
-  /// Registers named @p field's aux output components (where its solved phi / centered grad land). Called
-  /// by the native AMR loader for each m.elliptic_field. @p gx_comp / @p gy_comp < 0 => only phi is
-  /// written (both must equal -1); @p gradient_sign is exactly -1 or +1 and scales both derivatives.
-  /// @throws if the system is already built or the output contract is malformed.
+  /// Registers named @p field's exact-ranked aux outputs. ``output_components`` contains either the
+  /// potential alone or the potential followed by one gradient component per native axis.
+  /// @throws if the system is already built, the output contract is malformed, or no exact-ranked
+  /// hierarchy field-solver provider is installed. Provider-unavailable failure happens before mutation.
   POPS_EXPORT void register_elliptic_field(const std::string& block_name,
-                                           const std::string& provider_key, int phi_comp,
-                                           int gx_comp, int gy_comp, int gradient_sign);
+                                           const std::string& provider_key,
+                                           const std::vector<int>& output_components,
+                                           int gradient_sign);
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
-  /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws if the system is already
-  /// built or the block is unknown.
+  /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws before mutation if
+  /// the system is already built, the block is unknown, or no exact-ranked hierarchy provider exists.
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);

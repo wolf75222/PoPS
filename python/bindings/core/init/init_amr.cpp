@@ -514,8 +514,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           },
           py::arg("provider_slot"))
       .def("register_elliptic_field", &AmrSystem::register_elliptic_field, py::arg("block"),
-           py::arg("field"), py::arg("phi_comp"), py::arg("gx_comp"), py::arg("gy_comp"),
-           py::arg("gradient_sign"))
+           py::arg("field"), py::arg("output_components"), py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan, py::arg("provider_slot"),
            py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &AmrSystem::set_field_boundary_dependencies,

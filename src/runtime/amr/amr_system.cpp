@@ -8,6 +8,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/profiler.hpp>
@@ -431,6 +432,42 @@ void AmrSystem<Dim>::install_field_storage_route(const std::string& field_identi
                                                  const std::string& provider_slot) {
   require_amr_assembling(p_->lifecycle, "install_field_storage_route");
   p_->boundary_registry.install_field_storage_route(field_identity, provider_slot);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::register_elliptic_field(const std::string& block_name,
+                                             const std::string& provider_key,
+                                             const std::vector<int>& output_components,
+                                             int gradient_sign) {
+  require_amr_assembling(p_->lifecycle, "register_elliptic_field");
+  if (p_->engine)
+    throw std::runtime_error(
+        "AmrSystem cannot register a named elliptic field after hierarchy materialization");
+  if (provider_key.empty())
+    throw std::invalid_argument("AmrSystem named elliptic field identity must be non-empty");
+  (void)p_->block(block_name);
+  const runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
+  (void)output;
+  throw std::logic_error(
+      "AmrSystem exact-ranked named elliptic fields require an installed "
+      "dimension-qualified hierarchy field-solver provider");
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_block_elliptic_field(
+    const std::string& block_name, const std::string& field,
+    std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs) {
+  require_amr_assembling(p_->lifecycle, "set_block_elliptic_field");
+  if (p_->engine)
+    throw std::runtime_error(
+        "AmrSystem cannot install a named elliptic RHS after hierarchy materialization");
+  if (field.empty() || !rhs)
+    throw std::invalid_argument(
+        "AmrSystem named elliptic RHS requires a field identity and prepared closure");
+  (void)p_->block(block_name);
+  throw std::logic_error(
+      "AmrSystem exact-ranked named elliptic fields require an installed "
+      "dimension-qualified hierarchy field-solver provider");
 }
 
 template <int Dim>
@@ -1180,6 +1217,11 @@ template void AmrSystem<kNativeDimension>::install_block_state_route(const std::
                                                                       const std::string&);
 template void AmrSystem<kNativeDimension>::install_field_storage_route(const std::string&,
                                                                         const std::string&);
+template void AmrSystem<kNativeDimension>::register_elliptic_field(
+    const std::string&, const std::string&, const std::vector<int>&, int);
+template void AmrSystem<kNativeDimension>::set_block_elliptic_field(
+    const std::string&, const std::string&,
+    std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
 template void AmrSystem<kNativeDimension>::install_hyperbolic_boundary(
     const std::string&, const std::string&, int, const std::vector<std::string>&,
     const std::vector<double>&, const std::vector<std::string>&,

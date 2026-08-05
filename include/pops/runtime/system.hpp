@@ -726,12 +726,9 @@ class System {
   [[nodiscard]] POPS_EXPORT SolveOutcome
   solve_fields_from_blocks(const std::vector<const MultiFab<Dim>*>& U_stages);
   /// @name Named multi-elliptic fields (ADC-428)
-  /// A SECOND elliptic solve (beyond the default Poisson) for a user-named field
-  /// (m.elliptic_field("phi2", rhs=..., aux=[...])). The named field owns its RHS (a per-block brick,
-  /// distinct from the default elliptic coupling), a DEDICATED native elliptic solver instance, and its
-  /// OWN aux output components (the model's named aux slots). The default Poisson path
-  /// (solve_fields / solve_fields_from_state) is untouched / bit-identical. POPS_EXPORT: resolved by the
-  /// generated problem.so / native loader across the dlopen boundary.
+  /// Exact-ranked API for a SECOND elliptic solve (beyond the default Poisson). Installation is
+  /// accepted only when the selected native specialization owns a dimension-qualified field-solver
+  /// provider; the facade never falls back to the historical 2-D carrier.
   /// @{
   /// Solve named @p field's elliptic problem from block @p block_idx's stage state @p U_stage and write
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
@@ -746,14 +743,16 @@ class System {
   /// representative block.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_blocks(
       const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
-  /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
-  /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
-  /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
+  /// Register named @p field's exact-ranked aux outputs. ``output_components`` contains either the
+  /// potential alone or the potential followed by one gradient component per native axis. The
+  /// dimension-specific loader calls this only after Python has selected its immutable native rank.
+  /// @throws std::logic_error before mutation when no exact-ranked field-solver provider is installed.
   POPS_EXPORT void register_elliptic_field(const std::string& block, const std::string& field,
-                                           int phi_comp, int gx_comp, int gy_comp,
+                                           const std::vector<int>& output_components,
                                            int gradient_sign);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
-  /// the native loader (make_poisson_rhs of the per-field brick). @throws if the block is unknown.
+  /// the native loader (make_poisson_rhs of the per-field brick). @throws before mutation if the
+  /// block is unknown or no exact-ranked field-solver provider is installed.
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);

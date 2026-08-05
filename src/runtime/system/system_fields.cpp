@@ -599,26 +599,6 @@ bool System::field_publication_transaction_active_() const noexcept {
   return p_->field_publication_active_;
 }
 
-// Register a named elliptic field (ADC-428): records WHERE the field's solved phi / centered grad land
-// in the aux channel (@p phi_comp / @p gx_comp / @p gy_comp, the model's named aux slots). The native
-// loader calls this for each m.elliptic_field after the block is installed. POPS_EXPORT: resolved by the
-// generated problem.so / native loader across the dlopen boundary.
-POPS_EXPORT void System::register_elliptic_field(const std::string& block, const std::string& field,
-                                                 int phi_comp, int gx_comp, int gy_comp,
-                                                 int gradient_sign) {
-  p_->register_elliptic_field(block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
-}
-
-// Attach a named elliptic-field RHS closure to block @p block_name (ADC-428): the per-field Poisson
-// right-hand side brick += elliptic_field_rhs(U). The native loader builds it (make_poisson_rhs of the
-// named brick) and attaches it here; solve_fields_from_state(field, ...) then sums it over the blocks.
-// @throws if the block is unknown. POPS_EXPORT: resolved across the dlopen boundary.
-POPS_EXPORT void System::set_block_elliptic_field(
-    const std::string& block_name, const std::string& field,
-    std::function<void(const MultiFab&, MultiFab&)> rhs) {
-  p_->blocks_.find(block_name).named_poisson_rhs[field] = std::move(rhs);
-}
-
 // Potential phi restoration (IO v1, restart): writes the VALID cells of component 0 of the
 // solver phi (multigrid warm start). Mono-box
 // (same marshaling convention as potential / set_density).
