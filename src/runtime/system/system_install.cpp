@@ -477,7 +477,11 @@ void System<Dim>::set_block_elliptic_field(
     Real candidate = Real(0);
     bool contributes = false;
     for (const typename Impl::FieldProviderBinding& binding : plan->second.providers) {
-      if (binding.block == block_name && binding.key == field) {
+      // ``field`` identifies the qualified output route selected above.  A source provider key is
+      // deliberately independent (for example electron_charge -> electrostatic); generated block
+      // installation supplies the one RHS closure owned by this block, so its exact coefficient is
+      // resolved by block ownership rather than by equating input and output names.
+      if (binding.block == block_name) {
         candidate += static_cast<Real>(binding.coefficient);
         contributes = true;
       }

@@ -301,7 +301,7 @@ void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
         "System exact Cartesian Poisson does not approximate wall or variable-medium providers");
   if (!std::isfinite(abs_tol) || abs_tol < 0.0 || !std::isfinite(rel_tol) || rel_tol < 0.0 ||
       max_cycles < 1 || min_coarse < 1 || pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 ||
-      coarse_threshold < 1)
+      coarse_threshold < 0)
     throw std::invalid_argument("System exact Poisson controls are invalid");
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
   (void)poisson_options(topology, bc, rel_tol, abs_tol, max_cycles);
@@ -364,7 +364,8 @@ SolveReport System<Dim>::solve_fields_from_state_in_place_(const std::string& fi
 template <int Dim>
 SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
     const std::string& field, const std::vector<const MultiFab<Dim>*>& stages) {
-  const auto found = p_->named_fields_.find(field);
+  const std::string provider_slot = p_->resolve_named_field_slot(field);
+  const auto found = p_->named_fields_.find(provider_slot);
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
   p_->active_field_ = found->second;
@@ -454,7 +455,7 @@ template <int Dim>
 void System<Dim>::prepare_named_field_publication_storage_(const std::string& field) {
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
     throw std::invalid_argument("System named field request differs between MPI ranks");
-  if (p_->named_fields_.find(field) == p_->named_fields_.end())
+  if (p_->named_fields_.find(p_->resolve_named_field_slot(field)) == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
 }
 

@@ -210,6 +210,7 @@ void System<Dim>::set_default_field_nullspace(const std::string& nullspace_provi
   p_->default_nullspace_provider_identity_ = nullspace_provider_identity;
   p_->default_nullspace_options_ = options;
   p_->default_field_.reset();
+  p_->field_plan_consensus_verified_ = false;
 }
 
 template <int Dim>

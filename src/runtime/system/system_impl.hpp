@@ -177,7 +177,26 @@ struct System<Dim>::Impl {
     std::exception_ptr local_error;
     try {
       ExactContractBuilder registry;
-      registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{1});
+      registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{2});
+      registry.scalar(static_cast<std::uint64_t>(configured_field_solver_providers_.size()));
+      for (const auto& [route, provider] : configured_field_solver_providers_)
+        registry.text(route)
+            .text(provider.family_route)
+            .text(provider.exact_identity)
+            .bytes(provider.options.exact_contract());
+      registry.scalar(static_cast<std::uint64_t>(component_field_solver_providers_.size()));
+      for (const auto& [route, provider] : component_field_solver_providers_) {
+        if (!provider)
+          throw std::runtime_error("System field component provider registry contains null");
+        registry.text(route)
+            .text(provider->provider_identity())
+            .bytes(provider->collective_contract());
+      }
+      registry.text(default_nullspace_provider_identity_)
+          .presence(!default_nullspace_provider_identity_.empty());
+      if (!default_nullspace_provider_identity_.empty())
+        registry.bytes(default_nullspace_options_.exact_contract());
+      registry.scalar(static_cast<std::uint64_t>(field_plans_.size()));
       for (const auto& [slot, plan] : field_plans_) {
         registry.text(slot).bytes(exact_field_plan_contract(plan));
         const auto configured =
@@ -206,6 +225,15 @@ struct System<Dim>::Impl {
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-field-plan-registry", bytes}}))
       throw std::runtime_error("System: ordered resolved field plans differ across MPI ranks");
     field_plan_consensus_verified_ = true;
+  }
+
+  std::string resolve_named_field_slot(std::string_view field) const {
+    if (named_fields_.contains(std::string(field)))
+      return std::string(field);
+    for (const auto& [slot, plan] : field_plans_)
+      if (plan.output_key == field)
+        return slot;
+    return std::string(field);
   }
 
   struct AcceptedSnapshot {
