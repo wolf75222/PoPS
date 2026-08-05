@@ -5,6 +5,7 @@
 
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>
+#include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 
 #include <cstddef>
 #include <cstdint>
