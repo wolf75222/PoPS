@@ -59,7 +59,8 @@ def _amr_metadata_fixture():
         params={"alpha": alpha},
         caps={"cpu": True, "amr": True, "mpi": True},
         abi_key=pops._pops.abi_key(), model_hash="h", cxx="c++",
-        std="c++23", target="amr_system", aux_extra_names=["B_z"])
+        std="c++23", native_dimension=2, target="amr_system",
+        aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
     resolved = resolved_amr_plan(
         block_names=("ne",),

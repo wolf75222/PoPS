@@ -204,6 +204,7 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params={}, caps={"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
+        native_dimension=2,
         aux_extra_names=list(aux_names))
 
 

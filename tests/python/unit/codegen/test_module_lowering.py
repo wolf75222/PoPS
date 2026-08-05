@@ -261,6 +261,7 @@ def _final_trace_artifact(compiled):
         abi_key = compiled.abi_key
         cxx = compiled.cxx
         std = compiled.std
+        native_dimension = compiled.native_dimension
         model_hash = "trace-model"
         module_manifest = compiled.module_manifest
         module_hash = compiled.module_hash()
@@ -279,6 +280,7 @@ def _final_trace_artifact(compiled):
                 "params": {},
                 "aux_names": (),
                 "n_aux": 0,
+                "native_dimension": 2,
                 "capabilities": {"mpi": False},
                 "wave_speed_provider": None,
             }

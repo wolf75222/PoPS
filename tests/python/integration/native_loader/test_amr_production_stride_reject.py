@@ -34,6 +34,7 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
         model_hash="amr-preloader-guard",
         cxx="c++",
         std="c++23",
+        native_dimension=2,
         target="amr_system",
     )
 

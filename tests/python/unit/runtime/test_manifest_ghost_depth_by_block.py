@@ -82,6 +82,7 @@ def _compiled(blocks, *, ghost_depth=2):
         prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
         params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
         cxx="c++", std="c++23",
+        native_dimension=2,
     )
     model.artifact_identity = make_identity(
         "artifact", {"fixture": "ghost-depth-model", "blocks": list(blocks)})

@@ -201,6 +201,7 @@ def _component_at(component, so_path):
         model_hash=component.model_hash,
         cxx=component.cxx,
         std=component.std,
+        native_dimension=component.native_dimension,
         hllc=component.has_hllc,
         roe=component.has_roe,
         aux_extra_names=component.aux_extra_names,

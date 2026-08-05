@@ -320,6 +320,7 @@ def test_system_end_to_end():
             model_hash=model._model_hash(),
             cxx=cxx,
             std=loader_cxx_std(),
+            native_dimension=2,
             wave_speeds=False,
             wave_speed_provider=None,
         )

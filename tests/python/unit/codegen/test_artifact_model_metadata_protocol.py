@@ -18,6 +18,7 @@ class ExternalMetadataProvider:
             "params": {},
             "aux_names": ("electric_field",),
             "n_aux": 3,
+            "native_dimension": 2,
             "capabilities": {"cpu": True, "amr": False},
             "wave_speed_provider": "jacobian",
         }
@@ -42,6 +43,7 @@ def test_external_metadata_provider_is_consumed_without_concrete_class_dispatch(
     assert row.state_space == "electrons"
     assert row.cons_names == ("density", "momentum")
     assert row.cons_roles == ("Density", "MomentumX")
+    assert row.native_dimension == 2
     assert row.capabilities == {"cpu": True, "amr": False}
     assert row.wave_speed_provider == "jacobian"
 

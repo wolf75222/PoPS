@@ -36,6 +36,7 @@ def _compiled(*, n_vars, hllc=False, roe=False, roe_provider=ROE_FLUID_ROLES):
         model_hash="mh",
         cxx="c++",
         std="c++23",
+        native_dimension=2,
         hllc=hllc,
         roe=roe,
         hllc_provider=HLLC_FLUID_ROLES if hllc else None,
@@ -115,6 +116,7 @@ def test_compiled_provider_evidence_fails_closed_on_missing_unknown_or_mismatch(
         model_hash="hash",
         cxx="c++",
         std="c++23",
+        native_dimension=2,
     )
     with pytest.raises(ValueError, match="hllc flag disagrees"):
         CompiledModel(**kwargs, hllc=True)

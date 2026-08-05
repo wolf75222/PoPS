@@ -54,6 +54,7 @@ def _compiled(params):
         model_hash="model",
         cxx="c++",
         std="c++23",
+        native_dimension=2,
     )
 
 

@@ -161,7 +161,7 @@ fake = CompiledModel(so_path="/inexistant.so", backend="production",
                      cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"],
                      n_vars=1, gamma=None, n_aux=0, params={}, caps={}, abi_key="k",
                      model_hash="h", cxx="c++", std="c++20", wave_speeds=True,
-                     wave_speed_provider="explicit_pair")
+                     wave_speed_provider="explicit_pair", native_dimension=2)
 
 def add_eq_cache():
     s = System(n=16, L=1.0, periodicity=(True, True))

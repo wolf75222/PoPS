@@ -56,6 +56,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         params=params, caps={"cpu": True, "amr": True, "mpi": mpi},
         abi_key=pops._pops.abi_key(),
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
+        native_dimension=2,
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
     plan = resolved_amr_plan(

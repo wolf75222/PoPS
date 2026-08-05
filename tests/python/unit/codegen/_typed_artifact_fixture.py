@@ -33,6 +33,7 @@ class CompiledComponent:
         self.abi_key = "test-headers|clang++|c++23"
         self.cxx = "clang++"
         self.std = "c++23"
+        self.native_dimension = 2
         self.artifact_identity = make_identity("artifact", {"component": name})
 
     def inspect(self):
@@ -60,6 +61,7 @@ class CompiledComponent:
             "params": {},
             "aux_names": (),
             "n_aux": 0,
+            "native_dimension": 2,
             "capabilities": dict(self.caps),
             "wave_speed_provider": None,
         }
