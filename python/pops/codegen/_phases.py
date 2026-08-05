@@ -424,7 +424,8 @@ def compile(plan: Any) -> Any:
 
     component_artifacts = tuple(
         compile_component(item, cxx=plan.compile_options.get("cxx"),
-                          include=plan.compile_options.get("include"))
+                          include=plan.compile_options.get("include"),
+                          native_dimension=plan.resolved_dimension)
         if type(item) is ExternalComponent else item
         for item in plan.component_inputs
     )

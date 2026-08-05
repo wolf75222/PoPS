@@ -77,11 +77,7 @@ def _external_provider_authority() -> dict[str, Any]:
     }
 
 
-def _declared_execution(component: Any) -> dict[str, bool]:
-    variants = [
-        row for row in component.component_manifest.target["variants"]
-        if row["dimension"] == 2 and row["scalar"] == "float64"
-    ]
+def _declared_execution(variants: tuple[dict[str, Any], ...]) -> dict[str, bool]:
     host = [row for row in variants if row["device"] in ("cpu", "host")]
     return {
         "host": bool(host),
@@ -104,7 +100,7 @@ def _component_binding(component: Any, expected: Any, *, role: str) -> dict[str,
             % (role, expected.uri, expected.version, interface.uri, interface.version)
         )
     expected.require_manifest(component.component_manifest)
-    expected.resolve_native_target(component)
+    variants = expected.native_target_variants(component)
     parameters = component.to_data()["parameters"]
     try:
         json.dumps(parameters, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -119,7 +115,8 @@ def _component_binding(component: Any, expected: Any, *, role: str) -> dict[str,
         "native_interface": interface.to_data(),
         "interface_version": interface.version,
         "parameters": parameters,
-        "declared_execution": _declared_execution(component),
+        "native_dimensions": sorted({row["dimension"] for row in variants}),
+        "declared_execution": _declared_execution(variants),
     }
 
 
@@ -153,6 +150,11 @@ class ExternalFieldSolver(Descriptor):
             solver, interfaces.FieldSolver, role="solver")
         topology_binding = _component_binding(
             topology, interfaces.FieldTopology, role="topology")
+        common_dimensions = set(solver_binding["native_dimensions"]) & set(
+            topology_binding["native_dimensions"])
+        if not common_dimensions:
+            raise ValueError(
+                "ExternalFieldSolver components share no supported native dimension")
         if solver_binding["component_id"] == topology_binding["component_id"]:
             raise ValueError(
                 "ExternalFieldSolver requires distinct exact FieldSolver and FieldTopology "
@@ -435,11 +437,18 @@ def _validate_external_use(use, where):
     facts = use.facts
     _validate_external_facts(facts, where)
     bindings = use.resolution.component_bindings
+    cells = tuple(facts.layout.get("cells", ()))
+    dimension = len(cells)
+    if dimension not in (1, 2, 3):
+        raise ValueError("%s external field layout has no exact ranked domain" % where)
     if len(bindings) != 2 or any(
-        not binding.get("declared_execution", {}).get("host") for binding in bindings
+        not binding.get("declared_execution", {}).get("host")
+        or dimension not in tuple(binding.get("native_dimensions", ()))
+        for binding in bindings
     ):
         raise ValueError(
-            "%s external field components require compatible 2D float64 CPU targets" % where
+            "%s external field components require compatible Dim=%d float64 CPU targets"
+            % (where, dimension)
         )
 
 

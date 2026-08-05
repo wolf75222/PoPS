@@ -118,12 +118,21 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def test_external_amr_provider_refuses_a_3d_only_native_target(tmp_path):
+def test_external_amr_provider_accepts_a_3d_native_target_without_selecting_2d(tmp_path):
     component = _component(
         tmp_path, name="tagger-3d", alias="tagger_3d",
         interface=interfaces.Tagger, dimension=3)
 
-    with pytest.raises(ValueError, match="supported 2D float64"):
+    provider = TaggerProvider(component)
+    assert provider.inspect()["component_id"] == component.component_manifest.component_id
+
+
+def test_external_amr_provider_refuses_a_target_outside_ranked_dimensions(tmp_path):
+    component = _component(
+        tmp_path, name="tagger-4d", alias="tagger_4d",
+        interface=interfaces.Tagger, dimension=4)
+
+    with pytest.raises(ValueError, match="dimension 1, 2, or 3"):
         TaggerProvider(component)
 
 
