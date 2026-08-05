@@ -17,7 +17,6 @@
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
-#include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
@@ -57,13 +56,29 @@ namespace pops {
 
 class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
+struct AuxHaloPolicy;
 template <int Dim>
 struct CompiledFieldBoundaryKernel;
+
+namespace component {
+class LoadedComponent;
+}
 
 class ObserverMpiLane;
 namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
+class HierarchyTensorSolverProvider;
+class HierarchyTensorSolverProviderRegistry;
+}
+
+namespace runtime::amr {
+struct PreparedTaggerSpec;
+struct PreparedClusteringSpec;
+struct PreparedRefluxSpec;
+struct PreparedTaggingProgram {
+  struct Stencil;
+};
 }
 
 namespace runtime::field {
@@ -97,7 +112,7 @@ struct AmrRuntimeBlock;
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
 class AmrFieldSolverProvider;
 namespace runtime::amr {
-template <int Dim>
+template <int Dim, class MemorySpace>
 class AmrRuntime;
 }
 namespace detail {
@@ -584,15 +599,15 @@ class AmrSystem {
   ///         is not a multiple of ny*nx.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
   void begin_bootstrap_plan();
-  bool bootstrap_next_level(int refinement_ratio);  ///< execute one resolved transition if tagged
+  bool bootstrap_next_level();  ///< execute the next exact ranked transition if tagged
   void commit_bootstrap_level();
   void rollback_bootstrap_level();
   void register_bootstrap_transfer_route(
       const std::string& identity, const std::vector<std::string>& subjects,
       const std::string& provider_identity, const std::string& space, const std::string& centering,
       const std::string& representation, const std::string& storage, const std::string& operation,
-      const std::string& kernel, int order, const std::vector<int>& ghost_depth, int dimension,
-      int refinement_ratio);
+      const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
+      const Extent<Dim>& refinement_ratio);
   void register_bootstrap_array(const std::string& subject, const std::string& centering, int ncomp,
                                 Extent<Dim> shape, const std::vector<double>& values);
   void register_bootstrap_face_vector(const std::vector<std::string>& subjects);
