@@ -259,6 +259,11 @@ void System<Dim>::mark_bound() {
   if (p_->lifecycle_.frozen())
     p_->lifecycle_.to_bound();
 
+  // Field-plan setters are deliberately local: one rank may author an extra plan and must not
+  // strand peers inside the setter.  Freeze is the single collective commit point for the complete
+  // canonical registry and its selected exact-ranked backend authorities.
+  p_->require_field_plan_consensus();
+
   const auto& state_routes = p_->boundary_registry_.state_routes();
   if (!state_routes.empty() && state_routes.size() != p_->sp.size())
     throw std::runtime_error(

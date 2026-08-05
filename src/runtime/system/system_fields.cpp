@@ -174,7 +174,7 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
   for (std::size_t block = 0; block < implementation.sp.size(); ++block) {
     if (!implementation.sp[block].add_poisson_rhs)
       continue;
-    prepared->set_rhs(block, implementation.sp[block].add_poisson_rhs);
+    prepared->add_rhs(block, implementation.sp[block].add_poisson_rhs, Real(1));
     has_rhs = true;
   }
   if (!has_rhs)

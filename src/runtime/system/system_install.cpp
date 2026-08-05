@@ -368,29 +368,96 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
   (void)p_->find(block);
   runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
   output.validate_width(p_->aux_ncomp_, "System");
-  if (p_->named_fields_.contains(field))
-    throw std::invalid_argument("System named elliptic field is already registered: " + field);
+
+  auto selected = p_->field_plans_.end();
+  for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
+    if (plan->second.output_block != block || plan->second.output_key != field)
+      continue;
+    if (selected != p_->field_plans_.end())
+      throw std::runtime_error(
+          "System named elliptic output resolves to multiple qualified provider slots");
+    selected = plan;
+  }
+  if (selected == p_->field_plans_.end())
+    throw std::invalid_argument(
+        "System named elliptic output has no resolved exact-ranked field plan");
+  const std::string& provider_slot = selected->first;
+  const typename Impl::FieldPlan& plan = selected->second;
+  if (p_->named_fields_.contains(provider_slot))
+    throw std::invalid_argument("System named elliptic field is already registered: " +
+                                provider_slot);
+  if (!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty() ||
+      plan.has_boundary_kernel || plan.has_nonlinear_plan)
+    throw std::logic_error(
+        "System exact-ranked field backend does not accept legacy dynamic-boundary or nonlinear "
+        "carriers");
 
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
-  elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
-  if (p_->poisson_bc_ == "neumann")
-    physical = elliptic::nd::CartesianBoundaryKind::neumann;
-  else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
-           p_->poisson_bc_ != "periodic")
-    throw std::invalid_argument("System Poisson boundary mode is unknown");
-  if (p_->poisson_bc_ == "periodic" &&
-      topology.periodic_pair_count() != static_cast<std::size_t>(Dim))
-    throw std::invalid_argument(
-        "System periodic Poisson requires every exact topology axis to be periodic");
-  auto options = elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
-  options.absolute_tolerance = static_cast<Real>(p_->poisson_abs_tol_);
-  options.relative_tolerance = static_cast<Real>(p_->poisson_rel_tol_);
-  options.maximum_iterations = p_->poisson_max_iterations_;
+  std::unique_ptr<runtime::system::ExactFieldSolverBackend<Dim>> backend;
+  const auto component = p_->component_field_solver_providers_.find(plan.backend_provider_route);
+  const auto configured = p_->configured_field_solver_providers_.find(plan.backend_provider_route);
+  if ((component == p_->component_field_solver_providers_.end()) ==
+      (configured == p_->configured_field_solver_providers_.end()))
+    throw std::runtime_error(
+        "System field plan must select exactly one installed exact-ranked backend route");
+
+  if (component != p_->component_field_solver_providers_.end()) {
+    if (plan.has_reaction)
+      throw std::logic_error(
+          "external field reaction must be carried by the component's exact operator contract");
+    if (!plan.boundary_kind.empty() &&
+        std::any_of(plan.boundary_kind.begin(), plan.boundary_kind.end(),
+                    [](const std::string& kind) { return kind != "periodic"; }))
+      throw std::logic_error(
+          "external field components currently require a fully periodic exact topology");
+    backend = std::make_unique<runtime::system::ComponentFieldSolverBackend<Dim>>(
+        std::string(component->second->provider_identity()), p_->geom, p_->ba, p_->dm,
+        p_->local_rank, topology, p_->periodicity, component->second);
+  } else {
+    if (plan.has_reaction)
+      throw std::logic_error(
+          "configured exact Cartesian field solver does not implement a reaction operator");
+    elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
+    if (p_->poisson_bc_ == "neumann")
+      physical = elliptic::nd::CartesianBoundaryKind::neumann;
+    else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
+             p_->poisson_bc_ != "periodic")
+      throw std::invalid_argument("System Poisson boundary mode is unknown");
+    auto options = elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
+    if (!plan.boundary_kind.empty()) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        for (int side = 0; side < 2; ++side) {
+          const std::size_t face = static_cast<std::size_t>(2 * axis + side);
+          const std::string& kind = plan.boundary_kind[face];
+          const bool periodic = kind == "periodic";
+          if (periodic != p_->periodicity[static_cast<std::size_t>(axis)])
+            throw std::invalid_argument(
+                "System field boundary periodicity differs from its exact domain topology");
+          if (kind == "periodic")
+            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::periodic;
+          else if (kind == "dirichlet")
+            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::dirichlet;
+          else if (kind == "neumann")
+            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::neumann;
+          else
+            throw std::logic_error(
+                "mixed field boundaries require an exact-ranked boundary component");
+          options.boundary_values[face] = static_cast<Real>(plan.boundary_value[face]);
+        }
+      }
+    }
+    options.absolute_tolerance = static_cast<Real>(configured->second.absolute_tolerance);
+    options.relative_tolerance = static_cast<Real>(configured->second.relative_tolerance);
+    options.maximum_iterations = configured->second.maximum_iterations;
+    backend = std::make_unique<runtime::system::CartesianFieldSolverBackend<Dim>>(
+        p_->geom, p_->ba, p_->dm, p_->local_rank, topology, std::move(options),
+        configured->second.exact_identity);
+  }
 
   auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
-      field, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, topology, std::move(options),
+      provider_slot, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, std::move(backend),
       p_->sp.size());
-  p_->named_fields_.emplace(field, std::move(prepared));
+  p_->named_fields_.emplace(provider_slot, std::move(prepared));
 }
 
 template <int Dim>
@@ -402,10 +469,33 @@ void System<Dim>::set_block_elliptic_field(
     throw std::invalid_argument(
         "System named elliptic RHS requires a field identity and prepared closure");
   const int block = p_->index(block_name);
-  const auto provider = p_->named_fields_.find(field);
+  auto selected = p_->field_plans_.end();
+  Real coefficient = Real(0);
+  for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
+    if (plan->second.output_key != field)
+      continue;
+    Real candidate = Real(0);
+    bool contributes = false;
+    for (const typename Impl::FieldProviderBinding& binding : plan->second.providers) {
+      if (binding.block == block_name && binding.key == field) {
+        candidate += static_cast<Real>(binding.coefficient);
+        contributes = true;
+      }
+    }
+    if (!contributes)
+      continue;
+    if (selected != p_->field_plans_.end())
+      throw std::runtime_error("System elliptic RHS resolves to multiple qualified provider slots");
+    selected = plan;
+    coefficient = candidate;
+  }
+  if (selected == p_->field_plans_.end())
+    throw std::invalid_argument("System elliptic RHS has no resolved provider binding");
+  const auto provider = p_->named_fields_.find(selected->first);
   if (provider == p_->named_fields_.end())
-    throw std::invalid_argument("System named elliptic field is not registered: " + field);
-  provider->second->set_rhs(static_cast<std::size_t>(block), std::move(rhs));
+    throw std::invalid_argument("System named elliptic field is not registered: " +
+                                selected->first);
+  provider->second->add_rhs(static_cast<std::size_t>(block), std::move(rhs), coefficient);
 }
 
 template <int Dim>
