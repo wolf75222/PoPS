@@ -2,7 +2,7 @@
 """pops.time centered divergence primitive + a div(grad) Helmholtz solve (epic ADC-399 / ADC-412).
 
 ADC-412 adds the ``ctx.divergence`` primitive (the centered finite-volume divergence factored as
-``pops::apply_divergence``) and the ``P.divergence(out, fx, fy)`` IR op. A matrix-free Schur-like operator
+``pops::apply_divergence``) and the ``P.divergence(out, flux)`` IR op. A matrix-free Schur-like operator
 ``A(phi) = phi - alpha*div(grad phi)`` (the div(flux) structure of the condensed-Schur operator) is
 built from ``P.gradient`` chained into ``P.divergence`` and solved with a typed ``LinearProblem`` --
 exactly
@@ -64,7 +64,7 @@ def _divgrad_program(t, *, name="divgrad", solver=None, tol=1e-10, max_iter=200,
         g = P.scalar_field("g", ncomp=2)  # 2-component gradient buffer (d/dx, d/dy)
         P.gradient(g, x)
         d = P.scalar_field("d")
-        P.divergence(d, g, g)  # div(grad x) == Lap x; fy reads component 1 of the same buffer
+        P.divergence(d, g)  # div(grad x) == Lap x; g carries one component per native axis
         return x - alpha * d  # out = in - alpha*div(grad(in)) = in - alpha*Lap(in)
 
     if solver is None:
@@ -89,7 +89,7 @@ def test_divergence_records_and_validates(t):
         g = P.scalar_field("g", ncomp=2)
         P.gradient(g, x)
         d = P.scalar_field("d")
-        div = P.divergence(d, g, g)
+        div = P.divergence(d, g)
         assert div.vtype == "scalar_field", "divergence yields a scalar_field value"
         return x - div
 
@@ -114,7 +114,7 @@ def test_divergence_operand_types(t):
 
     def apply(P, out, x):
         d = P.scalar_field("d")
-        for args in ((U_state, x, x), (d, U_state, x), (d, x, U_state)):
+        for args in ((U_state, x), (d, U_state)):
             try:
                 P.divergence(*args)
             except ValueError as exc:
@@ -124,12 +124,12 @@ def test_divergence_operand_types(t):
         g = P.scalar_field("g", ncomp=2)
         P.gradient(g, x)
         dd = P.scalar_field("dd")
-        P.divergence(dd, g, g)
+        P.divergence(dd, g)
         return x - dd
 
     U_state = typed_state(P, "blk")  # a State is not a scalar_field -> each divergence operand must reject it
     P.set_apply(A, apply)
-    assert all(bad), "divergence must reject a non-scalar_field operand (out / fx / fy)"
+    assert all(bad), "divergence must reject a non-scalar_field operand (out / flux)"
 
 
 def test_scalar_field_ncomp_validates(t):

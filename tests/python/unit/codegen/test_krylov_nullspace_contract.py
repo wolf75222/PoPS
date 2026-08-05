@@ -6,7 +6,9 @@ import pytest
 import pops
 from pops.codegen.krylov_contract import validated_prepared_problem_contract
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.domain import Rectangle
 from pops.fields import ConstantNullspace, MeanValueGauge
+from pops.frames import Cartesian2D
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.solvers import CG, GMRES
 from pops.time import FailRun, Program
@@ -42,6 +44,22 @@ def _mutable_attrs(node):
     ):
         attrs[key] = dict(attrs[key])
     return attrs
+
+
+def _passive_scalar_model(name):
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    model = pops.Model(name, frame=frame)
+    state = model.state("U", components=("u",))
+    (u,) = state
+    model.flux(
+        "zero-flux",
+        frame=frame,
+        state=state,
+        components={frame.x: (0.0 * u,), frame.y: (0.0 * u,)},
+    )
+    return model, state
 
 
 @pytest.mark.parametrize("constant", [False, True])
@@ -135,8 +153,7 @@ def test_general_method_accepts_explicit_symmetry_without_spd_inference():
 
 
 def test_constant_nullspace_codegen_emits_the_prepared_policy_and_gauge_snapshot():
-    model = pops.Model("constant-nullspace-model")
-    state = model.state("U", components=("u",))
+    model, state = _passive_scalar_model("constant-nullspace-model")
     block = pops.Case("constant-nullspace-case").block("fluid", model)
     program = Program("constant-nullspace-codegen")
     temporal = program.state(block[state])
@@ -161,7 +178,9 @@ def test_constant_nullspace_codegen_emits_the_prepared_policy_and_gauge_snapshot
     source = emit_cpp_program(program, target="system")
     amr_source = emit_cpp_program(program, target="amr_system")
     for emitted in (source, amr_source):
-        assert "PreparedNullspacePolicy::preserving" in emitted
+        assert (
+            "PreparedNullspacePolicy<pops::kNativeDimension>::preserving" in emitted
+        )
         assert "constant_mean_zero_nullspace" in emitted
         assert "gauges.front().value" in emitted
         assert "symmetric_positive_definite_on_nullspace_complement" in emitted
@@ -184,8 +203,10 @@ def test_registered_header_provider_owns_contract_validation_and_native_plan_emi
     header.write_text(
         "#pragma once\n"
         "#include <pops/numerics/elliptic/interface/field_nullspace.hpp>\n"
-        "namespace vendor { inline pops::FieldNullspacePlan make_plan() {\n"
-        "  return pops::constant_mean_zero_nullspace(\"vendor\", \"vendor provider\");\n"
+            "namespace vendor { inline pops::FieldNullspacePlan<pops::kNativeDimension> "
+            "make_plan() {\n"
+            "  return pops::constant_mean_zero_nullspace<pops::kNativeDimension>("
+            "\"vendor\", \"vendor provider\");\n"
         "} }\n",
         encoding="utf-8",
     )
@@ -233,8 +254,7 @@ def test_registered_header_provider_owns_contract_validation_and_native_plan_emi
         ),
     ))
 
-    model = pops.Model("external-nullspace-provider-model")
-    state = model.state("U", components=("u",))
+    model, state = _passive_scalar_model("external-nullspace-provider-model")
     block = pops.Case("external-nullspace-provider-case").block("fluid", model)
     program = Program("external-nullspace-provider")
     temporal = program.state(block[state])
@@ -264,4 +284,4 @@ def test_registered_header_provider_owns_contract_validation_and_native_plan_emi
     emitted = emit_cpp_program(program)
     assert "#include <vendor/nullspace.hpp>" in emitted
     assert "vendor::make_plan()" in emitted
-    assert "PreparedNullspacePolicy::preserving" in emitted
+    assert "PreparedNullspacePolicy<pops::kNativeDimension>::preserving" in emitted

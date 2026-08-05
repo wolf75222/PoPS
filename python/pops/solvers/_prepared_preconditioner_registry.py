@@ -493,7 +493,9 @@ class PreparedPreconditionerProvider:
                 "capability" % self.scheme
             )
         if emission.make_session is None:
-            return "pops::PreparedLinearPreconditioner::identity()"
+            return (
+                "pops::PreparedLinearPreconditioner<pops::kNativeDimension>::identity()"
+            )
 
         options = node.attrs.get("preconditioner_options")
         prepared_options = self.prepare_options(
@@ -521,7 +523,8 @@ class PreparedPreconditionerProvider:
         byte_literal = "".join("\\x%02x" % value for value in exact_parameters)
         implementation = json.dumps(self.emitter_id, ensure_ascii=True)
         provider_expression = (
-            "pops::PreparedLinearPreconditionerProvider::trusted_extension("
+            "pops::PreparedLinearPreconditionerProvider<"
+            "pops::kNativeDimension>::trusted_extension("
             "pops::PreparedProviderIdentity{%s, %dull}, "
             "std::string(\"%s\", std::size_t{%d}), %s)"
             % (
@@ -532,7 +535,8 @@ class PreparedPreconditionerProvider:
                 emission.make_session,
             )
         )
-        return "pops::PreparedLinearPreconditioner(*%s, %s, %s)" % (
+        return "pops::PreparedLinearPreconditioner<pops::kNativeDimension>(" \
+               "*%s, %s, %s)" % (
             prototype,
             provider_expression,
             vector_distribution_expr,

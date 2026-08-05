@@ -116,11 +116,17 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="cg"))
-    for frag in ("pops::PreparedAffineOperatorSessionFactory make_apply_A", "ctx.laplacian",
-                 "return pops::PreparedAffineOperatorSessionCallbacks{",
+    for frag in (
+                 "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> "
+                 "make_apply_A",
+                 "ctx.laplacian",
+                 "return pops::PreparedAffineOperatorSessionCallbacks<"
+                 "pops::kNativeDimension>{",
                  "ctx.solve_prepared_linear",
-                 "pops::PreparedAffineLinearProblem", "pops::KrylovWorkspace",
-                 "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
+                 "pops::PreparedAffineLinearProblem<pops::kNativeDimension>",
+                 "pops::KrylovWorkspace<pops::kNativeDimension>",
+                 "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                 "ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
 
@@ -159,7 +165,9 @@ def test_solve_outcome_is_consumed_before_graph_publication(t):
 def test_bicgstab_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="bicgstab"))
     assert "ctx.solve_prepared_linear" in src, src
-    assert "PreparedLinearPreconditioner::identity()" in src, src
+    assert (
+        "PreparedLinearPreconditioner<pops::kNativeDimension>::identity()" in src
+    ), src
 
 
 def test_richardson_codegen(t):
@@ -174,7 +182,9 @@ def test_identity_precond_byte_identical(t):
     src_identity = emit_cpp_program(_solve_program(t, method="gmres",
                                   preconditioner=_precond("identity")))
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
-    assert "PreparedLinearPreconditioner::identity()" in src_default
+    assert (
+        "PreparedLinearPreconditioner<pops::kNativeDimension>::identity()" in src_default
+    )
     assert "PreparedLinearPreconditionerSessionFactory" not in src_default
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"
 
@@ -214,8 +224,10 @@ def test_solve_validates(t):
 
 def test_prepared_codegen_has_frozen_snapshot_and_no_context_algebra_in_apply(t):
     src = emit_cpp_program(_solve_program(t, method="cg", operator_uses_dt=True))
-    apply_body = src.split("pops::ApplyFn apply = ", 1)[1].split(
-        "return pops::PreparedAffineOperatorSessionCallbacks", 1
+    apply_body = src.split(
+        "pops::ApplyFn<pops::kNativeDimension> apply = ", 1
+    )[1].split(
+        "return pops::PreparedAffineOperatorSessionCallbacks<pops::kNativeDimension>", 1
     )[0]
     assert "operator_evaluation_snapshot" in src
     assert "probe_operator_evaluation" in src

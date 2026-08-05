@@ -41,51 +41,67 @@ inline void append_exact_contract_value(std::string& bytes, const Value& value) 
 /// Canonical structural identity of one field distribution. Distributed mappings preserve their
 /// exact rank owners. Replicated mappings canonicalize every local owner to zero after the caller
 /// has proved that every global box is materialized on the current rank.
-inline std::string field_distribution_layout_contract(const MultiFab& field,
-                                                      FieldDistribution distribution) {
+template <int Dim>
+std::string field_distribution_layout_contract(const MultiFab<Dim>& field,
+                                               FieldDistribution distribution) {
   std::string bytes;
-  const auto& boxes = field.box_array().boxes();
-  const auto& ranks = field.dmap().ranks();
-  bytes.reserve(3u * sizeof(int) + sizeof(std::uint64_t) + boxes.size() * (5u * sizeof(int)));
+  const auto& boxes = field.layout().boxes();
+  const auto& rank_space = field.rank_space();
+  const auto& owners = field.distribution().owners();
+  bytes.reserve((4u + 2u * static_cast<std::size_t>(Dim)) * sizeof(int) + sizeof(std::uint64_t) +
+                boxes.size() * static_cast<std::size_t>(2 * Dim + Dim) * sizeof(int));
   append_exact_contract_value(bytes, static_cast<std::uint8_t>(distribution));
+  append_exact_contract_value(bytes, Dim);
   append_exact_contract_value(bytes, field.ncomp());
-  append_exact_contract_value(bytes, field.n_grow());
+  for (int axis = 0; axis < Dim; ++axis)
+    append_exact_contract_value(bytes, field.ghosts()[axis]);
+  for (int axis = 0; axis < Dim; ++axis) {
+    append_exact_contract_value(bytes, rank_space.origin()[axis]);
+    append_exact_contract_value(bytes, rank_space.extent()[axis]);
+  }
   append_exact_contract_value(bytes, static_cast<std::uint64_t>(boxes.size()));
-  append_exact_contract_value(bytes, static_cast<std::uint64_t>(ranks.size()));
+  append_exact_contract_value(bytes, static_cast<std::uint64_t>(owners.size()));
   for (std::size_t index = 0; index < boxes.size(); ++index) {
-    const Box2D& box = boxes[index];
-    append_exact_contract_value(bytes, box.lo[0]);
-    append_exact_contract_value(bytes, box.lo[1]);
-    append_exact_contract_value(bytes, box.hi[0]);
-    append_exact_contract_value(bytes, box.hi[1]);
-    const int owner = distribution == FieldDistribution::Replicated
-                          ? 0
-                          : (index < ranks.size() ? ranks[index] : -1);
-    append_exact_contract_value(bytes, owner);
+    const Box<Dim>& box = boxes[index];
+    for (int axis = 0; axis < Dim; ++axis) {
+      append_exact_contract_value(bytes, box.lo[axis]);
+      append_exact_contract_value(bytes, box.hi[axis]);
+    }
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int owner = distribution == FieldDistribution::Replicated
+                            ? 0
+                            : (index < owners.size() ? owners[index][axis] : -1);
+      append_exact_contract_value(bytes, owner);
+    }
   }
   return bytes;
 }
 
-inline bool field_distribution_layout_matches(const MultiFab& field,
-                                              FieldDistribution distribution) {
-  const auto& boxes = field.box_array().boxes();
-  const auto& ranks = field.dmap().ranks();
-  if (field.ncomp() <= 0 || field.n_grow() < 0 || boxes.empty() || boxes.size() != ranks.size())
+template <int Dim>
+bool field_distribution_layout_matches(const MultiFab<Dim>& field, FieldDistribution distribution) {
+  const auto& boxes = field.layout().boxes();
+  if (field.ncomp() <= 0 || boxes.empty() ||
+      field.rank_space().size() != static_cast<std::size_t>(n_ranks()) ||
+      field.rank_space().linear_rank(field.local_rank()) != static_cast<std::size_t>(my_rank()))
     return false;
+  for (int axis = 0; axis < Dim; ++axis)
+    if (field.ghosts()[axis] < 0)
+      return false;
   if (distribution == FieldDistribution::Distributed)
-    return true;
+    return !field.distribution().replicated() &&
+           field.distribution().owners().size() == boxes.size();
   if (distribution != FieldDistribution::Replicated)
     return false;
-  const int rank = my_rank();
-  return std::all_of(ranks.begin(), ranks.end(), [rank](int owner) { return owner == rank; });
+  return field.distribution().replicated() && field.local_size() == boxes.size();
 }
 
 /// Authenticate an unauthenticated public descriptor before any scientific collective. This is
 /// exact rather than hash-based, so a rank-local full replica mislabeled Distributed is rejected
 /// instead of being silently counted once per rank.
-inline void require_collective_field_distribution_layout(const MultiFab& field,
-                                                         FieldDistribution distribution,
-                                                         const char* where) {
+template <int Dim>
+void require_collective_field_distribution_layout(const MultiFab<Dim>& field,
+                                                  FieldDistribution distribution,
+                                                  const char* where) {
   const long raw = static_cast<long>(distribution);
   const long minimum = all_reduce_min(raw);
   const long maximum = all_reduce_max(raw);
@@ -125,14 +141,27 @@ inline void require_collective_field_distribution_layout(const MultiFab& field,
                                 ": field layout differs between communicator ranks");
 }
 
-/// Compare every valid cell bit-for-bit in canonical global-box/component/j/i order. Kokkos packs
-/// directly from the execution-space-visible field into persistent shared scratch; rank zero then
-/// broadcasts the canonical bytes and every rank performs an exact device comparison. This avoids
-/// a host scan and remains collision-free. The caller supplies two fixed-size chunks, so memory is
+/// Compare every valid cell bit-for-bit in canonical global-box/component/axis-0-fastest order.
+/// Kokkos packs directly from the execution-space-visible field into persistent shared scratch;
+/// rank zero then broadcasts the canonical bytes and every rank performs an exact device
+/// comparison. This avoids a host scan and remains collision-free. The caller supplies two
+/// fixed-size chunks, so memory is
 /// bounded independently of field size.
-inline void require_exact_replicated_field_values_prevalidated(
-    const MultiFab& field, char* storage, std::size_t storage_size, const char* where,
-    const CommunicatorView& communicator) {
+template <int Dim>
+POPS_HD Index<Dim> field_replica_index(const Box<Dim>& box, std::size_t linear) {
+  Index<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::size_t extent = static_cast<std::size_t>(box.length(axis));
+    index[axis] = box.lo[axis] + static_cast<int>(linear % extent);
+    linear /= extent;
+  }
+  return index;
+}
+
+template <int Dim>
+void require_exact_replicated_field_values_prevalidated(const MultiFab<Dim>& field, char* storage,
+                                                        std::size_t storage_size, const char* where,
+                                                        const CommunicatorView& communicator) {
   if (communicator.size() == 1)
     return;
   const long invalid_storage = all_reduce_max(
@@ -141,8 +170,9 @@ inline void require_exact_replicated_field_values_prevalidated(
   if (invalid_storage != 0)
     throw std::logic_error(std::string(where) + ": replica consensus storage is incoherent");
   long missing_box = 0;
-  for (int global = 0; global < field.box_array().size(); ++global)
-    missing_box = std::max(missing_box, field.local_index_of(global) < 0 ? 1L : 0L);
+  for (std::size_t global = 0; global < field.layout().size(); ++global)
+    missing_box =
+        std::max(missing_box, field.local_index_of(global) == MultiFab<Dim>::not_local ? 1L : 0L);
   if (all_reduce_max(missing_box, communicator) != 0)
     throw std::logic_error(std::string(where) + ": prevalidated replica is missing a global box");
 
@@ -152,12 +182,12 @@ inline void require_exact_replicated_field_values_prevalidated(
   char* canonical_bytes = storage + kFieldReplicaConsensusChunkBytes;
 
   std::size_t total_values = 0;
-  for (const Box2D& box : field.box_array().boxes()) {
-    const std::size_t nx = static_cast<std::size_t>(box.nx());
-    const std::size_t ny = static_cast<std::size_t>(box.ny());
-    if (ny != 0 && nx > std::numeric_limits<std::size_t>::max() / ny)
+  for (const Box<Dim>& box : field.layout().boxes()) {
+    const std::int64_t signed_cells = box.numPts();
+    if (signed_cells < 0 ||
+        static_cast<std::uint64_t>(signed_cells) > std::numeric_limits<std::size_t>::max())
       throw std::overflow_error(std::string(where) + ": replica size overflows size_t");
-    const std::size_t cells = nx * ny;
+    const std::size_t cells = static_cast<std::size_t>(signed_cells);
     if (cells != 0 &&
         static_cast<std::size_t>(field.ncomp()) > std::numeric_limits<std::size_t>::max() / cells)
       throw std::overflow_error(std::string(where) + ": replica component size overflows size_t");
@@ -167,24 +197,21 @@ inline void require_exact_replicated_field_values_prevalidated(
     total_values += box_values;
   }
 
-  field.sync_device();
   for (std::size_t chunk_begin = 0; chunk_begin < total_values;
        chunk_begin += std::min(chunk_value_capacity, total_values - chunk_begin)) {
     const std::size_t chunk_values = std::min(chunk_value_capacity, total_values - chunk_begin);
     const std::size_t chunk_end = chunk_begin + chunk_values;
     std::size_t box_begin = 0;
-    for (int global = 0; global < field.box_array().size(); ++global) {
-      const int local = field.local_index_of(global);
-      const Box2D& box = field.box(local);
-      const std::size_t nx = static_cast<std::size_t>(box.nx());
-      const std::size_t ny = static_cast<std::size_t>(box.ny());
-      const std::size_t plane = nx * ny;
+    for (std::size_t global = 0; global < field.layout().size(); ++global) {
+      const std::size_t local = field.local_index_of(global);
+      const Box<Dim>& box = field.box(local);
+      const std::size_t plane = static_cast<std::size_t>(box.numPts());
       const std::size_t box_values = plane * static_cast<std::size_t>(field.ncomp());
       const std::size_t box_end = box_begin + box_values;
       const std::size_t overlap_begin = std::max(chunk_begin, box_begin);
       const std::size_t overlap_end = std::min(chunk_end, box_end);
       if (overlap_begin < overlap_end) {
-        const ConstArray4 values = field.fab(local).const_array();
+        const FieldView<const Real, Dim> values = field.fab(local).view();
         const std::size_t source_begin = overlap_begin - box_begin;
         const std::size_t destination_begin = overlap_begin - chunk_begin;
         const std::size_t count = overlap_end - overlap_begin;
@@ -195,9 +222,8 @@ inline void require_exact_replicated_field_values_prevalidated(
               const std::size_t source = source_begin + offset;
               const int component = static_cast<int>(source / plane);
               const std::size_t cell = source - static_cast<std::size_t>(component) * plane;
-              const int j = box.lo[1] + static_cast<int>(cell / nx);
-              const int i = box.lo[0] + static_cast<int>(cell % nx);
-              const std::uint64_t bits = Kokkos::bit_cast<std::uint64_t>(values(i, j, component));
+              const Index<Dim> index = field_replica_index(box, cell);
+              const std::uint64_t bits = Kokkos::bit_cast<std::uint64_t>(values(index, component));
               const std::size_t destination = (destination_begin + offset) * sizeof(Real);
               for (std::size_t byte = 0; byte < sizeof(Real); ++byte)
                 local_bytes[destination + byte] =
@@ -236,16 +262,17 @@ inline void require_exact_replicated_field_values_prevalidated(
   }
 }
 
-inline void require_exact_replicated_field_values_prevalidated(const MultiFab& field, char* storage,
-                                                               std::size_t storage_size,
-                                                               const char* where) {
+template <int Dim>
+void require_exact_replicated_field_values_prevalidated(const MultiFab<Dim>& field, char* storage,
+                                                        std::size_t storage_size,
+                                                        const char* where) {
   require_exact_replicated_field_values_prevalidated(field, storage, storage_size, where,
                                                      world_communicator_view());
 }
 
-inline void require_exact_field_replica(const MultiFab& field, FieldDistribution distribution,
-                                        char* storage, std::size_t storage_size,
-                                        const char* where) {
+template <int Dim>
+void require_exact_field_replica(const MultiFab<Dim>& field, FieldDistribution distribution,
+                                 char* storage, std::size_t storage_size, const char* where) {
   require_collective_field_distribution_layout(field, distribution, where);
   if (distribution == FieldDistribution::Replicated)
     require_exact_replicated_field_values_prevalidated(field, storage, storage_size, where);

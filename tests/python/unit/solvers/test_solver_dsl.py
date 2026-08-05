@@ -258,6 +258,12 @@ def test_cpp_generation_lowers_to_a_real_cpp_loop_over_shared_primitives():
     assert "richardson_codegen_solve" in src
     assert "template <class Op>" in src
     assert "const Op& A" in src
+    assert "pops::MultiFab<pops::kNativeDimension>& x" in src
+    assert "const pops::MultiFab<pops::kNativeDimension>& b" in src
+    assert "pops::Extent<pops::kNativeDimension> pops_scratch_ghosts" in src
+    assert "for (int axis = 0; axis < pops::kNativeDimension; ++axis)" in src
+    assert ".layout(), b.distribution(), b.local_rank()" in src
+    assert ".dmap()" not in src and ".n_grow()" not in src
     # A REAL C++ convergence loop with a re-evaluated break (not a Python loop, not unrolled).
     assert "for (;;" in src
     assert "break;" in src

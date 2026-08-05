@@ -414,7 +414,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     sub = {in_sf.id: "in", out_sf.id: "out"}
     # 1) Evaluation templates. The step body refreshes these before problem.prepare(); each problem
     #    or workspace session factory invocation deep-copies them into private mutable state.
-    scratch = [w for w in block if w.op == "scalar_field"]
+    scratch = [w for w in block if w.op in ("scalar_field", "vector_field")]
     captures = ["ctx_owner"]
     session_fields = []
     session_optional_fields = []
@@ -437,7 +437,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         sub[w.id] = sp
         ncomp = int(w.attrs.get("ncomp", 1))  # >1 for a gradient buffer consumed by divergence
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));"
             % (sp, ncomp))
         captures.append(sp)
         session_fields.append(sp)
@@ -449,7 +450,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     op_ncomp = int(v.attrs["ncomp"])
     acc_sp = "acc%d" % apply_id
     prelude.append(
-        "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
+        "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+        "ctx.alloc_scalar_field(%d, 1));"
         % (acc_sp, op_ncomp))
     captures.append(acc_sp)
     session_fields.append(acc_sp)
@@ -464,21 +466,21 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     captures.append(apply_dt)
     session_scalars.append(apply_dt)
     var[("operator_dt_captures", apply_id)] = (operator_dt, apply_dt)
-    # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
-    # the step body, before the operator): capture its four coefficient shared_ptrs (already
-    # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
+    # A coefficiented apply reads one OUTER row-major Dim*Dim tensor field assembled in the step
+    # body. Freeze that exact field once per prepared session so every matvec sees the same
+    # coefficient authority, including its allocated ghost cells.
     frozen_coefficients = {}
     freeze_pairs = []
     for w in block:
         if w.op == "apply_laplacian_coeff":
             coeffs = w.inputs[2]
-            for sp in var[coeffs.id]:
-                if sp in frozen_coefficients:
-                    continue
+            sp = var[coeffs.id]
+            if sp not in frozen_coefficients:
                 frozen = "frozen_A%d_%d" % (apply_id, len(frozen_coefficients))
                 prelude.append(
-                    "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 1));"
-                    % frozen)
+                    "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                    "ctx.alloc_scalar_field(pops::kNativeDimension * "
+                    "pops::kNativeDimension, 1));" % frozen)
                 frozen_coefficients[sp] = frozen
                 freeze_pairs.append((sp, frozen))
                 captures.append(frozen)
@@ -522,7 +524,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     if coupled_jacvec is not None:
         coupled_packed_uk = "jac_packed_uk%d" % apply_id
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));"
             % (coupled_packed_uk, op_ncomp))
         captures.append(coupled_packed_uk)
         session_fields.append(coupled_packed_uk)
@@ -556,7 +559,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             raise ValueError(
                 "rhs_jacvec iterate block %r has no declared Program state" % iterate_in.block)
         block_idx = indices[iterate_in.block]
-        ng_state = "ctx.state(%d).n_grow()" % block_idx
+        state_prototype = "ctx.state(%d)" % block_idx
         uk = "jac_uk%d_%d" % (apply_id, w.id)
         r0 = "jac_r0%d_%d" % (apply_id, w.id)
         up = "jac_up%d_%d" % (apply_id, w.id)
@@ -564,8 +567,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         jac_ncomp = coupled_width_by_id.get(w.id, op_ncomp)
         for sp in (uk, r0, up, rp):
             prelude.append(
-                "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %s));"
-                % (sp, jac_ncomp, ng_state))
+                "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                "%s.layout(), %s.distribution(), %s.local_rank(), %d, %s.ghosts());"
+                % (sp, state_prototype, state_prototype, state_prototype, jac_ncomp,
+                   state_prototype))
             captures.append(sp)
             session_fields.append(sp)
         if coupled_jacvec is None:
@@ -596,9 +601,12 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             optional_boundary_scratch.insert(0, r0_core)
         for sp in optional_boundary_scratch:
             prelude.append(
-                "auto %s = %s ? std::make_shared<pops::MultiFab>("
-                "ctx.alloc_scalar_field(%d, %s)) : std::shared_ptr<pops::MultiFab>{};"
-                % (sp, has_boundary, jac_ncomp, ng_state))
+                "auto %s = %s ? "
+                "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                "%s.layout(), %s.distribution(), %s.local_rank(), %d, %s.ghosts()) : "
+                "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
+                % (sp, has_boundary, state_prototype, state_prototype, state_prototype,
+                   jac_ncomp, state_prototype))
             captures.append(sp)
             session_optional_fields.append(sp)
         field_slot = None
@@ -685,6 +693,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     for w in block:
         if w.op in ("scalar_field", "apply_in", "apply_out"):
             continue  # scratch shared_ptr / lambda params: already bound in `sub`, nothing to emit
+        if w.op == "vector_field":
+            sources = ", ".join(
+                "&%s" % _apply_in_arg(sub, value) for value in w.inputs)
+            body.append(
+                "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
+                "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
+                % (sub[w.id], sources))
+            continue
         if w.op == "laplacian":
             o, i = w.inputs
             sub[w.id] = sub[o.id]
@@ -698,26 +714,20 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("ctx.gradient(*%s, %s, *%s%s);"
                         % (sub[o.id], _apply_in_arg(sub, p), stencil_boundary, point_arg))
         elif w.op == "divergence":
-            o, fx, fy = w.inputs
+            o, flux = w.inputs
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
-            body.append("ctx.divergence(*%s, %s, %s, *%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, fx), _apply_in_arg(sub, fy),
-                           stencil_boundary, point_arg))
+            body.append("ctx.divergence(*%s, %s, *%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, flux), stencil_boundary,
+                           point_arg))
         elif w.op == "apply_laplacian_coeff":
-            # out = div(A grad in), A the coefficient tensor of a condensed_coeffs bundle (ADC-637): the
-            # SAME two steps the retired brick wrapper did, emitted INLINE through Schur-free seams --
-            # ctx.fill_boundary(in) (the transport-BC ghost fill) then the pops::apply_laplacian
-            # coefficient floor -- so a generated .so compiles without coupling/schur/** and the operator
-            # arithmetic is bit-identical (eps_x/eps_y/a_xy/a_yx are the captured coeff fields).
+            # out = div(A grad in), with one exact row-major Dim*Dim tensor field.
             o, i, coeffs = w.inputs
-            ex, ey, axy, ayx = (
-                frozen_coefficients[name] for name in var[coeffs.id])
+            tensor = frozen_coefficients[var[coeffs.id]]
             sub[w.id] = sub[o.id]
             point_arg = ", *%s" % stencil_point if stencil_point else ""
-            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s, *%s, *%s, "
-                        "*%s%s);"
-                        % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx,
+            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s%s);"
+                        % (sub[o.id], _apply_in_arg(sub, i), tensor,
                            stencil_boundary, point_arg))
         elif w.op == "rhs_jacvec":
             if coupled_jacvec is not None:
@@ -889,7 +899,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         result, "out", sub, acc_sp, dt_symbol="(*%s)" % operator_dt)
     factory = "make_apply_A%d_session" % apply_id
     prelude.append(
-        "pops::PreparedAffineOperatorSessionFactory %s = "
+        "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> %s = "
         "[%s](const pops::ExecutionLane& lane) {"
         % (factory, ", ".join(captures)))
     session_capture_initializers = []
@@ -898,8 +908,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     for name in session_fields:
         local = "session_%s" % name
         template = "template_%s" % name
-        prelude.append("  auto %s = std::make_shared<pops::MultiFab>(*%s);" % (local, name))
-        prelude.append("  %s->detach_communication_caches();" % local)
+        prelude.append(
+            "  auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s);"
+            % (local, name))
         template_capture_initializers.append("%s = %s" % (template, name))
         session_capture_initializers.append("%s = %s" % (name, local))
         session_refresh.append(
@@ -908,9 +919,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         local = "session_%s" % name
         template = "template_%s" % name
         prelude.append(
-            "  auto %s = %s ? std::make_shared<pops::MultiFab>(*%s) "
-            ": std::shared_ptr<pops::MultiFab>{};" % (local, name, name))
-        prelude.append("  if (%s) %s->detach_communication_caches();" % (local, local))
+            "  auto %s = %s ? "
+            "std::make_shared<pops::MultiFab<pops::kNativeDimension>>(*%s) : "
+            "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{};"
+            % (local, name, name))
         template_capture_initializers.append("%s = %s" % (template, name))
         session_capture_initializers.append("%s = %s" % (name, local))
         session_refresh.append(
@@ -978,13 +990,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # Apply sees only its private session state.  The outer template snapshots are refresh inputs
     # for prepare() and must not bloat every hot matvec closure.
     apply_captures = session_direct + session_capture_initializers + ["execution_lane = &lane"]
-    prelude.append("  pops::ApplyFn apply = [%s](pops::MultiFab& out, const pops::MultiFab& in) {"
-                   % ", ".join(apply_captures))
+    prelude.append(
+        "  pops::ApplyFn<pops::kNativeDimension> apply = "
+        "[%s](pops::MultiFab<pops::kNativeDimension>& out, "
+        "const pops::MultiFab<pops::kNativeDimension>& in) {"
+        % ", ".join(apply_captures))
     prelude.append("    auto& ctx = *ctx_owner;")
     prelude += ["    " + ln for ln in body]
     prelude.append("  };")
     prelude.append(
-        "  return pops::PreparedAffineOperatorSessionCallbacks{"
+        "  return pops::PreparedAffineOperatorSessionCallbacks<pops::kNativeDimension>{"
         "std::move(prepare), std::move(apply), "
         "[session_field_count]() { return session_field_count; }};")
     prelude.append("};")
@@ -998,7 +1013,8 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         else "pops::PreparedOperatorConcurrency::Independent"
     )
     prelude.append(
-        "auto %s = pops::PreparedAffineOperatorProvider::trusted_extension("
+        "auto %s = "
+        "pops::PreparedAffineOperatorProvider<pops::kNativeDimension>::trusted_extension("
         "{\"pops.codegen.matrix-free-operator\", 1}, %s, %s, %s);"
         % (lam, json.dumps(exact_parameters), factory, concurrency))
 
@@ -1082,7 +1098,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         op_ncomp = footprint["components"]
         input_ghosts = footprint["input_ghosts"]
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %d));"
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, %d));"
             % (sol_sp, op_ncomp, input_ghosts))
     else:
         footprint = None
@@ -1171,9 +1188,15 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     else:
         raise ValueError("solve_linear operator properties are incoherent or unauthenticated")
     footprint_name = "krylov_footprint%d" % v.id
+    footprint_ghosts_name = "krylov_input_ghosts%d" % v.id
     prelude.append(
-        "const pops::KrylovFootprint %s{%d, %d, %s};"
-        % (footprint_name, op_ncomp, input_ghosts,
+        "const pops::Extent<pops::kNativeDimension> %s = [] { "
+        "pops::Extent<pops::kNativeDimension> ghosts{}; "
+        "for (int axis = 0; axis < pops::kNativeDimension; ++axis) ghosts[axis] = %d; "
+        "return ghosts; }();" % (footprint_ghosts_name, input_ghosts))
+    prelude.append(
+        "const pops::KrylovFootprint<pops::kNativeDimension> %s{%d, %s, %s};"
+        % (footprint_name, op_ncomp, footprint_ghosts_name,
            "true" if footprint["preconditioned"] else "false"))
 
     authority_material = json.dumps({
@@ -1214,24 +1237,25 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         raise ValueError("matrix-free operator has no prepared resource contract")
     vector_distribution_arg = ", " + vector_distribution_expr
     prelude.append(
-        "auto %s = std::make_shared<pops::PreparedAffineLinearProblem>("
+        "auto %s = "
+        "std::make_shared<pops::PreparedAffineLinearProblem<pops::kNativeDimension>>("
         "*%s, %s, %s, %s, %s, %s, "
         "[ctx_owner, %s]() { "
         "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
-        "%s, ctx.authenticated_program_apply_token({%s})%s);"
+        "%s%s);"
         % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
            nullspace_policy_expr,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
-           freeze_expr, authority_cpp, vector_distribution_arg))
+           freeze_expr, vector_distribution_arg))
     workspace_name = "krylov_workspace%d" % v.id
     prelude.append(
-        "auto %s = std::make_shared<pops::KrylovWorkspace>("
+        "auto %s = std::make_shared<pops::KrylovWorkspace<pops::kNativeDimension>>("
         "*%s, %s, %s%s);"
         % (workspace_name, sol_sp, method_expr, footprint_name,
            vector_distribution_arg))
     controls_name = "krylov_controls%d" % v.id
     prelude.append(
-        "const pops::KrylovControls %s{%s, %s, %s, %d};"
+        "const pops::KrylovControls<pops::kNativeDimension> %s{%s, %s, %s, %d};"
         % (controls_name, method_expr, tol, abs_tol, max_iter))
 
     prepare_refresh = var.get(("operator_prepare_refresh", op_value.id))

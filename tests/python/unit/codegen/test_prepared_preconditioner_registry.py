@@ -81,8 +81,14 @@ def test_plugin_provider_registers_resolves_and_emits_without_dispatcher_changes
 
     assert calls == [(17, "test_plugin_preconditioner")]
     assert prelude == []
-    assert expression.startswith("pops::PreparedLinearPreconditioner(*prototype_field, ")
-    assert "pops::PreparedLinearPreconditionerProvider::trusted_extension(" in expression
+    assert expression.startswith(
+        "pops::PreparedLinearPreconditioner<pops::kNativeDimension>("
+        "*prototype_field, "
+    )
+    assert (
+        "pops::PreparedLinearPreconditionerProvider<"
+        "pops::kNativeDimension>::trusted_extension(" in expression
+    )
     assert 'pops::PreparedProviderIdentity{"example.prepared-preconditioner@1", 1ull}' in expression
     assert (
         "example::make_preconditioner_session(*prototype_field, "
