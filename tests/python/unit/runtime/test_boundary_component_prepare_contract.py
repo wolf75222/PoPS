@@ -77,6 +77,35 @@ def test_ranked_periodicity_uses_face_table_without_a_second_identity_row(dimens
         data, face_types, dimension=dimension) == []
 
 
+def test_mapped_periodicity_preserves_one_dynamic_rank_three_row_for_provider_routing():
+    def endpoint(axis, side):
+        return {
+            "qualified_id": "case::axis%d::%s" % (axis, side),
+            "orientation": {
+                "schema_version": 1,
+                "axis": axis,
+                "side": side,
+                "outward_sign": -1 if side == "lower" else 1,
+            },
+        }
+
+    face_types = ["foextrap"] * 6
+    face_types[0] = face_types[3] = "periodic"
+    data = {
+        "periodic_identifications": [{
+            "source": endpoint(0, "lower"),
+            "target": endpoint(1, "upper"),
+            "source_face": 0,
+            "target_face": 3,
+            "permutation": [1, 0, 2],
+            "signs": [1, 1, 1],
+        }],
+    }
+
+    assert _periodic_identification_rows(
+        data, face_types, dimension=3) == [[0, 3, 1, 0, 2, 1, 1, 1]]
+
+
 @pytest.mark.parametrize("prepare_fails", (False, True))
 @pytest.mark.parametrize(
     ("operation", "native_interface", "expected_installer"),
