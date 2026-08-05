@@ -1,199 +1,239 @@
+/// @file
+/// @brief Compile-time-ranked elliptic right-hand-side assemblers.
+
 #pragma once
 
-#include <pops/core/model/coupled_system.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/model/coupled_system.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
 
-/// @file
-/// @brief Elliptic (Poisson) RIGHT-HAND-SIDE assemblers: single-model and N-species.
-///
-/// model.elliptic_rhs(U) covers the SINGLE-block case (SingleModelEllipticRhs). For several species the
-/// right-hand side is a SYSTEM quantity (f = Sum_s q_s n_s) reading several MultiFab. This header isolates
-/// that responsibility from the Coupler. ChargeDensityRhs (N species) REQUIRES one entry per block
-/// (species.size() == n_blocks): a forgotten block does not silently disappear from the right-hand side;
-/// a neutral species is declared explicitly with charge = 0. add_scaled_component (rhs += q * U) is the
-/// accumulation brick. The kernels assume identical layouts between U and rhs.
-
 namespace pops {
 
 namespace detail {
 
-/// NAMED functor (not an POPS_HD lambda) of the single-model RHS: f(i,j,0) = model.elliptic_rhs(U).
-template <class Model>
+template <int Dim, class MemorySpace>
+bool has_exact_field_identity(const MultiFab<Dim, MemorySpace>& source,
+                              const MultiFab<Dim, MemorySpace>& destination) {
+  return source.layout() == destination.layout() &&
+         source.distribution() == destination.distribution() &&
+         source.local_rank() == destination.local_rank() &&
+         source.local_size() == destination.local_size();
+}
+
+template <int Dim, class MemorySpace>
+void require_distinct_scalar_destination(const MultiFab<Dim, MemorySpace>& source,
+                                         const MultiFab<Dim, MemorySpace>& destination,
+                                         const char* operation) {
+  if (!has_exact_field_identity(source, destination) || destination.ncomp() != 1 ||
+      source.shares_storage_with(destination))
+    throw std::invalid_argument(operation);
+}
+
+template <class Model, int Dim, class MemorySpace>
+void require_model_rhs_target(const MultiFab<Dim, MemorySpace>& state,
+                              const MultiFab<Dim, MemorySpace>& rhs, const char* operation) {
+  require_distinct_scalar_destination(state, rhs, operation);
+  if (Model::n_vars < 1 || state.ncomp() < Model::n_vars)
+    throw std::invalid_argument(operation);
+}
+
+template <int Dim, class MemorySpace>
+void require_component_rhs_target(const MultiFab<Dim, MemorySpace>& state, int component,
+                                  const MultiFab<Dim, MemorySpace>& rhs, const char* operation) {
+  require_distinct_scalar_destination(state, rhs, operation);
+  if (component < 0 || component >= state.ncomp())
+    throw std::invalid_argument(operation);
+}
+
+template <int Dim, class Model>
 struct SingleModelEllipticRhsKernel {
-  Model m;
-  ConstArray4 s;
-  Array4 f;
-  POPS_HD void operator()(int i, int j) const {
-    f(i, j, 0) = m.elliptic_rhs(load_state<Model>(s, i, j));
+  Model model;
+  FieldView<const Real, Dim> state;
+  FieldView<Real, Dim> rhs;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    rhs(index) = model.elliptic_rhs(load_state<Model>(state, index));
   }
 };
 
-/// Geometry-independent accumulation of a model's pointwise elliptic source.
-template <class Model>
+template <int Dim, class Model>
 struct AddModelEllipticRhsKernel {
   Model model;
-  ConstArray4 state;
-  Array4 rhs;
+  FieldView<const Real, Dim> state;
+  FieldView<Real, Dim> rhs;
 
-  POPS_HD void operator()(int i, int j) const {
-    rhs(i, j, 0) += model.elliptic_rhs(load_state<Model>(state, i, j));
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    rhs(index) += model.elliptic_rhs(load_state<Model>(state, index));
   }
 };
+
+template <int Dim>
+struct TwoFieldChargeDensityRhsKernel {
+  FieldView<Real, Dim> rhs;
+  FieldView<const Real, Dim> first;
+  FieldView<const Real, Dim> second;
+  Real first_scale;
+  Real second_scale;
+  int first_component;
+  int second_component;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    rhs(index) = first_scale * first(index, first_component) +
+                 second_scale * second(index, second_component);
+  }
+};
+
+template <int Dim>
+struct AddScaledComponentKernel {
+  FieldView<Real, Dim> rhs;
+  FieldView<const Real, Dim> state;
+  Real scale;
+  int component;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    rhs(index) += scale * state(index, component);
+  }
+};
+
+template <int Dim, class MemorySpace>
+void add_scaled_component_unchecked(const MultiFab<Dim, MemorySpace>& state, Real scale,
+                                    int component, MultiFab<Dim, MemorySpace>& rhs) {
+  for (std::size_t local = 0; local < rhs.local_size(); ++local)
+    for_each_cell(rhs.box(local),
+                  AddScaledComponentKernel<Dim>{rhs.fab(local).view(), state.fab(local).view(),
+                                                scale, component});
+}
 
 }  // namespace detail
 
-/// SINGLE-model RHS assembler: rhs(.,.,0) = model.elliptic_rhs(U) over the valid cells.
-/// @tparam Model PhysicalModel exposing elliptic_rhs(State).
-template <class Model>
+/// Assemble one model's scalar elliptic source over one immutable field specialization.
+template <int Dim, class Model,
+          class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct SingleModelEllipticRhs {
   Model model;
 
-  /// rhs <- elliptic_rhs(state) cell by cell (identical layouts between state and rhs).
-  void operator()(const MultiFab& state, MultiFab& rhs) const {
-    for (int li = 0; li < state.local_size(); ++li) {
-      const ConstArray4 s = state.fab(li).const_array();
-      Array4 f = rhs.fab(li).array();
-      const Box2D v = rhs.box(li);
-      const Model m = model;
-      for_each_cell(v, detail::SingleModelEllipticRhsKernel<Model>{m, s, f});
-    }
+  void operator()(const MultiFab<Dim, MemorySpace>& state, MultiFab<Dim, MemorySpace>& rhs) const {
+    detail::require_model_rhs_target<Model>(
+        state, rhs,
+        "SingleModelEllipticRhs requires distinct fields with exact layout/distribution identity, "
+        "one RHS component, and the model's complete state width");
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local), detail::SingleModelEllipticRhsKernel<Dim, Model>{
+                                          model, state.fab(local).view(), rhs.fab(local).view()});
   }
 };
 
-/// Accumulate one arbitrary model contribution into an exactly co-distributed scalar RHS.
-/// Geometry and coordinate metrics belong to the elliptic operator, not to this pointwise source.
-template <class Model>
-inline void add_model_elliptic_rhs(const Model& model, const MultiFab& state, MultiFab& rhs) {
-  if (state.box_array().boxes() != rhs.box_array().boxes() ||
-      state.dmap().ranks() != rhs.dmap().ranks() || rhs.ncomp() != 1)
-    throw std::invalid_argument(
-        "add_model_elliptic_rhs requires an exactly co-distributed scalar destination");
-  for (int local = 0; local < rhs.local_size(); ++local)
-    for_each_cell(rhs.box(local),
-                  detail::AddModelEllipticRhsKernel<Model>{model, state.fab(local).const_array(),
-                                                           rhs.fab(local).array()});
+/// Accumulate one model contribution into an exactly co-distributed scalar RHS.
+template <int Dim, class Model, class MemorySpace>
+void add_model_elliptic_rhs(const Model& model, const MultiFab<Dim, MemorySpace>& state,
+                            MultiFab<Dim, MemorySpace>& rhs) {
+  detail::require_model_rhs_target<Model>(
+      state, rhs,
+      "add_model_elliptic_rhs requires distinct fields with exact layout/distribution identity, "
+      "one RHS component, and the model's complete state width");
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), detail::AddModelEllipticRhsKernel<Dim, Model>{
+                                        model, state.fab(local).view(), rhs.fab(local).view()});
 }
 
-namespace detail {
-
-/// NAMED functor (not an POPS_HD lambda) of the two-field RHS: r(i,j,0) = a0 u0 + a1 u1.
-struct TwoFieldChargeDensityRhsKernel {
-  Array4 r;
-  ConstArray4 u0, u1;
-  Real a0, a1;
-  int c0, c1;
-  POPS_HD void operator()(int i, int j) const {
-    r(i, j, 0) = a0 * u0(i, j, c0) + a1 * u1(i, j, c1);
-  }
-};
-
-}  // namespace detail
-
-/// Two-field RHS: rhs = q0 * U0(.,.,comp0) + q1 * U1(.,.,comp1) (two-species charge density).
+/// Assemble q0 * U0(comp0) + q1 * U1(comp1) over one exact ND field identity.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct TwoFieldChargeDensityRhs {
   Real q0 = Real(1);
   Real q1 = Real(-1);
   int comp0 = 0;
   int comp1 = 0;
 
-  /// rhs <- q0 U0 + q1 U1 over the valid cells (identical layouts).
-  void operator()(const MultiFab& U0, const MultiFab& U1, MultiFab& rhs) const {
-    for (int li = 0; li < rhs.local_size(); ++li) {
-      const ConstArray4 u0 = U0.fab(li).const_array();
-      const ConstArray4 u1 = U1.fab(li).const_array();
-      Array4 r = rhs.fab(li).array();
-      const Box2D b = rhs.box(li);
-      const Real a0 = q0, a1 = q1;
-      const int c0 = comp0, c1 = comp1;
-      for_each_cell(b, detail::TwoFieldChargeDensityRhsKernel{r, u0, u1, a0, a1, c0, c1});
-    }
+  void operator()(const MultiFab<Dim, MemorySpace>& first, const MultiFab<Dim, MemorySpace>& second,
+                  MultiFab<Dim, MemorySpace>& rhs) const {
+    constexpr const char* operation =
+        "TwoFieldChargeDensityRhs requires distinct fields with exact layout/distribution "
+        "identity, valid source components, and one RHS component";
+    detail::require_component_rhs_target(first, comp0, rhs, operation);
+    detail::require_component_rhs_target(second, comp1, rhs, operation);
+    for (std::size_t local = 0; local < rhs.local_size(); ++local)
+      for_each_cell(rhs.box(local), detail::TwoFieldChargeDensityRhsKernel<Dim>{
+                                        rhs.fab(local).view(), first.fab(local).view(),
+                                        second.fab(local).view(), q0, q1, comp0, comp1});
   }
 };
 
-/// Two-block RHS: same computation as TwoFieldChargeDensityRhs but reads blocks 0 and 1 of a
-/// CoupledSystem (q0 n0 + q1 n1).
+/// Two-block system adapter over the same ranked two-field assembler.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct TwoBlockChargeDensityRhs {
   Real q0 = Real(1);
   Real q1 = Real(-1);
   int comp0 = 0;
   int comp1 = 0;
 
-  /// rhs <- q0 n_0 + q1 n_1 from blocks 0 and 1 of the system.
   template <CoupledSystemLike System>
-  void operator()(const System& system, MultiFab& rhs) const {
-    TwoFieldChargeDensityRhs two;
-    two.q0 = q0;
-    two.q1 = q1;
-    two.comp0 = comp0;
-    two.comp1 = comp1;
-    two(system.template block<0>().U(), system.template block<1>().U(), rhs);
+  void operator()(const System& system, MultiFab<Dim, MemorySpace>& rhs) const {
+    static_assert(System::n_blocks >= 2,
+                  "TwoBlockChargeDensityRhs requires at least two system blocks");
+    TwoFieldChargeDensityRhs<Dim, MemorySpace>{q0, q1, comp0, comp1}(
+        system.template block<0>().U(), system.template block<1>().U(), rhs);
   }
 };
 
-/// Charge (with sign) and density component of a species for the elliptic RHS assembly. Default
-/// charge = 0: a neutral species (or a forgotten block) does NOT contribute to Poisson.
-/// charge includes the sign (q_e < 0, q_i > 0); comp locates the density component n_s in the
-/// block MultiFab (0 for a scalar, the rho index for a conservative Euler state).
+/// Charge (including sign) and density component of one species.
 struct SpeciesCharge {
   Real charge = Real(0);
   int comp = 0;
 };
 
-namespace detail {
-
-/// NAMED functor (not an POPS_HD lambda) of the accumulation: r(i,j,0) += a * u(i,j,c).
-struct AddScaledComponentKernel {
-  Array4 r;
-  ConstArray4 u;
-  Real a;
-  int c;
-  POPS_HD void operator()(int i, int j) const { r(i, j, 0) += a * u(i, j, c); }
-};
-
-}  // namespace detail
-
-/// rhs(.,.,0) += q * U(.,.,comp) over the valid cells. Accumulation brick of the N-species elliptic
-/// RHS (identical layouts between U and rhs).
-inline void add_scaled_component(const MultiFab& U, Real q, int comp, MultiFab& rhs) {
-  for (int li = 0; li < rhs.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    Array4 r = rhs.fab(li).array();
-    const Box2D b = rhs.box(li);
-    const Real a = q;
-    const int c = comp;
-    for_each_cell(b, detail::AddScaledComponentKernel{r, u, a, c});
-  }
+/// Accumulate q * U(comp) after proving exact ND field identity.
+template <int Dim, class MemorySpace>
+void add_scaled_component(const MultiFab<Dim, MemorySpace>& state, Real scale, int component,
+                          MultiFab<Dim, MemorySpace>& rhs) {
+  detail::require_component_rhs_target(
+      state, component, rhs,
+      "add_scaled_component requires distinct fields with exact layout/distribution identity, "
+      "a valid source component, and one RHS component");
+  detail::add_scaled_component_unchecked(state, scale, component, rhs);
 }
 
-/// N-species Poisson RHS: f = Sum_s q_s n_s over ALL blocks of the system. species[k] describes
-/// block k in the CoupledSystem order; REQUIRES species.size() == n_blocks (otherwise an exception).
-///
-/// Two-fluid example "rhs = n_i - n_e":
-///   ChargeDensityRhs{{ {.charge=-1, .comp=0},   // block 0: electrons
-///                      {.charge=+1, .comp=0} }} // block 1: ions
+/// Assemble Sum_s q_s U_s(component_s) across every block of one ranked system.
+/// All sources are preflighted before the destination is cleared, so a late mismatch cannot publish
+/// a zeroed or partially accumulated RHS.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct ChargeDensityRhs {
   std::vector<SpeciesCharge> species;
 
-  /// rhs <- 0 then += q_s n_s for each block. Throws if species.size() != n_blocks.
   template <CoupledSystemLike System>
-  void operator()(const System& system, MultiFab& rhs) const {
+  void operator()(const System& system, MultiFab<Dim, MemorySpace>& rhs) const {
     if (species.size() != System::n_blocks)
-      throw std::runtime_error(
-          "ChargeDensityRhs: exactly one SpeciesCharge per block is required "
-          "(a neutral species is declared with charge = 0)");
-    rhs.set_val(Real(0));
-    std::size_t k = 0;
+      throw std::invalid_argument(
+          "ChargeDensityRhs requires exactly one SpeciesCharge per block; neutral species use "
+          "charge zero");
+
+    constexpr const char* operation =
+        "ChargeDensityRhs requires distinct fields with exact layout/distribution identity, valid "
+        "source components, and one RHS component";
+    if (rhs.ncomp() != 1)
+      throw std::invalid_argument(operation);
+
+    std::vector<const MultiFab<Dim, MemorySpace>*> sources;
+    sources.reserve(species.size());
     system.for_each_block([&](const auto& block) {
-      const SpeciesCharge sc = species[k++];
-      add_scaled_component(block.U(), sc.charge, sc.comp, rhs);
+      if (sources.size() >= species.size())
+        throw std::invalid_argument(operation);
+      const auto& state = block.U();
+      detail::require_component_rhs_target(state, species[sources.size()].comp, rhs, operation);
+      sources.push_back(&state);
     });
+    if (sources.size() != species.size())
+      throw std::invalid_argument(operation);
+
+    rhs.set_val(Real(0));
+    for (std::size_t index = 0; index < sources.size(); ++index)
+      detail::add_scaled_component_unchecked(*sources[index], species[index].charge,
+                                             species[index].comp, rhs);
   }
 };
 

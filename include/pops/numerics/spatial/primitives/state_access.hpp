@@ -6,11 +6,12 @@
 ///     F = -nu grad U is added to the hyperbolic flux when present (face_flux.hpp,
 ///     cartesian_operator.hpp).
 ///   - SourceFreeModel<M>: adapter that zeroes the source (explicit IMEX half-step).
-///   - load_state<Model>: reads the conservative state from an Array4 (POPS_HD).
-///   - load_aux<NComp>: reads the auxiliary (phi, grad, extra fields) (POPS_HD).
+///   - load_state<Model>: reads the conservative state from a ranked FieldView (POPS_HD).
+///   - load_aux<NComp>: reads the auxiliary (phi, grad, extra fields) from the same authority.
 ///
 /// This module carries no grid loop: every entry is POINTWISE (POPS_HD) or a compile-time
-/// model adapter. It is the bottom of the spatial/ dependency DAG (depends only on core/).
+/// model adapter. It is the bottom of the spatial/ dependency DAG and depends only on the core
+/// contracts plus the non-owning ranked field descriptor.
 
 #pragma once
 
@@ -18,7 +19,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableSet: SourceFreeModel::conservative_vars forwarding
-#include <pops/mesh/storage/fab2d.hpp>  // ConstArray4: load_state / load_aux read path
+#include <pops/mesh/storage/field_view.hpp>
 
 #include <concepts>
 
@@ -117,39 +118,40 @@ struct SourceFreeModel {
   }
 };
 
-/// load_state<Model>: reads Model::n_vars scalars at (i,j) from an Array4.
+/// Read Model::n_vars conservative components at one compile-time-ranked cell.
 ///
 /// Returns a StateVec<n_vars> initialized from components 0..n_vars-1 of the channel.
 /// POPS_HD, zero allocation. Does NOT read components beyond n_vars.
-template <class Model>
-POPS_HD inline typename Model::State load_state(const ConstArray4& a, int i, int j) {
+template <class Model, int Dim>
+POPS_HD inline typename Model::State load_state(const FieldView<const Real, Dim>& field,
+                                                const Index<Dim>& index) {
   typename Model::State u;
-  for (int c = 0; c < Model::n_vars; ++c)
-    u[c] = a(i, j, c);
+  for (int component = 0; component < Model::n_vars; ++component)
+    u[component] = field(index, component);
   return u;
 }
 
-/// load_aux<NComp>: reads NComp components of the auxiliary from an Array4 at (i,j).
+/// Read NComp auxiliary components at one compile-time-ranked cell.
 ///
-/// The first 3 components (phi, grad_x, grad_y) are the base contract.
+/// The first 3 components (phi and the historical x/y gradient slots) are the base contract.
 /// Components >= 3 (B_z, T_e...) are read only if NComp > their canonical index
 /// (if constexpr guard -> zero codegen for NComp = kAuxBaseComps = 3: bit-identical).
 /// The extra fields are governed by POPS_AUX_FIELDS (state.hpp): adding a field =>
 /// 1 line in POPS_AUX_FIELDS, not in this path. POPS_HD.
 //
 // The extra fields are loaded from the SINGLE SOURCE POPS_AUX_FIELDS (state.hpp): each
-// X(name, idx) generates `if constexpr (NComp > idx) x.name = a(i,j,idx);`, exactly the
+// X(name, idx) generates `if constexpr (NComp > idx) x.name = field(index,idx);`, exactly the
 // sequence written by hand before. Adding an extra field => 1 line in POPS_AUX_FIELDS is
 // enough for this device read path to cover it (and the host marshaling, generated from the
 // same table). NComp = kAuxBaseComps: all guards are false -> bit-identical.
-template <int NComp = kAuxBaseComps>
-POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
+template <int NComp = kAuxBaseComps, int Dim>
+POPS_HD inline Aux load_aux(const FieldView<const Real, Dim>& field, const Index<Dim>& index) {
   static_assert(NComp >= kAuxBaseComps, "provider pack is missing required base aux fields");
   static_assert(NComp <= kAuxMaxComps, "provider pack exceeds capacity; never clamp it");
-  Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
+  Aux x{field(index, 0), field(index, 1), field(index, 2)};
 #define POPS_AUX_LOAD(name, idx) \
   if constexpr (NComp > (idx))   \
-    x.name = a(i, j, idx);
+    x.name = field(index, idx);
   POPS_AUX_FIELDS(POPS_AUX_LOAD)
 #undef POPS_AUX_LOAD
   // NAMED aux fields (ADC-70 phase 1): components from kAuxNamedBase (= 5). Loaded
@@ -160,7 +162,7 @@ POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   if constexpr (NComp > kAuxNamedBase) {
     constexpr int n_extra = NComp - kAuxNamedBase;
     for (int k = 0; k < n_extra; ++k)
-      x.extra[k] = a(i, j, kAuxNamedBase + k);
+      x.extra[k] = field(index, kAuxNamedBase + k);
   }
   return x;
 }

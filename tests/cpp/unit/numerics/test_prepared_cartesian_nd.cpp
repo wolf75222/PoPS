@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
+#include <pops/numerics/spatial/primitives/state_access.hpp>
 
 #include <algorithm>
 #include <array>
@@ -136,6 +138,83 @@ void check_constant_face_axis(const nd::FaceField<Dim>& fluxes,
   if constexpr (Axis + 1 < Dim)
     check_constant_face_axis<Axis + 1>(fluxes, expected);
 }
+
+template <int Dim>
+MultiFab<Dim> one_patch_field(const Box<Dim>& box, int ncomp, bool partitioned = false) {
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{box});
+  const mesh::RankSpace<Dim> ranks(Index<Dim>{}, uniform_extent<Dim>(1));
+  const auto distribution = partitioned ? mesh::Distribution<Dim>::partitioned(
+                                              layout, ranks, std::vector<Index<Dim>>{Index<Dim>{}})
+                                        : mesh::Distribution<Dim>::replicated(layout, ranks);
+  return MultiFab<Dim>(layout, distribution, Index<Dim>{}, ncomp, Extent<Dim>{});
+}
+
+struct TwoComponentEllipticModel {
+  using State = StateVec<2>;
+  static constexpr int n_vars = 2;
+
+  POPS_HD Real elliptic_rhs(const State& state) const { return state[0] + Real(2) * state[1]; }
+};
+
+template <int Dim>
+void check_ranked_state_access() {
+  const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(2));
+  Fab<Dim> field(box, kAuxNamedBase);
+  fill_periodic(field, [](const Index<Dim>& index, int component) {
+    Real value = Real(10 * component);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += Real(index[axis]);
+    return value;
+  });
+  const Index<Dim> sample = box.hi;
+  const auto view = static_cast<const Fab<Dim>&>(field).view();
+  const auto state = load_state<TwoComponentEllipticModel>(view, sample);
+  Real coordinate_sum = Real(0);
+  for (int axis = 0; axis < Dim; ++axis)
+    coordinate_sum += Real(sample[axis]);
+  EXPECT_EQ(state[0], coordinate_sum);
+  EXPECT_EQ(state[1], Real(10) + coordinate_sum);
+
+  const Aux auxiliary = load_aux<kAuxNamedBase>(view, sample);
+  EXPECT_EQ(auxiliary.phi, coordinate_sum);
+  EXPECT_EQ(auxiliary.grad_x, Real(10) + coordinate_sum);
+  EXPECT_EQ(auxiliary.grad_y, Real(20) + coordinate_sum);
+  EXPECT_EQ(auxiliary.B_z, Real(30) + coordinate_sum);
+  EXPECT_EQ(auxiliary.T_e, Real(40) + coordinate_sum);
+}
+
+template <int Dim>
+struct RankedFieldBlock {
+  MultiFab<Dim>* state = nullptr;
+
+  MultiFab<Dim>& U() { return *state; }
+  const MultiFab<Dim>& U() const { return *state; }
+};
+
+template <int Dim>
+struct ThreeFieldSystem {
+  static constexpr std::size_t n_blocks = 3;
+
+  RankedFieldBlock<Dim> first;
+  RankedFieldBlock<Dim> second;
+  RankedFieldBlock<Dim> third;
+
+  template <class Function>
+  void for_each_block(Function&& function) {
+    function(first);
+    function(second);
+    function(third);
+  }
+
+  template <class Function>
+  void for_each_block(Function&& function) const {
+    function(first);
+    function(second);
+    function(third);
+  }
+};
+
+static_assert(CoupledSystemLike<ThreeFieldSystem<3>>);
 
 }  // namespace
 
@@ -309,4 +388,83 @@ TEST(test_prepared_cartesian_nd, multi_patch_failure_is_transactional_before_fir
   for (std::size_t local = 0; local < residual.local_size(); ++local)
     for (const Real value : valid_values(residual.fab(local)))
       EXPECT_EQ(value, Real(7));
+}
+
+TEST(test_prepared_cartesian_nd, state_and_aux_access_share_one_ranked_pointwise_authority) {
+  check_ranked_state_access<1>();
+  check_ranked_state_access<2>();
+  check_ranked_state_access<3>();
+}
+
+TEST(test_prepared_cartesian_nd, single_model_rhs_is_ranked_and_requires_exact_state_identity) {
+  const Box<1> box = Box<1>::from_extents(Extent<1>{7});
+  auto state = one_patch_field(box, TwoComponentEllipticModel::n_vars + 1);
+  auto rhs = one_patch_field(box, 1);
+  state.set_val(Real(2));
+  rhs.set_val(Real(9));
+
+  SingleModelEllipticRhs<1, TwoComponentEllipticModel>{TwoComponentEllipticModel{}}(state, rhs);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(6));
+
+  rhs.set_val(Real(1));
+  add_model_elliptic_rhs(TwoComponentEllipticModel{}, state, rhs);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(7));
+
+  auto wrong_width = one_patch_field(box, 1);
+  rhs.set_val(Real(11));
+  EXPECT_THROW((SingleModelEllipticRhs<1, TwoComponentEllipticModel>{TwoComponentEllipticModel{}}(
+                   wrong_width, rhs)),
+               std::invalid_argument);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(11));
+}
+
+TEST(test_prepared_cartesian_nd,
+     two_field_rhs_rejects_distribution_drift_before_publishing_any_cell) {
+  const Box<2> box = Box<2>::from_extents(Extent<2>{4, 3});
+  auto first = one_patch_field(box, 2);
+  auto second = one_patch_field(box, 2);
+  auto rhs = one_patch_field(box, 1);
+  first.set_val(Real(2));
+  second.set_val(Real(5));
+  rhs.set_val(Real(9));
+
+  const TwoFieldChargeDensityRhs<2> assemble{Real(-1), Real(0.5), 0, 1};
+  assemble(first, second, rhs);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(0.5));
+
+  auto wrong_distribution = one_patch_field(box, 2, true);
+  rhs.set_val(Real(13));
+  EXPECT_THROW(assemble(first, wrong_distribution, rhs), std::invalid_argument);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(13));
+}
+
+TEST(test_prepared_cartesian_nd,
+     n_species_rhs_preflights_every_ranked_source_before_clearing_destination) {
+  const Box<3> box = Box<3>::from_extents(Extent<3>{3, 2, 2});
+  auto first = one_patch_field(box, 1);
+  auto second = one_patch_field(box, 1);
+  auto third = one_patch_field(box, 1);
+  auto rhs = one_patch_field(box, 1);
+  first.set_val(Real(1));
+  second.set_val(Real(2));
+  third.set_val(Real(4));
+
+  const ChargeDensityRhs<3> assemble{{{Real(1), 0}, {Real(-2), 0}, {Real(0.5), 0}}};
+  const ThreeFieldSystem<3> valid{{&first}, {&second}, {&third}};
+  assemble(valid, rhs);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(-1));
+
+  const Box<3> smaller = Box<3>::from_extents(Extent<3>{2, 2, 2});
+  auto wrong_layout = one_patch_field(smaller, 1);
+  const ThreeFieldSystem<3> invalid{{&first}, {&second}, {&wrong_layout}};
+  rhs.set_val(Real(17));
+  EXPECT_THROW(assemble(invalid, rhs), std::invalid_argument);
+  for (const Real value : valid_values(rhs.fab(0)))
+    EXPECT_EQ(value, Real(17));
 }
