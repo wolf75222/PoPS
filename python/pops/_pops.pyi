@@ -208,10 +208,13 @@ class AmrSystemConfig:
     shape: tuple[int, ...]
     lower: tuple[float, ...]
     upper: tuple[float, ...]
+    boxes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+    coordinate_system: str
     regrid_every: int
     level_count: int
-    regrid_grow: int
-    regrid_margin: int
+    transition_ratios: tuple[tuple[int, ...], ...]
+    transition_buffers: tuple[tuple[int, ...], ...]
+    transition_lookaheads: tuple[tuple[int, ...], ...]
     explicit_bootstrap: bool
     periodicity: tuple[bool, ...]
     distribute_coarse: bool

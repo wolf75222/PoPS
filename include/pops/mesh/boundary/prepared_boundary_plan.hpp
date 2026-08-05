@@ -13,6 +13,10 @@
 /// authenticated at installation and prepared into one private state per ExecutionLane session,
 /// then called as typed bulk tables at the scheduler's exact BoundaryEvaluationPoint. There is no
 /// Python callback or runtime component selection.
+///
+/// @note This compatibility provider remains capability-qualified to `supported_dimensions=(2,)`.
+/// The ranked System/AmrSystem core retains PreparedHyperbolicBoundary<Dim> directly and never
+/// routes through this session/component authority.
 
 #pragma once
 
@@ -144,7 +148,7 @@ inline std::string canonical_prepared_boundary_plan_request(
     const std::vector<std::string>& component_roles,
     const std::vector<int>& omitted_interface_faces, std::string_view state_identity,
     const PreparedBoundaryReadDependencies& read_dependencies,
-    const std::vector<PeriodicIdentification2D>& periodic_identifications,
+    const std::vector<PeriodicIdentification<2>>& periodic_identifications,
     const std::vector<std::string>& face_representations,
     const std::vector<std::string>& face_converter_identities,
     const std::vector<std::vector<std::string>>& face_analytic_opcodes,
@@ -319,7 +323,7 @@ class PreparedBoundaryPlan {
                        PreparedHyperbolicBoundary<2> hyperbolic_boundary,
                        std::vector<int> omitted_face_ordinals = {}, std::string state_identity = {},
                        PreparedBoundaryReadDependencies read_dependencies = {},
-                       std::vector<PeriodicIdentification2D> periodic_identifications = {})
+                       std::vector<PeriodicIdentification<2>> periodic_identifications = {})
       : identity_(std::move(identity)),
         required_depth_(required_depth),
         hyperbolic_boundary_(std::move(hyperbolic_boundary)),
@@ -392,7 +396,7 @@ class PreparedBoundaryPlan {
     characteristic_no_inflow_fill_ = std::move(fill);
     ++component_revision_;
   }
-  const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
+  const std::vector<PeriodicIdentification<2>>& periodic_identifications() const noexcept {
     return periodic_identifications_;
   }
   bool has_mapped_periodicity() const noexcept { return has_mapped_periodicity_(); }
@@ -804,7 +808,7 @@ class PreparedBoundaryPlan {
   std::array<bool, 4> omitted_faces_{{false, false, false, false}};
   std::string state_identity_;
   PreparedBoundaryReadDependencies read_dependencies_;
-  std::vector<PeriodicIdentification2D> periodic_identifications_;
+  std::vector<PeriodicIdentification<2>> periodic_identifications_;
   std::vector<std::shared_ptr<PreparedGhostBoundaryComponent>> ghost_components_;
   std::vector<std::shared_ptr<PreparedBoundaryFluxComponent>> flux_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryResidualComponent>> residual_components_;
@@ -897,7 +901,7 @@ class PreparedBoundaryPlan {
 
   bool has_mapped_periodicity_() const noexcept {
     return std::any_of(periodic_identifications_.begin(), periodic_identifications_.end(),
-                       [](const PeriodicIdentification2D& identification) {
+                       [](const PeriodicIdentification<2>& identification) {
                          return !identification.is_translation_identity();
                        });
   }

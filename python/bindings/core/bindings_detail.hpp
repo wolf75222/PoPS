@@ -13,6 +13,7 @@
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>  // Kokkos_Core under POPS_HAS_KOKKOS (kokkos_is_initialized)
 #include <pops/diagnostics/fallback_diagnostics.hpp>
+#include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
 #include <pops/runtime/config/runtime_params.hpp>          // kMaxRuntimeParams (ADC-618 hard_limit)
@@ -87,6 +88,42 @@ Extent<Dim> ranked_extent_from_python(const py::handle& value, const char* owner
 }
 
 template <int Dim>
+py::tuple ranked_extents_to_python(const std::vector<Extent<Dim>>& values) {
+  py::tuple result(values.size());
+  for (std::size_t index = 0; index < values.size(); ++index)
+    result[index] = ranked_extent_to_python(values[index]);
+  return result;
+}
+
+template <int Dim>
+std::vector<Extent<Dim>> ranked_extents_from_python(const py::handle& value, const char* owner,
+                                                    std::int64_t minimum) {
+  if (!PyTuple_CheckExact(value.ptr()) && !PyList_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an ordered sequence of ranked tuples");
+  const py::sequence rows = py::reinterpret_borrow<py::sequence>(value);
+  std::vector<Extent<Dim>> result;
+  result.reserve(rows.size());
+  for (std::size_t row_index = 0; row_index < static_cast<std::size_t>(rows.size()); ++row_index) {
+    const py::handle row = rows[static_cast<py::ssize_t>(row_index)];
+    if (!PyTuple_CheckExact(row.ptr()) || py::len(row) != Dim)
+      throw py::type_error(std::string(owner) + " rows must be exact native-rank tuples");
+    const py::tuple components = py::reinterpret_borrow<py::tuple>(row);
+    Extent<Dim> extent{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!PyLong_CheckExact(components[axis].ptr()) || PyBool_Check(components[axis].ptr()))
+        throw py::type_error(std::string(owner) + " entries must be exact integers");
+      const std::int64_t component = py::cast<std::int64_t>(components[axis]);
+      if (component < minimum)
+        throw py::value_error(std::string(owner) +
+                              " entries must be >= " + std::to_string(minimum));
+      extent[axis] = component;
+    }
+    result.push_back(extent);
+  }
+  return result;
+}
+
+template <int Dim>
 py::tuple ranked_real_vector_to_python(const RealVector<Dim>& value) {
   py::tuple result(Dim);
   for (int axis = 0; axis < Dim; ++axis)
@@ -110,6 +147,32 @@ RealVector<Dim> ranked_real_vector_from_python(const py::handle& value, const ch
       throw py::value_error(std::string(owner) + " entries must be finite");
   }
   return result;
+}
+
+/// Validate the retired mapped-periodicity compatibility payload at the native boundary. Ordinary
+/// axis translations are carried exclusively by the 2*Dim face table. A non-empty table therefore
+/// proves that the request needs a separately capability-qualified mapped-topology provider.
+template <int Dim>
+void reject_unqualified_periodic_identifications(const std::vector<std::vector<int>>& rows,
+                                                 const char* owner) {
+  for (const auto& row : rows) {
+    if (row.size() != static_cast<std::size_t>(2 + 2 * Dim))
+      throw py::value_error(std::string(owner) +
+                            " periodic identification row must contain 2+2*Dim integers");
+    PeriodicIdentification<Dim> identification;
+    identification.source_face = row[0];
+    identification.target_face = row[1];
+    for (int axis = 0; axis < Dim; ++axis) {
+      identification.permutation[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + axis)];
+      identification.signs[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + Dim + axis)];
+    }
+    identification.validate();
+  }
+  if (!rows.empty())
+    throw py::value_error(std::string(owner) +
+                          " requires a capability-qualified mapped-topology provider");
 }
 
 template <int Dim>

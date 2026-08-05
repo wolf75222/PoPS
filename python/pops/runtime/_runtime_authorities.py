@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
-def _boundary_face_ordinal(value: Any, dimension: int, *, where: str) -> int:
+def _boundary_face_ordinal(value: Any, *, dimension: int, where: str) -> int:
     if not isinstance(value, dict):
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
     orientation = value.get("orientation")
@@ -31,16 +31,17 @@ def _boundary_face_ordinal(value: Any, dimension: int, *, where: str) -> int:
     return 2 * axis + (0 if side == "lower" else 1)
 
 
-def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -> list[list[int]]:
+def _periodic_identification_rows(
+    data: dict[str, Any], face_types: list[str], *, dimension: int,
+) -> list[list[int]]:
     raw = data.get("periodic_identifications", [])
     if not isinstance(raw, list):
         raise TypeError("prepared periodic_identifications must be a list")
     rows = []
     claimed = set()
     mapped = 0
-    if len(face_types) not in (2, 4, 6):
-        raise ValueError("prepared face table must contain exactly 2*Dim rows for Dim in {1,2,3}")
-    dimension = len(face_types) // 2
+    if dimension not in (1, 2, 3) or len(face_types) != 2 * dimension:
+        raise ValueError("prepared face table must contain exactly 2*Dim rows")
     required = {
         "source", "target", "source_face", "target_face", "permutation", "signs",
     }
@@ -58,10 +59,10 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
                 "prepared periodic endpoints must be distinct rank-%d face ordinals" % dimension
             )
         if _boundary_face_ordinal(
-                row["source"], dimension,
+                row["source"], dimension=dimension,
                 where="periodic[%d].source" % index) != source_face \
                 or _boundary_face_ordinal(
-                    row["target"], dimension,
+                    row["target"], dimension=dimension,
                     where="periodic[%d].target" % index) != target_face:
             raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
         permutation = row["permutation"]
@@ -69,7 +70,8 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         if not isinstance(permutation, list) or any(
                 isinstance(value, bool) or not isinstance(value, int)
                 for value in permutation) or sorted(permutation) != list(range(dimension)):
-            raise ValueError("prepared periodic permutation must cover every ranked axis exactly")
+            raise ValueError(
+                "prepared periodic permutation must be the exact ranked permutation")
         if not isinstance(signs, list) or len(signs) != dimension \
                 or any(isinstance(value, bool) or not isinstance(value, int)
                        or value not in (-1, 1) for value in signs):
@@ -87,9 +89,14 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         if claimed & endpoints:
             raise ValueError("one prepared face belongs to multiple periodic identifications")
         claimed.update(endpoints)
-        if permutation != list(range(dimension)) or signs != [1] * dimension:
+        is_mapped = permutation != list(range(dimension)) or signs != [1] * dimension
+        if is_mapped:
             mapped += 1
-        rows.append([source_face, target_face, *map(int, permutation), *map(int, signs)])
+            rows.append([
+                source_face, target_face,
+                *(int(value) for value in permutation),
+                *(int(value) for value in signs),
+            ])
     periodic_faces = {
         ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
     }
@@ -104,7 +111,11 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
 
 
 def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
-    compiled_by_name = {row.name: row for row in install_plan.artifact.blocks}
+    artifact = install_plan.artifact
+    dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+        raise TypeError("runtime boundary installation requires one exact resolved dimension")
+    compiled_by_name = {row.name: row for row in artifact.blocks}
     reports = {}
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_boundary_plan", None)
@@ -160,9 +171,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise TypeError("compiled block lacks an authenticated positive n_vars")
         faces = first.get("faces")
-        if not isinstance(faces, list) or len(faces) != 4 \
-                or [row.get("ordinal") for row in faces] != [0, 1, 2, 3]:
-            raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
+        expected_faces = list(range(2 * dimension))
+        if not isinstance(faces, list) or len(faces) != 2 * dimension \
+                or [row.get("ordinal") for row in faces] != expected_faces:
+            raise ValueError(
+                "prepared boundary plan must contain canonical axis-major rows for dimension %d"
+                % dimension)
         types = [row.get("type") for row in faces]
         if any(value not in {
                 "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external",
@@ -267,7 +281,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         required_depth = first.get("required_depth")
         if isinstance(required_depth, bool) or not isinstance(required_depth, int):
             raise TypeError("prepared boundary required_depth must be an exact integer")
-        periodic_identifications = _periodic_identification_rows(first, types)
+        periodic_identifications = _periodic_identification_rows(
+            first, types, dimension=dimension)
         base_arguments = (
             block.name,
             str(first.get("identity")),

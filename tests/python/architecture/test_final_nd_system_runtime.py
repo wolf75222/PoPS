@@ -12,11 +12,15 @@ SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 AMR_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 SPATIAL_DOMAIN = ROOT / "include/pops/runtime/config/spatial_domain.hpp"
 SYSTEM_DOMAIN = ROOT / "include/pops/runtime/system/system_domain.hpp"
+BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 LAYOUT_TRANSFER = ROOT / "src/runtime/system/system_layout_transfer.cpp"
 BINDING_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 CORE_BINDING = ROOT / "python/bindings/core/init/init_core.cpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
+PERIODICITY = ROOT / "include/pops/mesh/boundary/periodicity.hpp"
+LEGACY_BOUNDARY_PLAN = ROOT / "include/pops/mesh/boundary/prepared_boundary_plan.hpp"
+RUNTIME_AUTHORITIES = ROOT / "python/pops/runtime/_runtime_authorities.py"
 
 
 def _read(path: Path) -> str:
@@ -83,6 +87,7 @@ def test_generic_core_has_no_parallel_2d_mesh_authority() -> None:
     paths = (
         SPATIAL_DOMAIN,
         SYSTEM_DOMAIN,
+        BLOCK_STORE,
         LAYOUT_TRANSFER,
         BINDING_DETAIL,
         CORE_BINDING,
@@ -109,6 +114,58 @@ def test_generic_core_has_no_parallel_2d_mesh_authority() -> None:
     assert not violations, "2D authority leaked back into the ranked core:\n" + "\n".join(
         violations
     )
+
+
+def test_block_store_retains_only_the_ranked_hyperbolic_boundary() -> None:
+    source = _read(BLOCK_STORE)
+    facade = _read(SYSTEM_HEADER)
+    amr_facade = _read(AMR_HEADER)
+    assert "template <int Dim>" in source
+    assert "PreparedHyperbolicBoundary<Dim>" in source
+    assert "std::shared_ptr<const boundary_type> boundary" in source
+    assert "install_hyperbolic_boundary" in facade
+    for legacy in ("PreparedBoundaryPlan", "PreparedGridBoundarySession"):
+        assert legacy not in source
+        assert legacy not in facade
+        assert legacy not in amr_facade
+    assert "interface_flux_scheduler.hpp" not in source
+
+
+def test_periodicity_rows_are_ranked_and_never_restore_a_2d_core_authority() -> None:
+    sources = {
+        path: _read(path)
+        for path in (
+            PERIODICITY,
+            LEGACY_BOUNDARY_PLAN,
+            BINDING_DETAIL,
+            SYSTEM_BINDING,
+            AMR_BINDING,
+            RUNTIME_AUTHORITIES,
+        )
+    }
+    assert "template <int Dim>\nstruct PeriodicIdentification" in sources[PERIODICITY]
+    assert "2 + 2 * Dim" in sources[PERIODICITY]
+    assert "2 + 2 * Dim" in sources[BINDING_DETAIL]
+    assert "2 * dimension" in sources[RUNTIME_AUTHORITIES]
+    for path, source in sources.items():
+        assert "PeriodicIdentification2D" not in source, path.relative_to(ROOT)
+        assert "std::array<int, 6>" not in source, path.relative_to(ROOT)
+
+
+def test_amr_hierarchy_config_carries_one_ranked_row_per_transition() -> None:
+    facade = _read(AMR_HEADER)
+    binding = _read(AMR_BINDING)
+    detail = _read(BINDING_DETAIL)
+    for name in ("transition_ratios", "transition_buffers", "transition_lookaheads"):
+        assert f"std::vector<Extent<Dim>> {name}" in facade
+        assert f'"{name}"' in binding
+        assert f"config.{name}" in binding
+    assert "regrid_grow" not in facade
+    assert "regrid_margin" not in facade
+    assert "regrid_grow" not in binding
+    assert "regrid_margin" not in binding
+    assert "ranked_extents_from_python<kNativeDimension>" in binding
+    assert "2 + 2 * Dim" in detail
 
 
 def test_layout_transfer_is_generic_and_instantiated_only_for_the_artifact() -> None:

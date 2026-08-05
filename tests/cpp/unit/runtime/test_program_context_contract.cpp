@@ -513,49 +513,14 @@ TEST(ProgramContextContract, SystemPreparesPrimitiveFixedStateWithExactCompiledM
   }
 }
 
-TEST(ProgramContextContract, SystemExecutesScalarAxisPermutedPeriodicPlan) {
+TEST(ProgramContextContract, RankedHyperbolicBoundaryRefusesMappedPeriodicityWithoutProvider) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 6;
-  cfg.L = 1.0;
-  cfg.periodicity = {false, false};
-  System sim(cfg);
-  const std::string state_identity = "case::block::scalar::state::U";
-  sim.install_block_state_route("scalar", state_identity);
-  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
-                                            std::array<int, 2>{{1, 1}}};
-  sim.install_boundary_plan(
-      "scalar", "case::block::scalar::boundary", 1,
+  auto boundary = prepare_hyperbolic_boundary<2>(
       {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
       {"case::block::scalar::xlo", "case::block::scalar::xhi", "case::block::scalar::ylo",
        "case::block::scalar::yhi"},
-      {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi});
-  sim.install_block("scalar", 1, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1,
-                    true, 1);
-  sim.mark_bound();
-
-  MultiFab& state = sim.block_state(0);
-  for (int local = 0; local < state.local_size(); ++local) {
-    const Array4 values = state.fab(local).array();
-    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
-  }
-  const auto lane = ExecutionLane::world("test.system.axis-permuted-periodic");
-  const runtime::multiblock::BoundaryEvaluationPoint point{
-      "clock.system-axis-permuted", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
-  PreparedGridBoundarySession boundary(sim.grid_context("scalar"), lane, state, point);
-  boundary.fill(state, point);
-  device_fence();
-
-  for (int local = 0; local < state.local_size(); ++local) {
-    const Fab2D& field = state.fab(local);
-    const Box2D grown = field.grown_box();
-    for (int j = 0; j < cfg.n; ++j)
-      if (grown.contains(-1, j))
-        EXPECT_EQ(field(-1, j, 0), Real(j + 100 * (cfg.n - 1)));
-    for (int i = 0; i < cfg.n; ++i)
-      if (grown.contains(i, cfg.n))
-        EXPECT_EQ(field(i, cfg.n, 0), Real(100 * i));
-  }
+      {"Scalar"}, true);
+  EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
 }
 
 TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {

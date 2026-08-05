@@ -263,25 +263,33 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& face_identities,
              const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-             const std::vector<std::array<int, 6>>& periodic_identifications,
+             const std::vector<std::vector<int>>& periodic_identifications,
              const std::vector<std::string>& face_representations,
              const std::vector<std::string>& face_converter_identities,
              const std::vector<std::vector<std::string>>& face_analytic_opcodes,
              const std::vector<std::vector<double>>& face_analytic_literals,
              const std::vector<std::string>& face_analytic_clocks) {
-            system.install_boundary_plan(
+            reject_unqualified_periodic_identifications<pops::kNativeDimension>(
+                periodic_identifications, "ranked Cartesian AMR boundary authority");
+            std::vector<bool> omitted(face_types.size(), false);
+            for (int ordinal : omitted_interface_faces) {
+              if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= face_types.size() ||
+                  face_types[static_cast<std::size_t>(ordinal)] != "external" ||
+                  omitted[static_cast<std::size_t>(ordinal)])
+                throw py::value_error(
+                    "every omitted AMR interface face must be one unique external ranked face");
+              omitted[static_cast<std::size_t>(ordinal)] = true;
+            }
+            system.install_hyperbolic_boundary(
                 name, identity, required_depth, face_types, face_values, face_identities,
-                component_roles, omitted_interface_faces, state_identity,
-                PreparedBoundaryReadDependencies{},
-                decode_periodic_identification_rows(periodic_identifications), face_representations,
-                face_converter_identities, face_analytic_opcodes, face_analytic_literals,
-                face_analytic_clocks);
+                component_roles, state_identity, face_representations, face_converter_identities,
+                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
-          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
+          py::arg("periodic_identifications") = std::vector<std::vector<int>>{},
           py::arg("face_representations") = std::vector<std::string>{},
           py::arg("face_converter_identities") = std::vector<std::string>{},
           py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
@@ -294,7 +302,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
-      .def("_discard_boundary_plans", &AmrSystem::discard_boundary_plans,
+      .def("_discard_boundary_plans", &AmrSystem::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
           "_install_amr_tagger_component",
@@ -322,62 +330,6 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("component"), py::arg("binding"), py::arg("execution_context"))
       .def("_discard_amr_provider_components", &AmrSystem::discard_amr_provider_components,
            "Roll back one failed external AMR provider transaction.")
-      .def(
-          "_install_ghost_boundary_component",
-          [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_ghost_boundary_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
-      .def(
-          "_install_boundary_flux_component",
-          [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_boundary_flux_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
-      .def(
-          "_install_field_boundary_residual_component",
-          [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_field_boundary_residual_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
-      .def(
-          "_install_field_boundary_jvp_component",
-          [](AmrSystem& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_field_boundary_jvp_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_interface_flux_component",
           [](AmrSystem& system, std::size_t left_block, std::size_t right_block, int level,
@@ -675,9 +627,18 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_register_analytic_constant", &AmrSystem::register_analytic_constant,
            py::arg("subject"), py::arg("block"), py::arg("space"), py::arg("centering"),
            py::arg("components"))
-      .def("_register_analytic_gaussian", &AmrSystem::register_analytic_gaussian,
-           py::arg("subject"), py::arg("block"), py::arg("center_x"), py::arg("center_y"),
-           py::arg("background"), py::arg("amplitude"), py::arg("inverse_width"))
+      .def(
+          "_register_analytic_gaussian",
+          [](AmrSystem& system, const std::string& subject, const std::string& block,
+             const py::handle& center, double background, double amplitude, double inverse_width) {
+            system.register_analytic_gaussian(
+                subject, block,
+                ranked_real_vector_from_python<pops::kNativeDimension>(center,
+                                                                       "AmrSystem Gaussian center"),
+                background, amplitude, inverse_width);
+          },
+          py::arg("subject"), py::arg("block"), py::arg("center"), py::arg("background"),
+          py::arg("amplitude"), py::arg("inverse_width"))
       .def("_register_analytic_expression", &AmrSystem::register_analytic_expression,
            py::arg("subject"), py::arg("block"), py::arg("space"), py::arg("centering"),
            py::arg("opcodes"), py::arg("literals"))
@@ -1293,8 +1254,33 @@ void init_amr(py::module_& m) {
       .def_readwrite("coordinate_system", &NativeAmrSystemConfig::coordinate_system)
       .def_readwrite("regrid_every", &NativeAmrSystemConfig::regrid_every)
       .def_readwrite("level_count", &NativeAmrSystemConfig::level_count)
-      .def_readwrite("regrid_grow", &NativeAmrSystemConfig::regrid_grow)
-      .def_readwrite("regrid_margin", &NativeAmrSystemConfig::regrid_margin)
+      .def_property(
+          "transition_ratios",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extents_to_python(config.transition_ratios);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.transition_ratios = ranked_extents_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.transition_ratios", 2);
+          })
+      .def_property(
+          "transition_buffers",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extents_to_python(config.transition_buffers);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.transition_buffers = ranked_extents_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.transition_buffers", 0);
+          })
+      .def_property(
+          "transition_lookaheads",
+          [](const NativeAmrSystemConfig& config) {
+            return ranked_extents_to_python(config.transition_lookaheads);
+          },
+          [](NativeAmrSystemConfig& config, const py::handle& value) {
+            config.transition_lookaheads = ranked_extents_from_python<kNativeDimension>(
+                value, "AmrSystemConfig.transition_lookaheads", 0);
+          })
       .def_readwrite("explicit_bootstrap", &NativeAmrSystemConfig::explicit_bootstrap)
       .def_property(
           "periodicity",

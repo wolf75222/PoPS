@@ -8,6 +8,7 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/multiblock/evaluation_point.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -26,22 +27,6 @@
 #include <vector>
 
 namespace pops::runtime::multiblock {
-
-/// Exact identity of one residual evaluation.  Both sides of an interface are assembled by the same
-/// scheduler call and therefore observe this exact same point; no side reconstructs time from a
-/// rounded physical value.
-struct BoundaryEvaluationPoint {
-  std::string clock;
-  std::int64_t tick = 0;
-  int level = 0;
-  int substep = 0;
-  int stage = 0;
-  ::pops::amr::Rational stage_fraction{0, 1};
-  double dt = std::numeric_limits<double>::quiet_NaN();
-  double physical_time = std::numeric_limits<double>::quiet_NaN();
-
-  friend bool operator==(const BoundaryEvaluationPoint&, const BoundaryEvaluationPoint&) = default;
-};
 
 enum class InterfaceAxis { X, Y };
 enum class InterfaceSide { Low, High };
@@ -561,8 +546,7 @@ class InterfaceFluxScheduler {
       ++level_routes;
       if ((prepared.route.left_block == first_block &&
            prepared.route.right_block == second_block) ||
-          (prepared.route.left_block == second_block &&
-           prepared.route.right_block == first_block))
+          (prepared.route.left_block == second_block && prepared.route.right_block == first_block))
         matched = &prepared;
     }
     if (level_routes != 1 || matched == nullptr)
@@ -570,12 +554,10 @@ class InterfaceFluxScheduler {
           "multi-block implicit JVP requires one exact prepared two-block interface route");
     if (matched->distributed || matched->communicator_size != 1 ||
         matched->communicator_identity != "serial")
-      throw std::runtime_error(
-          "multi-block implicit JVP requires serial rank-one execution");
+      throw std::runtime_error("multi-block implicit JVP requires serial rank-one execution");
     if (matched->memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
         (matched->device_identity != "host" && matched->device_identity != "cpu"))
-      throw std::runtime_error(
-          "multi-block implicit JVP requires host-memory execution");
+      throw std::runtime_error("multi-block implicit JVP requires host-memory execution");
   }
 
   /// Rebuild every layout-bound trace plan against a replacement AMR hierarchy.  The numerical

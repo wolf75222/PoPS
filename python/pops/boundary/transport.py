@@ -805,7 +805,9 @@ class ResolvedTransportBoundarySet:
             )
         return compose_transport_boundary(self, context=context)
 
-    def _native_contract(self) -> tuple[Handle, int, tuple[ResolvedTransportCondition, ...], int]:
+    def _native_contract(
+        self,
+    ) -> tuple[Handle, int, tuple[ResolvedTransportCondition, ...], int, int]:
         """Validate the complete executable shape of the built-in native provider.
 
         This is the sole acceptance contract used at numerical resolution, compile, and bind.
@@ -827,15 +829,22 @@ class ResolvedTransportBoundarySet:
         if not components:
             raise TypeError("resolved transport boundary state has no component manifest")
         ncomp = len(components)
-        face_rows: list[ResolvedTransportCondition | None] = [None, None, None, None]
+        boundaries = self.plan.topology.boundaries
+        if len(boundaries) not in (2, 4, 6):
+            raise ValueError(
+                "native transport topology must contain exactly 2*Dim Cartesian faces")
+        dimension = len(boundaries) // 2
+        axes = [row.geometry.axis.index for row in self.conditions]
+        if any(isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1, 2)
+               for axis in axes):
+            raise NotImplementedError(
+                "the installed native transport boundary provider supports dimensions 1, 2, and 3"
+            )
+        face_rows: list[ResolvedTransportCondition | None] = [None] * (2 * dimension)
         analytic_plan_clocks: set[str] = set()
         depth = 0
         for condition in self.conditions:
             geometry = condition.geometry
-            if geometry.axis.index not in (0, 1):
-                raise NotImplementedError(
-                    "the installed native transport boundary provider is two-dimensional"
-                )
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
             if face_rows[face] is not None:
                 raise ValueError("native transport boundary contains overlapping face producers")
@@ -923,7 +932,7 @@ class ResolvedTransportBoundarySet:
             raise ValueError("native transport boundary has incomplete physical-face coverage")
         if len(analytic_plan_clocks) > 1:
             raise ValueError("one prepared analytic boundary plan cannot mix several logical Clocks")
-        return state, ncomp, tuple(row for row in face_rows if row is not None), depth
+        return state, ncomp, tuple(row for row in face_rows if row is not None), depth, dimension
 
     @staticmethod
     def _native_representation_contract(
@@ -964,7 +973,7 @@ class ResolvedTransportBoundarySet:
         """
         from pops.mesh.boundaries import ClosureMode
 
-        state, ncomp, conditions, depth = self._native_contract()
+        state, ncomp, conditions, depth, _ = self._native_contract()
         return {
             "schema_version": 1,
             "authority_type": "prepared_boundary_plan_compile",
@@ -1017,7 +1026,7 @@ class ResolvedTransportBoundarySet:
 
         The built-in provider intentionally supports only data that can be executed without a
         Python callback: outflow, scalar expressions closed over BindSchema parameters, and
-        conservative analytic ``(x, y, t, params)`` inflow programs.  Discrete state/field reads
+        conservative analytic ``(coordinates, t, params)`` inflow programs. Discrete state/field reads
         need a compiled boundary component and therefore fail here instead of being retained as
         ignored metadata.
         """
@@ -1033,8 +1042,8 @@ class ResolvedTransportBoundarySet:
                 raise TypeError("runtime boundary parameters must use canonical ParamHandle keys")
             env[handle.qualified_id] = value
 
-        state, ncomp, conditions, depth = self._native_contract()
-        face_rows: list[dict[str, Any] | None] = [None, None, None, None]
+        state, ncomp, conditions, depth, dimension = self._native_contract()
+        face_rows: list[dict[str, Any] | None] = [None] * (2 * dimension)
         for condition in conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)

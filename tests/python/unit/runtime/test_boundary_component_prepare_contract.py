@@ -8,7 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
-from pops.runtime._runtime_authorities import install_runtime_authorities
+from pops.runtime._runtime_authorities import (
+    _boundary_face_ordinal,
+    _periodic_identification_rows,
+    install_runtime_authorities,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -37,6 +41,40 @@ def _execution_context() -> ExecutionContext:
         datatype=ExecutionResource("datatype", "float64"),
         device=ExecutionResource("device", "host"),
     )
+
+
+@pytest.mark.parametrize(("dimension", "axis"), ((1, 0), (3, 2)))
+def test_ranked_periodicity_uses_face_table_without_a_second_identity_row(dimension, axis):
+    def endpoint(side):
+        return {
+            "qualified_id": "case::axis%d::%s" % (axis, side),
+            "orientation": {
+                "schema_version": 1,
+                "axis": axis,
+                "side": side,
+                "outward_sign": -1 if side == "lower" else 1,
+            },
+        }
+
+    source_face = 2 * axis
+    target_face = source_face + 1
+    face_types = ["foextrap"] * (2 * dimension)
+    face_types[source_face] = face_types[target_face] = "periodic"
+    data = {
+        "periodic_identifications": [{
+            "source": endpoint("lower"),
+            "target": endpoint("upper"),
+            "source_face": source_face,
+            "target_face": target_face,
+            "permutation": list(range(dimension)),
+            "signs": [1] * dimension,
+        }],
+    }
+
+    assert _boundary_face_ordinal(
+        endpoint("upper"), dimension=dimension, where="test") == target_face
+    assert _periodic_identification_rows(
+        data, face_types, dimension=dimension) == []
 
 
 @pytest.mark.parametrize("prepare_fails", (False, True))
@@ -153,6 +191,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         interface=Interface(), native_handle=native_handle,
     )
     artifact = SimpleNamespace(
+        resolved_dimension=2,
         blocks=(SimpleNamespace(
             name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
@@ -261,6 +300,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     native = Native()
     engine = SimpleNamespace(_s=native)
     artifact = SimpleNamespace(
+        resolved_dimension=2,
         blocks=(SimpleNamespace(
             name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
