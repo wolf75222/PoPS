@@ -3,7 +3,7 @@
 #include <limits>
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions compatibility validation only
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
