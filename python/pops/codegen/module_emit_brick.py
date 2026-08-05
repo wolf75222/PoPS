@@ -239,7 +239,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <array>",
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
         "#include <limits>",
+        "#include <Kokkos_MathematicalFunctions.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
+        "#include <pops/numerics/spatial/nd/state_schema.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -256,9 +258,16 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "struct %s {" % nm,
         "  using State = pops::StateVec<%d>;" % nc,
         "  using Prim  = pops::StateVec<%d>;" % npr,
+        "  using Primitive = Prim;",
         "  static constexpr int dimension = %d;" % dimension,
         "  using Aux   = pops::AuxState<dimension>;",
         "  static constexpr int n_vars = %d;" % nc,
+        "  struct Schema {",
+        "    using Conservative = State;",
+        "    using Primitive = Prim;",
+        "    static constexpr int dimension = %d;" % dimension,
+        "    static constexpr int nvars = n_vars;",
+        "  };",
     ]
     provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
     S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
@@ -571,6 +580,51 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("    State U{};")
     S += ["    U[%d] = %s;" % (i, c) for i, c in enumerate(ccpps)]
     S += ["    return U;", "  }", ""]
+
+    # Canonical ND finite-volume conversion protocol.  The generated formulas remain the only
+    # conversion authority; these wrappers merely publish their fallible result to reconstruction.
+    S += [
+        "  POPS_HD pops::nd::StateConversion<Prim> recover(const State& U) const {",
+        "    pops::nd::StateConversion<Prim> result{};",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(U[component])) return result;",
+        "    result.value = to_primitive(U);",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(result.value[component])) return result;",
+    ]
+    if recovery_constraints:
+        S += [
+            "    int failing_component = -1;",
+            "    if (!recovery_admissible(result.value, &failing_component)) return result;",
+        ]
+    S += [
+        "    result.status = pops::nd::StateConversionStatus::Success;",
+        "    return result;",
+        "  }",
+        "",
+        "  POPS_HD pops::nd::StateConversionStatus admissibility(const State& U) const {",
+        "    return recover(U).status;",
+        "  }",
+        "",
+        "  POPS_HD pops::nd::StateConversion<State> make_conservative(const Prim& P) const {",
+        "    pops::nd::StateConversion<State> result{};",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(P[component])) return result;",
+    ]
+    if recovery_constraints:
+        S += [
+            "    int failing_component = -1;",
+            "    if (!recovery_admissible(P, &failing_component)) return result;",
+        ]
+    S += [
+        "    result.value = to_conservative(P);",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(result.value[component])) return result;",
+        "    result.status = pops::nd::StateConversionStatus::Success;",
+        "    return result;",
+        "  }",
+        "",
+    ]
 
     cons_set = "{pops::VariableKind::Conservative, {%s}, %d%s}" % (
         cnames, nc, (", {%s}" % croles) if croles is not None else "")
