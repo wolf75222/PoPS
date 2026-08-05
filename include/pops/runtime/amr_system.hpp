@@ -62,6 +62,7 @@ struct CompiledFieldBoundaryKernel;
 
 class ObserverMpiLane;
 namespace runtime::program {
+template <int Dim, class MemorySpace>
 class AmrProgramContext;
 }
 
@@ -107,6 +108,7 @@ namespace runtime {
 namespace program {
 class
     Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
+template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace program
 namespace multiblock {
@@ -1118,6 +1120,7 @@ class AmrSystem {
   std::vector<double> potential();
 
  private:
+  template <int ContextDim, class MemorySpace>
   friend class runtime::program::AmrProgramContext;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to AmrProgramContext and is deliberately absent from Python bindings.
@@ -1125,7 +1128,7 @@ class AmrSystem {
                                                double value);
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
                                                    const std::string& route, int every_n) const;
-  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
+  POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
   /// Read-only compiled-artifact capability check; artifact authority installation is private to
   /// AmrSystem::install_program and cannot be injected through the public facade.
   POPS_EXPORT bool program_owns_operator_authority(

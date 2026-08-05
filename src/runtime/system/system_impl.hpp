@@ -7,8 +7,10 @@
 
 #include <pops/runtime/system/system_block_store.hpp>
 #include <pops/runtime/system/system_boundary_registry.hpp>
+#include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
 
 #include <algorithm>
 #include <map>
@@ -51,13 +53,14 @@ struct System<Dim>::Impl {
   block_store_type blocks_;
   std::vector<Species>& sp = blocks_.blocks;
   boundary_registry_type boundary_registry_;
+  runtime::system::SystemCouplingRegistry<Dim> coupling_;
   runtime::system::SystemLifecycle lifecycle_;
+  runtime::program::ProgramRuntimeState<Dim> program_;
 
   double t = 0.0;
   int macro_step_ = 0;
   std::string last_dt_reason_;
-  std::map<std::string, Real> program_diagnostics_;
-  std::vector<std::string> step_projections_;
+  std::string poisson_solver_ = "geometric_mg";
 
   struct AcceptedSnapshot {
     std::vector<field_type> states;

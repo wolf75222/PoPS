@@ -125,9 +125,12 @@ struct SystemLayoutTransferReceipt {
 };
 
 namespace runtime::program {
-class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+class Profiler;  // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+template <int Dim>
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
+template <int Dim>
 class ProgramContext;
+template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace runtime::program
 
@@ -1161,7 +1164,7 @@ class System {
   /// @{
   /// The System-owned scheduler cache (a non-owning reference; lives as long as the System). A compiled
   /// Program's cache_store_aux / cache_restore_aux / cache_should_update reach it through ProgramContext.
-  POPS_EXPORT runtime::program::CacheManager& program_cache();
+  POPS_EXPORT runtime::program::CacheManager<Dim>& program_cache();
   /// @name Scheduler-cache checkpoint/restart (Spec 3 section 30, ADC-458)
   /// SERIALIZE / RESTORE the System-owned cache across a checkpoint, mirroring the history seam: the
   /// facade (sim.checkpoint / sim.restart) gathers each VALID slot (gather_global, MPI-safe) and scatters
@@ -1342,7 +1345,7 @@ class System {
                                                   /// @}
 
  private:
-  friend class runtime::program::ProgramContext;
+  friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to ProgramContext and is deliberately absent from Python bindings.
@@ -1350,7 +1353,7 @@ class System {
                                                Real value);
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
                                                    const std::string& route, int every_n) const;
-  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
+  POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
