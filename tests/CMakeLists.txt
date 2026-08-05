@@ -572,6 +572,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_riemann_capabilities
   test_newton_robustness
   test_variable_recovery_chain
+  test_generated_amr_system_block
   test_prepared_cartesian_nd
   test_prepared_numerics_gate
   test_elliptic_interface
@@ -586,6 +587,7 @@ endforeach()
 # The generic hierarchy tensor-provider contract is owned by AmrSystem at runtime.  Keep the test in
 # the standard inventory, but link the AMR facade implementation that supplies its provider registry.
 target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
+target_link_libraries(test_generated_amr_system_block PRIVATE pops_runtime_amr)
 target_link_libraries(test_multiblock_interface_scheduler PRIVATE pops_runtime_amr)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 

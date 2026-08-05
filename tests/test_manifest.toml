@@ -1145,6 +1145,11 @@ sources = ["tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_generated_amr_system_block"
+sources = ["tests/cpp/unit/runtime/test_generated_amr_system_block.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_assembler_driver"
 sources = ["tests/cpp/unit/runtime/test_assembler_driver.cpp"]
 labels = ["unit", "runtime", "fast"]

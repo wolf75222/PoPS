@@ -91,10 +91,10 @@ void append_geometry_contract(ExactContractBuilder& contract, const Geometry<Dim
 }
 
 template <int Dim, class MemorySpace>
-void require_level_context(
-    const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
-    const GeneratedAmrLevelContext<Dim, MemorySpace>& context, int state_components,
-    int auxiliary_components, const Extent<Dim>& required_ghosts) {
+void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
+                           const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
+                           int state_components, int auxiliary_components,
+                           const Extent<Dim>& required_ghosts) {
   if (context.level >= runtime.hierarchy().num_levels())
     throw std::out_of_range("generated AMR block level lies outside the live hierarchy");
   if (context.state_identity.empty() || context.auxiliary_identity.empty())
@@ -129,10 +129,9 @@ void require_level_context(
 }
 
 template <int Dim, class MemorySpace>
-std::string level_contract(
-    const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
-    const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
-    std::string_view provider_identity) {
+std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
+                           const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
+                           std::string_view provider_identity) {
   ExactContractBuilder contract;
   contract.text("pops.generated-amr-level-block")
       .scalar(std::uint32_t{1})
@@ -194,8 +193,7 @@ class PreparedGeneratedAmrLevelBlock {
   evaluation_type evaluate(const point_type& point) const {
     require_live_();
     if (point.level != static_cast<int>(level_))
-      throw std::invalid_argument(
-          "generated AMR residual point targets another hierarchy level");
+      throw std::invalid_argument("generated AMR residual point targets another hierarchy level");
     return evaluator_(point, runtime_->hierarchy().state(level_));
   }
 
@@ -287,9 +285,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   const Model model = request.model;
   const std::string name = request.name;
   const std::string provider_identity =
-      "pops.generated.amr.cartesian.nd/" + std::to_string(Dim) + "/" +
-      request.routes.limiter + "/" + request.routes.riemann + "/" +
-      request.routes.reconstruction;
+      "pops.generated.amr.cartesian.nd/" + std::to_string(Dim) + "/" + request.routes.limiter +
+      "/" + request.routes.riemann + "/" + request.routes.reconstruction;
 
   PreparedAmrSystemBlock<Dim> result;
   result.name = name;
@@ -322,57 +319,55 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     package_contract.scalar(std::int64_t{required_ghosts[axis]});
   result.collective_contract = std::move(package_contract).release();
 
-  result.materialize_level =
-      [model, spatial_factory, required_ghosts, provider_identity](
-          runtime::amr::AmrRuntime<Dim>& runtime, GeneratedAmrLevelContext<Dim> context) {
-        require_level_context(runtime, context, Model::n_vars, aux_comps_for<Model, Dim>(),
-                              required_ghosts);
-        const auto spatial = spatial_factory(context.geometry);
-        MultiFab<Dim>* const auxiliary = context.auxiliary;
-        const auto state_ghost_fill = context.state_ghost_fill;
-        const auto auxiliary_ghost_fill = context.auxiliary_ghost_fill;
-        const auto physical_boundary = context.physical_boundary;
-        const Geometry<Dim> geometry = context.geometry;
-        const std::size_t level = context.level;
+  result.materialize_level = [model, spatial_factory, required_ghosts, provider_identity](
+                                 runtime::amr::AmrRuntime<Dim>& runtime,
+                                 GeneratedAmrLevelContext<Dim> context) {
+    require_level_context(runtime, context, Model::n_vars, aux_comps_for<Model, Dim>(),
+                          required_ghosts);
+    const auto spatial = spatial_factory(context.geometry);
+    MultiFab<Dim>* const auxiliary = context.auxiliary;
+    const auto state_ghost_fill = context.state_ghost_fill;
+    const auto auxiliary_ghost_fill = context.auxiliary_ghost_fill;
+    const auto physical_boundary = context.physical_boundary;
+    const Geometry<Dim> geometry = context.geometry;
+    const std::size_t level = context.level;
 
-        auto evaluator = [model, spatial, auxiliary, state_ghost_fill, auxiliary_ghost_fill,
-                          physical_boundary, geometry](
-                             const runtime::multiblock::BoundaryEvaluationPoint& point,
-                             const MultiFab<Dim>& live_state) {
-          MultiFab<Dim> state(live_state);
-          MultiFab<Dim> aux(*auxiliary);
-          state_ghost_fill(state, point);
-          auxiliary_ghost_fill(aux, point);
-          if (physical_boundary)
-            physical_boundary->fill_physical(state, geometry);
+    auto evaluator = [model, spatial, auxiliary, state_ghost_fill, auxiliary_ghost_fill,
+                      physical_boundary,
+                      geometry](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                const MultiFab<Dim>& live_state) {
+      MultiFab<Dim> state(live_state);
+      MultiFab<Dim> aux(*auxiliary);
+      state_ghost_fill(state, point);
+      auxiliary_ghost_fill(aux, point);
+      if (physical_boundary)
+        physical_boundary->fill_physical(state, geometry);
 
-          auto faces = nd::make_face_flux_workspace(state);
-          for (std::size_t local = 0; local < state.local_size(); ++local) {
-            spatial.materialize_face_fluxes(state.fab(local), aux.fab(local), faces[local]);
-            if (physical_boundary)
-              physical_boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
-          }
+      auto faces = nd::make_face_flux_workspace(state);
+      for (std::size_t local = 0; local < state.local_size(); ++local) {
+        spatial.materialize_face_fluxes(state.fab(local), aux.fab(local), faces[local]);
+        if (physical_boundary)
+          physical_boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
+      }
 
-          MultiFab<Dim> residual(state.layout(), state.distribution(), state.local_rank(),
-                                 Model::n_vars, state.ghosts());
-          spatial.assemble_residual_from_face_fluxes(faces, residual);
-          MultiFab<Dim> source =
-              generated_system_detail::materialize_source<Dim>(model, state, aux);
-          saxpy(residual, Real(1), source);
-          return PreparedAmrLevelEvaluation<Dim>{std::move(residual), std::move(faces)};
-        };
-        auto speed = [model, auxiliary](const MultiFab<Dim>& state) {
-          return generated_system_detail::maximum_speed<Dim>(model, state, *auxiliary);
-        };
-        auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
-          generated_system_detail::add_poisson_rhs<Dim>(model, state, rhs);
-        };
-        std::string contract = level_contract(runtime, context, provider_identity);
-        return PreparedGeneratedAmrLevelBlock<Dim>(
-            runtime, level, std::move(context.state_identity), provider_identity,
-            std::move(contract), std::move(evaluator), std::move(speed),
-            std::move(poisson_rhs));
-      };
+      MultiFab<Dim> residual(state.layout(), state.distribution(), state.local_rank(),
+                             Model::n_vars, state.ghosts());
+      spatial.assemble_residual_from_face_fluxes(faces, residual);
+      MultiFab<Dim> source = generated_system_detail::materialize_source<Dim>(model, state, aux);
+      saxpy(residual, Real(1), source);
+      return PreparedAmrLevelEvaluation<Dim>{std::move(residual), std::move(faces)};
+    };
+    auto speed = [model, auxiliary](const MultiFab<Dim>& state) {
+      return generated_system_detail::maximum_speed<Dim>(model, state, *auxiliary);
+    };
+    auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
+      generated_system_detail::add_poisson_rhs<Dim>(model, state, rhs);
+    };
+    std::string contract = level_contract(runtime, context, provider_identity);
+    return PreparedGeneratedAmrLevelBlock<Dim>(
+        runtime, level, std::move(context.state_identity), provider_identity, std::move(contract),
+        std::move(evaluator), std::move(speed), std::move(poisson_rhs));
+  };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     typename Model::Primitive input{};
@@ -385,18 +380,18 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                                     : std::numeric_limits<double>::quiet_NaN();
   };
   const auto recovery_plan = prepare_model_variable_recovery(model);
-  result.conservative_to_primitive =
-      [recovery_plan](const double* conservative, double* primitive) {
-        Real input[Model::n_vars]{};
-        Real initial[Model::n_vars]{};
-        for (int component = 0; component < Model::n_vars; ++component)
-          input[component] = static_cast<Real>(conservative[component]);
-        const auto outcome = recover_prepared_variable(recovery_plan, input, initial);
-        if (outcome.publication_permitted())
-          for (int component = 0; component < Model::n_vars; ++component)
-            primitive[component] = static_cast<double>(outcome.value[component]);
-        return recovery_report(outcome);
-      };
+  result.conservative_to_primitive = [recovery_plan](const double* conservative,
+                                                     double* primitive) {
+    Real input[Model::n_vars]{};
+    Real initial[Model::n_vars]{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      input[component] = static_cast<Real>(conservative[component]);
+    const auto outcome = recover_prepared_variable(recovery_plan, input, initial);
+    if (outcome.publication_permitted())
+      for (int component = 0; component < Model::n_vars; ++component)
+        primitive[component] = static_cast<double>(outcome.value[component]);
+    return recovery_report(outcome);
+  };
   result.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
   return result;
 }
@@ -468,11 +463,13 @@ auto prepare_generated_amr_system_block(Request request)
                 "generated AMR request and physical model have different ranks");
   switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
     case ReconRouteId::kConservative:
-      return generated_amr_detail::select_reconstruction<
-          Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+      return generated_amr_detail::select_reconstruction<Dim,
+                                                         nd::ReconstructionVariables::Conservative>(
+          std::move(request));
     case ReconRouteId::kPrimitive:
-      return generated_amr_detail::select_reconstruction<
-          Dim, nd::ReconstructionVariables::Primitive>(std::move(request));
+      return generated_amr_detail::select_reconstruction<Dim,
+                                                         nd::ReconstructionVariables::Primitive>(
+          std::move(request));
   }
   throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
 }
@@ -507,8 +504,7 @@ namespace compiled_amr_detail {
 
 inline void validate_routes(const CompiledAmrSystemBlockRoutes& routes) {
   if (routes.limiter.empty() || routes.riemann.empty())
-    throw std::invalid_argument(
-        "compiled AMR block requires explicit limiter and Riemann routes");
+    throw std::invalid_argument("compiled AMR block requires explicit limiter and Riemann routes");
   (void)parse_limiter_route(routes.limiter, "compiled AMR block");
   (void)parse_riemann_route(routes.riemann, "compiled AMR block");
   (void)parse_recon_route(routes.reconstruction, "compiled AMR block");
@@ -533,14 +529,14 @@ inline void validate_routes(const CompiledAmrSystemBlockRoutes& routes) {
 /// Prepare a complete generated AMR block image without mutating the facade.
 template <int Dim, class Model>
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
-    const std::string& name, Model model, const std::string& limiter,
-    const std::string& riemann, const std::string& reconstruction, const std::string& time,
-    double gamma, int substeps, int stride, double positivity_floor = 0.0,
-    double weno_epsilon = static_cast<double>(kWenoEpsilon),
-    bool wave_speed_cache = false) {
+    const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
+    const std::string& reconstruction, const std::string& time, double gamma, int substeps,
+    int stride, double positivity_floor = 0.0,
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
   static_assert(Dim >= 1 && Dim <= 3);
-  static_assert(requires { Model::dimension; },
-                "a generated AMR model must publish its exact spatial dimension");
+  static_assert(
+      requires { Model::dimension; },
+      "a generated AMR model must publish its exact spatial dimension");
   static_assert(Model::dimension == Dim,
                 "generated model dimension differs from the target AmrSystem specialization");
   static_assert(requires {
@@ -555,18 +551,19 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     throw std::invalid_argument("compiled AMR block gamma must be finite and positive");
   if (substeps < 1 || stride < 1)
     throw std::invalid_argument("compiled AMR block substeps and stride must be positive");
-  if (positivity_floor > 0.0 &&
-      Model::conservative_vars().index_of(VariableRole::Density) < 0)
-    throw std::invalid_argument(
-        "compiled AMR positivity requires a conservative Density variable");
+  if (positivity_floor > 0.0 && Model::conservative_vars().index_of(VariableRole::Density) < 0)
+    throw std::invalid_argument("compiled AMR positivity requires a conservative Density variable");
 
-  CompiledAmrSystemBlockRoutes routes{
-      limiter, riemann, reconstruction, time, static_cast<Real>(positivity_floor),
-      static_cast<Real>(weno_epsilon), wave_speed_cache};
+  CompiledAmrSystemBlockRoutes routes{limiter,
+                                      riemann,
+                                      reconstruction,
+                                      time,
+                                      static_cast<Real>(positivity_floor),
+                                      static_cast<Real>(weno_epsilon),
+                                      wave_speed_cache};
   compiled_amr_detail::validate_routes(routes);
-  return prepare_generated_amr_system_block(
-      CompiledAmrSystemBlockPreparation<Dim, Model>{name, std::move(model), std::move(routes),
-                                                    gamma, substeps, stride});
+  return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
+      name, std::move(model), std::move(routes), gamma, substeps, stride});
 }
 
 /// Installation fence for the current facade.
@@ -574,8 +571,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
 /// AmrSystem::set_compiled_block accepts an obsolete deferred builder, discards it, and retains
 /// only metadata. Publishing through it would report success without an executable exact block.
 template <int Dim>
-[[noreturn]] void install_prepared_amr_block(AmrSystem<Dim>&,
-                                             PreparedAmrSystemBlock<Dim>) {
+[[noreturn]] void install_prepared_amr_block(AmrSystem<Dim>&, PreparedAmrSystemBlock<Dim>) {
   throw std::runtime_error(
       "compiled AMR block preparation succeeded, but AmrSystem<Dim> lacks the atomic "
       "install_prepared_amr_block(PreparedAmrSystemBlock<Dim>) seam required to publish exact "
@@ -597,8 +593,8 @@ void add_compiled_model(
         "compiled AMR block has no prepared exact-ranked partial-implicit provider");
   install_prepared_amr_block(
       system, prepare_compiled_amr_system_block<Dim>(
-                  name, std::move(model), limiter, riemann, reconstruction, time, gamma,
-                  substeps, stride, positivity_floor, weno_epsilon, wave_speed_cache));
+                  name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps,
+                  stride, positivity_floor, weno_epsilon, wave_speed_cache));
 }
 
 }  // namespace pops
