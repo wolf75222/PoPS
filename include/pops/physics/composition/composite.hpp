@@ -1,188 +1,570 @@
 #pragma once
 
-#include <pops/core/model/physical_model.hpp>  // HyperbolicPhysicalModel: contract of the hyperbolic brick
-#include <pops/core/state/state.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/model/physical_model.hpp>
+#include <pops/core/state/state.hpp>
 #include <pops/core/state/variables.hpp>
 
+#include <concepts>
+#include <limits>
+#include <type_traits>
+
 /// @file
-/// @brief CompositeModel: assembles (hyperbolic, source, elliptic) into one compiled PhysicalModel.
-///
-/// The HYPERBOLIC brick carries Vars + flux + wave speeds + conversions (inseparable); source
-/// and elliptic are SEPARATE bricks (physics/source.hpp, physics/elliptic.hpp), freely
-/// composable. A named scenario is a COMPOSITION chosen from the application (adc_cases).
+/// @brief Exact-ranked composition of hyperbolic, source, and elliptic physics bricks.
 
 namespace pops {
 
-/// Composite physical model: one HYPERBOLIC brick + one source + one elliptic right-hand side.
-/// Satisfies the PhysicalModel concept; the Vars (conversions + descriptor), the flux and the
-/// wave speeds come from the hyperbolic; pressure / wave_speeds are exposed when the
-/// hyperbolic provides them (required by the HLLC / Roe flux).
-///
-/// CONTRACT: CompositeModel is a pure function of its 3 bricks, device-callable (POPS_HD).
-/// No MultiFab, no allocation, no global access. Every delegated method inherits the
-/// device-clean invariant of the underlying brick.
-///
-/// n_aux propagation: n_aux = max(aux_comps<Hyperbolic>, aux_comps<Source>, aux_comps<Elliptic>).
-/// The system sizes the aux channel accordingly. A brick without n_aux (default kAuxBaseComps=3)
-/// does not change the bit-identical history.
+namespace composite_detail {
+
+template <class Hyperbolic, class = void>
+struct ConservationLawAliases {};
+
+template <class Hyperbolic>
+struct ConservationLawAliases<
+    Hyperbolic, std::void_t<typename Hyperbolic::Primitive, typename Hyperbolic::Schema>> {
+  using Primitive = typename Hyperbolic::Primitive;
+  using Schema = typename Hyperbolic::Schema;
+};
+
+template <class Hyperbolic, class = void>
+struct PrimitiveType {
+  using type = typename Hyperbolic::Primitive;
+};
+
+template <class Hyperbolic>
+struct PrimitiveType<Hyperbolic, std::void_t<typename Hyperbolic::Prim>> {
+  using type = typename Hyperbolic::Prim;
+};
+
+template <class Hyperbolic>
+consteval int hyperbolic_dimension() {
+  if constexpr (requires { Hyperbolic::dimension; })
+    return static_cast<int>(Hyperbolic::dimension);
+  return kNativeDimension;
+}
+
+template <class Brick, int Dim>
+consteval bool dimension_matches() {
+  if constexpr (requires { Brick::dimension; })
+    return static_cast<int>(Brick::dimension) == Dim;
+  return true;
+}
+
+template <int Axis, class Hyperbolic, class Providers>
+concept FluxAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Providers& providers) {
+      { h.template flux<Axis>(state, providers) } -> std::same_as<typename Hyperbolic::State>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Providers& providers) {
+      { h.flux(state, providers, Axis) } -> std::same_as<typename Hyperbolic::State>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state) {
+      { h.template flux<Axis>(state) } -> std::same_as<typename Hyperbolic::State>;
+    };
+
+template <int Axis, class Hyperbolic, class Providers>
+concept MaximumWaveSpeedAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Providers& providers) {
+      { h.template max_wave_speed<Axis>(state, providers) } -> std::convertible_to<Real>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Providers& providers) {
+      { h.max_wave_speed(state, providers, Axis) } -> std::convertible_to<Real>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state) {
+      { h.template max_wave_speed<Axis>(state) } -> std::convertible_to<Real>;
+    };
+
+template <int Axis, class Hyperbolic, class Providers>
+concept WaveSpeedsAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State state, const Providers& providers,
+             Real& lower,
+             Real& upper) { h.template wave_speeds<Axis>(state, providers, lower, upper); } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state, const Providers& providers,
+             Real& lower, Real& upper) { h.wave_speeds(state, providers, Axis, lower, upper); } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state, Real& lower, Real& upper) {
+      h.template wave_speeds<Axis>(state, lower, upper);
+    };
+
+template <int Axis, class Hyperbolic>
+concept ContactSpeedAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State left,
+             const typename Hyperbolic::State right, Real scalar) {
+      {
+        h.template contact_speed<Axis>(left, right, scalar, scalar, scalar, scalar)
+      } -> std::convertible_to<Real>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State left,
+             const typename Hyperbolic::State right, Real scalar) {
+      {
+        h.contact_speed(left, right, scalar, scalar, scalar, scalar, Axis)
+      } -> std::convertible_to<Real>;
+    };
+
+template <int Axis, class Hyperbolic>
+concept StarStateAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State state, Real scalar) {
+      {
+        h.template hllc_star_state<Axis>(state, scalar, scalar, scalar)
+      } -> std::same_as<typename Hyperbolic::State>;
+    } || requires(const Hyperbolic h, const typename Hyperbolic::State state, Real scalar) {
+      {
+        h.hllc_star_state(state, scalar, scalar, scalar, Axis)
+      } -> std::same_as<typename Hyperbolic::State>;
+    } || requires(const Hyperbolic h, const typename Hyperbolic::State state, Real scalar) {
+      {
+        h.template star_state<Axis>(state, scalar, scalar, scalar)
+      } -> std::same_as<typename Hyperbolic::State>;
+    };
+
+template <int Axis, class Hyperbolic, class LeftProviders, class RightProviders>
+concept RoeDissipationAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State left,
+             const LeftProviders& left_providers, const typename Hyperbolic::State right,
+             const RightProviders& right_providers) {
+      {
+        h.template roe_dissipation<Axis>(left, left_providers, right, right_providers)
+      } -> std::same_as<typename Hyperbolic::State>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State left,
+             const LeftProviders& left_providers, const typename Hyperbolic::State right,
+             const RightProviders& right_providers) {
+      {
+        h.roe_dissipation(left, left_providers, right, right_providers, Axis)
+      } -> std::same_as<typename Hyperbolic::State>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State left,
+             const typename Hyperbolic::State right) {
+      { h.template roe_dissipation<Axis>(left, right) } -> std::same_as<typename Hyperbolic::State>;
+    };
+
+template <int Axis, class Hyperbolic, class Auxiliary>
+concept StabilitySpeedAt =
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Auxiliary& auxiliary) {
+      { h.template stability_speed<Axis>(state, auxiliary) } -> std::convertible_to<Real>;
+    } ||
+    requires(const Hyperbolic h, const typename Hyperbolic::State state,
+             const Auxiliary& auxiliary) {
+      { h.stability_speed(state, auxiliary, Axis) } -> std::convertible_to<Real>;
+    };
+
+template <int Axis, int Dim, class Hyperbolic, class Auxiliary>
+consteval bool hyperbolic_axes_contract() {
+  if constexpr (!FluxAt<Axis, Hyperbolic, Auxiliary> ||
+                !MaximumWaveSpeedAt<Axis, Hyperbolic, Auxiliary>)
+    return false;
+  else if constexpr (Axis + 1 < Dim)
+    return hyperbolic_axes_contract<Axis + 1, Dim, Hyperbolic, Auxiliary>();
+  return true;
+}
+
+template <class Hyperbolic, int Dim>
+consteval bool hyperbolic_contract() {
+  using State = typename Hyperbolic::State;
+  using Prim = typename PrimitiveType<Hyperbolic>::type;
+  using Auxiliary = AuxState<Dim>;
+  constexpr bool legacy_contract =
+      requires(const Hyperbolic h, const State state, const Prim primitive) {
+        { Hyperbolic::n_vars } -> std::convertible_to<int>;
+        { h.to_primitive(state) } -> std::same_as<Prim>;
+        { h.to_conservative(primitive) } -> std::same_as<State>;
+        { Hyperbolic::conservative_vars() } -> std::same_as<VariableSet>;
+        { Hyperbolic::primitive_vars() } -> std::same_as<VariableSet>;
+      };
+  constexpr bool conservation_law_contract =
+      requires(const Hyperbolic h, const State state, const Prim primitive) {
+        typename Hyperbolic::Primitive;
+        typename Hyperbolic::Schema;
+        h.recover(state);
+        h.admissibility(state);
+        h.make_conservative(primitive);
+      };
+  return hyperbolic_axes_contract<0, Dim, Hyperbolic, Auxiliary>() &&
+         (legacy_contract || conservation_law_contract);
+}
+
+template <class State>
+POPS_HD State invalid_state() {
+  State result{};
+  for (int component = 0; component < State::size(); ++component)
+    result[component] = std::numeric_limits<Real>::quiet_NaN();
+  return result;
+}
+
+}  // namespace composite_detail
+
 template <class Hyperbolic, class Source, class Elliptic>
-struct CompositeModel {
-  static_assert(HyperbolicPhysicalModel<Hyperbolic>,
-                "CompositeModel : the 1st brick must be a HYPERBOLIC model (Vars + "
-                "cons<->prim conversions + flux + max_wave_speed), see HyperbolicPhysicalModel");
-  using State = StateVec<Hyperbolic::n_vars>;
-  using Prim = typename Hyperbolic::Prim;
-  using Aux = pops::Aux;
+struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
+  static constexpr int dimension = composite_detail::hyperbolic_dimension<Hyperbolic>();
+  static_assert(dimension >= 1 && dimension <= 3,
+                "CompositeModel hyperbolic rank must be 1, 2, or 3");
+  static_assert(composite_detail::hyperbolic_contract<Hyperbolic, dimension>(),
+                "CompositeModel requires an exact-ranked hyperbolic brick");
+  static_assert(composite_detail::dimension_matches<Source, dimension>(),
+                "CompositeModel source rank differs from its hyperbolic rank");
+  static_assert(composite_detail::dimension_matches<Elliptic, dimension>(),
+                "CompositeModel elliptic rank differs from its hyperbolic rank");
+
+  using State = typename Hyperbolic::State;
+  using Prim = typename composite_detail::PrimitiveType<Hyperbolic>::type;
+  using Aux = AuxState<dimension>;
   static constexpr int n_vars = Hyperbolic::n_vars;
-  // Aux channel width of the composite model = MAX of the widths of its bricks: if a brick (flux
-  // or source) reads an extra auxiliary field (e.g. a magnetized source declaring n_aux=4 to read
-  // B_z), the composite exposes it to the system (which then sizes the aux channel).
-  // Without any extra-field brick, n_aux = kAuxBaseComps (3) -> strictly identical to the history.
   static constexpr int n_aux = [] {
-    int w = aux_comps<Hyperbolic>();
-    if (aux_comps<Source>() > w)
-      w = aux_comps<Source>();
-    if (aux_comps<Elliptic>() > w)
-      w = aux_comps<Elliptic>();
-    return w;
+    int width = aux_comps_for<Hyperbolic, dimension>();
+    if (aux_comps_for<Source, dimension>() > width)
+      width = aux_comps_for<Source, dimension>();
+    if (aux_comps_for<Elliptic, dimension>() > width)
+      width = aux_comps_for<Elliptic, dimension>();
+    return width;
   }();
 
   Hyperbolic hyp{};
   Source src{};
   Elliptic ell{};
 
-  template <class Providers>
-  POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
-    return hyp.flux(u, providers, dir);
+  template <int Axis, class Providers>
+    requires composite_detail::FluxAt<Axis, Hyperbolic, Providers>
+  POPS_HD State flux(const State& state, const Providers& providers) const {
+    static_assert(Axis >= 0 && Axis < dimension, "CompositeModel flux axis is outside its rank");
+    if constexpr (requires { hyp.template flux<Axis>(state, providers); })
+      return hyp.template flux<Axis>(state, providers);
+    else if constexpr (requires { hyp.flux(state, providers, Axis); })
+      return hyp.flux(state, providers, Axis);
+    else
+      return hyp.template flux<Axis>(state);
   }
-  template <class Providers>
-  POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {
-    return hyp.max_wave_speed(u, providers, dir);
-  }
-  POPS_HD State source(const State& u, const Aux& a) const { return src.apply(u, a); }
-  POPS_HD Real elliptic_rhs(const State& u) const { return ell.rhs(u); }
-  POPS_HD Prim to_primitive(const State& u) const { return hyp.to_primitive(u); }
-  POPS_HD State to_conservative(const Prim& p) const { return hyp.to_conservative(p); }
-  static VariableSet conservative_vars() { return Hyperbolic::conservative_vars(); }
-  static VariableSet primitive_vars() { return Hyperbolic::primitive_vars(); }
 
-  /// Optional primitive-recovery admissibility, forwarded from the hyperbolic brick.  Keeping the
-  /// method concept-gated preserves the historical finite-only recovery path for every brick that
-  /// does not declare a physical policy.
-  POPS_HD bool recovery_admissible(const Prim& p, int* failing_component) const
-    requires requires(const Hyperbolic h, const Prim q, int* component) {
-      { h.recovery_admissible(q, component) } -> std::same_as<bool>;
+  template <int Axis = 0, class Providers>
+  POPS_HD State flux_at_runtime_axis(const State& state, const Providers& providers,
+                                     int axis) const {
+    if (axis == Axis)
+      return flux<Axis>(state, providers);
+    if constexpr (Axis + 1 < dimension)
+      return flux_at_runtime_axis<Axis + 1>(state, providers, axis);
+    return composite_detail::invalid_state<State>();
+  }
+
+  template <class Providers>
+  POPS_HD State flux(const State& state, const Providers& providers, int axis) const {
+    return flux_at_runtime_axis(state, providers, axis);
+  }
+
+  template <int Axis, class Providers>
+    requires composite_detail::MaximumWaveSpeedAt<Axis, Hyperbolic, Providers>
+  POPS_HD Real max_wave_speed(const State& state, const Providers& providers) const {
+    static_assert(Axis >= 0 && Axis < dimension,
+                  "CompositeModel wave-speed axis is outside its rank");
+    if constexpr (requires { hyp.template max_wave_speed<Axis>(state, providers); })
+      return hyp.template max_wave_speed<Axis>(state, providers);
+    else if constexpr (requires { hyp.max_wave_speed(state, providers, Axis); })
+      return hyp.max_wave_speed(state, providers, Axis);
+    else
+      return hyp.template max_wave_speed<Axis>(state);
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD Real max_wave_speed_at_runtime_axis(const State& state, const Providers& providers,
+                                              int axis) const {
+    if (axis == Axis)
+      return max_wave_speed<Axis>(state, providers);
+    if constexpr (Axis + 1 < dimension)
+      return max_wave_speed_at_runtime_axis<Axis + 1>(state, providers, axis);
+    return std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  template <class Providers>
+  POPS_HD Real max_wave_speed(const State& state, const Providers& providers, int axis) const {
+    return max_wave_speed_at_runtime_axis(state, providers, axis);
+  }
+
+  POPS_HD State source(const State& state, const Aux& auxiliary) const {
+    return src.apply(state, auxiliary);
+  }
+  POPS_HD Real elliptic_rhs(const State& state) const { return ell.rhs(state); }
+  POPS_HD Prim to_primitive(const State& state) const
+    requires requires(const Hyperbolic h, const State value) { h.to_primitive(value); }
+  {
+    return hyp.to_primitive(state);
+  }
+  POPS_HD State to_conservative(const Prim& primitive) const
+    requires requires(const Hyperbolic h, const Prim value) { h.to_conservative(value); }
+  {
+    return hyp.to_conservative(primitive);
+  }
+
+  POPS_HD auto recover(const State& state) const
+    requires requires(const Hyperbolic h, const State value) { h.recover(value); }
+  {
+    return hyp.recover(state);
+  }
+
+  POPS_HD auto admissibility(const State& state) const
+    requires requires(const Hyperbolic h, const State value) { h.admissibility(value); }
+  {
+    return hyp.admissibility(state);
+  }
+
+  template <class Primitive>
+  POPS_HD auto make_conservative(const Primitive& primitive) const
+    requires requires(const Hyperbolic h, const Primitive value) { h.make_conservative(value); }
+  {
+    return hyp.make_conservative(primitive);
+  }
+  static VariableSet conservative_vars()
+    requires requires { Hyperbolic::conservative_vars(); }
+  {
+    return Hyperbolic::conservative_vars();
+  }
+  static VariableSet primitive_vars()
+    requires requires { Hyperbolic::primitive_vars(); }
+  {
+    return Hyperbolic::primitive_vars();
+  }
+
+  POPS_HD bool recovery_admissible(const Prim& primitive, int* failing_component) const
+    requires requires(const Hyperbolic h, const Prim value, int* component) {
+      { h.recovery_admissible(value, component) } -> std::same_as<bool>;
     }
   {
-    return hyp.recovery_admissible(p, failing_component);
+    return hyp.recovery_admissible(primitive, failing_component);
   }
 
-  POPS_HD Real pressure(const State& u) const
-    requires requires(const Hyperbolic h, const State s) { h.pressure(s); }
+  POPS_HD Real pressure(const State& state) const
+    requires requires(const Hyperbolic h, const State value) { h.pressure(value); }
   {
-    return hyp.pressure(u);
-  }
-  template <class Providers>
-  POPS_HD void wave_speeds(const State& u, const Providers& providers, int dir, Real& smin,
-                           Real& smax) const
-    requires requires(const Hyperbolic h, const State s, const Providers& p, int d, Real& lo,
-                      Real& hi) { h.wave_speeds(s, p, d, lo, hi); }
-  {
-    hyp.wave_speeds(u, providers, dir, smin, smax);
+    return hyp.pressure(state);
   }
 
-  /// Riemann CAPABILITIES (audit wave 3): HLLC hooks (contact_speed + hllc_star_state) and Roe
-  /// (roe_dissipation) forwarded from the HYPERBOLIC brick when it declares them (the DSL emits
-  /// them via enable_hllc; a C++ model can write them by hand). Concept-gated like
-  /// pressure / wave_speeds: without hooks, the composite does not expose them (canonical paths /
-  /// explicit rejections unchanged).
-  POPS_HD Real contact_speed(const State& ul, const State& ur, Real pl, Real pr, Real sl, Real sr,
-                             int dir) const
-    requires requires(const Hyperbolic h, const State a_, const State b_, Real p, Real q, Real x,
-                      Real y, int d) { h.contact_speed(a_, b_, p, q, x, y, d); }
-  {
-    return hyp.contact_speed(ul, ur, pl, pr, sl, sr, dir);
+  template <int Axis, class Providers>
+    requires composite_detail::WaveSpeedsAt<Axis, Hyperbolic, Providers>
+  POPS_HD void wave_speeds(const State& state, const Providers& providers, Real& lower,
+                           Real& upper) const {
+    static_assert(Axis >= 0 && Axis < dimension,
+                  "CompositeModel signed-wave axis is outside its rank");
+    if constexpr (requires { hyp.template wave_speeds<Axis>(state, providers, lower, upper); })
+      hyp.template wave_speeds<Axis>(state, providers, lower, upper);
+    else if constexpr (requires { hyp.wave_speeds(state, providers, Axis, lower, upper); })
+      hyp.wave_speeds(state, providers, Axis, lower, upper);
+    else
+      hyp.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State hllc_star_state(const State& u, Real p, Real s, Real sStar, int dir) const
-    requires requires(const Hyperbolic h, const State a_, Real p_, Real s_, Real ss_, int d) {
-      h.hllc_star_state(a_, p_, s_, ss_, d);
+
+  template <int Axis = 0, class Providers>
+    requires composite_detail::WaveSpeedsAt<Axis, Hyperbolic, Providers>
+  POPS_HD void wave_speeds_at_runtime_axis(const State& state, const Providers& providers, int axis,
+                                           Real& lower, Real& upper) const {
+    if (axis == Axis) {
+      wave_speeds<Axis>(state, providers, lower, upper);
+      return;
     }
-  {
-    return hyp.hllc_star_state(u, p, s, sStar, dir);
+    if constexpr (Axis + 1 < dimension) {
+      wave_speeds_at_runtime_axis<Axis + 1>(state, providers, axis, lower, upper);
+      return;
+    }
+    lower = upper = std::numeric_limits<Real>::quiet_NaN();
   }
+
+  template <class Providers>
+    requires composite_detail::WaveSpeedsAt<0, Hyperbolic, Providers>
+  POPS_HD void wave_speeds(const State& state, const Providers& providers, int axis, Real& lower,
+                           Real& upper) const {
+    wave_speeds_at_runtime_axis(state, providers, axis, lower, upper);
+  }
+
+  template <int Axis>
+    requires composite_detail::ContactSpeedAt<Axis, Hyperbolic>
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real speed_left, Real speed_right) const {
+    static_assert(Axis >= 0 && Axis < dimension,
+                  "CompositeModel contact-speed axis is outside its rank");
+    if constexpr (requires {
+                    hyp.template contact_speed<Axis>(left, right, pressure_left, pressure_right,
+                                                     speed_left, speed_right);
+                  })
+      return hyp.template contact_speed<Axis>(left, right, pressure_left, pressure_right,
+                                              speed_left, speed_right);
+    else
+      return hyp.contact_speed(left, right, pressure_left, pressure_right, speed_left, speed_right,
+                               Axis);
+  }
+
+  template <int Axis = 0>
+    requires composite_detail::ContactSpeedAt<Axis, Hyperbolic>
+  POPS_HD Real contact_speed_at_runtime_axis(const State& left, const State& right,
+                                             Real pressure_left, Real pressure_right,
+                                             Real speed_left, Real speed_right, int axis) const {
+    if (axis == Axis)
+      return contact_speed<Axis>(left, right, pressure_left, pressure_right, speed_left,
+                                 speed_right);
+    if constexpr (Axis + 1 < dimension)
+      return contact_speed_at_runtime_axis<Axis + 1>(left, right, pressure_left, pressure_right,
+                                                     speed_left, speed_right, axis);
+    return std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real speed_left, Real speed_right, int axis) const
+    requires composite_detail::ContactSpeedAt<0, Hyperbolic>
+  {
+    return contact_speed_at_runtime_axis(left, right, pressure_left, pressure_right, speed_left,
+                                         speed_right, axis);
+  }
+
+  template <int Axis>
+    requires composite_detail::StarStateAt<Axis, Hyperbolic>
+  POPS_HD State hllc_star_state(const State& state, Real pressure_value, Real speed,
+                                Real contact) const {
+    static_assert(Axis >= 0 && Axis < dimension,
+                  "CompositeModel HLLC star-state axis is outside its rank");
+    if constexpr (requires {
+                    hyp.template hllc_star_state<Axis>(state, pressure_value, speed, contact);
+                  })
+      return hyp.template hllc_star_state<Axis>(state, pressure_value, speed, contact);
+    else if constexpr (requires {
+                         hyp.hllc_star_state(state, pressure_value, speed, contact, Axis);
+                       })
+      return hyp.hllc_star_state(state, pressure_value, speed, contact, Axis);
+    else
+      return hyp.template star_state<Axis>(state, pressure_value, speed, contact);
+  }
+
+  template <int Axis = 0>
+    requires composite_detail::StarStateAt<Axis, Hyperbolic>
+  POPS_HD State hllc_star_state_at_runtime_axis(const State& state, Real pressure_value, Real speed,
+                                                Real contact, int axis) const {
+    if (axis == Axis)
+      return hllc_star_state<Axis>(state, pressure_value, speed, contact);
+    if constexpr (Axis + 1 < dimension)
+      return hllc_star_state_at_runtime_axis<Axis + 1>(state, pressure_value, speed, contact, axis);
+    return composite_detail::invalid_state<State>();
+  }
+
+  POPS_HD State hllc_star_state(const State& state, Real pressure_value, Real speed, Real contact,
+                                int axis) const
+    requires composite_detail::StarStateAt<0, Hyperbolic>
+  {
+    return hllc_star_state_at_runtime_axis(state, pressure_value, speed, contact, axis);
+  }
+
+  template <int Axis, class LeftProviders, class RightProviders>
+    requires composite_detail::RoeDissipationAt<Axis, Hyperbolic, LeftProviders, RightProviders>
+  POPS_HD State roe_dissipation(const State& left, const LeftProviders& left_providers,
+                                const State& right, const RightProviders& right_providers) const {
+    static_assert(Axis >= 0 && Axis < dimension, "CompositeModel Roe axis is outside its rank");
+    if constexpr (requires {
+                    hyp.template roe_dissipation<Axis>(left, left_providers, right,
+                                                       right_providers);
+                  })
+      return hyp.template roe_dissipation<Axis>(left, left_providers, right, right_providers);
+    else if constexpr (requires {
+                         hyp.roe_dissipation(left, left_providers, right, right_providers, Axis);
+                       })
+      return hyp.roe_dissipation(left, left_providers, right, right_providers, Axis);
+    else
+      return hyp.template roe_dissipation<Axis>(left, right);
+  }
+
+  template <int Axis = 0, class LeftProviders, class RightProviders>
+    requires composite_detail::RoeDissipationAt<Axis, Hyperbolic, LeftProviders, RightProviders>
+  POPS_HD State roe_dissipation_at_runtime_axis(const State& left,
+                                                const LeftProviders& left_providers,
+                                                const State& right,
+                                                const RightProviders& right_providers,
+                                                int axis) const {
+    if (axis == Axis)
+      return roe_dissipation<Axis>(left, left_providers, right, right_providers);
+    if constexpr (Axis + 1 < dimension)
+      return roe_dissipation_at_runtime_axis<Axis + 1>(left, left_providers, right, right_providers,
+                                                       axis);
+    return composite_detail::invalid_state<State>();
+  }
+
   template <class LeftProviders, class RightProviders>
-  POPS_HD State roe_dissipation(const State& ul, const LeftProviders& left_providers,
-                                const State& ur, const RightProviders& right_providers,
-                                int dir) const
-    requires requires(const Hyperbolic h, const State a_, const LeftProviders& x_, const State b_,
-                      const RightProviders& y_, int d) { h.roe_dissipation(a_, x_, b_, y_, d); }
+  POPS_HD State roe_dissipation(const State& left, const LeftProviders& left_providers,
+                                const State& right, const RightProviders& right_providers,
+                                int axis) const
+    requires composite_detail::RoeDissipationAt<0, Hyperbolic, LeftProviders, RightProviders>
   {
-    return hyp.roe_dissipation(ul, left_providers, ur, right_providers, dir);
+    return roe_dissipation_at_runtime_axis(left, left_providers, right, right_providers, axis);
   }
 
-  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int dir,
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int axis,
                                         int outward_sign, State& ghost) const
-    requires requires(const Hyperbolic h, const State a_, const State b_, int d, int side,
-                      State& out) { h.characteristic_no_inflow(a_, b_, d, side, out); }
+    requires requires(const Hyperbolic h, const State a, const State b, int d, int side,
+                      State& out) { h.characteristic_no_inflow(a, b, d, side, out); }
   {
-    return hyp.characteristic_no_inflow(interior, reference, dir, outward_sign, ghost);
+    return hyp.characteristic_no_inflow(interior, reference, axis, outward_sign, ghost);
   }
 
-  /// GEOMETRIC source term of polar curvature, delegated to the hyperbolic brick when it
-  /// exposes it (polar fluid: IsothermalFluxPolar). Concept-gated like pressure / wave_speeds:
-  /// if the hyperbolic does not provide it (polar ExB scalar transport), CompositeModel does not
-  /// expose it -> assemble_rhs_polar falls back to 0 (bit-identical). Does NOT touch the cartesian
-  /// (assemble_rhs never calls it).
-  POPS_HD State polar_geom_source(const State& u, Real r) const
-    requires requires(const Hyperbolic h, const State s, Real rr) { h.polar_geom_source(s, rr); }
-  {
-    return hyp.polar_geom_source(u, r);
-  }
-
-  /// Optional STEP BOUNDS (audit 2026-06, see core/physical_model.hpp): forwarded
-  /// conditionally like pressure / wave_speeds, otherwise the composite does not expose them and the
-  /// step policy stays the history. stability_speed / stability_dt come from the HYPERBOLIC
-  /// brick (it is the one the DSL emits); source_frequency comes from the SOURCE brick (it is
-  /// the source that knows its relaxation/collision frequency).
-  POPS_HD Real stability_speed(const State& u, const Aux& a, int dir) const
-    requires requires(const Hyperbolic h, const State s, const Aux aa, int d) {
-      h.stability_speed(s, aa, d);
+  POPS_HD State polar_geom_source(const State& state, Real radius) const
+    requires(dimension == 2) && requires(const Hyperbolic h, const State value, Real r) {
+      h.polar_geom_source(value, r);
     }
   {
-    return hyp.stability_speed(u, a, dir);
-  }
-  POPS_HD Real stability_dt(const State& u, const Aux& a) const
-    requires requires(const Hyperbolic h, const State s, const Aux aa) { h.stability_dt(s, aa); }
-  {
-    return hyp.stability_dt(u, a);
-  }
-  POPS_HD Real source_frequency(const State& u, const Aux& a) const
-    requires requires(const Source sc, const State s, const Aux aa) { sc.frequency(s, aa); }
-  {
-    return src.frequency(u, a);
+    return hyp.polar_geom_source(state, radius);
   }
 
-  /// PROJECTION PONCTUELLE post-pas (ADC-177) : forwardee depuis la brique HYPERBOLIQUE quand elle
-  /// declare project(U, aux) (le DSL l'emet via m.projection ; une brique native peut l'ecrire a la
-  /// main). Concept-gate comme stability_speed : sans methode, le compose ne l'expose pas et le
-  /// stepper n'applique aucune projection (chemin bit-identique).
-  POPS_HD State project(const State& u, const Aux& a) const
-    requires requires(const Hyperbolic h, const State s, const Aux aa) { h.project(s, aa); }
-  {
-    return hyp.project(u, a);
+  template <int Axis>
+    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Aux>
+  POPS_HD Real stability_speed(const State& state, const Aux& auxiliary) const {
+    if constexpr (requires { hyp.template stability_speed<Axis>(state, auxiliary); })
+      return hyp.template stability_speed<Axis>(state, auxiliary);
+    else
+      return hyp.stability_speed(state, auxiliary, Axis);
   }
 
-  /// ANALYTIC JACOBIAN of the source (audit wave 3): forwarded from the SOURCE brick when
-  /// it declares jacobian(U, aux, J) (J[r][c] = dS_r/dU_c). The Newton of the implicit source
-  /// uses it instead of finite differences (HasSourceJacobian trait); without the method,
-  /// nothing is exposed and the Newton keeps the historical finite differences.
-  POPS_HD void source_jacobian(const State& u, const Aux& a, Real (&J)[n_vars][n_vars]) const
-    requires requires(const Source sc, const State s, const Aux aa, Real (&JJ)[n_vars][n_vars]) {
-      sc.jacobian(s, aa, JJ);
+  template <int Axis = 0>
+    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Aux>
+  POPS_HD Real stability_speed_at_runtime_axis(const State& state, const Aux& auxiliary,
+                                               int axis) const {
+    if (axis == Axis)
+      return stability_speed<Axis>(state, auxiliary);
+    if constexpr (Axis + 1 < dimension)
+      return stability_speed_at_runtime_axis<Axis + 1>(state, auxiliary, axis);
+    return std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  POPS_HD Real stability_speed(const State& state, const Aux& auxiliary, int axis) const
+    requires composite_detail::StabilitySpeedAt<0, Hyperbolic, Aux>
+  {
+    return stability_speed_at_runtime_axis(state, auxiliary, axis);
+  }
+
+  POPS_HD Real stability_dt(const State& state, const Aux& auxiliary) const
+    requires requires(const Hyperbolic h, const State value, const Aux aux) {
+      h.stability_dt(value, aux);
     }
   {
-    src.jacobian(u, a, J);
+    return hyp.stability_dt(state, auxiliary);
+  }
+
+  POPS_HD Real source_frequency(const State& state, const Aux& auxiliary) const
+    requires requires(const Source source_brick, const State value, const Aux aux) {
+      source_brick.frequency(value, aux);
+    }
+  {
+    return src.frequency(state, auxiliary);
+  }
+
+  POPS_HD State project(const State& state, const Aux& auxiliary) const
+    requires requires(const Hyperbolic h, const State value, const Aux aux) {
+      h.project(value, aux);
+    }
+  {
+    return hyp.project(state, auxiliary);
+  }
+
+  POPS_HD void source_jacobian(const State& state, const Aux& auxiliary,
+                               Real (&jacobian)[n_vars][n_vars]) const
+    requires requires(const Source source_brick, const State value, const Aux aux,
+                      Real (&matrix)[n_vars][n_vars]) { source_brick.jacobian(value, aux, matrix); }
+  {
+    src.jacobian(state, auxiliary, jacobian);
   }
 };
 
