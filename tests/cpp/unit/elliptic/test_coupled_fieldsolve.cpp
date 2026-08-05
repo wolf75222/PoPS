@@ -311,7 +311,7 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
       PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
                               {{"gauge.value", 0.0}}});
   system.ensure_aux_width(kAuxBaseComps + 1);
-  system.register_elliptic_field("n0", "potential", kAuxBaseComps, -1, -1, 1);
+  system.register_elliptic_field("n0", "potential", std::vector<int>{kAuxBaseComps}, 1);
   system.set_block_elliptic_field("n0", "potential", [](const MultiFab& state, MultiFab& rhs) {
     add_scaled_component(state, Real(1), 0, rhs);
   });
@@ -432,11 +432,13 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   spec.B0 = 1.0;
   system.add_block("plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   system.ensure_aux_width(kAuxNamedBase + 3);
-  EXPECT_THROW(system.register_elliptic_field("plasma", "potential", kAuxNamedBase,
-                                              kAuxNamedBase + 1, kAuxNamedBase + 2, 0),
+  EXPECT_THROW(system.register_elliptic_field(
+                   "plasma", "potential",
+                   std::vector<int>{kAuxNamedBase, kAuxNamedBase + 1, kAuxNamedBase + 2}, 0),
                std::invalid_argument);
-  system.register_elliptic_field("plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
-                                 kAuxNamedBase + 2, -1);
+  system.register_elliptic_field(
+      "plasma", "potential", std::vector<int>{kAuxNamedBase, kAuxNamedBase + 1, kAuxNamedBase + 2},
+      -1);
   system.set_block_elliptic_field("plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
     add_scaled_component(state, Real(1), 0, rhs);
   });

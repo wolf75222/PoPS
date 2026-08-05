@@ -10,7 +10,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>  // Kokkos_Core under POPS_HAS_KOKKOS (kokkos_is_initialized)
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/boundary/periodicity.hpp>
@@ -427,7 +426,7 @@ inline py::dict numerical_defaults_report_to_dict() {
 
   py::dict amr;
   amr["max_levels"] = kAmrDefaultMaxLevels;
-  amr["refinement_ratio"] = kAmrRefRatio;
+  amr["refinement_ratio"] = AmrSystemConfig<kNativeDimension>{}.transition_ratios.front()[0];
   amr["refinement_disabled_threshold"] = static_cast<double>(kAmrRefinementDisabledThreshold);
   amr["phi_refinement_disabled_threshold"] =
       static_cast<double>(kAmrPhiRefinementDisabledThreshold);

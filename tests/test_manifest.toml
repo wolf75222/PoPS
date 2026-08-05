@@ -871,6 +871,11 @@ sources = ["tests/cpp/unit/mesh/test_nd_load_balance.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_named_field_output"
+sources = ["tests/cpp/unit/runtime/test_nd_named_field_output.cpp"]
+labels = ["unit", "runtime", "fields", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_tag_mask"
 sources = ["tests/cpp/unit/mesh/test_nd_tag_mask.cpp"]
 labels = ["unit", "mesh", "fast"]

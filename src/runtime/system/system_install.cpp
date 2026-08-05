@@ -5,6 +5,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
+#include <pops/runtime/named_field_output.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -372,6 +373,35 @@ void System<Dim>::ensure_aux_width(int ncomp) {
 }
 
 template <int Dim>
+void System<Dim>::register_elliptic_field(const std::string& block, const std::string& field,
+                                          const std::vector<int>& output_components,
+                                          int gradient_sign) {
+  require_assembling(p_->lifecycle_, "register_elliptic_field");
+  if (field.empty())
+    throw std::invalid_argument("System named elliptic field identity must be non-empty");
+  (void)p_->find(block);
+  runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
+  output.validate_width(p_->aux_ncomp_, "System");
+  throw std::logic_error(
+      "System exact-ranked named elliptic fields require an installed dimension-qualified "
+      "field-solver provider");
+}
+
+template <int Dim>
+void System<Dim>::set_block_elliptic_field(
+    const std::string& block_name, const std::string& field,
+    std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs) {
+  require_assembling(p_->lifecycle_, "set_block_elliptic_field");
+  if (field.empty() || !rhs)
+    throw std::invalid_argument(
+        "System named elliptic RHS requires a field identity and prepared closure");
+  (void)p_->find(block_name);
+  throw std::logic_error(
+      "System exact-ranked named elliptic fields require an installed dimension-qualified "
+      "field-solver provider");
+}
+
+template <int Dim>
 void System<Dim>::add_dt_bound(const std::string& label, std::function<double()> function) {
   require_assembling(p_->lifecycle_, "add_dt_bound");
   if (label.empty() || !function)
@@ -479,6 +509,11 @@ System<kNativeDimension>::prepared_block_periodicity() const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
 template void System<kNativeDimension>::ensure_aux_width(int);
+template void System<kNativeDimension>::register_elliptic_field(
+    const std::string&, const std::string&, const std::vector<int>&, int);
+template void System<kNativeDimension>::set_block_elliptic_field(
+    const std::string&, const std::string&,
+    std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
 template void System<kNativeDimension>::add_dt_bound(const std::string&,
                                                      std::function<double()>);
 template std::string System<kNativeDimension>::last_dt_bound() const;

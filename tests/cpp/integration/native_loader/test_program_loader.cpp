@@ -375,8 +375,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
                                         {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
                                         {0.0, 0.0, 0.0, 0.0});
     replacement.ensure_aux_width(kAuxNamedBase + 1);
-    replacement.register_elliptic_field("gas", "program-boundary-potential", kAuxNamedBase, -1, -1,
-                                        1);
+    replacement.register_elliptic_field("gas", "program-boundary-potential",
+                                        std::vector<int>{kAuxNamedBase}, 1);
     replacement.set_block_elliptic_field("gas", "program-boundary-potential",
                                          [](const MultiFab&, MultiFab&) {});
     replacement.set_state("gas", U0);

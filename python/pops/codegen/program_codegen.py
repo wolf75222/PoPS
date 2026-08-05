@@ -396,7 +396,7 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
     if target != "system":
         return ""
     return (
-        'extern "C" void pops_install_program(pops::System* sys) {\n'
+        'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {\n'
         "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n" + prelude + "\n"
         "  ctx.install([=](double dt) {\n"
@@ -412,10 +412,10 @@ def _emit_dt_bound_entry(target: str, body: str) -> str:
     """Emit one allocation-free facade-typed dt-bound ABI."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
-        facade = "pops::AmrSystem"
+        facade = "pops::AmrSystem<pops::kNativeDimension>"
     else:
         symbol = "pops_program_dt_bound"
-        facade = "pops::System"
+        facade = "pops::System<pops::kNativeDimension>"
     return (
         f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
         "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"

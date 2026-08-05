@@ -473,6 +473,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 #error "generated Program loaders require the shared runtime exception ABI consumer contract"
 #endif
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 {prepared_native_component_includes}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>

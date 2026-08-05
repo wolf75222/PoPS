@@ -237,8 +237,12 @@ def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_
     assert shared.count("struct ProgramExecutionProviderFor;") == 1
     assert shared.count("make_program_execution_provider(") == 1
     assert shared.count("make_program_execution_view(") == 1
-    assert "ProgramExecutionProviderFor<System>" in uniform
-    assert "ProgramExecutionProviderFor<AmrSystem>" in amr
+    assert "make_program_execution_provider(System<Dim>* system)" in uniform
+    assert "make_program_execution_view(System<Dim>* system)" in uniform
+    assert "class ProgramContext" in uniform
+    assert "class AmrProgramContext" in amr
+    assert "ProgramExecutionProviderFor<System>" not in uniform
+    assert "ProgramExecutionProviderFor<AmrSystem>" not in amr
     assert "explicit ProgramContext(void*" not in uniform
     assert "explicit AmrProgramContext(void*" not in amr
 
@@ -251,8 +255,9 @@ def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_
         assert forbidden not in codegen
     assert codegen.count("make_program_execution_provider(sys)") >= 3
     assert codegen.count("make_program_execution_view(sys)") == 1
-    assert "pops_install_program(pops::System* sys)" in codegen
-    assert "pops_install_program_amr(pops::AmrSystem* sys)" in codegen
+    assert "pops_install_program(pops::System<pops::kNativeDimension>* sys)" in codegen
+    assert "pops_install_program_amr(" in codegen
+    assert "pops::AmrSystem<pops::kNativeDimension>* sys" in codegen
 
 
 def test_extracted_operations_have_one_source_definition():

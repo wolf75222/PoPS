@@ -100,7 +100,8 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         clock_identity = json.dumps(program.clock.qualified_id)
         return (
             '\n#include <pops/runtime/program/amr_program_context.hpp>\n'
-            'extern "C" void pops_install_program_amr(pops::AmrSystem* sys) {\n'
+            'extern "C" void pops_install_program_amr('
+            'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
             '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
             '  auto& ctx = *ctx_owner;\n'
             f'  ctx.configure_primary_clock({clock_identity});\n'
@@ -254,7 +255,8 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '// blocks by name and seeding the runtime params. The shared factory selects the provider and\n'
         '// the wrapper installs only the parent/child clock driver: the SAME\n'
         '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
-        'extern "C" void pops_install_program_amr(pops::AmrSystem* sys) {\n'
+        'extern "C" void pops_install_program_amr('
+        'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
         '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
         '  auto& ctx = *ctx_owner;\n'
         + transform_guard + level_resources +

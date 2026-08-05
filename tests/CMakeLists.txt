@@ -445,6 +445,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_hierarchy_plan
   test_nd_layout
   test_nd_load_balance
+  test_nd_named_field_output
   test_nd_tag_mask
   test_nd_topology
   test_nd_transfer

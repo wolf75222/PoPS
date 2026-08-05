@@ -171,6 +171,7 @@ set(POPS_CPP_TEST_SOURCE_test_nd_flux_ledger "tests/cpp/unit/amr/test_nd_flux_le
 set(POPS_CPP_TEST_SOURCE_test_nd_hierarchy_plan "tests/cpp/unit/mesh/test_nd_hierarchy_plan.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_layout "tests/cpp/unit/mesh/test_nd_layout.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_load_balance "tests/cpp/unit/mesh/test_nd_load_balance.cpp")
+set(POPS_CPP_TEST_SOURCE_test_nd_named_field_output "tests/cpp/unit/runtime/test_nd_named_field_output.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_tag_mask "tests/cpp/unit/mesh/test_nd_tag_mask.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_topology "tests/cpp/unit/mesh/test_nd_topology.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_transfer "tests/cpp/unit/amr/test_nd_transfer.cpp")
