@@ -15,6 +15,7 @@ _METADATA_KEYS = frozenset({
     "params",
     "aux_names",
     "n_aux",
+    "native_dimension",
     "capabilities",
     "wave_speed_provider",
 })
@@ -41,6 +42,7 @@ class ArtifactModelMetadata:
     params: dict[str, Any]
     aux_names: tuple[str, ...]
     n_aux: int
+    native_dimension: int
     state_space: str
     capabilities: dict[str, bool]
     wave_speed_provider: str | None
@@ -167,6 +169,11 @@ def _metadata(
     n_aux = data["n_aux"]
     if not isinstance(n_aux, int) or isinstance(n_aux, bool) or n_aux < len(aux_names):
         raise ValueError("compiled model n_aux cannot be smaller than its named aux metadata")
+    native_dimension = data["native_dimension"]
+    if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
+        raise TypeError("compiled model native_dimension must be an exact integer")
+    if native_dimension not in (1, 2, 3):
+        raise ValueError("compiled model native_dimension must be 1, 2, or 3")
     if not isinstance(data["capabilities"], Mapping):
         raise TypeError("compiled model capabilities metadata must be a mapping")
     capabilities = dict(data["capabilities"])
@@ -188,6 +195,7 @@ def _metadata(
         params=params,
         aux_names=aux_names,
         n_aux=n_aux,
+        native_dimension=native_dimension,
         state_space=state_spaces[0],
         capabilities=capabilities,
         wave_speed_provider=wave_speed_provider,

@@ -17,7 +17,7 @@ _SEQUENCE_FIELDS = (
 _SCALAR_FIELDS = (
     "has_hllc", "has_roe", "has_wave_speeds", "has_characteristic_no_inflow",
     "so_path", "backend", "target",
-    "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
+    "n_vars", "gamma", "n_aux", "native_dimension", "abi_key", "model_hash", "cxx", "std",
     "wave_speed_provider", "hllc_provider", "roe_provider", "roe_entropy_policy",
     "roe_entropy_delta",
 )
@@ -66,6 +66,11 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
                 "CompiledModel.%s contains non-data value %s" % (name, type(value).__name__))
     for name in _SEQUENCE_FIELDS:
         _string_tuple(_core_value(compiled, name), name)
+    native_dimension = _core_value(compiled, "native_dimension")
+    if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
+        raise TypeError("CompiledModel.native_dimension must be an exact integer")
+    if native_dimension not in (1, 2, 3):
+        raise ValueError("CompiledModel.native_dimension must be 1, 2, or 3")
     has_wave_speeds = _core_value(compiled, "has_wave_speeds")
     wave_speed_provider = _core_value(compiled, "wave_speed_provider")
     allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}

@@ -10,7 +10,6 @@ from pops._ir import Var  # noqa: F401  -- primitive_vars self-reference check
 from pops._ir.ops import left, right  # noqa: F401  -- Model.left / Model.right sugar
 
 from ._modelpkg import model as _model
-from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
 from ._model import HyperbolicModel
 from ._facade_compile import _FacadeCompileMixin
 from ._freeze import PhysicsFreezable
@@ -106,13 +105,13 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.recovery_admissibility(**constraints)
 
     def aux(self, name: Any) -> Any:
-        """CANONICAL auxiliary field (must be a key of AUX_CANONICAL: phi/grad_x/grad_y/B_z/T_e)."""
+        """Canonical auxiliary field valid for the model's inferred Cartesian rank."""
         return self._m.aux(name)
 
     def aux_field(self, name: Any) -> Any:
         """NAMED auxiliary field (ADC-70 phase 1) provided by a block via System.set_aux_field(block, name,
-        array). name is ARBITRARY (identifier); the k-th call reserves the aux channel component
-        AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k)). At most AUX_NAMED_MAX per model.
+        array). name is ARBITRARY (identifier); the k-th call reserves the k-th model-named slot
+        after the exact-ranked canonical prefix. At most AUX_NAMED_MAX per model.
         Returns a Var usable in flux / source / eigenvalues. Delegates to HyperbolicModel.aux_field."""
         return self._m.aux_field(name)
 

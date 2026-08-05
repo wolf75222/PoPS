@@ -24,7 +24,7 @@ class _SystemAuxState(_System):
         their dedicated paths (B_z -> set_magnetic_field, T_e -> set_electron_temperature_from, phi/grad
         derived by solve_fields). Otherwise look it up in the block table (filled at add_equation from
         the compiled model). Raises ValueError with an actionable message on unknown block/name."""
-        from pops.physics.aux import AUX_CANONICAL  # late import (physics <-> __init__ cycle)
+        from pops.physics.aux import AUX_CANONICAL_NAMES  # late import (physics <-> __init__ cycle)
 
         if name == "B_z":
             raise ValueError(
@@ -36,7 +36,7 @@ class _SystemAuxState(_System):
                 "set_aux_field: 'T_e' (electron temperature) is DERIVED from a fluid block via "
                 "sim.set_electron_temperature_from(block), NOT set via set_aux_field."
             )
-        if name in AUX_CANONICAL:
+        if name in AUX_CANONICAL_NAMES:
             raise ValueError(
                 "set_aux_field: '%s' is a CANONICAL aux field (derived by the solver, not settable); "
                 "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name

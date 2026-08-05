@@ -15,7 +15,7 @@ from pops._ir import _wrap
 from pops._ir.visitors import _expr_uses_cons_or_prim
 from pops.model import OperatorHandle
 
-from .aux import AUX_CANONICAL
+from .aux import AUX_CANONICAL_NAMES
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -68,22 +68,18 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError("elliptic_field('%s'): already declared" % name)
         if name in self._local_transforms:
             raise ValueError("elliptic_field('%s'): name collides with a local_transform" % name)
+        layout = self._aux_layout()
         if aux is None:
-            axes = tuple(self._flux)
-            if not axes:
-                raise ValueError(
-                    "elliptic_field('%s'): aux= is required when no ranked flux declares the "
-                    "model dimension" % name
-                )
-            aux = ["phi", *("grad_" + axis for axis in axes)]
+            aux = ["phi", *("grad_" + axis for axis in layout.axes)]
         else:
             aux = list(aux)
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
-        if len(aux) > 4:
+        if len(aux) not in (1, 1 + layout.dimension):
             raise ValueError(
-                "elliptic_field('%s'): aux may contain one scalar and at most three ranked "
-                "gradient components; got %d outputs" % (name, len(aux)))
+                "elliptic_field('%s'): aux must contain one scalar or that scalar plus exactly "
+                "%d ranked gradient components; got %d outputs"
+                % (name, layout.dimension, len(aux)))
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
@@ -102,7 +98,7 @@ class _SourceMixin(_HyperbolicModel):
         # the same surface). A source/flux READING the named field's solved aux is the supported pattern;
         # it is the named-elliptic RHS itself that must be a function of U only.
         rhs_aux = rhs.deps() & (
-            set(AUX_CANONICAL)
+            set(AUX_CANONICAL_NAMES)
             | set(self.aux_extra_names)
             | {"phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e"}
         )

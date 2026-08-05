@@ -64,7 +64,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
 
     def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
         """Exact low-level report projection used before a formula model is discarded."""
-        from pops.physics.aux import aux_total_n_aux, roles_for
+        from pops.physics.aux import roles_for
 
         runtime_params = self.runtime_param_nodes()
         if any(node.handle is None for node in runtime_params):
@@ -82,13 +82,14 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             wave_speed_provider = "pressure_derived"
         return {
             "schema_version": 3,
+            "native_dimension": self._aux_layout().dimension,
             "state_spaces": ("U",),
             "cons_names": tuple(self.cons_names),
             "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
             "n_vars": self.n_vars,
             "params": params,
             "aux_names": tuple(self.aux_extra_names),
-            "n_aux": aux_total_n_aux(self.aux_names, self.aux_extra_names),
+            "n_aux": self._total_n_aux(),
             "capabilities": {},
             "wave_speed_provider": wave_speed_provider,
         }

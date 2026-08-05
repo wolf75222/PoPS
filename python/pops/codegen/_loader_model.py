@@ -26,7 +26,8 @@ class CompiledModel:
 
     def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
-                 abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
+                 abi_key: Any, model_hash: Any, cxx: Any, std: Any, native_dimension: Any,
+                 target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
@@ -76,6 +77,11 @@ class CompiledModel:
                 % (wave_speed_provider,)
             )
         self.wave_speed_provider = wave_speed_provider
+        if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
+            raise TypeError("CompiledModel native_dimension must be an exact integer")
+        if native_dimension not in (1, 2, 3):
+            raise ValueError("CompiledModel native_dimension must be 1, 2, or 3")
+        self.native_dimension = native_dimension
         self.so_path = so_path
         if backend != "production":
             raise ValueError("CompiledModel backend must be the native production route")
@@ -170,6 +176,7 @@ class CompiledModel:
             "params": dict(self.params),
             "aux_names": tuple(self.aux_extra_names),
             "n_aux": self.n_aux,
+            "native_dimension": self.native_dimension,
             "capabilities": dict(self.caps),
             "wave_speed_provider": self.wave_speed_provider,
         }
@@ -298,10 +305,10 @@ class CompiledModel:
                                          if self.install_plan is not None else None))
 
     def __repr__(self) -> str:
-        return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
+        return ("CompiledModel(backend=%r, target=%r, dimension=%d, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
                 "wave_speed_provider=%r, hllc_provider=%r, roe_provider=%r, "
                 "roe_entropy_policy=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
-                % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
+                % (self.backend, self.target, self.native_dimension, self.so_path, self.n_vars, self.gamma, self.n_aux,
                    self.wave_speed_provider, self.hllc_provider, self.roe_provider,
                    self.roe_entropy_policy, self.runtime_param_names,
                    self.abi_key or "", self.model_hash or ""))

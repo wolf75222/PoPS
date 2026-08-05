@@ -130,6 +130,7 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
         "owner_block": output_block.local_id,
         "key": operator.name,
         "components": components,
+        "dimension": dimension,
         "gradient_sign": gradient_sign,
     }, gradient_sign
 
@@ -627,17 +628,21 @@ def _prepare_output(
     declared = tuple(getattr(model, "aux_extra_names", ()) or ())
     components = tuple(route["components"])
     try:
-        indices = [aux_component_index(component, declared) for component in components]
+        indices = [
+            aux_component_index(
+                component, declared, dimension=route["dimension"]
+            )
+            for component in components
+        ]
     except ValueError as error:
         raise ValueError(
             "field output route %r is absent from block %r native aux layout: %s"
             % (operator.name, block, ", ".join(components))
         ) from error
-    indices.extend([-1] * (3 - len(indices)))
     gradient_sign = route.get("gradient_sign")
     if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
         raise ValueError("field output route has no valid GradientOutput sign")
-    if indices[1] < 0 and gradient_sign != 1:
+    if len(indices) == 1 and gradient_sign != 1:
         raise ValueError("field output route carries a sign without gradient components")
     return {
         "block": block,
@@ -658,9 +663,7 @@ def _install_output(
     context.engine.register_elliptic_field(
         output_payload["block"],
         output_payload["key"],
-        indices[0],
-        indices[1],
-        indices[2],
+        indices,
         output_payload["gradient_sign"],
     )
 
@@ -684,7 +687,7 @@ _PROVIDER = register_prepared_field_lowering_provider(PreparedFieldLoweringProvi
     ),
     capabilities={
         "targets": ("system", "amr_system"),
-        "dimension": 2,
+        "dimensions": (1, 2, 3),
         "layout": ("uniform", "amr"),
         "principal": "scalar-laplacian",
         "reaction": "positive-scalar",

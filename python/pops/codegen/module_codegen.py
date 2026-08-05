@@ -35,14 +35,14 @@ from pops.codegen.cpp_writer import _cpp_identifier
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
 from pops.codegen.module_emit_helpers import (  # noqa: F401
-    _AUX_BASE_COMPS,
-    _AUX_CANONICAL,
-    _AUX_NAMED_BASE,
     _CANONICAL_ROLES,
+    _aux_component_index,
+    _aux_layout,
     _codegen_exprs,
     _jac_entries,
     _live_prims,
     _prim_block,
+    _ranked_axes,
     _role_of,
     _roles_for,
 )
@@ -65,25 +65,39 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     name = _cpp_identifier(func or model.name)
     if not model._flux:
         raise ValueError("emit_cpp : call set_flux(...) first")
-    if len(model._flux.get("x", [])) != model.n_vars or len(model._flux.get("y", [])) != model.n_vars:
-        raise ValueError("emit_cpp : flux expected with %d components per direction" % model.n_vars)
+    axes = _ranked_axes(model)
+    wrong_flux_arity = {
+        axis: len(model._flux[axis])
+        for axis in axes
+        if len(model._flux[axis]) != model.n_vars
+    }
+    if wrong_flux_arity:
+        raise ValueError(
+            "emit_cpp : flux expected with %d components on every ranked axis; got %r"
+            % (model.n_vars, wrong_flux_arity)
+        )
     nc = model.n_vars
     out = [
         "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % model.name,
-        "// flux physique F = flux(U, dir) ; dir 0=x, 1=y ; U et F de taille %d." % nc,
+        "// flux physique F = flux<Axis>(U) sur %d axes ; U et F de taille %d."
+        % (len(axes), nc),
         "#include <cmath>",
-        "template <class Real>",
-        "inline void %s_flux(const Real* U, Real* F, int dir) {" % name,
+        "template <int Axis, class Real>",
+        "inline void %s_flux(const Real* U, Real* F) {" % name,
+        "  static_assert(Axis >= 0 && Axis < %d, \"flux axis is outside the emitted rank\");"
+        % len(axes),
     ]
     out += ["  const Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
     out += ["  const Real %s = %s;" % (p, e.to_cpp()) for p, e in model.prim_defs.items()]
-    tl, cpps = _codegen_exprs(model, model._flux["x"] + model._flux["y"], cse, real="Real", indent="  ")
-    out += tl
-    out.append("  if (dir == 0) {")
-    out += ["    F[%d] = %s;" % (i, cpps[i]) for i in range(nc)]
-    out.append("  } else {")
-    out += ["    F[%d] = %s;" % (i, cpps[nc + i]) for i in range(nc)]
-    out += ["  }", "}"]
+    for ordinal, axis in enumerate(axes):
+        out.append("  if constexpr (Axis == %d) {" % ordinal)
+        tl, cpps = _codegen_exprs(
+            model, model._flux[axis], cse, real="Real", indent="    "
+        )
+        out += tl
+        out += ["    F[%d] = %s;" % (i, cpp) for i, cpp in enumerate(cpps)]
+        out.append("  }")
+    out.append("}")
     return "\n".join(out) + "\n"
 
 
@@ -148,7 +162,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     # If a formula reads an EXTRA aux field (B_z...), declare n_aux: CompositeModel
     # propagates it (max over the bricks) and the system sizes/populates the shared aux channel.
     # Without an extra field -> no n_aux emitted -> brick strictly identical to the historical one.
-    if na > _AUX_BASE_COMPS:
+    if na > _aux_layout(model).base_components:
         S.append("  static constexpr int n_aux = %d;" % na)
     S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const pops::Aux& a) const {"
              % (nc, nc))
@@ -244,31 +258,31 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
 # ---------------------------------------------------------------------------
 
 def _elliptic_field_registrations(model: Any, nm: Any) -> list:
-    """Per named elliptic field (ADC-428): (field, brick_struct, phi_comp, gx_comp, gy_comp) for the
-    native loader. The aux component of each output name is its channel index: a CANONICAL name
-    (phi/grad_x/...) maps via AUX_CANONICAL; a model-named aux (aux_field) maps to
-    AUX_NAMED_BASE + its position in aux_extra_names. A name the model never declared as an aux is
-    rejected (the solve would write a component no source can read). gx/gy default to -1 (phi only)
-    when the field lists fewer than 3 aux names."""
+    """Return exact-ranked named-field registrations for the native loader.
+
+    Each row is ``(field, brick_struct, components)``. ``components`` contains
+    either the scalar output alone or that scalar followed by one gradient slot
+    per physical axis. No two-dimensional padding enters the emitted ABI.
+    """
     def comp(name: Any) -> int:
-        if name in _AUX_CANONICAL:
-            return _AUX_CANONICAL[name]
-        if name in model.aux_extra_names:
-            return _AUX_NAMED_BASE + model.aux_extra_names.index(name)
-        raise ValueError(
-            "elliptic_field: aux output '%s' is not a declared aux field; declare it with "
-            "m.aux_field('%s') (so it gets an aux-channel slot a source can read)" % (name, name))
+        try:
+            return _aux_component_index(model, name)
+        except ValueError as error:
+            raise ValueError(
+                "elliptic_field: aux output '%s' is not a declared aux field; declare it with "
+                "m.aux_field('%s') (so it gets an aux-channel slot a source can read)"
+                % (name, name)
+            ) from error
     regs = []
+    layout = _aux_layout(model)
     for fld in sorted(model._elliptic_fields):
         aux = model._elliptic_fields[fld]["aux"]
-        if len(aux) == 2 or len(aux) > 3:
+        if len(aux) not in (1, 1 + layout.dimension):
             raise ValueError(
-                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
-                "cannot register %d outputs yet" % (fld, len(aux)))
-        phi_c = comp(aux[0])
-        gx_c = comp(aux[1]) if len(aux) > 1 else -1
-        gy_c = comp(aux[2]) if len(aux) > 2 else -1
-        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), phi_c, gx_c, gy_c))
+                "elliptic_field('%s'): aux outputs must have length 1 or %d; got %d"
+                % (fld, 1 + layout.dimension, len(aux)))
+        components = tuple(comp(name) for name in aux)
+        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), components))
     return regs
 
 

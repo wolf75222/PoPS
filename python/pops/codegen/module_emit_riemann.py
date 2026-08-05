@@ -20,7 +20,7 @@ from typing import Any
 from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
-    _AUX_CANONICAL,
+    _aux_component_index,
     _codegen_exprs,
     _live_prims,
     _prim_block,
@@ -338,7 +338,7 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
                 for p, e in model.prim_defs.items()]
         if has_aux:
             out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
-                    % (side, n, av, _AUX_CANONICAL[n])
+                    % (side, n, av, _aux_component_index(model, n))
                     for n in model.aux_names]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):

@@ -56,19 +56,14 @@ def model_hash(model: Any, params: Any = None) -> str:
         return tuple(canonical_axis_mapping(mapping, where=where))
 
     # --- lazy helpers: resolve at call time, not at import time ---
-    def _aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
-        # Mirrors pops.dsl.aux_total_n_aux without importing dsl.
-        _AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
-        _AUX_BASE_COMPS = 3
-        _AUX_NAMED_BASE = 5
-        w = _AUX_BASE_COMPS
-        for nm in aux_names:
-            if nm not in _AUX_CANONICAL:
-                raise ValueError("unknown aux field %r" % (nm,))
-            w = max(w, _AUX_CANONICAL[nm] + 1)
-        if aux_extra_names:
-            w = max(w, _AUX_NAMED_BASE + len(aux_extra_names))
-        return w
+    def _aux_total_n_aux(
+        aux_names: Any, aux_extra_names: Any, *, dimension: int
+    ) -> int:
+        from pops._aux_layout import aux_total_n_aux
+
+        return aux_total_n_aux(
+            aux_names, aux_extra_names, dimension=dimension
+        )
 
     def _role_of(name: Any) -> str:
         _CANONICAL_ROLES = {
@@ -224,7 +219,12 @@ def model_hash(model: Any, params: Any = None) -> str:
             parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
         if ws.get("im_tol") is not None:
             parts.append("ws_jac_im_tol=%s" % _scalar_token(ws["im_tol"]))
-    parts.append("n_aux=%d" % _aux_total_n_aux(m.aux_names, m.aux_extra_names))
+    parts.append(
+        "n_aux=%d"
+        % _aux_total_n_aux(
+            m.aux_names, m.aux_extra_names, dimension=len(flux_axes)
+        )
+    )
     if m.aux_extra_names:
         parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
     parts.append("gamma=%s" % ("None" if m.gamma is None else _scalar_token(m.gamma)))
@@ -330,12 +330,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     # must exist before set_block_elliptic_field is called.
     ell_field_prepare_lines = ""
     ell_field_attach_lines = ""
-    for index, (fld, brick, phi_c, gx_c, gy_c) in enumerate(ell_field_regs):
+    for index, (fld, brick, components) in enumerate(ell_field_regs):
         gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % fld)
-        if gx_c < 0 and gradient_sign != 1:
+        if len(components) == 1 and gradient_sign != 1:
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % fld)
         ell_field_prepare_lines += (
@@ -347,9 +347,17 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             % (index, brick, index, index, index)
         )
         ell_field_attach_lines += (
-            '  s->register_elliptic_field(name, "%s", %d, %d, %d, %d);\n'
+            '  s->register_elliptic_field(name, "%s", '
+            'std::array<int, %d>{%s}, %d);\n'
             '  s->set_block_elliptic_field(name, "%s", std::move(named_elliptic_rhs_%d));\n'
-            % (fld, phi_c, gx_c, gy_c, gradient_sign, fld, index)
+            % (
+                fld,
+                len(components),
+                ", ".join(str(component) for component in components),
+                gradient_sign,
+                fld,
+                index,
+            )
         )
     if m._elliptic is not None:
         ell_field_prepare_lines += (

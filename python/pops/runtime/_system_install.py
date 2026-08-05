@@ -77,7 +77,7 @@ class _SystemInstall(_System):
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.abi import check_compiled_matches_module
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import AUX_NAMED_BASE
+        from pops.physics.aux import aux_layout
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
@@ -143,7 +143,8 @@ class _SystemInstall(_System):
         # Consumed by set_aux_field / aux_field; the adders have already widened the aux channel
         # (pops_compiled_naux -> ensure_aux_width), so the component exists.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])
-        self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
+        named_base = aux_layout(compiled.native_dimension).named_base
+        self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
 
         backend = compiled.backend
         # Descriptor-owned model predicates are shared verbatim with AMR and availability.

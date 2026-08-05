@@ -136,7 +136,7 @@ class _AmrSystemEquation(_AmrSystem):
         guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import AUX_NAMED_BASE
+        from pops.physics.aux import aux_layout
 
         spatial = self._lower_spatial(spatial)
         time = time if time is not None else Explicit()
@@ -363,15 +363,16 @@ class _AmrSystemEquation(_AmrSystem):
         # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])
         if extra:
-            self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
+            named_base = aux_layout(compiled.native_dimension).named_base
+            self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
 
     def _resolve_aux_field(self, block: Any, name: Any) -> Any:
         """Resolve (block, named aux field) -> aux channel component (ADC-291). Mirror of
         System._resolve_aux_field: a canonical name is redirected to its dedicated path; an unknown
         block or an undeclared field raises (no silent component-0 fallback)."""
-        from pops.physics.aux import AUX_CANONICAL
+        from pops.physics.aux import AUX_CANONICAL_NAMES
 
-        if name in AUX_CANONICAL:
+        if name in AUX_CANONICAL_NAMES:
             if name == "B_z":
                 raise ValueError(
                     "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "

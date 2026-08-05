@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops._cartesian_axes import canonical_axis_mapping
 from pops._ir import Var, _wrap
 
-from .aux import AUX_CANONICAL, AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
+from .aux import AUX_CANONICAL_NAMES, AUX_NAMED_MAX, aux_layout
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -53,6 +54,11 @@ class _VariablesMixin(_HyperbolicModel):
         ``author_electrostatic_lorentz`` also reads it) reserves the channel ONCE. Re-appending would
         emit the per-cell binding ``const pops::Real B_z = a.B_z;`` twice in one kernel scope (a C++
         redefinition), so the second declaration returns the Var without re-registering."""
+        if name not in AUX_CANONICAL_NAMES:
+            raise ValueError(
+                "unknown canonical aux field %r: expected one of %s"
+                % (name, sorted(AUX_CANONICAL_NAMES))
+            )
         if name not in self.aux_names:
             self.aux_names.append(name)
         return Var(name, "aux")
@@ -73,7 +79,7 @@ class _VariablesMixin(_HyperbolicModel):
         if not (isinstance(name, str) and name.isidentifier()):
             raise ValueError("aux_field(%r): invalid name (C++ identifier expected: "
                              "letters/digits/_, without a leading digit)" % (name,))
-        if name in AUX_CANONICAL:
+        if name in AUX_CANONICAL_NAMES:
             raise ValueError(
                 "aux_field('%s') : '%s' is a CANONICAL aux field; use aux('%s') (and the "
                 "dedicated path, e.g. set_magnetic_field for B_z, set_electron_temperature_from "
@@ -90,10 +96,11 @@ class _VariablesMixin(_HyperbolicModel):
         """C++ locals for the aux fields read in a formula: canonical '<n>' <- a.<n> ;
         named '<n>' <- a.extra_field(k) (k = position in aux_extra_names). The local name is
         IDENTICAL to the one the Expr emits (Var.to_cpp), so the formula references it directly."""
-        lines = ["    const pops::Real %s = a.%s;" % (n, n) for n in self.aux_names]
-        lines += ["    const pops::Real %s = a.extra_field(%d);" % (n, k)
-                  for k, n in enumerate(self.aux_extra_names)]
-        return lines
+        return [
+            "    const pops::Real %s = a.template flux_provider<%d>();"
+            % (name, self._aux_component_index(name))
+            for name in (*self.aux_names, *self.aux_extra_names)
+        ]
 
     def _flux_provider_locals_lines(self) -> Any:
         """C++ locals read from the exact physical-flux provider protocol.
@@ -105,13 +112,13 @@ class _VariablesMixin(_HyperbolicModel):
         """
         lines = [
             "    const pops::Real %s = a.template flux_provider<%d>();"
-            % (name, AUX_CANONICAL[name])
+            % (name, self._aux_component_index(name))
             for name in self.aux_names
         ]
         lines += [
             "    const pops::Real %s = a.template flux_provider<%d>();"
-            % (name, AUX_NAMED_BASE + index)
-            for index, name in enumerate(self.aux_extra_names)
+            % (name, self._aux_component_index(name))
+            for name in self.aux_extra_names
         ]
         return lines
 
@@ -122,7 +129,20 @@ class _VariablesMixin(_HyperbolicModel):
 
     def _total_n_aux(self) -> Any:
         """TOTAL width of the model's aux channel (canonical + named fields)."""
-        return aux_total_n_aux(self.aux_names, self.aux_extra_names)
+        return self._aux_layout().required_components(
+            self.aux_names, self.aux_extra_names
+        )
+
+    def _aux_layout(self) -> Any:
+        """Dimension-qualified aux layout derived from the physical flux rank."""
+        axes = canonical_axis_mapping(self._flux, where="model auxiliary layout")
+        layout = aux_layout(len(axes))
+        for name in self.aux_names:
+            layout.component_index(name)
+        return layout
+
+    def _aux_component_index(self, name: Any) -> int:
+        return self._aux_layout().component_index(name, self.aux_extra_names)
 
     def set_primitive_state(self, *vars_or_names: Any, roles: Any = None) -> None:
         """Declares the ORDERED layout of the primitive state (Prim): component names, in order.

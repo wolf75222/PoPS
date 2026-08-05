@@ -7,7 +7,7 @@ module never imports pops.dsl or pops.physics at module level.
 
 Contents
 --------
-_AUX_BASE_COMPS, _AUX_CANONICAL, _AUX_NAMED_BASE   -- aux channel constants
+_aux_layout, _aux_component_index                  -- exact-ranked aux authority
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
 _ranked_axes, _axis_values                          -- exact Cartesian-rank helpers
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._aux_layout import aux_layout as _make_aux_layout
 from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
@@ -23,15 +24,6 @@ from pops.codegen.cpp_writer import (
     _recip_rewrite,
 )
 from pops._ir.visitors import _dependencies
-
-# --- Aux channel constants (mirrors of pops.dsl module-level constants) -----
-# These duplicate the values from pops.dsl intentionally to avoid an import
-# cycle.  They MUST stay in sync with AUX_BASE_COMPS / AUX_CANONICAL in
-# pops.dsl (which themselves mirror the C++ POPS_AUX_FIELDS table).
-_AUX_BASE_COMPS = 3
-_AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
-_AUX_NAMED_BASE = 5
-
 
 # ---------------------------------------------------------------------------
 # roles_for -- local copy; avoids importing pops.dsl at module level.
@@ -66,6 +58,16 @@ def _roles_for(names: Any, override: Any = None) -> list:
 def _ranked_axes(model: Any) -> tuple[str, ...]:
     """Return the model's one canonical x[/y[/z]] rank authority."""
     return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
+
+
+def _aux_layout(model: Any) -> Any:
+    """Return the auxiliary layout attached to the emitted physical rank."""
+    return _make_aux_layout(len(_ranked_axes(model)))
+
+
+def _aux_component_index(model: Any, name: Any) -> int:
+    """Resolve a canonical or model-named provider in that exact layout."""
+    return _aux_layout(model).component_index(name, model.aux_extra_names)
 
 
 def _axis_values(model: Any, values: Any, *, where: str) -> list:

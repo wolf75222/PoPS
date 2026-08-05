@@ -314,17 +314,13 @@ def _aux_comp(impl: Any, name: Any) -> int:
     """Component index of an aux field @p name in the System aux channel: canonical (dsl.AUX_CANONICAL)
     or a model NAMED aux field (dsl.AUX_NAMED_BASE + position in aux_extra_names). @p impl is the
     HyperbolicModel."""
-    from pops.physics.aux import AUX_CANONICAL, AUX_NAMED_BASE
-
-    if name in AUX_CANONICAL:
-        return AUX_CANONICAL[name]
-    extra = list(getattr(impl, "aux_extra_names", []) or [])
-    if name in extra:
-        return AUX_NAMED_BASE + extra.index(name)
-    raise NotImplementedError(
-        "emit_cpp_program: aux field '%s' is neither canonical (%s) nor a declared named aux field "
-        "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra)
-    )
+    try:
+        return impl._aux_component_index(name)
+    except ValueError as error:
+        raise NotImplementedError(
+            "emit_cpp_program: aux field '%s' is absent from the model's exact-ranked aux layout"
+            % name
+        ) from error
 
 
 def _has_runtime_param(exprs: Any) -> bool:

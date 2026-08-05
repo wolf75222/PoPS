@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._cartesian_axes import flattened_axis_values
 from ._modelpkg import model as _model
-from .aux import AUX_CANONICAL, roles_for
+from .aux import AUX_CANONICAL_NAMES, roles_for
 from pops._ir.visitors import _dependencies
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ class _OperatorViewMixin(_HyperbolicModel):
 
     def _aux_name_set(self) -> Any:
         """Names that denote an auxiliary field read by a formula (canonical + named)."""
-        return set(AUX_CANONICAL) | set(self.aux_extra_names)
+        return set(AUX_CANONICAL_NAMES) | set(self.aux_extra_names)
 
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
@@ -78,7 +78,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         therefore retain the single ``AUX_CANONICAL`` order shared with the native ABI.
         """
         read = set(self.aux_names)
-        comps = [nm for nm in AUX_CANONICAL if nm in read]
+        comps = [nm for nm in self._aux_layout().canonical if nm in read]
         for nm in self.aux_extra_names:
             if nm not in comps:
                 comps.append(nm)

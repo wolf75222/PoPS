@@ -17,7 +17,7 @@ from pops.codegen.cpp_writer import (
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
-    _AUX_BASE_COMPS,
+    _aux_layout,
     _axis_values,
     _codegen_exprs,
     _jac_entries,
@@ -256,8 +256,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "struct %s {" % nm,
         "  using State = pops::StateVec<%d>;" % nc,
         "  using Prim  = pops::StateVec<%d>;" % npr,
-        "  using Aux   = pops::Aux;",
         "  static constexpr int dimension = %d;" % dimension,
+        "  using Aux   = pops::AuxState<dimension>;",
         "  static constexpr int n_vars = %d;" % nc,
     ]
     provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
@@ -286,7 +286,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # n_aux if a formula (flux / eigenvalues) reads an extra aux field : canonical
     # (B_z...) OR named (aux_field -> kAuxNamedBase + k). Without an extra field -> no n_aux emitted,
     # brick strictly bit-identical to history.
-    if model._total_n_aux() > _AUX_BASE_COMPS:
+    if model._total_n_aux() > _aux_layout(model).base_components:
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     S += [
         "",

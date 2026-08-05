@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .aux import aux_total_n_aux, roles_for
+from .aux import roles_for
 if TYPE_CHECKING:
     from ._model_contract import _FacadeModel
 else:
@@ -105,6 +105,7 @@ class _FacadeCompileMixin(_FacadeModel):
         import os
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (loader_cxx_std,
+                                            loader_native_dimension,
                                             _native_kokkos_compiler,
                                             _native_feature_key, pops_include)
         from pops.codegen.cache import (
@@ -127,6 +128,13 @@ class _FacadeCompileMixin(_FacadeModel):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
 
         m = self._m
+        model_dimension = m._aux_layout().dimension
+        native_dimension = loader_native_dimension()
+        if native_dimension != model_dimension:
+            raise ValueError(
+                "model physical rank %d does not match the loaded native specialization %d"
+                % (model_dimension, native_dimension)
+            )
         riemann_evidence = authoring_provider_evidence(self)
         wave_speed_provider = provider_of(self)
         eff_std = std if std is not None else loader_cxx_std()
@@ -194,11 +202,11 @@ class _FacadeCompileMixin(_FacadeModel):
         cm: Any = CompiledModel(
             so_path=out_path, backend=backend, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
-            n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),
+            n_vars=m.n_vars, gamma=m.gamma, n_aux=m._total_n_aux(),
             params=self.params, caps=compiled_capability_flags(backend),
             abi_key=abi_key, model_hash=model_hash,
             definition_identity=model_compile_identity(self),
-            cxx=eff_cxx, std=eff_std,
+            cxx=eff_cxx, std=eff_std, native_dimension=native_dimension,
             hllc=riemann_evidence.hllc_provider is not None,
             roe=riemann_evidence.roe_provider is not None,
             hllc_provider=riemann_evidence.hllc_provider,

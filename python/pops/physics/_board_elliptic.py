@@ -146,11 +146,11 @@ class _EllipticAuthoringMixin(_BoardModel):
                     (self._dsl, "_module_cache"),
                     (self, "_module_cache"),
                     (self, "_field_operators")):
-                from .aux import AUX_CANONICAL
+                from .aux import AUX_CANONICAL_NAMES
                 for aux_name in aux_names:
                     if aux_name in model.aux_names or aux_name in model.aux_extra_names:
                         continue
-                    if aux_name in AUX_CANONICAL:
+                    if aux_name in AUX_CANONICAL_NAMES:
                         self._dsl.aux(aux_name)
                     else:
                         self._dsl.aux_field(aux_name)
