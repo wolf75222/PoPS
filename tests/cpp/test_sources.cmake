@@ -205,6 +205,7 @@ set(POPS_CPP_TEST_SOURCE_test_polar_tensor_elliptic_mms "tests/cpp/unit/elliptic
 set(POPS_CPP_TEST_SOURCE_test_polar_transport_mms "tests/cpp/unit/physics/test_polar_transport_mms.cpp")
 set(POPS_CPP_TEST_SOURCE_test_positivity_floor "tests/cpp/unit/numerics/test_positivity_floor.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_cartesian_nd "tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp")
+set(POPS_CPP_TEST_SOURCE_test_prepared_field_solver_nd "tests/cpp/unit/runtime/test_prepared_field_solver_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_numerics_gate "tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp")
 set(POPS_CPP_TEST_SOURCE_test_primitive_recon "tests/cpp/unit/numerics/test_primitive_recon.cpp")
 set(POPS_CPP_TEST_SOURCE_test_pure_field_algebra_extreme_dot "tests/cpp/unit/elliptic/test_pure_field_algebra_extreme_dot.cpp")
