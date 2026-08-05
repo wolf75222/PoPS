@@ -113,6 +113,7 @@ sdk-support pops/numerics/elliptic/linear/scaled_scalar.hpp
 api pops/numerics/elliptic/linear/solve_outcome.hpp
 api pops/numerics/elliptic/linear/solve_report.hpp
 api pops/numerics/elliptic/linear/vector_distribution.hpp
+api pops/numerics/elliptic/nd/cartesian_poisson.hpp
 sdk-support pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
 sdk-support pops/numerics/elliptic/mg/composite_fac_poisson.hpp
 sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
@@ -208,6 +209,7 @@ sdk-support pops/runtime/builders/block/prepared_boundary_defaults.hpp
 sdk-root pops/runtime/builders/compiled/amr_dsl_block.hpp
 sdk-root pops/runtime/builders/compiled/dsl_block.hpp
 sdk-support pops/runtime/builders/compiled/flat_grid.hpp
+sdk-support pops/runtime/builders/compiled/generated_amr_system_block.hpp
 sdk-support pops/runtime/builders/compiled/generated_system_block.hpp
 sdk-root pops/runtime/builders/compiled/model_runtime_params.hpp
 sdk-support pops/runtime/builders/compiled/native_loader.hpp
@@ -271,6 +273,7 @@ abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp
 sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
+sdk-support pops/runtime/system/exact_named_field.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp

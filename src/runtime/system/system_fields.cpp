@@ -1,78 +1,217 @@
-// ADC-632: field/state seam of the System facade -- density/primitive-state setters, the elliptic
-// field solve entry points (solve_fields / *_from_state), potential, get/set_state, variable
-// names/roles, reduce_component, mass/density/potential and their global gathers, and the local-box
-// accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
-// Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+/// @file
+/// @brief Exact compile-time-ranked System state and elliptic-field surface.
+
+#include "system_impl.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
-#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace pops {
 namespace {
 
-template <class Species>
-void require_recoverable_system_candidate(const Species& state, const MultiFab& candidate,
-                                          std::string_view operation) {
-  const long missing_recovery = all_reduce_sum(state.cons_to_prim ? 0L : 1L);
-  if (missing_recovery != 0)
-    throw std::runtime_error(std::string(operation) +
-                             ": target block has no prepared variable-recovery authority");
+template <int Dim>
+std::size_t checked_cell_count(const Box<Dim>& domain) {
+  const std::int64_t cells = domain.numPts();
+  if (cells < 0 || static_cast<std::uint64_t>(cells) >
+                       static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+    throw std::overflow_error("System field cell count exceeds size_t");
+  return static_cast<std::size_t>(cells);
+}
 
-  // Candidate kernels may execute asynchronously. The type-erased prepared recovery is a host
-  // closure over one cell, so make the latest device values visible before inspecting storage.
-  candidate.sync_host();
-  std::vector<double> conserved(static_cast<std::size_t>(state.ncomp));
-  std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
-  long local_failures = 0;
-  for (int local = 0; local < candidate.local_size(); ++local) {
-    const ConstArray4 values = candidate.fab(local).const_array();
-    const Box2D valid = candidate.box(local);
-    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-        for (int component = 0; component < state.ncomp; ++component)
-          conserved[static_cast<std::size_t>(component)] = values(i, j, component);
-        try {
-          const RecoveryReport report = state.cons_to_prim(conserved.data(), primitive.data());
-          const bool finite_candidate =
-              std::all_of(conserved.begin(), conserved.end(),
-                          [](double value) { return std::isfinite(value); }) &&
-              std::all_of(primitive.begin(), primitive.end(),
-                          [](double value) { return std::isfinite(value); });
-          if (!report.publication_permitted() || !finite_candidate)
-            ++local_failures;
-        } catch (...) {
-          // Do not let a rank-local provider exception strand peers before the collective verdict.
-          ++local_failures;
-        }
-      }
+template <int Dim>
+std::size_t domain_ordinal(const Box<Dim>& domain, const Index<Dim>& index) {
+  std::size_t ordinal = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (index[axis] < domain.lo[axis] || index[axis] > domain.hi[axis])
+      throw std::out_of_range("System field index lies outside the exact domain");
+    ordinal += static_cast<std::size_t>(index[axis] - domain.lo[axis]) * stride;
+    const std::size_t extent = static_cast<std::size_t>(domain.length(axis));
+    if (axis + 1 < Dim && extent > std::numeric_limits<std::size_t>::max() / stride)
+      throw std::overflow_error("System field linear stride exceeds size_t");
+    stride *= extent;
   }
+  return ordinal;
+}
 
-  const long failures = all_reduce_sum(local_failures);
+template <int Dim, class Function>
+void for_each_host_index(const Box<Dim>& box, Function&& function) {
+  const std::size_t cells = checked_cell_count(box);
+  for (std::size_t linear = 0; linear < cells; ++linear) {
+    std::size_t remainder = linear;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t extent = static_cast<std::size_t>(box.length(axis));
+      index[axis] = box.lo[axis] + static_cast<int>(remainder % extent);
+      remainder /= extent;
+    }
+    function(index, linear);
+  }
+}
+
+template <int Dim>
+std::size_t storage_ordinal(const Fab<Dim>& fab, const Index<Dim>& index, int component) {
+  const Box<Dim>& grown = fab.grown_box();
+  std::size_t cell = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    cell += static_cast<std::size_t>(index[axis] - grown.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(grown.length(axis));
+  }
+  return static_cast<std::size_t>(component) * checked_cell_count(grown) + cell;
+}
+
+template <int Dim>
+void copy_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
+  if (source.layout() != destination.layout() ||
+      source.distribution() != destination.distribution() ||
+      source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp())
+    throw std::invalid_argument("System valid-cell copy requires one exact ND layout");
+  for (int component = 0; component < source.ncomp(); ++component)
+    elliptic::nd::detail::copy_component(source, component, destination, component);
+  Kokkos::fence();
+}
+
+template <int Dim>
+std::vector<double> gather_global(const MultiFab<Dim>& field, const Box<Dim>& domain,
+                                  int components) {
+  if (components < 1 || components > field.ncomp())
+    throw std::invalid_argument("System global gather component count is invalid");
+  const std::size_t cells = checked_cell_count(domain);
+  if (cells != 0 &&
+      static_cast<std::size_t>(components) > std::numeric_limits<std::size_t>::max() / cells)
+    throw std::overflow_error("System global gather size exceeds size_t");
+  std::vector<double> result(static_cast<std::size_t>(components) * cells, 0.0);
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Fab<Dim>& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+      const std::size_t global = domain_ordinal(domain, index);
+      for (int component = 0; component < components; ++component)
+        result[static_cast<std::size_t>(component) * cells + global] =
+            static_cast<double>(host(storage_ordinal(fab, index, component)));
+    });
+  }
+  all_reduce_sum_inplace(result.data(), result.size());
+  return result;
+}
+
+template <int Dim>
+std::vector<double> gather_local_compact(const MultiFab<Dim>& field, int components) {
+  if (components < 1 || components > field.ncomp())
+    throw std::invalid_argument("System local gather component count is invalid");
+  std::size_t cells = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    cells += checked_cell_count(field.box(local));
+  std::vector<double> result(static_cast<std::size_t>(components) * cells, 0.0);
+  std::size_t base = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Fab<Dim>& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const std::size_t local_cells = checked_cell_count(fab.box());
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t linear) {
+      for (int component = 0; component < components; ++component)
+        result[static_cast<std::size_t>(component) * cells + base + linear] =
+            static_cast<double>(host(storage_ordinal(fab, index, component)));
+    });
+    base += local_cells;
+  }
+  return result;
+}
+
+template <int Dim>
+void write_global(MultiFab<Dim>& field, const Box<Dim>& domain, const std::vector<double>& values,
+                  int components) {
+  const std::size_t cells = checked_cell_count(domain);
+  if (components < 1 || components > field.ncomp() ||
+      values.size() != static_cast<std::size_t>(components) * cells)
+    throw std::invalid_argument("System global field payload has the wrong exact shape");
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    Fab<Dim>& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+      const std::size_t global = domain_ordinal(domain, index);
+      for (int component = 0; component < components; ++component)
+        host(storage_ordinal(fab, index, component)) =
+            static_cast<Real>(values[static_cast<std::size_t>(component) * cells + global]);
+    });
+    fab.copy_from_host(host);
+  }
+  Kokkos::fence();
+}
+
+template <int Dim, class Species>
+void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& candidate,
+                                   std::string_view operation) {
+  if (candidate.layout() != state.U.layout() ||
+      candidate.distribution() != state.U.distribution() ||
+      candidate.local_rank() != state.U.local_rank() || candidate.ncomp() != state.U.ncomp() ||
+      candidate.ghosts() != state.U.ghosts())
+    throw std::invalid_argument(std::string(operation) + ": candidate layout differs from block");
+  if (all_reduce_max(state.cons_to_prim ? 0L : 1L) != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": block has no prepared variable-recovery authority");
+
+  std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
+  std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
+  long failures = 0;
+  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+    const Fab<Dim>& fab = candidate.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+      for (int component = 0; component < state.ncomp; ++component)
+        conservative[static_cast<std::size_t>(component)] =
+            static_cast<double>(host(storage_ordinal(fab, index, component)));
+      try {
+        const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
+        const bool finite = std::all_of(conservative.begin(), conservative.end(),
+                                        [](double value) { return std::isfinite(value); }) &&
+                            std::all_of(primitive.begin(), primitive.end(),
+                                        [](double value) { return std::isfinite(value); });
+        if (!report.publication_permitted() || !finite)
+          ++failures;
+      } catch (...) {
+        ++failures;
+      }
+    });
+  }
+  failures = all_reduce_sum(failures);
   if (failures != 0)
     throw std::runtime_error(std::string(operation) +
-                             ": prepared variable recovery rejected the candidate before "
-                             "publication (failed cells=" +
+                             ": variable recovery rejected the candidate (failed cells=" +
                              std::to_string(failures) + ")");
 }
 
-template <class Species>
-void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
-                                         std::string_view operation) {
-  require_recoverable_system_candidate(state, candidate, operation);
-
-  PureFieldAlgebra::copy(state.U, candidate);
-  // candidate is setup-local storage; publication must finish before it is destroyed.
-  device_fence();
+template <int Dim, class Species>
+void publish_recovered_candidate(Species& state, MultiFab<Dim>& candidate,
+                                 std::string_view operation) {
+  require_recoverable_candidate<Dim>(state, candidate, operation);
+  copy_valid(candidate, state.U);
 }
 
+template <int Dim>
 void require_exact_field_evaluation_request(
     const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view provider_slot,
     std::string_view request_kind) {
@@ -84,7 +223,6 @@ void require_exact_field_evaluation_request(
   if (all_reduce_max(invalid ? 1L : 0L) != 0)
     throw std::invalid_argument(
         "System exact field evaluation requires one complete level-zero point and provider slot");
-
   ExactContractBuilder request;
   request.text("pops.system.exact-field-evaluation")
       .scalar(std::uint32_t{1})
@@ -99,1074 +237,926 @@ void require_exact_field_evaluation_request(
       .scalar(point.stage_fraction.denominator)
       .scalar(point.dt)
       .scalar(point.physical_time);
-  const std::string exact_request = std::move(request).release();
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-exact-field-evaluation", exact_request}}))
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-exact-field-evaluation", std::move(request).release()}}))
     throw std::invalid_argument(
         "System exact field evaluation point differs between communicator ranks");
 }
 
+template <int Dim>
+elliptic::nd::CartesianPoissonOptions<Dim> poisson_options(const BoundaryTopology<Dim>& topology,
+                                                           std::string_view mode,
+                                                           double relative_tolerance,
+                                                           double absolute_tolerance,
+                                                           int maximum_iterations) {
+  elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
+  if (mode == "neumann")
+    physical = elliptic::nd::CartesianBoundaryKind::neumann;
+  else if (mode != "auto" && mode != "dirichlet" && mode != "periodic")
+    throw std::invalid_argument("System Poisson boundary mode is unknown");
+  if (mode == "periodic" && topology.periodic_pair_count() != static_cast<std::size_t>(Dim))
+    throw std::invalid_argument(
+        "System periodic Poisson requires every exact topology axis to be periodic");
+  auto result = elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
+  result.relative_tolerance = static_cast<Real>(relative_tolerance);
+  result.absolute_tolerance = static_cast<Real>(absolute_tolerance);
+  result.maximum_iterations = maximum_iterations;
+  return result;
+}
+
+template <int Dim, class Implementation>
+std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
+    Implementation& implementation) {
+  if (implementation.default_field_)
+    return implementation.default_field_;
+  std::vector<int> outputs;
+  outputs.reserve(static_cast<std::size_t>(Dim + 1));
+  outputs.push_back(AuxComponentLayout<Dim>::phi);
+  for (int axis = 0; axis < Dim; ++axis)
+    outputs.push_back(AuxComponentLayout<Dim>::gradient_begin + axis);
+  runtime::field::NamedFieldOutput<Dim> output(outputs, 1);
+  const BoundaryTopology<Dim> topology =
+      BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);
+  auto prepared = std::make_shared<runtime::system::ExactNamedField<Dim>>(
+      "pops.system.default-field", implementation.sp.empty() ? "system" : implementation.sp[0].name,
+      output, implementation.geom, implementation.ba, implementation.dm, implementation.local_rank,
+      topology,
+      poisson_options(topology, implementation.poisson_bc_, implementation.poisson_rel_tol_,
+                      implementation.poisson_abs_tol_, implementation.poisson_max_iterations_),
+      implementation.sp.size());
+  bool has_rhs = false;
+  for (std::size_t block = 0; block < implementation.sp.size(); ++block) {
+    if (!implementation.sp[block].add_poisson_rhs)
+      continue;
+    prepared->set_rhs(block, implementation.sp[block].add_poisson_rhs);
+    has_rhs = true;
+  }
+  if (!has_rhs)
+    throw std::runtime_error("System default elliptic field has no prepared RHS provider");
+  implementation.default_field_ = prepared;
+  return prepared;
+}
+
+template <int Dim, class Blocks>
+std::vector<const MultiFab<Dim>*> select_states(
+    const Blocks& blocks, const std::vector<const MultiFab<Dim>*>& overrides) {
+  if (!overrides.empty() && overrides.size() != blocks.size())
+    throw std::invalid_argument("System field stage vector does not cover every block");
+  std::vector<const MultiFab<Dim>*> result;
+  result.reserve(blocks.size());
+  for (std::size_t block = 0; block < blocks.size(); ++block)
+    result.push_back(overrides.empty() || overrides[block] == nullptr ? &blocks[block].U
+                                                                      : overrides[block]);
+  return result;
+}
+
 }  // namespace
 
-void System::validate_program_state_publication_candidate(int block,
-                                                          const MultiFab& candidate) const {
-  const long invalid_block =
-      all_reduce_sum(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L);
-  if (invalid_block != 0)
+template <int Dim>
+void System<Dim>::validate_program_state_publication_candidate(
+    int block, const MultiFab<Dim>& candidate) const {
+  if (all_reduce_max(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L) != 0)
     throw std::out_of_range(
         "System Program state publication block index differs across communicator ranks");
-  const Impl::Species& state = p_->sp[static_cast<std::size_t>(block)];
-  const bool exact_layout = candidate.box_array().boxes() == state.U.box_array().boxes() &&
-                            candidate.dmap().ranks() == state.U.dmap().ranks() &&
-                            candidate.ncomp() == state.U.ncomp() &&
-                            candidate.n_grow() == state.U.n_grow();
-  if (all_reduce_sum(exact_layout ? 0L : 1L) != 0)
+  require_recoverable_candidate<Dim>(p_->sp[static_cast<std::size_t>(block)], candidate,
+                                     "System Program terminal state publication");
+}
+
+template <int Dim>
+void System<Dim>::set_density(const std::string& name, const std::vector<double>& density_values) {
+  typename Impl::Species& block = p_->find(name);
+  const std::size_t cells = checked_cell_count(p_->dom);
+  if (density_values.size() != cells)
+    throw std::invalid_argument("System::set_density payload does not match the exact domain");
+  std::vector<double> state(static_cast<std::size_t>(block.ncomp) * cells, 0.0);
+  std::copy(density_values.begin(), density_values.end(), state.begin());
+  if (block.ncomp == Dim + 2) {
+    const double denominator = block.gamma - 1.0;
+    if (!(denominator > 0.0))
+      throw std::invalid_argument("System::set_density requires gamma > 1 for an energy state");
+    for (std::size_t cell = 0; cell < cells; ++cell)
+      state[static_cast<std::size_t>(block.ncomp - 1) * cells + cell] =
+          density_values[cell] / denominator;
+  }
+  write_global(block.U, p_->dom, state, block.ncomp);
+}
+
+template <int Dim>
+void System<Dim>::set_primitive_state(const std::string& name,
+                                      const std::vector<double>& primitive) {
+  typename Impl::Species& block = p_->find(name);
+  const std::size_t cells = checked_cell_count(p_->dom);
+  if (primitive.size() != static_cast<std::size_t>(block.ncomp) * cells)
     throw std::invalid_argument(
-        "System Program state publication candidate differs from its block layout");
-  require_recoverable_system_candidate(
-      state, candidate,
-      "System Program terminal state publication for block '" + state.name + "'");
-}
-
-void System::set_density(const std::string& name, const std::vector<double>& rho) {
-  Impl::Species& s = p_->find(name);
-  const Real gm1 = Real(s.gamma) - Real(1);
-  // Local helper: sets density + rest state on ONE cell (same formulas as the historical).
-  auto set_cell = [&](Array4& u, int i, int j, Real r) {
-    u(i, j, 0) = r;
-    if (s.ncomp >= 3) {
-      u(i, j, 1) = 0;
-      u(i, j, 2) = 0;
-    }  // momentum at rest
-    if (s.ncomp == 4)
-      u(i, j, 3) = r / gm1;  // E = p/(g-1), p = rho
-  };
-  // MULTI-BOX (theta_boxes > 1, polar): @p rho is the GLOBAL field (nr x ntheta, layout flat[j*gnx+i]
-  // identical to the mono-box below). We write each local box at its GLOBAL indices. local_size() <= 1
-  // (Cartesian / polar mono-box, including MPI mono-box): historical path UNCHANGED, bit-identical.
-  if (s.U.local_size() > 1) {
-    const int gnx = p_->dom.nx(), gny = p_->dom.ny();
-    if (static_cast<int>(rho.size()) != gnx * gny)
-      throw std::runtime_error("System::set_density : size != nr*ntheta (multi-box theta)");
-    for (int li = 0; li < s.U.local_size(); ++li) {
-      Array4 u = s.U.fab(li).array();
-      const Box2D b = s.U.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          set_cell(u, i, j, rho[static_cast<std::size_t>(j) * gnx + i]);
-    }
-    return;
-  }
-  // Row-major layout of the input array: (ni x nj) = extents of the state box. In Cartesian
-  // ni = nj = cfg.n (indexing and size bit-identical to before). In polar ni = nr, nj = ntheta:
-  // we index by the real extents of the box (and not n*n), so nr != ntheta is correctly handled.
-  const Box2D v = s.U.box(0);
-  const int ni = v.nx(), nj = v.ny();
-  if (static_cast<int>(rho.size()) != ni * nj)
-    throw std::runtime_error("System::set_density : size != nr*ntheta (or n*n in Cartesian)");
-  Array4 u = s.U.fab(0).array();
-  // LAYOUT CONVENTION (unchanged vs the historical): slow axis = 2nd box index (j), fast axis =
-  // 1st (i), i.e. flat[(j-lo) * ni + (i-lo)]. In Cartesian ni = n, lo = 0 -> flat[j*n+i] (bit-identical
-  // to before). In polar the array is thus (nr, ntheta) radial-line-by-line: j = theta (slow
-  // axis), i = r (fast axis), SAME order as density()/copy_comp0 -> consistent.
-  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-      set_cell(u, i, j, rho[static_cast<std::size_t>(j - v.lo[1]) * ni + (i - v.lo[0])]);
-}
-
-POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                              CellRecovery cons_to_prim) {
-  Impl::Species& s = p_->find(name);
-  const auto boundary = p_->boundary_plans_.find(name);
-  if (boundary != p_->boundary_plans_.end()) {
-    if (!cons_to_prim)
-      throw std::runtime_error(
-          "System prepared boundary traces require the block-model variable-recovery authority");
-    if (boundary->second->requires_fixed_state_conversion()) {
-      if (!prim_to_cons)
-        throw std::runtime_error(
-            "System primitive fixed-state boundary requires the block-model conversion");
-      const int ncomp = s.ncomp;
-      boundary->second->prepare_fixed_state_conversion(
-          [prim_to_cons, cons_to_prim, ncomp](const double* primitive, double* conservative) {
-            prim_to_cons(primitive, conservative);
-            std::vector<double> recovered(static_cast<std::size_t>(ncomp));
-            const RecoveryReport report = cons_to_prim(conservative, recovered.data());
-            if (!report.publication_permitted())
-              throw std::runtime_error(
-                  "primitive fixed-state boundary conversion failed prepared variable recovery");
-          });
-    }
-    boundary->second->prepare_trace_recovery(cons_to_prim);
-  }
-  // A replacement pointwise authority must never inherit warm starts produced by the previous
-  // model/provider. The matching batch authority is installed explicitly immediately afterwards
-  // by every supported native and compiled builder. Until then primitive-field materialization
-  // fails closed instead of reviving a second cell-by-cell recovery engine.
-  s.batch_cons_to_prim = {};
-  s.prim_to_cons = std::move(prim_to_cons);
-  s.cons_to_prim = std::move(cons_to_prim);
-}
-
-POPS_EXPORT void System::set_block_characteristic_no_inflow(const std::string& name,
-                                                            CharacteristicNoInflowFill fill) {
-  Impl::Species& block = p_->find(name);
-  const auto boundary = p_->boundary_plans_.find(name);
-  if (boundary == p_->boundary_plans_.end() ||
-      !boundary->second->requires_characteristic_no_inflow())
+        "System::set_primitive_state payload does not match the exact state shape");
+  if (!block.prim_to_cons || !block.cons_to_prim)
     throw std::runtime_error(
-        "System characteristic no-inflow was not requested by the exact block boundary plan");
-  const SpatialProviderGeometry geometry = p_->geometry_mode_ == GeometryMode::None
-                                               ? block.base_spatial_geometry
-                                               : spatial_provider_geometry(p_->geometry_mode_);
-  if (!block.spatial_provider.supports(
-          {kNativeDimension, geometry, SpatialProviderOperation::CharacteristicNoInflow}))
-    throw std::runtime_error(
-        "System characteristic no-inflow has no qualified provider for the active spatial "
-        "geometry");
-  boundary->second->prepare_characteristic_no_inflow(std::move(fill));
-}
-
-POPS_EXPORT void System::set_block_batch_recovery(const std::string& name,
-                                                  CellBatchRecovery batch_cons_to_prim) {
-  Impl::Species& state = p_->find(name);
-  if (!state.cons_to_prim)
-    throw std::runtime_error(
-        "System batch variable recovery requires the pointwise prepared recovery authority");
-  if (!batch_cons_to_prim)
-    throw std::invalid_argument("System batch variable recovery callback must not be empty");
-  state.batch_cons_to_prim = std::move(batch_cons_to_prim);
-}
-
-void System::set_primitive_state(const std::string& name, const std::vector<double>& prim) {
-  Impl::Species& s = p_->find(name);
-  const int nc = s.ncomp;
-  // Number of cells = REAL EXTENTS of the index domain (n*n Cartesian, nr*ntheta polar), NOT
-  // cfg.n*cfg.n: in polar cfg.n = nr, so cfg.n^2 != nr*ntheta -> heap overflow (ntheta<nr) or
-  // partial/wrong content (ntheta>nr). Cartesian bit-identical (dom.nx()==dom.ny()==n).
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->dom.nx()) * static_cast<std::size_t>(p_->dom.ny());
-  if (prim.size() != static_cast<std::size_t>(nc) * nn)
-    throw std::runtime_error(
-        "System::set_primitive_state : size != ncomp*nr*ntheta (n*n Cartesian) (block '" + name +
-        "' has " + std::to_string(nc) + " variables)");
-  if (!s.prim_to_cons)
-    throw std::runtime_error(
-        "System::set_primitive_state : the model of block '" + name +
-        "' does not expose a primitive -> conservative conversion (.so generated before "
-        "this project ?) ; use set_state (direct conservative state)");
-  if (!s.cons_to_prim)
-    throw std::runtime_error(
-        "System::set_primitive_state : the model of block '" + name +
-        "' has no prepared variable-recovery authority for validating conservative publication");
-  // CELL-BY-CELL conversion via the block model: we read the nc primitives component-major
-  // (prim[c*nn + k]) into a small contiguous buffer, convert, and write the conservatives at the
-  // same place in an output buffer. Then write_state pushes everything to the MultiFab (set_state
-  // path, identical marshaling). Reuses therefore the existing marshaling (copy/write_state).
-  std::vector<double> cons(prim.size());
-  std::vector<double> cell_in(static_cast<std::size_t>(nc));
-  std::vector<double> cell_out(static_cast<std::size_t>(nc));
-  std::vector<double> recovered(static_cast<std::size_t>(nc));
-  long local_failures = 0;
-  for (std::size_t k = 0; k < nn; ++k) {
-    for (int c = 0; c < nc; ++c)
-      cell_in[c] = prim[static_cast<std::size_t>(c) * nn + k];
-    std::fill(cell_out.begin(), cell_out.end(), std::numeric_limits<double>::quiet_NaN());
-    bool accepted = false;
+        "System::set_primitive_state requires both prepared variable-conversion authorities");
+  std::vector<double> conservative(primitive.size(), 0.0);
+  std::vector<double> input(static_cast<std::size_t>(block.ncomp));
+  std::vector<double> output(static_cast<std::size_t>(block.ncomp));
+  std::vector<double> recovered(static_cast<std::size_t>(block.ncomp));
+  long failures = 0;
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    for (int component = 0; component < block.ncomp; ++component)
+      input[static_cast<std::size_t>(component)] =
+          primitive[static_cast<std::size_t>(component) * cells + cell];
     try {
-      s.prim_to_cons(cell_in.data(), cell_out.data());
-      const bool finite = std::all_of(cell_out.begin(), cell_out.end(),
-                                      [](double value) { return std::isfinite(value); });
-      if (finite) {
-        const RecoveryReport report = s.cons_to_prim(cell_out.data(), recovered.data());
-        accepted = report.publication_permitted();
+      block.prim_to_cons(input.data(), output.data());
+      const RecoveryReport report = block.cons_to_prim(output.data(), recovered.data());
+      bool finite = report.publication_permitted();
+      for (double value : output)
+        finite = finite && std::isfinite(value);
+      if (!finite) {
+        ++failures;
+        continue;
       }
+      for (int component = 0; component < block.ncomp; ++component)
+        conservative[static_cast<std::size_t>(component) * cells + cell] =
+            output[static_cast<std::size_t>(component)];
     } catch (...) {
-      accepted = false;
+      ++failures;
     }
-    if (!accepted) {
-      ++local_failures;
-      continue;
-    }
-    for (int c = 0; c < nc; ++c)
-      cons[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }
-  const long failures = all_reduce_sum(local_failures);
-  if (failures != 0)
+  if (all_reduce_max(failures) != 0)
     throw std::runtime_error(
-        "System::set_primitive_state : prepared variable recovery rejected conservative "
-        "publication (failed cells=" +
-        std::to_string(failures) + ")");
-  p_->write_state(s.U, nc, cons);
+        "System::set_primitive_state variable recovery rejected the candidate");
+  write_global(block.U, p_->dom, conservative, block.ncomp);
 }
 
-std::vector<double> System::get_primitive_state(const std::string& name) {
-  Impl::Species& s = p_->find(name);
-  const int nc = s.ncomp;
-  if (!s.cons_to_prim)
+template <int Dim>
+std::vector<double> System<Dim>::get_primitive_state(const std::string& name) {
+  typename Impl::Species& block = p_->find(name);
+  if (!block.batch_cons_to_prim)
     throw std::runtime_error(
-        "System::get_primitive_state : the model of block '" + name +
-        "' does not expose a conservative -> primitive conversion (.so generated before "
-        "this project ?) ; use get_state (direct conservative state)");
-  if (!s.batch_cons_to_prim)
-    throw std::runtime_error(
-        "System::get_primitive_state : block '" + name +
-        "' has no generation-qualified prepared batch recovery consumer");
-  const std::vector<double> cons = p_->copy_state(s.U, nc);  // get_state path (same marshaling)
-  std::vector<double> prim;
-  const UniformRecoveryBatchReport batch = s.batch_cons_to_prim(cons, prim);
-  if (!batch.publication_permitted()) {
-    const RecoveryReport& recovery = batch.recovery;
-    throw std::runtime_error(
-        "System::get_primitive_state : variable recovery failed for block '" + name +
-        "' at local cell " + std::to_string(batch.failed_cell) + " (status=" +
-        recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
-        ", failing_component=" + std::to_string(recovery.failing_component) +
-        ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
-        ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
-        ", last_method_index=" + std::to_string(recovery.last_method) + ")");
-  }
-  return prim;
+        "System::get_primitive_state requires a generation-qualified batch recovery provider");
+  const std::vector<double> conservative = gather_global(block.U, p_->dom, block.ncomp);
+  std::vector<double> primitive;
+  const UniformRecoveryBatchReport report = block.batch_cons_to_prim(conservative, primitive);
+  if (!report.publication_permitted())
+    throw std::runtime_error("System::get_primitive_state batch variable recovery failed");
+  return primitive;
 }
 
-SolveReport System::solve_fields_in_place_() {
-  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
-  const SolveReport report = p_->solve_fields();
-  // ELLIPTIC-SOLVER NATIVE COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43). The opaque
-  // "field_solve" scope hides where the elliptic solve (96-99.9% of step cost) spends its time: read
-  // the active solver's per-solve stats back HERE -- after p_->solve_fields() returns, so AFTER its
-  // internal device_fence() (system_field_solver.hpp CRITICAL invariant: the V-cycle must be done
-  // before phi is read), preserving the device-fence ordering. Cheap int/double reads, all guarded
-  // by enabled() -> ZERO cost when profiling is off (count/record are no-ops too, but the accessor
-  // reads are skipped entirely).
-  if (p_->program_.profiler_.enabled()) {
-    // mg_cycles / krylov_iters ACCUMULATE (total elliptic iteration work over the run); elliptic_bottom
-    // records the coarsest-grid self-time as a timing sample. mg_levels is a STRUCTURAL CONSTANT (the
-    // hierarchy depth), so count_max (peak) reports the actual level count instead of summing it per
-    // step (same idiom as scratch_peak_bytes). All four are honest 0 for a direct FFT solver.
-    p_->program_.profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
-    p_->program_.profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
-    p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
-    p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
-  }
-  return report;
-}
-
-SolveReport System::solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage) {
-  return p_->solve_fields_from_state(block_idx, U_stage);
-}
-
-SolveReport System::solve_fields_from_state_at_in_place_(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-    int block_idx, const MultiFab& U_stage) {
-  require_exact_field_evaluation_request(point, provider_slot, "single-stage");
-  return p_->solve_named_field_from_state(provider_slot, block_idx, U_stage);
-}
-
-// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): forwards to the field solver, which
-// assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
-// once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
-// aux. POPS_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
-POPS_EXPORT SolveReport
-System::solve_fields_from_blocks_in_place_(const std::vector<const MultiFab*>& U_stages) {
-  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
-  const SolveReport report = p_->solve_fields_from_blocks(U_stages);
-  // Same elliptic-solver counters as System::solve_fields (ADC-479 criteria 42/43), read back AFTER
-  // the coupled solve returns -- i.e. after its internal device_fence() (system_field_solver.hpp). The
-  // coupled multi-block solve uses the SAME ell_ solver, so the stats are populated identically.
-  if (p_->program_.profiler_.enabled()) {
-    p_->program_.profiler_.count("mg_cycles", p_->fields_.last_mg_cycles());
-    p_->program_.profiler_.count("krylov_iters", p_->fields_.last_krylov_iters());
-    p_->program_.profiler_.count_max("mg_levels", p_->fields_.last_num_levels());
-    p_->program_.profiler_.record("elliptic_bottom", p_->fields_.last_bottom_seconds());
-  }
-  return report;
-}
-
-// NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for @p field from block @p block_idx's
-// stage state. Forwards to the field solver, which assembles the per-field RHS (sum of the blocks'
-// named bricks), solves with a dedicated native solver, and writes the field's OWN aux components.
-POPS_EXPORT SolveReport System::solve_fields_from_state_in_place_(const std::string& field,
-                                                                  int block_idx,
-                                                                  const MultiFab& U_stage) {
-  return p_->solve_named_field_from_state(field, block_idx, U_stage);
-}
-
-POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
-    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
-  return p_->solve_named_field_from_blocks(field, U_stages);
-}
-
-POPS_EXPORT SolveReport System::solve_fields_from_blocks_at_in_place_(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
-    const std::vector<const MultiFab*>& U_stages) {
-  require_exact_field_evaluation_request(point, field, "simultaneous-stages");
-  return p_->solve_named_field_from_blocks(field, U_stages);
-}
-
-SolveOutcome System::solve_fields() {
-  prepare_default_field_publication_storage_();
-  return run_field_publication_outcome_([this]() { return solve_fields_in_place_(); });
-}
-
-SolveOutcome System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
-  prepare_default_field_publication_storage_();
-  return run_field_publication_outcome_([this, block_idx, &U_stage]() {
-    return solve_fields_from_state_in_place_(block_idx, U_stage);
-  });
-}
-
-SolveOutcome System::solve_fields_from_state_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-    int block_idx, const MultiFab& U_stage) {
-  if (provider_slot.empty())
+template <int Dim>
+void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
+                              const std::string& bc, const std::string& wall, double wall_radius,
+                              double epsilon, double abs_tol, double rel_tol, int max_cycles,
+                              int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
+                              int coarse_threshold) {
+  require_assembling(p_->lifecycle_, "set_poisson");
+  if (rhs != "charge_density")
+    throw std::invalid_argument("System exact Poisson supports the charge_density RHS route");
+  if (solver != "geometric_mg" && solver != "cartesian_cg")
     throw std::invalid_argument(
-        "System::solve_fields_from_state_at requires an exact provider slot");
-  prepare_named_field_publication_storage_(provider_slot);
-  return run_field_publication_outcome_([this, &point, &provider_slot, block_idx, &U_stage]() {
-    return solve_fields_from_state_at_in_place_(point, provider_slot, block_idx, U_stage);
-  });
+        "System exact ND Poisson supports geometric_mg/cartesian_cg provider routes");
+  if (wall != "none" || wall_radius != 0.0 || epsilon != 1.0)
+    throw std::invalid_argument(
+        "System exact Cartesian Poisson does not approximate wall or variable-medium providers");
+  if (!std::isfinite(abs_tol) || abs_tol < 0.0 || !std::isfinite(rel_tol) || rel_tol < 0.0 ||
+      max_cycles < 1 || min_coarse < 1 || pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 ||
+      coarse_threshold < 1)
+    throw std::invalid_argument("System exact Poisson controls are invalid");
+  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  (void)poisson_options(topology, bc, rel_tol, abs_tol, max_cycles);
+  p_->poisson_solver_ = solver;
+  p_->poisson_bc_ = bc;
+  p_->poisson_abs_tol_ = abs_tol;
+  p_->poisson_rel_tol_ = rel_tol;
+  p_->poisson_max_iterations_ = max_cycles;
+  p_->default_field_.reset();
 }
 
-SolveOutcome System::solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
-  prepare_default_field_publication_storage_();
-  return run_field_publication_outcome_(
-      [this, &U_stages]() { return solve_fields_from_blocks_in_place_(U_stages); });
+template <int Dim>
+SolveReport System<Dim>::solve_fields_in_place_() {
+  const auto field = prepare_default_field<Dim>(*p_);
+  p_->active_field_ = field;
+  return field->solve_candidate(select_states<Dim>(p_->sp, {}), p_->aux);
 }
 
-SolveOutcome System::solve_fields_from_state(const std::string& field, int block_idx,
-                                             const MultiFab& U_stage) {
-  prepare_named_field_publication_storage_(field);
-  return run_field_publication_outcome_([this, &field, block_idx, &U_stage]() {
-    return solve_fields_from_state_in_place_(field, block_idx, U_stage);
-  });
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_state_in_place_(int block_index,
+                                                           const MultiFab<Dim>& stage) {
+  if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System field stage block index is outside the registry");
+  std::vector<const MultiFab<Dim>*> overrides(p_->sp.size(), nullptr);
+  overrides[static_cast<std::size_t>(block_index)] = &stage;
+  const auto field = prepare_default_field<Dim>(*p_);
+  p_->active_field_ = field;
+  return field->solve_candidate(select_states<Dim>(p_->sp, overrides), p_->aux);
 }
 
-SolveOutcome System::solve_fields_from_blocks(const std::string& field,
-                                              const std::vector<const MultiFab*>& U_stages) {
-  prepare_named_field_publication_storage_(field);
-  return run_field_publication_outcome_(
-      [this, &field, &U_stages]() { return solve_fields_from_blocks_in_place_(field, U_stages); });
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int block_index, const MultiFab<Dim>& stage) {
+  require_exact_field_evaluation_request<Dim>(point, provider_slot, "single-stage");
+  if (provider_slot == "pops.system.default-field")
+    return solve_fields_from_state_in_place_(block_index, stage);
+  return solve_fields_from_state_in_place_(provider_slot, block_index, stage);
 }
 
-void System::prepare_default_field_publication_storage_() {
-  p_->fields_.prepare_default_publication_storage();
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
+    const std::vector<const MultiFab<Dim>*>& stages) {
+  const auto field = prepare_default_field<Dim>(*p_);
+  p_->active_field_ = field;
+  return field->solve_candidate(select_states<Dim>(p_->sp, stages), p_->aux);
 }
 
-void System::prepare_named_field_publication_storage_(const std::string& field) {
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
-    throw std::invalid_argument("System named field publication request differs between MPI ranks");
-  p_->fields_.prepare_named_publication_storage(field);
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_state_in_place_(const std::string& field,
+                                                           int block_index,
+                                                           const MultiFab<Dim>& stage) {
+  if (block_index < 0 || block_index >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System named-field block index is outside the registry");
+  std::vector<const MultiFab<Dim>*> stages(p_->sp.size(), nullptr);
+  stages[static_cast<std::size_t>(block_index)] = &stage;
+  return solve_fields_from_blocks_in_place_(field, stages);
 }
 
-SolveOutcome System::run_field_publication_outcome_(const std::function<SolveReport()>& solve) {
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
+    const std::string& field, const std::vector<const MultiFab<Dim>*>& stages) {
+  const auto found = p_->named_fields_.find(field);
+  if (found == p_->named_fields_.end())
+    throw std::out_of_range("System named elliptic field is not registered: " + field);
+  p_->active_field_ = found->second;
+  return found->second->solve_candidate(select_states<Dim>(p_->sp, stages), p_->aux);
+}
+
+template <int Dim>
+SolveReport System<Dim>::solve_fields_from_blocks_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+    const std::vector<const MultiFab<Dim>*>& stages) {
+  require_exact_field_evaluation_request<Dim>(point, field, "simultaneous-stages");
+  return solve_fields_from_blocks_in_place_(field, stages);
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::run_field_publication_outcome_(
+    const std::function<SolveReport()>& solve) {
   begin_field_publication_outcome_();
   SolveReport report;
   std::exception_ptr local_error;
-  bool solve_failed_local = false;
   try {
     report = solve();
   } catch (...) {
     local_error = std::current_exception();
-    solve_failed_local = true;
   }
-  if (all_reduce_max(solve_failed_local ? 1L : 0L) != 0) {
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
     rollback_field_publication_transaction();
-    if (n_ranks() == 1 && local_error != nullptr)
+    if (n_ranks() == 1 && local_error)
       std::rethrow_exception(local_error);
-    throw std::runtime_error("System field solver failed on at least one MPI rank");
+    throw std::runtime_error("System exact field solver failed on at least one MPI rank");
   }
   return stage_field_publication_outcome_(std::move(report));
 }
 
-void System::begin_field_publication_outcome_() {
-  const bool active_local = p_->field_publication_active_;
-  if (all_reduce_max(active_local ? 1L : 0L) != 0)
+template <int Dim>
+void System<Dim>::begin_field_publication_outcome_() {
+  if (all_reduce_max(p_->active_field_ ? 1L : 0L) != 0)
     throw std::logic_error(
         "System field solves are sequential until their prior SolveOutcome is consumed");
-
-  bool begin_failed_local = false;
-  try {
-    begin_field_publication_transaction();
-  } catch (...) {
-    begin_failed_local = true;
-  }
-  if (all_reduce_max(begin_failed_local ? 1L : 0L) != 0) {
-    rollback_field_publication_transaction();
-    throw std::runtime_error("System field publication snapshot failed on at least one MPI rank");
-  }
 }
 
-SolveOutcome System::stage_field_publication_outcome_(SolveReport report) {
-  const bool malformed = !solve_report_is_publishable(report, std::numeric_limits<int>::max());
-  if (all_reduce_max(malformed ? 1L : 0L) != 0) {
+template <int Dim>
+SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
+  if (!solve_report_is_publishable(report, p_->active_field_
+                                               ? p_->active_field_->maximum_iterations()
+                                               : std::numeric_limits<int>::max())) {
     rollback_field_publication_transaction();
-    throw std::runtime_error("System field solver published a malformed SolveReport");
+    throw std::runtime_error("System exact field solver published a malformed SolveReport");
   }
   ExactSolveReportConsensusScratch consensus;
   if (!consensus.agrees(report)) {
     rollback_field_publication_transaction();
-    throw std::runtime_error("System field solver report differs between MPI ranks");
+    throw std::runtime_error("System exact field solver report differs between MPI ranks");
   }
   if (!report.solved_value_available()) {
     rollback_field_publication_transaction();
     return SolveOutcome::collective_world(std::move(report));
   }
-
-  bool stage_failed_local = false;
-  try {
-    stage_field_publication_candidate();
-  } catch (...) {
-    stage_failed_local = true;
-  }
-  if (all_reduce_max(stage_failed_local ? 1L : 0L) != 0) {
-    rollback_field_publication_transaction();
-    throw std::runtime_error("System field candidate staging failed on at least one MPI rank");
-  }
+  stage_field_publication_candidate();
   return SolveOutcome::collective_world(
       std::move(report),
       SolveOutcome::PublicationHooks{
           this,
           [](void* context) noexcept {
-            static_cast<System*>(context)->accept_field_publication_candidate();
+            static_cast<System<Dim>*>(context)->accept_field_publication_candidate();
           },
           nullptr,
           [](void* context) noexcept {
             try {
-              static_cast<System*>(context)->rollback_field_publication_transaction();
+              static_cast<System<Dim>*>(context)->rollback_field_publication_transaction();
             } catch (...) {
               std::terminate();
             }
           },
           {},
           [](void* context) {
-            static_cast<System*>(context)->validate_field_publication_candidate();
+            static_cast<System<Dim>*>(context)->validate_field_publication_candidate();
           }});
 }
 
-void System::begin_field_publication_transaction() {
-  if (p_->field_publication_active_)
-    throw std::logic_error(
-        "System field solves are sequential until their publication outcome is consumed");
-  if (p_->accepted_field_publication_)
-    p_->accepted_field_publication_->capture(*p_);
-  else
-    p_->accepted_field_publication_ = std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
-  p_->field_publication_active_ = true;
-  p_->field_publication_candidate_ready_ = false;
+template <int Dim>
+void System<Dim>::prepare_default_field_publication_storage_() {
+  (void)prepare_default_field<Dim>(*p_);
 }
 
-void System::stage_field_publication_candidate() {
-  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
-      p_->field_publication_candidate_ready_)
-    throw std::logic_error("System field publication has no unique active candidate slot");
-  p_->fields_.stage_named_topology_reports();
-  if (p_->candidate_field_publication_)
-    p_->candidate_field_publication_->capture(*p_);
-  else
-    p_->candidate_field_publication_ = std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
-  p_->field_publication_candidate_ready_ = true;
-  p_->accepted_field_publication_->restore(*p_);
+template <int Dim>
+void System<Dim>::prepare_named_field_publication_storage_(const std::string& field) {
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
+    throw std::invalid_argument("System named field request differs between MPI ranks");
+  if (p_->named_fields_.find(field) == p_->named_fields_.end())
+    throw std::out_of_range("System named elliptic field is not registered: " + field);
 }
 
-void System::validate_field_publication_candidate() {
-  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
-      !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
-    throw std::logic_error("System field publication has no staged candidate");
-  if (!p_->candidate_field_publication_->publication_layout_matches(*p_))
-    throw std::logic_error("System field publication snapshot layout changed before Accept");
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields() {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this] { return solve_fields_in_place_(); });
 }
 
-void System::accept_field_publication_candidate() noexcept {
-  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
-      !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields_from_state(int block_index, const MultiFab<Dim>& stage) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this, block_index, &stage] {
+    return solve_fields_from_state_in_place_(block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields_from_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int block_index, const MultiFab<Dim>& stage) {
+  return run_field_publication_outcome_([this, &point, &provider_slot, block_index, &stage] {
+    return solve_fields_from_state_at_in_place_(point, provider_slot, block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields_from_blocks(
+    const std::vector<const MultiFab<Dim>*>& stages) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_(
+      [this, &stages] { return solve_fields_from_blocks_in_place_(stages); });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields_from_state(const std::string& field, int block_index,
+                                                  const MultiFab<Dim>& stage) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_([this, &field, block_index, &stage] {
+    return solve_fields_from_state_in_place_(field, block_index, stage);
+  });
+}
+
+template <int Dim>
+SolveOutcome System<Dim>::solve_fields_from_blocks(
+    const std::string& field, const std::vector<const MultiFab<Dim>*>& stages) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_(
+      [this, &field, &stages] { return solve_fields_from_blocks_in_place_(field, stages); });
+}
+
+template <int Dim>
+void System<Dim>::begin_field_publication_transaction() {
+  if (p_->active_field_)
+    throw std::logic_error("System field publication transaction is already active");
+}
+
+template <int Dim>
+void System<Dim>::stage_field_publication_candidate() {
+  if (!p_->active_field_)
+    throw std::logic_error("System field solve did not stage an exact provider candidate");
+  p_->active_field_->validate_candidate();
+}
+
+template <int Dim>
+void System<Dim>::validate_field_publication_candidate() {
+  if (!p_->active_field_)
+    throw std::logic_error("System field publication candidate is absent");
+  p_->active_field_->validate_candidate();
+}
+
+template <int Dim>
+void System<Dim>::accept_field_publication_candidate() noexcept {
+  if (!p_->active_field_)
     std::terminate();
-  p_->candidate_field_publication_->restore_copy_only(*p_);
-  p_->field_publication_candidate_ready_ = false;
-  p_->field_publication_active_ = false;
+  p_->active_field_->accept_candidate();
+  p_->active_field_.reset();
 }
 
-void System::rollback_field_publication_transaction() {
-  if (!p_->field_publication_active_)
+template <int Dim>
+void System<Dim>::rollback_field_publication_transaction() {
+  if (!p_->active_field_)
     return;
-  if (!p_->accepted_field_publication_)
-    std::terminate();
-  p_->accepted_field_publication_->restore(*p_);
-  p_->field_publication_candidate_ready_ = false;
-  p_->field_publication_active_ = false;
+  p_->active_field_->reject_candidate();
+  p_->active_field_.reset();
 }
 
-bool System::field_publication_transaction_active_() const noexcept {
-  return p_->field_publication_active_;
+template <int Dim>
+bool System<Dim>::field_publication_transaction_active_() const noexcept {
+  return static_cast<bool>(p_->active_field_);
 }
 
-// Potential phi restoration (IO v1, restart): writes the VALID cells of component 0 of the
-// solver phi (multigrid warm start). Mono-box
-// (same marshaling convention as potential / set_density).
-void System::set_potential(const std::vector<double>& phi) {
-  Impl* P = p_.get();
-  device_fence();
-  if (P->polar_) {
-    P->fields_.ensure_elliptic_polar();
-    MultiFab& ph = P->fields_.pell_->phi();
-    // Rank without a box (MPI mono-box): NO-OP (the owning rank restores phi). Allows restart on
-    // all ranks with the GLOBAL field. Mono-rank: local_size()==1, UNCHANGED.
-    if (ph.local_size() == 0)
-      return;
-    const Box2D v = ph.box(0);
-    if (static_cast<int>(phi.size()) != v.nx() * v.ny())
-      throw std::runtime_error("System::set_potential : size != nr*ntheta");
-    Array4 a = ph.fab(0).array();
-    std::size_t k = 0;
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        a(i, j, 0) = phi[k++];
-    return;
+template <int Dim>
+void System<Dim>::set_potential(const std::vector<double>& potential_values) {
+  auto field = prepare_default_field<Dim>(*p_);
+  write_global(field->accepted_potential_for_restore(), p_->dom, potential_values, 1);
+}
+
+template <int Dim>
+std::vector<std::string> System<Dim>::field_provider_slots() const {
+  std::vector<std::string> result;
+  if (p_->default_field_)
+    result.push_back("pops.system.default-field");
+  result.reserve(result.size() + p_->named_fields_.size());
+  for (const auto& [identity, field] : p_->named_fields_) {
+    (void)field;
+    result.push_back(identity);
   }
-  P->fields_.ensure_elliptic();
-  MultiFab& ph = P->fields_.ell_phi();
-  if (ph.local_size() == 0)
-    return;  // rank without a box: no-op (cf. polar branch)
-  const Box2D v = ph.box(0);
-  if (static_cast<int>(phi.size()) != v.nx() * v.ny())
-    throw std::runtime_error("System::set_potential : size != n*n");
-  Array4 a = ph.fab(0).array();
-  std::size_t k = 0;
-  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-      a(i, j, 0) = phi[k++];
+  return result;
 }
 
-std::vector<std::string> System::field_provider_slots() const {
-  return p_->fields_.provider_slots();
-}
-
-void System::set_field_potential(const std::string& provider_slot, const std::vector<double>& phi) {
-  MultiFab& field = p_->fields_.provider_potential(provider_slot);
-  if (field.local_size() == 0)
-    return;
-  const Box2D valid = field.box(0);
-  if (static_cast<int>(phi.size()) != valid.nx() * valid.ny())
-    throw std::runtime_error("System::set_field_potential size != nx*ny");
-  Array4 values = field.fab(0).array();
-  std::size_t index = 0;
-  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-      values(i, j, 0) = static_cast<Real>(phi[index++]);
-}
-std::vector<double> System::eval_rhs(const std::string& name) {
-  Impl::Species& s = p_->find(name);
-  MultiFab R(p_->ba, p_->dm, s.ncomp, 0);
-  block_rhs_into(p_->index(name), s.U, R);
-  return p_->copy_state(R, s.ncomp);
-}
-
-// Collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
-// driver (ADC-542) drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence
-// tick. Resolves the block by name (Impl::find, insertion order) and folds its U with the pops::
-// free functions. Per-component kinds read component @p comp; the full-state "_all" kinds fold over
-// EVERY component. Unknown kind -> throw (fail loud, no silent 0). COLLECTIVE like dot.
-double System::reduce_component(const std::string& block, const std::string& kind, int comp) const {
-  const Impl::Species& s = p_->find(block);
-  const MultiFab& u = s.U;
-  const int nc = s.ncomp;
-  if (comp < 0 || comp >= nc)
-    throw std::out_of_range("System::reduce_component: component " + std::to_string(comp) +
-                            " is outside block '" + block + "' with " + std::to_string(nc) +
-                            " components");
-  RelativeCellMeasure measure;
-  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
-    measure.active_cells = &p_->domain_mask_;
-    if (p_->geometry_mode_ == GeometryMode::CutCell)
-      measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
+template <int Dim>
+void System<Dim>::set_field_potential(const std::string& provider_slot,
+                                      const std::vector<double>& potential_values) {
+  std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
+  if (provider_slot == "pops.system.default-field")
+    field = prepare_default_field<Dim>(*p_);
+  else {
+    const auto found = p_->named_fields_.find(provider_slot);
+    if (found == p_->named_fields_.end())
+      throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+    field = found->second;
   }
+  write_global(field->accepted_potential_for_restore(), p_->dom, potential_values, 1);
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::eval_rhs(const std::string& name) {
+  typename Impl::Species& block = p_->find(name);
+  MultiFab<Dim> residual(p_->ba, p_->dm, p_->local_rank, block.ncomp, Extent<Dim>{});
+  block_rhs_into(p_->index(name), block.U, residual);
+  return gather_local_compact(residual, block.ncomp);
+}
+
+template <int Dim>
+double System<Dim>::reduce_component(const std::string& block_name, const std::string& kind,
+                                     int component) const {
+  const typename Impl::Species& block = p_->find(block_name);
+  if (component < 0 || component >= block.ncomp)
+    throw std::out_of_range("System reduction component is outside the block state");
+  const MultiFab<Dim>& values = block.U;
   if (kind == "sum")
-    return static_cast<double>(pops::reduce_sum(u, comp, measure));
+    return static_cast<double>(reduce_sum(values, component));
   if (kind == "min")
-    return static_cast<double>(pops::reduce_min(u, comp, measure));
+    return static_cast<double>(reduce_min(values, component));
   if (kind == "max")
-    return static_cast<double>(pops::reduce_max(u, comp, measure));
+    return static_cast<double>(reduce_max(values, component));
   if (kind == "abs_sum")
-    return static_cast<double>(pops::reduce_abs_sum(u, comp, measure));
-  if (kind == "sum_sq")  // L2 squared: dot(u, u, comp); the driver takes sqrt
-    return static_cast<double>(pops::dot(u, u, comp, measure));
-  if (kind == "abs_max")  // LInf: collective max |u(.,.,comp)|
-    return static_cast<double>(pops::reduce_norm_inf(u, comp, measure));
-  // Full-state (unscoped) folds over ALL components -- host O(ncomp) composition of the native
-  // per-component collectives (no field leaves the ranks; only ncomp scalars).
-  if (kind == "sum_all") {
-    double acc = 0.0;
-    for (int c = 0; c < nc; ++c)
-      acc += static_cast<double>(pops::reduce_sum(u, c, measure));
-    return acc;
-  }
-  if (kind == "abs_sum_all") {
-    double acc = 0.0;
-    for (int c = 0; c < nc; ++c)
-      acc += static_cast<double>(pops::reduce_abs_sum(u, c, measure));
-    return acc;
+    return static_cast<double>(reduce_abs_sum(values, component));
+  if (kind == "sum_sq")
+    return static_cast<double>(dot(values, values, component));
+  if (kind == "abs_max")
+    return static_cast<double>(reduce_norm_inf(values, component));
+  if (kind == "sum_all" || kind == "abs_sum_all" || kind == "abs_max_all") {
+    double result = 0.0;
+    for (int current = 0; current < block.ncomp; ++current) {
+      const double value = kind == "sum_all" ? static_cast<double>(reduce_sum(values, current))
+                           : kind == "abs_sum_all"
+                               ? static_cast<double>(reduce_abs_sum(values, current))
+                               : static_cast<double>(reduce_norm_inf(values, current));
+      result = kind == "abs_max_all" ? std::max(result, value) : result + value;
+    }
+    return result;
   }
   if (kind == "sum_sq_all")
-    return static_cast<double>(pops::dot_all(u, u, measure));
-  if (kind == "abs_max_all") {
-    double m = 0.0;
-    for (int c = 0; c < nc; ++c)
-      m = std::max(m, static_cast<double>(pops::reduce_norm_inf(u, c, measure)));
-    return m;
-  }
-  throw std::runtime_error("System::reduce_component: unknown reduction kind '" + kind +
-                           "' for block '" + block +
-                           "' (expected one of: sum, min, max, abs_sum, sum_sq, abs_max, "
-                           "sum_all, abs_sum_all, sum_sq_all, abs_max_all)");
-}
-MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
-  // Co-distributed with the block storage (Impl::ba / Impl::dm -- the same (ba, dm) every block U is
-  // built with, P->ba/P->dm above), so a matrix-free apply pairs this field with the state/aux by
-  // local fab index. Zero-initialized like a fresh block state (install_block sets U to 0).
-  MultiFab f(p_->ba, p_->dm, n_comp, n_ghost);
-  f.set_val(Real(0));
-  return f;
+    return static_cast<double>(dot_all(values, values));
+  throw std::invalid_argument("System reduction kind is unknown: " + kind);
 }
 
-// Multistep history seam (ADC-406a): a generated problem.so declares / reads / writes a named history
-// field across macro-steps (Adams-Bashforth), reaching the SYSTEM-OWNED ring buffers through these
-// accessors. The rings live in Impl::program_.hist_ (the extracted Program subsystem, ADC-594) so a
-// later checkpoint slice (ADC-406b) can serialize them without touching the .so ABI.
-MultiFab& System::register_history(const std::string& name, int lag, int ncomp, int owner,
-                                   const std::string& state_identity,
-                                   const std::string& space_identity,
-                                   const std::string& clock_identity,
-                                   const std::string& interpolation_identity) {
-  if (lag < 1)
-    throw std::runtime_error("System::register_history: lag must be >= 1 (got " +
-                             std::to_string(lag) + ") for history '" + name + "'");
-  if (p_->sp.empty())
-    throw std::runtime_error(
-        "System::register_history: no block exists yet; a history is co-distributed with block 0's "
-        "state (add the block before installing the program)");
-  const bool qualified = owner >= 0 || !state_identity.empty() || !space_identity.empty() ||
-                         !clock_identity.empty() || !interpolation_identity.empty();
+template <int Dim>
+MultiFab<Dim> System<Dim>::alloc_scalar_field(int components, int ghosts) {
+  if (components < 1 || ghosts < 0)
+    throw std::invalid_argument("System scalar-field allocation shape is invalid");
+  Extent<Dim> ghost_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ghost_extent[axis] = ghosts;
+  return MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank, components, ghost_extent);
+}
+
+template <int Dim>
+MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, int ncomp, int owner,
+                                             const std::string& state_identity,
+                                             const std::string& space_identity,
+                                             const std::string& clock_identity,
+                                             const std::string& interpolation_identity) {
+  if (lag < 1 || p_->sp.empty())
+    throw std::invalid_argument("System history requires a block and lag >= 1");
+  const bool qualified = owner >= 0;
   if (qualified &&
-      (owner < 0 || owner >= static_cast<int>(p_->sp.size()) || state_identity.empty() ||
+      (owner >= static_cast<int>(p_->sp.size()) || state_identity.empty() ||
        space_identity.empty() || clock_identity.empty() || interpolation_identity.empty()))
-    throw std::runtime_error(
-        "System::register_history: qualified registration requires owner/state/space/clock/"
-        "interpolation identities for history '" +
-        name + "'");
-  const int want_depth = lag + 1;
-  auto it = p_->program_.hist_.histories.find(name);
-  if (it != p_->program_.hist_.histories.end()) {
-    if (qualified) {
-      auto& histories = p_->program_.hist_;
-      const auto prior = histories.clock_identity.find(name);
-      if (prior == histories.clock_identity.end()) {
-        histories.owner[name] = owner;
-        histories.state_identity[name] = state_identity;
-        histories.space_identity[name] = space_identity;
-        histories.clock_identity[name] = clock_identity;
-        histories.interpolation_identity[name] = interpolation_identity;
-      } else if (histories.owner.at(name) != owner ||
-                 histories.state_identity.at(name) != state_identity ||
-                 histories.space_identity.at(name) != space_identity ||
-                 prior->second != clock_identity ||
-                 histories.interpolation_identity.at(name) != interpolation_identity) {
-        throw std::runtime_error("System::register_history: history '" + name +
-                                 "' cannot be re-registered with a different qualified identity");
-      }
-    }
-    if (ncomp >= 1 && it->second[0].ncomp() != ncomp)
-      throw std::runtime_error("System::register_history: ncomp mismatch for history '" + name +
-                               "'");
-    // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A read at the
-    // declared max lag and the store (which only needs the current slot, register_history(name, 1))
-    // can register in EITHER order without conflict -- a smaller request is a no-op (returns the
-    // existing current slot), a larger one grows the ring (appending zero-filled deeper slots; the
-    // current slot [0] and the already-stored slots are preserved). A program reads each name at one
-    // fixed lag, so the depth converges in the first step and never changes again. The @p ncomp
-    // request is ignored on re-registration: a name binds one component count at its first register.
-    if (want_depth > p_->program_.hist_.depth[name]) {
-      const int slot_ncomp = it->second[0].ncomp();
-      for (int k = p_->program_.hist_.depth[name]; k < want_depth; ++k) {
-        MultiFab slot(p_->ba, p_->dm, slot_ncomp, 1);
-        slot.set_val(Real(0));
-        it->second.push_back(std::move(slot));
-      }
-      p_->program_.hist_.depth[name] = want_depth;
-    }
-    return it->second[0];
+    throw std::invalid_argument("System qualified history identity is incomplete");
+  const int depth = lag + 1;
+  auto& histories = p_->program_.hist_;
+  auto found = histories.histories.find(name);
+  if (found != histories.histories.end()) {
+    if ((qualified &&
+         (histories.owner[name] != owner || histories.state_identity[name] != state_identity ||
+          histories.space_identity[name] != space_identity ||
+          histories.clock_identity[name] != clock_identity ||
+          histories.interpolation_identity[name] != interpolation_identity)) ||
+        (!qualified && histories.owner[name] != -1))
+      throw std::invalid_argument("System history cannot be requalified");
+    if (ncomp >= 1 && found->second.front().ncomp() != ncomp)
+      throw std::invalid_argument("System history component count changed");
+    while (static_cast<int>(found->second.size()) < depth)
+      found->second.emplace_back(p_->ba, p_->dm, p_->local_rank, found->second.front().ncomp(),
+                                 found->second.front().ghosts());
+    histories.depth[name] = static_cast<int>(found->second.size());
+    histories.slot_dt[name].resize(found->second.size(), Real(0));
+    return found->second.front();
   }
-  // The ring holds @p ncomp components, co-distributed with the block storage (ba/dm) so a per-cell
-  // kernel and the arithmetic pair it with the state by local fab index. One ghost layer like a block
-  // state; zero-initialized (the cold-start fill happens on the first store, but a never-stored read
-  // still fails loud on the !initialized flag below). @p ncomp < 0 (the default) resolves to block 0's
-  // ncomp -- so a slot can carry a full RHS / state, byte-identical to the historical multistep ring
-  // (ADC-406a); a caller that needs a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
-  // carry) passes an explicit ncomp >= 1.
-  const int resolved_ncomp = ncomp < 0 ? p_->sp[qualified ? owner : 0].ncomp : ncomp;
-  if (resolved_ncomp < 1)
-    throw std::runtime_error("System::register_history: ncomp must be >= 1 (got " +
-                             std::to_string(ncomp) + ") for history '" + name + "'");
-  std::vector<MultiFab> ring;
-  ring.reserve(static_cast<std::size_t>(want_depth));
-  for (int k = 0; k < want_depth; ++k) {
-    MultiFab slot(p_->ba, p_->dm, resolved_ncomp, 1);
-    slot.set_val(Real(0));
-    ring.push_back(std::move(slot));
-  }
-  auto& stored = p_->program_.hist_.histories.emplace(name, std::move(ring)).first->second;
-  p_->program_.hist_.depth[name] = want_depth;
-  p_->program_.hist_.initialized[name] = false;
-  p_->program_.hist_.fill_count[name] = 0;
-  p_->program_.hist_.store_pending[name] = false;
-  p_->program_.hist_.owner[name] = qualified ? owner : -1;
+  const int components =
+      ncomp < 0 ? p_->sp[qualified ? static_cast<std::size_t>(owner) : 0].ncomp : ncomp;
+  if (components < 1)
+    throw std::invalid_argument("System history component count must be positive");
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ghosts[axis] = 1;
+  std::vector<MultiFab<Dim>> ring;
+  ring.reserve(static_cast<std::size_t>(depth));
+  for (int slot = 0; slot < depth; ++slot)
+    ring.emplace_back(p_->ba, p_->dm, p_->local_rank, components, ghosts);
+  auto& stored = histories.histories.emplace(name, std::move(ring)).first->second;
+  histories.depth[name] = depth;
+  histories.initialized[name] = false;
+  histories.fill_count[name] = 0;
+  histories.store_pending[name] = false;
+  histories.owner[name] = qualified ? owner : -1;
+  histories.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
   if (qualified) {
-    p_->program_.hist_.state_identity[name] = state_identity;
-    p_->program_.hist_.space_identity[name] = space_identity;
-    p_->program_.hist_.clock_identity[name] = clock_identity;
-    p_->program_.hist_.interpolation_identity[name] = interpolation_identity;
+    histories.state_identity[name] = state_identity;
+    histories.space_identity[name] = space_identity;
+    histories.clock_identity[name] = clock_identity;
+    histories.interpolation_identity[name] = interpolation_identity;
   }
-  return stored[0];
+  return stored.front();
 }
 
-MultiFab& System::read_history(const std::string& name, int lag) {
-  auto it = p_->program_.hist_.histories.find(name);
-  if (it == p_->program_.hist_.histories.end())
-    throw std::runtime_error("System::read_history: unknown history '" + name +
-                             "' (register it first)");
-  if (lag < 0 || lag >= p_->program_.hist_.depth[name])
-    throw std::runtime_error("System::read_history: lag=" + std::to_string(lag) +
-                             " out of range for history '" + name + "' (depth " +
-                             std::to_string(p_->program_.hist_.depth[name]) + ")");
-  if (!p_->program_.hist_.initialized[name])
-    throw std::runtime_error("history '" + name + "' with lag=" + std::to_string(lag) +
-                             " was requested but not initialized");
-  return it->second[static_cast<std::size_t>(lag)];
+template <int Dim>
+MultiFab<Dim>& System<Dim>::read_history(const std::string& name, int lag) {
+  auto& histories = p_->program_.hist_;
+  const auto found = histories.histories.find(name);
+  if (found == histories.histories.end() || lag < 0 || lag >= histories.depth[name])
+    throw std::out_of_range("System history read is outside the registered ring");
+  if (!histories.initialized[name])
+    throw std::runtime_error("System history was requested before its first store");
+  return found->second[static_cast<std::size_t>(lag)];
 }
 
-std::vector<double> System::get_state(const std::string& name) {
-  Impl::Species& s = p_->find(name);
-  return p_->copy_state(s.U, s.ncomp);
+template <int Dim>
+std::vector<double> System<Dim>::get_state(const std::string& name) {
+  const typename Impl::Species& block = p_->find(name);
+  return gather_local_compact(block.U, block.ncomp);
 }
-void System::set_state(const std::string& name, const std::vector<double>& u) {
-  Impl::Species& s = p_->find(name);
-  p_->write_state(s.U, s.ncomp, u);
+
+template <int Dim>
+void System<Dim>::set_state(const std::string& name, const std::vector<double>& state) {
+  typename Impl::Species& block = p_->find(name);
+  write_global(block.U, p_->dom, state, block.ncomp);
 }
-std::int64_t System::set_analytic_expression_state(
+
+template <int Dim>
+std::int64_t System<Dim>::set_analytic_expression_state(
     const std::string& name, const std::string& space, const std::string& centering,
     const std::string& projection, const std::vector<std::vector<std::string>>& opcodes,
     const std::vector<std::vector<double>>& literals) {
   auto prepared = analytic::collectively_prepare_analytic_request(
       "System::set_analytic_expression_state",
       {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}}, {},
-      opcodes, literals, [&]() {
+      opcodes, literals, [&] {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
-        if (p_->polar_)
-          throw std::runtime_error(
-              "System::set_analytic_expression_state requires a Cartesian frame");
         if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
-          throw std::runtime_error(
-              "System::set_analytic_expression_state requires cell-centred "
-              "conservative_cell_average projection");
-        Impl::Species& state = p_->find(name);
-        std::vector<analytic::AnalyticProgram> programs =
-            analytic::compile_component_programs(opcodes, literals);
-        if (programs.size() != static_cast<std::size_t>(state.ncomp))
-          throw std::runtime_error(
-              "System::set_analytic_expression_state component count differs from target state");
-        return std::pair<Impl::Species*, std::vector<analytic::AnalyticProgram>>{
-            &state, std::move(programs)};
+          throw std::invalid_argument(
+              "System analytic state requires cell conservative_cell_average projection");
+        typename Impl::Species& block = p_->find(name);
+        auto programs = analytic::compile_component_programs(opcodes, literals);
+        if (programs.size() != static_cast<std::size_t>(block.ncomp))
+          throw std::invalid_argument("System analytic expression component count differs");
+        return std::pair<typename Impl::Species*, std::vector<analytic::AnalyticProgram>>{
+            &block, std::move(programs)};
       });
-  MultiFab candidate(prepared.first->U.box_array(), prepared.first->U.dmap(),
-                     prepared.first->U.ncomp(), prepared.first->U.n_grow());
-  const std::int64_t materialized = analytic::materialize_cell_average(
-      candidate, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(), prepared.second);
-  publish_recovered_initial_candidate(*prepared.first, candidate,
-                                      "System::set_analytic_expression_state");
-  return materialized;
+  MultiFab<Dim> candidate(prepared.first->U.layout(), prepared.first->U.distribution(),
+                          prepared.first->U.local_rank(), prepared.first->U.ncomp(),
+                          prepared.first->U.ghosts());
+  const std::int64_t count =
+      analytic::materialize_cell_average(candidate, p_->geom, prepared.second);
+  publish_recovered_candidate<Dim>(*prepared.first, candidate,
+                                   "System::set_analytic_expression_state");
+  return count;
 }
-std::int64_t System::set_analytic_mapped_state(const std::string& name,
-                                               const std::vector<std::vector<std::string>>& opcodes,
-                                               const std::vector<std::vector<double>>& literals,
-                                               const std::vector<std::string>& input_sources) {
+
+template <int Dim>
+std::int64_t System<Dim>::set_analytic_mapped_state(
+    const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
+    const std::vector<std::vector<double>>& literals,
+    const std::vector<std::string>& input_sources) {
   auto prepared = analytic::collectively_prepare_analytic_request(
-      "System::set_analytic_mapped_state", {{"name", name}}, {}, opcodes, literals, [&]() {
+      "System::set_analytic_mapped_state", {{"name", name}}, {}, opcodes, literals, [&] {
         require_assembling(p_->lifecycle_, "set_analytic_mapped_state");
-        if (p_->polar_)
-          throw std::runtime_error("System::set_analytic_mapped_state requires a Cartesian frame");
-        Impl::Species& state = p_->find(name);
-        std::vector<analytic::AnalyticProgram> programs =
-            analytic::compile_component_programs(opcodes, literals);
-        if (programs.size() != static_cast<std::size_t>(state.ncomp))
-          throw std::runtime_error(
-              "System::set_analytic_mapped_state component count differs from target state");
-        if (input_sources.empty() || input_sources.size() > analytic::kAnalyticMaxStack)
-          throw std::runtime_error(
-              "System::set_analytic_mapped_state requires one bounded input table");
+        typename Impl::Species& block = p_->find(name);
+        auto programs = analytic::compile_component_programs(opcodes, literals);
+        if (programs.size() != static_cast<std::size_t>(block.ncomp) || input_sources.empty() ||
+            input_sources.size() > analytic::kAnalyticMaxStack)
+          throw std::invalid_argument("System mapped analytic request shape is invalid");
         std::vector<analytic::detail::AnalyticInputBinding> bindings;
         bindings.reserve(input_sources.size());
-        for (const auto& source : input_sources) {
-          const auto sep = source.find(':');
-          if (sep == std::string::npos)
-            throw std::runtime_error(
-                "System::set_analytic_mapped_state input source must be 'state:N' or 'aux:N'");
-          const std::string kind = source.substr(0, sep);
-          int component = -1;
-          try {
-            component = std::stoi(source.substr(sep + 1));
-          } catch (...) {
-            throw std::runtime_error(
-                "System::set_analytic_mapped_state input component is not an integer");
-          }
-          if (component < 0)
-            throw std::runtime_error(
-                "System::set_analytic_mapped_state input component must be non-negative");
-          if (kind == "state")
-            bindings.push_back({0, component});
-          else if (kind == "aux")
-            bindings.push_back({1, component});
-          else
-            throw std::runtime_error(
-                "System::set_analytic_mapped_state input source must be 'state' or 'aux'");
+        for (const std::string& source : input_sources) {
+          const std::size_t separator = source.find(':');
+          if (separator == std::string::npos)
+            throw std::invalid_argument("System analytic input must be state:N or aux:N");
+          const int component = std::stoi(source.substr(separator + 1));
+          const std::string kind = source.substr(0, separator);
+          bindings.push_back({kind == "state" ? 0 : kind == "aux" ? 1 : -1, component});
         }
-        return std::tuple<Impl::Species*, std::vector<analytic::AnalyticProgram>,
+        return std::tuple<typename Impl::Species*, std::vector<analytic::AnalyticProgram>,
                           std::vector<analytic::detail::AnalyticInputBinding>>{
-            &state, std::move(programs), std::move(bindings)};
+            &block, std::move(programs), std::move(bindings)};
       });
-  Impl::Species* state = std::get<0>(prepared);
-  const auto& programs = std::get<1>(prepared);
-  const auto& bindings = std::get<2>(prepared);
-  MultiFab seed(state->U.box_array(), state->U.dmap(), state->U.ncomp(), state->U.n_grow());
-  for (int local = 0; local < state->U.local_size(); ++local) {
-    const ConstArray4 src = state->U.fab(local).const_array();
-    Array4 dst = seed.fab(local).array();
-    const Box2D valid = state->U.box(local);
-    for (int c = 0; c < state->U.ncomp(); ++c)
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-          dst(i, j, c) = src(i, j, c);
-  }
-  device_fence();
-  MultiFab candidate(state->U.box_array(), state->U.dmap(), state->U.ncomp(), state->U.n_grow());
-  const std::int64_t materialized = analytic::materialize_discrete_mapped_state(
-      candidate, seed, p_->aux, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(), programs,
-      bindings);
-  publish_recovered_initial_candidate(*state, candidate, "System::set_analytic_mapped_state");
-  return materialized;
+  typename Impl::Species* block = std::get<0>(prepared);
+  MultiFab<Dim> seed = block->U;
+  MultiFab<Dim> candidate(block->U.layout(), block->U.distribution(), block->U.local_rank(),
+                          block->U.ncomp(), block->U.ghosts());
+  const std::int64_t count = analytic::materialize_discrete_mapped_state(
+      candidate, seed, p_->aux, p_->geom, std::get<1>(prepared), std::get<2>(prepared));
+  publish_recovered_candidate<Dim>(*block, candidate, "System::set_analytic_mapped_state");
+  return count;
 }
-std::int64_t System::set_analytic_gaussian_state(const std::string& name, double center_x,
-                                                 double center_y, double background,
-                                                 double amplitude, double inverse_width) {
+
+template <int Dim>
+std::int64_t System<Dim>::set_analytic_gaussian_state(const std::string& name,
+                                                      const RealVector<Dim>& center,
+                                                      double background, double amplitude,
+                                                      double inverse_width) {
   require_assembling(p_->lifecycle_, "set_analytic_gaussian_state");
-  if (p_->polar_)
-    throw std::runtime_error("System::set_analytic_gaussian_state requires a Cartesian frame");
-  Impl::Species& state = p_->find(name);
-  MultiFab candidate(state.U.box_array(), state.U.dmap(), state.U.ncomp(), state.U.n_grow());
-  const std::int64_t materialized = analytic::materialize_gaussian_cell_average(
-      candidate, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
-      static_cast<Real>(center_x), static_cast<Real>(center_y), static_cast<Real>(background),
-      static_cast<Real>(amplitude), static_cast<Real>(inverse_width));
-  publish_recovered_initial_candidate(state, candidate, "System::set_analytic_gaussian_state");
-  return materialized;
+  typename Impl::Species& block = p_->find(name);
+  if (block.ncomp != 1)
+    throw std::invalid_argument("System Gaussian initializer requires a scalar block");
+  MultiFab<Dim> candidate(block.U.layout(), block.U.distribution(), block.U.local_rank(), 1,
+                          block.U.ghosts());
+  const std::int64_t count = analytic::materialize_gaussian_cell_average(
+      candidate, p_->geom, center, static_cast<Real>(background), static_cast<Real>(amplitude),
+      static_cast<Real>(inverse_width));
+  publish_recovered_candidate<Dim>(block, candidate, "System::set_analytic_gaussian_state");
+  return count;
 }
-int System::n_vars(const std::string& name) const {
+
+template <int Dim>
+int System<Dim>::n_vars(const std::string& name) const {
   return p_->find(name).ncomp;
 }
-std::vector<std::string> System::variable_names(const std::string& name,
-                                                const std::string& kind) const {
-  const Impl::Species& s = p_->find(name);
+
+template <int Dim>
+std::vector<std::string> System<Dim>::variable_names(const std::string& name,
+                                                     const std::string& kind) const {
+  const typename Impl::Species& block = p_->find(name);
   if (kind == "conservative")
-    return s.cons_vars.names;
+    return block.cons_vars.names;
   if (kind == "primitive")
-    return s.prim_vars.names;
-  throw std::runtime_error(
-      "System::variable_names : kind 'conservative' | 'primitive' (received '" + kind + "')");
+    return block.prim_vars.names;
+  throw std::invalid_argument("System variable kind is neither conservative nor primitive");
 }
-std::vector<std::string> System::variable_roles(const std::string& name,
-                                                const std::string& kind) const {
-  const Impl::Species& s = p_->find(name);
-  const VariableSet* vs = nullptr;
-  if (kind == "conservative")
-    vs = &s.cons_vars;
-  else if (kind == "primitive")
-    vs = &s.prim_vars;
-  else
-    throw std::runtime_error(
-        "System::variable_roles : kind 'conservative' | 'primitive' (received '" + kind + "')");
-  std::vector<std::string> out;
-  out.reserve(static_cast<std::size_t>(vs->size));
-  for (int i = 0; i < vs->size; ++i)
-    out.push_back(role_name(vs->at(i).role));  // 'custom' if absent
-  return out;
+
+template <int Dim>
+std::vector<std::string> System<Dim>::variable_roles(const std::string& name,
+                                                     const std::string& kind) const {
+  const typename Impl::Species& block = p_->find(name);
+  const VariableSet* variables = kind == "conservative" ? &block.cons_vars
+                                 : kind == "primitive"  ? &block.prim_vars
+                                                        : nullptr;
+  if (variables == nullptr)
+    throw std::invalid_argument("System variable role kind is invalid");
+  std::vector<std::string> result;
+  result.reserve(static_cast<std::size_t>(variables->size));
+  for (int index = 0; index < variables->size; ++index)
+    result.emplace_back(role_name(variables->at(index).role));
+  return result;
 }
-double System::block_gamma(const std::string& name) const {
+
+template <int Dim>
+double System<Dim>::block_gamma(const std::string& name) const {
   return p_->find(name).gamma;
 }
 
-double System::mass(const std::string& name) const {
-  const Impl::Species& s = p_->find(name);
-  if (!p_->polar_) {
-    RelativeCellMeasure measure;
-    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
-      measure.active_cells = &p_->domain_mask_;
-      if (p_->geometry_mode_ == GeometryMode::CutCell)
-        measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
-    }
-    return static_cast<double>(pops::reduce_sum(s.U, 0, measure));
-  }
-  // POLAR: FV mass = Sum_ij n_ij r_i dr dtheta (annular cell volume r dr dtheta). This is the
-  // quantity CONSERVED by assemble_rhs_polar (cf. test_polar_transport_mms). Host loop over the valid
-  // cells (mono-rank: a single local fab), reduced over the ranks by symmetry (n_ranks==1).
-  device_fence();
-  const PolarGeometry& g = p_->pgeom_;
-  const Real dr = g.dr(), dth = g.dtheta();
-  double m = 0.0;
-  for (int li = 0; li < s.U.local_size(); ++li) {
-    const ConstArray4 u = s.U.fab(li).const_array();
-    const Box2D v = s.U.box(li);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        m += static_cast<double>(u(i, j, 0)) * static_cast<double>(g.r_cell(i) * dr * dth);
-  }
-  return all_reduce_sum(m);
-}
-std::vector<double> System::density(const std::string& name) const {
-  return p_->copy_comp0(p_->find(name).U);
-}
-std::vector<double> System::potential() {
-  device_fence();
-  // POLAR: phi comes from the polar Poisson (pell_), not from the Cartesian solver (ell_). We build it
-  // lazily if needed (a call before any step) and we read phi() of PolarPoissonSolver.
-  if (p_->polar_) {
-    p_->fields_.ensure_elliptic_polar();
-    // Rank without a box (MPI mono-box): EMPTY return (no fab(0)). Cf. copy_comp0; the multi-rank
-    // global field goes through System::potential_global.
-    if (p_->aux.local_size() == 0)
-      return {};
-    const ConstArray4 ph = p_->fields_.pell_->phi().fab(0).const_array();
-    const Box2D v = p_->aux.box(0);
-    std::vector<double> out;
-    out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        out.push_back(ph(i, j));
-    return out;
-  }
-  p_->fields_.ensure_elliptic();
-  if (p_->aux.local_size() == 0)
-    return {};  // rank without a box: empty (cf. potential_global)
-  const ConstArray4 ph = p_->fields_.ell_phi().fab(0).const_array();
-  const Box2D v = p_->aux.box(0);
-  std::vector<double> out;
-  out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
-  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-      out.push_back(ph(i, j));
-  return out;
+template <int Dim>
+double System<Dim>::mass(const std::string& name) const {
+  return static_cast<double>(reduce_sum(p_->find(name).U, 0));
 }
 
-// --- GLOBAL accessors (collective MPI-safe), IO v1 multi-rank --------------------------------
-// All three delegate to gather_global (anon namespace, top of file): a GLOBAL buffer filled by the
-// LOCAL fabs at GLOBAL indices then all_reduce_sum_inplace, component-major. Mono-rank: the box
-// covers the domain and the reduce is the identity -> array bit-identical to the non-global
-// accessors (density / get_state / potential). The device_fence is owned here (before the gather).
-std::vector<double> System::density_global(const std::string& name) const {
-  device_fence();
-  const Impl::Species& s = p_->find(name);
-  return gather_global(s.U, 1, nx(), ny());
-}
-std::vector<double> System::state_global(const std::string& name) const {
-  device_fence();
-  const Impl::Species& s = p_->find(name);
-  return gather_global(s.U, s.ncomp, nx(), ny());
-}
-std::vector<double> System::potential_global() {
-  device_fence();
-  // Resolve phi, solving the Poisson (polar or Cartesian) if needed: COLLECTIVE, like the gather.
-  const MultiFab* phi = nullptr;
-  if (p_->polar_) {
-    p_->fields_.ensure_elliptic_polar();
-    phi = &p_->fields_.pell_->phi();
-  } else {
-    p_->fields_.ensure_elliptic();
-    phi = &p_->fields_.ell_phi();
-  }
-  return gather_global(*phi, 1, nx(), ny());
+template <int Dim>
+std::vector<double> System<Dim>::density(const std::string& name) const {
+  return gather_local_compact(p_->find(name).U, 1);
 }
 
-std::vector<double> System::field_potential_global(const std::string& provider_slot) {
-  device_fence();
-  MultiFab& field = p_->fields_.provider_potential(provider_slot);
-  return gather_global(field, 1, nx(), ny());
+template <int Dim>
+std::vector<double> System<Dim>::potential() {
+  return gather_local_compact(prepare_default_field<Dim>(*p_)->accepted_potential(), 1);
 }
 
-std::vector<OutputPiece<2>> System::output_state_local_pieces(const std::string& name,
-                                                              int level) const {
+template <int Dim>
+std::vector<double> System<Dim>::density_global(const std::string& name) const {
+  return gather_global(p_->find(name).U, p_->dom, 1);
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::state_global(const std::string& name) const {
+  const typename Impl::Species& block = p_->find(name);
+  return gather_global(block.U, p_->dom, block.ncomp);
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::potential_global() {
+  return gather_global(prepare_default_field<Dim>(*p_)->accepted_potential(), p_->dom, 1);
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::field_potential_global(const std::string& provider_slot) {
+  if (provider_slot == "pops.system.default-field")
+    return potential_global();
+  const auto found = p_->named_fields_.find(provider_slot);
+  if (found == p_->named_fields_.end())
+    throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+  return gather_global(found->second->accepted_potential(), p_->dom, 1);
+}
+
+template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_state_local_pieces(const std::string& name,
+                                                                     int level) const {
   if (level != 0)
-    throw std::out_of_range(
-        "System::output_state_local_pieces: uniform layout has only level zero");
-  const Impl::Species& species = p_->find(name);
-  return output_local_pieces(species.U, 0, false);
+    throw std::out_of_range("Uniform System output has only level zero");
+  return output_local_pieces(p_->find(name).U, 0, false);
 }
 
-std::vector<OutputPiece<2>> System::output_field_local_pieces(const std::string& provider_slot,
-                                                              int level) {
+template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
+    const std::string& provider_slot, int level) {
   if (level != 0)
-    throw std::out_of_range(
-        "System::output_field_local_pieces: uniform layout has only level zero");
-  MultiFab& field = p_->fields_.provider_potential(provider_slot);
-  return output_local_pieces(field, 0, false);
+    throw std::out_of_range("Uniform System output has only level zero");
+  if (provider_slot == "pops.system.default-field")
+    return output_local_pieces(prepare_default_field<Dim>(*p_)->accepted_potential(), 0, false);
+  const auto found = p_->named_fields_.find(provider_slot);
+  if (found == p_->named_fields_.end())
+    throw std::out_of_range("System field provider slot is unknown: " + provider_slot);
+  return output_local_pieces(found->second->accepted_potential(), 0, false);
 }
 
-std::vector<OutputPiece<2>> System::output_state_root_pieces(const ObserverMpiLane& lane,
-                                                             const std::string& name,
-                                                             int level) const {
+template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_state_root_pieces(const ObserverMpiLane& lane,
+                                                                    const std::string& name,
+                                                                    int level) const {
   return output_pieces_to_root(lane,
                                detail::output_collective_identity("System", "state", name, level),
                                [&] { return output_state_local_pieces(name, level); });
 }
 
-std::vector<OutputPiece<2>> System::output_field_root_pieces(const ObserverMpiLane& lane,
-                                                             const std::string& provider_slot,
-                                                             int level) {
+template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_field_root_pieces(
+    const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
   return output_pieces_to_root(
       lane, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
 }
 
-// --- LOCAL per-fab accessors (NON collective): exact native ownership inspection ----------------
-// Local counterpart of the _global accessors: they aggregate nothing (no MPI comm), they expose per
-// rank the LOCAL boxes (in GLOBAL indices, as carried by the fab box) and the state of each fab. The
-// typed scientific-output bridge consumes OutputPiece instead; these lower-level views remain useful
-// for native ownership verification. A rank without a box returns an empty list.
-std::vector<std::array<int, 4>> System::local_boxes(const std::string& name) const {
-  device_fence();
-  const Impl::Species& s = p_->find(name);
-  std::vector<std::array<int, 4>> out;
-  out.reserve(s.U.local_size());
-  for (int li = 0; li < s.U.local_size(); ++li) {
-    const Box2D v = s.U.box(li);
-    out.push_back({v.lo[0], v.lo[1], v.hi[0], v.hi[1]});  // (ilo, jlo, ihi, jhi) GLOBAL
-  }
-  return out;
+template <int Dim>
+std::vector<Box<Dim>> System<Dim>::local_boxes(const std::string& name) const {
+  const MultiFab<Dim>& state = p_->find(name).U;
+  std::vector<Box<Dim>> result;
+  result.reserve(state.local_size());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    result.push_back(state.box(local));
+  return result;
 }
-std::vector<double> System::local_state(const std::string& name, int li) const {
-  device_fence();
-  const Impl::Species& s = p_->find(name);
-  if (li < 0 || li >= s.U.local_size())
-    throw std::out_of_range("System::local_state : local fab index out of bounds (0.." +
-                            std::to_string(s.U.local_size() - 1) + ")");
-  const int nc = s.ncomp;
-  const ConstArray4 u = s.U.fab(li).const_array();
-  const Box2D v = s.U.box(li);
-  const int bnx = v.nx(), bny = v.ny();  // dimensions of the LOCAL box (valid cells)
-  std::vector<double> out(static_cast<std::size_t>(nc) * bnx * bny, 0.0);
-  // Layout = state_global mapped to the local box: (c*bny + jl)*bnx + il, component-major, so
-  // reshapeable into (nc, bny, bnx) for a hyperslab dset[:, jlo:jhi+1, ilo:ihi+1].
-  for (int c = 0; c < nc; ++c)
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        out[(static_cast<std::size_t>(c) * bny + (j - v.lo[1])) * bnx + (i - v.lo[0])] =
-            static_cast<double>(u(i, j, c));
-  return out;
+
+template <int Dim>
+std::vector<double> System<Dim>::local_state(const std::string& name, int local_index) const {
+  const typename Impl::Species& block = p_->find(name);
+  if (local_index < 0 || static_cast<std::size_t>(local_index) >= block.U.local_size())
+    throw std::out_of_range("System local state index is outside the owned patch list");
+  const Fab<Dim>& fab = block.U.fab(static_cast<std::size_t>(local_index));
+  const std::size_t cells = checked_cell_count(fab.box());
+  std::vector<double> result(static_cast<std::size_t>(block.ncomp) * cells, 0.0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t linear) {
+    for (int component = 0; component < block.ncomp; ++component)
+      result[static_cast<std::size_t>(component) * cells + linear] =
+          static_cast<double>(host(storage_ordinal(fab, index, component)));
+  });
+  return result;
 }
+
+template void System<kNativeDimension>::validate_program_state_publication_candidate(
+    int, const MultiFab<kNativeDimension>&) const;
+template void System<kNativeDimension>::set_density(const std::string&, const std::vector<double>&);
+template void System<kNativeDimension>::set_primitive_state(const std::string&,
+                                                            const std::vector<double>&);
+template std::vector<double> System<kNativeDimension>::get_primitive_state(const std::string&);
+template void System<kNativeDimension>::set_poisson(const std::string&, const std::string&,
+                                                    const std::string&, const std::string&, double,
+                                                    double, double, double, int, int, int, int, int,
+                                                    int);
+template SolveReport System<kNativeDimension>::solve_fields_in_place_();
+template SolveReport System<kNativeDimension>::solve_fields_from_state_in_place_(
+    int, const MultiFab<kNativeDimension>&);
+template SolveReport System<kNativeDimension>::solve_fields_from_state_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&);
+template SolveReport System<kNativeDimension>::solve_fields_from_blocks_in_place_(
+    const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveReport System<kNativeDimension>::solve_fields_from_state_in_place_(
+    const std::string&, int, const MultiFab<kNativeDimension>&);
+template SolveReport System<kNativeDimension>::solve_fields_from_blocks_in_place_(
+    const std::string&, const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveReport System<kNativeDimension>::solve_fields_from_blocks_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&,
+    const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveOutcome System<kNativeDimension>::solve_fields();
+template SolveOutcome System<kNativeDimension>::solve_fields_from_state(
+    int, const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::solve_fields_from_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+    const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::solve_fields_from_blocks(
+    const std::vector<const MultiFab<kNativeDimension>*>&);
+template SolveOutcome System<kNativeDimension>::solve_fields_from_state(
+    const std::string&, int, const MultiFab<kNativeDimension>&);
+template SolveOutcome System<kNativeDimension>::solve_fields_from_blocks(
+    const std::string&, const std::vector<const MultiFab<kNativeDimension>*>&);
+template void System<kNativeDimension>::prepare_default_field_publication_storage_();
+template void System<kNativeDimension>::prepare_named_field_publication_storage_(
+    const std::string&);
+template void System<kNativeDimension>::begin_field_publication_transaction();
+template void System<kNativeDimension>::stage_field_publication_candidate();
+template void System<kNativeDimension>::validate_field_publication_candidate();
+template void System<kNativeDimension>::accept_field_publication_candidate() noexcept;
+template void System<kNativeDimension>::rollback_field_publication_transaction();
+template bool System<kNativeDimension>::field_publication_transaction_active_() const noexcept;
+template void System<kNativeDimension>::begin_field_publication_outcome_();
+template SolveOutcome System<kNativeDimension>::stage_field_publication_outcome_(SolveReport);
+template SolveOutcome System<kNativeDimension>::run_field_publication_outcome_(
+    const std::function<SolveReport()>&);
+template void System<kNativeDimension>::set_potential(const std::vector<double>&);
+template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
+template void System<kNativeDimension>::set_field_potential(const std::string&,
+                                                            const std::vector<double>&);
+template std::vector<double> System<kNativeDimension>::eval_rhs(const std::string&);
+template double System<kNativeDimension>::reduce_component(const std::string&, const std::string&,
+                                                           int) const;
+template MultiFab<kNativeDimension> System<kNativeDimension>::alloc_scalar_field(int, int);
+template MultiFab<kNativeDimension>& System<kNativeDimension>::register_history(
+    const std::string&, int, int, int, const std::string&, const std::string&, const std::string&,
+    const std::string&);
+template MultiFab<kNativeDimension>& System<kNativeDimension>::read_history(const std::string&,
+                                                                            int);
+template std::vector<double> System<kNativeDimension>::get_state(const std::string&);
+template void System<kNativeDimension>::set_state(const std::string&, const std::vector<double>&);
+template std::int64_t System<kNativeDimension>::set_analytic_expression_state(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::vector<std::vector<std::string>>&, const std::vector<std::vector<double>>&);
+template std::int64_t System<kNativeDimension>::set_analytic_mapped_state(
+    const std::string&, const std::vector<std::vector<std::string>>&,
+    const std::vector<std::vector<double>>&, const std::vector<std::string>&);
+template std::int64_t System<kNativeDimension>::set_analytic_gaussian_state(
+    const std::string&, const RealVector<kNativeDimension>&, double, double, double);
+template int System<kNativeDimension>::n_vars(const std::string&) const;
+template std::vector<std::string> System<kNativeDimension>::variable_names(
+    const std::string&, const std::string&) const;
+template std::vector<std::string> System<kNativeDimension>::variable_roles(
+    const std::string&, const std::string&) const;
+template double System<kNativeDimension>::block_gamma(const std::string&) const;
+template double System<kNativeDimension>::mass(const std::string&) const;
+template std::vector<double> System<kNativeDimension>::density(const std::string&) const;
+template std::vector<double> System<kNativeDimension>::potential();
+template std::vector<double> System<kNativeDimension>::density_global(const std::string&) const;
+template std::vector<double> System<kNativeDimension>::state_global(const std::string&) const;
+template std::vector<double> System<kNativeDimension>::potential_global();
+template std::vector<double> System<kNativeDimension>::field_potential_global(const std::string&);
+template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_state_local_pieces(const std::string&, int) const;
+template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_field_local_pieces(const std::string&, int);
+template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_state_root_pieces(const ObserverMpiLane&, const std::string&,
+                                                   int) const;
+template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_field_root_pieces(const ObserverMpiLane&, const std::string&, int);
+template std::vector<Box<kNativeDimension>> System<kNativeDimension>::local_boxes(
+    const std::string&) const;
+template std::vector<double> System<kNativeDimension>::local_state(const std::string&, int) const;
 
 }  // namespace pops

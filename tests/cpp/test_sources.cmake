@@ -188,6 +188,7 @@ set(POPS_CPP_TEST_SOURCE_test_patch_range "tests/cpp/unit/mesh/test_patch_range.
 set(POPS_CPP_TEST_SOURCE_test_platform_manifest "tests/cpp/unit/runtime/test_platform_manifest.cpp")
 set(POPS_CPP_TEST_SOURCE_test_physical_bc "tests/cpp/unit/mesh/test_physical_bc.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_convergence "tests/cpp/unit/elliptic/test_poisson_convergence.cpp")
+set(POPS_CPP_TEST_SOURCE_test_cartesian_poisson_nd "tests/cpp/unit/elliptic/test_cartesian_poisson_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_disc "tests/cpp/unit/elliptic/test_poisson_disc.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_fft "tests/cpp/unit/elliptic/test_poisson_fft.cpp")
 set(POPS_CPP_TEST_SOURCE_test_poisson_smoother "tests/cpp/unit/elliptic/test_poisson_smoother.cpp")

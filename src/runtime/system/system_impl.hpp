@@ -9,6 +9,7 @@
 #include <pops/runtime/system/system_boundary_registry.hpp>
 #include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
+#include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 
@@ -61,6 +62,15 @@ struct System<Dim>::Impl {
   int macro_step_ = 0;
   std::string last_dt_reason_;
   std::string poisson_solver_ = "geometric_mg";
+  std::string poisson_bc_ = "auto";
+  double poisson_abs_tol_ = 0.0;
+  double poisson_rel_tol_ = 1.0e-10;
+  int poisson_max_iterations_ = 2000;
+
+  using exact_field_type = runtime::system::ExactNamedField<Dim>;
+  std::shared_ptr<exact_field_type> default_field_;
+  std::map<std::string, std::shared_ptr<exact_field_type>> named_fields_;
+  std::shared_ptr<exact_field_type> active_field_;
 
   struct AcceptedSnapshot {
     std::vector<field_type> states;

@@ -59,8 +59,8 @@ std::size_t storage_offset(const Index<Dim>& index, const Box<Dim>& storage) {
 /// Copy only valid cells. Ghost values are owned by prepared communication/boundary producers and
 /// must be regenerated after storage width changes.
 template <int Dim>
-void copy_valid_components(const MultiFab<Dim>& source, MultiFab<Dim>& destination,
-                           int components, const char* operation) {
+void copy_valid_components(const MultiFab<Dim>& source, MultiFab<Dim>& destination, int components,
+                           const char* operation) {
   if (source.layout() != destination.layout() ||
       source.distribution() != destination.distribution() ||
       source.local_rank() != destination.local_rank() ||
@@ -74,8 +74,7 @@ void copy_valid_components(const MultiFab<Dim>& source, MultiFab<Dim>& destinati
     const Fab<Dim>& source_fab = source.fab(local);
     Fab<Dim>& destination_fab = destination.fab(local);
     if (source_fab.box() != destination_fab.box())
-      throw std::invalid_argument(std::string(operation) +
-                                  ": local valid boxes differ");
+      throw std::invalid_argument(std::string(operation) + ": local valid boxes differ");
     auto source_host = source_fab.create_host_mirror();
     auto destination_host = destination_fab.create_host_mirror();
     source_fab.copy_to_host(source_host);
@@ -122,10 +121,8 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
   if (block.ncomp < 1 || block.aux_components < 1)
     throw std::invalid_argument(
         "prepared System block requires positive state and auxiliary component counts");
-  if (!std::isfinite(block.gamma) || !(block.gamma > 0.0) || block.substeps < 1 ||
-      block.stride < 1)
-    throw std::invalid_argument(
-        "prepared System block gamma, substeps, and stride are invalid");
+  if (!std::isfinite(block.gamma) || !(block.gamma > 0.0) || block.substeps < 1 || block.stride < 1)
+    throw std::invalid_argument("prepared System block gamma, substeps, and stride are invalid");
   for (int axis = 0; axis < Dim; ++axis)
     if (block.ghosts[axis] < 1)
       throw std::invalid_argument(
@@ -137,12 +134,11 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
 
   const auto& closures = block.closures;
   if (!closures.rhs_into || !closures.rhs_flux_only || !closures.source_only ||
-      !closures.rhs_at_point || !closures.rhs_flux_only_at_point ||
-      !closures.rhs_core_at_point || !closures.rhs_flux_only_core_at_point ||
-      !closures.rhs_core_at_point_prepared ||
+      !closures.rhs_at_point || !closures.rhs_flux_only_at_point || !closures.rhs_core_at_point ||
+      !closures.rhs_flux_only_core_at_point || !closures.rhs_core_at_point_prepared ||
       !closures.rhs_flux_only_core_at_point_prepared || !block.maximum_speed ||
-      !block.poisson_rhs || !block.primitive_to_conservative ||
-      !block.conservative_to_primitive || !block.batch_conservative_to_primitive)
+      !block.poisson_rhs || !block.primitive_to_conservative || !block.conservative_to_primitive ||
+      !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
         "prepared System block does not implement the complete exact-ranked execution contract");
 }
@@ -164,9 +160,8 @@ std::optional<MultiFab<Dim>> widened_aux_candidate(Implementation& implementatio
 template <int Dim>
 void System<Dim>::add_block(const std::string&, const ModelSpec&, const std::string&,
                             const std::string&, const std::string&, const std::string&, int, bool,
-                            int, const std::vector<std::string>&,
-                            const std::vector<std::string>&, const NewtonOptions&, bool, double,
-                            bool, double) {
+                            int, const std::vector<std::string>&, const std::vector<std::string>&,
+                            const NewtonOptions&, bool, double, bool, double) {
   throw std::logic_error(
       "System::add_block(ModelSpec) was removed from the native core: resolve and compile one "
       "dimension-qualified provider, then install its PreparedSystemBlock<Dim>");
@@ -176,11 +171,9 @@ template <int Dim>
 void System<Dim>::install_block_state_route(const std::string& name,
                                             const std::string& state_identity) {
   require_assembling(p_->lifecycle_, "install_block_state_route");
-  if (std::any_of(p_->sp.begin(), p_->sp.end(), [&](const typename Impl::Species& block) {
-        return block.name == name;
-      }))
-    throw std::logic_error(
-        "System block state route must be installed before its prepared block");
+  if (std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [&](const typename Impl::Species& block) { return block.name == name; }))
+    throw std::logic_error("System block state route must be installed before its prepared block");
   p_->boundary_registry_.install_state_route(name, state_identity);
 }
 
@@ -203,9 +196,8 @@ void System<Dim>::install_hyperbolic_boundary(
     const std::vector<std::vector<double>>& face_analytic_literals,
     const std::vector<std::string>& face_analytic_clocks) {
   require_assembling(p_->lifecycle_, "install_hyperbolic_boundary");
-  if (std::any_of(p_->sp.begin(), p_->sp.end(), [&](const typename Impl::Species& block) {
-        return block.name == name;
-      }))
+  if (std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [&](const typename Impl::Species& block) { return block.name == name; }))
     throw std::logic_error(
         "System hyperbolic boundary must be prepared before its block is committed");
   p_->boundary_registry_.install_boundary(
@@ -219,9 +211,8 @@ void System<Dim>::install_prepared_hyperbolic_boundary(
     const std::string& name, const std::string& identity, int required_depth,
     const std::string& state_identity, std::shared_ptr<const HyperbolicBoundary> boundary) {
   require_assembling(p_->lifecycle_, "install_prepared_hyperbolic_boundary");
-  if (std::any_of(p_->sp.begin(), p_->sp.end(), [&](const typename Impl::Species& block) {
-        return block.name == name;
-      }))
+  if (std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [&](const typename Impl::Species& block) { return block.name == name; }))
     throw std::logic_error(
         "System hyperbolic boundary must be prepared before its block is committed");
   p_->boundary_registry_.install_boundary(name, identity, required_depth, state_identity,
@@ -272,15 +263,13 @@ template <int Dim>
 void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   require_assembling(p_->lifecycle_, "install_prepared_block");
   validate_prepared_block(prepared);
-  if (std::any_of(p_->sp.begin(), p_->sp.end(), [&](const typename Impl::Species& block) {
-        return block.name == prepared.name;
-      }))
+  if (std::any_of(p_->sp.begin(), p_->sp.end(),
+                  [&](const typename Impl::Species& block) { return block.name == prepared.name; }))
     throw std::invalid_argument("System prepared block name is already installed");
 
   const auto route = p_->boundary_registry_.state_routes().find(prepared.name);
   if (route == p_->boundary_registry_.state_routes().end())
-    throw std::runtime_error(
-        "System prepared block lacks its exact pre-installed state identity");
+    throw std::runtime_error("System prepared block lacks its exact pre-installed state identity");
   const std::string state_identity = route->second;
 
   const auto* installed_boundary = p_->boundary_for(prepared.name);
@@ -334,13 +323,10 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   candidate.rhs_flux_only_without_prepared_interfaces =
       std::move(prepared.closures.rhs_flux_only_without_prepared_interfaces);
   candidate.rhs_core_at_point = std::move(prepared.closures.rhs_core_at_point);
-  candidate.rhs_flux_only_core_at_point =
-      std::move(prepared.closures.rhs_flux_only_core_at_point);
-  candidate.boundary_residual_at_point =
-      std::move(prepared.closures.boundary_residual_at_point);
+  candidate.rhs_flux_only_core_at_point = std::move(prepared.closures.rhs_flux_only_core_at_point);
+  candidate.boundary_residual_at_point = std::move(prepared.closures.boundary_residual_at_point);
   candidate.boundary_jvp_at_point = std::move(prepared.closures.boundary_jvp_at_point);
-  candidate.rhs_core_at_point_prepared =
-      std::move(prepared.closures.rhs_core_at_point_prepared);
+  candidate.rhs_core_at_point_prepared = std::move(prepared.closures.rhs_core_at_point_prepared);
   candidate.rhs_flux_only_core_at_point_prepared =
       std::move(prepared.closures.rhs_flux_only_core_at_point_prepared);
   candidate.boundary_residual_at_point_prepared =
@@ -382,9 +368,29 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
   (void)p_->find(block);
   runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
   output.validate_width(p_->aux_ncomp_, "System");
-  throw std::logic_error(
-      "System exact-ranked named elliptic fields require an installed dimension-qualified "
-      "field-solver provider");
+  if (p_->named_fields_.contains(field))
+    throw std::invalid_argument("System named elliptic field is already registered: " + field);
+
+  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
+  if (p_->poisson_bc_ == "neumann")
+    physical = elliptic::nd::CartesianBoundaryKind::neumann;
+  else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
+           p_->poisson_bc_ != "periodic")
+    throw std::invalid_argument("System Poisson boundary mode is unknown");
+  if (p_->poisson_bc_ == "periodic" &&
+      topology.periodic_pair_count() != static_cast<std::size_t>(Dim))
+    throw std::invalid_argument(
+        "System periodic Poisson requires every exact topology axis to be periodic");
+  auto options = elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
+  options.absolute_tolerance = static_cast<Real>(p_->poisson_abs_tol_);
+  options.relative_tolerance = static_cast<Real>(p_->poisson_rel_tol_);
+  options.maximum_iterations = p_->poisson_max_iterations_;
+
+  auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
+      field, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, topology, std::move(options),
+      p_->sp.size());
+  p_->named_fields_.emplace(field, std::move(prepared));
 }
 
 template <int Dim>
@@ -395,18 +401,18 @@ void System<Dim>::set_block_elliptic_field(
   if (field.empty() || !rhs)
     throw std::invalid_argument(
         "System named elliptic RHS requires a field identity and prepared closure");
-  (void)p_->find(block_name);
-  throw std::logic_error(
-      "System exact-ranked named elliptic fields require an installed dimension-qualified "
-      "field-solver provider");
+  const int block = p_->index(block_name);
+  const auto provider = p_->named_fields_.find(field);
+  if (provider == p_->named_fields_.end())
+    throw std::invalid_argument("System named elliptic field is not registered: " + field);
+  provider->second->set_rhs(static_cast<std::size_t>(block), std::move(rhs));
 }
 
 template <int Dim>
 void System<Dim>::add_dt_bound(const std::string& label, std::function<double()> function) {
   require_assembling(p_->lifecycle_, "add_dt_bound");
   if (label.empty() || !function)
-    throw std::invalid_argument(
-        "System global dt bound requires a non-empty label and provider");
+    throw std::invalid_argument("System global dt bound requires a non-empty label and provider");
   p_->coupling_.dt_bounds.push_back({label, std::move(function)});
 }
 
@@ -426,16 +432,14 @@ void System<Dim>::add_native_block(const std::string& name, const std::string& s
                                    const std::string& limiter, const std::string& riemann,
                                    const std::string& recon, const std::string& time, double gamma,
                                    int substeps, bool evolve, int stride,
-                                   const std::vector<double>& params,
-                                   double positivity_floor) {
+                                   const std::vector<double>& params, double positivity_floor) {
   require_assembling(p_->lifecycle_, "add_native_block");
   native_loader::add_native_block<Dim>(this, name, so_path, limiter, riemann, recon, time, gamma,
                                        substeps, evolve, stride, params, positivity_floor);
 }
 
 template <int Dim>
-void System<Dim>::add_coupled_source(const CoupledSourceProgram&, double,
-                                     const std::string&) {
+void System<Dim>::add_coupled_source(const CoupledSourceProgram&, double, const std::string&) {
   throw std::logic_error(
       "System coupled-source bytecode is not an execution provider; install one prepared "
       "dimension-qualified coupling operator");
@@ -454,8 +458,7 @@ void System<Dim>::install_prepared_coupling_operator(
     std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
     double constant_frequency, std::function<Real()> maximum_frequency) {
   require_assembling(p_->lifecycle_, "install_prepared_coupling_operator");
-  if (label.empty() || !operation || !std::isfinite(constant_frequency) ||
-      constant_frequency < 0.0)
+  if (label.empty() || !operation || !std::isfinite(constant_frequency) || constant_frequency < 0.0)
     throw std::invalid_argument(
         "prepared System coupling requires an identity, executable provider, and finite frequency");
   if (!view.label.empty() && view.label != label)
@@ -480,20 +483,22 @@ const std::vector<CouplingOperatorView>& System<Dim>::coupled_operators() const 
   return p_->coupling_.coupled_operators;
 }
 
-template void System<kNativeDimension>::add_block(
-    const std::string&, const ModelSpec&, const std::string&, const std::string&,
-    const std::string&, const std::string&, int, bool, int, const std::vector<std::string>&,
-    const std::vector<std::string>&, const NewtonOptions&, bool, double, bool, double);
+template void System<kNativeDimension>::add_block(const std::string&, const ModelSpec&,
+                                                  const std::string&, const std::string&,
+                                                  const std::string&, const std::string&, int, bool,
+                                                  int, const std::vector<std::string>&,
+                                                  const std::vector<std::string>&,
+                                                  const NewtonOptions&, bool, double, bool, double);
 template void System<kNativeDimension>::install_block_state_route(const std::string&,
                                                                   const std::string&);
 template void System<kNativeDimension>::install_field_storage_route(const std::string&,
                                                                     const std::string&);
 template void System<kNativeDimension>::install_hyperbolic_boundary(
     const std::string&, const std::string&, int, const std::vector<std::string>&,
-    const std::vector<double>&, const std::vector<std::string>&,
-    const std::vector<std::string>&, const std::string&, const std::vector<std::string>&,
-    const std::vector<std::string>&, const std::vector<std::vector<std::string>>&,
-    const std::vector<std::vector<double>>&, const std::vector<std::string>&);
+    const std::vector<double>&, const std::vector<std::string>&, const std::vector<std::string>&,
+    const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
+    const std::vector<std::vector<std::string>>&, const std::vector<std::vector<double>>&,
+    const std::vector<std::string>&);
 template void System<kNativeDimension>::install_prepared_hyperbolic_boundary(
     const std::string&, const std::string&, int, const std::string&,
     std::shared_ptr<const System<kNativeDimension>::HyperbolicBoundary>);
@@ -504,25 +509,26 @@ template void System<kNativeDimension>::discard_interface_flux_components();
 template std::size_t System<kNativeDimension>::interface_evaluation_count(const std::string&,
                                                                           int) const;
 template Geometry<kNativeDimension> System<kNativeDimension>::prepared_block_geometry() const;
-template std::array<bool, kNativeDimension>
-System<kNativeDimension>::prepared_block_periodicity() const;
+template std::array<bool, kNativeDimension> System<kNativeDimension>::prepared_block_periodicity()
+    const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
 template void System<kNativeDimension>::ensure_aux_width(int);
-template void System<kNativeDimension>::register_elliptic_field(
-    const std::string&, const std::string&, const std::vector<int>&, int);
+template void System<kNativeDimension>::register_elliptic_field(const std::string&,
+                                                                const std::string&,
+                                                                const std::vector<int>&, int);
 template void System<kNativeDimension>::set_block_elliptic_field(
     const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
-template void System<kNativeDimension>::add_dt_bound(const std::string&,
-                                                     std::function<double()>);
+template void System<kNativeDimension>::add_dt_bound(const std::string&, std::function<double()>);
 template std::string System<kNativeDimension>::last_dt_bound() const;
-template System<kNativeDimension>::SourceNewtonReport
-System<kNativeDimension>::newton_report(const std::string&) const;
-template void System<kNativeDimension>::add_native_block(
-    const std::string&, const std::string&, const std::string&, const std::string&,
-    const std::string&, const std::string&, double, int, bool, int,
-    const std::vector<double>&, double);
+template System<kNativeDimension>::SourceNewtonReport System<kNativeDimension>::newton_report(
+    const std::string&) const;
+template void System<kNativeDimension>::add_native_block(const std::string&, const std::string&,
+                                                         const std::string&, const std::string&,
+                                                         const std::string&, const std::string&,
+                                                         double, int, bool, int,
+                                                         const std::vector<double>&, double);
 template void System<kNativeDimension>::add_coupled_source(const CoupledSourceProgram&, double,
                                                            const std::string&);
 template void System<kNativeDimension>::add_coupling_operator(const CouplingOperator&);
@@ -530,7 +536,7 @@ template void System<kNativeDimension>::install_prepared_coupling_operator(
     const std::string&, CouplingOperatorView,
     std::function<void(Real, const std::vector<MultiFab<kNativeDimension>*>&)>, double,
     std::function<Real()>);
-template const std::vector<CouplingOperatorView>&
-System<kNativeDimension>::coupled_operators() const;
+template const std::vector<CouplingOperatorView>& System<kNativeDimension>::coupled_operators()
+    const;
 
 }  // namespace pops
