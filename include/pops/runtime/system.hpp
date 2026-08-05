@@ -7,8 +7,6 @@
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
-#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
@@ -21,7 +19,6 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
-#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
 #include <cstddef>
@@ -50,6 +47,10 @@
 namespace pops {
 
 class ObserverMpiLane;
+class FieldNullspaceProvider;
+struct FieldLogicalTimePoint;
+template <int Dim>
+struct CompiledFieldBoundaryKernel;
 struct BlockClosures;
 template <int Dim>
 class PreparedSystemLayoutTransfer;
@@ -130,8 +131,14 @@ class ProgramContext;
 struct ProgramRuntimeState;
 }  // namespace runtime::program
 
+namespace runtime::field {
+struct PreparedFieldSolverSpec;
+struct FieldTopologyReportRow;
+}  // namespace runtime::field
+
 namespace runtime::multiblock {
 struct AxisAlignedInterface;
+struct BoundaryEvaluationPoint;
 struct PreparedInterfaceFluxSpec;
 }  // namespace runtime::multiblock
 
@@ -445,7 +452,7 @@ class System {
   /// The shared library remains loaded for the System lifetime, so the direct function pointers are
   /// stable and no registry lookup occurs in a face-cell loop.
   POPS_EXPORT void set_field_boundary_kernel(const std::string& provider_slot,
-                                             const CompiledFieldBoundaryKernel& kernel);
+                                             const CompiledFieldBoundaryKernel<Dim>& kernel);
   POPS_EXPORT void set_field_logical_timepoint(const std::string& provider_slot,
                                                const FieldLogicalTimePoint& point);
   POPS_EXPORT void set_field_boundary_parameters(const std::string& provider_slot,

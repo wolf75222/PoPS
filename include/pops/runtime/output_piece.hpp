@@ -33,43 +33,49 @@ struct OutputPiece {
   std::vector<double> values;
 };
 
-/// Copy the valid cells of every locally allocated legacy 2D fab into exact ranked output pieces.
-/// The returned contract is the same ``OutputPiece<Dim>`` consumed by dimension-specialized
-/// engines; this overload is 2D because the source MultiFab itself is the remaining legacy 2D type.
-inline std::vector<OutputPiece<2>> output_local_pieces(const MultiFab& source, int level,
-                                                       bool replicated) {
+/// Copy the valid cells of every locally allocated ranked fab into exact output pieces.
+template <int Dim, class MemorySpace>
+std::vector<OutputPiece<Dim>> output_local_pieces(const MultiFab<Dim, MemorySpace>& source,
+                                                  int level, bool replicated) {
   if (level < 0)
     throw std::out_of_range("output_local_pieces level must be nonnegative");
   if (source.ncomp() < 1)
     throw std::runtime_error("output_local_pieces requires at least one component");
 
-  source.sync_host();
-  std::vector<OutputPiece<2>> result;
-  result.reserve(static_cast<std::size_t>(source.local_size()));
-  for (int local = 0; local < source.local_size(); ++local) {
-    const int global = source.global_index(local);
-    const Box2D& valid = source.box(local);
-    const int nx = valid.nx();
-    const int ny = valid.ny();
+  std::vector<OutputPiece<Dim>> result;
+  result.reserve(source.local_size());
+  for (std::size_t local = 0; local < source.local_size(); ++local) {
+    const std::size_t global = source.global_index(local);
+    const Box<Dim>& valid = source.box(local);
+    const std::size_t cells = static_cast<std::size_t>(valid.numPts());
     const int ncomp = source.ncomp();
-    OutputPiece<2> piece;
+    OutputPiece<Dim> piece;
     piece.level = level;
-    piece.box = Box<2>{Index<2>{valid.lo[0], valid.lo[1]}, Index<2>{valid.hi[0], valid.hi[1]}};
-    piece.global_box_index = global;
-    piece.owner_rank = replicated ? my_rank() : source.dmap()[global];
+    piece.box = valid;
+    piece.global_box_index = static_cast<int>(global);
+    piece.owner_rank = replicated ? my_rank()
+                                  : static_cast<int>(source.rank_space().linear_rank(
+                                        source.distribution().owner(global)));
     piece.replicated = replicated;
     piece.ncomp = ncomp;
-    piece.values.resize(static_cast<std::size_t>(ncomp) * static_cast<std::size_t>(ny) *
-                        static_cast<std::size_t>(nx));
-    const ConstArray4 values = source.fab(local).const_array();
-    for (int c = 0; c < ncomp; ++c)
-      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-          piece.values[static_cast<std::size_t>(c) * static_cast<std::size_t>(ny) *
-                           static_cast<std::size_t>(nx) +
-                       static_cast<std::size_t>(j - valid.lo[1]) * static_cast<std::size_t>(nx) +
-                       static_cast<std::size_t>(i - valid.lo[0])] =
-              static_cast<double>(values(i, j, c));
+    piece.values.resize(static_cast<std::size_t>(ncomp) * cells);
+    const Fab<Dim, MemorySpace>& fab = source.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const FieldView<const Real, Dim> view = fab.view();
+    for (int component = 0; component < ncomp; ++component)
+      for (std::size_t linear = 0; linear < cells; ++linear) {
+        std::size_t remainder = linear;
+        std::int64_t storage = static_cast<std::int64_t>(component) * view.component_stride;
+        for (int axis = 0; axis < Dim; ++axis) {
+          const std::size_t extent = static_cast<std::size_t>(valid.length(axis));
+          const int coordinate = valid.lo[axis] + static_cast<int>(remainder % extent);
+          remainder /= extent;
+          storage += static_cast<std::int64_t>(coordinate - view.origin[axis]) * view.strides[axis];
+        }
+        piece.values[static_cast<std::size_t>(component) * cells + linear] =
+            static_cast<double>(host(static_cast<std::size_t>(storage)));
+      }
     result.push_back(std::move(piece));
   }
   return result;

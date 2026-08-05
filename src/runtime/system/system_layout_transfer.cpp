@@ -1,5 +1,6 @@
 #include "system_impl.hpp"
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
@@ -320,7 +321,7 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     target_block_index = target->blocks_.index(spec.target_block);
     components = source->sp[static_cast<std::size_t>(source_block_index)].ncomp;
     const mesh::BoxArray<Dim> carrier =
-        source_carrier_boxes(target->ba, source->dom, target->dom, spec.refinement_ratio);
+        source_carrier_boxes<Dim>(target->ba, source->dom, target->dom, spec.refinement_ratio);
     source_snapshot = field_type(carrier, rebind_distribution(carrier, target->dm),
                                  target->local_rank, components, Extent<Dim>{});
     source_copy_schedule.emplace(prepare_exact_copy_schedule(source_snapshot, source_state()));
