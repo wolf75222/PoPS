@@ -288,6 +288,5 @@ sdk-support pops/runtime/system/system_elliptic_backend.hpp
 sdk-support pops/runtime/system/system_field_solver.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
-sdk-support pops/runtime/system/system_program_driver.hpp
 test-only pops/validation/numerics/geometric_mg.hpp
 test-only pops/validation/physics/advection_diffusion.hpp

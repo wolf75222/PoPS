@@ -9,6 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
+SYSTEM_RUNTIME = ROOT / "src/runtime/system/system.cpp"
+RETIRED_PROGRAM_DRIVER = (
+    ROOT / "include/pops/runtime/system/system_program_driver.hpp"
+)
 AMR_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 SPATIAL_DOMAIN = ROOT / "include/pops/runtime/config/spatial_domain.hpp"
 SYSTEM_DOMAIN = ROOT / "include/pops/runtime/system/system_domain.hpp"
@@ -44,6 +48,24 @@ def test_uniform_and_amr_facades_have_one_visible_ranked_template() -> None:
     assert "implicit_stepper.hpp" not in amr
     assert "numerics/nonlinear/newton_options.hpp" in system
     assert "numerics/nonlinear/newton_options.hpp" in amr
+
+
+def test_system_step_driver_is_the_exact_ranked_facade_not_a_parallel_authority() -> None:
+    runtime = _read(SYSTEM_RUNTIME)
+    manifest = _read(ROOT / "include/pops_headers.manifest")
+
+    assert not RETIRED_PROGRAM_DRIVER.exists()
+    assert "system_program_driver.hpp" not in manifest
+    assert "System<Dim>::step(double dt)" in runtime
+    assert "System<Dim>::step_cfl(" in runtime
+    assert "p_->geom.spacing(axis)" in runtime
+    assert "p_->coupling_.coupled_frequencies" in runtime
+    assert "p_->coupling_.dt_bounds" in runtime
+    assert "dispatch_cadence_step(" in runtime
+    assert "if constexpr" not in runtime
+    assert not re.search(r"\bif\s*\(\s*Dim\s*(?:==|!=|<=|>=|<|>)", runtime)
+    for legacy in ("SystemProgramDriver", "Box2D", "Array4"):
+        assert legacy not in runtime
 
 
 def test_ranked_domain_is_one_authority_from_config_through_storage() -> None:

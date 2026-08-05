@@ -10,7 +10,7 @@ SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 PROGRAM_RUNTIME_STATE = PROGRAM_DIR / "program_runtime_state.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
-UNIFORM_DRIVER = ROOT / "include" / "pops" / "runtime" / "system" / "system_program_driver.hpp"
+UNIFORM_RUNTIME = ROOT / "src" / "runtime" / "system" / "system.cpp"
 AMR_RUNTIME = ROOT / "src" / "runtime" / "amr" / "amr_system.cpp"
 BINDINGS = (
     ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
@@ -202,7 +202,7 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
 
 def test_uniform_and_amr_enter_one_shared_cadence_dispatcher():
     state = _read(PROGRAM_RUNTIME_STATE)
-    uniform_driver = _read(UNIFORM_DRIVER)
+    uniform_runtime = _read(UNIFORM_RUNTIME)
     amr_runtime = _read(AMR_RUNTIME)
 
     assert state.count("void dispatch_cadence_step(") == 1
@@ -215,14 +215,25 @@ def test_uniform_and_amr_enter_one_shared_cadence_dispatcher():
         "complete_balance_step(",
     ):
         assert operation in state
-        assert operation not in uniform_driver
+        assert operation not in uniform_runtime
         assert operation not in amr_runtime
 
+    assert "System<Dim>::step(" in uniform_runtime
+    assert "System<Dim>::step_cfl(" in uniform_runtime
+    assert "dispatch_cadence_step(" in uniform_runtime
+
     assert (
-        'P->program_.dispatch_cadence_step(P->t, P->macro_step_, dt, "System");'
-        in uniform_driver
+        'p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System");'
+        in uniform_runtime
     )
-    assert 'program_.dispatch_cadence_step(t, macro_step_, dt, "AmrSystem");' in amr_runtime
+    assert (
+        'p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System");'
+        in uniform_runtime
+    )
+    assert (
+        'p_->program.dispatch_cadence_step(p_->accepted_time, p_->macro_step, dt, "AmrSystem");'
+        in amr_runtime
+    )
 
 
 def test_balance_attempt_sink_is_not_python_bound():

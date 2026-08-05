@@ -851,7 +851,7 @@ class System {
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Set the compiled-Program macro-step cadence (ADC-411): SYSTEM-level @p substeps and @p stride
-  /// around the installed program closure (cf. SystemProgramDriver::step). @p substeps subdivides each
+  /// around the installed program closure (cf. System::step). @p substeps subdivides each
   /// effective step into @p substeps calls program_.step_(eff_dt/substeps); @p stride runs the whole
   /// program once per @p stride macro-steps with eff_dt = stride*dt (GLOBAL hold-then-catch-up, the
   /// clock still ticks every macro-step). Both must be >= 1 (throws std::invalid_argument otherwise).
@@ -859,7 +859,7 @@ class System {
   /// install_program so the generated .so ABI is untouched (the cadence is runtime metadata).
   /// NOTE: substeps > 1 is bit-exact vs native substeps ONLY for an UNCOUPLED / transport-only program
   /// (program_.step_ re-runs the whole program, solve_fields included); stride is GLOBAL (whole-system),
-  /// equal to native per-block stride only for a single-block system. See SystemProgramDriver::step.
+  /// equal to native per-block stride only for a single-block system. See System::step.
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
   /// Installed GLOBAL macro-step cadence (ADC-594): the current @c substeps / @c stride the compiled
   /// Program runs at (default 1/1 with no cadence set). Const, side-effect-free -- the structured
@@ -958,7 +958,7 @@ class System {
   /// the generated problem.so across the dlopen boundary, like the other seam accessors.
   POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
   /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) --
-  /// the SAME hmin the native CFL uses (SystemProgramDriver::cfl_grid_h). A compiled time Program reads it
+  /// the SAME hmin the native CFL uses (System::step_cfl). A compiled time Program reads it
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;

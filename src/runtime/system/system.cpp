@@ -6,6 +6,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/profiler.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -124,6 +125,23 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
   if (!std::isfinite(min_dt) || min_dt < 0.0)
     throw std::invalid_argument("System::step_cfl min_dt must be finite and non-negative");
 
+  SolveOutcome field_outcome = solve_fields();
+  const SolveConsumption field_consumption =
+      field_outcome.report().solved_value_available()
+          ? SolveConsumption::kAccept
+          : (field_outcome.report().action == SolveAction::kRejectAttempt
+                 ? SolveConsumption::kRejectAttempt
+                 : SolveConsumption::kFailRun);
+  const SolveReport field_report = field_outcome.consume(field_consumption);
+  if (!field_report.solved_value_available()) {
+    if (field_consumption == SolveConsumption::kRejectAttempt)
+      throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
+                                                  field_report.reason);
+    throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+                             field_report.status_name() + " action=" + field_report.action_name() +
+                             " reason=" + field_report.reason);
+  }
+
   Real minimum_spacing = p_->geom.spacing(0);
   for (int axis = 1; axis < Dim; ++axis)
     minimum_spacing = std::min(minimum_spacing, p_->geom.spacing(axis));
@@ -166,6 +184,46 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     if (block_dt < selected) {
       selected = block_dt;
       reason = std::string(block_reason) + ":" + block.name;
+    }
+  }
+
+  for (const runtime::system::CoupledFreq& frequency : p_->coupling_.coupled_freqs) {
+    if (!(frequency.mu > 0.0))
+      continue;
+    const double candidate = cfl / frequency.mu;
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "coupled_source:" + frequency.label;
+    }
+  }
+  for (const runtime::system::PreparedCoupledFrequency& frequency :
+       p_->coupling_.coupled_frequencies) {
+    if (!frequency.maximum_frequency)
+      continue;
+    const double maximum_frequency = static_cast<double>(frequency.maximum_frequency());
+    if (!std::isfinite(maximum_frequency))
+      throw std::runtime_error(
+          "System coupled-source frequency provider returned a non-finite "
+          "maximum for '" +
+          frequency.label + "'");
+    if (!(maximum_frequency > 0.0))
+      continue;
+    const double candidate = cfl / maximum_frequency;
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "coupled_source:" + frequency.label;
+    }
+  }
+  for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds) {
+    if (!bound.fn)
+      continue;
+    double candidate = bound.fn();
+    if (!(candidate > 0.0) || !std::isfinite(candidate))
+      candidate = std::numeric_limits<double>::infinity();
+    candidate = all_reduce_min(candidate);
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "global:" + bound.label;
     }
   }
 

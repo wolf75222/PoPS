@@ -14,7 +14,7 @@
 /// Extracted from three inline `std::map`s that lived on `System::Impl`. It groups the metadata a
 /// runtime report reads back: the effective numerical/physical block options captured at
 /// configuration time and compatibility carriers for a future typed Program diagnostic consumer.
-/// None of these are read by SystemProgramDriver -> MockImpl-invisible.
+/// None of these are read by the exact-ranked System step policy.
 ///
 /// OWNERSHIP CONTRACT
 ///  - block_options: FROZEN AT BIND. Populated only by structural block installation, refused once

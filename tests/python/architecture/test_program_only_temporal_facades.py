@@ -93,17 +93,20 @@ def _cpp_without_comments(source: str) -> str:
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     source = SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
-        "void System::step(double dt)",
-        "void System::advance(double dt, int nsteps)",
-        "double System::step_cfl(",
+        "void System<Dim>::step(double dt)",
+        "void System<Dim>::advance(double dt, int nsteps)",
+        "double System<Dim>::step_cfl(",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
         assert "SystemStepper" not in body
         assert "driver_->" not in body
 
-    assert "program_driver_.step(dt)" in _function_body(source, "void System::step(double dt)")
-    assert "program_driver_.step_cfl(" in _function_body(source, "double System::step_cfl(")
+    step = _function_body(source, "void System<Dim>::step(double dt)")
+    step_cfl = _function_body(source, "double System<Dim>::step_cfl(")
+    assert "dispatch_cadence_step(" in step
+    assert "dispatch_cadence_step(" in step_cfl
+    assert "program_driver_" not in source
     assert "step_adaptive" not in source
     assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")

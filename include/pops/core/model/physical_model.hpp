@@ -108,7 +108,7 @@ concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
 // behavior (max_wave_speed fallback, bit-identical).
 //
 // SEMANTICS (all bounds apply to the EFFECTIVE SUBSTEP stride*dt/substeps of the block,
-// see SystemProgramDriver::step_cfl):
+// see System<Dim>::step_cfl):
 //  - stability_speed(U, aux, dir): stability speed lambda* [length/time] which REPLACES
 //    max_wave_speed in the block CFL reduction (dt <= cfl * h / max_cells(lambda*)). For
 //    when the speed relevant for STABILITY is not the physical wave speed (declared
