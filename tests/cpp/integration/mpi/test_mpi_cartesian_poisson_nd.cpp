@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -143,13 +144,25 @@ void prove_distributed_manufactured_mode() {
     EXPECT_EQ(solver.candidate().local_size(), 0U);
 }
 
+int run_mpi_cartesian_poisson_nd(int argc, char** argv) {
+  comm_init(&argc, &argv);
+  int result = 0;
+  {
+    Kokkos::ScopeGuard kokkos(argc, argv);
+    EXPECT_EQ(n_ranks(), 3);
+    prove_distributed_manufactured_mode<1>();
+    prove_distributed_manufactured_mode<2>();
+    prove_distributed_manufactured_mode<3>();
+    result = ::testing::Test::HasFailure() ? 1 : 0;
+  }
+  comm_finalize();
+  return result;
+}
+
 }  // namespace
 
 TEST(test_mpi_cartesian_poisson_nd,
      distributed_exact_ranked_solve_includes_a_rank_without_local_patches) {
-  Kokkos::ScopeGuard kokkos;
-  ASSERT_EQ(n_ranks(), 3);
-  prove_distributed_manufactured_mode<1>();
-  prove_distributed_manufactured_mode<2>();
-  prove_distributed_manufactured_mode<3>();
+  EXPECT_EQ(pops::test::RunTestBody(&run_mpi_cartesian_poisson_nd, "test_mpi_cartesian_poisson_nd"),
+            0);
 }
