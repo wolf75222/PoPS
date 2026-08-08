@@ -17,10 +17,12 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
-#include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -32,6 +34,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -40,36 +43,72 @@
 
 using namespace pops;
 
-namespace {
+namespace pops {
 
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
-constexpr double kGamma = 1.4;
-
-void fill_ic(std::vector<double>& U, int n) {
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  const double pi = 3.14159265358979323846;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double p = 3.0 + 0.5 * std::cos(2 * pi * x) * std::cos(2 * pi * y);
-      U[0 * nn + k] = 1.0;
-      U[1 * nn + k] = 0.0;
-      U[2 * nn + k] = 0.0;
-      U[3 * nn + k] = p / (kGamma - 1.0);
-    }
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
 }
 
-void add_gas(System<2>& s) {
-  add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", kGamma);
-  s.set_poisson("charge_density", "geometric_mg");
+}  // namespace pops
+
+namespace {
+
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using GasLaw = nd::IdealGasEuler<kTestDimension>;
+using GasModel = CompositeModel<GasLaw, NoSource, NoElliptic>;
+constexpr double kGamma = 1.4;
+constexpr int kGasComponents = GasModel::n_vars;
+
+std::size_t cell_count(int n) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    count *= static_cast<std::size_t>(n);
+  return count;
+}
+
+NativeSystemConfig native_config(int n) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[static_cast<std::size_t>(axis)] = true;
+  }
+  config.boxes = {Box<kTestDimension>::from_extents(config.shape)};
+  return config;
+}
+
+void fill_ic(std::vector<double>& U, int n) {
+  const std::size_t nn = cell_count(n);
+  const double pi = 3.14159265358979323846;
+  for (std::size_t cell = 0; cell < nn; ++cell) {
+    std::size_t remaining = cell;
+    double mode = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      const int index = static_cast<int>(remaining % static_cast<std::size_t>(n));
+      remaining /= static_cast<std::size_t>(n);
+      const double coordinate = (static_cast<double>(index) + 0.5) / n;
+      mode *= std::cos(2 * pi * coordinate);
+    }
+    const double pressure = 3.0 + 0.5 * mode;
+    U[cell] = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      U[static_cast<std::size_t>(axis + 1) * nn + cell] = 0.0;
+    U[static_cast<std::size_t>(kTestDimension + 1) * nn + cell] = pressure / (kGamma - 1.0);
+  }
+}
+
+void add_gas(NativeSystem& system) {
+  GasModel model{};
+  model.hyp = GasLaw::prepare(static_cast<Real>(kGamma));
+  add_compiled_model(system, "gas", std::move(model), "minmod", "rusanov", "conservative",
+                     "explicit", kGamma);
+  system.set_poisson("charge_density", "geometric_mg");
 }
 
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
@@ -161,8 +200,18 @@ void prepare_boundary_residual(
     int, const pops::MultiFab<pops::kNativeDimension>&,
     pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
     const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void prepare_boundary_jvp(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
 void add_boundary_residual(
     int, const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void add_boundary_jvp(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    const pops::MultiFab<pops::kNativeDimension>&,
     pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
     const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
 }  // namespace
@@ -173,8 +222,9 @@ extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimensio
     source += "\"" + dynamic_boundary_slot + "\"";
     source += R"CPP(,
       pops::CompiledFieldBoundaryKernel<pops::kNativeDimension>{
-          "test:program-boundary", "test:program-boundary-residual", "",
-          prepare_boundary_residual, nullptr, add_boundary_residual, nullptr, false});
+          "test:program-boundary", "test:program-boundary-residual",
+          "test:program-boundary-jvp", prepare_boundary_residual,
+          prepare_boundary_jvp, add_boundary_residual, add_boundary_jvp, false});
 }
 )CPP";
   }
@@ -190,22 +240,19 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   const int n = 16;
   const double dt = 1e-3;
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  std::vector<double> U0(4 * nn);
+  const std::size_t nn = cell_count(n);
+  std::vector<double> U0(static_cast<std::size_t>(kGasComponents) * nn);
   fill_ic(U0, n);
 
-  SystemConfig<2> cfg;
-  cfg.shape = Extent<2>{n, n};
-  cfg.upper = RealVector<2>{Real(1), Real(1)};
-  cfg.periodicity = {true, true};
+  const NativeSystemConfig cfg = native_config(n);
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
-  System<2> ref(cfg);
+  NativeSystem ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
-  std::vector<double> Uref(4 * nn);
+  std::vector<double> Uref(static_cast<std::size_t>(kGasComponents) * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
     Uref[k] = U0[k] + dt * R0[k];
 
@@ -277,7 +324,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   int fails = 0;
   // A pre-spec library with no explicit block identity table must never install by add-order. The
   // old positional fallback could silently bind the right equations to the wrong instances.
-  System<2> missing_identity(cfg);
+  NativeSystem missing_identity(cfg);
   add_gas(missing_identity);
   try {
     missing_identity.install_program(legacy_so);
@@ -297,7 +344,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // A prelude-only installer that registers a history but omits the Program step must not inherit its
   // candidate block map/history or replace an already usable direct step. The loader's generation
   // witness fails and restores the exact image.
-  System<2> no_op(cfg);
+  NativeSystem no_op(cfg);
   add_gas(no_op);
   no_op.install_program_step([](double) {});
   no_op.program_cache().store(7, no_op.block_state(0), 0, "kept-cache");
@@ -335,7 +382,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // A declared-but-missing dt-bound entry is rejected before any candidate facade state is
   // installed. Falling back to the native CFL would silently change the authored numerics.
-  System<2> incomplete_dt(cfg);
+  NativeSystem incomplete_dt(cfg);
   add_gas(incomplete_dt);
   incomplete_dt.install_program_step([](double) {});
   try {
@@ -360,7 +407,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // restore the static baseline. The FFT provider is a useful witness: it rejects A's dynamic
   // boundary, but accepts the same periodic field plan once B has removed that overlay.
   {
-    System<2> replacement(cfg);
+    NativeSystem replacement(cfg);
     add_gas(replacement);
     constexpr const char* slot = "program-boundary-field";
     replacement.set_field_solver_plan(
@@ -370,14 +417,15 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                              "test:periodic-cartesian",
                                              "test:periodic-cartesian:v1");
-    replacement.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
-                                        {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
-                                        {0.0, 0.0, 0.0, 0.0});
+    const std::vector<std::string> periodic_faces(static_cast<std::size_t>(2 * kTestDimension),
+                                                  "periodic");
+    const std::vector<double> zero_faces(static_cast<std::size_t>(2 * kTestDimension), 0.0);
+    replacement.set_field_boundary_plan(slot, periodic_faces, zero_faces, zero_faces, zero_faces);
     replacement.ensure_aux_width(kAuxNamedBase + 1);
     replacement.register_elliptic_field("gas", "program-boundary-potential",
                                         std::vector<int>{kAuxNamedBase}, 1);
     replacement.set_block_elliptic_field("gas", "program-boundary-potential",
-                                         [](const MultiFab<2>&, MultiFab<2>&) {});
+                                         [](const NativeField&, NativeField&) {});
     replacement.set_state("gas", U0);
 
     replacement.install_program(dynamic_boundary_so);
@@ -418,7 +466,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     }
   }
 
-  System<2> sim(cfg);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
