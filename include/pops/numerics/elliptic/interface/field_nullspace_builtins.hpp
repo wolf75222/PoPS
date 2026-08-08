@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,8 +21,9 @@
 namespace pops {
 namespace detail {
 
+template <int Dim>
 inline bool field_nullspace_request_shape_is_valid(
-    const FieldNullspaceProviderRequest& request) noexcept {
+    const FieldNullspaceProviderRequest<Dim>& request) noexcept {
   const auto& topology = request.topology;
   if (request.plan_identity.empty() || topology.identity.empty() ||
       topology.exact_layout_contract.empty() || topology.first_level < 0 ||
@@ -41,7 +43,7 @@ inline bool field_nullspace_request_shape_is_valid(
   if (topology.level_distributions.size() != topology.layouts.size())
     return false;
   if (std::any_of(topology.layouts.begin(), topology.layouts.end(),
-                  [](const MultiFab* layout) { return layout == nullptr; }) ||
+                  [](const MultiFab<Dim>* layout) { return layout == nullptr; }) ||
       std::any_of(topology.cell_measure.begin(), topology.cell_measure.end(),
                   [](Real measure) { return !(measure > Real(0)); }))
     return false;
@@ -75,8 +77,9 @@ inline Real operator_topology_gauge_value(const PreparedProviderOptions& options
   return static_cast<Real>(value);
 }
 
+template <int Dim>
 inline std::string operator_topology_nullspace_contract(
-    const FieldNullspaceProviderRequest& request) {
+    const FieldNullspaceProviderRequest<Dim>& request) {
   ExactContractBuilder contract;
   contract.text("pops.prepared-field-nullspace")
       .scalar(std::uint32_t{2})
@@ -91,10 +94,11 @@ inline std::string operator_topology_nullspace_contract(
       .bytes(request.topology.connected_component_contract)
       .scalar(static_cast<std::uint64_t>(request.topology.layouts.size()))
       .sequence(request.topology.cell_measure)
-      .sequence(request.topology.level_distributions,
-                [](ExactContractBuilder& item, const PreparedVectorDistribution& distribution) {
-                  item.bytes(distribution.collective_contract());
-                })
+      .sequence(
+          request.topology.level_distributions,
+          [](ExactContractBuilder& item, const PreparedVectorDistribution<Dim>& distribution) {
+            item.bytes(distribution.collective_contract());
+          })
       .sequence(request.topology.connected_components,
                 [](ExactContractBuilder& item, const FieldConnectedComponent& component) {
                   item.scalar(static_cast<std::int64_t>(component.label))
@@ -111,13 +115,14 @@ inline std::string operator_topology_nullspace_contract(
   return std::move(contract).release();
 }
 
-inline FieldNullspacePlan connected_operator_topology_plan(
-    const FieldNullspaceProviderRequest& request, Real gauge_value) {
+template <int Dim>
+inline FieldNullspacePlan<Dim> connected_operator_topology_plan(
+    const FieldNullspaceProviderRequest<Dim>& request, Real gauge_value) {
   const auto& topology = request.topology;
-  FieldNullspacePlan result;
+  FieldNullspacePlan<Dim> result;
   result.identity = request.plan_identity + ":nullspace";
   result.layout_identity = topology.identity;
-  FieldNullspaceBasis basis;
+  FieldNullspaceBasis<Dim> basis;
   basis.identity = result.identity + ":connected-component:0";
   basis.provenance = "provider:pops.field-nullspace.operator-topology-derived@2";
   basis.recipe_identity = topology.identity + ":constant-component@1";
@@ -128,12 +133,15 @@ inline FieldNullspacePlan connected_operator_topology_plan(
                             topology.cell_measure.end());
   result.gauges.push_back(FieldGaugeConstraint{basis.identity, gauge_value});
   result.bases.push_back(std::move(basis));
-  validate_field_nullspace_basis(topology.layouts, result, topology.level_distributions,
-                                 topology.first_level);
+  validate_field_nullspace_basis<Dim>(
+      topology.layouts, result,
+      std::span<const PreparedVectorDistribution<Dim>>(topology.level_distributions),
+      topology.first_level);
   return result;
 }
 
-class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvider {
+template <int Dim>
+class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvider<Dim> {
  public:
   [[nodiscard]] std::string_view identity() const noexcept override {
     return "pops.field-nullspace.operator-topology-derived";
@@ -157,7 +165,7 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
     }
   }
   [[nodiscard]] PreparedProviderSupport supports(
-      const FieldNullspaceProviderRequest& request) const noexcept override {
+      const FieldNullspaceProviderRequest<Dim>& request) const noexcept override {
     if (!accepts_options(request.options))
       return PreparedProviderSupport::reject(1, "invalid operator-topology nullspace options");
     if (!request.operator_facts.is_canonical())
@@ -183,26 +191,27 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(
-      const FieldNullspaceProviderRequest& request) const override {
+      const FieldNullspaceProviderRequest<Dim>& request) const override {
     const PreparedProviderSupport support = supports(request);
     if (!support.accepted())
       throw std::invalid_argument(std::string(support.reason));
     return operator_topology_nullspace_contract(request);
   }
-  [[nodiscard]] PreparedFieldNullspace prepare(
-      const FieldNullspaceProviderRequest& request) const override {
+  [[nodiscard]] PreparedFieldNullspace<Dim> prepare(
+      const FieldNullspaceProviderRequest<Dim>& request) const override {
     const std::string contract = expected_prepared_contract(request);
     const Real gauge_value = operator_topology_gauge_value(request.options);
-    FieldNullspacePlan plan;
+    FieldNullspacePlan<Dim> plan;
     if (field_operator_preserves_constant_mode(request.operator_facts)) {
       if (!request.topology.connected_component_contract.empty()) {
         plan = connected_operator_topology_plan(request, gauge_value);
       } else {
-        plan = labelled_mean_zero_nullspace(
+        plan = labelled_mean_zero_nullspace<Dim>(
             request.plan_identity + ":nullspace", request.topology.identity,
             request.topology.component_labels, request.topology.connected_components,
             request.topology.coverage, request.topology.cell_measure,
-            request.topology.field_component, request.topology.level_distributions,
+            request.topology.field_component,
+            std::span<const PreparedVectorDistribution<Dim>>(request.topology.level_distributions),
             request.topology.first_level);
         for (FieldGaugeConstraint& gauge : plan.gauges)
           gauge.value = gauge_value;
@@ -214,10 +223,11 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
 
 }  // namespace detail
 
-inline std::shared_ptr<FieldNullspaceProviderRegistry>
+template <int Dim>
+inline std::shared_ptr<FieldNullspaceProviderRegistry<Dim>>
 make_default_field_nullspace_provider_registry() {
-  auto registry = std::make_shared<FieldNullspaceProviderRegistry>();
-  registry->add(std::make_shared<detail::OperatorTopologyFieldNullspaceProvider>());
+  auto registry = std::make_shared<FieldNullspaceProviderRegistry<Dim>>();
+  registry->add(std::make_shared<detail::OperatorTopologyFieldNullspaceProvider<Dim>>());
   return registry;
 }
 

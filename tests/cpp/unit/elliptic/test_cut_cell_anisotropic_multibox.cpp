@@ -2,7 +2,8 @@
 // div(diag(eps_x, eps_y) grad phi) = f sur un domaine DECOUPE EN PLUSIEURS BOITES.
 //
 // Le cut-cell mono-box est couvert par test_cut_cell ; le cut-cell anisotrope mono-box par
-// test_cut_cell_anisotropic ; le Poisson multi-box reparti (sans cut-cell) par test_mpi_mbox_parity.
+// test_cut_cell_anisotropic ; le Poisson ND multi-box reparti (sans cut-cell) par
+// test_mpi_cartesian_poisson_nd.
 // Il manquait la combinaison cut-cell + anisotrope sur un domaine MULTI-BOX : ce test la valide.
 // Les champs cut-cell (masque, coefficients Shortley-Weller) et anisotropes (eps_x, eps_y) sont des
 // MultiFab construits PAR BOITE depuis les fonctions analytiques ; le lisseur et le residu echangent
