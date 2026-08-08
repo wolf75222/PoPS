@@ -124,7 +124,6 @@ class ExternalGraphIdentityPrepared final : public AmrPreparedFieldSolver {
       throw std::out_of_range("graph-identity provider has exactly one level");
     return phi_;
   }
-  void set_boundary_context(const FieldBoundaryExecutionContext&) override {}
   SolveReport solve() override {
     phi_.set_val(Real(0));
     parallel_copy(phi_, rhs_);
@@ -201,16 +200,16 @@ class ExternalGraphIdentityProvider final : public AmrFieldSolverProvider {
 
 static std::array<int, 2> level_boundary_prepare_visits{};
 
-static void prepare_level_qualified_boundary(int, const MultiFab& iterate, MultiFab&,
-                                             const Geometry&,
-                                             const FieldBoundaryExecutionContext& context) {
+static void prepare_level_qualified_boundary(int, const MultiFab<2>& iterate, MultiFab<2>&,
+                                             const Geometry<2>&,
+                                             const FieldBoundaryExecutionContext<2>& context) {
   if (context.point.level < 0 ||
       context.point.level >= static_cast<int>(level_boundary_prepare_visits.size()))
     throw std::runtime_error("field boundary received an invalid AMR level");
   if (context.state_count != 1 || context.states == nullptr ||
       context.state_distributions == nullptr || context.states[0] == nullptr)
     throw std::runtime_error("field boundary did not receive its one state dependency");
-  const MultiFab& state = *context.states[0];
+  const MultiFab<2>& state = *context.states[0];
   if (state.box_array().boxes() != iterate.box_array().boxes() ||
       state.dmap().ranks() != iterate.dmap().ranks() || state.local_size() != iterate.local_size())
     throw std::runtime_error("field boundary dependency belongs to another AMR level");
@@ -221,12 +220,14 @@ static void prepare_level_qualified_boundary(int, const MultiFab& iterate, Multi
   ++level_boundary_prepare_visits[static_cast<std::size_t>(context.point.level)];
 }
 
-static void add_noop_level_qualified_boundary(int, const MultiFab&, MultiFab&, const Geometry&,
-                                              const FieldBoundaryExecutionContext&) {}
+static void add_noop_level_qualified_boundary(int, const MultiFab<2>&, MultiFab<2>&,
+                                              const Geometry<2>&,
+                                              const FieldBoundaryExecutionContext<2>&) {}
 
-static void boundary_carrier_prepare_noop(int face, const MultiFab& iterate,
-                                          MultiFab& operator_view, const Geometry& geometry,
-                                          const FieldBoundaryExecutionContext& context) {
+static void boundary_carrier_prepare_noop(int face, const MultiFab<2>& iterate,
+                                          MultiFab<2>& operator_view,
+                                          const Geometry<2>& geometry,
+                                          const FieldBoundaryExecutionContext<2>& context) {
   (void)face;
   (void)iterate;
   (void)operator_view;
@@ -234,9 +235,9 @@ static void boundary_carrier_prepare_noop(int face, const MultiFab& iterate,
   (void)context;
 }
 
-static void boundary_carrier_residual_noop(int face, const MultiFab& iterate, MultiFab& residual,
-                                           const Geometry& geometry,
-                                           const FieldBoundaryExecutionContext& context) {
+static void boundary_carrier_residual_noop(int face, const MultiFab<2>& iterate,
+                                           MultiFab<2>& residual, const Geometry<2>& geometry,
+                                           const FieldBoundaryExecutionContext<2>& context) {
   (void)face;
   (void)iterate;
   (void)residual;
@@ -244,28 +245,30 @@ static void boundary_carrier_residual_noop(int face, const MultiFab& iterate, Mu
   (void)context;
 }
 
-static void require_composite_boundary_carriers(const MultiFab& iterate,
-                                                const FieldBoundaryExecutionContext& context) {
+static void require_composite_boundary_carriers(
+    const MultiFab<2>& iterate, const FieldBoundaryExecutionContext<2>& context) {
   if (context.state_count != 1 || context.states == nullptr ||
       context.state_distributions == nullptr || context.states[0] == nullptr ||
       context.field_count != 1 || context.fields == nullptr ||
       context.field_distributions == nullptr || context.fields[0] == nullptr)
     throw std::runtime_error(
         "composite boundary launcher did not receive its state and field carriers");
-  for (const MultiFab* dependency : {context.states[0], context.fields[0]})
+  for (const MultiFab<2>* dependency : {context.states[0], context.fields[0]})
     if (dependency->box_array().boxes() != iterate.box_array().boxes() ||
         dependency->dmap().ranks() != iterate.dmap().ranks())
       throw std::runtime_error(
           "composite boundary launcher received a carrier from the wrong AMR level");
 }
 
-static void composite_boundary_prepare(int, const MultiFab& iterate, MultiFab&, const Geometry&,
-                                       const FieldBoundaryExecutionContext& context) {
+static void composite_boundary_prepare(int, const MultiFab<2>& iterate, MultiFab<2>&,
+                                       const Geometry<2>&,
+                                       const FieldBoundaryExecutionContext<2>& context) {
   require_composite_boundary_carriers(iterate, context);
 }
 
-static void composite_boundary_residual(int, const MultiFab& iterate, MultiFab&, const Geometry&,
-                                        const FieldBoundaryExecutionContext& context) {
+static void composite_boundary_residual(int, const MultiFab<2>& iterate, MultiFab<2>&,
+                                        const Geometry<2>&,
+                                        const FieldBoundaryExecutionContext<2>& context) {
   require_composite_boundary_carriers(iterate, context);
 }
 
@@ -302,14 +305,14 @@ class ExternalLevelBoundaryPrepared final : public AmrPreparedFieldSolver {
   }
   MultiFab& rhs_level(int level) override { return rhs_.at(static_cast<std::size_t>(level)); }
   MultiFab& phi_level(int level) override { return phi_.at(static_cast<std::size_t>(level)); }
-  void set_boundary_context(const FieldBoundaryExecutionContext& context) override {
+  void set_boundary_context(const FieldBoundaryExecutionContext<2>& context) override {
     if (level_count() != 1)
       throw std::runtime_error(
           "external level-boundary provider requires one exact context per AMR level");
     set_boundary_context_at_level(0, context);
   }
   void set_boundary_context_at_level(int level,
-                                     const FieldBoundaryExecutionContext& context) override {
+                                     const FieldBoundaryExecutionContext<2>& context) override {
     if (level < 0 || level >= level_count())
       throw std::out_of_range("external level-boundary context level is out of range");
     if (!expects_field_dependency_)
@@ -860,7 +863,7 @@ TEST(test_amr_named_field, ExternalProviderReceivesSolvedFieldDependencyOnEveryL
   dependent.has_reaction = true;
   dependent.reaction = Real(1);
   dependent.has_boundary_kernel = true;
-  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel<2>{
       "tests:a_potential/field-dependent-boundary@1",
       "tests:a_potential/field-dependent-boundary-residual@1",
       "",
@@ -983,7 +986,7 @@ TEST(test_amr_named_field, LevelLocalProviderConsumesTopologicalBoundaryDependen
   dependent.has_reaction = true;
   dependent.reaction = Real(1);
   dependent.has_boundary_kernel = true;
-  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel<2>{
       "tests:a_potential/level-local-field-dependent-boundary@1",
       "tests:a_potential/level-local-field-dependent-boundary-residual@1",
       "",
@@ -1073,7 +1076,7 @@ TEST(test_amr_named_field, LevelLocalProviderConsumesTopologicalBoundaryDependen
   failing.plan_identity = "tests:plasma/zz_failure:level-local-plan@1";
   failing.provider_identity = "tests:plasma/zz_failure";
   failing.output_key = "zz_failure";
-  failing.boundary_kernel = CompiledFieldBoundaryKernel{
+  failing.boundary_kernel = CompiledFieldBoundaryKernel<2>{
       "tests:zz_failure/level-local-field-dependent-boundary@1",
       "tests:zz_failure/level-local-field-dependent-boundary-residual@1",
       "",
@@ -1177,7 +1180,7 @@ TEST(test_amr_named_field, LevelLocalDynamicBoundaryReceivesLevelQualifiedState)
   runtime.set_field_boundary_dependencies("level_boundary", {"plasma"}, {0}, {}, {}, {});
   runtime.set_field_boundary_kernel(
       "level_boundary",
-      CompiledFieldBoundaryKernel{"tests.level-qualified-boundary",
+      CompiledFieldBoundaryKernel<2>{"tests.level-qualified-boundary",
                                   "tests.level-qualified-boundary.residual", "",
                                   prepare_level_qualified_boundary, nullptr,
                                   add_noop_level_qualified_boundary, nullptr, false});
@@ -1249,7 +1252,7 @@ TEST(test_amr_named_field, FullyRefinedCompositeBoundaryReceivesFinestLevelState
   runtime.set_field_boundary_dependencies("composite_level_boundary", {"plasma"}, {0}, {}, {}, {});
   runtime.set_field_boundary_kernel(
       "composite_level_boundary",
-      CompiledFieldBoundaryKernel{"tests.composite-level-qualified-boundary",
+      CompiledFieldBoundaryKernel<2>{"tests.composite-level-qualified-boundary",
                                   "tests.composite-level-qualified-boundary.residual", "",
                                   prepare_level_qualified_boundary, nullptr,
                                   add_noop_level_qualified_boundary, nullptr, false});
@@ -2139,7 +2142,7 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
         make_plan("partial-dynamic-composite", composite_hierarchy_policy());
     dynamic.has_boundary_kernel = true;
     dynamic.boundary_kernel =
-        CompiledFieldBoundaryKernel{"tests.partial-dynamic-composite",
+        CompiledFieldBoundaryKernel<2>{"tests.partial-dynamic-composite",
                                     "tests.partial-dynamic-composite.residual",
                                     "",
                                     prepare_level_qualified_boundary,

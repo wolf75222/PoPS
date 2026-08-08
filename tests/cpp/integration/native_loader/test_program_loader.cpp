@@ -120,8 +120,8 @@ extern "C" bool pops_program_has_dt_bound() { return true; }
   }
   if (install_step) {
     source += R"CPP(
-extern "C" void pops_install_program(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
 )CPP";
     if (register_history) {
       source += R"CPP(
@@ -137,8 +137,8 @@ extern "C" void pops_install_program(pops::System* sys) {
     auto field_outcome = ctx.solve_fields();
     (void)field_outcome.consume(pops::SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
-      pops::MultiFab& U = ctx.state(b);
-      pops::MultiFab R = ctx.rhs_scratch_like(U);
+      pops::MultiFab<pops::kNativeDimension>& U = ctx.state(b);
+      pops::MultiFab<pops::kNativeDimension> R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, static_cast<pops::Real>(dt), R);
     }
@@ -147,8 +147,8 @@ extern "C" void pops_install_program(pops::System* sys) {
 )CPP";
   } else {
     source += R"CPP(
-extern "C" void pops_install_program(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
   ctx.register_history("poison", 1, 1, 0, "test:poison/state", "test:poison/space",
                        "clock.macro", "test:poison/interp");
 }
@@ -157,25 +157,24 @@ extern "C" void pops_install_program(pops::System* sys) {
   if (!dynamic_boundary_slot.empty()) {
     source += R"CPP(
 namespace {
-void prepare_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
-                               const pops::FieldBoundaryExecutionContext&) {}
-void add_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
-                           const pops::FieldBoundaryExecutionContext&) {}
+void prepare_boundary_residual(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void add_boundary_residual(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
 }  // namespace
-extern "C" void pops_install_field_boundaries(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
   ctx.set_field_boundary_kernel(
 )CPP";
     source += "\"" + dynamic_boundary_slot + "\"";
     source += R"CPP(,
-      pops::CompiledFieldBoundaryKernel{"test:program-boundary",
-                                        "test:program-boundary-residual",
-                                        "",
-                                        prepare_boundary_residual,
-                                        nullptr,
-                                        add_boundary_residual,
-                                        nullptr,
-                                        false});
+      pops::CompiledFieldBoundaryKernel<pops::kNativeDimension>{
+          "test:program-boundary", "test:program-boundary-residual", "",
+          prepare_boundary_residual, nullptr, add_boundary_residual, nullptr, false});
 }
 )CPP";
   }

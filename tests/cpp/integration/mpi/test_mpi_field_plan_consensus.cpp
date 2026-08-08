@@ -325,7 +325,6 @@ class ConsensusAmrFieldPrepared final : public AmrPreparedFieldSolver {
   MultiFab& rhs_level(int) override { return rhs_; }
   MultiFab& phi_level(int) override { return phi_; }
   void set_phi_layout_drift(bool drift) { phi_ = MultiFab(boxes_, mapping_, 1, drift ? 1 : 0); }
-  void set_boundary_context(const FieldBoundaryExecutionContext&) override {}
   SolveReport solve() override {
     if (fault_ == SolveReportFault::ThrowWithStaleReject)
       throw std::runtime_error("unknown failure after a prior rejected attempt");
