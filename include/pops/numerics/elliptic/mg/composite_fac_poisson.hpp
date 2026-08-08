@@ -201,7 +201,53 @@ class CompositeFacPoisson {
   }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
 
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         std::vector<PreparedVectorDistribution<Dim>> distributions) {
+    if (nullspace_workspace_)
+      throw std::logic_error("composite FAC nullspace authority is already installed");
+    if (distributions.size() != levels_.size())
+      throw std::invalid_argument(
+          "composite FAC nullspace authority requires one distribution per hierarchy level");
+    if (singular_() != !plan.empty())
+      throw std::invalid_argument(
+          "composite FAC nullspace plan disagrees with the prepared operator kernel");
+
+    std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<MultiFab<Dim>*> candidates;
+    rhs_layouts.reserve(levels_.size());
+    candidates.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      rhs_layouts.push_back(&level->rhs);
+      candidates.push_back(&level->phi);
+    }
+    auto workspace = std::make_unique<FieldNullspaceWorkspace<Dim>>(
+        plan, rhs_layouts, distributions);
+    FieldNullspacePlan<Dim> coarse_plan = coarse_correction_plan_(plan);
+    coarse_solver_->install_nullspace(std::move(coarse_plan), distributions.front());
+
+    nullspace_rhs_ = std::move(rhs_layouts);
+    nullspace_candidates_ = std::move(candidates);
+    nullspace_workspace_ = std::move(workspace);
+  }
+
   SolveReport solve() {
+    if (!nullspace_workspace_)
+      throw std::logic_error("composite FAC solve has no prepared nullspace authority");
+    try {
+      nullspace_workspace_->require_compatible(nullspace_rhs_);
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    }
+    nullspace_workspace_->apply_gauge(nullspace_candidates_);
+
     compute_composite_residual_();
     const Real reference = composite_residual_norm_();
     SolveReport report;
@@ -252,6 +298,7 @@ class CompositeFacPoisson {
       for (std::size_t level = 1; level < levels_.size(); ++level)
         smooth_level_(level, post);
       average_solution_down_();
+      nullspace_workspace_->apply_gauge(nullspace_candidates_);
 
       compute_composite_residual_();
       ++report.evaluations;
@@ -328,6 +375,34 @@ class CompositeFacPoisson {
     std::vector<fac_detail::CellTransfer<Dim>> solution_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> correction_prolongation;
   };
+
+  static FieldNullspacePlan<Dim> coarse_correction_plan_(
+      const FieldNullspacePlan<Dim>& hierarchy_plan) {
+    if (hierarchy_plan.empty())
+      return {};
+    FieldNullspacePlan<Dim> result;
+    result.identity = hierarchy_plan.identity + ":fac-coarse-correction";
+    result.layout_identity = hierarchy_plan.layout_identity + ":fac-coarse-correction";
+    result.bases.reserve(hierarchy_plan.bases.size());
+    result.gauges.reserve(hierarchy_plan.bases.size());
+    for (const FieldNullspaceBasis<Dim>& source : hierarchy_plan.bases) {
+      FieldNullspaceBasis<Dim> basis;
+      basis.identity = source.identity;
+      basis.provenance = source.provenance;
+      basis.recipe_identity = source.recipe_identity + ":fac-coarse-correction";
+      basis.field_component = source.field_component;
+      if (!source.masks.empty()) {
+        if (!source.masks.front())
+          throw std::invalid_argument(
+              "composite FAC coarse nullspace basis has no level-zero mask");
+        basis.masks.push_back(source.masks.front());
+      }
+      basis.cell_measure.push_back(source.measure(0));
+      result.gauges.push_back(FieldGaugeConstraint{basis.identity, Real(0)});
+      result.bases.push_back(std::move(basis));
+    }
+    return result;
+  }
 
   static void validate_request_(const request_type& request) {
     if (request.levels.empty() || request.ratios.size() + 1 != request.levels.size())
@@ -598,11 +673,18 @@ class CompositeFacPoisson {
     return static_cast<Real>(all_reduce_max(static_cast<double>(result)));
   }
 
+  bool singular_() const noexcept {
+    return detail::is_singular(levels_.front()->boundary, reaction_);
+  }
+
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::vector<std::unique_ptr<Level>> levels_{};
   std::vector<Connection> connections_{};
   std::unique_ptr<GeometricMG<Dim, MemorySpace>> coarse_solver_{};
+  std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
+  std::vector<MultiFab<Dim>*> nullspace_candidates_{};
+  std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   std::string exact_prepared_contract_{};
   SolveReport last_report_{};
 };

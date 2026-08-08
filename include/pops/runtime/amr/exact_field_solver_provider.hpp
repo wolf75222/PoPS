@@ -6,6 +6,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/identity/prepared_provider_options.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/runtime/export.hpp>
@@ -75,6 +76,9 @@ class ExactAmrFieldSolver {
   virtual field_type& rhs_level(int level) = 0;
   virtual field_type& candidate_level(int level) = 0;
   virtual const field_type& candidate_level(int level) const = 0;
+  virtual void install_nullspace(
+      PreparedFieldNullspace<Dim> prepared,
+      std::vector<PreparedVectorDistribution<Dim>> level_distributions) = 0;
   virtual int maximum_iterations() const noexcept = 0;
   virtual SolveReport solve() = 0;
 };

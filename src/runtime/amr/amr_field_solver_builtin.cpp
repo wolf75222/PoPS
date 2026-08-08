@@ -107,10 +107,39 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     return composite_ ? composite_->phi_level(level)
                       : local_.at(static_cast<std::size_t>(level))->phi();
   }
+  void install_nullspace(
+      PreparedFieldNullspace<Dim> prepared,
+      std::vector<PreparedVectorDistribution<Dim>> level_distributions) override {
+    if (!nullspace_contract_.empty())
+      throw std::logic_error("exact AMR field nullspace authority is already installed");
+    if (prepared.provider_identity.empty() || prepared.provider_version == 0 ||
+        prepared.exact_prepared_contract.empty())
+      throw std::invalid_argument(
+          "exact AMR field nullspace authority requires authenticated provider metadata");
+    if (level_distributions.size() != static_cast<std::size_t>(level_count()))
+      throw std::invalid_argument(
+          "exact AMR field nullspace authority requires one distribution per level");
+
+    if (composite_) {
+      composite_->install_nullspace(std::move(prepared.plan),
+                                    std::move(level_distributions));
+    } else {
+      std::vector<FieldNullspacePlan<Dim>> plans;
+      plans.reserve(local_.size());
+      for (std::size_t level = 0; level < local_.size(); ++level)
+        plans.push_back(level_local_plan_(prepared.plan, level));
+      for (std::size_t level = 0; level < local_.size(); ++level)
+        local_[level]->install_nullspace(std::move(plans[level]),
+                                         std::move(level_distributions[level]));
+    }
+    nullspace_contract_ = std::move(prepared.exact_prepared_contract);
+  }
   int maximum_iterations() const noexcept override {
     return composite_ ? options_.fac.max_iters : options_.mg.maximum_cycles;
   }
   SolveReport solve() override {
+    if (nullspace_contract_.empty())
+      throw std::logic_error("exact AMR field solve has no prepared nullspace authority");
     if (composite_)
       return composite_->solve();
     SolveReport result;
@@ -124,7 +153,37 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
   }
 
  private:
+  static FieldNullspacePlan<Dim> level_local_plan_(
+      const FieldNullspacePlan<Dim>& hierarchy_plan, std::size_t level) {
+    if (hierarchy_plan.empty())
+      return {};
+    FieldNullspacePlan<Dim> result;
+    result.identity = hierarchy_plan.identity + ":level-local:" + std::to_string(level);
+    result.layout_identity =
+        hierarchy_plan.layout_identity + ":level-local:" + std::to_string(level);
+    result.gauges = hierarchy_plan.gauges;
+    result.bases.reserve(hierarchy_plan.bases.size());
+    for (const FieldNullspaceBasis<Dim>& source : hierarchy_plan.bases) {
+      FieldNullspaceBasis<Dim> basis;
+      basis.identity = source.identity;
+      basis.provenance = source.provenance;
+      basis.recipe_identity =
+          source.recipe_identity + ":level-local:" + std::to_string(level);
+      basis.field_component = source.field_component;
+      if (!source.masks.empty()) {
+        if (level >= source.masks.size() || !source.masks[level])
+          throw std::invalid_argument(
+              "exact AMR level-local nullspace basis is missing its level mask");
+        basis.masks.push_back(source.masks[level]);
+      }
+      basis.cell_measure.push_back(source.measure(static_cast<int>(level)));
+      result.bases.push_back(std::move(basis));
+    }
+    return result;
+  }
+
   std::string contract_;
+  std::string nullspace_contract_;
   ExactFieldHierarchyMode mode_ = ExactFieldHierarchyMode::level_local;
   BuiltinOptions options_{};
   std::vector<std::unique_ptr<elliptic::mg::GeometricMG<Dim, MemorySpace>>> local_{};

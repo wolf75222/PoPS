@@ -11,6 +11,7 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
@@ -348,12 +349,37 @@ class GeometricMG {
   const field_type& residual_field() const noexcept { return levels_.front()->residual; }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
 
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) {
+    if (nullspace_workspace_)
+      throw std::logic_error("geometric MG nullspace authority is already installed");
+    if (singular_ != !plan.empty())
+      throw std::invalid_argument(
+          "geometric MG nullspace plan disagrees with the prepared operator kernel");
+    std::vector<const MultiFab<Dim>*> layouts{&rhs()};
+    std::vector<PreparedVectorDistribution<Dim>> distributions{std::move(distribution)};
+    nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
+        std::move(plan), std::move(layouts), std::move(distributions));
+  }
+
   SolveReport solve() {
     Level& fine = *levels_.front();
-    if (singular_) {
-      project_mean_(fine.rhs, fine.geometry.domain());
-      project_mean_(fine.phi, fine.geometry.domain());
+    if (!nullspace_workspace_)
+      throw std::logic_error("geometric MG solve has no prepared nullspace authority");
+    try {
+      nullspace_workspace_->require_compatible(fine.rhs);
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
     }
+    nullspace_workspace_->apply_gauge(fine.phi);
 
     compute_residual_(fine);
     const Real reference = global_norm_inf_(fine.residual);
@@ -379,8 +405,7 @@ class GeometricMG {
 
     for (int cycle = 0; cycle < options_.maximum_cycles; ++cycle) {
       v_cycle_(0);
-      if (singular_)
-        project_mean_(fine.phi, fine.geometry.domain());
+      nullspace_workspace_->apply_gauge(fine.phi);
       compute_residual_(fine);
       ++report.evaluations;
       report.iters = cycle + 1;
@@ -511,8 +536,6 @@ class GeometricMG {
       damped_jacobi_update_valid(level.phi, level.rhs, level.geometry, level.scratch,
                                  options_.jacobi_relaxation, options_.reaction);
       copy_scalar_valid(level.scratch, level.phi);
-      if (singular_)
-        project_mean_(level.phi, level.geometry.domain());
     }
   }
 
@@ -536,8 +559,6 @@ class GeometricMG {
     const CopyScheduleBudget restriction_budget =
         detail::exact_copy_budget(coarse.rhs.layout(), coarsen(level.residual.layout(), 2));
     average_down(level.residual, coarse.rhs, 2, restriction_budget);
-    if (singular_)
-      project_mean_(coarse.rhs, coarse.geometry.domain());
     v_cycle_(level_index + 1);
 
     level.correction.set_val(Real(0));
@@ -552,29 +573,12 @@ class GeometricMG {
     return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field))));
   }
 
-  Real global_sum_(const field_type& field) const {
-    const Real local = reduce_sum_local(field);
-    if (!field.distribution().replicated())
-      return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
-    const Real minimum = static_cast<Real>(all_reduce_min(static_cast<double>(local)));
-    const Real maximum = static_cast<Real>(all_reduce_max(static_cast<double>(local)));
-    if (minimum != maximum)
-      throw std::runtime_error("replicated geometric MG field differs between MPI ranks");
-    return local;
-  }
-
-  void project_mean_(field_type& field, const Box<Dim>& domain) const {
-    const std::int64_t cells = domain.numPts();
-    if (cells <= 0)
-      throw std::logic_error("geometric MG cannot project an empty domain");
-    add_scalar_valid(field, -global_sum_(field) / static_cast<Real>(cells));
-  }
-
   Geometry<Dim> geometry_;
   PhysicalBoundaryConditions<Dim> boundary_;
   GeometricMultigridOptions options_{};
   bool singular_ = false;
   std::vector<std::unique_ptr<Level>> levels_{};
+  std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   EllipticOperatorContract prepared_operator_contract_{};
   SolveReport last_report_{};
 };
