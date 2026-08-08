@@ -5,6 +5,7 @@
 #include "output_geometry_binding.hpp"
 
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <array>
@@ -147,17 +148,23 @@ pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(const py::dic
   return spec;
 }
 
-pops::runtime::amr::PreparedTaggingProgram::Stencil amr_tagging_stencil_from_python(
-    const py::dict& row) {
-  using Program = pops::runtime::amr::PreparedTaggingProgram;
+typename pops::runtime::amr::PreparedTaggingProgram<pops::kNativeDimension>::Stencil
+amr_tagging_stencil_from_python(const py::dict& row) {
+  using Program = pops::runtime::amr::PreparedTaggingProgram<pops::kNativeDimension>;
   Program::Stencil result;
   result.identity = py::cast<std::string>(row["identity"]);
   result.route = py::cast<std::string>(row["route"]);
   result.norm = py::cast<std::string>(row["norm"]);
   result.scale = py::cast<std::string>(row["scale"]);
   result.boundary_mode = py::cast<std::string>(row["boundary_mode"]);
-  result.dimension = py::cast<std::int32_t>(row["dimension"]);
-  for (const py::handle value : py::cast<py::list>(row["axes"])) {
+  if (py::cast<std::int32_t>(row["dimension"]) != pops::kNativeDimension)
+    throw std::invalid_argument(
+        "AMR Tagger stencil dimension differs from the selected native specialization");
+  const py::list axes = py::cast<py::list>(row["axes"]);
+  if (axes.size() != pops::kNativeDimension)
+    throw std::invalid_argument("AMR Tagger stencil has no exact native-rank axis image");
+  std::size_t axis_ordinal = 0;
+  for (const py::handle value : axes) {
     const py::dict axis = py::cast<py::dict>(value);
     std::vector<double> coefficients;
     for (const py::handle coefficient_value : py::cast<py::list>(axis["coefficients"])) {
@@ -173,11 +180,17 @@ pops::runtime::amr::PreparedTaggingProgram::Stencil amr_tagging_stencil_from_pyt
             "AMR Tagger stencil coefficient is not finite canonical binary64 data");
       coefficients.push_back(parsed);
     }
-    result.axes.push_back(Program::AxisStencil{
-        py::cast<std::int32_t>(axis["axis"]), py::cast<std::int32_t>(axis["derivative_order"]),
-        py::cast<std::int32_t>(axis["formal_order"]), py::cast<std::size_t>(axis["ghost_lower"]),
-        py::cast<std::size_t>(axis["ghost_upper"]),
-        py::cast<std::vector<std::int32_t>>(axis["offsets"]), std::move(coefficients)});
+    const std::int32_t axis_index = py::cast<std::int32_t>(axis["axis"]);
+    if (axis_index != static_cast<std::int32_t>(axis_ordinal))
+      throw std::invalid_argument("AMR Tagger stencil axes are not in canonical native order");
+    result.axes[axis_ordinal++] =
+        Program::AxisStencil{axis_index,
+                             py::cast<std::int32_t>(axis["derivative_order"]),
+                             py::cast<std::int32_t>(axis["formal_order"]),
+                             py::cast<std::size_t>(axis["ghost_lower"]),
+                             py::cast<std::size_t>(axis["ghost_upper"]),
+                             py::cast<std::vector<std::int32_t>>(axis["offsets"]),
+                             std::move(coefficients)};
   }
   return result;
 }
@@ -388,7 +401,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::int32_t>& coarsen_args, int min_cycles,
              const std::string& equality_policy, const std::string& conflict_policy,
              const std::string& clock_identity, const std::string& provider_identity) {
-            std::vector<pops::runtime::amr::PreparedTaggingProgram::Stencil> stencils;
+            std::vector<typename pops::runtime::amr::PreparedTaggingProgram<
+                pops::kNativeDimension>::Stencil>
+                stencils;
             stencils.reserve(stencil_rows.size());
             for (const py::handle row : stencil_rows)
               stencils.push_back(amr_tagging_stencil_from_python(py::cast<py::dict>(row)));

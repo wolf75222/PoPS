@@ -386,11 +386,11 @@ static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
 
   // Parent-level-1 history remains meaningful even though its fine suffix is temporarily absent.
   // Restore validates keys against configured max_levels(), not only currently materialized levels.
-  const std::vector<Box2D> configured_parent_domains{
-      Box2D{{0, 0}, {N - 1, N - 1}},
-      Box2D{{0, 0}, {2 * N - 1, 2 * N - 1}},
+  const std::vector<Box<2>> configured_parent_domains{
+      Box<2>{Index<2>{0, 0}, Index<2>{N - 1, N - 1}},
+      Box<2>{Index<2>{0, 0}, Index<2>{2 * N - 1, 2 * N - 1}},
   };
-  const auto decoded = pops::runtime::amr::PersistentTaggingState::decode(
+  const auto decoded = pops::runtime::amr::PersistentTaggingState<2>::decode(
       image, minimum_cycles, provider_identity, configured_parent_domains);
   EXPECT_GT(decoded.active_entry_count(), static_cast<std::size_t>(N * N))
       << "the checkpoint must retain live parent-level-1 decisions after suffix removal";
@@ -884,14 +884,13 @@ TEST(test_amr_multiblock_regrid_union, GradientTaggingRefusesUnproducedNonPeriod
   runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
       0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
 
-  using Program = runtime::amr::PreparedTaggingProgram;
+  using Program = runtime::amr::PreparedTaggingProgram<2>;
   const std::vector<Program::Stencil> stencils{
       Program::Stencil{"test::centered-gradient",
                        POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
                        "l2",
                        "inverse_cell_size",
                        "ghost_extension",
-                       2,
                        {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
                         Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
   try {

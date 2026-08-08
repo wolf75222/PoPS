@@ -8,6 +8,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[3]
 INCLUDE = ROOT / "include"
+BINDINGS = ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp"
 
 RANKED_PROVIDERS = (
     "pops/numerics/time/amr/reflux/amr_reflux_mf.hpp",
@@ -18,6 +19,10 @@ RANKED_PROVIDERS = (
     "pops/runtime/builders/compiled/amr_dsl_block.hpp",
 )
 SPECIALIZED_FAC = "pops/numerics/elliptic/mg/composite_fac_poisson.hpp"
+RANKED_TAGGING_EXECUTION = (
+    "pops/runtime/amr/prepared_tagging_execution.hpp",
+    "pops/runtime/amr/persistent_tagging_state.hpp",
+)
 
 
 def _source(relative: str) -> str:
@@ -109,3 +114,39 @@ def test_provider_types_and_contracts_carry_the_selected_rank() -> None:
     assert "BlockProviderCapabilities<Dim>" in block
     assert "bound_spatial_contract_" in amr_block
     assert "materialization_generation_" in amr_block
+
+
+def test_tagging_bytecode_and_hysteresis_execute_in_one_exact_native_rank() -> None:
+    sources = {relative: _source(relative) for relative in RANKED_TAGGING_EXECUTION}
+    joined = "\n".join(sources.values())
+
+    for required in (
+        "PreparedTaggingProgram<Dim>",
+        "PreparedTaggingExecutionPlan",
+        "FieldView<const Real, Dim>",
+        "TagMask<Dim>",
+        "Box<Dim>",
+        "Index<Dim>",
+        "PersistentTaggingState",
+        "all_ranks_agree_exact_ordered_byte_pairs",
+        "replicated-consensus budget",
+    ):
+        assert required in joined, required
+
+    for forbidden in (
+        "Box2D",
+        "ConstArray4",
+        "Array4",
+        "TagBox",
+        "kPreparedTaggingDimension",
+        "requires an exact 2D",
+    ):
+        assert forbidden not in joined, forbidden
+    assert not re.search(r"\bif\s+(?:constexpr\s*)?\(\s*Dim\b", joined)
+    assert not re.search(r"<\s*2\s*>", joined)
+
+    binding = BINDINGS.read_text(encoding="utf-8")
+    assert "PreparedTaggingProgram<pops::kNativeDimension>" in binding
+    assert "row[\"dimension\"]" in binding
+    assert "differs from the selected native specialization" in binding
+    assert "result.dimension" not in binding

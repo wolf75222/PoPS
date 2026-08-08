@@ -138,6 +138,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_cutcell_multibox "tests/cpp/integration/mpi/te
 set(POPS_CPP_TEST_SOURCE_test_mpi_external_lifecycle "tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_field_nullspace_preflight "tests/cpp/integration/mpi/test_mpi_field_nullspace_preflight.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_field_plan_consensus "tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_prepared_tagging_execution "tests/cpp/integration/mpi/test_mpi_prepared_tagging_execution.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_fft_distributed "tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_flux_failure_collective "tests/cpp/integration/mpi/test_mpi_flux_failure_collective.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_hdf5_collective "tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp")

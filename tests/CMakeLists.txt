@@ -806,6 +806,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_field_nullspace_preflight 2)
+  set(POPS_MPI_RANKS_test_mpi_prepared_tagging_execution 2)
   set(POPS_MPI_RANKS_test_krylov_collective_contract 2)
   set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
@@ -850,6 +851,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_analytic_level_set
     test_mpi_coupled_source
     test_mpi_field_nullspace_preflight
+    test_mpi_prepared_tagging_execution
     test_krylov_collective_contract
     test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
@@ -926,6 +928,9 @@ if(POPS_HAS_MPI)
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_mpi_field_nullspace_preflight_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_mpi_prepared_tagging_execution_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
   set_tests_properties(test_krylov_collective_contract_np2 PROPERTIES
