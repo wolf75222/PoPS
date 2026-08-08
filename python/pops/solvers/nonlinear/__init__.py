@@ -1,4 +1,5 @@
 """Typed nonlinear solvers used by field residual providers."""
+
 from __future__ import annotations
 
 import math
@@ -49,8 +50,13 @@ class PreparedFieldNonlinear:
             raise ValueError("PreparedFieldNonlinear target is unsupported")
         options = MappingProxyType(dict(self.options))
         required = {
-            "tolerance", "max_iterations", "linear_tolerance",
-            "linear_max_iterations", "restart", "armijo", "minimum_step",
+            "tolerance",
+            "max_iterations",
+            "linear_tolerance",
+            "linear_max_iterations",
+            "restart",
+            "armijo",
+            "minimum_step",
         }
         if set(options) != required:
             raise ValueError("PreparedFieldNonlinear options are incomplete")
@@ -78,11 +84,19 @@ class PreparedFieldNonlinear:
         setter = getattr(runtime, "set_field_newton_plan", None)
         if not callable(setter):
             raise TypeError(
-                "prepared nonlinear provider requires the field nonlinear install protocol")
+                "prepared nonlinear provider requires the field nonlinear install protocol"
+            )
         o = self.options
-        setter(provider_slot, _runtime_number(o["tolerance"]), o["max_iterations"],
-               _runtime_number(o["linear_tolerance"]), o["linear_max_iterations"], o["restart"],
-               _runtime_number(o["armijo"]), _runtime_number(o["minimum_step"]))
+        setter(
+            provider_slot,
+            _runtime_number(o["tolerance"]),
+            o["max_iterations"],
+            _runtime_number(o["linear_tolerance"]),
+            o["linear_max_iterations"],
+            o["restart"],
+            _runtime_number(o["armijo"]),
+            _runtime_number(o["minimum_step"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +135,11 @@ class _PreparedLocalNewton:
             raise ValueError("prepared LocalNewton identity is not canonical")
 
     def build_program_solve(
-        self, *, program: Any, problem: Any, name: Any = None,
+        self,
+        *,
+        program: Any,
+        problem: Any,
+        name: Any = None,
     ) -> Any:
         """Join two explicit small protocols without inspecting a problem class."""
         build = getattr(problem, "build_with", None)
@@ -134,15 +152,23 @@ _NATIVE_INT_MAX = (1 << 31) - 1
 
 
 def _positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) \
-            or value <= 0 or value > _NATIVE_INT_MAX:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value > _NATIVE_INT_MAX
+    ):
         raise ValueError("Newton %s must be a positive Python int" % name)
     return value
 
 
 def _positive_float(value: Any, name: str, *, upper: float | None = None) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
-            or not math.isfinite(float(value)) or float(value) <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
         raise ValueError("Newton %s must be a finite positive scalar" % name)
     result = float(value)
     if upper is not None and result >= upper:
@@ -151,15 +177,23 @@ def _positive_float(value: Any, name: str, *, upper: float | None = None) -> flo
 
 
 def _nonnegative_float(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
-            or not math.isfinite(float(value)) or float(value) < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0
+    ):
         raise ValueError("Newton %s must be a finite non-negative scalar" % name)
     return float(value)
 
 
 def _nonnegative_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) \
-            or value < 0 or value > _NATIVE_INT_MAX:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > _NATIVE_INT_MAX
+    ):
         raise ValueError("Newton %s must be a non-negative Python int" % name)
     return value
 
@@ -167,9 +201,9 @@ def _nonnegative_int(value: Any, name: str) -> int:
 class Newton(Descriptor):
     """Global damped Newton-Krylov outer solve for a nonlinear field residual.
 
-    The field discretization's linear solver is used only as the preconditioner.  Residual and JVP
-    come from the resolved FieldResidual/Boundary providers; publication occurs only after the
-    accepted iterate satisfies the nonlinear tolerance.
+    The native backend evaluates the exact-ranked residual and JVP and solves each Newton correction
+    with persistent restarted GMRES storage. Publication occurs only after the accepted iterate
+    satisfies the nonlinear tolerance.
     """
 
     category = "nonlinear_solver"
@@ -190,9 +224,10 @@ class Newton(Descriptor):
         self.tolerance = _positive_float(tolerance, "tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
         self.linear_tolerance = _positive_float(linear_tolerance, "linear_tolerance")
-        self.linear_max_iterations = _positive_int(
-            linear_max_iterations, "linear_max_iterations")
+        self.linear_max_iterations = _positive_int(linear_max_iterations, "linear_max_iterations")
         self.restart = _positive_int(restart, "restart")
+        if self.restart > self.linear_max_iterations:
+            raise ValueError("Newton restart cannot exceed linear_max_iterations")
         self.armijo = _positive_float(armijo, "armijo", upper=1.0)
         self.minimum_step = _positive_float(minimum_step, "minimum_step", upper=1.0)
 
@@ -215,14 +250,16 @@ class Newton(Descriptor):
         return {"scheme": self.scheme, **self.options()}
 
     def capabilities(self) -> CapabilitySet:
-        return CapabilitySet({
-            "nonlinear_residual": True,
-            "jvp": True,
-            "line_search": True,
-            "publication_atomic": True,
-            "uniform": True,
-            "amr": True,
-        })
+        return CapabilitySet(
+            {
+                "nonlinear_residual": True,
+                "jvp": True,
+                "line_search": True,
+                "publication_atomic": True,
+                "uniform": True,
+                "amr": True,
+            }
+        )
 
     def available(self, context: Any = None) -> Availability:
         del context
@@ -237,17 +274,25 @@ class Newton(Descriptor):
             key: value if isinstance(value, int) else _scalar_data(value)
             for key, value in authored.items()
         }
-        capabilities = frozenset({
-            "residual", "jvp", "line_search", "publication_atomic", "reject_attempt",
-            "newton_krylov" if target == "system" else "full_approximation_scheme",
-        })
+        capabilities = frozenset(
+            {
+                "residual",
+                "jvp",
+                "line_search",
+                "publication_atomic",
+                "reject_attempt",
+                "newton_krylov" if target == "system" else "full_approximation_scheme",
+            }
+        )
         payload = {
-            "schema_version": 1, "target": target, "options": options,
+            "schema_version": 1,
+            "target": target,
+            "options": options,
             "capabilities": sorted(capabilities),
         }
         return PreparedFieldNonlinear(
-            target, options, capabilities,
-            make_identity("prepared-field-nonlinear", payload))
+            target, options, capabilities, make_identity("prepared-field-nonlinear", payload)
+        )
 
 
 class LocalNewton(Descriptor):
@@ -273,16 +318,15 @@ class LocalNewton(Descriptor):
         armijo: Any = 1.0e-4,
     ) -> None:
         self.tolerance = _positive_float(tolerance, "tolerance")
-        self.relative_tolerance = _nonnegative_float(
-            relative_tolerance, "relative_tolerance")
+        self.relative_tolerance = _nonnegative_float(relative_tolerance, "relative_tolerance")
         self.step_tolerance = _nonnegative_float(step_tolerance, "step_tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
         self.max_evaluations = _nonnegative_int(max_evaluations, "max_evaluations")
         self.finite_difference_step = _positive_float(
-            finite_difference_step, "finite_difference_step")
+            finite_difference_step, "finite_difference_step"
+        )
         if safeguard not in ("exact", "damped", "backtracking"):
-            raise ValueError(
-                "Newton safeguard must be 'exact', 'damped', or 'backtracking'")
+            raise ValueError("Newton safeguard must be 'exact', 'damped', or 'backtracking'")
         self.safeguard = safeguard
         self.damping = _positive_float(damping, "damping")
         if self.damping > 1.0:
@@ -342,6 +386,9 @@ class LocalNewton(Descriptor):
             identity=make_identity("prepared-local-newton", payload),
         )
 
+
 __all__ = [
-    "LocalNewton", "Newton", "PreparedFieldNonlinear",
+    "LocalNewton",
+    "Newton",
+    "PreparedFieldNonlinear",
 ]

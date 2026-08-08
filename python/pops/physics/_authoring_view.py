@@ -6,6 +6,7 @@ the codegen. Methods only; the touched attributes are created by
 ``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops._ir`
 (no codegen, no ``_pops``).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -78,7 +79,12 @@ class _OperatorViewMixin(_HyperbolicModel):
         therefore retain the single ``AUX_CANONICAL`` order shared with the native ABI.
         """
         read = set(self.aux_names)
-        comps = [nm for nm in self._aux_layout().canonical if nm in read]
+        # A purely scalar field model may be authored before any flux or frame fixes the native
+        # rank.  Component names are semantic here; their dimension-qualified integer positions
+        # are assigned only after the resolved mesh is known.  The maximal canonical sequence is
+        # an ordering rule, not a 3-D layout choice.
+        canonical_order = ("phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e")
+        comps = [nm for nm in canonical_order if nm in read]
         for nm in self.aux_extra_names:
             if nm not in comps:
                 comps.append(nm)
@@ -112,18 +118,14 @@ class _OperatorViewMixin(_HyperbolicModel):
         if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
             for direction in self._ws_jacobian["rows"]:
                 stability_exprs.extend(
-                    expression
-                    for row in self._ws_jacobian["rows"][direction]
-                    for expression in row
+                    expression for row in self._ws_jacobian["rows"][direction] for expression in row
                 )
         if self._roe_rows is not None:
             stability_exprs.extend(flattened_axis_values(self._roe_rows))
         if self._roe_jacobian is not None:
             for direction in self._flux:
                 stability_exprs.extend(
-                    expression
-                    for row in self._roe_jacobian[direction]
-                    for expression in row
+                    expression for row in self._roe_jacobian[direction] for expression in row
                 )
 
         # Flux divergence (grid_operator: State -> Rate(State)).
@@ -133,15 +135,24 @@ class _OperatorViewMixin(_HyperbolicModel):
                 *stability_exprs,
             ]
             rf = reads_fields(exprs)
-            reg.register(_model.Operator(
-                "flux_default", "grid_operator",
-                _model.Signature([state, fields] if rf else [state],
-                                 _model.Rate(state)),
-                capabilities={"local": False, "linear": False, "produces_rate": True,
-                              "requires_ghosts": 1, "supports_device": True,
-                              "requires_fields": rf, "default": True},
-                requirements=self._aux_requirements(exprs),
-                source=None))
+            reg.register(
+                _model.Operator(
+                    "flux_default",
+                    "grid_operator",
+                    _model.Signature([state, fields] if rf else [state], _model.Rate(state)),
+                    capabilities={
+                        "local": False,
+                        "linear": False,
+                        "produces_rate": True,
+                        "requires_ghosts": 1,
+                        "supports_device": True,
+                        "requires_fields": rf,
+                        "default": True,
+                    },
+                    requirements=self._aux_requirements(exprs),
+                    source=None,
+                )
+            )
         for nm in sorted(self._flux_terms):
             term = self._flux_terms[nm]
             exprs = [
@@ -149,29 +160,45 @@ class _OperatorViewMixin(_HyperbolicModel):
                 *stability_exprs,
             ]
             rf = reads_fields(exprs)
-            reg.register(_model.Operator(
-                nm, "grid_operator",
-                _model.Signature([state, fields] if rf else [state],
-                                 _model.Rate(state)),
-                capabilities={"local": False, "linear": False, "produces_rate": True,
-                              "requires_ghosts": 1, "supports_device": True,
-                              "requires_fields": rf},
-                requirements=self._aux_requirements(exprs),
-                source=None))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "grid_operator",
+                    _model.Signature([state, fields] if rf else [state], _model.Rate(state)),
+                    capabilities={
+                        "local": False,
+                        "linear": False,
+                        "produces_rate": True,
+                        "requires_ghosts": 1,
+                        "supports_device": True,
+                        "requires_fields": rf,
+                    },
+                    requirements=self._aux_requirements(exprs),
+                    source=None,
+                )
+            )
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).
         if self._source is not None:
             rf = reads_fields(self._source)
-            reg.register(_model.Operator(
-                "source_default", "local_source",
-                _model.Signature([state, fields] if rf else [state],
-                                 _model.Rate(state)),
-                capabilities={"local": True, "linear": False, "requires_fields": rf,
-                              "produces_rate": True, "supports_device": True,
-                              "default": True},
-                requirements=self._aux_requirements(self._source),
-                lowering={"source": "default"},
-                source=None))
+            reg.register(
+                _model.Operator(
+                    "source_default",
+                    "local_source",
+                    _model.Signature([state, fields] if rf else [state], _model.Rate(state)),
+                    capabilities={
+                        "local": True,
+                        "linear": False,
+                        "requires_fields": rf,
+                        "produces_rate": True,
+                        "supports_device": True,
+                        "default": True,
+                    },
+                    requirements=self._aux_requirements(self._source),
+                    lowering={"source": "default"},
+                    source=None,
+                )
+            )
             # ``source_term("default", ...)`` returns a readable ``default`` handle,
             # while the lowering registry keeps the unambiguous ``source_default`` key.
             # The alias is an explicit registry declaration, never inferred by resolution.
@@ -179,27 +206,45 @@ class _OperatorViewMixin(_HyperbolicModel):
         for nm in sorted(self._source_terms):
             exprs = self._source_terms[nm]
             rf = reads_fields(exprs)
-            reg.register(_model.Operator(
-                nm, "local_source",
-                _model.Signature([state, fields] if rf else [state],
-                                 _model.Rate(state)),
-                capabilities={"local": True, "linear": False, "requires_fields": rf,
-                              "produces_rate": True, "supports_device": True},
-                requirements=self._aux_requirements(exprs),
-                source=None))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "local_source",
+                    _model.Signature([state, fields] if rf else [state], _model.Rate(state)),
+                    capabilities={
+                        "local": True,
+                        "linear": False,
+                        "requires_fields": rf,
+                        "produces_rate": True,
+                        "supports_device": True,
+                    },
+                    requirements=self._aux_requirements(exprs),
+                    source=None,
+                )
+            )
 
         # Local linear operators (local_linear_operator: Fields? -> L(State, State)).
         for nm in sorted(self._linear_sources):
             coeffs = [c for row in self._linear_sources[nm] for c in row]
             rf = reads_fields(coeffs)
-            reg.register(_model.Operator(
-                nm, "local_linear_operator",
-                _model.Signature([fields] if rf else [],
-                                 _model.LocalLinearOperator(state, state)),
-                capabilities={"local": True, "linear": True, "solve_i_minus_a": True,
-                              "matrix_available": True, "supports_device": True},
-                requirements=self._aux_requirements(coeffs),
-                source=None))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "local_linear_operator",
+                    _model.Signature(
+                        [fields] if rf else [], _model.LocalLinearOperator(state, state)
+                    ),
+                    capabilities={
+                        "local": True,
+                        "linear": True,
+                        "solve_i_minus_a": True,
+                        "matrix_available": True,
+                        "supports_device": True,
+                    },
+                    requirements=self._aux_requirements(coeffs),
+                    source=None,
+                )
+            )
 
         # Explicit local State -> State transforms.  These are ordinary named operators, not
         # projections: Program placement defines exactly when and how often they run.
@@ -208,52 +253,69 @@ class _OperatorViewMixin(_HyperbolicModel):
             exprs = list(transform["expressions"])
             valid_if = transform["valid_if"]
             rf = reads_fields(exprs + [valid_if])
-            reg.register(_model.Operator(
-                nm, "local_transform",
-                _model.Signature([state, fields] if rf else [state], state),
-                capabilities={"local": True, "supports_device": True,
-                              "fail_closed": True},
-                requirements=self._aux_requirements(exprs + [valid_if]),
-                source=None,
-                body={"expressions": tuple(exprs), "valid_if": valid_if}))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "local_transform",
+                    _model.Signature([state, fields] if rf else [state], state),
+                    capabilities={"local": True, "supports_device": True, "fail_closed": True},
+                    requirements=self._aux_requirements(exprs + [valid_if]),
+                    source=None,
+                    body={"expressions": tuple(exprs), "valid_if": valid_if},
+                )
+            )
 
         # Field operators (field_operator: State -> FieldSpace).
         if self._elliptic is not None:
-            reg.register(_model.Operator(
-                "fields_from_state", "field_operator",
-                # FieldSpace types the complete context AVAILABLE to downstream operators after the
-                # solve, including imposed aux such as B_z.  FieldContext.outputs separately records
-                # the triple physically produced by this Poisson solve, so availability is never
-                # confused with ownership/production.
-                _model.Signature([state], fields),
-                capabilities={"requires_solver": True, "supports_device": True,
-                              "default": True},
-                requirements={"elliptic_operator": "poisson"},
-                lowering={"field_provider": {"key": "fields_from_state"}},
-                source=None,
-                body=self._elliptic))
+            reg.register(
+                _model.Operator(
+                    "fields_from_state",
+                    "field_operator",
+                    # FieldSpace types the complete context AVAILABLE to downstream operators after the
+                    # solve, including imposed aux such as B_z.  FieldContext.outputs separately records
+                    # the triple physically produced by this Poisson solve, so availability is never
+                    # confused with ownership/production.
+                    _model.Signature([state], fields),
+                    capabilities={
+                        "requires_solver": True,
+                        "supports_device": True,
+                        "default": True,
+                    },
+                    requirements={"elliptic_operator": "poisson"},
+                    lowering={"field_provider": {"key": "fields_from_state"}},
+                    source=None,
+                    body=self._elliptic,
+                )
+            )
         for nm in sorted(self._elliptic_fields):
             info = self._elliptic_fields[nm]
-            reg.register(_model.Operator(
-                nm, "field_operator",
-                _model.Signature([state],
-                                 _model.FieldSpace(nm, components=tuple(info["aux"]))),
-                capabilities={"requires_solver": True, "supports_device": True},
-                requirements={"elliptic_operator": info["operator"]},
-                lowering={
-                    "field_provider": {"key": nm},
-                    "gradient_sign": info["gradient_sign"],
-                },
-                source=None,
-                body=info["rhs"]))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "field_operator",
+                    _model.Signature([state], _model.FieldSpace(nm, components=tuple(info["aux"]))),
+                    capabilities={"requires_solver": True, "supports_device": True},
+                    requirements={"elliptic_operator": info["operator"]},
+                    lowering={
+                        "field_provider": {"key": nm},
+                        "gradient_sign": info["gradient_sign"],
+                    },
+                    source=None,
+                    body=info["rhs"],
+                )
+            )
 
         # Pointwise projection (projection: State -> State).
         if self._proj is not None:
-            reg.register(_model.Operator(
-                "projection", "projection", _model.Signature([state], state),
-                capabilities={"local": True, "idempotent": True,
-                              "supports_device": True},
-                source=None))
+            reg.register(
+                _model.Operator(
+                    "projection",
+                    "projection",
+                    _model.Signature([state], state),
+                    capabilities={"local": True, "idempotent": True, "supports_device": True},
+                    source=None,
+                )
+            )
 
         # Composite rate operators (local_rate: State[, Fields] -> Rate(State)); aliases
         # for ctx.rhs(flux=, sources=, fluxes=), carried as a lowering hint for P.call.
@@ -263,19 +325,29 @@ class _OperatorViewMixin(_HyperbolicModel):
             needs = False
             for s in src_names:
                 if s == "default":
-                    needs = needs or (self._source is not None
-                                      and reads_fields(self._source))
+                    needs = needs or (self._source is not None and reads_fields(self._source))
                 elif s in self._source_terms:
                     needs = needs or reads_fields(self._source_terms[s])
-            reg.register(_model.Operator(
-                nm, "local_rate",
-                _model.Signature([state, fields] if needs else [state],
-                                 _model.Rate(state)),
-                capabilities={"local": False, "linear": False, "requires_fields": needs,
-                              "produces_rate": True, "supports_device": True},
-                lowering={"flux": cfg["flux"], "sources": cfg["sources"],
-                          "fluxes": cfg["fluxes"]},
-                source=None))
+            reg.register(
+                _model.Operator(
+                    nm,
+                    "local_rate",
+                    _model.Signature([state, fields] if needs else [state], _model.Rate(state)),
+                    capabilities={
+                        "local": False,
+                        "linear": False,
+                        "requires_fields": needs,
+                        "produces_rate": True,
+                        "supports_device": True,
+                    },
+                    lowering={
+                        "flux": cfg["flux"],
+                        "sources": cfg["sources"],
+                        "fluxes": cfg["fluxes"],
+                    },
+                    source=None,
+                )
+            )
         for alias, target in sorted(self._aliases.items()):
             reg.register_alias(alias, target)
         # Deep-freeze seals derived caches as mapping proxies. A missing view remains computable

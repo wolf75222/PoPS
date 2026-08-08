@@ -48,6 +48,7 @@
 namespace pops {
 
 class ObserverMpiLane;
+template <int Dim>
 class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
 template <int Dim>
@@ -400,7 +401,7 @@ class System {
   /// Adds a native field-nullspace provider before binding. Builtins and extensions use this same
   /// registry; the System core never interprets a mathematical nullspace family name.
   POPS_EXPORT void register_field_nullspace_provider(
-      std::shared_ptr<const FieldNullspaceProvider> provider);
+      std::shared_ptr<const FieldNullspaceProvider<Dim>> provider);
   /// Select the provider for the principal field configured by set_poisson.
   void set_default_field_nullspace(const std::string& nullspace_provider_identity,
                                    const PreparedProviderOptions& options);
@@ -411,7 +412,7 @@ class System {
   POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
       const std::string& provider_slot) const;
 
-  /// Install the exact xlo/xhi/ylo/yhi field boundary residuals. ``kind`` is
+  /// Install the exact lower/upper boundary residual for every axis of this specialization. ``kind`` is
   /// periodic/dirichlet/neumann/mixed; mixed represents alpha*u + beta*du/dn = value.
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,

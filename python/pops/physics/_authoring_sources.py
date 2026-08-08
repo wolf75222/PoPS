@@ -5,6 +5,7 @@ Methods only; the touched attributes (``_source`` / ``_elliptic`` /
 / ``_stab_dt`` / ``_src_freq`` / ``_proj`` / ``_src_jac`` / ``_rate_operators``)
 are created by ``HyperbolicModel.__init__``. Codegen-free and ``_pops``-free.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -15,7 +16,7 @@ from pops._ir import _wrap
 from pops._ir.visitors import _expr_uses_cons_or_prim
 from pops.model import OperatorHandle
 
-from .aux import AUX_CANONICAL_NAMES
+from .aux import AUX_CANONICAL_NAMES, aux_layout
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -26,8 +27,11 @@ else:
 class _SourceMixin(_HyperbolicModel):
     """Source, elliptic, named operators, projection and stability declarations."""
 
-    def set_source(self, s: Any) -> None: self._source = [_wrap(e) for e in s]
-    def set_elliptic_rhs(self, e: Any) -> None: self._elliptic = _wrap(e)
+    def set_source(self, s: Any) -> None:
+        self._source = [_wrap(e) for e in s]
+
+    def set_elliptic_rhs(self, e: Any) -> None:
+        self._elliptic = _wrap(e)
 
     def elliptic_field(
         self,
@@ -37,6 +41,7 @@ class _SourceMixin(_HyperbolicModel):
         aux: Any = None,
         *,
         gradient_sign: int = 1,
+        dimension: int | None = None,
     ) -> None:
         """Declare a NAMED elliptic field (ADC-419): an elliptic solve ``operator(field) = rhs(U)``
         whose solution + derived quantities populate the NAMED aux fields @p aux.  The first entry
@@ -56,40 +61,66 @@ class _SourceMixin(_HyperbolicModel):
         if not isinstance(name, str) or not name:
             raise ValueError("elliptic_field: name must be a non-empty string")
         if name == "default":
-            raise ValueError("elliptic_field('default'): the default elliptic field is m.elliptic_rhs "
-                             "(set_elliptic_rhs); pass a distinct name")
+            raise ValueError(
+                "elliptic_field('default'): the default elliptic field is m.elliptic_rhs "
+                "(set_elliptic_rhs); pass a distinct name"
+            )
         if not name.isidentifier():
-            raise ValueError("elliptic_field('%s'): name must be a valid identifier "
-                             "(letters/digits/_, no leading digit)" % name)
+            raise ValueError(
+                "elliptic_field('%s'): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % name
+            )
         if operator != "poisson":
-            raise ValueError("elliptic_field('%s'): operator '%s' is not supported (only 'poisson')"
-                             % (name, operator))
+            raise ValueError(
+                "elliptic_field('%s'): operator '%s' is not supported (only 'poisson')"
+                % (name, operator)
+            )
         if name in self._elliptic_fields:
             raise ValueError("elliptic_field('%s'): already declared" % name)
         if name in self._local_transforms:
             raise ValueError("elliptic_field('%s'): name collides with a local_transform" % name)
-        layout = self._aux_layout()
+        if dimension is not None:
+            if type(dimension) is not int or dimension not in (1, 2, 3):
+                raise ValueError(
+                    "elliptic_field('%s'): dimension must be exactly 1, 2, or 3" % name
+                )
+            layout = aux_layout(dimension)
+            if self._flux and self._aux_layout().dimension != dimension:
+                raise ValueError(
+                    "elliptic_field('%s'): typed frame rank differs from the physical flux rank"
+                    % name
+                )
+        else:
+            layout = None
         if aux is None:
+            if layout is None:
+                layout = self._aux_layout()
             aux = ["phi", *("grad_" + axis for axis in layout.axes)]
         else:
             aux = list(aux)
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
-        if len(aux) not in (1, 1 + layout.dimension):
+        # A scalar field is rank-independent and may be authored before a mesh/frame exists.  A
+        # gradient route is rank-bearing, so it must consume the model's typed frame immediately;
+        # the resolved mesh remains the sole authority checked again during lowering.
+        if len(aux) != 1 and layout is None:
+            layout = self._aux_layout()
+        if layout is not None and len(aux) != 1 + layout.dimension:
             raise ValueError(
                 "elliptic_field('%s'): aux must contain one scalar or that scalar plus exactly "
-                "%d ranked gradient components; got %d outputs"
-                % (name, layout.dimension, len(aux)))
+                "%d ranked gradient components; got %d outputs" % (name, layout.dimension, len(aux))
+            )
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
-            raise ValueError(
-                "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
+            raise ValueError("elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
         if len(aux) == 1 and gradient_sign != 1:
             raise ValueError(
-                "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % name)
+                "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % name
+            )
         for a in aux:
             if not (isinstance(a, str) and a.isidentifier()):
-                raise ValueError("elliptic_field('%s'): aux field %r is not a valid identifier"
-                                 % (name, a))
+                raise ValueError(
+                    "elliptic_field('%s'): aux field %r is not a valid identifier" % (name, a)
+                )
         rhs = _wrap(rhs)
         # The elliptic RHS brick (emit_cpp_elliptic_field, like the default emit_cpp_elliptic) reads
         # ONLY the conservative state (+ primitives derived from it), never the aux channel: the System
@@ -103,10 +134,12 @@ class _SourceMixin(_HyperbolicModel):
             | {"phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e"}
         )
         if rhs_aux:
-            raise ValueError("elliptic_field('%s'): rhs may not read aux fields %s; the elliptic "
-                             "right-hand side is a function of the conservative state only (the same "
-                             "surface as m.elliptic_rhs). Read the SOLVED field's aux in a source/flux."
-                             % (name, sorted(rhs_aux)))
+            raise ValueError(
+                "elliptic_field('%s'): rhs may not read aux fields %s; the elliptic "
+                "right-hand side is a function of the conservative state only (the same "
+                "surface as m.elliptic_rhs). Read the SOLVED field's aux in a source/flux."
+                % (name, sorted(rhs_aux))
+            )
         self._elliptic_fields[name] = {
             "rhs": rhs,
             "operator": operator,
@@ -133,16 +166,23 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError("source_term: name must be a non-empty string")
         exprs = [_wrap(e) for e in exprs]
         if len(exprs) != n:
-            raise ValueError("source_term('%s'): %d expressions for %d conservative variables"
-                             % (name, len(exprs), n))
+            raise ValueError(
+                "source_term('%s'): %d expressions for %d conservative variables"
+                % (name, len(exprs), n)
+            )
         if name == "default":
-            self._source = exprs   # equivalent to m.source([...]) -- the legacy default source
+            self._source = exprs  # equivalent to m.source([...]) -- the legacy default source
             return OperatorHandle(
-                "default", kind="local_source", owner=self.owner_path,
-                registered_operator_name="source_default")
+                "default",
+                kind="local_source",
+                owner=self.owner_path,
+                registered_operator_name="source_default",
+            )
         if not name.isidentifier():
-            raise ValueError("source_term('%s'): name must be a valid identifier "
-                             "(letters/digits/_, no leading digit)" % name)
+            raise ValueError(
+                "source_term('%s'): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % name
+            )
         if name in self._source_terms:
             raise ValueError("source_term('%s'): already declared" % name)
         if name in self._linear_sources:
@@ -170,18 +210,23 @@ class _SourceMixin(_HyperbolicModel):
         if not isinstance(name, str) or not name:
             raise ValueError("linear_source: name must be a non-empty string")
         if not name.isidentifier():
-            raise ValueError("linear_source('%s'): name must be a valid identifier "
-                             "(letters/digits/_, no leading digit)" % name)
+            raise ValueError(
+                "linear_source('%s'): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % name
+            )
         rows = [list(r) for r in matrix]
         if len(rows) != n or any(len(r) != n for r in rows):
-            raise ValueError("linear_source('%s'): expected a %dx%d matrix (n_cons x n_cons)"
-                             % (name, n, n))
+            raise ValueError(
+                "linear_source('%s'): expected a %dx%d matrix (n_cons x n_cons)" % (name, n, n)
+            )
         wrapped = [[_wrap(c) for c in row] for row in rows]
         for row in wrapped:
             for coeff in row:
                 if _expr_uses_cons_or_prim(coeff):
-                    raise ValueError("linear_source '%s' coefficients must not depend on "
-                                     "conservative or primitive variables" % name)
+                    raise ValueError(
+                        "linear_source '%s' coefficients must not depend on "
+                        "conservative or primitive variables" % name
+                    )
         if name in self._linear_sources:
             raise ValueError("linear_source('%s'): already declared" % name)
         if name in self._source_terms:
@@ -192,7 +237,11 @@ class _SourceMixin(_HyperbolicModel):
         return OperatorHandle(name, kind="local_linear_operator", owner=self.owner_path)
 
     def local_transform(
-        self, name: Any, exprs: Any, *, valid_if: Any = 1.0,
+        self,
+        name: Any,
+        exprs: Any,
+        *,
+        valid_if: Any = 1.0,
     ) -> Any:
         """Declare a named pointwise ``State -> State`` transformation.
 
@@ -210,7 +259,8 @@ class _SourceMixin(_HyperbolicModel):
         if not name.isidentifier():
             raise ValueError(
                 "local_transform('%s'): name must be a valid identifier "
-                "(letters/digits/_, no leading digit)" % name)
+                "(letters/digits/_, no leading digit)" % name
+            )
         if name in self._local_transforms:
             raise ValueError("local_transform('%s'): already declared" % name)
         if name in self._source_terms:
@@ -225,13 +275,13 @@ class _SourceMixin(_HyperbolicModel):
         }
         for family, registry in collisions.items():
             if name in registry:
-                raise ValueError(
-                    "local_transform('%s'): name collides with a %s" % (name, family))
+                raise ValueError("local_transform('%s'): name collides with a %s" % (name, family))
         wrapped = tuple(_wrap(expr) for expr in exprs)
         if len(wrapped) != n:
             raise ValueError(
                 "local_transform('%s'): %d expressions for %d conservative variables"
-                % (name, len(wrapped), n))
+                % (name, len(wrapped), n)
+            )
         self._local_transforms[name] = {
             "expressions": wrapped,
             "valid_if": _wrap(valid_if),
@@ -246,7 +296,8 @@ class _SourceMixin(_HyperbolicModel):
         except KeyError:
             raise ValueError(
                 "local_transform_value: unknown transform %r; declared: %s"
-                % (name, sorted(self._local_transforms))) from None
+                % (name, sorted(self._local_transforms))
+            ) from None
         env = self._env(U, aux)
         if not np.isfinite(np.asarray(U)).all():
             raise FloatingPointError("local transform %r received a non-finite state" % name)
@@ -254,19 +305,20 @@ class _SourceMixin(_HyperbolicModel):
         valid = np.broadcast_to(transform["valid_if"].eval(env), shape)
         if not np.isfinite(np.asarray(valid)).all():
             raise FloatingPointError(
-                "local transform %r produced a non-finite domain predicate" % name)
+                "local transform %r produced a non-finite domain predicate" % name
+            )
         if not np.asarray(valid, dtype=bool).all():
             raise ValueError("local transform %r rejected an input outside its domain" % name)
-        result = np.stack([
-            np.broadcast_to(expr.eval(env), shape)
-            for expr in transform["expressions"]
-        ], axis=0)
+        result = np.stack(
+            [np.broadcast_to(expr.eval(env), shape) for expr in transform["expressions"]], axis=0
+        )
         if not np.isfinite(result).all():
             raise FloatingPointError("local transform %r produced a non-finite state" % name)
         return result
 
-    def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
-                      fluxes: Any = None) -> Any:
+    def rate_operator(
+        self, name: Any, *, flux: bool = True, sources: Any = ("default",), fluxes: Any = None
+    ) -> Any:
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
         operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
         calling the returned handle lowers to the same internal rhs IR,
@@ -282,18 +334,27 @@ class _SourceMixin(_HyperbolicModel):
         if self.n_vars == 0:
             raise ValueError("rate_operator(%r): declare conservative_vars(...) first" % (name,))
         if not (isinstance(name, str) and name.isidentifier()):
-            raise ValueError("rate_operator(%r): name must be a valid identifier "
-                             "(letters/digits/_, no leading digit)" % (name,))
+            raise ValueError(
+                "rate_operator(%r): name must be a valid identifier "
+                "(letters/digits/_, no leading digit)" % (name,)
+            )
         if name in self._rate_operators:
             raise ValueError("rate_operator('%s'): already declared" % name)
-        if name in self._source_terms or name in self._linear_sources or name in self._local_transforms:
-            raise ValueError("rate_operator('%s'): name collides with a source_term/linear_source/"
-                             "local_transform"
-                             % name)
+        if (
+            name in self._source_terms
+            or name in self._linear_sources
+            or name in self._local_transforms
+        ):
+            raise ValueError(
+                "rate_operator('%s'): name collides with a source_term/linear_source/"
+                "local_transform" % name
+            )
         flx = list(fluxes) if fluxes else None
         if not flux and flx:
-            raise ValueError("rate_operator('%s'): named fluxes require flux=True "
-                             "(a source-only rate has no flux to divide)" % name)
+            raise ValueError(
+                "rate_operator('%s'): named fluxes require flux=True "
+                "(a source-only rate has no flux to divide)" % name
+            )
         srcs = list(sources) if sources is not None else None
         self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
         return OperatorHandle(name, kind="local_rate", owner=self.owner_path)
@@ -343,8 +404,10 @@ class _SourceMixin(_HyperbolicModel):
         appel : aucun hook emis."""
         exprs = [_wrap(e) for e in exprs]
         if len(exprs) != self.n_vars:
-            raise ValueError("projection : %d expressions attendues (une par composante "
-                             "conservative), recu %d" % (self.n_vars, len(exprs)))
+            raise ValueError(
+                "projection : %d expressions attendues (une par composante "
+                "conservative), recu %d" % (self.n_vars, len(exprs))
+            )
         self._proj = exprs
 
     def projection_value(self, U: Any, aux: Any = None) -> Any:

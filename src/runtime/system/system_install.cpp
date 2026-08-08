@@ -392,13 +392,44 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
   if (p_->named_fields_.contains(provider_slot))
     throw std::invalid_argument("System named elliptic field is already registered: " +
                                 provider_slot);
-  if (!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty() ||
-      plan.has_boundary_kernel || plan.has_nonlinear_plan)
+  if ((!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty()) &&
+      !plan.boundary_kernel)
     throw std::logic_error(
-        "System exact-ranked field backend does not accept legacy dynamic-boundary or nonlinear "
-        "carriers");
-
+        "System field boundary dependencies require one compiled exact-ranked kernel");
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
+  if (p_->poisson_bc_ == "neumann")
+    physical = elliptic::nd::CartesianBoundaryKind::neumann;
+  else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
+           p_->poisson_bc_ != "periodic")
+    throw std::invalid_argument("System Poisson boundary mode is unknown");
+  auto operator_options =
+      elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
+  if (!plan.boundary_kind.empty()) {
+    for (int axis = 0; axis < Dim; ++axis) {
+      for (int side = 0; side < 2; ++side) {
+        const std::size_t face = static_cast<std::size_t>(2 * axis + side);
+        const std::string& kind = plan.boundary_kind[face];
+        const bool periodic = kind == "periodic";
+        if (periodic != p_->periodicity[static_cast<std::size_t>(axis)])
+          throw std::invalid_argument(
+              "System field boundary periodicity differs from its exact domain topology");
+        if (kind == "periodic")
+          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::periodic;
+        else if (kind == "dirichlet")
+          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::dirichlet;
+        else if (kind == "neumann")
+          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::neumann;
+        else if (kind == "mixed")
+          operator_options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::mixed;
+        else
+          throw std::logic_error("System exact-ranked field boundary kind is unsupported");
+        operator_options.boundary_alpha[face] = static_cast<Real>(plan.boundary_alpha[face]);
+        operator_options.boundary_beta[face] = static_cast<Real>(plan.boundary_beta[face]);
+        operator_options.boundary_values[face] = static_cast<Real>(plan.boundary_value[face]);
+      }
+    }
+  }
   std::unique_ptr<runtime::system::ExactFieldSolverBackend<Dim>> backend;
   const auto component = p_->component_field_solver_providers_.find(plan.backend_provider_route);
   const auto configured = p_->configured_field_solver_providers_.find(plan.backend_provider_route);
@@ -408,6 +439,9 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
         "System field plan must select exactly one installed exact-ranked backend route");
 
   if (component != p_->component_field_solver_providers_.end()) {
+    if (plan.boundary_kernel)
+      throw std::logic_error(
+          "external exact field components must own dynamic boundaries in their component ABI");
     if (plan.has_reaction)
       throw std::logic_error(
           "external field reaction must be carried by the component's exact operator contract");
@@ -423,46 +457,34 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
     if (plan.has_reaction)
       throw std::logic_error(
           "configured exact Cartesian field solver does not implement a reaction operator");
-    elliptic::nd::CartesianBoundaryKind physical = elliptic::nd::CartesianBoundaryKind::dirichlet;
-    if (p_->poisson_bc_ == "neumann")
-      physical = elliptic::nd::CartesianBoundaryKind::neumann;
-    else if (p_->poisson_bc_ != "auto" && p_->poisson_bc_ != "dirichlet" &&
-             p_->poisson_bc_ != "periodic")
-      throw std::invalid_argument("System Poisson boundary mode is unknown");
-    auto options = elliptic::nd::CartesianPoissonOptions<Dim>::from_topology(topology, physical);
-    if (!plan.boundary_kind.empty()) {
-      for (int axis = 0; axis < Dim; ++axis) {
-        for (int side = 0; side < 2; ++side) {
-          const std::size_t face = static_cast<std::size_t>(2 * axis + side);
-          const std::string& kind = plan.boundary_kind[face];
-          const bool periodic = kind == "periodic";
-          if (periodic != p_->periodicity[static_cast<std::size_t>(axis)])
-            throw std::invalid_argument(
-                "System field boundary periodicity differs from its exact domain topology");
-          if (kind == "periodic")
-            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::periodic;
-          else if (kind == "dirichlet")
-            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::dirichlet;
-          else if (kind == "neumann")
-            options.boundaries[face] = elliptic::nd::CartesianBoundaryKind::neumann;
-          else
-            throw std::logic_error(
-                "mixed field boundaries require an exact-ranked boundary component");
-          options.boundary_values[face] = static_cast<Real>(plan.boundary_value[face]);
-        }
-      }
-    }
-    options.absolute_tolerance = static_cast<Real>(configured->second.absolute_tolerance);
-    options.relative_tolerance = static_cast<Real>(configured->second.relative_tolerance);
-    options.maximum_iterations = configured->second.maximum_iterations;
+    operator_options.absolute_tolerance = static_cast<Real>(configured->second.absolute_tolerance);
+    operator_options.relative_tolerance = static_cast<Real>(configured->second.relative_tolerance);
+    operator_options.maximum_iterations = configured->second.maximum_iterations;
     backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
-        p_->geom, p_->ba, p_->dm, p_->local_rank, topology, std::move(options),
+        p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options,
         configured->second.exact_identity);
   }
 
   auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
       provider_slot, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, std::move(backend),
       p_->sp.size());
+  if (plan.boundary_kernel)
+    prepared->install_boundary_kernel(*plan.boundary_kernel);
+  if (plan.newton)
+    prepared->install_newton(*plan.newton);
+  const FieldNullspaceProviderSelection nullspace_selection{
+      plan.nullspace_provider_identity.empty() ? p_->default_nullspace_provider_identity_
+                                               : plan.nullspace_provider_identity,
+      plan.nullspace_provider_identity.empty() ? p_->default_nullspace_options_
+                                               : plan.nullspace_options};
+  const std::string topology_identity = plan.topology_digest.empty()
+                                            ? plan.plan_identity + ":uniform-topology"
+                                            : plan.topology_digest;
+  prepared->install_nullspace(
+      p_->prepare_uniform_field_nullspace(plan.plan_identity, topology_identity,
+                                          nullspace_selection, operator_options,
+                                          prepared->accepted_potential(), plan.has_reaction),
+      PreparedVectorDistribution<Dim>::distributed());
   p_->named_fields_.emplace(provider_slot, std::move(prepared));
 }
 

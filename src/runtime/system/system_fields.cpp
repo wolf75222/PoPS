@@ -18,6 +18,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -163,13 +164,13 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
   runtime::field::NamedFieldOutput<Dim> output(outputs, 1);
   const BoundaryTopology<Dim> topology =
       BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);
+  const auto operator_options =
+      poisson_options(topology, implementation.poisson_bc_, implementation.poisson_rel_tol_,
+                      implementation.poisson_abs_tol_, implementation.poisson_max_iterations_);
   auto prepared = std::make_shared<runtime::system::ExactNamedField<Dim>>(
       "pops.system.default-field", implementation.sp.empty() ? "system" : implementation.sp[0].name,
       output, implementation.geom, implementation.ba, implementation.dm, implementation.local_rank,
-      topology,
-      poisson_options(topology, implementation.poisson_bc_, implementation.poisson_rel_tol_,
-                      implementation.poisson_abs_tol_, implementation.poisson_max_iterations_),
-      implementation.sp.size());
+      topology, operator_options, implementation.sp.size());
   bool has_rhs = false;
   for (std::size_t block = 0; block < implementation.sp.size(); ++block) {
     if (!implementation.sp[block].add_poisson_rhs)
@@ -179,6 +180,14 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
   }
   if (!has_rhs)
     throw std::runtime_error("System default elliptic field has no prepared RHS provider");
+  const FieldNullspaceProviderSelection nullspace_selection{
+      implementation.default_nullspace_provider_identity_,
+      implementation.default_nullspace_options_};
+  prepared->install_nullspace(
+      implementation.prepare_uniform_field_nullspace(
+          "pops.system.default-field", "pops.system.default-uniform-topology", nullspace_selection,
+          operator_options, prepared->accepted_potential(), false),
+      PreparedVectorDistribution<Dim>::distributed());
   implementation.default_field_ = prepared;
   return prepared;
 }
@@ -194,6 +203,110 @@ std::vector<const MultiFab<Dim>*> select_states(
     result.push_back(overrides.empty() || overrides[block] == nullptr ? &blocks[block].U
                                                                       : overrides[block]);
   return result;
+}
+
+template <int Dim>
+struct PreparedBoundaryContext {
+  std::vector<const MultiFab<Dim>*> states;
+  std::vector<FieldDistribution> state_distributions;
+  std::vector<std::string> state_identities;
+  std::vector<const MultiFab<Dim>*> fields;
+  std::vector<FieldDistribution> field_distributions;
+  std::vector<std::string> field_identities;
+  const std::vector<Real>* parameters = nullptr;
+  FieldLogicalTimePoint point{};
+  FieldBoundaryFailure<Dim> failure{};
+
+  FieldBoundaryExecutionContext<Dim> view() {
+    if (states.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        fields.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        (parameters != nullptr &&
+         parameters->size() > static_cast<std::size_t>(std::numeric_limits<int>::max())))
+      throw std::overflow_error("System field boundary dependency pack exceeds native int");
+    return {point,
+            states.empty() ? nullptr : states.data(),
+            state_distributions.empty() ? nullptr : state_distributions.data(),
+            state_identities.empty() ? nullptr : state_identities.data(),
+            static_cast<int>(states.size()),
+            fields.empty() ? nullptr : fields.data(),
+            field_distributions.empty() ? nullptr : field_distributions.data(),
+            field_identities.empty() ? nullptr : field_identities.data(),
+            static_cast<int>(fields.size()),
+            parameters,
+            parameters == nullptr ? 0 : static_cast<int>(parameters->size()),
+            &failure};
+  }
+};
+
+template <int Dim, class Implementation>
+std::optional<PreparedBoundaryContext<Dim>> prepare_boundary_context(
+    Implementation& implementation, const std::string& provider_slot,
+    const std::vector<const MultiFab<Dim>*>& selected_states) {
+  const auto plan_entry = implementation.field_plans_.find(provider_slot);
+  if (plan_entry == implementation.field_plans_.end() || !plan_entry->second.boundary_kernel)
+    return std::nullopt;
+  const auto& plan = plan_entry->second;
+  if (selected_states.size() != implementation.sp.size())
+    throw std::invalid_argument(
+        "System dynamic field boundary state selection does not cover every block");
+
+  PreparedBoundaryContext<Dim> prepared;
+  prepared.parameters = &plan.boundary_parameters;
+  if (plan.boundary_point)
+    prepared.point = *plan.boundary_point;
+  prepared.states.reserve(plan.boundary_state_blocks.size());
+  prepared.state_distributions.reserve(plan.boundary_state_blocks.size());
+  prepared.state_identities.reserve(plan.boundary_state_blocks.size());
+  for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size(); ++dependency) {
+    const int block = implementation.index(plan.boundary_state_blocks[dependency]);
+    const auto* state = selected_states[static_cast<std::size_t>(block)];
+    const int component = plan.boundary_state_components[dependency];
+    if (state == nullptr || component < 0 || component >= state->ncomp())
+      throw std::invalid_argument(
+          "System dynamic field boundary state dependency is not materialized exactly");
+    prepared.states.push_back(state);
+    prepared.state_distributions.push_back(FieldDistribution::Distributed);
+    prepared.state_identities.push_back(
+        implementation.sp[static_cast<std::size_t>(block)].state_identity);
+  }
+
+  prepared.fields.reserve(plan.boundary_field_blocks.size());
+  prepared.field_distributions.reserve(plan.boundary_field_blocks.size());
+  prepared.field_identities.reserve(plan.boundary_field_blocks.size());
+  for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size(); ++dependency) {
+    if (plan.boundary_field_components[dependency] != 0)
+      throw std::invalid_argument(
+          "System scalar field boundary dependency must select component zero");
+    const auto dependency_plan = std::find_if(
+        implementation.field_plans_.begin(), implementation.field_plans_.end(),
+        [&](const auto& candidate) {
+          return candidate.second.output_block == plan.boundary_field_blocks[dependency] &&
+                 candidate.second.output_key == plan.boundary_field_keys[dependency];
+        });
+    if (dependency_plan == implementation.field_plans_.end())
+      throw std::runtime_error(
+          "System dynamic boundary names an unknown owner-qualified field dependency");
+    const auto field = implementation.named_fields_.find(dependency_plan->first);
+    if (field == implementation.named_fields_.end())
+      throw std::logic_error(
+          "System dynamic boundary field dependency has not been materialized before its use");
+    prepared.fields.push_back(&field->second->dependency_potential());
+    prepared.field_distributions.push_back(FieldDistribution::Distributed);
+    prepared.field_identities.push_back(field->second->identity());
+  }
+  return prepared;
+}
+
+template <int Dim, class Implementation>
+SolveReport solve_field_candidate(
+    Implementation& implementation, const std::string& provider_slot,
+    const std::shared_ptr<runtime::system::ExactNamedField<Dim>>& field,
+    std::vector<const MultiFab<Dim>*> states) {
+  auto storage = prepare_boundary_context<Dim>(implementation, provider_slot, states);
+  std::optional<FieldBoundaryExecutionContext<Dim>> context;
+  if (storage)
+    context = storage->view();
+  return field->solve_candidate(states, implementation.aux, context ? &*context : nullptr);
 }
 
 }  // namespace
@@ -315,7 +428,7 @@ template <int Dim>
 SolveReport System<Dim>::solve_fields_in_place_() {
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
-  return field->solve_candidate(select_states<Dim>(p_->sp, {}), p_->aux);
+  return solve_field_candidate<Dim>(*p_, field->identity(), field, select_states<Dim>(p_->sp, {}));
 }
 
 template <int Dim>
@@ -327,7 +440,8 @@ SolveReport System<Dim>::solve_fields_from_state_in_place_(int block_index,
   overrides[static_cast<std::size_t>(block_index)] = &stage;
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
-  return field->solve_candidate(select_states<Dim>(p_->sp, overrides), p_->aux);
+  return solve_field_candidate<Dim>(*p_, field->identity(), field,
+                                    select_states<Dim>(p_->sp, overrides));
 }
 
 template <int Dim>
@@ -345,7 +459,8 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
     const std::vector<const MultiFab<Dim>*>& stages) {
   const auto field = prepare_default_field<Dim>(*p_);
   p_->active_field_ = field;
-  return field->solve_candidate(select_states<Dim>(p_->sp, stages), p_->aux);
+  return solve_field_candidate<Dim>(*p_, field->identity(), field,
+                                    select_states<Dim>(p_->sp, stages));
 }
 
 template <int Dim>
@@ -367,7 +482,8 @@ SolveReport System<Dim>::solve_fields_from_blocks_in_place_(
   if (found == p_->named_fields_.end())
     throw std::out_of_range("System named elliptic field is not registered: " + field);
   p_->active_field_ = found->second;
-  return found->second->solve_candidate(select_states<Dim>(p_->sp, stages), p_->aux);
+  return solve_field_candidate<Dim>(*p_, provider_slot, found->second,
+                                    select_states<Dim>(p_->sp, stages));
 }
 
 template <int Dim>

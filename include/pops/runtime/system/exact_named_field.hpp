@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
 #include <pops/runtime/system/exact_field_solver_backend.hpp>
@@ -67,6 +68,9 @@ class ExactNamedField final {
   const std::string& output_block() const noexcept { return output_block_; }
   const runtime::field::NamedFieldOutput<Dim>& output() const noexcept { return output_; }
   const field_type& accepted_potential() const noexcept { return accepted_; }
+  const field_type& dependency_potential() const noexcept {
+    return active_ && candidate_ready_ ? solver_->candidate() : accepted_;
+  }
   field_type& accepted_potential_for_restore() {
     if (active_)
       throw std::logic_error("cannot restore a named field while a solve is active");
@@ -80,6 +84,37 @@ class ExactNamedField final {
     return accepted_topology_report_;
   }
 
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    if (active_)
+      throw std::logic_error("cannot install a named-field boundary while a solve is active");
+    if (has_boundary_kernel_)
+      throw std::logic_error("named-field boundary kernel is already installed");
+    solver_->install_boundary_kernel(std::move(kernel));
+    has_boundary_kernel_ = true;
+  }
+
+  void install_newton(FieldNewtonOptions options) {
+    if (active_)
+      throw std::logic_error("cannot install named-field Newton while a solve is active");
+    if (has_newton_)
+      throw std::logic_error("named-field Newton authority is already installed");
+    solver_->install_newton(options);
+    has_newton_ = true;
+  }
+
+  void install_nullspace(PreparedFieldNullspace<Dim> prepared,
+                         PreparedVectorDistribution<Dim> distribution) {
+    if (active_)
+      throw std::logic_error("cannot install a named-field nullspace while a solve is active");
+    if (prepared_nullspace_)
+      throw std::logic_error("named-field nullspace is already installed");
+    if (prepared.provider_identity.empty() || prepared.provider_version == 0 ||
+        prepared.exact_prepared_contract.empty())
+      throw std::invalid_argument("named-field nullspace lacks an exact prepared authority");
+    solver_->install_nullspace(prepared.plan, std::move(distribution));
+    prepared_nullspace_ = std::move(prepared);
+  }
+
   void add_rhs(std::size_t block, rhs_type rhs, Real coefficient) {
     if (active_)
       throw std::logic_error("cannot add a named-field RHS while a solve is active");
@@ -90,7 +125,9 @@ class ExactNamedField final {
     rhs_by_block_[block].push_back({std::move(rhs), coefficient});
   }
 
-  SolveReport solve_candidate(const std::vector<const field_type*>& states, field_type& live_aux) {
+  SolveReport solve_candidate(
+      const std::vector<const field_type*>& states, field_type& live_aux,
+      const FieldBoundaryExecutionContext<Dim>* boundary_context = nullptr) {
     std::optional<field_type> prepared_aux;
     std::exception_ptr preparation_error;
     try {
@@ -119,6 +156,15 @@ class ExactNamedField final {
       }
       if (!has_rhs)
         throw std::runtime_error("named elliptic field has no prepared RHS provider");
+      if (has_boundary_kernel_) {
+        if (boundary_context == nullptr)
+          throw std::logic_error(
+              "named elliptic field dynamic boundary has no prepared execution context");
+        solver_->set_boundary_context(*boundary_context);
+      } else if (boundary_context != nullptr) {
+        throw std::logic_error(
+            "named elliptic field received a boundary context without a compiled kernel");
+      }
     } catch (...) {
       preparation_error = std::current_exception();
     }
@@ -272,6 +318,9 @@ class ExactNamedField final {
   field_type accepted_;
   std::unique_ptr<solver_type> solver_;
   std::vector<std::vector<PreparedRhs>> rhs_by_block_;
+  bool has_boundary_kernel_ = false;
+  bool has_newton_ = false;
+  std::optional<PreparedFieldNullspace<Dim>> prepared_nullspace_;
   std::optional<field_type> contribution_scratch_;
   std::optional<field_type> candidate_aux_;
   std::vector<runtime::field::FieldTopologyReportRow> accepted_topology_report_;

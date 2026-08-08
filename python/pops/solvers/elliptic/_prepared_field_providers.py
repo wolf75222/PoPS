@@ -219,14 +219,10 @@ def _validate_cartesian_cg(use: Any, where: str) -> None:
         raise ValueError("%s CartesianCG implements only constant-coefficient Poisson" % where)
     if facts.layout.get("embedded_boundary"):
         raise ValueError("%s CartesianCG requires a full-material Cartesian topology" % where)
-    if (
-        facts.boundary.get("dynamic")
-        or facts.boundary.get("dependent")
-        or facts.boundary.get("iterate_dependent")
-        or facts.nonlinear
-    ):
+    if facts.boundary.get("iterate_dependent") and not facts.nonlinear:
         raise ValueError(
-            "%s CartesianCG does not implement dynamic, dependent, or nonlinear boundaries" % where
+            "%s iterate-dependent Cartesian boundary requires a prepared Newton-Krylov outer "
+            "solve" % where
         )
 
 

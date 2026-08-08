@@ -53,8 +53,7 @@ ConfiguredFieldOptions decode_configured_field_options(std::string_view family_r
   if (family_route != "cartesian_cg")
     throw std::invalid_argument("System exact-ranked field solver family is unknown: " +
                                 std::string(family_route));
-  if (options.schema_identity != "pops.system.cartesian-cg-options@1" ||
-      options.values.size() != 3)
+  if (options.schema_identity != "pops.system.cartesian-cg-options@1" || options.values.size() != 3)
     throw std::invalid_argument(
         "System exact-ranked field solver received an incompatible option schema");
 
@@ -189,13 +188,12 @@ std::string System<Dim>::register_field_solver_provider(
 
 template <int Dim>
 void System<Dim>::register_field_nullspace_provider(
-    std::shared_ptr<const FieldNullspaceProvider> provider) {
+    std::shared_ptr<const FieldNullspaceProvider<Dim>> provider) {
   require_assembling(p_->lifecycle_, "register_field_nullspace_provider");
-  if (!provider)
-    throw std::invalid_argument("field nullspace provider must be non-null");
-  throw std::logic_error(
-      "legacy 2-D field-nullspace providers cannot enter the exact-ranked System; install a "
-      "dimension-qualified field solver component instead");
+  if (!p_->field_nullspace_providers_)
+    throw std::logic_error("System field-nullspace registry is absent");
+  p_->field_nullspace_providers_->add(std::move(provider));
+  p_->field_plan_consensus_verified_ = false;
 }
 
 template <int Dim>
@@ -295,23 +293,51 @@ void System<Dim>::set_field_boundary_dependencies(const std::string& provider_sl
 
 template <int Dim>
 void System<Dim>::set_field_boundary_kernel(const std::string& provider_slot,
-                                            const CompiledFieldBoundaryKernel<Dim>&) {
+                                            const CompiledFieldBoundaryKernel<Dim>& kernel) {
   require_assembling(p_->lifecycle_, "set_field_boundary_kernel");
-  if (!p_->field_plans_.contains(provider_slot))
+  require_unmaterialized_field_plan(*p_, provider_slot, "set_field_boundary_kernel");
+  const auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
     throw std::runtime_error("field boundary kernel names an unknown provider slot");
-  throw std::logic_error(
-      "generated field boundary kernels require the exact-ranked component ABI; the legacy 2-D "
-      "kernel carrier is not accepted by System<Dim>");
+  kernel.validate();
+  if (found->second.boundary_kernel)
+    throw std::logic_error("field boundary kernel is already installed for this provider slot");
+  found->second.boundary_kernel = kernel;
+  p_->field_plan_consensus_verified_ = false;
 }
 
 template <int Dim>
 void System<Dim>::set_field_logical_timepoint(const std::string& provider_slot,
-                                              const FieldLogicalTimePoint&) {
-  require_assembling(p_->lifecycle_, "set_field_logical_timepoint");
-  if (!p_->field_plans_.contains(provider_slot))
+                                              const FieldLogicalTimePoint& point) {
+  const auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
     throw std::runtime_error("field logical timepoint names an unknown provider slot");
-  throw std::logic_error(
-      "dynamic field boundary timepoints require a dimension-qualified boundary component");
+  const bool invalid = !std::isfinite(static_cast<double>(point.time)) ||
+                       !std::isfinite(static_cast<double>(point.dt)) || point.dt <= Real(0) ||
+                       point.clock_slot < 0 || point.partition_slot < 0 || point.stage_slot < 0 ||
+                       point.level != 0 || point.step < 0 || point.substep < 0 ||
+                       point.iteration < 0;
+  if (all_reduce_max(invalid ? 1L : 0L) != 0)
+    throw std::invalid_argument(
+        "System field logical timepoint must be one complete level-zero coordinate");
+  ExactContractBuilder contract;
+  contract.text("pops.system.field-logical-timepoint")
+      .scalar(std::uint32_t{1})
+      .text(provider_slot)
+      .scalar(point.time)
+      .scalar(point.dt)
+      .scalar(point.clock_slot)
+      .scalar(point.partition_slot)
+      .scalar(point.stage_slot)
+      .scalar(point.level)
+      .scalar(point.step)
+      .scalar(point.substep)
+      .scalar(point.iteration);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-field-logical-timepoint", std::move(contract).release()}}))
+    throw std::invalid_argument(
+        "System field logical timepoint differs between communicator ranks");
+  found->second.boundary_point = point;
 }
 
 template <int Dim>
@@ -325,7 +351,7 @@ void System<Dim>::set_field_boundary_parameters(const std::string& provider_slot
   if (found == p_->field_plans_.end())
     throw std::runtime_error("field boundary parameters name an unknown provider slot");
   require_unmaterialized_field_plan(*p_, provider_slot, "set_field_boundary_parameters");
-  found->second.boundary_parameters = parameters;
+  found->second.boundary_parameters.assign(parameters.begin(), parameters.end());
   p_->field_plan_consensus_verified_ = false;
 }
 
@@ -336,15 +362,15 @@ void System<Dim>::set_field_newton_plan(const std::string& provider_slot, double
                                         double minimum_step) {
   require_assembling(p_->lifecycle_, "set_field_newton_plan");
   require_unmaterialized_field_plan(*p_, provider_slot, "set_field_newton_plan");
-  if (!std::isfinite(tolerance) || tolerance <= 0.0 || max_iterations < 1 ||
-      !std::isfinite(linear_tolerance) || linear_tolerance <= 0.0 || linear_max_iterations < 1 ||
-      restart < 1 || !std::isfinite(armijo) || armijo <= 0.0 || armijo >= 1.0 ||
-      !std::isfinite(minimum_step) || minimum_step <= 0.0 || minimum_step > 1.0)
-    throw std::invalid_argument("System field Newton plan is outside its exact domain");
+  const FieldNewtonOptions options{
+      static_cast<Real>(tolerance),   max_iterations, static_cast<Real>(linear_tolerance),
+      linear_max_iterations,          restart,        static_cast<Real>(armijo),
+      static_cast<Real>(minimum_step)};
+  validate_field_newton_options(options);
   const auto found = p_->field_plans_.find(provider_slot);
   if (found == p_->field_plans_.end())
     throw std::runtime_error("field Newton plan names an unknown provider slot");
-  found->second.has_nonlinear_plan = true;
+  found->second.newton = options;
   p_->field_plan_consensus_verified_ = false;
 }
 
@@ -377,7 +403,7 @@ template std::string System<kNativeDimension>::register_field_solver_provider(
     const std::string&, runtime::field::PreparedFieldSolverSpec,
     std::shared_ptr<component::LoadedComponent>, std::shared_ptr<component::LoadedComponent>);
 template void System<kNativeDimension>::register_field_nullspace_provider(
-    std::shared_ptr<const FieldNullspaceProvider>);
+    std::shared_ptr<const FieldNullspaceProvider<kNativeDimension>>);
 template void System<kNativeDimension>::set_default_field_nullspace(const std::string&,
                                                                     const PreparedProviderOptions&);
 template void System<kNativeDimension>::set_field_topology_authority(const std::string&,

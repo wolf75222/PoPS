@@ -7,6 +7,9 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -16,18 +19,21 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace pops::elliptic::nd {
 
-enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann };
+enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann, mixed };
 
 template <int Dim>
 struct CartesianPoissonOptions {
   static_assert(Dim >= 1 && Dim <= 3, "CartesianPoissonOptions supports dimensions 1, 2, and 3");
 
   std::array<CartesianBoundaryKind, 2 * Dim> boundaries{};
+  std::array<Real, 2 * Dim> boundary_alpha{};
+  std::array<Real, 2 * Dim> boundary_beta{};
   std::array<Real, 2 * Dim> boundary_values{};
   Real relative_tolerance = kCartesianCGDefaultRelTol;
   Real absolute_tolerance = kCartesianCGDefaultAbsTol;
@@ -43,8 +49,15 @@ struct CartesianPoissonOptions {
     for (int axis = 0; axis < Dim; ++axis) {
       for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
         const Face<Dim> face{axis, side};
-        result.boundaries[static_cast<std::size_t>(face.ordinal())] =
+        const std::size_t ordinal = static_cast<std::size_t>(face.ordinal());
+        result.boundaries[ordinal] =
             topology.is_periodic(face) ? CartesianBoundaryKind::periodic : physical_kind;
+        if (!topology.is_periodic(face)) {
+          result.boundary_alpha[ordinal] =
+              physical_kind == CartesianBoundaryKind::dirichlet ? Real(1) : Real(0);
+          result.boundary_beta[ordinal] =
+              physical_kind == CartesianBoundaryKind::neumann ? Real(1) : Real(0);
+        }
       }
     }
     return result;
@@ -105,18 +118,12 @@ struct CopyComponentKernel {
 };
 
 template <int Dim>
-struct AddConstantKernel {
-  FieldView<Real, Dim> values{};
-  Real increment = 0;
-
-  POPS_HD void operator()(const Index<Dim>& index) const { values(index, 0) += increment; }
-};
-
-template <int Dim>
 struct PhysicalGhostKernel {
   FieldView<Real, Dim> values{};
   Box<Dim> domain{};
   std::array<CartesianBoundaryKind, 2 * Dim> boundaries{};
+  std::array<Real, 2 * Dim> boundary_alpha{};
+  std::array<Real, 2 * Dim> boundary_beta{};
   std::array<Real, 2 * Dim> boundary_values{};
   Real spacing[Dim]{};
 
@@ -150,11 +157,16 @@ struct PhysicalGhostKernel {
         face = 2 * axis + 1;
       if (face < 0)
         continue;
-      const CartesianBoundaryKind kind = boundaries[static_cast<std::size_t>(face)];
-      if (kind == CartesianBoundaryKind::dirichlet)
-        result = Real(2) * boundary_values[static_cast<std::size_t>(face)] - result;
-      else if (kind == CartesianBoundaryKind::neumann)
-        result += boundary_values[static_cast<std::size_t>(face)] * spacing[axis];
+      const std::size_t ordinal = static_cast<std::size_t>(face);
+      if (boundaries[ordinal] == CartesianBoundaryKind::periodic)
+        continue;
+      const int layer = destination[axis] < domain.lo[axis] ? domain.lo[axis] - destination[axis]
+                                                            : destination[axis] - domain.hi[axis];
+      const Real distance = Real(2 * layer - 1) * spacing[axis];
+      const Real alpha = boundary_alpha[ordinal];
+      const Real beta = boundary_beta[ordinal];
+      result = (boundary_values[ordinal] - result * (alpha / Real(2) - beta / distance)) /
+               (alpha / Real(2) + beta / distance);
     }
     values(destination, 0) = result;
   }
@@ -202,8 +214,8 @@ void copy_component(const MultiFab<Dim>& source, int source_component, MultiFab<
 ///
 /// The implementation owns every Krylov vector and one authenticated halo schedule. It is one
 /// compile-time-ranked algorithm: axes are visited by a bounded loop and no dimensional fallback
-/// exists. Remote schedules are rejected before the candidate iterate is touched until the exact ND
-/// transport component is present.
+/// exists. Distributed schedules use the same exact-ranked halo transport and authenticated
+/// communicator lane as the rest of the native mesh runtime.
 template <int Dim>
 class CartesianPoissonSolver {
  public:
@@ -254,7 +266,49 @@ class CartesianPoissonSolver {
   const field_type& rhs() const noexcept { return rhs_; }
   field_type& candidate() noexcept { return candidate_; }
   const field_type& candidate() const noexcept { return candidate_; }
-  int maximum_iterations() const noexcept { return options_.maximum_iterations; }
+  int maximum_iterations() const noexcept {
+    return newton_workspace_ ? newton_workspace_->options().max_iterations
+                             : options_.maximum_iterations;
+  }
+
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    kernel.validate();
+    boundary_kernel_ = std::move(kernel);
+    boundary_context_storage_.reset();
+  }
+
+  void install_newton(FieldNewtonOptions options) {
+    validate_field_newton_options(options);
+    if (newton_workspace_)
+      throw std::logic_error("Cartesian Poisson Newton authority is already installed");
+    newton_workspace_.emplace(rhs_.layout(), rhs_.distribution(), rhs_.local_rank(), options);
+  }
+
+  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) {
+    if (!boundary_kernel_)
+      throw std::logic_error("Cartesian Poisson has no compiled dynamic boundary kernel");
+    if (context.failure == nullptr)
+      throw std::invalid_argument(
+          "Cartesian Poisson dynamic boundary requires a fallible execution channel");
+    boundary_context_storage_ = context;
+  }
+
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) {
+    if (nullspace_installed_)
+      throw std::logic_error("Cartesian Poisson nullspace authority is already installed");
+    distribution.require_collective_layout(rhs_, "Cartesian Poisson nullspace preparation");
+    const std::array<PreparedVectorDistribution<Dim>, 1> distributions{distribution};
+    validate_field_nullspace_basis<Dim>({&rhs_}, plan,
+                                        std::span<const PreparedVectorDistribution<Dim>>(
+                                            distributions.data(), distributions.size()));
+    if (singular_() != !plan.empty())
+      throw std::invalid_argument(
+          "Cartesian Poisson nullspace plan disagrees with the prepared operator kernel");
+    nullspace_plan_ = std::move(plan);
+    nullspace_distribution_ = std::move(distribution);
+    nullspace_installed_ = true;
+  }
 
   SolveReport solve(const field_type& warm_start) {
     std::exception_ptr layout_error;
@@ -269,23 +323,59 @@ class CartesianPoissonSolver {
       throw std::runtime_error("Cartesian Poisson solve layout validation failed collectively");
     }
 
-    detail::copy_component(warm_start, 0, candidate_, 0);
-    if (singular_()) {
-      project_mean_(rhs_);
-      project_mean_(candidate_);
-    }
+    if (!nullspace_installed_)
+      throw std::logic_error("Cartesian Poisson solve has no prepared nullspace authority");
 
-    apply_(candidate_, image_);
-    lincomb(residual_, Real(1), rhs_, Real(-1), image_);
+    detail::copy_component(warm_start, 0, candidate_, 0);
+    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+
+    if (newton_workspace_) {
+      SolveReport report;
+      try {
+        report = newton_workspace_->solve(
+            candidate_,
+            [this](const field_type& iterate, field_type& residual, int iteration) {
+              evaluate_residual_(iterate, residual, iteration);
+            },
+            [this](const field_type& iterate, const field_type& direction, field_type& output,
+                   int iteration) { apply_linearized_(iterate, direction, output, iteration); },
+            [this](field_type& value) {
+              apply_field_gauge(value, nullspace_plan_, nullspace_distribution_);
+            });
+      } catch (const FieldNullspaceIncompatibleRhs& error) {
+        report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      } catch (const FieldNullspaceInvalidEvaluation& error) {
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      }
+      if (report.solved_value_available()) {
+        apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+        fill_candidate_ghosts_(report.iters);
+      }
+      return report;
+    }
+    if (boundary_kernel_ && boundary_kernel_->observes_iteration)
+      throw std::logic_error(
+          "iterate-dependent Cartesian boundary requires a prepared Newton authority");
+
+    try {
+      evaluate_residual_(candidate_, residual_, 0);
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      return report;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      return report;
+    }
     detail::copy_component(residual_, 0, direction_, 0);
 
     const Real reference_squared = dot(rhs_, rhs_);
     Real residual_squared = dot(residual_, residual_);
     SolveReport report;
     report.evaluations = 1;
-    report.reference_residual_norm =
-        reference_squared > Real(0) ? std::sqrt(reference_squared) : Real(0);
-    report.residual_norm = residual_squared > Real(0) ? std::sqrt(residual_squared) : Real(0);
+    report.reference_residual_norm = norm_from_squared_(reference_squared);
+    report.residual_norm = norm_from_squared_(residual_squared);
     const Real denominator =
         report.reference_residual_norm > Real(0) ? report.reference_residual_norm : Real(1);
     report.rel_residual = report.residual_norm / denominator;
@@ -297,14 +387,15 @@ class CartesianPoissonSolver {
       return report;
     }
     if (report.residual_norm <= stop) {
-      fill_candidate_ghosts_();
+      apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+      fill_candidate_ghosts_(0);
       report.mark_solved("cartesian_poisson_initial_residual");
       return report;
     }
 
     Real previous = residual_squared;
     for (int iteration = 0; iteration < options_.maximum_iterations; ++iteration) {
-      apply_(direction_, image_);
+      apply_linearized_(candidate_, direction_, image_, 0);
       ++report.evaluations;
       const Real curvature = dot(direction_, image_);
       if (!finite_(curvature) || !(curvature > Real(0))) {
@@ -318,12 +409,10 @@ class CartesianPoissonSolver {
           std::abs(alpha) * std::sqrt(std::max(dot(direction_, direction_), Real(0)));
       saxpy(candidate_, alpha, direction_);
       saxpy(residual_, -alpha, image_);
-      if (singular_())
-        project_mean_(candidate_);
 
       residual_squared = dot(residual_, residual_);
       report.iters = iteration + 1;
-      report.residual_norm = residual_squared > Real(0) ? std::sqrt(residual_squared) : Real(0);
+      report.residual_norm = norm_from_squared_(residual_squared);
       report.rel_residual = report.residual_norm / denominator;
       if (!finite_(report.residual_norm) || !finite_(report.step_norm)) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
@@ -331,7 +420,8 @@ class CartesianPoissonSolver {
         return report;
       }
       if (report.residual_norm <= stop) {
-        fill_candidate_ghosts_();
+        apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+        fill_candidate_ghosts_(0);
         report.mark_solved("cartesian_poisson_converged");
         return report;
       }
@@ -375,12 +465,42 @@ class CartesianPoissonSolver {
       if (!finite_(options_.boundary_values[static_cast<std::size_t>(lower.ordinal())]) ||
           !finite_(options_.boundary_values[static_cast<std::size_t>(upper.ordinal())]))
         throw std::invalid_argument("Cartesian Poisson boundary values must be finite");
+      for (const Face<Dim> face : {lower, upper}) {
+        const std::size_t ordinal = static_cast<std::size_t>(face.ordinal());
+        const CartesianBoundaryKind kind = options_.boundaries[ordinal];
+        const Real alpha = options_.boundary_alpha[ordinal];
+        const Real beta = options_.boundary_beta[ordinal];
+        if (!finite_(alpha) || !finite_(beta))
+          throw std::invalid_argument("Cartesian Poisson Robin coefficients must be finite");
+        if (kind == CartesianBoundaryKind::periodic) {
+          if (alpha != Real(0) || beta != Real(0))
+            throw std::invalid_argument(
+                "Cartesian Poisson periodic faces cannot carry Robin coefficients");
+          continue;
+        }
+        if (kind == CartesianBoundaryKind::dirichlet && (alpha != Real(1) || beta != Real(0)))
+          throw std::invalid_argument(
+              "Cartesian Poisson Dirichlet faces require alpha=1 and beta=0");
+        if (kind == CartesianBoundaryKind::neumann && (alpha != Real(0) || beta != Real(1)))
+          throw std::invalid_argument("Cartesian Poisson Neumann faces require alpha=0 and beta=1");
+        if (kind == CartesianBoundaryKind::mixed && alpha == Real(0) && beta == Real(0))
+          throw std::invalid_argument(
+              "Cartesian Poisson mixed faces require a non-degenerate Robin pair");
+        const Real denominator = alpha / Real(2) + beta / geometry_.spacing(axis);
+        const Real scale = std::max(
+            Real(1), std::max(std::abs(alpha / Real(2)), std::abs(beta / geometry_.spacing(axis))));
+        if (!finite_(denominator) ||
+            std::abs(denominator) <= Real(64) * std::numeric_limits<Real>::epsilon() * scale)
+          throw std::invalid_argument(
+              "Cartesian Poisson boundary elimination denominator is singular");
+      }
     }
   }
 
   bool singular_() const noexcept {
-    for (const CartesianBoundaryKind boundary : options_.boundaries)
-      if (boundary == CartesianBoundaryKind::dirichlet)
+    for (std::size_t face = 0; face < options_.boundaries.size(); ++face)
+      if (options_.boundaries[face] != CartesianBoundaryKind::periodic &&
+          options_.boundary_alpha[face] != Real(0))
         return false;
     return true;
   }
@@ -392,19 +512,8 @@ class CartesianPoissonSolver {
                                   " does not match its prepared scalar layout");
   }
 
-  void project_mean_(field_type& field) const {
-    const std::int64_t cell_count = geometry_.domain().numPts();
-    if (cell_count <= 0)
-      throw std::logic_error("Cartesian Poisson domain unexpectedly has no cells");
-    const Real mean = reduce_sum(field) / static_cast<Real>(cell_count);
-    for (std::size_t local = 0; local < field.local_size(); ++local)
-      for_each_cell(field.box(local),
-                    detail::AddConstantKernel<Dim>{field.fab(local).view(), -mean});
-  }
-
-  void fill_candidate_ghosts_() {
-    detail::copy_component(candidate_, 0, halo_, 0);
-    fill_halo_();
+  void fill_candidate_ghosts_(int iteration) {
+    fill_residual_halo_(candidate_, iteration);
     for (std::size_t local = 0; local < candidate_.local_size(); ++local) {
       const auto& source = static_cast<const field_type&>(halo_).fab(local);
       for_each_cell(
@@ -414,7 +523,7 @@ class CartesianPoissonSolver {
     Kokkos::fence();
   }
 
-  void fill_halo_() {
+  void fill_static_halo_(bool homogeneous) {
     if (exchange_)
       exchange_->execute(halo_, *lane_);
     else
@@ -423,10 +532,15 @@ class CartesianPoissonSolver {
     for (int axis = 0; axis < Dim; ++axis)
       spacing[axis] = geometry_.spacing(axis);
     for (std::size_t local = 0; local < halo_.local_size(); ++local) {
+      std::array<Real, 2 * Dim> values = options_.boundary_values;
+      if (homogeneous)
+        values.fill(Real(0));
       detail::PhysicalGhostKernel<Dim> kernel{halo_.fab(local).view(),
                                               geometry_.domain(),
                                               options_.boundaries,
-                                              options_.boundary_values,
+                                              options_.boundary_alpha,
+                                              options_.boundary_beta,
+                                              values,
                                               {}};
       for (int axis = 0; axis < Dim; ++axis)
         kernel.spacing[axis] = spacing[axis];
@@ -435,11 +549,49 @@ class CartesianPoissonSolver {
     Kokkos::fence();
   }
 
-  void apply_(const field_type& input, field_type& output) {
-    authenticate_(input, "operator input");
+  FieldBoundaryExecutionContext<Dim>& boundary_context_(int iteration) {
+    if (!boundary_context_storage_)
+      throw std::logic_error(
+          "Cartesian Poisson dynamic boundary has no prepared execution context");
+    boundary_context_storage_->point.iteration = iteration;
+    return *boundary_context_storage_;
+  }
+
+  void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
+                                     const char* message) {
+    Kokkos::fence();
+    if (context.failure->synchronize_across_ranks())
+      throw std::runtime_error(message);
+  }
+
+  void fill_residual_halo_(const field_type& iterate, int iteration) {
+    detail::copy_component(iterate, 0, halo_, 0);
+    fill_static_halo_(false);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_(iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_residual_view(face, iterate, halo_, geometry_, context);
+      synchronize_boundary_failure_(
+          context, "Cartesian Poisson dynamic boundary evaluation failed collectively");
+    }
+  }
+
+  void fill_jvp_halo_(const field_type& iterate, const field_type& direction, int iteration) {
+    detail::copy_component(direction, 0, halo_, 0);
+    fill_static_halo_(true);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_(iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_jvp_view(face, iterate, direction, halo_, geometry_, context);
+      synchronize_boundary_failure_(context,
+                                    "Cartesian Poisson dynamic boundary JVP failed collectively");
+    }
+  }
+
+  void apply_negative_laplacian_(field_type& output) {
     authenticate_(output, "operator output");
-    detail::copy_component(input, 0, halo_, 0);
-    fill_halo_();
     Real inverse_spacing_squared[Dim]{};
     for (int axis = 0; axis < Dim; ++axis) {
       const Real inverse = Real(1) / geometry_.spacing(axis);
@@ -455,7 +607,49 @@ class CartesianPoissonSolver {
     Kokkos::fence();
   }
 
+  void evaluate_residual_(const field_type& iterate, field_type& output, int iteration) {
+    authenticate_(iterate, "residual iterate");
+    authenticate_(output, "residual output");
+    fill_residual_halo_(iterate, iteration);
+    apply_negative_laplacian_(image_);
+    lincomb(output, Real(1), rhs_, Real(-1), image_);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_(iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->add_residual(face, iterate, output, geometry_, context);
+      synchronize_boundary_failure_(
+          context, "Cartesian Poisson dynamic residual closure failed collectively");
+    }
+    require_field_nullspace_compatible(output, nullspace_plan_, nullspace_distribution_);
+  }
+
+  void apply_linearized_(const field_type& iterate, const field_type& direction, field_type& output,
+                         int iteration) {
+    authenticate_(iterate, "linearization iterate");
+    authenticate_(direction, "linearization direction");
+    authenticate_(output, "operator output");
+    fill_jvp_halo_(iterate, direction, iteration);
+    apply_negative_laplacian_(output);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_(iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->apply_jvp(face, iterate, direction, output, geometry_, context);
+      synchronize_boundary_failure_(context,
+                                    "Cartesian Poisson dynamic JVP closure failed collectively");
+    }
+  }
+
   static bool finite_(Real value) noexcept { return std::isfinite(static_cast<double>(value)); }
+
+  static Real norm_from_squared_(Real squared) noexcept {
+    if (!finite_(squared))
+      return squared;
+    if (squared < Real(0))
+      return std::numeric_limits<Real>::quiet_NaN();
+    return squared > Real(0) ? std::sqrt(squared) : Real(0);
+  }
 
   Geometry<Dim> geometry_;
   BoundaryTopology<Dim> topology_;
@@ -469,6 +663,13 @@ class CartesianPoissonSolver {
   HaloSchedule<Dim> schedule_;
   std::unique_ptr<ExecutionLane> lane_;
   std::unique_ptr<HaloExchange<Dim>> exchange_;
+  std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_;
+  std::optional<FieldBoundaryExecutionContext<Dim>> boundary_context_storage_;
+  std::optional<FieldNewtonKrylovWorkspace<Dim>> newton_workspace_;
+  FieldNullspacePlan<Dim> nullspace_plan_;
+  PreparedVectorDistribution<Dim> nullspace_distribution_ =
+      PreparedVectorDistribution<Dim>::distributed();
+  bool nullspace_installed_ = false;
 };
 
 }  // namespace pops::elliptic::nd

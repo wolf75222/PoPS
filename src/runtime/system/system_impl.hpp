@@ -12,12 +12,15 @@
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
 #include <exception>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -96,7 +99,7 @@ struct System<Dim>::Impl {
     std::vector<std::string> boundary_field_blocks;
     std::vector<std::string> boundary_field_keys;
     std::vector<int> boundary_field_components;
-    std::vector<double> boundary_parameters;
+    std::vector<Real> boundary_parameters;
     std::string nullspace_provider_identity;
     PreparedProviderOptions nullspace_options;
     std::string topology_provider_kind;
@@ -104,8 +107,9 @@ struct System<Dim>::Impl {
     std::string topology_digest;
     double reaction = 0.0;
     bool has_reaction = false;
-    bool has_boundary_kernel = false;
-    bool has_nonlinear_plan = false;
+    std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel;
+    std::optional<FieldLogicalTimePoint> boundary_point;
+    std::optional<FieldNewtonOptions> newton;
   };
 
   struct ConfiguredFieldSolverProvider {
@@ -124,6 +128,7 @@ struct System<Dim>::Impl {
   std::map<std::string, ConfiguredFieldSolverProvider> configured_field_solver_providers_;
   std::map<std::string, std::shared_ptr<component_field_solver_type>>
       component_field_solver_providers_;
+  std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers_;
   bool field_plan_consensus_verified_ = false;
   std::string default_nullspace_provider_identity_;
   PreparedProviderOptions default_nullspace_options_;
@@ -131,7 +136,7 @@ struct System<Dim>::Impl {
   static std::string exact_field_plan_contract(const FieldPlan& plan) {
     ExactContractBuilder contract;
     contract.text("pops.system.exact-ranked-field-plan")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(plan.plan_identity)
         .text(plan.provider_identity)
         .text(plan.output_owner_identity)
@@ -166,7 +171,21 @@ struct System<Dim>::Impl {
         .presence(plan.has_reaction);
     if (plan.has_reaction)
       contract.scalar(plan.reaction);
-    contract.presence(plan.has_boundary_kernel).presence(plan.has_nonlinear_plan);
+    contract.presence(plan.boundary_kernel.has_value());
+    if (plan.boundary_kernel)
+      contract.text(plan.boundary_kernel->identity)
+          .text(plan.boundary_kernel->residual_identity)
+          .text(plan.boundary_kernel->jvp_identity)
+          .presence(plan.boundary_kernel->observes_iteration);
+    contract.presence(plan.newton.has_value());
+    if (plan.newton)
+      contract.scalar(plan.newton->tolerance)
+          .scalar(plan.newton->max_iterations)
+          .scalar(plan.newton->linear_tolerance)
+          .scalar(plan.newton->linear_max_iterations)
+          .scalar(plan.newton->restart)
+          .scalar(plan.newton->armijo)
+          .scalar(plan.newton->minimum_step);
     return std::move(contract).release();
   }
 
@@ -177,7 +196,7 @@ struct System<Dim>::Impl {
     std::exception_ptr local_error;
     try {
       ExactContractBuilder registry;
-      registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{2});
+      registry.text("pops.system.exact-ranked-field-plan-registry").scalar(std::uint32_t{3});
       registry.scalar(static_cast<std::uint64_t>(configured_field_solver_providers_.size()));
       for (const auto& [route, provider] : configured_field_solver_providers_)
         registry.text(route)
@@ -260,7 +279,71 @@ struct System<Dim>::Impl {
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;
 
-  explicit Impl(const SystemConfig<Dim>& config) : domain_(config) {}
+  explicit Impl(const SystemConfig<Dim>& config)
+      : domain_(config),
+        field_nullspace_providers_(make_default_field_nullspace_provider_registry<Dim>()) {
+    const FieldNullspaceProviderSelection selection = operator_topology_zero_mean_nullspace();
+    default_nullspace_provider_identity_ = selection.provider_identity;
+    default_nullspace_options_ = selection.options;
+  }
+
+  PreparedFieldNullspace<Dim> prepare_uniform_field_nullspace(
+      std::string plan_identity, std::string topology_identity,
+      const FieldNullspaceProviderSelection& selection,
+      const elliptic::nd::CartesianPoissonOptions<Dim>& options, const field_type& layout,
+      bool has_reaction) const {
+    if (!field_nullspace_providers_)
+      throw std::logic_error("System field-nullspace registry is absent");
+
+    std::vector<FieldBoundaryNullspaceFact> boundaries;
+    boundaries.reserve(static_cast<std::size_t>(2 * Dim));
+    ExactContractBuilder boundary_contract;
+    boundary_contract.text("pops.system.uniform-field-boundary-set")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint32_t>(Dim));
+    for (int axis = 0; axis < Dim; ++axis) {
+      for (int side = 0; side < 2; ++side) {
+        const std::size_t face = static_cast<std::size_t>(2 * axis + side);
+        const auto kind = options.boundaries[face];
+        const Real alpha = options.boundary_alpha[face];
+        FieldBoundaryNullspaceBehavior behavior =
+            FieldBoundaryNullspaceBehavior::ConstrainsConstantMode;
+        if (kind == elliptic::nd::CartesianBoundaryKind::periodic ||
+            kind == elliptic::nd::CartesianBoundaryKind::neumann ||
+            (kind == elliptic::nd::CartesianBoundaryKind::mixed && alpha == Real(0)))
+          behavior = FieldBoundaryNullspaceBehavior::PreservesConstantMode;
+        const std::string face_identity =
+            "axis:" + std::to_string(axis) + (side == 0 ? ":lower" : ":upper");
+        boundaries.push_back({face_identity, behavior});
+        boundary_contract.text(face_identity).scalar(kind).scalar(alpha);
+      }
+    }
+
+    const PreparedVectorDistribution<Dim> distribution =
+        PreparedVectorDistribution<Dim>::distributed();
+    FieldNullspaceProviderRequest<Dim> request;
+    request.plan_identity = std::move(plan_identity);
+    request.operator_facts = make_field_nullspace_operator_facts(
+        std::move(boundary_contract).release(), std::move(boundaries), has_reaction);
+    request.topology.identity = std::move(topology_identity);
+    request.topology.exact_layout_contract = distribution.layout_contract(layout);
+    request.topology.field_component = 0;
+    ExactContractBuilder connected;
+    connected.text("pops.system.uniform-cartesian-connected-component")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint32_t>(Dim));
+    for (int axis = 0; axis < Dim; ++axis)
+      connected.scalar(geom.domain().lo[axis]).scalar(geom.domain().hi[axis]);
+    request.topology.connected_component_contract = std::move(connected).release();
+    request.topology.layouts = {&layout};
+    Real cell_measure = Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      cell_measure *= geom.spacing(axis);
+    request.topology.cell_measure = {cell_measure};
+    request.topology.level_distributions = {distribution};
+    return prepare_field_nullspace_collectively<Dim>(*field_nullspace_providers_, selection,
+                                                     std::move(request));
+  }
 
   Species& find(const std::string& name) { return blocks_.find(name); }
   const Species& find(const std::string& name) const { return blocks_.find(name); }

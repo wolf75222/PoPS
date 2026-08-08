@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -109,6 +110,22 @@ Real maximum_error(const MultiFab<Dim>& solution, const Geometry<Dim>& geometry,
 }
 
 template <int Dim>
+void install_mode_nullspace(CartesianPoissonSolver<Dim>& solver, const Geometry<Dim>& geometry,
+                            CartesianBoundaryKind boundary) {
+  if (boundary == CartesianBoundaryKind::dirichlet) {
+    solver.install_nullspace(FieldNullspacePlan<Dim>{},
+                             PreparedVectorDistribution<Dim>::replicated());
+    return;
+  }
+  Real cell_measure = Real(1);
+  for (int axis = 0; axis < Dim; ++axis)
+    cell_measure *= geometry.spacing(axis);
+  solver.install_nullspace(
+      constant_mean_zero_nullspace<Dim>("manufactured-constant-mode", "unit-test", cell_measure),
+      PreparedVectorDistribution<Dim>::replicated());
+}
+
+template <int Dim>
 void expect_manufactured_mode(CartesianBoundaryKind boundary) {
   constexpr int cells = 8;
   const Box<Dim> domain{Index<Dim>{}, [&] {
@@ -132,6 +149,7 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
   options.maximum_iterations = 32;
   CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, Index<Dim>{}, topology,
                                      options);
+  install_mode_nullspace(solver, geometry, boundary);
   MultiFab<Dim> warm_start(layout, distribution, Index<Dim>{}, 1, uniform_extent<Dim>(1));
   warm_start.set_val(Real{0});
 
@@ -188,12 +206,80 @@ void expect_exact_marshaling_round_trip() {
   EXPECT_EQ(runtime::system::marshaling::gather_global(field, domain, 2), before);
 }
 
+template <int Dim>
+struct QuadraticResidualKernel {
+  FieldView<const Real, Dim> iterate{};
+  FieldView<Real, Dim> residual{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    const Real value = iterate(index, 0);
+    residual(index, 0) = Real(4) - value * value;
+  }
+};
+
+template <int Dim>
+struct QuadraticJvpKernel {
+  FieldView<const Real, Dim> iterate{};
+  FieldView<const Real, Dim> direction{};
+  FieldView<Real, Dim> output{};
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    output(index, 0) = Real(2) * iterate(index, 0) * direction(index, 0);
+  }
+};
+
+template <int Dim>
+void expect_exact_ranked_newton() {
+  Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 3;
+  const Box<Dim> domain{Index<Dim>{}, upper};
+  const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, uniform_extent<Dim>(4));
+  const RankSpace<Dim> ranks{Index<Dim>{}, uniform_extent<Dim>(1)};
+  const auto distribution = Distribution<Dim>::replicated(layout, ranks);
+  FieldNewtonOptions options;
+  options.tolerance = Real(1e-12);
+  options.max_iterations = 12;
+  options.linear_tolerance = Real(1e-12);
+  options.linear_max_iterations = 8;
+  options.restart = 4;
+  FieldNewtonKrylovWorkspace<Dim> workspace(layout, distribution, Index<Dim>{}, options);
+  MultiFab<Dim> iterate(layout, distribution, Index<Dim>{}, 1, Extent<Dim>{});
+  iterate.set_val(Real(1));
+
+  const SolveReport report = workspace.solve(
+      iterate,
+      [](const MultiFab<Dim>& value, MultiFab<Dim>& residual, int) {
+        for (std::size_t local = 0; local < value.local_size(); ++local)
+          for_each_cell(value.box(local), QuadraticResidualKernel<Dim>{value.fab(local).view(),
+                                                                       residual.fab(local).view()});
+      },
+      [](const MultiFab<Dim>& value, const MultiFab<Dim>& direction, MultiFab<Dim>& output, int) {
+        for (std::size_t local = 0; local < value.local_size(); ++local)
+          for_each_cell(value.box(local), QuadraticJvpKernel<Dim>{value.fab(local).view(),
+                                                                  direction.fab(local).view(),
+                                                                  output.fab(local).view()});
+      },
+      [](MultiFab<Dim>&) {});
+
+  ASSERT_TRUE(report.solved_value_available()) << report.reason;
+  EXPECT_LT(report.residual_norm, Real(1e-10));
+  EXPECT_LT(reduce_norm_inf(iterate) - Real(2), Real(1e-10));
+  EXPECT_GT(reduce_min(iterate), Real(2) - Real(1e-10));
+}
+
 }  // namespace
 
 TEST(test_cartesian_poisson_nd, manufactured_modes_solve_in_exact_rank_one_two_and_three) {
   expect_all_boundaries<1>();
   expect_all_boundaries<2>();
   expect_all_boundaries<3>();
+}
+
+TEST(test_cartesian_poisson_nd, damped_newton_gmres_executes_one_algorithm_in_all_ranks) {
+  expect_exact_ranked_newton<1>();
+  expect_exact_ranked_newton<2>();
+  expect_exact_ranked_newton<3>();
 }
 
 TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_acceptance) {
@@ -210,6 +296,14 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   runtime::field::NamedFieldOutput<2> output(std::array<int, 3>{0, 1, 2}, 1);
   runtime::system::ExactNamedField<2> provider("electric", "plasma", output, geometry, layout,
                                                distribution, Index<2>{}, topology, options, 1);
+  PreparedFieldNullspace<2> prepared_nullspace;
+  prepared_nullspace.provider_identity = "tests.constant-nullspace";
+  prepared_nullspace.provider_version = 1;
+  prepared_nullspace.exact_prepared_contract = "tests.constant-nullspace@1";
+  prepared_nullspace.plan = constant_mean_zero_nullspace<2>(
+      "electric-constant-mode", "unit-test", geometry.spacing(0) * geometry.spacing(1));
+  provider.install_nullspace(std::move(prepared_nullspace),
+                             PreparedVectorDistribution<2>::replicated());
 
   MultiFab<2> state(layout, distribution, Index<2>{}, 1, Extent<2>{});
   const Real pi = std::acos(Real{-1});
@@ -252,19 +346,17 @@ TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_m
       Distribution<1>::partitioned(layout, ranks, std::vector<Index<1>>{Index<1>{0}, Index<1>{1}});
   const BoundaryTopology<1> topology = BoundaryTopology<1>::axis_periodic({false});
   auto options = CartesianPoissonOptions<1>::from_topology(topology);
-  CartesianPoissonSolver<1> solver(geometry, layout, distribution, Index<1>{0}, topology, options);
   MultiFab<1> warm_start(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
   warm_start.set_val(Real{5});
-  solver.candidate().set_val(Real{13});
-
-  EXPECT_THROW((void)solver.solve(warm_start), std::logic_error);
-  const auto& candidate = static_cast<const MultiFab<1>&>(solver.candidate());
-  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-    const auto& fab = candidate.fab(local);
+  EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, Index<1>{0},
+                                               topology, options),
+               std::logic_error);
+  for (std::size_t local = 0; local < warm_start.local_size(); ++local) {
+    const auto& fab = static_cast<const MultiFab<1>&>(warm_start).fab(local);
     auto host = fab.create_host_mirror();
     fab.copy_to_host(host);
     for (std::size_t element = 0; element < host.size(); ++element)
-      EXPECT_DOUBLE_EQ(host(element), Real{13});
+      EXPECT_DOUBLE_EQ(host(element), Real{5});
   }
 }
 

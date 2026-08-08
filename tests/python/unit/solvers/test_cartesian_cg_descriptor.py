@@ -7,7 +7,13 @@ from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.solvers.tolerances import AbsoluteFloor, Relative
 
 
-def _facts(*, target: str = "system", dynamic: bool = False) -> PreparedFieldSolverFacts:
+def _facts(
+    *,
+    target: str = "system",
+    dynamic: bool = False,
+    iterate_dependent: bool = False,
+    nonlinear: bool = False,
+) -> PreparedFieldSolverFacts:
     return PreparedFieldSolverFacts(
         target=target,
         operator={"principal": "scalar-laplacian", "screened": False, "reaction": None},
@@ -43,9 +49,9 @@ def _facts(*, target: str = "system", dynamic: bool = False) -> PreparedFieldSol
             "state_dependent": False,
             "field_dependent": False,
             "logical_time_coordinates": (),
-            "iterate_dependent": False,
+            "iterate_dependent": iterate_dependent,
         },
-        nonlinear=False,
+        nonlinear=nonlinear,
     )
 
 
@@ -95,9 +101,19 @@ def test_solver_families_refuse_the_wrong_runtime_target() -> None:
         _prepare(CartesianCG(), _facts(target="amr_system"))
 
 
-def test_cartesian_cg_refuses_unimplemented_dynamic_boundaries() -> None:
-    with pytest.raises(ValueError, match="dynamic, dependent, or nonlinear"):
-        _prepare(CartesianCG(), _facts(dynamic=True))
+def test_cartesian_cg_accepts_prepared_dynamic_boundaries() -> None:
+    binding = _prepare(CartesianCG(), _facts(dynamic=True))
+    assert binding.resolution.native_contract["factory_route"] == "cartesian_cg"
+
+
+def test_cartesian_cg_requires_newton_for_iterate_dependent_boundaries() -> None:
+    with pytest.raises(ValueError, match="requires a prepared Newton-Krylov"):
+        _prepare(CartesianCG(), _facts(dynamic=True, iterate_dependent=True))
+    binding = _prepare(
+        CartesianCG(),
+        _facts(dynamic=True, iterate_dependent=True, nonlinear=True),
+    )
+    assert binding.resolution.native_contract["factory_route"] == "cartesian_cg"
 
 
 def test_cartesian_cg_rejects_foreign_controls() -> None:

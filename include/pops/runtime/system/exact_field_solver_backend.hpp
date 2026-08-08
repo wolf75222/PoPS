@@ -5,6 +5,7 @@
 
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/halo_exchange.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
@@ -31,6 +32,11 @@ class ExactFieldSolverBackend {
   virtual field_type& rhs() noexcept = 0;
   virtual field_type& candidate() noexcept = 0;
   virtual const field_type& candidate() const noexcept = 0;
+  virtual void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) = 0;
+  virtual void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) = 0;
+  virtual void install_newton(FieldNewtonOptions options) = 0;
+  virtual void install_nullspace(FieldNullspacePlan<Dim> plan,
+                                 PreparedVectorDistribution<Dim> distribution) = 0;
   virtual SolveReport solve(const field_type& warm_start) = 0;
   virtual int maximum_iterations() const noexcept = 0;
   virtual std::string_view provider_identity() const noexcept = 0;
@@ -58,6 +64,17 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
   field_type& rhs() noexcept override { return solver_.rhs(); }
   field_type& candidate() noexcept override { return solver_.candidate(); }
   const field_type& candidate() const noexcept override { return solver_.candidate(); }
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) override {
+    solver_.install_boundary_kernel(std::move(kernel));
+  }
+  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) override {
+    solver_.set_boundary_context(context);
+  }
+  void install_newton(FieldNewtonOptions options) override { solver_.install_newton(options); }
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) override {
+    solver_.install_nullspace(std::move(plan), std::move(distribution));
+  }
   SolveReport solve(const field_type& warm_start) override { return solver_.solve(warm_start); }
   int maximum_iterations() const noexcept override { return solver_.maximum_iterations(); }
   std::string_view provider_identity() const noexcept override { return identity_; }
@@ -127,12 +144,45 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   field_type& candidate() noexcept override { return candidate_; }
   const field_type& candidate() const noexcept override { return candidate_; }
 
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim>) override {
+    throw std::logic_error(
+        "external exact field components must own their boundary closure in the component ABI");
+  }
+
+  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>&) override {
+    throw std::logic_error(
+        "external exact field components do not consume the generated Cartesian boundary ABI");
+  }
+
+  void install_newton(FieldNewtonOptions) override {
+    throw std::logic_error(
+        "external exact field components must own nonlinear iteration in their component ABI");
+  }
+
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) override {
+    if (nullspace_installed_)
+      throw std::logic_error("component field nullspace is already installed");
+    const std::array<PreparedVectorDistribution<Dim>, 1> distributions{distribution};
+    validate_field_nullspace_basis<Dim>({&rhs_}, plan,
+                                        std::span<const PreparedVectorDistribution<Dim>>(
+                                            distributions.data(), distributions.size()));
+    nullspace_plan_ = std::move(plan);
+    nullspace_distribution_ = std::move(distribution);
+    nullspace_installed_ = true;
+  }
+
   SolveReport solve(const field_type& warm_start) override {
+    if (!nullspace_installed_)
+      throw std::logic_error("component field solve has no prepared nullspace authority");
+    require_field_nullspace_compatible(rhs_, nullspace_plan_, nullspace_distribution_);
     elliptic::nd::detail::copy_component(warm_start, 0, candidate_, 0);
+    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
     Kokkos::fence();
     SolveReport report = component_->solve(rhs_, candidate_, geometry_, periodicity_);
     if (!report.solved_value_available())
       return report;
+    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
     if (exchange_)
       exchange_->execute(candidate_, *lane_);
     else
@@ -164,6 +214,10 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   std::shared_ptr<component_type> component_;
   std::unique_ptr<ExecutionLane> lane_;
   std::unique_ptr<HaloExchange<Dim>> exchange_;
+  FieldNullspacePlan<Dim> nullspace_plan_;
+  PreparedVectorDistribution<Dim> nullspace_distribution_ =
+      PreparedVectorDistribution<Dim>::distributed();
+  bool nullspace_installed_ = false;
 };
 
 }  // namespace pops::runtime::system
