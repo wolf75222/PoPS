@@ -66,7 +66,7 @@ void fill_ic(std::vector<double>& U, int n) {
     }
 }
 
-void add_gas(System& s) {
+void add_gas(System<2>& s) {
   add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
                      "conservative", "explicit", kGamma);
   s.set_poisson("charge_density", "geometric_mg");
@@ -194,13 +194,13 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   std::vector<double> U0(4 * nn);
   fill_ic(U0, n);
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
+  SystemConfig<2> cfg;
+  cfg.shape = Extent<2>{n, n};
+  cfg.upper = RealVector<2>{Real(1), Real(1)};
   cfg.periodicity = {true, true};
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
-  System ref(cfg);
+  System<2> ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -277,7 +277,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   int fails = 0;
   // A pre-spec library with no explicit block identity table must never install by add-order. The
   // old positional fallback could silently bind the right equations to the wrong instances.
-  System missing_identity(cfg);
+  System<2> missing_identity(cfg);
   add_gas(missing_identity);
   try {
     missing_identity.install_program(legacy_so);
@@ -297,7 +297,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // A prelude-only installer that registers a history but omits the Program step must not inherit its
   // candidate block map/history or replace an already usable direct step. The loader's generation
   // witness fails and restores the exact image.
-  System no_op(cfg);
+  System<2> no_op(cfg);
   add_gas(no_op);
   no_op.install_program_step([](double) {});
   no_op.program_cache().store(7, no_op.block_state(0), 0, "kept-cache");
@@ -335,7 +335,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // A declared-but-missing dt-bound entry is rejected before any candidate facade state is
   // installed. Falling back to the native CFL would silently change the authored numerics.
-  System incomplete_dt(cfg);
+  System<2> incomplete_dt(cfg);
   add_gas(incomplete_dt);
   incomplete_dt.install_program_step([](double) {});
   try {
@@ -360,7 +360,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // restore the static baseline. The FFT provider is a useful witness: it rejects A's dynamic
   // boundary, but accepts the same periodic field plan once B has removed that overlay.
   {
-    System replacement(cfg);
+    System<2> replacement(cfg);
     add_gas(replacement);
     constexpr const char* slot = "program-boundary-field";
     replacement.set_field_solver_plan(
@@ -377,7 +377,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.register_elliptic_field("gas", "program-boundary-potential",
                                         std::vector<int>{kAuxNamedBase}, 1);
     replacement.set_block_elliptic_field("gas", "program-boundary-potential",
-                                         [](const MultiFab&, MultiFab&) {});
+                                         [](const MultiFab<2>&, MultiFab<2>&) {});
     replacement.set_state("gas", U0);
 
     replacement.install_program(dynamic_boundary_so);
@@ -418,7 +418,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     }
   }
 
-  System sim(cfg);
+  System<2> sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
