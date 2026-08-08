@@ -17,6 +17,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
+#include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
@@ -62,6 +63,7 @@ struct FieldLogicalTimePoint;
 struct AuxHaloPolicy;
 template <int Dim>
 struct CompiledFieldBoundaryKernel;
+class SolveOutcome;
 
 namespace component {
 class LoadedComponent;
@@ -104,11 +106,6 @@ template <int Dim, class MemorySpace>
 struct PreparedAmrSystemBlock;
 template <int Dim, class MemorySpace>
 struct PreparedAmrLevelEvaluation;
-// Forward-declared for the named-elliptic-field RHS closure signature (ADC-428,
-// set_block_elliptic_field): a std::function with an incomplete-type parameter is legal as long as it is
-// only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
-// loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
-class AmrFieldSolverProvider;
 namespace runtime::amr {
 template <int Dim, class MemorySpace>
 class AmrRuntime;
@@ -531,7 +528,8 @@ class AmrSystem {
                              const AmrFieldSolverOptions& solver_options);
   /// Adds one native AMR field solver provider before binding. Builtins and extensions are resolved
   /// through the same per-system registry and must expose exact collective contracts.
-  void register_field_solver_provider(std::shared_ptr<const AmrFieldSolverProvider> provider);
+  void register_field_solver_provider(
+      std::shared_ptr<const runtime::amr::ExactAmrFieldSolverProvider<Dim>> provider);
   /// Installs one authenticated external FieldTopology@2 + FieldSolver@2 pair as an AMR provider.
   /// The returned route is exactly ``provider_slot`` and is suitable for set_field_solver_plan.
   POPS_EXPORT std::string register_field_solver_provider(
@@ -1155,6 +1153,13 @@ class AmrSystem {
   /// AmrSystem::install_program and cannot be injected through the public facade.
   POPS_EXPORT bool program_owns_operator_authority(
       const std::array<std::uint64_t, 4>& authority) const noexcept;
+  POPS_EXPORT SolveOutcome solve_program_field_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int active_level, const MultiFab<Dim>* stage_override);
+  POPS_EXPORT SolveOutcome solve_program_field_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
+  POPS_EXPORT SolveOutcome solve_program_default_field(int active_level);
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

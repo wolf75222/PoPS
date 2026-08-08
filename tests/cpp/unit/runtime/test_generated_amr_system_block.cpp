@@ -2,6 +2,7 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
@@ -401,6 +402,111 @@ TEST(GeneratedAmrSystemBlock, RegistersOnlyExactRankedNullspaceProviders) {
   EXPECT_THROW(
       system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>()),
       std::invalid_argument);
+}
+
+TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptance) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.set_poisson();
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.set_program_block_map({0});
+  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(7));
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
+  ASSERT_TRUE(outcome.report().solved_value_available());
+  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+
+  const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
+  EXPECT_TRUE(accepted.solved());
+  EXPECT_NEAR(static_cast<double>(pops::reduce_max(system.prepared_amr_level_auxiliary(0), 0)), 0.0,
+              1.0e-8);
+  EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
+  EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
+}
+
+TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
+      "pops.field-hierarchy.level-local", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+  system.set_field_solver_plan("field/tracer", "test.named-field-plan", "test.named-field",
+                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
+                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               pops::geometric_mg_amr_field_solver_options(
+                                   pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.register_elliptic_field("tracer", "phi", {0}, 1);
+  system.set_block_elliptic_field(
+      "tracer", "phi",
+      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+  stage.set_val(pops::Real(3));
+  pops::SolveOutcome outcome =
+      context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
+  ASSERT_TRUE(outcome.report().solved_value_available());
+  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  (void)outcome.consume(pops::SolveConsumption::kAccept);
+  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
+}
+
+TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.periodicity[axis] = true;
+  }
+  pops::AmrSystem<Dim> system(config);
+  system.set_poisson();
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
+  ASSERT_TRUE(outcome.report().solved_value_available());
+  (void)outcome.consume(pops::SolveConsumption::kAccept);
+
+  EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 2);
+  EXPECT_EQ(system.field_potential_level_global("pops.amr.default-field", 0).size(),
+            cell_count(config.shape));
+  pops::Extent<Dim> fine_shape{};
+  for (int axis = 0; axis < Dim; ++axis)
+    fine_shape[axis] = 16;
+  EXPECT_EQ(system.field_potential_level_global("pops.amr.default-field", 1).size(),
+            cell_count(fine_shape));
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation) {

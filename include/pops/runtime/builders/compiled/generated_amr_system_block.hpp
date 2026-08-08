@@ -479,6 +479,12 @@ class PreparedGeneratedAmrLevelBlock {
     poisson_rhs_(runtime_->hierarchy().state(level_), rhs);
   }
 
+  void add_poisson_rhs(const field_type& state, field_type& rhs) const {
+    require_live_();
+    require_state_contract_(state);
+    poisson_rhs_(state, rhs);
+  }
+
   std::optional<Real> source_frequency() const {
     require_live_();
     if (!source_frequency_)

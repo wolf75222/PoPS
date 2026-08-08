@@ -1169,22 +1169,87 @@ class AmrProgramContext {
     unavailable_("AMR perturbed field-state provider");
   }
 
-  [[noreturn]] SolveOutcome solve_fields() const { unavailable_("AMR field solver provider"); }
-  template <class... Arguments>
-  [[noreturn]] SolveOutcome solve_fields_from_state_at(Arguments&&...) const {
-    unavailable_("AMR field solver provider");
+  [[nodiscard]] SolveOutcome solve_fields() const {
+    refresh_resources_();
+    return facade_->solve_program_default_field(active_level_);
   }
-  template <class... Arguments>
-  [[noreturn]] SolveOutcome solve_fields_from_blocks_at(Arguments&&...) const {
-    unavailable_("AMR field solver provider");
+
+  [[nodiscard]] SolveOutcome solve_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int program_block, field_type& stage) const {
+    refresh_resources_();
+    require_boundary_point_(point, "AMR Program single-state field solve");
+    if (provider_slot.empty())
+      throw std::invalid_argument("AMR Program field solve requires an exact provider slot");
+    if (sys_block(program_block) != 0)
+      unavailable_("exact-ranked multi-block AMR field-state provider");
+    require_same_field_contract_(stage, state(program_block), "AMR Program field stage override");
+    return facade_->solve_program_field_at(point, provider_slot, active_level_, &stage);
   }
-  [[noreturn]] SolveOutcome solve_default_field_on_coarse_level() const {
-    unavailable_("AMR default field solver provider");
+
+  [[nodiscard]] SolveOutcome solve_fields_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
+    refresh_resources_();
+    require_boundary_point_(point, "AMR Program simultaneous field solve");
+    if (value_id < 0 || field.empty() || overrides.size() == 0)
+      throw std::invalid_argument(
+          "AMR Program simultaneous field solve requires an IR identity, field, and stages");
+
+    GeneratedFieldRoute candidate;
+    candidate.field.assign(field.data(), field.size());
+    std::vector<const field_type*> runtime_stages(static_cast<std::size_t>(n_blocks()), nullptr);
+    std::vector<const field_type*> unique_stages;
+    unique_stages.reserve(overrides.size());
+    for (const FieldStageOverride& override_value : overrides) {
+      if (override_value.state == nullptr)
+        throw std::invalid_argument("AMR Program simultaneous field stage override cannot be null");
+      if (std::find(candidate.program_blocks.begin(), candidate.program_blocks.end(),
+                    override_value.program_block) != candidate.program_blocks.end())
+        throw std::invalid_argument(
+            "AMR Program simultaneous field solve contains a duplicate Program block");
+      if (std::find(unique_stages.begin(), unique_stages.end(), override_value.state) !=
+          unique_stages.end())
+        throw std::invalid_argument(
+            "AMR Program simultaneous field solve aliases two stage overrides");
+      const int runtime_block = sys_block(override_value.program_block);
+      if (runtime_stages[static_cast<std::size_t>(runtime_block)] != nullptr)
+        throw std::invalid_argument(
+            "AMR Program simultaneous field solve maps two stages to one runtime block");
+      if (runtime_block != 0)
+        unavailable_("exact-ranked multi-block AMR field-state provider");
+      require_same_field_contract_(*override_value.state, state(override_value.program_block),
+                                   "AMR Program simultaneous field stage override");
+      candidate.program_blocks.push_back(override_value.program_block);
+      runtime_stages[static_cast<std::size_t>(runtime_block)] = override_value.state;
+      unique_stages.push_back(override_value.state);
+    }
+    const auto existing = generated_field_routes_.find(value_id);
+    if (existing == generated_field_routes_.end()) {
+      generated_field_routes_.emplace(value_id, candidate);
+    } else if (existing->second != candidate) {
+      throw std::logic_error(
+          "AMR Program simultaneous field IR identity changed its qualified route");
+    }
+    return facade_->solve_program_field_from_blocks_at(
+        point, generated_field_routes_.at(value_id).field, active_level_, runtime_stages);
+  }
+
+  [[nodiscard]] SolveOutcome solve_default_field_on_coarse_level() const {
+    refresh_resources_();
+    return facade_->solve_program_default_field(0);
   }
 
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
   using ScratchKey = std::tuple<ScratchKind, int, std::int64_t, int>;
+
+  struct GeneratedFieldRoute {
+    std::string field;
+    std::vector<int> program_blocks;
+
+    friend bool operator==(const GeneratedFieldRoute&, const GeneratedFieldRoute&) = default;
+  };
 
   static facade_type* require_facade_(facade_type* facade) {
     if (facade == nullptr)
@@ -1515,6 +1580,7 @@ class AmrProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
+  mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
   mutable PreparedVectorDistribution<Dim> vector_distribution_ =
       PreparedVectorDistribution<Dim>::distributed();
 };
