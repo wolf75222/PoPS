@@ -4,15 +4,21 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -47,6 +53,7 @@ class ProgramContext {
   using runtime_type = System<Dim>;
   using field_type = MultiFab<Dim>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
+  using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
 
   struct FieldStageOverride {
     int program_block = -1;
@@ -74,10 +81,10 @@ class ProgramContext {
     field_type* state = nullptr;
   };
 
-  explicit ProgramContext(runtime_type* system) : system_(system) {
-    if (system_ == nullptr)
-      throw std::invalid_argument("ProgramContext requires a non-null ranked System");
-  }
+  explicit ProgramContext(runtime_type* system)
+      : system_(require_system_(system)),
+        scalar_boundary_lane_(ExecutionLane::duplicate_world_collectively(
+            "pops.program.scalar-boundary.nd" + std::to_string(Dim))) {}
 
   void install(std::function<void(double)> step) const {
     system_->install_program_step(std::move(step));
@@ -88,6 +95,7 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
     stage_time_ = amr::Rational(0, 1);
+    active_operator_snapshot_.reset();
   }
 
   void configure_primary_clock(const std::string& clock) const {
@@ -104,6 +112,7 @@ class ProgramContext {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::invalid_argument("ProgramContext stage time is outside [0, 1]");
     stage_time_ = amr::Rational(numerator, denominator);
+    active_operator_snapshot_.reset();
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage) const {
@@ -232,6 +241,57 @@ class ProgramContext {
     system_->require_cartesian_generated_operator(sys_block(program_block), operation);
   }
 
+  /// Fill the state and shared auxiliary halos through the exact block package before a generated
+  /// pointwise stencil reads neighbouring cells.  The Program contributes no topology or boundary
+  /// policy; both are retained by `SystemBlockStore<Dim>`.
+  void prepare_generated_state(int program_block, field_type& state_value, int rate_id) const {
+    require_rate_identity_(rate_id);
+    system_->block_prepare_generated_state_at(boundary_evaluation_point(rate_id),
+                                               sys_block(program_block), state_value);
+  }
+
+  /// Assemble the centered negative divergence of one already-materialized named flux field per
+  /// native axis.  Axis count and storage rank are the same compile-time constant, so 1D/2D/3D use
+  /// one algorithm and no runtime dimension selector.
+  void neg_div_named_flux_into(field_type& rhs,
+                               const std::array<field_type*, Dim>& fluxes) const {
+    const Geometry<Dim> geometry = system_->prepared_block_geometry();
+    for (int axis = 0; axis < Dim; ++axis) {
+      const field_type* flux = fluxes[static_cast<std::size_t>(axis)];
+      if (flux == nullptr || flux->layout() != rhs.layout() ||
+          flux->distribution() != rhs.distribution() ||
+          flux->local_rank() != rhs.local_rank() || flux->ncomp() != rhs.ncomp() ||
+          flux->local_size() != rhs.local_size() || flux->ghosts()[axis] < 1)
+        throw std::invalid_argument(
+            "ProgramContext named flux does not match the exact ranked residual layout");
+    }
+    for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+      std::array<FieldView<const Real, Dim>, Dim> views{};
+      for (int axis = 0; axis < Dim; ++axis)
+        views[static_cast<std::size_t>(axis)] =
+            std::as_const(*fluxes[static_cast<std::size_t>(axis)]).fab(local).view();
+      const FieldView<Real, Dim> output = rhs.fab(local).view();
+      const int components = rhs.ncomp();
+      for_each_cell(rhs.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int component = 0; component < components; ++component) {
+          Real divergence = Real(0);
+          for (int axis = 0; axis < Dim; ++axis) {
+            Index<Dim> lower = cell;
+            Index<Dim> upper = cell;
+            --lower[axis];
+            ++upper[axis];
+            divergence +=
+                (views[static_cast<std::size_t>(axis)](upper, component) -
+                 views[static_cast<std::size_t>(axis)](lower, component)) /
+                (Real(2) * geometry.spacing(axis));
+          }
+          output(cell, component) = -divergence;
+        }
+      });
+    }
+    count_kernel_();
+  }
+
   void apply_projection(int program_block, field_type& state_value) const {
     count_kernel_();
     system_->block_project(sys_block(program_block), state_value);
@@ -336,12 +396,282 @@ class ProgramContext {
     return pops::dot(left, right, 0);
   }
 
-  void fill_boundary(field_type&) const {
-    field_type::require_communication("ProgramContext::fill_boundary");
+  Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
+
+  field_type& assembly_target(field_type& field, std::string_view identity) const {
+    if (identity.empty())
+      throw std::invalid_argument("ProgramContext assembly target requires an identity");
+    return field;
   }
-  template <class Lane>
-  void fill_boundary(field_type&, const Lane&) const {
-    field_type::require_communication("ProgramContext::fill_boundary");
+
+  field_type& assembly_source(field_type& field, std::string_view identity) const {
+    if (identity.empty())
+      throw std::invalid_argument("ProgramContext assembly source requires an identity");
+    return field;
+  }
+
+  std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
+      field_type& prototype, const ExecutionLane& lane) const {
+    return std::make_shared<scalar_boundary_session_type>(
+        geometry(), scalar_boundary_topology_(), prototype, lane,
+        next_scalar_boundary_generation_());
+  }
+
+  std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
+      int program_block, field_type& prototype,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    (void)sys_block(program_block);
+    require_boundary_point_(point, "Program block scalar boundary");
+    return prepare_mesh_boundary_session(prototype, lane);
+  }
+
+  void fill_boundary(field_type& field) const {
+    scalar_boundary_session_type session(
+        geometry(), scalar_boundary_topology_(), field, scalar_boundary_lane_,
+        next_scalar_boundary_generation_());
+    session.fill(field);
+  }
+
+  void fill_boundary(field_type& field, const ExecutionLane& lane) const {
+    scalar_boundary_session_type session(
+        geometry(), scalar_boundary_topology_(), field, lane,
+        next_scalar_boundary_generation_());
+    session.fill(field);
+  }
+
+  void laplacian(field_type& output, field_type& input) const {
+    auto boundary = prepare_mesh_boundary_session(input, scalar_boundary_lane_);
+    laplacian(output, input, *boundary);
+  }
+
+  void laplacian(field_type& output, field_type& input,
+                 const scalar_boundary_session_type& boundary) const {
+    require_scalar_stencil_(output, input, 1, "Program Laplacian");
+    boundary.fill(input);
+    const Geometry<Dim> geom = boundary.geometry();
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        Real image = Real(0);
+        for (int axis = 0; axis < Dim; ++axis) {
+          Index<Dim> lower = cell;
+          Index<Dim> upper = cell;
+          --lower[axis];
+          ++upper[axis];
+          const Real spacing = geom.spacing(axis);
+          image += (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) /
+                   (spacing * spacing);
+        }
+        result(cell, 0) = image;
+      });
+    }
+    count_kernel_();
+  }
+
+  void laplacian(field_type& output, field_type& input,
+                 const scalar_boundary_session_type& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program Laplacian");
+    laplacian(output, input, boundary);
+  }
+
+  void gradient(field_type& output, field_type& input) const {
+    auto boundary = prepare_mesh_boundary_session(input, scalar_boundary_lane_);
+    gradient(output, input, *boundary);
+  }
+
+  void gradient(field_type& output, field_type& input,
+                const scalar_boundary_session_type& boundary) const {
+    require_scalar_stencil_(output, input, Dim, "Program gradient");
+    boundary.fill(input);
+    const Geometry<Dim> geom = boundary.geometry();
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int axis = 0; axis < Dim; ++axis) {
+          Index<Dim> lower = cell;
+          Index<Dim> upper = cell;
+          --lower[axis];
+          ++upper[axis];
+          result(cell, axis) =
+              (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
+        }
+      });
+    }
+    count_kernel_();
+  }
+
+  void gradient(field_type& output, field_type& input,
+                const scalar_boundary_session_type& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program gradient");
+    gradient(output, input, boundary);
+  }
+
+  void divergence(field_type& output, field_type& flux) const {
+    auto boundary = prepare_mesh_boundary_session(flux, scalar_boundary_lane_);
+    divergence(output, flux, *boundary);
+  }
+
+  void divergence(field_type& output, field_type& flux,
+                  const scalar_boundary_session_type& boundary) const {
+    if (output.ncomp() != 1 || flux.ncomp() != Dim ||
+        output.layout() != flux.layout() || output.distribution() != flux.distribution() ||
+        output.local_rank() != flux.local_rank() || output.local_size() != flux.local_size())
+      throw std::invalid_argument(
+          "Program divergence requires one exact-ranked vector flux and scalar output");
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (flux.ghosts()[axis] < 1)
+        throw std::invalid_argument(
+            "Program divergence flux requires one ghost on every native axis");
+    }
+    boundary.fill(flux);
+    const Geometry<Dim> geom = boundary.geometry();
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const FieldView<const Real, Dim> value = std::as_const(flux).fab(local).view();
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        Real image = Real(0);
+        for (int axis = 0; axis < Dim; ++axis) {
+          Index<Dim> lower = cell;
+          Index<Dim> upper = cell;
+          --lower[axis];
+          ++upper[axis];
+          image += (value(upper, axis) - value(lower, axis)) /
+                   (Real(2) * geom.spacing(axis));
+        }
+        result(cell, 0) = image;
+      });
+    }
+    count_kernel_();
+  }
+
+  void divergence(field_type& output, field_type& flux,
+                  const scalar_boundary_session_type& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program divergence");
+    divergence(output, flux, boundary);
+  }
+
+  void pack_vector(field_type& output,
+                   const std::array<const field_type*, Dim>& components) const {
+    if (output.ncomp() != Dim)
+      throw std::invalid_argument(
+          "Program vector output must carry one component per native axis");
+    for (int axis = 0; axis < Dim; ++axis) {
+      const field_type* component = components[static_cast<std::size_t>(axis)];
+      if (component == nullptr || component->ncomp() != 1 ||
+          component->layout() != output.layout() ||
+          component->distribution() != output.distribution() ||
+          component->local_rank() != output.local_rank() ||
+          component->local_size() != output.local_size())
+        throw std::invalid_argument(
+            "Program vector component does not match the exact scalar layout");
+    }
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      std::array<FieldView<const Real, Dim>, Dim> values{};
+      for (int axis = 0; axis < Dim; ++axis)
+        values[static_cast<std::size_t>(axis)] =
+            std::as_const(*components[static_cast<std::size_t>(axis)]).fab(local).view();
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int axis = 0; axis < Dim; ++axis)
+          result(cell, axis) = values[static_cast<std::size_t>(axis)](cell, 0);
+      });
+    }
+    count_kernel_();
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const scalar_boundary_session_type& boundary) const {
+    require_scalar_stencil_(output, input, 1, "Program tensor Laplacian");
+    require_tensor_stencil_(input, tensor, "Program tensor Laplacian");
+    boundary.fill(input);
+    const Geometry<Dim> geom = boundary.geometry();
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const FieldView<Real, Dim> result = output.fab(local).view();
+      const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
+      const FieldView<const Real, Dim> coefficient =
+          std::as_const(tensor).fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        Real image = Real(0);
+        for (int row = 0; row < Dim; ++row) {
+          Index<Dim> lower_row = cell;
+          Index<Dim> upper_row = cell;
+          --lower_row[row];
+          ++upper_row[row];
+          Real lower_flux = Real(0);
+          Real upper_flux = Real(0);
+          for (int column = 0; column < Dim; ++column) {
+            const int component = row * Dim + column;
+            if (column == row) {
+              const Real center_coefficient = coefficient(cell, component);
+              const Real lower_coefficient = coefficient(lower_row, component);
+              const Real upper_coefficient = coefficient(upper_row, component);
+              const Real lower_sum = center_coefficient + lower_coefficient;
+              const Real upper_sum = center_coefficient + upper_coefficient;
+              const Real lower_face = lower_sum != Real(0)
+                                          ? Real(2) * center_coefficient * lower_coefficient /
+                                                lower_sum
+                                          : Real(0);
+              const Real upper_face = upper_sum != Real(0)
+                                          ? Real(2) * center_coefficient * upper_coefficient /
+                                                upper_sum
+                                          : Real(0);
+              lower_flux += lower_face * (value(cell, 0) - value(lower_row, 0)) /
+                            geom.spacing(row);
+              upper_flux += upper_face * (value(upper_row, 0) - value(cell, 0)) /
+                            geom.spacing(row);
+            } else {
+              Index<Dim> lower_column = cell;
+              Index<Dim> upper_column = cell;
+              Index<Dim> lower_row_lower_column = lower_row;
+              Index<Dim> lower_row_upper_column = lower_row;
+              Index<Dim> upper_row_lower_column = upper_row;
+              Index<Dim> upper_row_upper_column = upper_row;
+              --lower_column[column];
+              ++upper_column[column];
+              --lower_row_lower_column[column];
+              ++lower_row_upper_column[column];
+              --upper_row_lower_column[column];
+              ++upper_row_upper_column[column];
+              const Real lower_face = Real(0.5) *
+                                      (coefficient(cell, component) +
+                                       coefficient(lower_row, component));
+              const Real upper_face = Real(0.5) *
+                                      (coefficient(cell, component) +
+                                       coefficient(upper_row, component));
+              const Real tangent_scale = Real(4) * geom.spacing(column);
+              const Real lower_tangent =
+                  (value(upper_column, 0) - value(lower_column, 0) +
+                   value(lower_row_upper_column, 0) -
+                   value(lower_row_lower_column, 0)) /
+                  tangent_scale;
+              const Real upper_tangent =
+                  (value(upper_column, 0) - value(lower_column, 0) +
+                   value(upper_row_upper_column, 0) -
+                   value(upper_row_lower_column, 0)) /
+                  tangent_scale;
+              lower_flux += lower_face * lower_tangent;
+              upper_flux += upper_face * upper_tangent;
+            }
+          }
+          image += (upper_flux - lower_flux) / geom.spacing(row);
+        }
+        result(cell, 0) = image;
+      });
+    }
+    count_kernel_();
+  }
+
+  void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
+                        const scalar_boundary_session_type& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_boundary_point_(point, "Program tensor Laplacian");
+    tensor_laplacian(output, input, tensor, boundary);
   }
 
   void register_history(const std::string& name, int lag, int ncomp = -1,
@@ -503,6 +833,58 @@ class ProgramContext {
 
   runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
 
+  const PreparedVectorDistribution<Dim>& program_resource_vector_distribution() const {
+    return PreparedVectorDistribution<Dim>::Distributed;
+  }
+
+  int program_resource_field_level() const noexcept { return 0; }
+
+  void configure_program_resource_field_nullspace(FieldNullspacePlan<Dim>& plan) const {
+    const Geometry<Dim> geom = geometry();
+    Real cell_measure = Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      cell_measure *= geom.spacing(axis);
+    if (!std::isfinite(cell_measure) || !(cell_measure > Real(0)))
+      throw std::runtime_error("Program nullspace cell measure is invalid");
+    for (FieldNullspaceBasis<Dim>& basis : plan.bases)
+      basis.cell_measure = {cell_measure};
+  }
+
+  SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem<Dim>& problem,
+                                     KrylovWorkspace<Dim>& workspace, field_type& solution,
+                                     const field_type& rhs,
+                                     const KrylovControls<Dim>& controls) const {
+    return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
+  }
+
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(
+      OperatorFingerprint authority, const field_type& prototype,
+      OperatorFingerprint resources) const {
+    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Program operator snapshot revision exhausted uint64_t");
+    const OperatorFingerprint topology = operator_topology_(prototype);
+    OperatorEvaluationSnapshot snapshot = current_operator_snapshot_(
+        authority, topology, resources, ++operator_snapshot_revision_);
+    if (!snapshot.valid())
+      throw std::runtime_error("Program produced an invalid exact operator snapshot");
+    active_operator_snapshot_ = snapshot;
+    return snapshot;
+  }
+
+  OperatorEvaluationSnapshot probe_operator_evaluation(
+      OperatorFingerprint authority, OperatorFingerprint topology,
+      OperatorFingerprint resources, std::uint64_t revision) const {
+    const bool active = active_operator_snapshot_ &&
+                        active_operator_snapshot_->revision == revision;
+    OperatorEvaluationSnapshot probe =
+        current_operator_snapshot_(authority, topology, resources, active ? revision : 0);
+    if (!active || probe != *active_operator_snapshot_) {
+      active_operator_snapshot_.reset();
+      probe.revision = 0;
+    }
+    return probe;
+  }
+
   [[noreturn]] SolveOutcome solve_fields() const { unavailable_field_provider_(); }
   [[noreturn]] SolveOutcome solve_fields_from_state(int, field_type&) const {
     unavailable_field_provider_();
@@ -522,13 +904,15 @@ class ProgramContext {
     unavailable_field_provider_();
   }
 
-  bool is_polar_geometry() const noexcept { return false; }
-  [[noreturn]] Real radial_origin() const { unavailable_polar_provider_(); }
-  [[noreturn]] Real radial_spacing() const { unavailable_polar_provider_(); }
-
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
   using ScratchKey = std::tuple<ScratchKind, std::int64_t, int>;
+
+  static runtime_type* require_system_(runtime_type* system) {
+    if (system == nullptr)
+      throw std::invalid_argument("ProgramContext requires a non-null ranked System");
+    return system;
+  }
 
   static void require_rate_identity_(int rate_id) {
     if (rate_id < 0)
@@ -542,6 +926,81 @@ class ProgramContext {
         left.ghosts() != right.ghosts())
       throw std::invalid_argument(std::string(operation) +
                                   " requires the same exact ranked field contract");
+  }
+
+  static void require_boundary_point_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const char* operation) {
+    if (point.clock.empty() || point.tick < 0 || point.level < 0 || point.substep < 0 ||
+        point.stage < 0 || !std::isfinite(point.dt) || !(point.dt > 0.0) ||
+        !std::isfinite(point.physical_time))
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires a complete boundary evaluation point");
+  }
+
+  static void require_scalar_stencil_(const field_type& output, const field_type& input,
+                                      int output_components, const char* operation) {
+    if (output_components < 1 || output.ncomp() != output_components || input.ncomp() != 1 ||
+        output.layout() != input.layout() || output.distribution() != input.distribution() ||
+        output.local_rank() != input.local_rank() || output.local_size() != input.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " fields do not share the exact scalar stencil layout");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (input.ghosts()[axis] < 1)
+        throw std::invalid_argument(std::string(operation) +
+                                    " input requires one ghost on every native axis");
+  }
+
+  static void require_tensor_stencil_(const field_type& input, const field_type& tensor,
+                                      const char* operation) {
+    if (tensor.ncomp() != Dim * Dim || input.layout() != tensor.layout() ||
+        input.distribution() != tensor.distribution() ||
+        input.local_rank() != tensor.local_rank() || input.local_size() != tensor.local_size())
+      throw std::invalid_argument(std::string(operation) +
+                                  " tensor must be one row-major Dim*Dim exact-ranked field");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (tensor.ghosts()[axis] < 1)
+        throw std::invalid_argument(std::string(operation) +
+                                    " tensor requires one ghost on every native axis");
+  }
+
+  BoundaryTopology<Dim> scalar_boundary_topology_() const {
+    return BoundaryTopology<Dim>::axis_periodic(system_->prepared_block_periodicity());
+  }
+
+  std::uint64_t next_scalar_boundary_generation_() const {
+    if (scalar_boundary_generation_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Program scalar boundary generation exhausted uint64_t");
+    return ++scalar_boundary_generation_;
+  }
+
+  OperatorFingerprint operator_topology_(const field_type& prototype) const {
+    OperatorFingerprint fingerprint =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
+    ::pops::detail::fingerprint_geometry(fingerprint, geometry());
+    const auto periodicity = system_->prepared_block_periodicity();
+    ::pops::detail::fingerprint_mix(fingerprint, "uniform-cartesian-topology");
+    for (int axis = 0; axis < Dim; ++axis)
+      ::pops::detail::fingerprint_mix(
+          fingerprint,
+          static_cast<std::uint64_t>(periodicity[static_cast<std::size_t>(axis)]));
+    return fingerprint;
+  }
+
+  OperatorEvaluationSnapshot current_operator_snapshot_(
+      OperatorFingerprint authority, OperatorFingerprint topology,
+      OperatorFingerprint resources, std::uint64_t revision) const {
+    const double stage_time =
+        physical_time() + stage_time_.value() * current_dt_;
+    return {authority,
+            revision,
+            static_cast<std::int64_t>(macro_step()),
+            stage_time_.numerator,
+            stage_time_.denominator,
+            std::bit_cast<std::uint64_t>(current_dt_),
+            std::bit_cast<std::uint64_t>(stage_time),
+            std::uint64_t{1},
+            topology,
+            resources};
   }
 
   static field_type make_scratch_(const field_type& prototype, int ncomp,
@@ -613,12 +1072,11 @@ class ProgramContext {
     throw std::runtime_error(
         "ProgramContext field solve requires a dimension-qualified prepared field provider");
   }
-  [[noreturn]] static void unavailable_polar_provider_() {
-    throw std::runtime_error(
-        "ProgramContext polar operation is outside the exact Cartesian ranked core");
-  }
-
   runtime_type* system_ = nullptr;
+  ExecutionLane scalar_boundary_lane_;
+  mutable std::uint64_t scalar_boundary_generation_ = 0;
+  mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
   mutable amr::Rational stage_time_{0, 1};
   mutable std::string primary_clock_;
