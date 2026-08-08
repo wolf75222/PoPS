@@ -7,6 +7,7 @@
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
@@ -379,6 +380,98 @@ bool same_field_shape(const MultiFab<Dim>& left, const MultiFab<Dim>& right) noe
 }
 
 template <int Dim>
+bool same_field_contract(const MultiFab<Dim>& left, const MultiFab<Dim>& right) noexcept {
+  return same_field_shape(left, right) && left.ghosts() == right.ghosts();
+}
+
+template <int Dim>
+void copy_full_field_in_place(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
+  if (!same_field_contract(source, destination))
+    throw std::invalid_argument("AMR full-field copy requires one exact ranked field contract");
+
+  // Complete validation precedes the first device write so a malformed candidate cannot partially
+  // mutate storage pinned by a prepared halo provider.
+  for (std::size_t local = 0; local < source.local_size(); ++local) {
+    const Fab<Dim>& source_fab = source.fab(local);
+    const Fab<Dim>& destination_fab = destination.fab(local);
+    if (source.global_index(local) != destination.global_index(local) ||
+        source_fab.box() != destination_fab.box() ||
+        source_fab.grown_box() != destination_fab.grown_box() ||
+        source_fab.size() != destination_fab.size())
+      throw std::invalid_argument(
+          "AMR full-field copy encountered different exact local patch storage");
+  }
+  for (std::size_t local = 0; local < source.local_size(); ++local)
+    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(local).storage());
+  Kokkos::fence();
+}
+
+template <int Dim>
+void restore_exact_field_collectively(std::optional<MultiFab<Dim>>& backup, MultiFab<Dim>& live,
+                                      const CommunicatorView& communicator) {
+  if (!backup)
+    return;
+  std::exception_ptr restore_error;
+  long restore_failure = 0;
+  try {
+    copy_full_field_in_place(*backup, live);
+  } catch (...) {
+    restore_failure = 1;
+    restore_error = std::current_exception();
+  }
+  if (all_reduce_max(restore_failure, communicator) != 0) {
+    if (restore_error)
+      std::rethrow_exception(restore_error);
+    throw std::runtime_error("prepared AMR live-state restoration failed collectively");
+  }
+}
+
+template <int Dim>
+std::optional<MultiFab<Dim>> stage_exact_field_collectively(const MultiFab<Dim>& candidate,
+                                                            MultiFab<Dim>& live,
+                                                            const CommunicatorView& communicator) {
+  const long staged = &candidate == &live ? 0L : 1L;
+  if (all_reduce_min(staged, communicator) != all_reduce_max(staged, communicator))
+    throw std::invalid_argument("prepared AMR candidate/live selection differs between MPI ranks");
+  if (staged == 0)
+    return std::nullopt;
+
+  std::optional<MultiFab<Dim>> backup;
+  std::exception_ptr preflight_error;
+  long preflight_failure = 0;
+  try {
+    if (!same_field_contract(candidate, live))
+      throw std::invalid_argument(
+          "prepared AMR candidate differs from its exact live level contract");
+    backup.emplace(live);
+  } catch (...) {
+    preflight_failure = 1;
+    preflight_error = std::current_exception();
+  }
+  if (all_reduce_max(preflight_failure, communicator) != 0) {
+    if (preflight_error)
+      std::rethrow_exception(preflight_error);
+    throw std::runtime_error("prepared AMR candidate staging preflight failed collectively");
+  }
+
+  std::exception_ptr staging_error;
+  long staging_failure = 0;
+  try {
+    copy_full_field_in_place(candidate, live);
+  } catch (...) {
+    staging_failure = 1;
+    staging_error = std::current_exception();
+  }
+  if (all_reduce_max(staging_failure, communicator) != 0) {
+    restore_exact_field_collectively(backup, live, communicator);
+    if (staging_error)
+      std::rethrow_exception(staging_error);
+    throw std::runtime_error("prepared AMR candidate staging failed collectively");
+  }
+  return backup;
+}
+
+template <int Dim>
 void copy_valid_field(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
   if (!same_field_shape(source, destination))
     throw std::invalid_argument("AMR auxiliary copy requires one exact ranked field shape");
@@ -740,6 +833,7 @@ struct AmrSystem<Dim>::Impl {
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
   std::vector<BlockSpec> blocks;
   boundary_registry_type boundary_registry;
+  FieldNullspaceProviderRegistry<Dim> field_nullspace_providers;
   runtime::program::ProgramRuntimeState<Dim> program;
   runtime::system::SystemLifecycle lifecycle;
   mutable std::unique_ptr<engine_type> engine;
@@ -1265,6 +1359,18 @@ template <int Dim>
 const typename AmrSystem<Dim>::PreparedLevelEvaluation& AmrSystem<Dim>::evaluate_prepared_amr_level(
     const runtime::multiblock::BoundaryEvaluationPoint& point) {
   p_->ensure_engine();
+  if (point.level < 0 ||
+      static_cast<std::size_t>(point.level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("prepared AMR evaluation level lies outside the live hierarchy");
+  return evaluate_prepared_amr_level_at(
+      point, p_->engine->hierarchy().state(static_cast<std::size_t>(point.level)));
+}
+
+template <int Dim>
+const typename AmrSystem<Dim>::PreparedLevelEvaluation&
+AmrSystem<Dim>::evaluate_prepared_amr_level_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state) {
+  p_->ensure_engine();
   std::string point_contract;
   std::exception_ptr point_error;
   long point_failure = 0;
@@ -1298,25 +1404,115 @@ const typename AmrSystem<Dim>::PreparedLevelEvaluation& AmrSystem<Dim>::evaluate
   if (point.level < 0 ||
       static_cast<std::size_t>(point.level) >= p_->prepared_hierarchy->levels.size())
     throw std::out_of_range("prepared AMR evaluation level lies outside the live hierarchy");
+  const std::size_t level_index = static_cast<std::size_t>(point.level);
+  MultiFab<Dim>& live = p_->engine->hierarchy().state(level_index);
+  std::optional<MultiFab<Dim>> live_backup =
+      stage_exact_field_collectively(state, live, p_->prepared_hierarchy->lane->communicator());
   std::optional<PreparedLevelEvaluation> candidate;
   std::exception_ptr evaluation_error;
   long evaluation_failure = 0;
   try {
-    candidate.emplace(
-        p_->prepared_hierarchy->levels[static_cast<std::size_t>(point.level)].evaluate(point));
+    candidate.emplace(p_->prepared_hierarchy->levels[level_index].evaluate(point));
   } catch (...) {
     evaluation_failure = 1;
     evaluation_error = std::current_exception();
   }
+  restore_exact_field_collectively(live_backup, live, p_->prepared_hierarchy->lane->communicator());
   if (all_reduce_max(evaluation_failure, p_->prepared_hierarchy->lane->communicator()) != 0) {
     if (evaluation_error)
       std::rethrow_exception(evaluation_error);
     throw std::runtime_error("prepared AMR level evaluation failed collectively");
   }
   std::optional<PreparedLevelEvaluation>& published =
-      p_->prepared_hierarchy->evaluations[static_cast<std::size_t>(point.level)];
+      p_->prepared_hierarchy->evaluations[level_index];
   published.swap(candidate);
   return *published;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::prepare_generated_amr_level_state(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state) {
+  p_->ensure_engine();
+  if (point.level < 0 ||
+      static_cast<std::size_t>(point.level) >= p_->prepared_hierarchy->levels.size())
+    throw std::out_of_range("prepared AMR state-preparation level lies outside the live hierarchy");
+
+  std::string point_contract;
+  std::exception_ptr point_error;
+  long point_failure = 0;
+  try {
+    ExactContractBuilder contract;
+    contract.text("pops.generated-amr-state-preparation-point")
+        .scalar(std::uint32_t{1})
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(std::int32_t{point.level})
+        .scalar(std::int32_t{point.substep})
+        .scalar(std::int32_t{point.stage})
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time);
+    point_contract = std::move(contract).release();
+  } catch (...) {
+    point_failure = 1;
+    point_error = std::current_exception();
+  }
+  if (all_reduce_max(point_failure, p_->prepared_hierarchy->lane->communicator()) != 0) {
+    if (point_error)
+      std::rethrow_exception(point_error);
+    throw std::runtime_error("prepared AMR state-preparation point failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("generated-amr-state-preparation-point"),
+            std::string_view(point_contract)}},
+          p_->prepared_hierarchy->lane->communicator()))
+    throw std::invalid_argument("prepared AMR state-preparation points differ between MPI ranks");
+
+  const std::size_t level_index = static_cast<std::size_t>(point.level);
+  MultiFab<Dim>& live = p_->engine->hierarchy().state(level_index);
+  const long staged = &state == &live ? 0L : 1L;
+  if (all_reduce_min(staged, p_->prepared_hierarchy->lane->communicator()) !=
+      all_reduce_max(staged, p_->prepared_hierarchy->lane->communicator()))
+    throw std::invalid_argument("prepared AMR state-preparation target differs between MPI ranks");
+
+  std::optional<MultiFab<Dim>> prepared_candidate;
+  std::exception_ptr candidate_error;
+  long candidate_failure = 0;
+  try {
+    if (staged != 0)
+      prepared_candidate.emplace(state);
+  } catch (...) {
+    candidate_failure = 1;
+    candidate_error = std::current_exception();
+  }
+  if (all_reduce_max(candidate_failure, p_->prepared_hierarchy->lane->communicator()) != 0) {
+    if (candidate_error)
+      std::rethrow_exception(candidate_error);
+    throw std::runtime_error("prepared AMR state candidate allocation failed collectively");
+  }
+
+  MultiFab<Dim>& prepared_state = prepared_candidate ? *prepared_candidate : state;
+  std::optional<MultiFab<Dim>> live_backup = stage_exact_field_collectively(
+      prepared_state, live, p_->prepared_hierarchy->lane->communicator());
+  std::exception_ptr preparation_error;
+  long preparation_failure = 0;
+  try {
+    p_->prepared_hierarchy->levels[level_index].prepare(point, live);
+    if (prepared_candidate)
+      copy_full_field_in_place(live, *prepared_candidate);
+  } catch (...) {
+    preparation_failure = 1;
+    preparation_error = std::current_exception();
+  }
+  restore_exact_field_collectively(live_backup, live, p_->prepared_hierarchy->lane->communicator());
+  if (all_reduce_max(preparation_failure, p_->prepared_hierarchy->lane->communicator()) != 0) {
+    if (preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("prepared AMR state preparation failed collectively");
+  }
+  if (prepared_candidate)
+    state = std::move(*prepared_candidate);
 }
 
 template <int Dim>
@@ -1330,6 +1526,29 @@ AmrSystem<Dim>::prepared_amr_level_evaluation(int level) const {
   if (!evaluation)
     throw std::logic_error("prepared AMR level has no published residual/flux evaluation");
   return *evaluation;
+}
+
+template <int Dim>
+Geometry<Dim> AmrSystem<Dim>::prepared_amr_level_geometry(int level) const {
+  p_->ensure_engine();
+  if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("prepared AMR geometry level lies outside the live hierarchy");
+  return Geometry<Dim>::from_bounds(
+      p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain(), p_->cfg.lower,
+      p_->cfg.upper);
+}
+
+template <int Dim>
+BoundaryTopology<Dim> AmrSystem<Dim>::prepared_amr_boundary_topology() const {
+  return p_->topology();
+}
+
+template <int Dim>
+Real AmrSystem<Dim>::prepared_amr_level_maximum_speed(int level, const MultiFab<Dim>& state) const {
+  p_->ensure_engine();
+  if (level < 0 || static_cast<std::size_t>(level) >= p_->prepared_hierarchy->levels.size())
+    throw std::out_of_range("prepared AMR speed level lies outside the live hierarchy");
+  return p_->prepared_hierarchy->levels[static_cast<std::size_t>(level)].maximum_speed(state);
 }
 
 template <int Dim>
@@ -1373,6 +1592,13 @@ void AmrSystem<Dim>::install_field_storage_route(const std::string& field_identi
                                                  const std::string& provider_slot) {
   require_amr_assembling(p_->lifecycle, "install_field_storage_route");
   p_->boundary_registry.install_field_storage_route(field_identity, provider_slot);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::register_field_nullspace_provider(
+    std::shared_ptr<const FieldNullspaceProvider<Dim>> provider) {
+  require_amr_assembling(p_->lifecycle, "register_field_nullspace_provider");
+  p_->field_nullspace_providers.add(std::move(provider));
 }
 
 template <int Dim>
@@ -2339,8 +2565,19 @@ template void AmrSystem<kNativeDimension>::refresh_prepared_amr_levels();
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_level(
     const runtime::multiblock::BoundaryEvaluationPoint&);
+template void AmrSystem<kNativeDimension>::prepare_generated_amr_level_state(
+    const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
+template const PreparedAmrLevelEvaluation<kNativeDimension>&
+AmrSystem<kNativeDimension>::evaluate_prepared_amr_level_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&);
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_level_evaluation(int) const;
+template Geometry<kNativeDimension> AmrSystem<kNativeDimension>::prepared_amr_level_geometry(
+    int) const;
+template BoundaryTopology<kNativeDimension>
+AmrSystem<kNativeDimension>::prepared_amr_boundary_topology() const;
+template Real AmrSystem<kNativeDimension>::prepared_amr_level_maximum_speed(
+    int, const MultiFab<kNativeDimension>&) const;
 template MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_level_auxiliary(int);
 template const MultiFab<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_level_auxiliary(int) const;
@@ -2350,6 +2587,8 @@ template void AmrSystem<kNativeDimension>::install_block_state_route(const std::
                                                                      const std::string&);
 template void AmrSystem<kNativeDimension>::install_field_storage_route(const std::string&,
                                                                        const std::string&);
+template void AmrSystem<kNativeDimension>::register_field_nullspace_provider(
+    std::shared_ptr<const FieldNullspaceProvider<kNativeDimension>>);
 template void AmrSystem<kNativeDimension>::register_elliptic_field(const std::string&,
                                                                    const std::string&,
                                                                    const std::vector<int>&, int);

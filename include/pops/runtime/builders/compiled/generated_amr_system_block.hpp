@@ -408,29 +408,22 @@ class PreparedGeneratedAmrLevelBlock {
   using field_type = MultiFab<Dim, MemorySpace>;
   using evaluation_type = PreparedAmrLevelEvaluation<Dim, MemorySpace>;
   using point_type = runtime::multiblock::BoundaryEvaluationPoint;
+  using StatePreparation = std::function<void(const point_type&, field_type&)>;
   using Evaluator = std::function<evaluation_type(const point_type&, field_type&)>;
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
   PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level,
                                  std::string state_identity, std::string provider_identity,
-                                 std::string collective_contract, Evaluator evaluator,
-                                 Speed maximum_speed, PoissonRhs poisson_rhs)
-      : PreparedGeneratedAmrLevelBlock(runtime, level, std::move(state_identity),
-                                       std::move(provider_identity), std::move(collective_contract),
-                                       std::move(evaluator), std::move(maximum_speed),
-                                       std::move(poisson_rhs), {}, {}) {}
-
-  PreparedGeneratedAmrLevelBlock(runtime_type& runtime, std::size_t level,
-                                 std::string state_identity, std::string provider_identity,
-                                 std::string collective_contract, Evaluator evaluator,
-                                 Speed maximum_speed, PoissonRhs poisson_rhs,
+                                 std::string collective_contract, StatePreparation prepare_state,
+                                 Evaluator evaluator, Speed maximum_speed, PoissonRhs poisson_rhs,
                                  Speed source_frequency, Speed stability_dt)
       : runtime_(&runtime),
         level_(level),
         state_identity_(std::move(state_identity)),
         provider_identity_(std::move(provider_identity)),
         collective_contract_(std::move(collective_contract)),
+        prepare_state_(std::move(prepare_state)),
         evaluator_(std::move(evaluator)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
@@ -439,8 +432,8 @@ class PreparedGeneratedAmrLevelBlock {
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.materialization_generation()) {
     if (level_ >= runtime.hierarchy().num_levels() || state_identity_.empty() ||
-        provider_identity_.empty() || collective_contract_.empty() || !evaluator_ ||
-        !maximum_speed_ || !poisson_rhs_)
+        provider_identity_.empty() || collective_contract_.empty() || !prepare_state_ ||
+        !evaluator_ || !maximum_speed_ || !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
   }
 
@@ -450,11 +443,18 @@ class PreparedGeneratedAmrLevelBlock {
   std::string_view provider_identity() const noexcept { return provider_identity_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
 
-  evaluation_type evaluate(const point_type& point) const {
+  void prepare(const point_type& point, field_type& state) const {
     require_live_();
-    if (point.level != static_cast<int>(level_))
-      throw std::invalid_argument("generated AMR residual point targets another hierarchy level");
-    evaluation_type evaluation = evaluator_(point, runtime_->hierarchy().state(level_));
+    require_state_(point, state);
+    require_bound_state_(state);
+    prepare_state_(point, state);
+  }
+
+  evaluation_type evaluate(const point_type& point, field_type& state) const {
+    require_live_();
+    require_state_(point, state);
+    require_bound_state_(state);
+    evaluation_type evaluation = evaluator_(point, state);
     evaluation.point = point;
     evaluation.spatial_contract.assign(runtime_->spatial_contract());
     evaluation.topology_epoch = topology_epoch_;
@@ -462,10 +462,17 @@ class PreparedGeneratedAmrLevelBlock {
     return evaluation;
   }
 
-  Real maximum_speed() const {
-    require_live_();
-    return maximum_speed_(runtime_->hierarchy().state(level_));
+  evaluation_type evaluate(const point_type& point) const {
+    return evaluate(point, runtime_->hierarchy().state(level_));
   }
+
+  Real maximum_speed(const field_type& state) const {
+    require_live_();
+    require_state_contract_(state);
+    return maximum_speed_(state);
+  }
+
+  Real maximum_speed() const { return maximum_speed(runtime_->hierarchy().state(level_)); }
 
   void add_poisson_rhs(field_type& rhs) const {
     require_live_();
@@ -487,6 +494,28 @@ class PreparedGeneratedAmrLevelBlock {
   }
 
  private:
+  void require_state_(const point_type& point, const field_type& state) const {
+    if (point.level != static_cast<int>(level_))
+      throw std::invalid_argument("generated AMR residual point targets another hierarchy level");
+    require_state_contract_(state);
+  }
+
+  void require_state_contract_(const field_type& state) const {
+    const field_type& live = runtime_->hierarchy().state(level_);
+    if (state.layout() != live.layout() || state.distribution() != live.distribution() ||
+        state.local_rank() != live.local_rank() || state.local_size() != live.local_size() ||
+        state.ncomp() != live.ncomp() || state.ghosts() != live.ghosts())
+      throw std::invalid_argument(
+          "generated AMR stage state differs from its exact live level contract");
+  }
+
+  void require_bound_state_(const field_type& state) const {
+    if (&state != &runtime_->hierarchy().state(level_))
+      throw std::invalid_argument(
+          "generated AMR ghost providers require their exact bound live level; stage candidates "
+          "must enter through AmrSystem's transactional evaluation route");
+  }
+
   void require_live_() const {
     if (runtime_ == nullptr || level_ >= runtime_->hierarchy().num_levels() ||
         topology_epoch_ != runtime_->topology_epoch() ||
@@ -500,6 +529,7 @@ class PreparedGeneratedAmrLevelBlock {
   std::string state_identity_;
   std::string provider_identity_;
   std::string collective_contract_;
+  StatePreparation prepare_state_;
   Evaluator evaluator_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
@@ -619,10 +649,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
 
-    auto evaluator = [model, spatial, auxiliary, state_ghost_fill, auxiliary_ghost_fill,
-                      root_state_ghost_fill, root_auxiliary_ghost_fill, physical_boundary, geometry,
-                      level](const runtime::multiblock::BoundaryEvaluationPoint& point,
-                             MultiFab<Dim>& state) {
+    auto prepare_state = [auxiliary, state_ghost_fill, auxiliary_ghost_fill, root_state_ghost_fill,
+                          root_auxiliary_ghost_fill, physical_boundary, geometry,
+                          level](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 MultiFab<Dim>& state) {
       MultiFab<Dim>& aux = *auxiliary;
       collective_phase(
           [&] {
@@ -637,7 +667,13 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
               physical_boundary->fill_physical(state, geometry);
           },
           "generated AMR ghost/boundary phase failed collectively");
+    };
 
+    auto evaluator = [model, spatial, auxiliary, prepare_state, physical_boundary, geometry](
+                         const runtime::multiblock::BoundaryEvaluationPoint& point,
+                         MultiFab<Dim>& state) {
+      prepare_state(point, state);
+      MultiFab<Dim>& aux = *auxiliary;
       std::optional<std::vector<nd::FaceField<Dim>>> faces;
       std::optional<MultiFab<Dim>> residual;
       collective_phase(
@@ -688,7 +724,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     std::string contract = level_contract(runtime, context, provider_identity);
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, std::move(context.state_identity), provider_identity, std::move(contract),
-        std::move(evaluator), std::move(speed), std::move(poisson_rhs),
+        std::move(prepare_state), std::move(evaluator), std::move(speed), std::move(poisson_rhs),
         std::move(source_frequency_bound), std::move(stability_dt_bound));
   };
 

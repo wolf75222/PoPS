@@ -3,6 +3,7 @@
 #include <limits>
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/mesh/topology/boundary_topology.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
@@ -54,6 +55,7 @@
 
 namespace pops {
 
+template <int Dim>
 class FieldNullspaceProvider;
 struct FieldLogicalTimePoint;
 struct AuxHaloPolicy;
@@ -76,6 +78,7 @@ namespace runtime::amr {
 struct PreparedTaggerSpec;
 struct PreparedClusteringSpec;
 struct PreparedRefluxSpec;
+template <int Dim>
 struct PreparedTaggingProgram {
   struct Stencil;
 };
@@ -358,7 +361,18 @@ class AmrSystem {
   /// together with the exact face-integrated fluxes used to assemble it.
   POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level(
       const runtime::multiblock::BoundaryEvaluationPoint& point);
+  /// Prepare/evaluate an exact stage candidate without replacing the hierarchy's accepted state.
+  /// The candidate must retain the active level's complete layout/distribution/component contract.
+  POPS_EXPORT void prepare_generated_amr_level_state(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
+  POPS_EXPORT const PreparedLevelEvaluation& evaluate_prepared_amr_level_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state);
   POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
+
+  /// Exact level geometry/topology and model speed retained by the prepared hierarchy graph.
+  POPS_EXPORT Geometry<Dim> prepared_amr_level_geometry(int level) const;
+  POPS_EXPORT BoundaryTopology<Dim> prepared_amr_boundary_topology() const;
+  POPS_EXPORT Real prepared_amr_level_maximum_speed(int level, const MultiFab<Dim>& state) const;
 
   /// Stable per-level auxiliary storage owned by the prepared hierarchy generation.
   POPS_EXPORT MultiFab<Dim>& prepared_amr_level_auxiliary(int level);
@@ -476,7 +490,7 @@ class AmrSystem {
       const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
       const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
       const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
-      const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
+      const std::vector<typename runtime::amr::PreparedTaggingProgram<Dim>::Stencil>& stencils,
       const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
@@ -529,7 +543,8 @@ class AmrSystem {
       std::shared_ptr<component::LoadedComponent> solver);
   /// Adds one native field-nullspace provider before binding. The selected route is resolved only
   /// after operator, boundary, topology and distribution facts have materialized.
-  void register_field_nullspace_provider(std::shared_ptr<const FieldNullspaceProvider> provider);
+  void register_field_nullspace_provider(
+      std::shared_ptr<const FieldNullspaceProvider<Dim>> provider);
   /// Select the provider for the principal field configured by set_poisson. The AMR facade retains
   /// only the opaque provider identity and its exact typed options; it never interprets a nullspace
   /// family or gauge name.

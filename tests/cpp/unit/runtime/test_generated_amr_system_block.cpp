@@ -1,15 +1,19 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
 
 #include <cstdint>
 #include <array>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -75,6 +79,36 @@ AdvectionModel<Dim> advection_model() {
     velocity[axis] = pops::Real(axis + 1);
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
 }
+
+template <int Dim>
+class TestFieldNullspaceProvider final : public pops::FieldNullspaceProvider<Dim> {
+ public:
+  std::string_view identity() const noexcept override {
+    return "tests.field-nullspace.exact-ranked";
+  }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "tests.field-nullspace.exact-ranked@1";
+  }
+  pops::PreparedProviderOptions default_options() const override {
+    return {"tests.field-nullspace.options@1", {}};
+  }
+  bool accepts_options(const pops::PreparedProviderOptions& options) const noexcept override {
+    return options.schema_identity == "tests.field-nullspace.options@1" && options.values.empty();
+  }
+  pops::PreparedProviderSupport supports(
+      const pops::FieldNullspaceProviderRequest<Dim>&) const noexcept override {
+    return pops::PreparedProviderSupport::reject(1, "test provider is registry-only");
+  }
+  std::string expected_prepared_contract(
+      const pops::FieldNullspaceProviderRequest<Dim>&) const override {
+    return "tests.field-nullspace.prepared@1";
+  }
+  pops::PreparedFieldNullspace<Dim> prepare(
+      const pops::FieldNullspaceProviderRequest<Dim>&) const override {
+    throw std::logic_error("test provider is registry-only");
+  }
+};
 
 template <int Dim>
 struct RenamedAdvectionModel : AdvectionModel<Dim> {
@@ -322,6 +356,148 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
   const pops::AmrSystem<Dim>& const_system = system;
   EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(1), fine_auxiliary);
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  (void)system.engine();
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage = context->scratch_state_like(context->state(0));
+  stage.set_val(pops::Real(2));
+  pops::MultiFab<Dim> residual = context->rhs_scratch_like(stage);
+  context->rhs_into(0, stage, residual, 7);
+
+  EXPECT_EQ(pops::reduce_min_local(stage), pops::Real(2));
+  EXPECT_EQ(pops::reduce_max_local(context->state(0)), pops::Real(1));
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 7);
+
+  pops::MultiFab<Dim> foreign(stage.layout(), stage.distribution(), stage.local_rank(), 2,
+                              stage.ghosts());
+  foreign.set_val(pops::Real(9));
+  pops::MultiFab<Dim> foreign_residual = context->rhs_scratch_like(foreign);
+  EXPECT_THROW(context->rhs_into(0, foreign, foreign_residual, 8), std::invalid_argument);
+  EXPECT_EQ(pops::reduce_max_local(context->state(0)), pops::Real(1));
+  EXPECT_EQ(system.prepared_amr_level_evaluation(0).point.stage, 7);
+}
+
+TEST(GeneratedAmrSystemBlock, RegistersOnlyExactRankedNullspaceProviders) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>());
+  EXPECT_THROW(
+      system.register_field_nullspace_provider(std::make_shared<TestFieldNullspaceProvider<Dim>>()),
+      std::invalid_argument);
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramContextRefusesUnsynchronizedHierarchyBeforeMutation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  EXPECT_THROW(
+      context->advance_hierarchy(0.01, [&](double) { context->state(0).set_val(pops::Real(9)); }),
+      std::runtime_error);
+  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(0)), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(system.engine()->hierarchy().state(1)), pops::Real(1));
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramContextRetainsAndInterpolatesExactLevelHistory) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  (void)system.engine();
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->declare_clock_relation("clock.macro", "clock.fast", 2);
+  context->register_history("tracer.rate", 2, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+                            "dense.linear");
+
+  pops::MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+  context->begin_step(0.2);
+  sample.set_val(pops::Real(10));
+  context->store_history("tracer.rate", sample, 0);
+  context->rotate_histories("clock.macro");
+
+  context->begin_step(0.4);
+  sample.set_val(pops::Real(20));
+  context->store_history("tracer.rate", sample, 0);
+  pops::MultiFab<Dim> interpolated = context->scratch_state_like(sample);
+  interpolated.set_val(pops::Real(-1));
+  context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.macro",
+                                      "clock.fast", -1, pops::Real(0));
+
+  EXPECT_EQ(pops::reduce_min_local(interpolated), pops::Real(15));
+  EXPECT_EQ(pops::reduce_max_local(interpolated), pops::Real(15));
+  EXPECT_THROW((void)context->schedule_decision(17, true, true), std::runtime_error);
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramContextRefusesHistoryRegridBeforeTopologyMutation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  auto* engine = system.engine();
+  ASSERT_NE(engine, nullptr);
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.macro");
+  context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
+                            "dense.linear");
+  std::array<int, Dim> ratio_components{};
+  ratio_components.fill(2);
+  const pops::amr::RefinementRatio<Dim> ratio(ratio_components);
+  const pops::amr::regridding::RegridPreparationBudget budget{
+      .clustered_parent_layout = {16, 120},
+      .fine_layout = {16, 120},
+      .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()},
+  };
+  auto prepared =
+      context->prepare_regrid(0, ratio, centered_cluster(engine->hierarchy().layout(0)), budget);
+  ASSERT_TRUE(prepared.fine_layout().has_value());
+  pops::MultiFab<Dim> child(
+      prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
+      engine->hierarchy().state(0).local_rank(), engine->hierarchy().state(0).ncomp(),
+      engine->hierarchy().state(0).ghosts());
+  child.set_val(pops::Real(1));
+
+  EXPECT_THROW(context->publish_regrid(std::move(prepared), std::move(child)), std::runtime_error);
+  EXPECT_EQ(engine->hierarchy().num_levels(), 1u);
 }
 
 TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
