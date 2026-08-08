@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/index/extent.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/parallel/comm.hpp>
@@ -22,6 +24,26 @@
 using namespace pops;
 
 namespace {
+
+inline constexpr int kDim = 2;
+using TestBox = Box<kDim>;
+using TestLayout = mesh::BoxArray<kDim>;
+using TestDistribution = mesh::Distribution<kDim>;
+using TestRankSpace = mesh::RankSpace<kDim>;
+using TestMultiFab = MultiFab<kDim>;
+using TestVectorDistribution = PreparedVectorDistribution<kDim>;
+
+Index<kDim> rank_coordinate(int rank) {
+  return Index<kDim>{rank, 0};
+}
+
+TestRankSpace world_rank_space() {
+  return TestRankSpace{Index<kDim>{}, Extent<kDim>{n_ranks(), 1}};
+}
+
+Extent<kDim> no_ghosts() {
+  return Extent<kDim>{};
+}
 
 class CommEnvironment : public ::testing::Environment {
  public:
@@ -45,43 +67,45 @@ class KokkosEnvironment : public ::testing::Environment {
     ::testing::AddGlobalTestEnvironment(new KokkosEnvironment);
 #endif
 
-BoxArray dot_boxes(int cell_count) {
-  std::vector<Box2D> boxes;
+TestLayout dot_boxes(int cell_count) {
+  std::vector<TestBox> boxes;
   boxes.reserve(static_cast<std::size_t>(cell_count));
   for (int i = 0; i < cell_count; ++i)
-    boxes.push_back(Box2D{{i, 0}, {i, 0}});
-  return BoxArray(std::move(boxes));
+    boxes.push_back(TestBox{Index<kDim>{i, 0}, Index<kDim>{i, 0}});
+  return TestLayout(std::move(boxes));
 }
 
-DistributionMapping round_robin_mapping(int box_count) {
-  std::vector<int> ranks;
-  ranks.reserve(static_cast<std::size_t>(box_count));
+TestDistribution round_robin_mapping(const TestLayout& boxes) {
+  std::vector<Index<kDim>> owners;
+  owners.reserve(boxes.size());
   const int rank_count = n_ranks();
-  for (int i = 0; i < box_count; ++i)
-    ranks.push_back(i % rank_count);
-  return DistributionMapping(std::move(ranks));
+  for (std::size_t i = 0; i < boxes.size(); ++i)
+    owners.push_back(rank_coordinate(static_cast<int>(i) % rank_count));
+  return TestDistribution::partitioned(boxes, world_rank_space(), std::move(owners));
 }
 
 struct DotFields {
-  MultiFab left;
-  MultiFab right;
+  TestMultiFab left;
+  TestMultiFab right;
 };
 
 DotFields make_fields(int cell_count, int components = 1) {
-  BoxArray boxes = dot_boxes(cell_count);
-  DistributionMapping mapping = round_robin_mapping(boxes.size());
-  DotFields fields{MultiFab(boxes, mapping, components, 0),
-                   MultiFab(boxes, mapping, components, 0)};
+  TestLayout boxes = dot_boxes(cell_count);
+  TestDistribution mapping = round_robin_mapping(boxes);
+  DotFields fields{
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts()),
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts())};
   fields.left.set_val(Real(0));
   fields.right.set_val(Real(0));
   return fields;
 }
 
 DotFields make_replicated_fields(int cell_count, int components = 1) {
-  BoxArray boxes = dot_boxes(cell_count);
-  DistributionMapping mapping(std::vector<int>(static_cast<std::size_t>(boxes.size()), my_rank()));
-  DotFields fields{MultiFab(boxes, mapping, components, 0),
-                   MultiFab(boxes, mapping, components, 0)};
+  TestLayout boxes = dot_boxes(cell_count);
+  TestDistribution mapping = TestDistribution::replicated(boxes, world_rank_space());
+  DotFields fields{
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts()),
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts())};
   fields.left.set_val(Real(0));
   fields.right.set_val(Real(0));
   return fields;
@@ -97,21 +121,23 @@ TEST(test_pure_field_algebra_extreme_dot, MpiRouteInitializesRequestedCommunicat
 }
 
 DotFields make_rank_zero_owned_fields(int cell_count, int components = 1) {
-  BoxArray boxes = dot_boxes(cell_count);
-  DistributionMapping mapping(std::vector<int>(static_cast<std::size_t>(boxes.size()), 0));
-  DotFields fields{MultiFab(boxes, mapping, components, 0),
-                   MultiFab(boxes, mapping, components, 0)};
+  TestLayout boxes = dot_boxes(cell_count);
+  TestDistribution mapping = TestDistribution::partitioned(
+      boxes, world_rank_space(), std::vector<Index<kDim>>(boxes.size(), rank_coordinate(0)));
+  DotFields fields{
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts()),
+      TestMultiFab(boxes, mapping, rank_coordinate(my_rank()), components, no_ghosts())};
   fields.left.set_val(Real(0));
   fields.right.set_val(Real(0));
   return fields;
 }
 
-void set_global_cell(MultiFab& field, int global, Real value, int component = 0) {
-  const int local = field.local_index_of(global);
-  if (local < 0)
+void set_global_cell(TestMultiFab& field, int global, Real value, int component = 0) {
+  const std::size_t local = field.local_index_of(static_cast<std::size_t>(global));
+  if (local == TestMultiFab::not_local)
     return;
-  const Box2D box = field.box(local);
-  field.fab(local)(box.lo[0], box.lo[1], component) = value;
+  const TestBox box = field.box(local);
+  field.fab(local).view()(box.lo, component) = value;
 }
 
 void expect_close_to_one(Real value) {
@@ -158,13 +184,13 @@ TEST(test_pure_field_algebra_extreme_dot,
   set_global_cell(fields.right, 2, Real(1e200));
 
   expect_close_to_one(
-      PureFieldAlgebra::dot(fields.left, fields.right, PreparedVectorDistribution::Replicated));
+      PureFieldAlgebra::dot(fields.left, fields.right, TestVectorDistribution::Replicated));
   expect_close_to_one(detail::PreparedFieldAlgebra::dot(fields.left, fields.right,
-                                                        PreparedVectorDistribution::Replicated));
+                                                        TestVectorDistribution::Replicated));
 }
 
 TEST(test_pure_field_algebra_extreme_dot, ProviderHandleRejectsInvalidNativeDescriptor) {
-  EXPECT_THROW((void)PreparedVectorDistribution(static_cast<FieldDistribution>(255)),
+  EXPECT_THROW((void)TestVectorDistribution(static_cast<FieldDistribution>(255)),
                std::invalid_argument);
 }
 
@@ -172,10 +198,10 @@ TEST(test_pure_field_algebra_extreme_dot, PublicReplicaOverloadsRejectPartialRan
   if (n_ranks() == 1)
     GTEST_SKIP() << "a serial mapping is necessarily a complete local replica";
   DotFields fields = make_fields(2);
-  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right,
-                                           PreparedVectorDistribution::Replicated),
-               std::invalid_argument);
-  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+  EXPECT_THROW(
+      (void)PureFieldAlgebra::dot(fields.left, fields.right, TestVectorDistribution::Replicated),
+      std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, TestVectorDistribution::Replicated),
                std::invalid_argument);
 }
 
@@ -187,12 +213,12 @@ TEST(test_pure_field_algebra_extreme_dot,
   // no boxes. All ranks must nevertheless complete the validation collectives and reject it
   // uniformly rather than letting rank zero enter the following physical reduction alone.
   DotFields fields = make_rank_zero_owned_fields(2);
-  EXPECT_THROW((void)PureFieldAlgebra::max_abs(fields.left, PreparedVectorDistribution::Replicated),
+  EXPECT_THROW((void)PureFieldAlgebra::max_abs(fields.left, TestVectorDistribution::Replicated),
                std::invalid_argument);
-  EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right,
-                                           PreparedVectorDistribution::Replicated),
-               std::invalid_argument);
-  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+  EXPECT_THROW(
+      (void)PureFieldAlgebra::dot(fields.left, fields.right, TestVectorDistribution::Replicated),
+      std::invalid_argument);
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, TestVectorDistribution::Replicated),
                std::invalid_argument);
 }
 
@@ -200,9 +226,8 @@ TEST(test_pure_field_algebra_extreme_dot, PublicOwnershipMustAgreeAcrossRanks) {
   if (n_ranks() == 1)
     GTEST_SKIP() << "ownership descriptors cannot disagree in serial";
   DotFields fields = make_replicated_fields(2);
-  const PreparedVectorDistribution ownership = my_rank() == 0
-                                                   ? PreparedVectorDistribution::Distributed
-                                                   : PreparedVectorDistribution::Replicated;
+  const TestVectorDistribution ownership =
+      my_rank() == 0 ? TestVectorDistribution::Distributed : TestVectorDistribution::Replicated;
   EXPECT_THROW((void)PureFieldAlgebra::dot(fields.left, fields.right, ownership),
                std::invalid_argument);
 }
@@ -220,7 +245,7 @@ TEST(test_pure_field_algebra_extreme_dot, PublicReplicaRejectsIsometricValuePerm
     GTEST_SKIP() << "replica values cannot disagree in serial";
   DotFields fields = make_replicated_fields(2);
   set_global_cell(fields.left, my_rank() == 0 ? 0 : 1, Real(1));
-  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, PreparedVectorDistribution::Replicated),
+  EXPECT_THROW((void)PureFieldAlgebra::norm(fields.left, TestVectorDistribution::Replicated),
                std::runtime_error);
 }
 
