@@ -1,117 +1,100 @@
+/// @file
+/// @brief Compile-time-ranked concepts and providers for the Cartesian elliptic stage.
+
 #pragma once
 
-/// @file
-/// @brief C++20 concepts NAMING the common contracts of the elliptic stage: EllipticOperator
-///        (operator role), LinearSolver (iterative subset), FieldPostProcessor (field derivation).
-///
-/// Layer: `include/pops/numerics/elliptic/interface`.
-/// Role: PURELY DESCRIPTIVE header (host metaprogramming). It formalizes as concepts the
-/// contracts ALREADY coded by the existing elliptic classes and PROVES it via static_assert. No
-/// floating-point logic, no existing class touched: the device-validated elliptic stack stays
-/// bit-identical. Reuses (does not redefine) the EllipticSolver concept from elliptic_solver.hpp.
-/// Contract: three concepts -- EllipticOperator (geom/bc + stencil coefficient pointers for a
-/// matvec consistent with the MG residual, modeled by GeometricMG), LinearSolver (EllipticSolver + a
-/// tolerance variant solve(rel_tol, max_iters) with a non-void return), FieldPostProcessor (callable deriving the
-/// field from phi, signature of field_postprocess).
-///
-/// Invariants:
-/// - the concepts are COMPILE-TIME predicates, with no device impact (neither kernel nor extended lambda);
-/// - LinearSolver is DELIBERATELY separated from EllipticSolver: the DIRECT solvers (PoissonFFTSolver,
-///   DistributedFFTSolver, PolarPoissonSolver) model EllipticSolver but NOT LinearSolver (no
-///   notion of iterative tolerance), and that is correct;
-/// - none of the elliptic classes is modified to satisfy a concept (deliberate refusal).
-
-#include <pops/core/foundation/types.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // FieldPostProcess (spec), field_postprocess
-#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>  // concept EllipticSolver (already in place)
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 
 #include <concepts>
+#include <type_traits>
 
 namespace pops {
 
-// ---------------------------------------------------------------------------
-// (1) EllipticOperator: OPERATOR role of the elliptic stencil at the MultiFab level.
-//
-// Contract = what a matrix-free matvec provider reads from its operator to apply
-// L_int(phi) = div(A grad phi) - kappa phi in a way
-// CONSISTENT with the MG residual (poisson_residual): the geometry, the physical BC, the
-// BoxArray/DistributionMapping of the fine level, and the operator coefficient POINTERS
-// (eps_x, eps_y, kappa, cut-cell weights, cross terms Axy/Ayx, mask).
-// An inactive term returns nullptr (cf. internal op_*_ptr), which the concept only requires
-// to be CALLABLE and convertible to const MultiFab*; it does not constrain the value.
-//
-// GeometricMG models this role (and it is the only TYPE that carries it today). The
-// free functions apply_laplacian/poisson_residual/gs_smooth are its lowest-level
-// realization (the APPLICATION proper): not constrainable by a concept
-// because they are not types. EllipticOperator thus NAMES the interface that SUPPLIES
-// the coefficients (the "what to apply"), not the application kernel (the "how").
-//
-// NOTE: EllipticOperator does NOT REQUIRE solve()/rhs()/phi(); it describes the operator
-// role only. GeometricMG completes it with EllipticSolver (it is also a solver), but
-// a purely operator type (without solve) would already satisfy EllipticOperator.
-template <class Op>
-concept EllipticOperator = requires(Op op) {
-  { op.geom() } -> std::convertible_to<const Geometry&>;
-  { op.bc() } -> std::convertible_to<const BCRec&>;
-  // Fine-level coefficient pointers: nullptr when the term is inactive.
-  { op.op_mask() } -> std::convertible_to<const MultiFab*>;
-  { op.op_coef() } -> std::convertible_to<const MultiFab*>;
-  { op.op_eps() } -> std::convertible_to<const MultiFab*>;
-  { op.op_kappa() } -> std::convertible_to<const MultiFab*>;
-  { op.op_eps_y() } -> std::convertible_to<const MultiFab*>;
-  { op.op_a_xy() } -> std::convertible_to<const MultiFab*>;
-  { op.op_a_yx() } -> std::convertible_to<const MultiFab*>;
+namespace elliptic_interface_detail {
+
+template <class Owner>
+using OwnerField = typename Owner::field_type;
+
+template <class Owner>
+concept ExactRankedFieldOwner = requires {
+  { Owner::dimension } -> std::convertible_to<int>;
+  requires(Owner::dimension >= 1 && Owner::dimension <= 3);
+  typename Owner::field_type;
+  requires(OwnerField<Owner>::dimension == Owner::dimension);
+  requires std::same_as<typename OwnerField<Owner>::box_type, Box<Owner::dimension>>;
 };
 
-// ---------------------------------------------------------------------------
-// (2) LinearSolver: ITERATIVE solver with an explicit stopping criterion.
-//
-// Contract = solve(rel_tol, max_iters) that returns a RESULT (the convention "solve
-// up to a relative tolerance in at most max_iters steps, returning a report").
-// The return type is intentionally not constrained to a precise struct: the legacy object
-// protocol is still modeled by GeometricMG, which returns the number of V-cycles. The generic
-// Krylov family has a stronger, separate prepared protocol and returns SolveReport through
-// solve_prepared_affine; it is not forced into this object-shaped concept.
-//
-// We also require the EllipticSolver base (rhs/phi/solve()/residual/geom): an
-// elliptic LinearSolver IS an EllipticSolver that, IN ADDITION, exposes the
-// tolerance variant. GeometricMG models both.
-//
-// DOCUMENTED GAP (concept DELIBERATELY separated from EllipticSolver). The DIRECT solvers
-// PoissonFFTSolver, DistributedFFTSolver and PolarPoissonSolver solve in ONE pass
-// (FFT + Thomas): they have NO solve(rel_tol, max_iters) nor any notion of iterative
-// tolerance. They model EllipticSolver (at the Cartesian MultiFab level) or
-// PolarEllipticSolver (polar), but NOT LinearSolver, and that is CORRECT: a direct
-// solver is not an iterative solver. LinearSolver thus captures the ITERATIVE
-// subset of the contract, without claiming that all elliptic backends carry it.
-template <class S>
-concept LinearSolver = EllipticSolver<S> && requires(S s, Real tol, int it) {
-  // Tolerance variant: solves up to rel_tol (or max_iters) and returns a stopping
-  // report. Return type FREE but NON void (int for GeometricMG today).
-  s.solve(tol, it);
-  requires !std::same_as<decltype(s.solve(tol, it)), void>;
-};
+}  // namespace elliptic_interface_detail
 
-// ---------------------------------------------------------------------------
-// (3) FieldPostProcessor: field derivation from the potential, phi -> aux/grad.
-//
-// Contract = an APPLICATOR callable with the signature of field_postprocess:
-//   (const MultiFab& phi, MultiFab& out, Real cx, Real cy, FieldPostProcess spec) -> void
-// i.e. write into out the convention (phi in component 0 if requested) + the
-// centered gradient (+/- depending on the spec sign), with cx = 1/(2 dx), cy = 1/(2 dy). The SPEC
-// (gradient sign, phi storage) stays the existing FieldPostProcess struct
-// (elliptic_problem.hpp): we do not redefine it, we PARAMETERIZE it.
-//
-// We constrain a CALLABLE type (functor or function pointer), not a class with
-// methods: that is what field_postprocess IS (a free function). The static_assert
-// below proves that &field_postprocess satisfies FieldPostProcessor.
-template <class F>
-concept FieldPostProcessor =
-    requires(F f, const MultiFab& phi, MultiFab& out, Real cx, Real cy, FieldPostProcess spec) {
-      { f(phi, out, cx, cy, spec) } -> std::same_as<void>;
+/// Prepared Cartesian operator whose rank, materialization request and published contract agree at
+/// compile time.  Coefficient families are advertised separately by backend capability providers;
+/// this concept deliberately does not revive the former nullable 2D coefficient-pointer protocol.
+template <class Operator>
+concept EllipticOperator =
+    elliptic_interface_detail::ExactRankedFieldOwner<Operator> &&
+    requires(const Operator& operation, const EllipticBuildRequest<Operator::dimension>& request) {
+      typename Operator::request_type;
+      requires std::same_as<typename Operator::request_type,
+                            EllipticBuildRequest<Operator::dimension>>;
+      { Operator::operator_identity() } noexcept -> std::same_as<EllipticOperatorIdentity>;
+      { Operator::expected_operator_contract(request) } -> std::same_as<EllipticOperatorContract>;
+      { operation.geom() } noexcept -> std::same_as<const Geometry<Operator::dimension>&>;
+      {
+        operation.boundary()
+      } noexcept -> std::same_as<const PhysicalBoundaryConditions<Operator::dimension>&>;
+      {
+        operation.prepared_operator_contract()
+      } noexcept -> std::same_as<const EllipticOperatorContract&>;
     };
+
+/// Iterative exact-ranked backend with a prepared stopping policy and one fallible SolveReport.
+/// An exact direct provider may still model EllipticSolver, but a backend that returns `void`
+/// intentionally does not model this stronger contract.
+template <class Solver>
+concept LinearSolver = EllipticSolver<Solver> && EllipticOperator<Solver> &&
+                       requires(Solver& solver, const Solver& constant_solver) {
+                         {
+                           constant_solver.maximum_iterations()
+                         } noexcept -> std::convertible_to<int>;
+                         { solver.solve() } -> std::same_as<SolveReport>;
+                         {
+                           constant_solver.last_solve_report()
+                         } noexcept -> std::same_as<const SolveReport&>;
+                       };
+
+/// Exact-ranked provider for the canonical centered potential/gradient publication.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+struct CenteredFieldPostProcessor {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "CenteredFieldPostProcessor only supports dimensions 1, 2, and 3");
+
+  static constexpr int dimension = Dim;
+  using field_type = MultiFab<Dim, MemorySpace>;
+
+  void operator()(const Geometry<Dim>& geometry, const field_type& potential, field_type& output,
+                  FieldPostProcess spec) const {
+    field_postprocess(geometry, potential, output, spec);
+  }
+};
+
+/// Field publication provider whose geometry and field rank are one immutable type property.
+template <class Processor>
+concept FieldPostProcessor =
+    elliptic_interface_detail::ExactRankedFieldOwner<Processor> &&
+    requires(const Processor& processor, const Geometry<Processor::dimension>& geometry,
+             const typename Processor::field_type& potential,
+             typename Processor::field_type& output, FieldPostProcess spec) {
+      { processor(geometry, potential, output, spec) } -> std::same_as<void>;
+    };
+
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<1>>);
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<2>>);
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<3>>);
 
 }  // namespace pops

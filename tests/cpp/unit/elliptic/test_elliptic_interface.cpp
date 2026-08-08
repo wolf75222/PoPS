@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_interface.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 
 #include <array>
 #include <cstddef>
@@ -22,6 +23,7 @@ class ExactTestElliptic {
 
   explicit ExactTestElliptic(request_type request)
       : geometry_(request.geometry),
+        boundary_(request.boundary),
         rhs_(request.boxes, request.distribution, request.local_rank, 1, request.rhs_ghosts),
         phi_(request.boxes, request.distribution, request.local_rank, 1, request.phi_ghosts),
         contract_(expected_operator_contract(request)) {}
@@ -32,29 +34,56 @@ class ExactTestElliptic {
   ExactTestElliptic& operator=(ExactTestElliptic&&) noexcept = default;
   ~ExactTestElliptic() noexcept = default;
 
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.test.exact-ranked-elliptic", 1};
+  }
   static EllipticOperatorContract expected_operator_contract(const request_type& request) {
-    return make_expected_elliptic_operator_contract(
-        EllipticOperatorIdentity{"pops.test.exact-ranked-elliptic", 1}, request, "test-options-v1");
+    return make_expected_elliptic_operator_contract(operator_identity(), request,
+                                                    "test-options-v1");
   }
 
   field_type& rhs() { return rhs_; }
   field_type& phi() { return phi_; }
-  void solve() { residual_ = Real(0); }
+  SolveReport solve() {
+    residual_ = Real(0);
+    report_.mark_solved("exact_test_elliptic");
+    return report_;
+  }
   Real residual() const { return residual_; }
-  const Geometry<Dim>& geom() const { return geometry_; }
+  int maximum_iterations() const noexcept { return 4; }
+  const Geometry<Dim>& geom() const noexcept { return geometry_; }
+  const PhysicalBoundaryConditions<Dim>& boundary() const noexcept { return boundary_; }
+  const SolveReport& last_solve_report() const noexcept { return report_; }
   const EllipticOperatorContract& prepared_operator_contract() const noexcept { return contract_; }
 
  private:
   Geometry<Dim> geometry_;
+  PhysicalBoundaryConditions<Dim> boundary_;
   field_type rhs_;
   field_type phi_;
   EllipticOperatorContract contract_;
   Real residual_ = Real(1);
+  SolveReport report_{};
 };
 
 static_assert(EllipticSolver<ExactTestElliptic<1>>);
 static_assert(EllipticSolver<ExactTestElliptic<2>>);
 static_assert(EllipticSolver<ExactTestElliptic<3>>);
+static_assert(EllipticOperator<ExactTestElliptic<1>>);
+static_assert(EllipticOperator<ExactTestElliptic<2>>);
+static_assert(EllipticOperator<ExactTestElliptic<3>>);
+static_assert(LinearSolver<ExactTestElliptic<1>>);
+static_assert(LinearSolver<ExactTestElliptic<2>>);
+static_assert(LinearSolver<ExactTestElliptic<3>>);
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<1>>);
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<2>>);
+static_assert(FieldPostProcessor<CenteredFieldPostProcessor<3>>);
+static_assert(EllipticOperator<pops::elliptic::mg::GeometricMG<1>>);
+static_assert(EllipticOperator<pops::elliptic::mg::GeometricMG<2>>);
+static_assert(EllipticOperator<pops::elliptic::mg::GeometricMG<3>>);
+static_assert(LinearSolver<pops::elliptic::mg::GeometricMG<1>>);
+static_assert(LinearSolver<pops::elliptic::mg::GeometricMG<2>>);
+static_assert(LinearSolver<pops::elliptic::mg::GeometricMG<3>>);
 static_assert(EllipticFactory<DefaultEllipticFactory<ExactTestElliptic<3>>, ExactTestElliptic<3>>);
 
 template <int Dim>
@@ -113,7 +142,9 @@ void expect_factory_builds_exact_rank() {
   EXPECT_EQ(solver.rhs().distribution(), expected_distribution);
   EXPECT_EQ(solver.rhs().local_rank(), expected_local_rank);
   EXPECT_FALSE(solver.rhs().shares_storage_with(solver.phi()));
-  solver.solve();
+  const SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved());
+  EXPECT_TRUE(solver.last_solve_report().solved());
   EXPECT_EQ(solver.residual(), Real(0));
 }
 
