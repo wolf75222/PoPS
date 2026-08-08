@@ -4,15 +4,45 @@
 
 #include <pops/runtime/program/program_context.hpp>
 
+#include <concepts>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
+
+template <int Dim>
+concept ExactRankedFieldProgramRoutes = requires(
+    pops::runtime::program::ProgramContext<Dim>& context, pops::MultiFab<Dim>& stage,
+    const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+    const pops::CompiledFieldBoundaryKernel<Dim>& boundary_kernel,
+    const pops::FieldLogicalTimePoint& logical_point,
+    const std::vector<const pops::MultiFab<Dim>*>& stages,
+    std::initializer_list<typename pops::runtime::program::ProgramContext<Dim>::FieldStageOverride>
+        overrides,
+    const std::string& identity, const std::vector<double>& parameters) {
+  { context.solve_fields() } -> std::same_as<pops::SolveOutcome>;
+  { context.solve_fields_from_state(0, stage) } -> std::same_as<pops::SolveOutcome>;
+  {
+    context.solve_fields_from_state_at(point, identity, 0, stage)
+  } -> std::same_as<pops::SolveOutcome>;
+  { context.solve_fields_from_blocks(stages) } -> std::same_as<pops::SolveOutcome>;
+  {
+    context.solve_fields_from_blocks_at(point, 0, identity, overrides)
+  } -> std::same_as<pops::SolveOutcome>;
+  context.set_field_boundary_kernel(identity, boundary_kernel);
+  context.set_field_logical_timepoint(identity, logical_point);
+  context.set_field_boundary_parameters(identity, parameters);
+};
 
 static_assert(std::is_class_v<pops::runtime::program::ProgramContext<1>>);
 static_assert(std::is_class_v<pops::runtime::program::ProgramContext<2>>);
 static_assert(std::is_class_v<pops::runtime::program::ProgramContext<3>>);
 static_assert(!std::is_trivially_constructible_v<pops::runtime::program::ProgramContext<2>>);
+static_assert(ExactRankedFieldProgramRoutes<1>);
+static_assert(ExactRankedFieldProgramRoutes<2>);
+static_assert(ExactRankedFieldProgramRoutes<3>);
 
 TEST(ProgramContextSchurFree, ExactRankedHeaderIsSelfContainedAndRejectsNullRuntime) {
   EXPECT_THROW((void)pops::runtime::program::ProgramContext<2>(nullptr), std::invalid_argument);

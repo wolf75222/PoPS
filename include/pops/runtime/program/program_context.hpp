@@ -885,28 +885,137 @@ class ProgramContext {
     return probe;
   }
 
-  [[noreturn]] SolveOutcome solve_fields() const { unavailable_field_provider_(); }
-  [[noreturn]] SolveOutcome solve_fields_from_state(int, field_type&) const {
-    unavailable_field_provider_();
+  void set_field_boundary_kernel(const std::string& provider_slot,
+                                 const CompiledFieldBoundaryKernel<Dim>& kernel) const {
+    system_->set_field_boundary_kernel(provider_slot, kernel);
   }
-  [[noreturn]] SolveOutcome solve_fields_from_state_at(
-      const runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
-      field_type&) const {
-    unavailable_field_provider_();
+
+  void set_field_logical_timepoint(const std::string& provider_slot,
+                                   const FieldLogicalTimePoint& point) const {
+    system_->set_field_logical_timepoint(provider_slot, point);
   }
-  [[noreturn]] SolveOutcome solve_fields_from_blocks(
-      const std::vector<const field_type*>&) const {
-    unavailable_field_provider_();
+
+  void set_field_boundary_parameters(const std::string& provider_slot,
+                                     const std::vector<double>& parameters) const {
+    system_->set_field_boundary_parameters(provider_slot, parameters);
   }
-  [[noreturn]] SolveOutcome solve_fields_from_blocks_at(
-      const runtime::multiblock::BoundaryEvaluationPoint&, std::int64_t, std::string_view,
-      std::initializer_list<FieldStageOverride>) const {
-    unavailable_field_provider_();
+
+  [[nodiscard]] SolveOutcome solve_fields() const { return system_->solve_fields(); }
+
+  [[nodiscard]] SolveOutcome solve_fields_from_state(int program_block, field_type& stage) const {
+    const int runtime_block = sys_block(program_block);
+    require_program_stage_(program_block, runtime_block, stage);
+    return system_->solve_fields_from_state(runtime_block, stage);
+  }
+
+  [[nodiscard]] SolveOutcome solve_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int program_block, field_type& stage) const {
+    require_boundary_point_(point, "Program single-state field solve");
+    if (provider_slot.empty())
+      throw std::invalid_argument("Program field solve requires an exact provider slot");
+    const int runtime_block = sys_block(program_block);
+    require_program_stage_(program_block, runtime_block, stage);
+    return system_->solve_fields_from_state_at(point, provider_slot, runtime_block, stage);
+  }
+
+  [[nodiscard]] SolveOutcome solve_fields_from_blocks(
+      const std::vector<const field_type*>& program_stages) const {
+    const std::vector<int>& block_map = require_program_block_map_();
+    if (program_stages.size() != block_map.size())
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires one slot per Program block");
+
+    std::vector<const field_type*> runtime_stages(static_cast<std::size_t>(system_->n_blocks()),
+                                                  nullptr);
+    std::vector<const field_type*> unique_stages;
+    unique_stages.reserve(program_stages.size());
+    for (std::size_t program = 0; program < program_stages.size(); ++program) {
+      const int runtime_block = sys_block(static_cast<int>(program));
+      const field_type* const stage = program_stages[program];
+      if (stage == nullptr)
+        continue;
+      require_unaliased_stage_(unique_stages, *stage);
+      require_program_stage_(static_cast<int>(program), runtime_block, *stage);
+      if (runtime_stages[static_cast<std::size_t>(runtime_block)] != nullptr)
+        throw std::invalid_argument(
+            "Program simultaneous field solve maps two stages to one runtime block");
+      runtime_stages[static_cast<std::size_t>(runtime_block)] = stage;
+      unique_stages.push_back(stage);
+    }
+    return system_->solve_fields_from_blocks(runtime_stages);
+  }
+
+  [[nodiscard]] SolveOutcome solve_fields_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
+    require_boundary_point_(point, "Program simultaneous field solve");
+    if (value_id < 0)
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires a non-negative IR identity");
+    if (field.empty())
+      throw std::invalid_argument("Program field solve requires an exact provider slot");
+    if (overrides.size() == 0)
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires at least one stage override");
+
+    const std::vector<int>& block_map = require_program_block_map_();
+    GeneratedFieldRoute candidate;
+    candidate.field.assign(field.data(), field.size());
+    candidate.program_to_system.assign(block_map.begin(), block_map.end());
+    candidate.program_blocks.reserve(overrides.size());
+    std::vector<const field_type*> runtime_stages(static_cast<std::size_t>(system_->n_blocks()),
+                                                  nullptr);
+    std::vector<const field_type*> unique_stages;
+    unique_stages.reserve(overrides.size());
+    for (const FieldStageOverride& override_value : overrides) {
+      if (override_value.program_block < 0 ||
+          static_cast<std::size_t>(override_value.program_block) >= block_map.size())
+        throw std::out_of_range("Program simultaneous field solve Program block is out of range");
+      if (override_value.state == nullptr)
+        throw std::invalid_argument(
+            "Program simultaneous field solve stage override cannot be null");
+      if (std::find(candidate.program_blocks.begin(), candidate.program_blocks.end(),
+                    override_value.program_block) != candidate.program_blocks.end())
+        throw std::invalid_argument(
+            "Program simultaneous field solve contains a duplicate Program block");
+      require_unaliased_stage_(unique_stages, *override_value.state);
+      const int runtime_block = sys_block(override_value.program_block);
+      require_program_stage_(override_value.program_block, runtime_block, *override_value.state);
+      if (runtime_stages[static_cast<std::size_t>(runtime_block)] != nullptr)
+        throw std::invalid_argument(
+            "Program simultaneous field solve maps two stages to one runtime block");
+      candidate.program_blocks.push_back(override_value.program_block);
+      runtime_stages[static_cast<std::size_t>(runtime_block)] = override_value.state;
+      unique_stages.push_back(override_value.state);
+    }
+
+    const auto existing = generated_field_routes_.find(value_id);
+    if (existing == generated_field_routes_.end()) {
+      generated_field_routes_.emplace(value_id, std::move(candidate));
+    } else if (existing->second != candidate) {
+      throw std::logic_error(
+          "Program simultaneous field solve IR identity changed its qualified route");
+    }
+
+    const std::string& provider_slot = generated_field_routes_.at(value_id).field;
+    system_->prepare_named_field_publication_storage_(provider_slot);
+    return system_->run_field_publication_outcome_([this, &point, &provider_slot, &runtime_stages] {
+      return system_->solve_fields_from_blocks_at_in_place_(point, provider_slot, runtime_stages);
+    });
   }
 
  private:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
   using ScratchKey = std::tuple<ScratchKind, std::int64_t, int>;
+
+  struct GeneratedFieldRoute {
+    std::string field;
+    std::vector<int> program_to_system;
+    std::vector<int> program_blocks;
+
+    friend bool operator==(const GeneratedFieldRoute&, const GeneratedFieldRoute&) = default;
+  };
 
   static runtime_type* require_system_(runtime_type* system) {
     if (system == nullptr)
@@ -926,6 +1035,43 @@ class ProgramContext {
         left.ghosts() != right.ghosts())
       throw std::invalid_argument(std::string(operation) +
                                   " requires the same exact ranked field contract");
+  }
+
+  const std::vector<int>& require_program_block_map_() const {
+    const std::vector<int>& block_map = system_->program_block_map();
+    if (block_map.empty())
+      throw std::runtime_error(
+          "Program simultaneous field solve requires an explicit program-to-runtime block map");
+    std::vector<int> runtime_blocks;
+    runtime_blocks.reserve(block_map.size());
+    for (std::size_t program = 0; program < block_map.size(); ++program) {
+      const int runtime_block = sys_block(static_cast<int>(program));
+      if (std::find(runtime_blocks.begin(), runtime_blocks.end(), runtime_block) !=
+          runtime_blocks.end())
+        throw std::runtime_error(
+            "Program simultaneous field solve block map contains duplicate runtime routes");
+      runtime_blocks.push_back(runtime_block);
+    }
+    return block_map;
+  }
+
+  void require_program_stage_(int program_block, int runtime_block, const field_type& stage) const {
+    const field_type& live = system_->block_state(runtime_block);
+    require_same_field_contract_(stage, live, "Program field stage");
+    for (int other = 0; other < system_->n_blocks(); ++other) {
+      if (other != runtime_block && &stage == &system_->block_state(other))
+        throw std::invalid_argument(
+            "Program field stage cannot borrow another runtime block's live state");
+    }
+    if (sys_block(program_block) != runtime_block)
+      throw std::logic_error("Program field stage route changed during validation");
+  }
+
+  static void require_unaliased_stage_(const std::vector<const field_type*>& stages,
+                                       const field_type& candidate) {
+    if (std::find(stages.begin(), stages.end(), &candidate) != stages.end())
+      throw std::invalid_argument(
+          "Program simultaneous field solve cannot alias one stage across blocks");
   }
 
   static void require_boundary_point_(
@@ -1068,10 +1214,6 @@ class ProgramContext {
     runtime_state().profiler_.count("kernels", count);
   }
 
-  [[noreturn]] static void unavailable_field_provider_() {
-    throw std::runtime_error(
-        "ProgramContext field solve requires a dimension-qualified prepared field provider");
-  }
   runtime_type* system_ = nullptr;
   ExecutionLane scalar_boundary_lane_;
   mutable std::uint64_t scalar_boundary_generation_ = 0;
@@ -1082,6 +1224,7 @@ class ProgramContext {
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;
+  mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
 };
 
 template <int Dim>
