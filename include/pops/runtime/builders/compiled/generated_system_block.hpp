@@ -30,6 +30,54 @@
 namespace pops {
 namespace generated_system_detail {
 
+/// Convert one primitive cell without exposing a rejected or partially materialized candidate.
+///
+/// Generated Uniform and AMR blocks share this publication seam.  The model-owned inverse is
+/// evaluated before the caller's buffer is touched so a provider that reports success while
+/// producing a non-finite or non-recoverable conservative state still fails closed.
+template <class Model>
+void publish_conservative_state(const Model& model, const double* primitive,
+                                double* conservative) {
+  if (primitive == nullptr || conservative == nullptr)
+    throw std::invalid_argument(
+        "generated primitive-to-conservative conversion requires valid buffers");
+
+  typename Model::Primitive input{};
+  for (int component = 0; component < Model::n_vars; ++component) {
+    const Real value = static_cast<Real>(primitive[component]);
+    if (!std::isfinite(value))
+      throw std::runtime_error(
+          "generated primitive-to-conservative conversion rejected its candidate");
+    input[component] = value;
+  }
+
+  const auto converted = model.make_conservative(input);
+  if (!converted.succeeded())
+    throw std::runtime_error(
+        "generated primitive-to-conservative conversion rejected its candidate");
+
+  const auto recovered = model.recover(converted.value);
+  if (!recovered.succeeded())
+    throw std::runtime_error(
+        "generated primitive-to-conservative conversion failed its recovery roundtrip");
+
+  double candidate[Model::n_vars]{};
+  for (int component = 0; component < Model::n_vars; ++component) {
+    const Real converted_value = converted.value[component];
+    const Real recovered_value = recovered.value[component];
+    if (!std::isfinite(converted_value) || !std::isfinite(recovered_value))
+      throw std::runtime_error(
+          "generated primitive-to-conservative conversion failed its recovery roundtrip");
+    candidate[component] = static_cast<double>(converted_value);
+    if (!std::isfinite(candidate[component]))
+      throw std::runtime_error(
+          "generated primitive-to-conservative conversion exceeds publication precision");
+  }
+
+  for (int component = 0; component < Model::n_vars; ++component)
+    conservative[component] = candidate[component];
+}
+
 template <int Dim, class Model>
 concept GeneratedSourceModel =
     requires(const Model& model, const typename Model::State& state,
@@ -372,15 +420,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     add_poisson_rhs<Dim>(model, state, rhs);
   };
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
-    typename Model::Primitive input{};
-    for (int component = 0; component < Model::n_vars; ++component)
-      input[component] = static_cast<Real>(primitive[component]);
-    const auto converted = model.make_conservative(input);
-    if (!converted.succeeded())
-      throw std::runtime_error(
-          "generated primitive-to-conservative conversion rejected its candidate");
-    for (int component = 0; component < Model::n_vars; ++component)
-      conservative[component] = static_cast<double>(converted.value[component]);
+    generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
   const auto recovery_plan = prepare_model_variable_recovery(model);
   result.conservative_to_primitive =

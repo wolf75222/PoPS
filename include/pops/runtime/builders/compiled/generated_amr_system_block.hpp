@@ -729,14 +729,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
-    typename Model::Primitive input{};
-    for (int component = 0; component < Model::n_vars; ++component)
-      input[component] = static_cast<Real>(primitive[component]);
-    const auto converted = model.make_conservative(input);
-    for (int component = 0; component < Model::n_vars; ++component)
-      conservative[component] = converted.succeeded()
-                                    ? static_cast<double>(converted.value[component])
-                                    : std::numeric_limits<double>::quiet_NaN();
+    generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
   const auto recovery_plan = prepare_model_variable_recovery(model);
   result.conservative_to_primitive = [recovery_plan](const double* conservative,
