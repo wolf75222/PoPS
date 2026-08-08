@@ -539,7 +539,7 @@ def _check_lowerable(
 # (consumed by apply / solve_local_linear, which read the model coefficients), so it lowers to
 # nothing -- always allowed, model or not. 'reduce' / 'compare' / 'while' are the ADC-404a control
 # flow / reduction ops (lowered inline via pops::dot; no model needed). 'matrix_free_operator' /
-# 'scalar_field' / 'laplacian' / 'gradient' / 'divergence' / 'solve_linear' are the ADC-405 / ADC-412
+# 'scalar_field' / 'vector_field' / 'laplacian' / 'gradient' / 'divergence' / 'solve_linear' are the ADC-405 / ADC-412
 # matrix-free Krylov ops (the operator declaration carries an apply sub-block; solve_linear lowers to
 # pops::*_solve; divergence is the centered FV divergence of a gradient field).
 

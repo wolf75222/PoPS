@@ -60,6 +60,7 @@ _ALLOWED_OPS = frozenset(
         "acceptance_guard",
         "matrix_free_operator",
         "scalar_field",
+        "vector_field",
         "laplacian",
         "gradient",
         "divergence",
@@ -181,7 +182,7 @@ def _apply_in_arg(sub: Any, value: Any) -> str:
     """C++ argument for the INPUT field of a laplacian / gradient inside an apply lambda. When the input
     is the lambda's ``in`` (a const&), const_cast it (ctx.laplacian / gradient take a non-const
     exact-ranked MultiFab&
-    and only write the ghosts, never the valid cells -- the same contract test_generic_krylov relies on);
+    and only write the ghosts, never the valid cells -- the prepared operator contract);
     a persistent scratch shared_ptr is dereferenced."""
     tok = sub[value.id]
     if tok == "in":
@@ -381,7 +382,13 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
     return lines
 
 
-def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list:
+def _kernel_open(
+    out_var: Any,
+    state_var: Any,
+    params_block: Any = None,
+    *,
+    ghost_depth: int = 0,
+) -> list:
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
     write handle ``outA``, the read state handle ``<state_var>A`` and the aux read handle ``auxA``.
 
@@ -396,6 +403,13 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
     ctx.program_params(<block>);`` at the FAB-LOOP level (a host map lookup, NOT inside the device
     for_each_cell) so the per-cell lambda captures the trivially-copyable struct by value; the lowered
     ``params.get(idx)`` then reads the CURRENT value (no recompile, mirror of the AOT-native member)."""
+    if isinstance(ghost_depth, bool) or not isinstance(ghost_depth, int) or ghost_depth < 0:
+        raise ValueError("generated kernel ghost depth must be a non-negative integer")
+    iteration_box = (
+        "%s.box(li)" % out_var
+        if ghost_depth == 0
+        else "%s.fab(li).box().grow(%d)" % (out_var, ghost_depth)
+    )
     lines = [
         "pops::MultiFab<pops::kNativeDimension>& %s_aux = ctx.aux();" % out_var,
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
@@ -411,8 +425,8 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
         # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
         lines.append("  const pops::RuntimeParams params = ctx.program_params(%d);" % params_block)
     lines.append(
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
-        "const pops::CellIndex<pops::kNativeDimension>& index) {" % out_var
+        "  pops::for_each_cell(%s, [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % iteration_box
     )
     return lines
 
@@ -502,6 +516,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>  // one prepared local solver
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>
+#include <array>                               // exact-ranked axis packs
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)

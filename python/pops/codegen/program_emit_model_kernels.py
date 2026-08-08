@@ -51,22 +51,25 @@ def _emit_local_transform_kernel(
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
-        "  const pops::Array4 statusA = %s.fab(li).array();" % status_var,
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> statusA = "
+        "%s.fab(li).view();" % status_var,
         "  const bool transform_has_active_mask_ = %s != nullptr;" % active_mask_var,
-        "  const pops::ConstArray4 transform_activeA_ = "
-        "transform_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> "
+        "transform_activeA_ = transform_has_active_mask_ "
+        "? std::as_const(*%s).fab(li).view() "
+        ": pops::FieldView<const pops::Real, pops::kNativeDimension>{};"
         % active_mask_var,
     ]
     body += [
         "    if (transform_has_active_mask_ && "
-        "!(transform_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+        "!(transform_activeA_(index, 0) >= pops::Real(0.5))) {",
     ]
     for component in range(len(exprs)):
         body.append(
-            "      outA(i, j, %d) = %sA(i, j, %d);"
+            "      outA(index, %d) = %sA(index, %d);"
             % (component, state_var, component))
     body += [
-        "      statusA(i, j, 0) = pops::Real(0);",
+        "      statusA(index, 0) = pops::Real(0);",
         "      return;",
         "    }",
     ]
@@ -88,7 +91,7 @@ def _emit_local_transform_kernel(
     body.append("    const pops::Real transform_valid_ = %s;" % rendered[-1])
     for component in range(len(exprs)):
         body.append(
-            "    if (!Kokkos::isfinite(%sA(i, j, %d))) transform_failed_ = pops::Real(1);"
+            "    if (!Kokkos::isfinite(%sA(index, %d))) transform_failed_ = pops::Real(1);"
             % (state_var, component))
     body.append(
         "    if (!Kokkos::isfinite(transform_valid_) || "
@@ -98,8 +101,8 @@ def _emit_local_transform_kernel(
             "    if (!Kokkos::isfinite(transformed_%d_)) transform_failed_ = pops::Real(1);"
             % component)
         body.append(
-            "    outA(i, j, %d) = transformed_%d_;" % (component, component))
-    body.append("    statusA(i, j, 0) = transform_failed_;")
+            "    outA(index, %d) = transformed_%d_;" % (component, component))
+    body.append("    statusA(index, 0) = transform_failed_;")
     body += _kernel_close()
     return body
 
@@ -123,7 +126,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     body = _kernel_open(out_var, state_var, params_block)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True)]
-    body += ["    outA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
+    body += ["    outA(index, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
     body += _kernel_close()
     return body
 
@@ -171,7 +174,7 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
 
     @p components: ``{block: [Expr, ...]}`` -- the per-block component formulas (cons-only MVP).
     @p by_block:   ``{block: state Value}`` -- each block's input state (its StateSpace gives the cons
-                   names + their component indices; its C++ token gives the read Array4).
+                   names + their component indices; its C++ token gives the ranked read FieldView).
     @p var:        the id -> C++ token map (the input states are already bound to ``ctx.state(idx)``).
     @p scratch:    ``{block: scratch var name}`` -- the per-block rate scratch (alloc'd by the caller).
 
@@ -180,7 +183,7 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     scratches are co-located (same ba/dm as the System aux), so ``fab(li)`` is the same box on every
     rank -- the co-distribution every aux-reading kernel relies on (see _kernel_open). Each input
     state binds its OWN read handle (``<state token>A``); a referenced cons var binds from its state's
-    Array4 at its component index. A cons NAME shared by two states' components AND referenced by a
+    FieldView at its component index. A cons NAME shared by two states' components AND referenced by a
     formula is ambiguous (no single source) -- rejected loud, never silently bound to one state."""
     blocks = list(components)
     driver = scratch[blocks[0]]                  # the block whose box / local_size drives the loop
@@ -200,22 +203,30 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     # formula actually reads (incl. a read-only catalyst input that is not an output block), all inside
     # the per-fab loop and BEFORE for_each_cell so the device lambda captures them by value.
     for blk in blocks:
-        lines.append("  const pops::Array4 %sA = %s.fab(li).array();" % (scratch[blk], scratch[blk]))
+        lines.append(
+            "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
+            "%s.fab(li).view();" % (scratch[blk], scratch[blk])
+        )
     read_tokens = {src[0] for src in cons_source.values()}
     seen_states = []
     for st in by_block.values():                 # input order (v.inputs); deterministic
         tok = var[st.id]
         if tok in read_tokens and tok not in seen_states:
             seen_states.append(tok)
-            lines.append("  const pops::ConstArray4 %s = %s.fab(li).const_array();"
-                         % (state_handle(tok), tok))
-    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % driver)
+            lines.append(
+                "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %s = "
+                "std::as_const(%s).fab(li).view();" % (state_handle(tok), tok)
+            )
+    lines.append(
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
+    )
     for c in sorted(cons_source):                # bind only the referenced cons (no unused locals)
         tok, idx = cons_source[c]
-        lines.append("    const pops::Real %s = %s(i, j, %d);" % (c, state_handle(tok), idx))
+        lines.append("    const pops::Real %s = %s(index, %d);" % (c, state_handle(tok), idx))
     for blk in blocks:
         for comp, e in enumerate(components[blk]):
-            lines.append("    %sA(i, j, %d) = %s;" % (scratch[blk], comp, e.to_cpp()))
+            lines.append("    %sA(index, %d) = %s;" % (scratch[blk], comp, e.to_cpp()))
     lines += ["  });", "}"]
     return lines
 
@@ -277,22 +288,32 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
     coefficient_cpp = scalar_cpp(coefficient)
     lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
     for block in blocks:
-        lines.append("  const pops::Array4 %sA = %s.fab(li).array();"
-                     % (scratch[block], scratch[block]))
-    lines.append("  const pops::Array4 %sA = %s.fab(li).array();" % (status, status))
+        lines.append(
+            "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
+            "%s.fab(li).view();" % (scratch[block], scratch[block])
+        )
+    lines.append(
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> %sA = "
+        "%s.fab(li).view();" % (status, status)
+    )
     seen = set()
     for state in by_block.values():
         token = var[state.id]
         if token not in seen:
             seen.add(token)
-            lines.append("  const pops::ConstArray4 %sA = %s.fab(li).const_array();"
-                         % (token, token))
-    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % driver)
+            lines.append(
+                "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %sA = "
+                "std::as_const(%s).fab(li).view();" % (token, token)
+            )
+    lines.append(
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD("
+        "const pops::CellIndex<pops::kNativeDimension>& index) {" % driver
+    )
     lines.append("    pops::Real G_[%d];" % total)
     for block in blocks:
         state = by_block[block]
         for index in range(len(components[block])):
-            lines.append("    G_[%d] = %sA(i, j, %d);"
+            lines.append("    G_[%d] = %sA(index, %d);"
                          % (offsets[block] + index, var[state.id], index))
     lines.append(
         "    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
@@ -302,7 +323,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         if source[0] == "unknown":
             lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
         else:
-            lines.append("      const pops::Real %s = %sA(i, j, %d);"
+            lines.append("      const pops::Real %s = %sA(index, %d);"
                          % (component, source[1], source[2]))
     for block in blocks:
         for index, expr in enumerate(components[block]):
@@ -323,39 +344,45 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "pops::solve_prepared_local_nonlinear(prepared_, G_);" % total)
     for block in blocks:
         for index in range(len(components[block])):
-            lines.append("    %sA(i, j, %d) = solved_.value[%d];"
+            lines.append("    %sA(index, %d) = solved_.value[%d];"
                          % (scratch[block], index, offsets[block] + index))
     lines += [
-        "    %sA(i, j, 0) = static_cast<pops::Real>("
+        "    %sA(index, 0) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_code(solved_.status));" % status,
-        "    %sA(i, j, 1) = static_cast<pops::Real>(solved_.iterations);" % status,
-        "    %sA(i, j, 2) = static_cast<pops::Real>(solved_.evaluations);" % status,
-        "    %sA(i, j, 3) = solved_.reference_residual_norm;" % status,
-        "    %sA(i, j, 4) = solved_.residual_norm;" % status,
-        "    %sA(i, j, 5) = solved_.step_norm;" % status,
-        "    %sA(i, j, 6) = solved_.condition_evidence;" % status,
-        "    %sA(i, j, 7) = static_cast<pops::Real>(solved_.safeguard_steps);" % status,
-        "    %sA(i, j, 10) = static_cast<pops::Real>("
+        "    %sA(index, 1) = static_cast<pops::Real>(solved_.iterations);" % status,
+        "    %sA(index, 2) = static_cast<pops::Real>(solved_.evaluations);" % status,
+        "    %sA(index, 3) = solved_.reference_residual_norm;" % status,
+        "    %sA(index, 4) = solved_.residual_norm;" % status,
+        "    %sA(index, 5) = solved_.step_norm;" % status,
+        "    %sA(index, 6) = solved_.condition_evidence;" % status,
+        "    %sA(index, 7) = static_cast<pops::Real>(solved_.safeguard_steps);" % status,
+        "    %sA(index, 10) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_priority(solved_.status));" % status,
         "    if (!solved_.solved()) {",
-        "      %sA(i, j, 8) = static_cast<pops::Real>(solved_.failing_component);" % status,
-        "      %sA(i, j, 9) = pops::Real(1);" % status,
+        "      %sA(index, 8) = static_cast<pops::Real>(solved_.failing_component);" % status,
+        "      %sA(index, 9) = pops::Real(1);" % status,
         "    } else {",
-        "      %sA(i, j, 8) = pops::Real(0);" % status,
-        "      %sA(i, j, 9) = pops::Real(0);" % status,
+        "      %sA(index, 8) = pops::Real(0);" % status,
+        "      %sA(index, 9) = pops::Real(0);" % status,
         "    }",
     ]
     lines += ["  });", "}"]
     return lines
 
 
-def _emit_flux_kernel(model: Any, names: Any, state_var: Any, fx_var: Any, fy_var: Any,
-                      block_idx: Any = 0) -> list:
-    """Lower NAMED fluxes (ADC-419): fxA(i,j,c) = sum_k F^k_x[c](U, prims, aux, params),
-    fyA(i,j,c) = sum_k F^k_y[c](U, prims, aux, params) over the selected named fluxes @p names. ONE
-    kernel evaluates the SUM per direction into the two n_cons flux fields (the subsequent
-    neg_div_flux_into takes -div). Reuses the same per-cell local machinery as the source kernel
-    (cons/prim/aux locals, + the runtime-param read of ADC-510 when a flux references one)."""
+def _emit_flux_kernel(
+    model: Any,
+    names: Any,
+    state_var: Any,
+    flux_vars: dict[str, str],
+    block_idx: Any = 0,
+) -> list:
+    """Lower a named physical-flux sum over the model's exact ranked axis set.
+
+    The authored model already owns a canonical ``x[/y[/z]]`` mapping.  The emitted kernel binds
+    one exact-ranked field per authored axis and iterates once over ``CellIndex<kNativeDimension>``;
+    no two-dimensional fallback or runtime dimension branch is generated.
+    """
     impl = _model_impl(model)
     flux_terms = impl._flux_terms
     for name in names:
@@ -363,23 +390,55 @@ def _emit_flux_kernel(model: Any, names: Any, state_var: Any, fx_var: Any, fy_va
             raise NotImplementedError(
                 "emit_cpp_program: flux '%s' is not declared on the model (m.flux_term); declared: %s"
                 % (name, sorted(flux_terms)))
+    axes = tuple(flux_terms[names[0]])
+    if tuple(flux_vars) != axes:
+        raise ValueError(
+            "named-flux scratch axes %s differ from the model axes %s"
+            % (tuple(flux_vars), axes)
+        )
+    for name in names[1:]:
+        if tuple(flux_terms[name]) != axes:
+            raise ValueError("named fluxes must share one exact ranked axis set")
     n = len(impl.cons_names)
-    x_exprs = [flux_terms[names[0]]["x"][c] for c in range(n)]
-    y_exprs = [flux_terms[names[0]]["y"][c] for c in range(n)]
-    for name in names[1:]:  # accumulate the additional named fluxes (their SUM is one -div)
-        x_exprs = [x_exprs[c] + flux_terms[name]["x"][c] for c in range(n)]
-        y_exprs = [y_exprs[c] + flux_terms[name]["y"][c] for c in range(n)]
+    expressions = {
+        axis: [flux_terms[names[0]][axis][component] for component in range(n)]
+        for axis in axes
+    }
+    for name in names[1:]:
+        for axis in axes:
+            expressions[axis] = [
+                expressions[axis][component] + flux_terms[name][axis][component]
+                for component in range(n)
+            ]
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
-    params_block = block_idx if _has_runtime_param(x_exprs + y_exprs) else None
-    body = _kernel_open(fx_var, state_var, params_block)
-    # fx and fy share the (ba, dm) of the scratch state, so the SAME loop / handles write both: bind a
-    # second write handle to fy's local fab right after _kernel_open's outA (= fxA), still INSIDE the
-    # per-fab loop and BEFORE for_each_cell so the device lambda captures it.
-    body.insert(3, "  const pops::Array4 fyA = %s.fab(li).array();" % fy_var)
-    body += ["    " + ln for ln in _cell_locals(impl, x_exprs + y_exprs, state_var, with_cons=True,
-                                                 with_prim=True)]
-    body += ["    outA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(x_exprs)]
-    body += ["    fyA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(y_exprs)]
+    roots = [expression for axis in axes for expression in expressions[axis]]
+    params_block = block_idx if _has_runtime_param(roots) else None
+    first_axis = axes[0]
+    body = _kernel_open(
+        flux_vars[first_axis], state_var, params_block, ghost_depth=1
+    )
+    insertion = 3
+    handles = {first_axis: "outA"}
+    for axis in axes[1:]:
+        handle = "flux_%sA" % axis
+        handles[axis] = handle
+        body.insert(
+            insertion,
+            "  const pops::FieldView<pops::Real, pops::kNativeDimension> %s = "
+            "%s.fab(li).view();" % (handle, flux_vars[axis]),
+        )
+        insertion += 1
+    body += [
+        "    " + line
+        for line in _cell_locals(
+            impl, roots, state_var, with_cons=True, with_prim=True
+        )
+    ]
+    for axis in axes:
+        body += [
+            "    %s(index, %d) = %s;" % (handles[axis], component, expression.to_cpp())
+            for component, expression in enumerate(expressions[axis])
+        ]
     body += _kernel_close()
     return body
 
@@ -399,8 +458,11 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
     body += ["    " + ln for ln in _cell_locals(impl, flat, state_var, with_cons=False,
                                                  with_prim=False)]
     for r in range(n):
-        terms = ["(%s) * %sA(i, j, %d)" % (rows[r][c].to_cpp(), state_var, c) for c in range(n)]
-        body.append("    outA(i, j, %d) = %s;" % (r, " + ".join(terms)))
+        terms = [
+            "(%s) * %sA(index, %d)" % (rows[r][c].to_cpp(), state_var, c)
+            for c in range(n)
+        ]
+        body.append("    outA(index, %d) = %s;" % (r, " + ".join(terms)))
     body += _kernel_close()
     return body
 
@@ -422,7 +484,8 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
-        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "
+        "%s.fab(li).view();" % status_var,
     ]
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
                                                  with_prim=False)]
@@ -437,24 +500,27 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
                 "    if (!std::isfinite(M_[%d][%d])) solve_failure_ = 3;" % (r, c))
     for c in range(n):
         body.append(
-            "    if (!std::isfinite(%sA(i, j, %d))) solve_failure_ = 3;"
+            "    if (!std::isfinite(%sA(index, %d))) solve_failure_ = 3;"
             % (rhs_var, c))
     body.append("    pops::Real Minv_[%d][%d];" % (n, n))
     body.append(
         "    if (solve_failure_ == 0 && !pops::detail::mat_inverse<%d>(M_, Minv_)) "
         "solve_failure_ = 2;" % n)
     for r in range(n):
-        terms = ["Minv_[%d][%d] * %sA(i, j, %d)" % (r, c, rhs_var, c) for c in range(n)]
+        terms = [
+            "Minv_[%d][%d] * %sA(index, %d)" % (r, c, rhs_var, c)
+            for c in range(n)
+        ]
         body.append(
-            "    pops::Real solved_%d_ = %sA(i, j, %d);" % (r, rhs_var, r))
+            "    pops::Real solved_%d_ = %sA(index, %d);" % (r, rhs_var, r))
         body.append(
             "    if (solve_failure_ == 0) solved_%d_ = %s;"
             % (r, " + ".join(terms)))
         body.append(
             "    if (!std::isfinite(solved_%d_)) solve_failure_ = 3;" % r)
-        body.append("    outA(i, j, %d) = solved_%d_;" % (r, r))
+        body.append("    outA(index, %d) = solved_%d_;" % (r, r))
     body.append(
-        "    solve_statusA(i, j, 0) = static_cast<pops::Real>(solve_failure_);")
+        "    solve_statusA(index, 0) = static_cast<pops::Real>(solve_failure_);")
     body += _kernel_close()
     return body
 
@@ -562,21 +628,27 @@ def _emit_solve_local_nonlinear_kernel(
     body = _kernel_open(out_var, guess_var, params_block)
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
-        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+        "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "
+        "%s.fab(li).view();" % status_var,
         "  const bool nonlinear_has_active_mask_ = %s != nullptr;" % active_mask_var,
-        "  const pops::ConstArray4 nonlinear_activeA_ = "
-        "nonlinear_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> "
+        "nonlinear_activeA_ = nonlinear_has_active_mask_ "
+        "? std::as_const(*%s).fab(li).view() "
+        ": pops::FieldView<const pops::Real, pops::kNativeDimension>{};"
         % active_mask_var,
     ]
     body += [
         "    if (nonlinear_has_active_mask_ && "
-        "!(nonlinear_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+        "!(nonlinear_activeA_(index, 0) >= pops::Real(0.5))) {",
     ]
     for component in range(n):
-        body.append("      outA(i, j, %d) = %sA(i, j, %d);" % (component, guess_var, component))
+        body.append(
+            "      outA(index, %d) = %sA(index, %d);"
+            % (component, guess_var, component)
+        )
     body += [
         "      for (int component_ = 0; component_ < 11; ++component_)",
-        "        solve_statusA(i, j, component_) = pops::Real(0);",
+        "        solve_statusA(index, component_) = pops::Real(0);",
         "      return;",
         "    }",
     ]
@@ -586,7 +658,7 @@ def _emit_solve_local_nonlinear_kernel(
     ]
     body.append("    pops::Real Gval[%d];" % n)
     for component in range(n):
-        body.append("    Gval[%d] = %sA(i, j, %d);" % (component, guess_var, component))
+        body.append("    Gval[%d] = %sA(index, %d);" % (component, guess_var, component))
     body.append(
         "    auto residual_eval = "
         "[&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {" % (n, n)
@@ -612,25 +684,25 @@ def _emit_solve_local_nonlinear_kernel(
         "pops::solve_prepared_local_nonlinear(prepared_, Gval);" % n
     )
     for component in range(n):
-        body.append("    outA(i, j, %d) = solved_.value[%d];" % (component, component))
+        body.append("    outA(index, %d) = solved_.value[%d];" % (component, component))
     body += [
-        "    solve_statusA(i, j, 0) = static_cast<pops::Real>("
+        "    solve_statusA(index, 0) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_code(solved_.status));",
-        "    solve_statusA(i, j, 1) = static_cast<pops::Real>(solved_.iterations);",
-        "    solve_statusA(i, j, 2) = static_cast<pops::Real>(solved_.evaluations);",
-        "    solve_statusA(i, j, 3) = solved_.reference_residual_norm;",
-        "    solve_statusA(i, j, 4) = solved_.residual_norm;",
-        "    solve_statusA(i, j, 5) = solved_.step_norm;",
-        "    solve_statusA(i, j, 6) = solved_.condition_evidence;",
-        "    solve_statusA(i, j, 7) = static_cast<pops::Real>(solved_.safeguard_steps);",
-        "    solve_statusA(i, j, 10) = static_cast<pops::Real>("
+        "    solve_statusA(index, 1) = static_cast<pops::Real>(solved_.iterations);",
+        "    solve_statusA(index, 2) = static_cast<pops::Real>(solved_.evaluations);",
+        "    solve_statusA(index, 3) = solved_.reference_residual_norm;",
+        "    solve_statusA(index, 4) = solved_.residual_norm;",
+        "    solve_statusA(index, 5) = solved_.step_norm;",
+        "    solve_statusA(index, 6) = solved_.condition_evidence;",
+        "    solve_statusA(index, 7) = static_cast<pops::Real>(solved_.safeguard_steps);",
+        "    solve_statusA(index, 10) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_priority(solved_.status));",
         "    if (!solved_.solved()) {",
-        "      solve_statusA(i, j, 8) = static_cast<pops::Real>(solved_.failing_component);",
-        "      solve_statusA(i, j, 9) = pops::Real(1);",
+        "      solve_statusA(index, 8) = static_cast<pops::Real>(solved_.failing_component);",
+        "      solve_statusA(index, 9) = pops::Real(1);",
         "    } else {",
-        "      solve_statusA(i, j, 8) = pops::Real(0);",
-        "      solve_statusA(i, j, 9) = pops::Real(0);",
+        "      solve_statusA(index, 8) = pops::Real(0);",
+        "      solve_statusA(index, 9) = pops::Real(0);",
         "    }",
     ]
     body += _kernel_close()

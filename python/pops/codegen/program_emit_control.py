@@ -159,7 +159,7 @@ def _emit_contiguous_rhs_group(
     for value in values:
         state = value.inputs[0]
         var[value.id] = "r%d" % value.id
-        lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[value.id], int(value.id), var[state.id]))
         index = _required_block_index(
             block_idx, value.block, "emit simultaneous rhs %r" % value.name)
@@ -479,7 +479,7 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     var[v.id] = x
     # Hoist + initialize the loop variable from the entry state (x <- loop_in).
-    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                  % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
@@ -517,7 +517,7 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     x = "x%d" % v.id
     i = "i%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                  % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                  % (x, x, var[loop_in.id]))
@@ -558,7 +558,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
     scope = "subcycle_scope_%d" % v.id
     evaluation_scope = "logical_evaluation_scope_%d" % v.id
     var[v.id] = x
-    lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+    lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                  % (x, int(v.id), var[base.id]))
     lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
                  "static_cast<pops::Real>(1), %s);" % (x, x, var[loop_in.id]))
@@ -618,7 +618,7 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
             raise NotImplementedError(
                 "branch codegen for a block-free scalar_field result requires an explicit "
                 "layout template")
-        lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (x, int(v.id), var[base.id]))
     else:
         cpp_type = "bool" if v.vtype == "bool" else "pops::Real"

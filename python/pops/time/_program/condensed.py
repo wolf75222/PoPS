@@ -86,11 +86,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def condensed_coeffs(self, name: Any = None, state: Any = None, linear_operator: Any = None,
                          subset: Any = None, c: Any = None, th_dt: Any = None, c_rho: Any = 0) -> Any:
         """Assemble the per-cell tensor coefficient ``A = I + c*rho*M^{-1}`` of the condensed operator
-        from an authored linear operator J (``M = I - th_dt*J``) on the coupled 2D momentum @p subset and
-        a State (rho at @p c_rho). Returns a ``condensed_coeffs`` bundle carrying the four coefficient
-        fields (eps_x, eps_y, a_xy, a_yx) -- pass it to ``P.apply_laplacian_coeff`` inside a matrix-free
-        apply. Generic counterpart of ``P.schur_coeffs``: the codegen inverts M with
-        ``pops::detail::block_inverse<2>`` inline (bit-identical to the Schur brick for the Lorentz J).
+        from an authored linear operator J (``M = I - th_dt*J``) on the exact-ranked momentum @p subset
+        and a State (rho at @p c_rho). Returns a ``condensed_coeffs`` bundle carrying one row-major
+        ``Dim*Dim`` tensor field -- pass it to ``P.apply_laplacian_coeff`` inside a matrix-free apply.
+        The codegen inverts M with ``pops::detail::block_inverse<Dim>`` inline.
 
         @p c = theta^2*dt^2*alpha and @p th_dt = theta*dt are scalars (numbers or dt-polynomials). rho
         (a conservative var) enters only the outer c*rho factor, never M (R2)."""
@@ -109,7 +108,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def condensed_rhs(self, out: Any = None, phi_n: Any = None, state: Any = None,
                       linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
                       g: Any = None) -> Any:
-        """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1}(mx, my))`` (F = M^{-1} applied to the
+        """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1} momentum)`` (F = M^{-1} applied to the
         momentum @p subset) -- the generic counterpart of ``P.schur_rhs``. @p out is a 1-component
         scalar_field, @p phi_n the warm-start potential (its ghosts are filled for the Laplacian), @p
         state a State. @p th_dt = theta*dt, @p g = theta*dt*alpha (numbers or dt-polynomials). The
@@ -158,14 +157,12 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                          state.block, space=state.space)
 
     def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,
-                         c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
+                         subset: Any = None, c_rho: Any = 0, c_E: Any = 3) -> Any:
         """Record the kinetic-energy increment IN PLACE on @p state (ADC-427):
-        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``, ``v = (mx, my)/rho`` -- the generic
-        counterpart of the retired ``P.schur_energy``. @p state carries ``rho`` / ``mx`` / ``my`` / ``E``
-        at @p c_rho / @p c_mx / @p c_my / @p c_E AFTER the velocity update (mom = rho*v^{n+1}); @p
-        state_old is U^n (read for v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same
-        rho is read from both. Returns @p state (E overwritten in place). Emitted as a self-contained
-        inline kernel (no block inverse, no coupling/schur)."""
+        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``. The exact-ranked momentum
+        @p subset is the same 1D/2D/3D subset used by the condensed solve. @p state carries the updated
+        momentum and energy at @p c_E; @p state_old is U^n. rho is frozen, so both velocities use the
+        same density. Returns @p state (E overwritten in place)."""
         if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
@@ -176,9 +173,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
             raise ValueError("condensed_energy: state and state_old must belong to the same block")
         require_compatible_spaces(
             state.space, state_old.space, "condensed_energy", typed_pair=True)
-        for nm, ci in (("c_rho", c_rho), ("c_mx", c_mx), ("c_my", c_my), ("c_E", c_E)):
-            if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
-                raise ValueError("condensed_energy: %s must be a Python int >= 0 (got %r)" % (nm, ci))
+        sub = self._condensed_subset(subset, "condensed_energy")
+        rho_component = self._comp_index(c_rho, "c_rho", "condensed_energy")
+        energy_component = self._comp_index(c_E, "c_E", "condensed_energy")
         return self._new("state", "condensed_energy", (state, state_old),
-                         {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
+                         {"subset": sub, "spatial_dimension": len(sub),
+                          "c_rho": rho_component, "c_E": energy_component},
                          name, state.block, space=state.space)

@@ -430,6 +430,31 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "scalar_field", "scalar_field", (),
             {"ncomp": int(ncomp), "stencil_access": StencilAccess.pointwise()}, name, None)
 
+    def vector_field(self, *components: Any, name: Any = None) -> Any:
+        """Compose one exact spatial vector from scalar-field components.
+
+        The component count is the authored spatial rank and is matched against the domain rank
+        during resolve.  Native lowering allocates one field and packs each scalar into its matching
+        axis component; no missing axis is padded and no 2D convention survives in the runtime.
+        """
+        if len(components) not in (1, 2, 3):
+            raise ValueError(
+                "vector_field requires exactly 1, 2, or 3 scalar components")
+        for axis, component in enumerate(components):
+            if not (isinstance(component, ProgramValue)
+                    and component.vtype == "scalar_field"):
+                raise ValueError(
+                    "vector_field component %d must be a scalar_field value" % axis)
+            if int(component.attrs.get("ncomp", 1)) != 1:
+                raise ValueError(
+                    "vector_field component %d must have exactly one component" % axis)
+            require_owned(self, component, "vector_field")
+        dimension = len(components)
+        return self._new(
+            "scalar_field", "vector_field", tuple(components),
+            {"ncomp": dimension, "spatial_dimension": dimension,
+             "stencil_access": StencilAccess.pointwise()}, name, None)
+
     def matrix_free_operator(self, name: Any, domain: Any = "scalar", range_: Any = "scalar",
                              ncomp: Any = None, *, scope: Any = None,
                              stencil_depth: Any = None) -> Any:
@@ -559,7 +584,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         return self._replace_value(operator, attrs=attrs)
 
     def laplacian(self, out: Any, in_: Any) -> Any:
-        """Record ``out = Lap(in_)`` (the shared discrete 5-point Laplacian). @p out and @p in_ are
+        """Record ``out = Lap(in_)`` (the shared exact-ranked Cartesian Laplacian). @p out and @p in_ are
         scalar_field values. Lowered to ``ctx.laplacian(out, in_)``. Used inside an apply sub-block to
         form a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` via the affine algebra."""
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
@@ -571,28 +596,41 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
     def gradient(self, out: Any, phi: Any) -> Any:
-        """Record ``out = grad(phi)`` (centered differences; @p out has >= 2 components). @p out and
+        """Record ``out = grad(phi)`` (centered differences; @p out has one component per native axis). @p out and
         @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``."""
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("gradient: out must be a scalar_field value")
         if not (isinstance(phi, ProgramValue) and phi.vtype == "scalar_field"):
             raise ValueError("gradient: phi must be a scalar_field value")
+        output_components = int(out.attrs.get("ncomp", 1))
+        if output_components not in (1, 2, 3):
+            raise ValueError("gradient: out must carry one component per spatial axis")
+        if int(phi.attrs.get("ncomp", 1)) != 1:
+            raise ValueError("gradient: phi must have exactly one component")
         return self._new(
             "scalar_field", "gradient", (out, phi),
-            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
+            {"ncomp": output_components, "spatial_dimension": output_components,
+             "stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
-    def divergence(self, out: Any, fx: Any, fy: Any) -> Any:
-        """Record ``out = div(fx, fy)`` (centered FV divergence d fx/dx + d fy/dy, component 0). @p out,
-        @p fx and @p fy are scalar_field values. Lowered to ``ctx.divergence(out, fx, fy)``. The exact
-        inverse of @ref gradient: chaining ``P.gradient(g, phi); P.divergence(d, gx, gy)`` recovers the
-        5-point Laplacian, so a matrix-free apply ``phi - alpha*div(grad phi)`` is the Schur-like flux
-        operator ``phi - alpha*Lap(phi)``."""
-        for nm, val in (("out", out), ("fx", fx), ("fy", fy)):
-            if not (isinstance(val, ProgramValue) and val.vtype == "scalar_field"):
-                raise ValueError("divergence: %s must be a scalar_field value" % nm)
+    def divergence(self, out: Any, flux: Any) -> Any:
+        """Record ``out = div(flux)`` for one exact-ranked vector field.
+
+        ``flux`` carries one component per native axis, so it is directly composable with
+        :meth:`gradient`; native binding authenticates its width against the resolved domain.
+        """
+        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+            raise ValueError("divergence: out must be a scalar_field value")
+        if not (isinstance(flux, ProgramValue) and flux.vtype == "scalar_field"):
+            raise ValueError("divergence: flux must be a scalar_field value")
+        if int(out.attrs.get("ncomp", 1)) != 1:
+            raise ValueError("divergence: out must have exactly one component")
+        flux_components = int(flux.attrs.get("ncomp", 1))
+        if flux_components not in (1, 2, 3):
+            raise ValueError("divergence: flux must carry one component per spatial axis")
         return self._new(
-            "scalar_field", "divergence", (out, fx, fy),
-            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
+            "scalar_field", "divergence", (out, flux),
+            {"ncomp": 1, "spatial_dimension": flux_components,
+             "stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
     # --- finite-difference Jacobian-vector product (ADC-431: implicit-flux BDF Newton-Krylov) --------
     def rhs_jacvec(self, out: Any, in_: Any, *, iterate: Any, r0: Any, c_dt: Any, eps: Any = 1e-7,
@@ -707,8 +745,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
         if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("apply_laplacian_coeff: in_ must be a scalar_field value")
-        # The GENERIC condensed bundle (P.condensed_coeffs, ADC-637) carries the four tensor-coefficient
-        # fields (eps_x, eps_y, a_xy, a_yx) the coefficiented apply consumes.
+        # The exact-ranked condensed bundle carries one row-major Dim*Dim tensor field.
         if not (isinstance(coeffs, ProgramValue) and coeffs.vtype == "condensed_coeffs"):
             raise ValueError("apply_laplacian_coeff: coeffs must be a coefficient bundle "
                              "(P.condensed_coeffs(...))")
