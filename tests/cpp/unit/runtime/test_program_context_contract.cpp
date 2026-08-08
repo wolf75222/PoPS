@@ -1,26 +1,28 @@
-// ADC-538: the native ProgramContext EXECUTION CONTRACT, proved host-side without codegen or a .so.
+// ADC-538: the exact-ranked ProgramContext EXECUTION CONTRACT, proved host-side without codegen or a .so.
 // ProgramContext (include/pops/runtime/program/program_context.hpp) is the C++ facade a generated
 // problem.so calls to run a compiled time Program during sim.step(dt); it REIMPLEMENTS NOTHING (each
-// method forwards to a System primitive). test_program_runtime.cpp already pins one Forward-Euler
+// method forwards to a System<Dim> primitive). test_program_runtime.cpp already pins one Forward-Euler
 // step + the profiler counters. This suite widens the fence to the whole host-validatable seam surface
 // and proves the "no Python in a time stage" contract BY CONSTRUCTION: the step body is native C++ and
-// its result is bit-equal to the same step composed from the System primitives directly.
+// its result is bit-equal to the same step composed from the System<Dim> primitives directly.
 //
 // It pins:
-//  - Forward-Euler via ProgramContext == the eval_rhs reference (the ADC-538 parity assertion, at the
-//    per-stage solve_fields_from_state seam, not the whole-step solve_fields);
-//  - a 2-stage SSPRK (Heun / SSP-RK2) via ProgramContext == a hand-written SSPRK reference built from
-//    solve_fields + eval_rhs, using ctx.scratch_state_like / ctx.rhs_into / ctx.lincomb / ctx.axpy and
-//    a per-stage ctx.solve_fields_from_state -- so a multi-stage field-coupled Program is exercised;
+//  - Forward-Euler via ProgramContext<kNativeDimension> == the eval_rhs reference (the ADC-538
+//    parity assertion, at the per-stage solve_fields_from_state seam, not the whole-step
+//    solve_fields);
+//  - a 2-stage SSPRK (Heun / SSP-RK2) via ProgramContext<kNativeDimension> == a hand-written SSPRK
+//    reference built from solve_fields + eval_rhs, using ctx.scratch_state_like / ctx.rhs_into /
+//    ctx.lincomb / ctx.axpy and a per-stage ctx.solve_fields_from_state -- so a multi-stage
+//    field-coupled Program is exercised;
 //  - the remaining host-validatable seams return sane, consistent results: neg_div_flux_default_into +
-//    source_default_into recompose to rhs_into; lincomb / axpy; fill_boundary; apply_projection (no-op
-//    here) is a copy; the reductions; laplacian == divergence(gradient) on a smooth field; the scratch
+//    source_default_into recompose to rhs_into; lincomb / axpy; fill_boundary; an absent projection
+//    fails closed; the reductions; laplacian == divergence(gradient); the scratch
 //    allocators; register/store/read/rotate history; record_scalar -> program_diagnostic; the runtime
 //    params round-trip; hmin / max_wave_speed are positive;
 //  - the per-stage FieldContext.matches() guard rejects a wrong (problem, block, stage) read.
 //
 // The compiled-.so runtime cadence, the held-node scheduler cache and the AOT ABI are Kokkos-only and
-// validated on ROMEO; here every seam is driven on a ProgramContext built directly on a host System.
+// validated on ROMEO; here every seam is driven on the build-selected exact native dimension.
 
 #include <gtest/gtest.h>
 
@@ -28,13 +30,11 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/execution_lane.hpp>
-#include <pops/physics/bricks/source.hpp>                // NoSource
-#include <pops/physics/composition/composite.hpp>        // CompositeModel
-#include <pops/physics/fluids/euler.hpp>                 // Euler
-#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/context/aux_layout.hpp>           // default_poisson_layout
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/context/aux_layout.hpp>       // default_poisson_layout
 #include <pops/runtime/context/field_context.hpp>    // FieldContext (per-stage provenance token)
-#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the contract under test)
+#include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <algorithm>
@@ -44,6 +44,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -51,19 +52,57 @@
 #endif
 
 using namespace pops;
-using runtime::program::ProgramContext;
 
 namespace {
 
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeProgramContext = runtime::program::ProgramContext<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using NativeLayout = mesh::BoxArray<kTestDimension>;
+using NativeDistribution = mesh::Distribution<kTestDimension>;
+using NativeConstView = FieldView<const Real, kTestDimension>;
+using NativeBox = Box<kTestDimension>;
+
+NativeSystemConfig native_config(std::int64_t cells, Real length = Real(1)) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = length;
+    config.periodicity[static_cast<std::size_t>(axis)] = true;
   }
-};
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
+  return config;
+}
+
+Extent<kTestDimension> enlarged_ghosts(const NativeField& field, int increment) {
+  Extent<kTestDimension> ghosts = field.ghosts();
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    ghosts[axis] += increment;
+  return ghosts;
+}
+
+NativeField native_field_like(const NativeField& field, int components,
+                              Extent<kTestDimension> ghosts) {
+  return NativeField(field.layout(), field.distribution(), field.local_rank(), components, ghosts);
+}
+
+Real first_value(const NativeField& field, int component = 0) {
+  return field.fab(0).view()(field.box(0).lo, component);
+}
+
+using GasModel = nd::IdealGasEuler<kTestDimension>;
+using GasSchema = typename GasModel::Schema;
 constexpr double kGamma = 1.4;
-constexpr int kNcomp = 4;
+constexpr int kNcomp = GasModel::n_vars;
+
+std::size_t uniform_cell_count(int cells) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    result *= static_cast<std::size_t>(cells);
+  return result;
+}
 
 void ensure_kokkos() {
 #if defined(POPS_HAS_KOKKOS)
@@ -71,47 +110,170 @@ void ensure_kokkos() {
 #endif
 }
 
-void add_gas_block(System& s, const std::string& name) {
-  add_compiled_model(s, name, GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", kGamma);
+void materialize_test_residual(NativeField& state, NativeField& residual) {
+  if (state.layout() != residual.layout() || state.distribution() != residual.distribution() ||
+      state.local_rank() != residual.local_rank() || state.ncomp() != residual.ncomp())
+    throw std::invalid_argument("test residual requires one exact ranked field contract");
+  for (std::size_t local = 0; local < state.local_size(); ++local) {
+    const NativeConstView input = std::as_const(state).fab(local).view();
+    const FieldView<Real, kTestDimension> output = residual.fab(local).view();
+    const int components = state.ncomp();
+    for_each_cell(state.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      for (int component = 0; component < components; ++component)
+        output(cell, component) = -Real(0.25) * input(cell, component);
+    });
+  }
 }
 
-void add_gas(System& s) {
+void materialize_zero_residual(NativeField&, NativeField& residual) {
+  residual.set_val(Real(0));
+}
+
+void materialize_mean_free_density(const NativeField& state, NativeField& rhs) {
+  if (rhs.ncomp() != 1 || state.layout() != rhs.layout() ||
+      state.distribution() != rhs.distribution() || state.local_rank() != rhs.local_rank())
+    throw std::invalid_argument("test field RHS requires one exact ranked scalar output");
+  std::size_t cells = 0;
+  for (std::size_t box = 0; box < state.layout().size(); ++box)
+    cells += static_cast<std::size_t>(state.layout()[box].numPts());
+  if (cells == 0)
+    throw std::logic_error("test field RHS requires a non-empty exact ranked layout");
+  const Real mean = reduce_sum(state, GasSchema::density) / static_cast<Real>(cells);
+  rhs.set_val(Real(0));
+  for (std::size_t local = 0; local < state.local_size(); ++local) {
+    const NativeConstView input = std::as_const(state).fab(local).view();
+    const FieldView<Real, kTestDimension> output = rhs.fab(local).view();
+    for_each_cell(state.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      const Real fluctuation = input(cell, GasSchema::density) - mean;
+      const Real magnitude = fluctuation < Real(0) ? -fluctuation : fluctuation;
+      output(cell, 0) = magnitude <= Real(1e-12) ? Real(0) : fluctuation;
+    });
+  }
+}
+
+void add_gas_block(NativeSystem& s, const std::string& name) {
+  s.install_block_state_route(name, "test::state::" + name);
+  const GasModel model = GasModel::prepare(Real(kGamma));
+  PreparedSystemBlock<kTestDimension> prepared;
+  prepared.name = name;
+  prepared.provider_identity = "test.program-context.exact-ranked-euler";
+  prepared.ncomp = GasModel::n_vars;
+  prepared.aux_components = kTestDimension + 1;
+  prepared.conservative_variables = GasModel::conservative_vars();
+  prepared.primitive_variables = GasModel::primitive_vars();
+  prepared.gamma = kGamma;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    prepared.ghosts[axis] = 1;
+
+  const auto residual = [](NativeField& state, NativeField& output) {
+    materialize_test_residual(state, output);
+  };
+  const auto zero = [](NativeField& state, NativeField& output) {
+    materialize_zero_residual(state, output);
+  };
+  prepared.closures.rhs_into = residual;
+  prepared.closures.rhs_flux_only = residual;
+  prepared.closures.source_only = zero;
+  prepared.closures.source_only_masked = zero;
+  prepared.closures.rhs_at_point = [residual](const auto&, NativeField& state,
+                                              NativeField& output) { residual(state, output); };
+  prepared.closures.rhs_flux_only_at_point = prepared.closures.rhs_at_point;
+  prepared.closures.rhs_without_prepared_interfaces = prepared.closures.rhs_at_point;
+  prepared.closures.rhs_flux_only_without_prepared_interfaces = prepared.closures.rhs_at_point;
+  prepared.closures.rhs_core_at_point = prepared.closures.rhs_at_point;
+  prepared.closures.rhs_flux_only_core_at_point = prepared.closures.rhs_at_point;
+  prepared.closures.rhs_core_at_point_prepared = [residual](const auto&, NativeField& state,
+                                                            NativeField& output, const auto&) {
+    residual(state, output);
+  };
+  prepared.closures.rhs_flux_only_core_at_point_prepared =
+      prepared.closures.rhs_core_at_point_prepared;
+  prepared.closures.prepare_generated_state_at_point = [](const auto&, NativeField&) {};
+  prepared.closures.prepare_generated_state_at_point_prepared = [](const auto&, NativeField&,
+                                                                   const auto&) {};
+  prepared.maximum_speed = [](const NativeField&) { return Real(1); };
+  prepared.poisson_rhs = [](const NativeField& state, NativeField& rhs) {
+    materialize_mean_free_density(state, rhs);
+  };
+  prepared.primitive_to_conservative = [](const double* primitive, double* conservative) {
+    std::copy_n(primitive, kNcomp, conservative);
+  };
+  prepared.conservative_to_primitive = [](const double* conservative, double* primitive) {
+    RecoveryReport report;
+    report.status = RecoveryStatus::kRecovered;
+    report.attempted_methods = 1;
+    report.selected_method = 0;
+    report.last_method = 0;
+    for (int component = 0; component < kNcomp; ++component) {
+      if (!std::isfinite(conservative[component])) {
+        report.status = RecoveryStatus::kRejected;
+        report.cause = RecoveryCause::kNonFiniteCandidate;
+        report.failing_component = component;
+        return report;
+      }
+    }
+    std::copy_n(conservative, kNcomp, primitive);
+    return report;
+  };
+  prepared.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
+  s.install_prepared_block(std::move(prepared));
+}
+
+void add_gas(NativeSystem& s) {
   add_gas_block(s, "gas");
-  s.set_poisson("charge_density", "geometric_mg");
+  s.set_poisson("charge_density", "cartesian_cg");
 }
 
 // Non-uniform pressure IC (u = v = 0): -div F has a non-zero momentum component so the step actually
-// changes the state (parity is not vacuous). Periodic, deterministic across System instances.
+// changes the state (parity is not vacuous). Periodic, deterministic across NativeSystem instances.
 std::vector<double> ic(int n) {
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const std::size_t cell_count = uniform_cell_count(n);
   const double pi = 3.14159265358979323846;
-  std::vector<double> U(4 * nn);
-  for (int j = 0; j < n; ++j) {
-    for (int i = 0; i < n; ++i) {
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double p = 3.0 + 0.5 * std::cos(2 * pi * x) * std::cos(2 * pi * y);
-      U[0 * nn + k] = 1.0;
-      U[1 * nn + k] = 0.0;
-      U[2 * nn + k] = 0.0;
-      U[3 * nn + k] = p / (kGamma - 1.0);
+  std::vector<double> U(static_cast<std::size_t>(kNcomp) * cell_count, 0.0);
+  for (std::size_t linear = 0; linear < cell_count; ++linear) {
+    std::size_t remainder = linear;
+    double modulation = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      const int index = static_cast<int>(remainder % static_cast<std::size_t>(n));
+      remainder /= static_cast<std::size_t>(n);
+      modulation *= std::cos(2 * pi * (index + 0.5) / n);
     }
+    const double pressure = 3.0 + 0.5 * modulation;
+    U[static_cast<std::size_t>(GasSchema::density) * cell_count + linear] = 1.0;
+    U[static_cast<std::size_t>(GasSchema::energy) * cell_count + linear] =
+        pressure / (kGamma - 1.0);
   }
   return U;
 }
 
+std::vector<double> scalar_wave(int n) {
+  const std::size_t cell_count = uniform_cell_count(n);
+  const double pi = 3.14159265358979323846;
+  std::vector<double> values(cell_count);
+  for (std::size_t linear = 0; linear < cell_count; ++linear) {
+    std::size_t remainder = linear;
+    double value = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      const int index = static_cast<int>(remainder % static_cast<std::size_t>(n));
+      remainder /= static_cast<std::size_t>(n);
+      value *= std::sin(2.0 * pi * (index + 0.5) / n);
+    }
+    values[linear] = value;
+  }
+  return values;
+}
+
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
-  ProgramContext context(static_cast<System*>(nullptr));
+  ensure_kokkos();
+  NativeSystem sim(native_config(2));
+  NativeProgramContext context(&sim);
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
 }
 
 TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilConsumed) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 2;
-  cfg.L = 1.0;
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(2);
+  NativeSystem sim(cfg);
 
   sim.begin_step_projection_report();
   EXPECT_TRUE(sim.consume_step_projections().empty());
@@ -128,11 +290,9 @@ TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilCons
 
 TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 2;
-  cfg.L = 1.0;
-  System sim(cfg);
-  ProgramContext context(&sim);
+  NativeSystemConfig cfg = native_config(2);
+  NativeSystem sim(cfg);
+  NativeProgramContext context(&sim);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
   const std::array<std::pair<const char*, double>, 5> terms{{
       {"storage_change", 11.0},
@@ -190,37 +350,38 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
   return d;
 }
 
-Real max_abs_diff(const MultiFab& a, const MultiFab& b) {
+Real max_abs_diff(const NativeField& a, const NativeField& b) {
   Real difference = 0;
-  for (int local = 0; local < a.local_size(); ++local) {
-    const ConstArray4 lhs = a.fab(local).const_array();
-    const ConstArray4 rhs = b.fab(local).const_array();
-    const Box2D box = a.fab(local).grown_box();
-    for (int component = 0; component < a.ncomp(); ++component)
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          difference =
-              std::fmax(difference, std::fabs(lhs(i, j, component) - rhs(i, j, component)));
+  const int components = a.ncomp();
+  for (std::size_t local = 0; local < a.local_size(); ++local) {
+    const NativeConstView lhs = a.fab(local).view();
+    const NativeConstView rhs = b.fab(local).view();
+    const NativeBox box = a.fab(local).grown_box();
+    difference = std::fmax(
+        difference, for_each_cell_reduce_max(box, [=] POPS_HD(const Index<kTestDimension>& cell) {
+          Real local_difference = Real(0);
+          for (int component = 0; component < components; ++component)
+            local_difference =
+                std::fmax(local_difference, std::fabs(lhs(cell, component) - rhs(cell, component)));
+          return local_difference;
+        }));
   }
   return static_cast<Real>(all_reduce_max(static_cast<double>(difference)));
 }
 
 }  // namespace
 
-// A Forward-Euler Program expressed through ProgramContext, driven by sim.step(dt), is bit-equal to the
+// A Forward-Euler Program expressed through NativeProgramContext, driven by sim.step(dt), is bit-equal to the
 // reference U + dt*R computed from solve_fields + eval_rhs. Uses the PER-STAGE solve_fields_from_state
 // seam (the one the codegen lowers every solve_fields to), passing the block's own live state.
 TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  NativeSystemConfig cfg = native_config(n);
   const std::vector<double> U0 = ic(n);
 
-  System ref(cfg);
+  NativeSystem ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -230,22 +391,22 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
     Uref[k] = U0[k] + dt * R0[k];
   }
 
-  System sim(cfg);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
-  ctx.install([ctx](double h) {
+  ctx.install([&ctx](double h) {
     ctx.begin_step(h);
     ctx.set_stage_time(0, 1);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
-      MultiFab& U = ctx.state(b);
+      NativeField& U = ctx.state(b);
       {
         auto outcome = ctx.solve_fields_from_state(b, U);
         (void)outcome.consume(SolveConsumption::kAccept);
       }  // per-stage field solve at the block's own state
-      MultiFab R = ctx.rhs_scratch_like(U);
+      NativeField R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h R
     }
@@ -261,46 +422,33 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
 TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
   ensure_kokkos();
   constexpr int n = 8;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  NativeSystemConfig cfg = native_config(n);
 
-  System sim(cfg);
-  ModelSpec model;
-  model.transport = "exb";
-  model.source = "none";
-  model.elliptic = "charge";
-  model.q = 1.0;
-  model.B0 = 1.0;
-  sim.add_block("plasma", model);
-  sim.set_poisson("charge_density", "geometric_mg");
+  NativeSystem sim(cfg);
+  add_gas_block(sim, "plasma");
+  sim.set_poisson("charge_density", "cartesian_cg");
   sim.set_program_block_map({0});
 
-  const double pi = 3.14159265358979323846;
-  std::vector<double> density(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i)
-      density[static_cast<std::size_t>(j) * n + i] =
-          std::sin(2.0 * pi * (i + 0.5) / n) * std::sin(2.0 * pi * (j + 0.5) / n);
+  std::vector<double> density = scalar_wave(n);
   sim.set_density("plasma", density);
 
-  ProgramContext ctx(&sim);
-  MultiFab accepted_aux_before(ctx.aux());
-  const BoxArray aux_boxes = ctx.aux().box_array();
-  const DistributionMapping aux_mapping = ctx.aux().dmap();
+  NativeProgramContext ctx(&sim);
+  NativeField accepted_aux_before(ctx.aux());
+  const NativeLayout aux_boxes = ctx.aux().layout();
+  const NativeDistribution aux_mapping = ctx.aux().distribution();
+  const Index<kTestDimension> aux_local_rank = ctx.aux().local_rank();
   const int aux_components = ctx.aux().ncomp();
-  const int aux_ghosts = ctx.aux().n_grow();
+  const Extent<kTestDimension> aux_ghosts = ctx.aux().ghosts();
   const std::vector<double> accepted_potential_before = sim.potential();
   SolveOutcome direct = sim.solve_fields();
   ASSERT_TRUE(direct.report().solved_value_available()) << direct.report().reason;
   EXPECT_EQ(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
   EXPECT_EQ(sim.potential(), accepted_potential_before)
       << "uniform aux and potential must remain physically unchanged before Accept";
-  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components + 1, aux_ghosts);
   EXPECT_THROW((void)direct.consume(SolveConsumption::kAccept), std::logic_error)
       << "Accept must validate every publication layout before copying a candidate";
-  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
+  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components, aux_ghosts);
   EXPECT_THROW((void)sim.solve_fields(), std::logic_error);
   EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
   const SolveReport direct_report = direct.consume(SolveConsumption::kAccept);
@@ -310,21 +458,21 @@ TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
   for (double& value : density)
     value *= 0.5;
   sim.set_density("plasma", density);
-  MultiFab program_aux_before(ctx.aux());
+  NativeField program_aux_before(ctx.aux());
   const std::vector<double> program_potential_before = sim.potential();
   SolveOutcome accepted = ctx.solve_fields();
   ASSERT_TRUE(accepted.report().solved_value_available()) << accepted.report().reason;
   EXPECT_EQ(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
   EXPECT_EQ(sim.potential(), program_potential_before);
-  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components + 1, aux_ghosts);
   EXPECT_THROW((void)accepted.consume(SolveConsumption::kAccept), std::logic_error)
-      << "ProgramContext must use the same read-only System publication validation";
-  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
+      << "NativeProgramContext must use the same read-only NativeSystem publication validation";
+  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components, aux_ghosts);
   EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
   const SolveReport accepted_report = accepted.consume(SolveConsumption::kAccept);
   ASSERT_TRUE(accepted_report.solved_value_available()) << accepted_report.reason;
   EXPECT_GT(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
-  MultiFab published_aux(ctx.aux());
+  NativeField published_aux(ctx.aux());
 
   std::fill(density.begin(), density.end(), std::numeric_limits<double>::quiet_NaN());
   sim.set_density("plasma", density);
@@ -335,28 +483,28 @@ TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
 
 TEST(ProgramContextContract, RankedHyperbolicBoundaryRefusesMappedPeriodicityWithoutProvider) {
   ensure_kokkos();
-  auto boundary = prepare_hyperbolic_boundary<2>(
-      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
-      {"case::block::scalar::xlo", "case::block::scalar::xhi", "case::block::scalar::ylo",
-       "case::block::scalar::yhi"},
-      {"Scalar"}, true);
+  std::vector<std::string> kinds(static_cast<std::size_t>(2 * kTestDimension), "foextrap");
+  kinds.front() = "periodic";
+  std::vector<std::string> identities;
+  identities.reserve(kinds.size());
+  for (int face = 0; face < 2 * kTestDimension; ++face)
+    identities.push_back("case::block::scalar::face-" + std::to_string(face));
+  auto boundary = prepare_hyperbolic_boundary<kTestDimension>(
+      kinds, std::vector<double>(kinds.size(), 0.0), identities, {"Scalar"}, true);
   EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
 }
 
 TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
   sim.set_program_block_map({0, 1});
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
 
-  MultiFab& first = ctx.state(0);
-  MultiFab& second = ctx.state(1);
+  NativeField& first = ctx.state(0);
+  NativeField& second = ctx.state(1);
   first.set_val(Real(3));
   second.set_val(Real(7));
 
@@ -364,94 +512,84 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
 
   ASSERT_GT(first.local_size(), 0);
   ASSERT_GT(second.local_size(), 0);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
-  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+  EXPECT_EQ(first_value(first), Real(7));
+  EXPECT_EQ(first_value(second), Real(3));
 
-  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
-                                 first.n_grow() + 1);
+  NativeField different_ghost_width =
+      native_field_like(first, first.ncomp(), enlarged_ghosts(first, 1));
   different_ghost_width.set_val(Real(13));
-  ctx.commit_many({{&first, &different_ghost_width}});
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
+  EXPECT_THROW(ctx.commit_many({{&first, &different_ghost_width}}), std::invalid_argument);
+  EXPECT_EQ(first_value(first), Real(7));
 
-  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  NativeField wrong_components = native_field_like(first, first.ncomp() + 1, first.ghosts());
   EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
-  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+  EXPECT_EQ(first_value(first), Real(7));
+  EXPECT_EQ(first_value(second), Real(3));
 }
 
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_program_block_map({0});
-  ProgramContext ctx(&sim);
-  MultiFab& state = ctx.state(0);
+  NativeProgramContext ctx(&sim);
+  NativeField& state = ctx.state(0);
 
-  MultiFab& rhs = ctx.rhs_scratch(41, 0, state);
+  NativeField& rhs = ctx.rhs_scratch(41, 0, state);
   ASSERT_GT(rhs.local_size(), 0);
-  Real* const rhs_storage = rhs.fab(0).array().p;
+  Real* const rhs_storage = rhs.fab(0).view().data;
   rhs.set_val(Real(9));
   const AllocationEventStats before_reuse = allocation_event_stats();
-  MultiFab& reused = ctx.rhs_scratch(41, 0, state);
+  NativeField& reused = ctx.rhs_scratch(41, 0, state);
   const AllocationEventStats after_reuse = allocation_event_stats();
   EXPECT_EQ(&reused, &rhs);
-  EXPECT_EQ(reused.fab(0).array().p, rhs_storage);
+  EXPECT_EQ(reused.fab(0).view().data, rhs_storage);
   EXPECT_EQ(after_reuse.fab_calls, before_reuse.fab_calls);
   EXPECT_EQ(after_reuse.fab_bytes, before_reuse.fab_bytes);
-  EXPECT_EQ(reused.fab(0).const_array()(reused.box(0).lo[0], reused.box(0).lo[1], 0), Real(0))
-      << "a retry must not observe provisional scratch bytes";
+  EXPECT_EQ(first_value(reused), Real(0)) << "a retry must not observe provisional scratch bytes";
 
-  MultiFab& other_lane = ctx.rhs_scratch(41, 1, state);
-  MultiFab& provisional_state = ctx.scratch_state(41, 0, state);
+  NativeField& other_lane = ctx.rhs_scratch(41, 1, state);
+  NativeField& provisional_state = ctx.scratch_state(41, 0, state);
   EXPECT_NE(&other_lane, &rhs);
   EXPECT_NE(&provisional_state, &rhs);
   if (other_lane.local_size() > 0)
-    EXPECT_NE(other_lane.fab(0).array().p, rhs_storage);
+    EXPECT_NE(other_lane.fab(0).view().data, rhs_storage);
   if (provisional_state.local_size() > 0)
-    EXPECT_NE(provisional_state.fab(0).array().p, rhs_storage);
+    EXPECT_NE(provisional_state.fab(0).view().data, rhs_storage);
 
-  MultiFab wider(state.box_array(), state.dmap(), state.ncomp(), state.n_grow() + 1);
-  const AllocationEventStats before_layout_change = allocation_event_stats();
-  MultiFab& rebound = ctx.rhs_scratch(41, 0, wider);
-  const AllocationEventStats after_layout_change = allocation_event_stats();
-  EXPECT_EQ(rebound.n_grow(), wider.n_grow());
-  EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls)
-      << "an exact layout change must rematerialize the slot";
+  NativeField wider = native_field_like(state, state.ncomp(), enlarged_ghosts(state, 1));
+  NativeField& rebound = ctx.rhs_scratch(41, 0, wider);
+  EXPECT_EQ(&rebound, &rhs);
+  EXPECT_EQ(rebound.ghosts(), wider.ghosts());
 }
 
 TEST(ProgramContextContract,
      SimultaneousNamedFieldWorkspaceIsPersistentSubsetSafeAndTransactional) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
-  sim.set_poisson("charge_density", "geometric_mg");
+  sim.set_poisson("charge_density", "cartesian_cg");
   sim.set_program_block_map({0, 1});
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.main");
   ctx.begin_step(0.01);
   const auto point = [&](int stage) { return ctx.boundary_evaluation_point(stage); };
 
-  MultiFab& live_a = ctx.state(0);
-  MultiFab& live_b = ctx.state(1);
+  NativeField& live_a = ctx.state(0);
+  NativeField& live_b = ctx.state(1);
   live_a.set_val(Real(2));
   live_b.set_val(Real(3));
-  MultiFab stage_a(live_a.box_array(), live_a.dmap(), live_a.ncomp(), live_a.n_grow());
-  MultiFab stage_b(live_b.box_array(), live_b.dmap(), live_b.ncomp(), live_b.n_grow());
+  NativeField stage_a = native_field_like(live_a, live_a.ncomp(), live_a.ghosts());
+  NativeField stage_b = native_field_like(live_b, live_b.ncomp(), live_b.ghosts());
   stage_a.set_val(Real(7));
   stage_b.set_val(Real(9));
   ASSERT_GT(live_a.local_size(), 0);
   ASSERT_GT(live_b.local_size(), 0);
-  Real* const live_a_storage = live_a.fab(0).array().p;
-  Real* const live_b_storage = live_b.fab(0).array().p;
+  Real* const live_a_storage = live_a.fab(0).view().data;
+  Real* const live_b_storage = live_b.fab(0).view().data;
 
   auto incomplete_point = point(500);
   incomplete_point.clock.clear();
@@ -464,42 +602,43 @@ TEST(ProgramContextContract,
     return ctx.solve_fields_from_blocks_at(point(501), 501, "missing-provider",
                                            {{0, &stage_a}, {1, &stage_b}});
   };
-  EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
-  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
-  EXPECT_EQ(live_a.fab(0).const_array()(live_a.box(0).lo[0], live_a.box(0).lo[1], 0), Real(2));
-  EXPECT_EQ(live_b.fab(0).const_array()(live_b.box(0).lo[0], live_b.box(0).lo[1], 0), Real(3));
+  EXPECT_THROW((void)missing_field_solve(), std::out_of_range);
+  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
+  EXPECT_EQ(first_value(live_a), Real(2));
+  EXPECT_EQ(first_value(live_b), Real(3));
 
   const AllocationEventStats before_retry = allocation_event_stats();
-  EXPECT_THROW((void)missing_field_solve(), std::runtime_error);
+  EXPECT_THROW((void)missing_field_solve(), std::out_of_range);
   const AllocationEventStats after_retry = allocation_event_stats();
   EXPECT_EQ(after_retry.fab_calls, before_retry.fab_calls);
   EXPECT_EQ(after_retry.fab_bytes, before_retry.fab_bytes);
   EXPECT_EQ(after_retry.communication_calls, before_retry.communication_calls);
   EXPECT_EQ(after_retry.communication_bytes, before_retry.communication_bytes);
-  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
+  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
 
   // The complete request is validated before the first substitution: neither a cross-owner live
   // alias nor one wrong ghost footprint may expose a provisional state.
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(502), 502, "missing-provider",
                                                      {{0, &live_b}, {1, &stage_b}}),
                std::invalid_argument);
-  MultiFab wrong_layout(stage_b.box_array(), stage_b.dmap(), stage_b.ncomp(), stage_b.n_grow() + 1);
+  NativeField wrong_layout =
+      native_field_like(stage_b, stage_b.ncomp(), enlarged_ghosts(stage_b, 1));
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(503), 503, "missing-provider",
                                                      {{0, &stage_a}, {1, &wrong_layout}}),
                std::invalid_argument);
-  EXPECT_EQ(live_a.fab(0).array().p, live_a_storage);
-  EXPECT_EQ(live_b.fab(0).array().p, live_b_storage);
-  EXPECT_EQ(live_a.fab(0).const_array()(live_a.box(0).lo[0], live_a.box(0).lo[1], 0), Real(2));
-  EXPECT_EQ(live_b.fab(0).const_array()(live_b.box(0).lo[0], live_b.box(0).lo[1], 0), Real(3));
+  EXPECT_EQ(live_a.fab(0).view().data, live_a_storage);
+  EXPECT_EQ(live_b.fab(0).view().data, live_b_storage);
+  EXPECT_EQ(first_value(live_a), Real(2));
+  EXPECT_EQ(first_value(live_b), Real(3));
 
-  // A Program may own only a subset of a larger System. The exact block map selects System block b,
-  // while the context-owned native vector retains the required System-sized nullptr padding.
+  // A Program may own only a subset of a larger NativeSystem. The exact block map selects NativeSystem block b,
+  // while the context-owned native vector retains the required NativeSystem-sized nullptr padding.
   sim.set_program_block_map({1});
-  MultiFab& subset_live = ctx.state(0);
-  MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
-                        subset_live.n_grow());
+  NativeField& subset_live = ctx.state(0);
+  NativeField subset_stage =
+      native_field_like(subset_live, subset_live.ncomp(), subset_live.ghosts());
   subset_stage.set_val(Real(11));
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(501), 501, "missing-provider",
                                                      {{0, &subset_stage}}),
@@ -508,60 +647,58 @@ TEST(ProgramContextContract,
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(505), 505, "missing-subset-provider",
                                                      {{0, &live_a}}),
                std::invalid_argument)
-      << "a subset Program must not borrow an unlisted System block's live state as its stage";
+      << "a subset Program must not borrow an unlisted NativeSystem block's live state as its "
+         "stage";
   auto subset_solve = [&]() {
     return ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
                                            {{0, &subset_stage}});
   };
-  EXPECT_THROW((void)subset_solve(), std::runtime_error);
+  EXPECT_THROW((void)subset_solve(), std::out_of_range);
   const AllocationEventStats before_subset_retry = allocation_event_stats();
-  EXPECT_THROW((void)subset_solve(), std::runtime_error);
+  EXPECT_THROW((void)subset_solve(), std::out_of_range);
   const AllocationEventStats after_subset_retry = allocation_event_stats();
   EXPECT_EQ(after_subset_retry.fab_calls, before_subset_retry.fab_calls);
   EXPECT_EQ(after_subset_retry.communication_calls, before_subset_retry.communication_calls);
 
   // Replacing the live layout does not materialize a representative-block snapshot: the exact
-  // System-sized stage vector is forwarded directly to the qualified named-field solve.
-  subset_live = MultiFab(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
-                         subset_live.n_grow() + 1);
+  // NativeSystem-sized stage vector is forwarded directly to the qualified named-field solve.
+  subset_live =
+      native_field_like(subset_live, subset_live.ncomp(), enlarged_ghosts(subset_live, 1));
   subset_live.set_val(Real(5));
-  MultiFab rebound_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
-                         subset_live.n_grow());
+  NativeField rebound_stage =
+      native_field_like(subset_live, subset_live.ncomp(), subset_live.ghosts());
   rebound_stage.set_val(Real(13));
   const AllocationEventStats before_layout_change = allocation_event_stats();
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
                                                      {{0, &rebound_stage}}),
-               std::runtime_error);
+               std::out_of_range);
   const AllocationEventStats after_layout_change = allocation_event_stats();
   EXPECT_EQ(after_layout_change.fab_calls, before_layout_change.fab_calls);
   EXPECT_EQ(after_layout_change.communication_calls, before_layout_change.communication_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(504), 504, "missing-subset-provider",
                                                      {{0, &rebound_stage}}),
-               std::runtime_error);
+               std::out_of_range);
   const AllocationEventStats after_rebound_retry = allocation_event_stats();
   EXPECT_EQ(after_rebound_retry.fab_calls, before_rebound_retry.fab_calls);
   EXPECT_EQ(after_rebound_retry.communication_calls, before_rebound_retry.communication_calls);
 }
 
-// A 2-stage SSP-RK2 (Heun) Program through ProgramContext is bit-equal to a hand-written SSPRK2
+// A 2-stage SSP-RK2 (Heun) Program through NativeProgramContext is bit-equal to a hand-written SSPRK2
 // reference built from the SAME primitives:
 //   U1        = U^n + dt R(U^n)
 //   U^{n+1}   = 1/2 U^n + 1/2 U1 + 1/2 dt R(U1)
-// The reference re-solves the fields at each stage state (solve_fields on a scratch System seeded with
+// The reference re-solves the fields at each stage state (solve_fields on a scratch NativeSystem seeded with
 // the stage state), mirroring the per-stage ctx.solve_fields_from_state in the Program body.
 TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  NativeSystemConfig cfg = native_config(n);
   const std::vector<double> U0 = ic(n);
 
   // Reference SSPRK2 on the host via solve_fields + eval_rhs (a fresh solve per stage state).
-  System ref(cfg);
+  NativeSystem ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -579,27 +716,27 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
     Uref[k] = 0.5 * U0[k] + 0.5 * U1[k] + 0.5 * dt * R1[k];
   }
 
-  // ProgramContext SSPRK2: stage into scratch states via scratch_state_like / axpy / lincomb, with a
+  // NativeProgramContext SSPRK2: stage into scratch states via scratch_state_like / axpy / lincomb, with a
   // per-stage solve_fields_from_state before each RHS.
-  System sim(cfg);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
-  ctx.install([ctx](double h) {
+  ctx.install([&ctx](double h) {
     ctx.begin_step(h);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
-      MultiFab& U = ctx.state(b);
+      NativeField& U = ctx.state(b);
       // stage 1: u1 = U + dt R(U)
       ctx.set_stage_time(0, 1);
       {
         auto outcome = ctx.solve_fields_from_state(b, U);
         (void)outcome.consume(SolveConsumption::kAccept);
       }
-      MultiFab u1 = ctx.scratch_state_like(U);
+      NativeField u1 = ctx.scratch_state_like(U);
       ctx.lincomb(u1, Real(1), U, Real(0), U);  // u1 <- U
-      MultiFab R = ctx.rhs_scratch_like(U);
+      NativeField R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(u1, Real(h), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
       // stage 2 (Heun): U <- 1/2 U + 1/2 (U1 + dt R(U1)) = 1/2 U + 1/2 U1 + 1/2 dt R(U1)
@@ -608,7 +745,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
         auto outcome = ctx.solve_fields_from_state(b, u1);
         (void)outcome.consume(SolveConsumption::kAccept);
       }  // re-solve fields at the stage-1 state
-      MultiFab R1 = ctx.rhs_scratch_like(u1);
+      NativeField R1 = ctx.rhs_scratch_like(u1);
       ctx.rhs_into(b, u1, R1, 0);
       ctx.axpy(u1, Real(h), R1);                    // u1 <- U1 + dt R(U1)
       ctx.lincomb(U, Real(0.5), U, Real(0.5), u1);  // U <- 1/2 U + 1/2 (U1 + dt R(U1))
@@ -627,17 +764,14 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  NativeSystemConfig cfg = native_config(n);
   const std::vector<double> U0 = ic(n);
 
-  System sim(cfg);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
@@ -647,19 +781,19 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   }
 
   const int b = 0;
-  MultiFab& U = ctx.state(b);
+  NativeField& U = ctx.state(b);
 
   // rhs_into == neg_div_flux_default_into + source_default_into (the split-then-sum identity, ADC-425).
-  MultiFab Rfull = ctx.rhs_scratch_like(U);
-  MultiFab Rflux = ctx.rhs_scratch_like(U);
-  MultiFab Rsrc = ctx.rhs_scratch_like(U);
+  NativeField Rfull = ctx.rhs_scratch_like(U);
+  NativeField Rflux = ctx.rhs_scratch_like(U);
+  NativeField Rsrc = ctx.rhs_scratch_like(U);
   ctx.rhs_into(b, U, Rfull, 0);
   ctx.neg_div_flux_default_into(b, U, Rflux, 0);
   ctx.source_default_into(b, U, Rsrc);
-  MultiFab Rsum = ctx.rhs_scratch_like(U);
+  NativeField Rsum = ctx.rhs_scratch_like(U);
   ctx.lincomb(Rsum, Real(1), Rflux, Real(1), Rsrc);  // Rsum = -div F + S
   {
-    // compare valid-cell sums per component (NoSource here -> Rsrc is 0, Rsum == Rflux == Rfull)
+    // The exact Euler package has no source provider, so Rsrc is zero and Rsum == Rflux == Rfull.
     for (int c = 0; c < kNcomp; ++c) {
       const Real full = ctx.sum_component(Rfull, c);
       const Real sum = ctx.sum_component(Rsum, c);
@@ -670,22 +804,24 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
 
   // reductions: sum/max/min of component 0 are consistent (min <= sum/N is not asserted, but max>=min).
   EXPECT_TRUE(ctx.max_component(U, 0) >= ctx.min_component(U, 0)) << "max >= min density";
-  EXPECT_TRUE(std::fabs(ctx.sum(U) - ctx.sum_component(U, 0)) < 1e-12) << "sum == sum_component(0)";
+  EXPECT_NEAR(ctx.sum_component(U, GasSchema::density), static_cast<Real>(uniform_cell_count(n)),
+              1e-12)
+      << "density sum covers every valid cell exactly once";
 
   // laplacian(phi) == divergence(gradient(phi)) on a smooth periodic field (the stencil identity the
   // matrix-free operators rely on). Build phi = density (component 0) into a scalar field.
-  MultiFab phi = ctx.alloc_scalar_field(1, 1);
-  MultiFab lap = ctx.alloc_scalar_field(1, 1);
-  MultiFab grad = ctx.alloc_scalar_field(2, 1);
-  MultiFab divg = ctx.alloc_scalar_field(1, 1);
+  NativeField phi = ctx.alloc_scalar_field(1, 1);
+  NativeField lap = ctx.alloc_scalar_field(1, 1);
+  NativeField grad = ctx.alloc_scalar_field(kTestDimension, 1);
+  NativeField divg = ctx.alloc_scalar_field(1, 1);
   {
     // seed phi with a smooth field: reuse density; copy component 0 of U into phi via lincomb on a
     // 1-comp scratch is not directly possible (ncomp differs), so seed phi from a fresh smooth pattern.
     // Instead assert the operators run and produce finite output of the right shape.
     phi.set_val(Real(1));
-    ctx.laplacian(lap, phi);           // Lap(const) == 0
-    ctx.gradient(grad, phi);           // grad(const) == 0
-    ctx.divergence(divg, grad, grad);  // div(0) == 0
+    ctx.laplacian(lap, phi);     // Lap(const) == 0
+    ctx.gradient(grad, phi);     // grad(const) == 0
+    ctx.divergence(divg, grad);  // div(0) == 0
     EXPECT_TRUE(ctx.max_component(lap, 0) < 1e-12) << "laplacian of a constant is 0";
     EXPECT_TRUE(ctx.max_component(divg, 0) < 1e-12) << "divergence(gradient(const)) is 0";
   }
@@ -702,16 +838,19 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
 
   // history register/store/read/rotate through the context seam.
   ctx.register_history("h", 1);
-  MultiFab hv = ctx.rhs_scratch_like(U);
+  NativeField hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
-  ctx.store_history("h", hv, 0);  // owner is a Program block, never component zero
+  ctx.store_history("h", hv);
   {
-    MultiFab& r = ctx.history("h", 1, 0);  // cold-start fill -> lag 1 == the stored value
+    NativeField& r = ctx.history("h", 1);  // cold-start fill -> lag 1 == the stored value
     EXPECT_TRUE(r.ncomp() == U.ncomp()) << "owner-qualified history preserves the whole field";
-    EXPECT_TRUE(std::fabs(ctx.sum_component(r, 0) - Real(3) * n * n) < 1e-9) << "history lag1 read";
+    EXPECT_TRUE(std::fabs(ctx.sum_component(r, 0) -
+                          Real(3) * static_cast<Real>(uniform_cell_count(n))) < 1e-9)
+        << "history lag1 read";
   }
-  MultiFab& scalar_history = ctx.history_zero_start("scalar_h", 1, 1, 0);
-  EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar MultiFab";
+  ctx.register_history("scalar_h", 1, 1);
+  NativeField& scalar_history = ctx.history_zero_start("scalar_h", 1, 1);
+  EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar NativeField";
   EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
       << "owner-qualified zero-start history preserves its declared cold start";
   ctx.rotate_histories();  // no throw
@@ -729,23 +868,20 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(ctx.max_wave_speed(b, U) > 0) << "max wave speed positive";
 
   // scratch allocators produce the requested shape.
-  MultiFab sc = ctx.scratch_state_like(U);
+  NativeField sc = ctx.scratch_state_like(U);
   EXPECT_TRUE(sc.ncomp() == U.ncomp()) << "scratch_state_like ncomp";
-  MultiFab sf = ctx.alloc_scalar_field(1, 1);
+  NativeField sf = ctx.alloc_scalar_field(1, 1);
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
 }
 
 TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_program_block_map({0});
 
-  ProgramContext ctx(&sim);
+  NativeProgramContext ctx(&sim);
   ctx.configure_primary_clock("clock.macro");
   ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
   ctx.declare_clock_relation("clock.fast", "clock.micro", 2);
@@ -852,12 +988,11 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
 
 TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  System sim(cfg);
+  NativeSystemConfig cfg = native_config(8);
+  NativeSystem sim(cfg);
   add_gas(sim);
-  ProgramContext ctx(&sim);
-  const std::vector<const MultiFab*> stages{&sim.block_state(0)};
+  NativeProgramContext ctx(&sim);
+  const std::vector<const NativeField*> stages{&sim.block_state(0)};
 
   EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "an empty map must not imply identity";
   EXPECT_THROW((void)ctx.solve_fields_from_blocks(stages), std::runtime_error)
@@ -865,18 +1000,21 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
 
   sim.set_program_block_map({0});
   EXPECT_EQ(ctx.sys_block(0), 0);
-  EXPECT_THROW(ctx.sys_block(-1), std::runtime_error) << "negative Program index must fail";
-  EXPECT_THROW(ctx.sys_block(1), std::runtime_error) << "Program index outside the map must fail";
+  SolveOutcome mapped = ctx.solve_fields_from_blocks(stages);
+  ASSERT_TRUE(mapped.report().solved_value_available()) << mapped.report().reason;
+  (void)mapped.consume(SolveConsumption::kAccept);
+  EXPECT_THROW(ctx.sys_block(-1), std::out_of_range) << "negative Program index must fail";
+  EXPECT_THROW(ctx.sys_block(1), std::out_of_range) << "Program index outside the map must fail";
   EXPECT_THROW(sim.set_program_block_map({0, 0}), std::invalid_argument)
-      << "two Program blocks must not silently overwrite the same System stage slot";
+      << "two Program blocks must not silently overwrite the same NativeSystem stage slot";
   EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}))
       << "a rejected double assignment must preserve the previously authenticated map";
 
-  sim.set_program_block_map({-1});
-  EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "negative mapped System index must fail";
-  sim.set_program_block_map({1});
-  EXPECT_THROW(ctx.sys_block(0), std::runtime_error)
-      << "mapped System index outside n_blocks must fail";
+  EXPECT_THROW(sim.set_program_block_map({-1}), std::out_of_range)
+      << "negative mapped NativeSystem index must fail before publication";
+  EXPECT_THROW(sim.set_program_block_map({1}), std::out_of_range)
+      << "mapped NativeSystem index outside n_blocks must fail before publication";
+  EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}));
 }
 
 // The per-stage FieldContext.matches() guard rejects a context read at the wrong qualified provider,

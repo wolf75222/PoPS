@@ -81,6 +81,72 @@ class ProgramContext {
     field_type* state = nullptr;
   };
 
+  /// Move-only exact child interval used by generated subcycle bodies.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const ProgramContext& owner, int iteration, int count)
+        : owner_(&owner),
+          prior_dt_(owner.current_dt_),
+          prior_stage_(owner.stage_time_),
+          prior_phase_begin_(owner.logical_phase_begin_),
+          prior_phase_span_(owner.logical_phase_span_),
+          prior_physical_time_offset_(owner.logical_physical_time_offset_) {
+      if (count < 1 || iteration < 0 || iteration >= count || !std::isfinite(prior_dt_) ||
+          !(prior_dt_ > 0.0))
+        throw std::invalid_argument("Program logical evaluation scope is invalid");
+      const double child_dt = prior_dt_ / static_cast<double>(count);
+      const double child_offset =
+          prior_physical_time_offset_ + static_cast<double>(iteration) * child_dt;
+      if (!std::isfinite(child_dt) || !(child_dt > 0.0) || !std::isfinite(child_offset))
+        throw std::overflow_error("Program logical evaluation child window is not finite");
+      const amr::Rational child_fraction(iteration, count);
+      const amr::Rational child_span(1, count);
+      owner_->current_dt_ = child_dt;
+      owner_->stage_time_ = amr::Rational(0, 1);
+      owner_->logical_phase_begin_ = prior_phase_begin_ + prior_phase_span_ * child_fraction;
+      owner_->logical_phase_span_ = prior_phase_span_ * child_span;
+      owner_->logical_physical_time_offset_ = child_offset;
+      owner_->active_operator_snapshot_.reset();
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          prior_dt_(other.prior_dt_),
+          prior_stage_(other.prior_stage_),
+          prior_phase_begin_(other.prior_phase_begin_),
+          prior_phase_span_(other.prior_phase_span_),
+          prior_physical_time_offset_(other.prior_physical_time_offset_) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("Program logical evaluation scope is no longer active");
+      return static_cast<Real>(owner_->current_dt_);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->current_dt_ = prior_dt_;
+      owner_->stage_time_ = prior_stage_;
+      owner_->logical_phase_begin_ = prior_phase_begin_;
+      owner_->logical_phase_span_ = prior_phase_span_;
+      owner_->logical_physical_time_offset_ = prior_physical_time_offset_;
+      owner_->active_operator_snapshot_.reset();
+      owner_ = nullptr;
+    }
+
+    const ProgramContext* owner_ = nullptr;
+    double prior_dt_ = 0.0;
+    amr::Rational prior_stage_{0, 1};
+    amr::Rational prior_phase_begin_{0, 1};
+    amr::Rational prior_phase_span_{1, 1};
+    double prior_physical_time_offset_ = 0.0;
+  };
+
   explicit ProgramContext(runtime_type* system)
       : system_(require_system_(system)),
         scalar_boundary_lane_(ExecutionLane::duplicate_world_collectively(
@@ -95,6 +161,9 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
     stage_time_ = amr::Rational(0, 1);
+    logical_phase_begin_ = amr::Rational(0, 1);
+    logical_phase_span_ = amr::Rational(1, 1);
+    logical_physical_time_offset_ = 0.0;
     active_operator_snapshot_.reset();
   }
 
@@ -119,14 +188,15 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("ProgramContext boundary evaluation has no prepared clock and dt");
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
             0,
             stage,
-            stage_time_,
+            evaluation_stage,
             current_dt_,
-            physical_time() + stage_time_.value() * current_dt_};
+            physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_};
   }
 
   int n_blocks() const { return system_->n_blocks(); }
@@ -799,6 +869,9 @@ class ProgramContext {
                                                    const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
   }
+  LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(*this, iteration, count);
+  }
   void synchronize_sample_and_hold(const std::string& source, const std::string& target,
                                    int step, Real offset) const {
     clock_schedule_.synchronize_sample_and_hold(source, target, step,
@@ -1132,18 +1205,20 @@ class ProgramContext {
     return fingerprint;
   }
 
-  OperatorEvaluationSnapshot current_operator_snapshot_(
-      OperatorFingerprint authority, OperatorFingerprint topology,
-      OperatorFingerprint resources, std::uint64_t revision) const {
-    const double stage_time =
-        physical_time() + stage_time_.value() * current_dt_;
+  OperatorEvaluationSnapshot current_operator_snapshot_(OperatorFingerprint authority,
+                                                        OperatorFingerprint topology,
+                                                        OperatorFingerprint resources,
+                                                        std::uint64_t revision) const {
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const double evaluation_time =
+        physical_time() + logical_physical_time_offset_ + stage_time_.value() * current_dt_;
     return {authority,
             revision,
             static_cast<std::int64_t>(macro_step()),
-            stage_time_.numerator,
-            stage_time_.denominator,
+            evaluation_stage.numerator,
+            evaluation_stage.denominator,
             std::bit_cast<std::uint64_t>(current_dt_),
-            std::bit_cast<std::uint64_t>(stage_time),
+            std::bit_cast<std::uint64_t>(evaluation_time),
             std::uint64_t{1},
             topology,
             resources};
@@ -1221,6 +1296,9 @@ class ProgramContext {
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
   mutable amr::Rational stage_time_{0, 1};
+  mutable amr::Rational logical_phase_begin_{0, 1};
+  mutable amr::Rational logical_phase_span_{1, 1};
+  mutable double logical_physical_time_offset_ = 0.0;
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;
