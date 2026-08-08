@@ -14,17 +14,24 @@
 //   (c) CUTCELL : mode='cutcell' tourne, etat FINI partout (aucun NaN/Inf), DIFFERENT du carre ; et sur
 //       un disque ENGLOBANT (rayon > diagonale, aucune cellule coupee) un pas est BIT-IDENTIQUE au carre.
 //
-// Modele : transport scalaire ExB (add_block transport='exb', source='none', elliptic='charge') -- le
-// transport DIOCOTRON de production. La vitesse derive de grad phi (Poisson sur la densite) : champ a
-// divergence nulle -> la masse est conservee par les schemas masque / EB. Compile python/system.cpp.
+// Modele : loi d'advection scalaire compilee pour le rang natif. La vitesse constante a divergence
+// nulle isole le routage geometrie/EB et impose la conservation de masse sans autorite 2D cachee.
 
 #include <gtest/gtest.h>
 
-#include "explicit_system_program.hpp"
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/builders/compiled/dsl_block.hpp>
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
+#include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <numeric>
+#include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -33,7 +40,98 @@
 
 using namespace pops;
 
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
 namespace {
+
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using NativeGeometry = Geometry<kTestDimension>;
+using NativeIndex = Index<kTestDimension>;
+using NativeBox = Box<kTestDimension>;
+using NativeExtent = Extent<kTestDimension>;
+constexpr int kCompressibleComponents = kTestDimension + 2;
+using ScalarModel = nd::ScalarAdvection<kTestDimension>;
+using CompressibleModel = nd::IdealGasEuler<kTestDimension>;
+
+NativeSystemConfig native_config(int cells, Real length, bool periodic) {
+  NativeSystemConfig config;
+  NativeIndex lower{};
+  NativeIndex upper{};
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = length;
+    config.periodicity[static_cast<std::size_t>(axis)] = periodic;
+    lower[axis] = 0;
+    upper[axis] = cells - 1;
+  }
+  config.boxes = {NativeBox{lower, upper}};
+  return config;
+}
+
+NativeGeometry native_geometry(const NativeSystemConfig& config) {
+  return NativeGeometry::from_bounds(NativeBox::from_extents(config.shape), config.lower,
+                                     config.upper);
+}
+
+std::size_t cell_count(const NativeExtent& extent) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    count *= static_cast<std::size_t>(extent[axis]);
+  return count;
+}
+
+NativeIndex index_from_linear(std::size_t linear, const NativeBox& box) {
+  NativeIndex index{};
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    const std::size_t axis_extent = static_cast<std::size_t>(box.length(axis));
+    index[axis] = box.lo[axis] + static_cast<int>(linear % axis_extent);
+    linear /= axis_extent;
+  }
+  return index;
+}
+
+void install_forward_euler_program(NativeSystem& system) {
+  std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
+  std::iota(block_map.begin(), block_map.end(), 0);
+  system.set_program_block_map(block_map);
+
+  auto context = runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test.clock.macro");
+  context->install([context](double dt) {
+    context->begin_step(dt);
+    context->set_stage_time(0, 1);
+    (void)consume_solve_outcome(context->solve_fields());
+
+    std::vector<NativeField*> states;
+    std::vector<NativeField*> next_states;
+    states.reserve(static_cast<std::size_t>(context->n_blocks()));
+    next_states.reserve(static_cast<std::size_t>(context->n_blocks()));
+    for (int block = 0; block < context->n_blocks(); ++block) {
+      NativeField& state = context->state(block);
+      NativeField& residual = context->rhs_scratch(1000 + block, 0, state);
+      NativeField& next = context->scratch_state(2000 + block, 0, state);
+      context->rhs_into(block, state, residual, 3000 + block);
+      context->lincomb(next, Real(1), state, Real(dt), residual);
+      states.push_back(&state);
+      next_states.push_back(&next);
+    }
+    for (std::size_t block = 0; block < states.size(); ++block)
+      context->lincomb(*states[block], Real(0), *states[block], Real(1), *next_states[block]);
+  });
+  system.set_program_block_map(block_map);
+}
 
 #if defined(POPS_HAS_KOKKOS)
 Kokkos::ScopeGuard& kokkos_scope() {
@@ -42,76 +140,80 @@ Kokkos::ScopeGuard& kokkos_scope() {
 }
 #endif
 
-// Densite initiale : anneau lisse (recouvre le disque interieur), perturbe en azimut pour casser la
-// symetrie -> grad phi non trivial -> vitesse ExB non nulle. n*n row-major (j lent, i rapide).
-std::vector<double> ring_density(int n, double L) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n, 1e-3);
-  const double cx = 0.5 * L, cy = 0.5 * L;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) * L / n, y = (j + 0.5) * L / n;
-      const double r = std::hypot(x - cx, y - cy);
-      // anneau gaussien centre sur r0 = 0.18 L, module en sin(3 theta) (perturbation azimutale l=3).
-      const double r0 = 0.18 * L, w = 0.05 * L;
-      const double th = std::atan2(y - cy, x - cx);
-      const double g = std::exp(-((r - r0) * (r - r0)) / (2 * w * w));
-      rho[static_cast<std::size_t>(j) * n + i] = 1e-3 + g * (1.0 + 0.3 * std::sin(3 * th));
+// Densite initiale : coquille lisse, perturbee suivant toutes les coordonnees exactes pour casser
+// les symetries. La linearisation garde l'axe 0 contigu, comme MultiFab<Dim>.
+std::vector<double> ring_density(const NativeSystemConfig& config) {
+  const NativeBox domain = NativeBox::from_extents(config.shape);
+  const NativeGeometry geometry = native_geometry(config);
+  std::vector<double> rho(static_cast<std::size_t>(domain.numPts()), 1e-3);
+  constexpr double two_pi = 2.0 * 3.14159265358979323846;
+  for (std::size_t linear = 0; linear < rho.size(); ++linear) {
+    const auto position = geometry.cell_center(index_from_linear(linear, domain));
+    double radius_squared = 0.0;
+    double phase = 0.0;
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      const double length = config.upper[axis] - config.lower[axis];
+      const double center = 0.5 * (config.lower[axis] + config.upper[axis]);
+      const double offset = position[axis] - center;
+      radius_squared += offset * offset;
+      phase += static_cast<double>(axis + 1) * two_pi * offset / length;
     }
+    const double length = config.upper[0] - config.lower[0];
+    const double radius = std::sqrt(radius_squared);
+    const double r0 = 0.18 * length;
+    const double width = 0.05 * length;
+    const double gaussian = std::exp(-((radius - r0) * (radius - r0)) / (2.0 * width * width));
+    rho[linear] = 1e-3 + gaussian * (1.0 + 0.3 * std::sin(phase));
+  }
   return rho;
 }
 
-std::vector<double> periodic_seam_density(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
+std::vector<double> periodic_seam_density(const NativeSystemConfig& config) {
+  const NativeBox domain = NativeBox::from_extents(config.shape);
+  const NativeGeometry geometry = native_geometry(config);
+  std::vector<double> rho(static_cast<std::size_t>(domain.numPts()));
   const double two_pi = 2.0 * std::acos(-1.0);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n;
-      const double y = (j + 0.5) / n;
-      rho[static_cast<std::size_t>(j) * n + i] =
-          1.0 + 0.15 * std::cos(two_pi * x) * std::sin(two_pi * y);
-    }
+  for (std::size_t linear = 0; linear < rho.size(); ++linear) {
+    const auto position = geometry.cell_center(index_from_linear(linear, domain));
+    double harmonic = std::cos(two_pi * position[0]);
+    for (int axis = 1; axis < kTestDimension; ++axis)
+      harmonic *= std::sin(two_pi * position[axis]);
+    rho[linear] = 1.0 + 0.15 * harmonic;
+  }
   return rho;
 }
 
-ModelSpec periodic_exb_model() {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "background";
-  spec.B0 = 1.0;
-  spec.alpha = 1.0;
-  spec.n0 = 1.0;
-  return spec;
+ScalarModel scalar_transport_model() {
+  RealVector<kTestDimension> velocity{};
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    velocity[axis] = Real(0.25) / Real(axis + 1);
+  return ScalarModel::prepare(velocity);
 }
 
-ModelSpec compressible_model() {
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "none";
-  spec.elliptic = "background";
-  spec.gamma = 1.4;
-  spec.n0 = 0.0;
-  return spec;
+void add_periodic_transport(NativeSystem& system) {
+  add_compiled_model(system, "n", scalar_transport_model(), "none", "rusanov", "conservative",
+                     "explicit");
+  system.set_poisson("composite", "cartesian_cg", "periodic");
 }
 
-// Construit un System scalaire ExB diocotron pret a stepper. Le disque/mode est pose par l'appelant.
-void build_exb(System& s, double R_wall) {
-  ModelSpec spec;
-  spec.transport = "exb";
-  spec.source = "none";
-  spec.elliptic = "charge";
-  spec.q = 1.0;
-  spec.B0 = 1.0;
+void add_compressible(NativeSystem& system) {
+  add_compiled_model(system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov",
+                     "conservative", "explicit", 1.4);
+}
+
+// Construit un System d'advection scalaire exact-rank pret a stepper. Le domaine/mode est pose par
+// l'appelant. First-order reconstruction is the native embedded-boundary provider supported here.
+void build_transport(NativeSystem& s) {
   // First-order reconstruction is the native embedded-boundary provider supported by this facade.
   // Higher-order stencils require geometry-aware neighbor reconstruction and are rejected rather
   // than reading inactive cells. The same provider is used in every mode so this test isolates only
   // residual routing.
-  s.add_block("n", spec, "none", "rusanov", "conservative", "explicit", 1, true);
-  // Poisson sur la densite de charge, mur conducteur circulaire concentrique (comme le diocotron) :
-  // donne un phi non trivial -> vitesse ExB. Le mur elliptique et le disque de transport partagent le
-  // meme centre (L/2, L/2) et la meme convention de level set.
-  s.set_poisson("charge_density", "geometric_mg", "dirichlet", "circle", R_wall, 1.0);
-  test::install_forward_euler_program(s);
+  add_compiled_model(s, "n", scalar_transport_model(), "none", "rusanov", "conservative",
+                     "explicit");
+  // Le Program conserve son solve de champ exact-rank ; le modele scalaire fournit un RHS nul et
+  // la vitesse transportee est entierement preparee dans la loi de conservation.
+  s.set_poisson("composite", "cartesian_cg", "dirichlet");
+  install_forward_euler_program(s);
 }
 
 // max|diff| composante a composante entre deux champs de meme taille.
@@ -137,13 +239,14 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
 #endif
   const int n = 48;
   const double L = 1.0;
-  const double R_wall = 0.45 * L;  // mur conducteur de Poisson (rayon < L/2)
   const double R_disc =
       0.30 * L;  // disque de transport (plus petit : de vraies cellules inactives)
   const double cx = 0.5 * L, cy = 0.5 * L;
-  const double dt = 2e-4;  // pas court, transport ExB sous-CFL
+  const double dt = 2e-4;  // pas court, advection sous-CFL
   const int n_steps = 12;
-  const std::vector<double> rho0 = ring_density(n, L);
+  const NativeSystemConfig config = native_config(n, L, false);
+  const NativeGeometry geometry = native_geometry(config);
+  const std::vector<double> rho0 = ring_density(config);
 
   // ----------------------------------------------------------------------
   // (a) NO-DISC PAR DEFAUT : mode='none' (disque materialise) == jamais set_disc_domain (byte a byte).
@@ -151,15 +254,15 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   std::vector<double>
       ref_state;  // etat de reference (chemin plein cartesien), reutilise par (b)/(c)/(d)
   {
-    System base(SystemConfig{n, L, Periodicity{false, false}});
-    build_exb(base, R_wall);
+    NativeSystem base(config);
+    build_transport(base);
     base.set_density("n", rho0);
     for (int k = 0; k < n_steps; ++k)
       base.step(dt);
     ref_state = base.get_state("n");
 
-    System none(SystemConfig{n, L, Periodicity{false, false}});
-    build_exb(none, R_wall);
+    NativeSystem none(config);
+    build_transport(none);
     none.set_density("n", rho0);
     none.set_disc_domain(cx, cy, R_disc, "none");  // disque pose, mode none : doit rester inerte
     for (int k = 0; k < n_steps; ++k)
@@ -173,29 +276,31 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
         << "(a) mode='none' BIT-IDENTIQUE au chemin sans disque (routage inerte sauf opt-in) : "
            "max|diff| = "
         << d << " (attendu 0)";
-    EXPECT_TRUE(all_finite(ref_state) && ref_state.size() == static_cast<std::size_t>(n) * n)
-        << "(a) etat de reference fini et de taille n*n (le pas plein a bien tourne)";
+    EXPECT_TRUE(all_finite(ref_state) && ref_state.size() == cell_count(config.shape))
+        << "(a) etat de reference fini et de taille shape.product (le pas plein a bien tourne)";
   }
 
   // ----------------------------------------------------------------------
   // (b) ROUTING-LIVE (staircase) : etat DIFFERENT du carre + masse active conservee a la machine.
   // ----------------------------------------------------------------------
   {
-    System sc(SystemConfig{n, L, Periodicity{false, false}});
-    build_exb(sc, R_wall);
+    NativeSystem sc(config);
+    build_transport(sc);
     sc.set_density("n", rho0);
     sc.set_disc_domain(cx, cy, R_disc, "staircase");
 
     // Masse initiale sur les cellules ACTIVES (masque 0/1 du System) AVANT les pas.
     const std::vector<double> mask = sc.disc_mask();  // (ny, nx) row-major, 1.0 actif
     const std::vector<double> dens0 = sc.density("n");
-    const double dx2 = (L / n) * (L / n);
+    double cell_measure = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      cell_measure *= geometry.spacing(axis);
     int n_active = 0, n_inactive = 0;
     double mass0 = 0.0;
     for (std::size_t k = 0; k < mask.size(); ++k) {
       if (mask[k] >= 0.5) {
         ++n_active;
-        mass0 += dens0[k] * dx2;
+        mass0 += dens0[k] * cell_measure;
       } else
         ++n_inactive;
     }
@@ -211,7 +316,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     double mass1 = 0.0;
     for (std::size_t k = 0; k < mask.size(); ++k)
       if (mask[k] >= 0.5)
-        mass1 += dens1[k] * dx2;
+        mass1 += dens1[k] * cell_measure;
 
     const double d_vs_square = max_abs_diff(ref_state, sc_state);
     const double rel_drift = std::fabs(mass1 - mass0) / std::fabs(mass0);
@@ -236,8 +341,8 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   // ----------------------------------------------------------------------
   {
     // (c1) disque coupant : etat fini + different du carre.
-    System cc(SystemConfig{n, L, Periodicity{false, false}});
-    build_exb(cc, R_wall);
+    NativeSystem cc(config);
+    build_transport(cc);
     cc.set_density("n", rho0);
     cc.set_disc_domain(cx, cy, R_disc, "cutcell");
     for (int k = 0; k < n_steps; ++k)
@@ -253,15 +358,15 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
     // (c2) disque ENGLOBANT (rayon > demi-diagonale) : TOUTE cellule est active, AUCUNE face coupee ->
     // assemble_rhs_eb == assemble_rhs (kappa=1, alpha=1 partout, cf. test_eb_transport bit-identite).
     // Un pas cutcell doit alors etre BIT-IDENTIQUE au pas carre sur le meme init.
-    const double R_big = 10.0 * L;                             // englobe largement la boite
-    System sq(SystemConfig{n, L, Periodicity{false, false}});  // reference 1 pas plein
-    build_exb(sq, R_wall);
+    const double R_big = 10.0 * L;  // englobe largement la boite
+    NativeSystem sq(config);        // reference 1 pas plein
+    build_transport(sq);
     sq.set_density("n", rho0);
     sq.step(dt);
     const std::vector<double> sq1 = sq.get_state("n");
 
-    System eb(SystemConfig{n, L, Periodicity{false, false}});
-    build_exb(eb, R_wall);
+    NativeSystem eb(config);
+    build_transport(eb);
     eb.set_density("n", rho0);
     eb.set_disc_domain(cx, cy, R_big, "cutcell");
     eb.step(dt);
@@ -283,18 +388,18 @@ TEST(FacadeRouting, GenericAnalyticLevelSetMatchesDiscSugarAfterBlockConstructio
   const double cx = 0.5;
   const double cy = 0.5;
   const double radius = 0.31;
-  const double wall_radius = 0.45;
-  const std::vector<double> rho0 = ring_density(n, L);
+  const NativeSystemConfig config = native_config(n, L, false);
+  const std::vector<double> rho0 = ring_density(config);
 
   // Both transport closures are deliberately built before their geometry is installed. The stable
   // native program owner must therefore make authoring order irrelevant.
-  System disc(SystemConfig{n, L, Periodicity{false, false}});
-  build_exb(disc, wall_radius);
+  NativeSystem disc(config);
+  build_transport(disc);
   disc.set_density("n", rho0);
   disc.set_disc_domain(cx, cy, radius, "cutcell");
 
-  System analytic(SystemConfig{n, L, Periodicity{false, false}});
-  build_exb(analytic, wall_radius);
+  NativeSystem analytic(config);
+  build_transport(analytic);
   analytic.set_density("n", rho0);
   analytic.set_analytic_level_set(
       {"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
@@ -310,7 +415,7 @@ TEST(FacadeRouting, AnalyticLevelSetReplacementIsTransactionalOnNonFiniteValues)
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();
 #endif
-  System system(SystemConfig{20, 1.0, Periodicity{false, false}});
+  NativeSystem system(native_config(20, Real(1), false));
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
                                 0.1);
   const std::vector<double> original = system.disc_mask();
@@ -330,26 +435,27 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   (void)kokkos_scope();
 #endif
   const int n = 24;
-  const std::vector<double> rho0 = periodic_seam_density(n);
+  const NativeSystemConfig config = native_config(n, Real(1), true);
+  const std::vector<double> rho0 = periodic_seam_density(config);
 
   // The valid-cell expression x - 1/4 describes the same non-circular half-plane in both systems.
   // The reference spells out the low-side periodic extension only to make this regression observable:
   // a correct topology fill replaces that extension with the opposite valid cells and both prepared
   // metric fields become bit-identical. Direct evaluation at the fictitious x<0 ghost does not.
-  System topology(SystemConfig{n, 1.0, Periodicity{true, true}});
-  topology.add_block("n", periodic_exb_model(), "none");
+  NativeSystem topology(config);
+  add_periodic_transport(topology);
   topology.set_density("n", rho0);
   topology.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.25, 0.0}, "cutcell");
-  test::install_forward_euler_program(topology);
+  install_forward_euler_program(topology);
 
-  System explicit_wrap(SystemConfig{n, 1.0, Periodicity{true, true}});
-  explicit_wrap.add_block("n", periodic_exb_model(), "none");
+  NativeSystem explicit_wrap(config);
+  add_periodic_transport(explicit_wrap);
   explicit_wrap.set_density("n", rho0);
   explicit_wrap.set_analytic_level_set(
       {"x", "constant", "lt", "x", "constant", "add", "constant", "sub", "x", "constant", "sub",
        "where"},
       {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0}, "cutcell");
-  test::install_forward_euler_program(explicit_wrap);
+  install_forward_euler_program(explicit_wrap);
 
   ASSERT_EQ(topology.disc_mask(), explicit_wrap.disc_mask());
   topology.step(2e-4);
@@ -363,12 +469,14 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
   (void)kokkos_scope();
 #endif
   constexpr int n = 4;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
+  const NativeSystemConfig config = native_config(n, Real(1), true);
+  NativeSystem system(config);
+  add_compressible(system);
 
   // All components are finite, but Euler conservative -> primitive is undefined at rho=0.
   // This exercises the real runtime registry and its prepared conversion, not a test-only callback.
-  const std::vector<double> accepted(static_cast<std::size_t>(4 * n * n), 0.0);
+  const std::vector<double> accepted(
+      static_cast<std::size_t>(kCompressibleComponents) * cell_count(config.shape), 0.0);
   system.set_state("gas", accepted);
 
   bool rejected = false;
@@ -376,50 +484,34 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
     (void)system.get_primitive_state("gas");
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
-    rejected = message.find("variable recovery failed") != std::string::npos &&
-               message.find("status=invalid_contract") != std::string::npos &&
-               message.find("cause=non_finite_candidate") != std::string::npos &&
-               message.find("attempted_methods=1") != std::string::npos;
+    rejected = message.find("batch variable recovery failed") != std::string::npos;
   }
   EXPECT_TRUE(rejected);
   EXPECT_EQ(system.get_state("gas"), accepted)
       << "failed diagnostic recovery must not mutate the accepted conservative state";
 }
 
-TEST(FacadeRouting, PrimitiveMaterializationRefusesMissingPreparedBatchAuthority) {
+TEST(FacadeRouting, PreparedBlockInstallationRefusesMissingBatchAuthorityWithoutPublication) {
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();
 #endif
   constexpr int n = 4;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
-
-  const std::vector<double> accepted = system.get_state("gas");
-  system.set_block_conversion(
-      "gas", [](const double* in, double* out) {
-        for (int component = 0; component < 4; ++component)
-          out[component] = in[component];
-      },
-      [](const double* in, double* out) {
-        for (int component = 0; component < 4; ++component)
-          out[component] = in[component];
-        RecoveryReport report;
-        report.status = RecoveryStatus::kRecovered;
-        report.cause = RecoveryCause::kNone;
-        return report;
-      });
+  NativeSystem system(native_config(n, Real(1), true));
+  auto prepared = prepare_compiled_system_block<kTestDimension>(
+      system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov", "conservative",
+      "explicit", 1.4, 1, true, 1);
+  prepared.batch_conservative_to_primitive = {};
 
   bool rejected = false;
   try {
-    (void)system.get_primitive_state("gas");
-  } catch (const std::runtime_error& error) {
-    rejected = std::string(error.what()).find(
-                   "no generation-qualified prepared batch recovery consumer") !=
+    system.install_prepared_block(std::move(prepared));
+  } catch (const std::invalid_argument& error) {
+    rejected = std::string(error.what()).find("complete exact-ranked execution contract") !=
                std::string::npos;
   }
   EXPECT_TRUE(rejected);
-  EXPECT_EQ(system.get_state("gas"), accepted)
-      << "missing prepared batch authority must not mutate accepted conservative state";
+  EXPECT_EQ(system.n_blocks(), 0)
+      << "missing prepared batch authority must not publish a partial block";
 }
 
 TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication) {
@@ -427,30 +519,36 @@ TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePubl
   (void)kokkos_scope();
 #endif
   constexpr int n = 4;
-  const std::size_t cells = static_cast<std::size_t>(n) * n;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
+  const NativeSystemConfig config = native_config(n, Real(1), true);
+  const std::size_t cells = cell_count(config.shape);
+  NativeSystem system(config);
+  add_compressible(system);
 
-  std::vector<double> accepted(4 * cells, 0.0);
+  std::vector<double> accepted(static_cast<std::size_t>(kCompressibleComponents) * cells, 0.0);
   for (std::size_t cell = 0; cell < cells; ++cell) {
     accepted[cell] = 1.0;
-    accepted[3 * cells + cell] = 2.5;
+    accepted[static_cast<std::size_t>(kCompressibleComponents - 1) * cells + cell] = 2.5;
   }
   system.set_state("gas", accepted);
 
-  std::vector<double> inadmissible_primitive(4 * cells, 0.0);
+  std::vector<double> inadmissible_primitive(
+      static_cast<std::size_t>(kCompressibleComponents) * cells, 0.0);
   for (std::size_t cell = 0; cell < cells; ++cell)
-    inadmissible_primitive[3 * cells + cell] = 1.0;
+    inadmissible_primitive[static_cast<std::size_t>(kCompressibleComponents - 1) * cells + cell] =
+        1.0;
   EXPECT_THROW(system.set_primitive_state("gas", inadmissible_primitive), std::runtime_error);
   EXPECT_EQ(system.get_state("gas"), accepted)
       << "failed forward conversion validation must not publish a partial conservative state";
 
-  std::vector<double> admissible_primitive(4 * cells, 0.0);
+  std::vector<double> admissible_primitive(
+      static_cast<std::size_t>(kCompressibleComponents) * cells, 0.0);
   for (std::size_t cell = 0; cell < cells; ++cell) {
     admissible_primitive[cell] = 1.0;
-    admissible_primitive[cells + cell] = 0.2;
-    admissible_primitive[2 * cells + cell] = -0.1;
-    admissible_primitive[3 * cells + cell] = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      admissible_primitive[static_cast<std::size_t>(axis + 1) * cells + cell] =
+          axis % 2 == 0 ? 0.2 : -0.1;
+    admissible_primitive[static_cast<std::size_t>(kCompressibleComponents - 1) * cells + cell] =
+        1.0;
   }
   EXPECT_NO_THROW(system.set_primitive_state("gas", admissible_primitive));
   const std::vector<double> recovered = system.get_primitive_state("gas");
