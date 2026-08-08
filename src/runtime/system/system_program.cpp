@@ -177,6 +177,15 @@ void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEval
 }
 
 template <int Dim>
+void System<Dim>::block_prepare_generated_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System generated-state block index is out of range");
+  p_->blocks_.prepare_generated_state(point, static_cast<std::size_t>(block), state);
+}
+
+template <int Dim>
 void System<Dim>::block_neg_div_flux_into(int block, MultiFab<Dim>& state,
                                           MultiFab<Dim>& residual) {
   if (block < 0 || block >= p_->blocks_.size())
@@ -392,6 +401,9 @@ template void System<kNativeDimension>::block_rhs_group(
 template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, bool);
+template void System<kNativeDimension>::block_prepare_generated_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int,
+    MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into(int, MultiFab<kNativeDimension>&,
                                                                 MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into_at(

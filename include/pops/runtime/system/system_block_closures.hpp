@@ -39,6 +39,9 @@ struct SystemBlockClosures {
       std::function<void(const point_type&, field_type&, const field_type&, field_type&)>;
   using PreparedPointJvp = std::function<void(const point_type&, field_type&, const field_type&,
                                                field_type&, const boundary_type&)>;
+  using PointStatePreparation = std::function<void(const point_type&, field_type&)>;
+  using PreparedPointStatePreparation =
+      std::function<void(const point_type&, field_type&, const boundary_type&)>;
 
   Residual rhs_into;
   Residual rhs_flux_only;
@@ -58,6 +61,12 @@ struct SystemBlockClosures {
   PreparedPointResidual rhs_flux_only_core_at_point_prepared;
   PreparedPointResidual boundary_residual_at_point_prepared;
   PreparedPointJvp boundary_jvp_at_point_prepared;
+
+  /// Fill the exact same-level and physical halos consumed by generated pointwise stencils.
+  /// The closure is prepared by the dimension-qualified block package; Program code never
+  /// reconstructs topology or boundary laws from scalar metadata.
+  PointStatePreparation prepare_generated_state_at_point;
+  PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
 
   std::function<void(const field_type&, Real&, Index<Dim>&)> hotspot;
   std::function<void(field_type&)> project;

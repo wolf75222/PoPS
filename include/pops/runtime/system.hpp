@@ -888,6 +888,10 @@ class System {
   POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           int b, MultiFab<Dim>& U, MultiFab<Dim>& R,
                                           bool flux_only);
+  /// Fill same-level and physical halos for one generated pointwise stencil through the block's
+  /// retained exact-ranked package.  This is a preparation seam, not a second boundary engine.
+  POPS_EXPORT void block_prepare_generated_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The

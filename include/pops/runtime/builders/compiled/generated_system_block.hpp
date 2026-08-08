@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -28,6 +29,19 @@
 
 namespace pops {
 namespace generated_system_detail {
+
+template <int Dim, class Model>
+concept GeneratedSourceModel =
+    requires(const Model& model, const typename Model::State& state,
+             const AuxState<Dim>& auxiliary) {
+      { model.source(state, auxiliary) } -> std::same_as<typename Model::State>;
+    };
+
+template <class Model>
+concept GeneratedEllipticRhsModel =
+    requires(const Model& model, const typename Model::State& state) {
+      { model.elliptic_rhs(state) } -> std::convertible_to<Real>;
+    };
 
 template <int Dim>
 struct CopyValidField {
@@ -186,15 +200,20 @@ MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
     throw std::invalid_argument("generated source auxiliary field is too narrow");
   MultiFab<Dim> candidate(state.layout(), state.distribution(), state.local_rank(), Model::n_vars,
                           state.ghosts());
-  MultiFab<Dim> status(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-  for (std::size_t local = 0; local < state.local_size(); ++local)
-    for_each_cell(state.box(local),
-                  MaterializeSource<Dim, Model>{model, state.fab(local).view(),
-                                                auxiliary.fab(local).view(),
-                                                candidate.fab(local).view(),
-                                                status.fab(local).view()});
-  if (reduce_max(status) != Real(0))
-    throw std::runtime_error("generated source produced a non-finite component");
+  if constexpr (GeneratedSourceModel<Dim, Model>) {
+    MultiFab<Dim> status(state.layout(), state.distribution(), state.local_rank(), 1,
+                         state.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    MaterializeSource<Dim, Model>{model, state.fab(local).view(),
+                                                  auxiliary.fab(local).view(),
+                                                  candidate.fab(local).view(),
+                                                  status.fab(local).view()});
+    if (reduce_max(status) != Real(0))
+      throw std::runtime_error("generated source produced a non-finite component");
+  } else {
+    candidate.set_val(Real(0));
+  }
   return candidate;
 }
 
@@ -220,15 +239,17 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
   if (rhs.ncomp() != 1)
     throw std::invalid_argument("generated Poisson RHS destination must have one component");
   require_same_layout(state, rhs, 1, "generated Poisson RHS");
-  MultiFab<Dim> candidate(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-  MultiFab<Dim> status(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-  for (std::size_t local = 0; local < state.local_size(); ++local)
-    for_each_cell(state.box(local), MaterializePoissonRhs<Dim, Model>{
-                                         model, state.fab(local).view(),
-                                         candidate.fab(local).view(), status.fab(local).view()});
-  if (reduce_max(status) != Real(0))
-    throw std::runtime_error("generated Poisson RHS produced a non-finite value");
-  saxpy(rhs, Real(1), candidate);
+  if constexpr (GeneratedEllipticRhsModel<Model>) {
+    MultiFab<Dim> candidate(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+    MultiFab<Dim> status(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local), MaterializePoissonRhs<Dim, Model>{
+                                           model, state.fab(local).view(),
+                                           candidate.fab(local).view(), status.fab(local).view()});
+    if (reduce_max(status) != Real(0))
+      throw std::runtime_error("generated Poisson RHS produced a non-finite value");
+    saxpy(rhs, Real(1), candidate);
+  }
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
@@ -245,6 +266,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const auto state_schedule = HaloSchedule<Dim>(
       request.auxiliary->layout(), request.auxiliary->distribution(),
       request.auxiliary->local_rank(), request.geometry.domain(), ghosts, request.topology,
+      Model::n_vars,
       halo_budget(*request.auxiliary, request.geometry.domain(), request.topology, ghosts));
   const auto auxiliary_schedule = prepare_halo_schedule(
       *request.auxiliary, request.geometry.domain(), request.topology,
@@ -258,15 +280,21 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   MultiFab<Dim>* const auxiliary = request.auxiliary;
   const Geometry<Dim> geometry = request.geometry;
 
-  auto flux = [spatial, state_schedule, auxiliary_schedule, auxiliary, geometry](
-                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                  const PreparedHyperbolicBoundary<Dim>* boundary) {
-    require_same_layout(state, residual, Model::n_vars, "generated flux residual");
+  auto prepare_state = [state_schedule, auxiliary_schedule, auxiliary, geometry](
+                           MultiFab<Dim>& state,
+                           const PreparedHyperbolicBoundary<Dim>* boundary) {
     require_same_layout(state, *auxiliary, auxiliary->ncomp(), "generated flux auxiliary");
     fill_boundary(state, state_schedule);
     fill_boundary(*auxiliary, auxiliary_schedule);
     if (boundary != nullptr)
       boundary->fill_physical(state, geometry);
+  };
+
+  auto flux = [spatial, prepare_state, auxiliary, geometry](
+                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                  const PreparedHyperbolicBoundary<Dim>* boundary) {
+    require_same_layout(state, residual, Model::n_vars, "generated flux residual");
+    prepare_state(state, boundary);
 
     auto faces = nd::make_face_flux_workspace(state);
     for (std::size_t local = 0; local < state.local_size(); ++local) {
@@ -329,6 +357,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
              const PreparedHyperbolicBoundary<Dim>& boundary) {
         flux(state, residual, &boundary);
       };
+  result.closures.prepare_generated_state_at_point =
+      [prepare_state](const auto&, MultiFab<Dim>& state) { prepare_state(state, nullptr); };
+  result.closures.prepare_generated_state_at_point_prepared =
+      [prepare_state](const auto&, MultiFab<Dim>& state,
+                      const PreparedHyperbolicBoundary<Dim>& boundary) {
+        prepare_state(state, &boundary);
+      };
 
   result.maximum_speed = [model, auxiliary](const MultiFab<Dim>& state) {
     return maximum_speed<Dim>(model, state, *auxiliary);
@@ -341,10 +376,11 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     for (int component = 0; component < Model::n_vars; ++component)
       input[component] = static_cast<Real>(primitive[component]);
     const auto converted = model.make_conservative(input);
+    if (!converted.succeeded())
+      throw std::runtime_error(
+          "generated primitive-to-conservative conversion rejected its candidate");
     for (int component = 0; component < Model::n_vars; ++component)
-      conservative[component] = converted.succeeded()
-                                    ? static_cast<double>(converted.value[component])
-                                    : std::numeric_limits<double>::quiet_NaN();
+      conservative[component] = static_cast<double>(converted.value[component]);
   };
   const auto recovery_plan = prepare_model_variable_recovery(model);
   result.conservative_to_primitive =

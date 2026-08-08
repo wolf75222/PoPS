@@ -51,6 +51,9 @@ class SystemBlockStore {
       std::function<void(const evaluation_point&, field_type&, const field_type&, field_type&)>;
   using PreparedPointJvp = std::function<void(
       const evaluation_point&, field_type&, const field_type&, field_type&, const boundary_type&)>;
+  using PointStatePreparation = std::function<void(const evaluation_point&, field_type&)>;
+  using PreparedPointStatePreparation =
+      std::function<void(const evaluation_point&, field_type&, const boundary_type&)>;
 
   struct ResidualFamily {
     PointResidual full;
@@ -105,6 +108,8 @@ class SystemBlockStore {
     PreparedPointResidual rhs_flux_only_core_at_point_prepared;
     PreparedPointResidual boundary_residual_at_point_prepared;
     PreparedPointJvp boundary_jvp_at_point_prepared;
+    PointStatePreparation prepare_generated_state_at_point;
+    PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
     ResidualFamily staircase_residuals;
     ResidualFamily cutcell_residuals;
 
@@ -224,6 +229,25 @@ class SystemBlockStore {
       throw std::runtime_error("System block '" + selected.name +
                                "' lacks a prepared hyperbolic core residual provider");
     closure(point, state, residual, boundary);
+  }
+
+  /// Prepare one state for a generated stencil through the block's retained halo/boundary
+  /// authority.  The generated Program supplies only the exact evaluation point and ranked field;
+  /// it never re-derives a schedule or assumes a two-dimensional boundary table.
+  void prepare_generated_state(const evaluation_point& point, std::size_t block,
+                               field_type& state) {
+    BlockState& selected = at_(block);
+    if (selected.boundary) {
+      if (!selected.prepare_generated_state_at_point_prepared)
+        throw std::runtime_error("System block '" + selected.name +
+                                 "' lacks its prepared generated-state provider");
+      selected.prepare_generated_state_at_point_prepared(point, state, *selected.boundary);
+      return;
+    }
+    if (!selected.prepare_generated_state_at_point)
+      throw std::runtime_error("System block '" + selected.name +
+                               "' lacks a dimension-qualified generated-state provider");
+    selected.prepare_generated_state_at_point(point, state);
   }
 
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
