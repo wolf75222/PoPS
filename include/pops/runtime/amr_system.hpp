@@ -16,6 +16,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
@@ -78,10 +79,6 @@ namespace runtime::amr {
 struct PreparedTaggerSpec;
 struct PreparedClusteringSpec;
 struct PreparedRefluxSpec;
-template <int Dim>
-struct PreparedTaggingProgram {
-  struct Stencil;
-};
 }  // namespace runtime::amr
 
 namespace runtime::field {
