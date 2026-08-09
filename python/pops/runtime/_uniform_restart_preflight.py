@@ -105,6 +105,7 @@ def preflight_uniform_restart(payload: Any) -> None:
         "t",
         "macro_step",
         "pops_spatial_contract",
+        "pops_embedded_boundary_contract",
         "program_hash",
         "history_names",
         "cache_nodes",
@@ -162,9 +163,7 @@ def preflight_uniform_restart(payload: Any) -> None:
             if slots != tuple(sorted(set(slots))) or any(
                 slot < 0 or slot >= depth for slot in slots
             ):
-                raise ValueError(
-                    "restart : history '%s' %s-slot index is invalid" % (name, label)
-                )
+                raise ValueError("restart : history '%s' %s-slot index is invalid" % (name, label))
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
             if key not in files:
@@ -176,9 +175,7 @@ def preflight_uniform_restart(payload: Any) -> None:
             if regrid_steps != tuple(sorted(set(regrid_steps))) or any(
                 step < 0 for step in regrid_steps
             ):
-                raise ValueError(
-                    "restart : history '%s' replay-step index is invalid" % name
-                )
+                raise ValueError("restart : history '%s' replay-step index is invalid" % name)
 
     cache_nodes = _integer_vector(payload, "cache_nodes")
     cache_names = _text_vector(payload, "cache_names", unique=False)

@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <cstdint>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -233,6 +234,9 @@ struct EffectiveEbOptions {
   double kappa_min = static_cast<double>(kEbKappaMin);
   double face_open_eps = static_cast<double>(kEbFaceOpenEps);
   double cut_theta_min = static_cast<double>(kEbCutFractionFloor);
+  std::string semantic_digest;
+  std::string materialization_digest;
+  std::uint64_t generation = 0;
 };
 
 struct EffectiveSpatialTopology {

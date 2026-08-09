@@ -62,6 +62,10 @@ class _SystemIO(_System):
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.identity import make_identity
         from pops.output._checkpoint_collective import canonical_checkpoint_path
+        from pops.runtime._checkpoint_embedded_boundary import (
+            add_checkpoint_embedded_boundary_contract,
+            current_checkpoint_embedded_boundary_contract,
+        )
         from pops.runtime._checkpoint_spatial import (
             add_checkpoint_spatial_contract,
             require_checkpoint_spatial_contract,
@@ -91,6 +95,8 @@ class _SystemIO(_System):
         }
         spatial = require_checkpoint_spatial_contract(self)
         add_checkpoint_spatial_contract(out, spatial)
+        embedded_boundary = current_checkpoint_embedded_boundary_contract(self)
+        add_checkpoint_embedded_boundary_contract(out, embedded_boundary)
         out.update(cadence.to_payload())
         block_evidence = []
         for b in blocks:
@@ -186,6 +192,7 @@ class _SystemIO(_System):
                 "target": str(target),
                 "clock": {"time": time.hex(), "macro_step": macro_step},
                 "spatial_contract": spatial.to_data(),
+                "embedded_boundary_contract": embedded_boundary.to_data(),
                 "abi_key": str(out["abi_key"]),
                 "blocks": block_evidence,
                 "field_slots": list(field_slots),
@@ -280,6 +287,9 @@ class _SystemIO(_System):
             authenticate_checkpoint_payload,
             require_exact_payload_version,
         )
+        from pops.runtime._checkpoint_embedded_boundary import (
+            authenticate_checkpoint_embedded_boundary_contract,
+        )
         from pops.runtime._checkpoint_spatial import authenticate_checkpoint_spatial_contract
         from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
         from pops.runtime._temporal_restart import TemporalRestartState
@@ -300,6 +310,7 @@ class _SystemIO(_System):
             runtime_kind="Uniform",
         )
         spatial = authenticate_checkpoint_spatial_contract(self, d)
+        authenticate_checkpoint_embedded_boundary_contract(self, d)
         preflight_uniform_restart(d)
         cadence = prepare_program_cadence(
             self._s,

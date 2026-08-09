@@ -18,10 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
-- Uniform checkpoint payload v6 and AMR payload v8 persist one release-versioned rank-generic
+- Uniform checkpoint payload v7 and AMR payload v8 persist one release-versioned rank-generic
   spatial authority. Shape, bounds, periodicity, patch boxes and AMR refinement ratios carry exactly
   `Dim` components; restart authenticates the resolved 1D/2D/3D specialization before native
-  allocation or mutation, with no scalar `nx`/`ny` compatibility route.
+  allocation or mutation, with no scalar `nx`/`ny` compatibility route. Uniform v7 additionally
+  authenticates the semantic embedded-boundary expression, mode and thresholds independently of
+  MPI rank ownership and local materialization before any restart mutation.
 - Spatial providers now publish one exact dimension/geometry/operation matrix. The prepared local
   periodic Cartesian residual executes compile-time 1D and 3D metrics, reconstruction, Riemann
   fluxes and conservative divergence, while the Box2D/MultiFab runtime still refuses non-2D binds
@@ -127,7 +129,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   sealing, so a divergent tagging payload fails collectively without a partial file; external
   Tagger components remain fail-closed for non-zero hysteresis.
 - Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
-  Migration requires a complete authenticated current-v6 authority plus a reviewed mapping that pins
+  Migration requires a complete authenticated current-v7 authority plus a reviewed mapping that pins
   both artifacts, all lifecycle/ABI/Program identities, every block/component/history
   correspondence, and every missing metadata class inherited from the authority. The first route is
   deliberately limited to same-grid/same-clock, Dense fully stored histories and empty

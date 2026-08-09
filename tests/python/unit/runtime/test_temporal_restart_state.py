@@ -1154,6 +1154,8 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
         {
             "t": np.array(0.0, dtype=np.float64),
             "macro_step": np.array(0, dtype=np.int64),
+            "pops_spatial_contract": np.array("{}"),
+            "pops_embedded_boundary_contract": np.array("{}"),
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
             "cache_nodes": np.array([], dtype=np.int64),

@@ -667,6 +667,9 @@ inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
   d["kappa_min"] = e.kappa_min;
   d["face_open_eps"] = e.face_open_eps;
   d["cut_theta_min"] = e.cut_theta_min;
+  d["semantic_digest"] = e.semantic_digest;
+  d["materialization_digest"] = e.materialization_digest;
+  d["generation"] = e.generation;
   return d;
 }
 

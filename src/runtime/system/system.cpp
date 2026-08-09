@@ -342,6 +342,19 @@ EffectiveOptionsReport System<Dim>::effective_options_report() const {
   report.poisson.rel_tol = p_->poisson_rel_tol_;
   report.poisson.abs_tol = p_->poisson_abs_tol_;
   report.poisson.max_iterations = p_->poisson_max_iterations_;
+  if (p_->embedded_boundary_) {
+    report.eb.enabled = true;
+    report.eb.geometry_mode = std::string(
+        runtime::system::prepared_embedded_boundary_mode_name(p_->embedded_boundary_->mode()));
+    report.eb.kappa_min = static_cast<double>(p_->embedded_boundary_->thresholds().kappa_min);
+    report.eb.face_open_eps =
+        static_cast<double>(p_->embedded_boundary_->thresholds().face_open_eps);
+    report.eb.cut_theta_min =
+        static_cast<double>(p_->embedded_boundary_->thresholds().cut_theta_min);
+    report.eb.semantic_digest = p_->embedded_boundary_->semantic_digest();
+    report.eb.materialization_digest = p_->embedded_boundary_->digest();
+    report.eb.generation = p_->embedded_boundary_->generation();
+  }
 
   report.blocks.reserve(p_->sp.size());
   for (const typename Impl::Species& block : p_->sp) {
