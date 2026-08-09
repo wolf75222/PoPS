@@ -8,23 +8,175 @@
 //  (4) OBSERVATEUR PUR : les diagnostics ne changent pas le candidat converge.
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 using pops::Aux;
 using pops::Real;
+
+namespace {
+
+constexpr int kDim = pops::kNativeDimension;
+using Field = pops::MultiFab<kDim>;
+using Layout = pops::mesh::BoxArray<kDim>;
+using Distribution = pops::mesh::Distribution<kDim>;
+
+template <class Ranked, class Value>
+Ranked filled_ranked(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+Field make_mf(const Layout& layout, const Distribution& distribution, int components,
+              pops::Extent<kDim> ghosts = {}) {
+  Field field(layout, distribution,
+              distribution.rank_space().coordinate(static_cast<std::size_t>(pops::my_rank())),
+              components, ghosts);
+  field.set_val(Real(0));
+  return field;
+}
+
+struct CopyThree {
+  pops::FieldView<const Real, kDim> source;
+  pops::FieldView<Real, kDim> destination;
+
+  POPS_HD void operator()(const pops::Index<kDim>& index) const {
+    for (int component = 0; component < 3; ++component)
+      destination(index, component) = source(index, component);
+  }
+};
+
+void copy3(const Field& source, Field& destination) {
+  for (std::size_t local = 0; local < destination.local_size(); ++local)
+    pops::for_each_cell(destination.box(local),
+                        CopyThree{source.fab(local).view(), destination.fab(local).view()});
+}
+
+struct DifferenceThree {
+  pops::FieldView<const Real, kDim> left;
+  pops::FieldView<const Real, kDim> right;
+
+  POPS_HD Real operator()(const pops::Index<kDim>& index) const {
+    Real maximum = Real(0);
+    for (int component = 0; component < 3; ++component) {
+      const Real difference = Kokkos::abs(left(index, component) - right(index, component));
+      if (!Kokkos::isfinite(difference))
+        return std::numeric_limits<Real>::infinity();
+      maximum = difference > maximum ? difference : maximum;
+    }
+    return maximum;
+  }
+};
+
+double max_difference3(const Field& left, const Field& right) {
+  Real difference = Real(0);
+  for (std::size_t local = 0; local < left.local_size(); ++local)
+    difference = std::max(
+        difference,
+        pops::for_each_cell_reduce_max(
+            left.box(local), DifferenceThree{left.fab(local).view(), right.fab(local).view()}));
+  return static_cast<double>(pops::all_reduce_max(difference));
+}
+
+struct FillInitialState {
+  pops::FieldView<Real, kDim> state;
+
+  POPS_HD void operator()(const pops::Index<kDim>& index) const {
+    Real coordinate_sum = Real(0);
+    for (int axis = 0; axis < kDim; ++axis)
+      coordinate_sum += static_cast<Real>(index[axis]);
+    state(index, 0) = Real(1) + Real(0.1) * static_cast<Real>(index[0]);
+    state(index, 1) = Real(-0.5) + Real(0.05) * coordinate_sum;
+    state(index, 2) = Real(0.3);
+  }
+};
+
+struct FillThreeState {
+  pops::FieldView<Real, kDim> state;
+  Real first;
+  Real second;
+  Real third;
+
+  POPS_HD void operator()(const pops::Index<kDim>& index) const {
+    state(index, 0) = first;
+    state(index, 1) = second;
+    state(index, 2) = third;
+  }
+};
+
+struct ReplaceAtIndex {
+  pops::FieldView<Real, kDim> state;
+  pops::Index<kDim> target;
+  int component;
+  Real value;
+
+  POPS_HD void operator()(const pops::Index<kDim>& index) const {
+    bool matches = true;
+    for (int axis = 0; axis < kDim; ++axis)
+      matches = matches && index[axis] == target[axis];
+    if (matches)
+      state(index, component) = value;
+  }
+};
+
+struct FillFailureStatistics {
+  pops::FieldView<Real, kDim> statistics;
+  int recoverable_priority;
+  int fatal_priority;
+  bool promote_negative;
+
+  POPS_HD void operator()(const pops::Index<kDim>& index) const {
+    const bool negative = index[0] < 0;
+    statistics(index, 8) = negative ? Real(7) : Real(3);
+    statistics(index, 9) = Real(1);
+    statistics(index, 10) =
+        static_cast<Real>(negative && !promote_negative ? recoverable_priority : fatal_priority);
+  }
+};
+
+template <class Model>
+struct BackwardEulerResidual {
+  pops::FieldView<const Real, kDim> candidate;
+  pops::FieldView<const Real, kDim> initial;
+  Model model;
+  Real dt;
+
+  POPS_HD Real operator()(const pops::Index<kDim>& index) const {
+    typename Model::State state{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      state[component] = candidate(index, component);
+    const typename Model::State source = model.source(state, Aux{});
+    Real maximum = Real(0);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      const Real residual = Kokkos::abs(candidate(index, component) - initial(index, component) -
+                                        dt * source[component]);
+      maximum = residual > maximum ? residual : maximum;
+    }
+    return maximum;
+  }
+};
+
+}  // namespace
 
 // Relaxation NON LINEAIRE 3 variables, sans aucun layout fluide (ni densite, ni pression) :
 //   S0 = -k (u0 - u1 u2) ; S1 = -k (u1 - u0/2) ; S2 = -k u2^3.
@@ -164,44 +316,6 @@ struct FallibleJacobianModel : StiffModel {
   }
 };
 
-static pops::MultiFab make_mf(const pops::BoxArray& ba, const pops::DistributionMapping& dm,
-                              int nc) {
-  pops::MultiFab m(ba, dm, nc, 0);
-  m.set_val(Real(0));
-  return m;
-}
-
-// Copie de src vers dst sur les 3 composantes (idiome recopie dans chaque section).
-static void copy3(const pops::MultiFab& src, pops::MultiFab& dst) {
-  for (int li = 0; li < dst.local_size(); ++li) {
-    pops::Array4 d = dst.fab(li).array();
-    const pops::ConstArray4 s = src.fab(li).const_array();
-    const pops::Box2D b = dst.box(li);
-    for (int c = 0; c < 3; ++c)
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          d(i, j, c) = s(i, j, c);
-  }
-}
-
-static double max_difference3(const pops::MultiFab& left, const pops::MultiFab& right) {
-  double difference = 0;
-  for (int li = 0; li < left.local_size(); ++li) {
-    const pops::ConstArray4 a = left.fab(li).const_array();
-    const pops::ConstArray4 b = right.fab(li).const_array();
-    const pops::Box2D box = left.box(li);
-    for (int c = 0; c < 3; ++c)
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          if (const double value = std::fabs(static_cast<double>(a(i, j, c) - b(i, j, c)));
-              std::isfinite(value))
-            difference = std::fmax(difference, value);
-          else
-            return std::numeric_limits<double>::infinity();
-  }
-  return difference;
-}
-
 // pas de temps commun : k*dt = 10 (raide, un point-fixe explicite divergerait).
 static constexpr Real kDt = 0.05;
 
@@ -210,21 +324,16 @@ static constexpr Real kDt = 0.05;
 class NewtonRobustnessTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
-    dom_ = new pops::Box2D(pops::Box2D::from_extents(4, 4));
-    ba_ = new pops::BoxArray(std::vector<pops::Box2D>{*dom_});
-    dm_ = new pops::DistributionMapping(1, pops::n_ranks());
-    aux_ = new pops::MultiFab(make_mf(*ba_, *dm_, pops::kAuxBaseComps));
-    U0_ = new pops::MultiFab(make_mf(*ba_, *dm_, 3));
-    for (int li = 0; li < U0_->local_size(); ++li) {
-      pops::Array4 u = U0_->fab(li).array();
-      const pops::Box2D b = U0_->box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-          u(i, j, 0) = 1.0 + 0.1 * i;
-          u(i, j, 1) = -0.5 + 0.05 * j;
-          u(i, j, 2) = 0.3;
-        }
-    }
+    dom_ = new pops::Box<kDim>{pops::Index<kDim>{}, filled_ranked<pops::Index<kDim>>(3)};
+    ba_ = new Layout(std::vector<pops::Box<kDim>>{*dom_});
+    pops::Extent<kDim> rank_extent = filled_ranked<pops::Extent<kDim>>(1);
+    rank_extent[0] = pops::n_ranks();
+    dm_ = new Distribution(Distribution::replicated(
+        *ba_, pops::mesh::RankSpace<kDim>{pops::Index<kDim>{}, rank_extent}));
+    aux_ = new Field(make_mf(*ba_, *dm_, pops::kAuxBaseComps));
+    U0_ = new Field(make_mf(*ba_, *dm_, 3));
+    for (std::size_t local = 0; local < U0_->local_size(); ++local)
+      pops::for_each_cell(U0_->box(local), FillInitialState{U0_->fab(local).view()});
   }
   static void TearDownTestSuite() {
     delete dom_;
@@ -239,18 +348,17 @@ class NewtonRobustnessTest : public ::testing::Test {
     U0_ = nullptr;
   }
 
-  static pops::Box2D* dom_;
-  static pops::BoxArray* ba_;
-  static pops::DistributionMapping* dm_;
-  static pops::MultiFab* aux_;
-  static pops::MultiFab*
-      U0_;  // etat initial commun (verification BE, damping, jacobien, observateur)
+  static pops::Box<kDim>* dom_;
+  static Layout* ba_;
+  static Distribution* dm_;
+  static Field* aux_;
+  static Field* U0_;  // etat initial commun (verification BE, damping, jacobien, observateur)
 };
-pops::Box2D* NewtonRobustnessTest::dom_ = nullptr;
-pops::BoxArray* NewtonRobustnessTest::ba_ = nullptr;
-pops::DistributionMapping* NewtonRobustnessTest::dm_ = nullptr;
-pops::MultiFab* NewtonRobustnessTest::aux_ = nullptr;
-pops::MultiFab* NewtonRobustnessTest::U0_ = nullptr;
+pops::Box<kDim>* NewtonRobustnessTest::dom_ = nullptr;
+Layout* NewtonRobustnessTest::ba_ = nullptr;
+Distribution* NewtonRobustnessTest::dm_ = nullptr;
+Field* NewtonRobustnessTest::aux_ = nullptr;
+Field* NewtonRobustnessTest::U0_ = nullptr;
 
 TEST(SolveOutcomeContract, unconsumed_outcome_fails_loud) {
   EXPECT_DEATH(
@@ -307,7 +415,7 @@ TEST(SolveOutcomeContract, direct_consumer_cannot_continue_after_failed_solve) {
 // (1) NON-EULER MULTI-VARIABLES : converge sous tolerance ; W verifie l'equation BE au residu pres.
 TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backward_euler_root) {
   StiffModel m;
-  pops::MultiFab U = make_mf(*ba_, *dm_, 3);
+  Field U = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, U);
 
   pops::NewtonOptions opts;
@@ -323,21 +431,14 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
       << ", res=" << static_cast<double>(rep.max_residual) << ")";
 
   // verification BE : W - Un - dt S(W) ~ 0 sur chaque cellule.
-  double worst = 0;
-  for (int li = 0; li < U.local_size(); ++li) {
-    const pops::ConstArray4 w = U.fab(li).const_array();
-    const pops::ConstArray4 un = U0_->fab(li).const_array();
-    const pops::Box2D b = U.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        StiffModel::State W{};
-        for (int c = 0; c < 3; ++c)
-          W[c] = w(i, j, c);
-        const StiffModel::State S = m.source(W, Aux{});
-        for (int c = 0; c < 3; ++c)
-          worst = std::fmax(worst, std::fabs(w(i, j, c) - un(i, j, c) - kDt * S[c]));
-      }
-  }
+  Real worst = Real(0);
+  for (std::size_t local = 0; local < U.local_size(); ++local)
+    worst = std::max(
+        worst, pops::for_each_cell_reduce_max(
+                   U.box(local), BackwardEulerResidual<StiffModel>{
+                                     static_cast<const Field&>(U).fab(local).view(),
+                                     static_cast<const Field&>(*U0_).fab(local).view(), m, kDt}));
+  worst = pops::all_reduce_max(worst);
   EXPECT_TRUE(worst <= 1e-10) << "residu BE " << worst << " > 1e-10";
   std::printf(
       "OK  (1) relaxation non lineaire 3-var NON Euler : converge (res BE %.1e, iters max "
@@ -348,7 +449,7 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
 // (2) DAMPING : Newton amorti (damping < 1) converge vers la MEME racine (plus d'iterations).
 TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   StiffModel m;
-  pops::MultiFab U = make_mf(*ba_, *dm_, 3);
+  Field U = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, U);
   pops::NewtonOptions opts;
   opts.max_iters = 25;
@@ -360,7 +461,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   (void)reference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine de reference non convergee";
 
-  pops::MultiFab Ud = make_mf(*ba_, *dm_, 3);
+  Field Ud = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Ud);
   pops::NewtonOptions od = opts;
   od.damping = 0.5;
@@ -370,16 +471,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   ASSERT_TRUE(damped.report().solved_value_available());
   (void)damped.consume(pops::SolveConsumption::kAccept);
 
-  double dmax = 0;
-  for (int li = 0; li < U.local_size(); ++li) {
-    const pops::ConstArray4 a4 = U.fab(li).const_array();
-    const pops::ConstArray4 b4 = Ud.fab(li).const_array();
-    const pops::Box2D b = U.box(li);
-    for (int c = 0; c < 3; ++c)
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          dmax = std::fmax(dmax, std::fabs(a4(i, j, c) - b4(i, j, c)));
-  }
+  const double dmax = max_difference3(U, Ud);
   EXPECT_TRUE(repd.converged) << "damping : non converge";
   EXPECT_TRUE(dmax <= 1e-8) << "damping : ecart racine " << dmax << " > 1e-8";
   std::printf("OK  (2) Newton amorti (damping=0.5) : meme racine (ecart %.1e), iters %.0f\n", dmax,
@@ -389,19 +481,17 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
 // (3) Une evaluation non finie produit un outcome invalide qui reste prive et est consomme FailRun.
 TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publish) {
   NanModel nm;
-  pops::MultiFab Un2 = make_mf(*ba_, *dm_, 3);
-  for (int li = 0; li < Un2.local_size(); ++li) {
-    pops::Array4 u = Un2.fab(li).array();
-    const pops::Box2D b = Un2.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        u(i, j, 0) = 1.0;  // sain partout...
-        u(i, j, 1) = 0.2;
-        u(i, j, 2) = 0.1;
-      }
-  }
-  Un2.fab(0).array()(2, 3, 0) = -4.0;  // ...sauf la cellule (2, 3) : sqrt(-4) -> NaN composante 1
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field Un2 = make_mf(*ba_, *dm_, 3);
+  for (std::size_t local = 0; local < Un2.local_size(); ++local)
+    pops::for_each_cell(Un2.box(local),
+                        FillThreeState{Un2.fab(local).view(), Real(1), Real(0.2), Real(0.1)});
+  pops::Index<kDim> failing_index{};
+  for (int axis = 0; axis < kDim; ++axis)
+    failing_index[axis] = 2 + axis % 2;
+  for (std::size_t local = 0; local < Un2.local_size(); ++local)
+    pops::for_each_cell(Un2.box(local),
+                        ReplaceAtIndex{Un2.fab(local).view(), failing_index, 0, Real(-4)});
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(Un2, accepted);
   pops::NewtonOptions options;
   pops::NewtonReport repf;
@@ -410,10 +500,13 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
   EXPECT_FALSE(repf.enabled) << "les diagnostics persistants ont ete modifies avant consommation";
-  EXPECT_TRUE(outcome.report().failed_i == 2 && outcome.report().failed_j == 3)
-      << "cellule fautive (" << outcome.report().failed_i << ", " << outcome.report().failed_j
-      << ") != (2, 3)";
-  EXPECT_EQ(outcome.report().failed_component, 1)
+  ASSERT_TRUE(outcome.report().failure.found);
+  EXPECT_EQ(outcome.report().failure.rank, kDim);
+  for (int axis = 0; axis < kDim; ++axis)
+    EXPECT_EQ(outcome.report().failure.index[static_cast<std::size_t>(axis)], failing_index[axis]);
+  for (int axis = kDim; axis < pops::SolveFailureLocation::maximum_rank; ++axis)
+    EXPECT_EQ(outcome.report().failure.index[static_cast<std::size_t>(axis)], 0);
+  EXPECT_EQ(outcome.report().failure.component, 1)
       << "la composante NaN initiale doit rester l'origine de l'echec";
   const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
   EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
@@ -426,9 +519,9 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
 // (3b) Une tolerance non satisfaite a l'epuisement du budget ne publie jamais le dernier itere.
 TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   StiffModel model;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
   pops::NewtonOptions options;
   options.max_iters = 1;
@@ -446,9 +539,9 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
 // (3c) Un Jacobien singulier a son propre statut et ne publie pas l'itere partiel.
 TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) {
   SingularModel model;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
   pops::NewtonOptions options;
   pops::NewtonReport report;
@@ -463,10 +556,15 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
 // RejectAttempt, mais son candidat reste prive pendant la consommation FailRun.
 TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_run) {
   NanModel model;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  accepted.fab(0).array()(2, 3, 0) = -4.0;
-  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  pops::Index<kDim> failing_index{};
+  for (int axis = 0; axis < kDim; ++axis)
+    failing_index[axis] = 2 + axis % 2;
+  for (std::size_t local = 0; local < accepted.local_size(); ++local)
+    pops::for_each_cell(accepted.box(local),
+                        ReplaceAtIndex{accepted.fab(local).view(), failing_index, 0, Real(-4)});
+  Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
   pops::NewtonOptions options;
   pops::NewtonReport diagnostics;
@@ -486,7 +584,7 @@ TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_r
 
 TEST_F(NewtonRobustnessTest,
        fallible_source_propagates_retry_reject_fail_and_invalid_without_publication) {
-  static_assert(pops::HasFallibleSourceEvaluation<FallibleSourceModel>);
+  static_assert(pops::HasFallibleSourceEvaluationFor<FallibleSourceModel, pops::Aux>);
   constexpr std::uint32_t reason = 0xfedcba98u;
   struct FailureCase {
     pops::ImplicitEvaluationStatus status;
@@ -504,9 +602,9 @@ TEST_F(NewtonRobustnessTest,
 
   for (const FailureCase& failure : cases) {
     SCOPED_TRACE(failure.reason_fragment);
-    pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+    Field accepted = make_mf(*ba_, *dm_, 3);
     copy3(*U0_, accepted);
-    pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+    Field state = make_mf(*ba_, *dm_, 3);
     copy3(accepted, state);
     FallibleSourceModel model{failure.status, reason};
 
@@ -526,11 +624,11 @@ TEST_F(NewtonRobustnessTest,
 
 TEST_F(NewtonRobustnessTest,
        fallible_analytic_jacobian_rejects_privately_and_success_keeps_legacy_result) {
-  static_assert(pops::HasFallibleSourceJacobianEvaluation<FallibleJacobianModel>);
+  static_assert(pops::HasFallibleSourceJacobianEvaluationFor<FallibleJacobianModel, pops::Aux>);
   constexpr std::uint32_t reason = 0x1234abcdu;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  pops::MultiFab rejected_state = make_mf(*ba_, *dm_, 3);
+  Field rejected_state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, rejected_state);
   FallibleJacobianModel rejected_model;
   rejected_model.evaluation = pops::ImplicitEvaluationStatus::kReject;
@@ -550,8 +648,8 @@ TEST_F(NewtonRobustnessTest,
   options.max_iters = 25;
   options.rel_tol = 1e-12;
   options.abs_tol = 1e-13;
-  pops::MultiFab fallible_state = make_mf(*ba_, *dm_, 3);
-  pops::MultiFab legacy_state = make_mf(*ba_, *dm_, 3);
+  Field fallible_state = make_mf(*ba_, *dm_, 3);
+  Field legacy_state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, fallible_state);
   copy3(accepted, legacy_state);
   FallibleJacobianModel fallible_model;
@@ -569,9 +667,9 @@ TEST_F(NewtonRobustnessTest,
 // fois.
 TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   StiffModel model;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
   pops::NewtonOptions options;
   options.max_iters = 25;
@@ -592,9 +690,9 @@ TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
 
 TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_outcome) {
   StiffModel model;
-  pops::MultiFab accepted = make_mf(*ba_, *dm_, 3);
+  Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
-  pops::MultiFab state = make_mf(*ba_, *dm_, 3);
+  Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
 
   auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, pops::NewtonOptions{});
@@ -603,7 +701,7 @@ TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_out
   // A caller changing the destination structure between prepare and consume used to let lincomb
   // enter an incompatible layout after the outcome had already been marked consumed. The complete
   // layout guard now rejects before publication and leaves the valid outcome available.
-  state = pops::MultiFab(*ba_, *dm_, 3, 1);
+  state = make_mf(*ba_, *dm_, 3, filled_ranked<pops::Extent<kDim>>(1));
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
 
   state = make_mf(*ba_, *dm_, 3);
@@ -616,7 +714,7 @@ TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_out
 // (4) Le contrat par defaut converge et le rapport optionnel ne change pas le candidat publie.
 TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnostics) {
   StiffModel m;
-  pops::MultiFab Ua = make_mf(*ba_, *dm_, 3), Ub = make_mf(*ba_, *dm_, 3);
+  Field Ua = make_mf(*ba_, *dm_, 3), Ub = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Ua);
   copy3(*U0_, Ub);
 
@@ -630,26 +728,20 @@ TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnost
   (void)with_report.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(repo.converged);
 
-  for (int li = 0; li < Ua.local_size(); ++li) {
-    const pops::ConstArray4 a4 = Ua.fab(li).const_array();
-    const pops::ConstArray4 b4 = Ub.fab(li).const_array();
-    const pops::Box2D b = Ua.box(li);
-    for (int c = 0; c < 3; ++c)
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          EXPECT_EQ(a4(i, j, c), b4(i, j, c)) << "diagnostics ont modifie le candidat sain en ("
-                                              << i << "," << j << ",c" << c << ")";
-  }
+  EXPECT_EQ(max_difference3(Ua, Ub), 0.0)
+      << "les diagnostics optionnels ont modifie le candidat sain";
   std::printf("OK  (4) diagnostics optionnels : meme etat accepte\n");
 }
 
 // (5) JACOBIEN ANALYTIQUE (vague 3) : meme racine que les differences finies.
 TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
-  static_assert(!pops::HasSourceJacobian<StiffModel>, "StiffModel sans jacobien : FD historiques");
-  static_assert(pops::HasSourceJacobian<JacStiffModel>, "JacStiffModel doit declarer le trait");
+  static_assert(!pops::HasSourceJacobianFor<StiffModel, pops::Aux>,
+                "StiffModel sans jacobien : FD historiques");
+  static_assert(pops::HasSourceJacobianFor<JacStiffModel, pops::Aux>,
+                "JacStiffModel doit declarer le trait");
 
   StiffModel m;
-  pops::MultiFab U = make_mf(*ba_, *dm_, 3);
+  Field U = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, U);
   pops::NewtonOptions opts;
   opts.max_iters = 25;
@@ -662,23 +754,14 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine FD de reference non convergee";
 
   JacStiffModel jm;
-  pops::MultiFab Uj = make_mf(*ba_, *dm_, 3);
+  Field Uj = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Uj);
   pops::NewtonReport repj;
   auto analytic = pops::backward_euler_source(jm, *aux_, Uj, kDt, opts, {}, &repj);
   ASSERT_TRUE(analytic.report().solved_value_available());
   (void)analytic.consume(pops::SolveConsumption::kAccept);
 
-  double jdiff = 0;
-  for (int li = 0; li < U.local_size(); ++li) {
-    const pops::ConstArray4 a4 = U.fab(li).const_array();
-    const pops::ConstArray4 b4 = Uj.fab(li).const_array();
-    const pops::Box2D b = U.box(li);
-    for (int c = 0; c < 3; ++c)
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          jdiff = std::fmax(jdiff, std::fabs(a4(i, j, c) - b4(i, j, c)));
-  }
+  const double jdiff = max_difference3(U, Uj);
   EXPECT_TRUE(repj.converged) << "jacobien analytique : non converge";
   EXPECT_TRUE(jdiff <= 1e-9) << "jacobien analytique : ecart racine " << jdiff << " > 1e-9";
   std::printf("OK  (5) jacobien analytique : meme racine que les FD (ecart %.1e), iters %.0f\n",
@@ -978,47 +1061,40 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
 }
 
 TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographicOrder) {
-  const pops::BoxArray boxes(
-      std::vector<pops::Box2D>{pops::Box2D{{-1000000000, -700000000}, {-1000000000, -700000000}},
-                               pops::Box2D{{1000000000, 700000000}, {1000000000, 700000000}}});
-  const pops::DistributionMapping mapping(boxes.size(), pops::n_ranks());
-  pops::MultiFab statistics(boxes, mapping, 11, 0);
-  statistics.set_val(Real(0));
+  pops::Index<kDim> negative{};
+  pops::Index<kDim> positive{};
+  for (int axis = 0; axis < kDim; ++axis) {
+    negative[axis] = -1000000000 + 300000000 * axis;
+    positive[axis] = 1000000000 - 300000000 * axis;
+  }
+  const Layout boxes(std::vector<pops::Box<kDim>>{pops::Box<kDim>{negative, negative},
+                                                  pops::Box<kDim>{positive, positive}});
+  pops::Extent<kDim> rank_extent = filled_ranked<pops::Extent<kDim>>(1);
+  rank_extent[0] = pops::n_ranks();
+  const Distribution distribution = Distribution::replicated(
+      boxes, pops::mesh::RankSpace<kDim>{pops::Index<kDim>{}, rank_extent});
+  Field statistics = make_mf(boxes, distribution, 11);
   const int recoverable =
       pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kEvaluationReject);
   const int fatal =
       pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation);
 
-  for (int local = 0; local < statistics.local_size(); ++local) {
-    const pops::Box2D box = statistics.box(local);
-    const pops::Array4 values = statistics.fab(local).array();
-    pops::for_each_cell(box, [=] POPS_HD(int i, int j) {
-      const bool negative = i < 0;
-      values(i, j, 8) = negative ? Real(7) : Real(3);
-      values(i, j, 9) = Real(1);
-      values(i, j, 10) = static_cast<Real>(negative ? recoverable : fatal);
-    });
-  }
+  for (std::size_t local = 0; local < statistics.local_size(); ++local)
+    pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
+                                                                     recoverable, fatal, false});
 
   auto location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
   ASSERT_TRUE(location.found);
   EXPECT_EQ(location.priority, fatal);
-  EXPECT_EQ(location.i, 1000000000);
-  EXPECT_EQ(location.j, 700000000);
+  EXPECT_EQ(location.index, positive);
   EXPECT_EQ(location.component, 3);
 
-  for (int local = 0; local < statistics.local_size(); ++local) {
-    const pops::Box2D box = statistics.box(local);
-    const pops::Array4 values = statistics.fab(local).array();
-    pops::for_each_cell(box, [=] POPS_HD(int i, int j) {
-      if (i < 0)
-        values(i, j, 10) = static_cast<Real>(fatal);
-    });
-  }
+  for (std::size_t local = 0; local < statistics.local_size(); ++local)
+    pops::for_each_cell(statistics.box(local), FillFailureStatistics{statistics.fab(local).view(),
+                                                                     recoverable, fatal, true});
   location = pops::collective_first_local_nonlinear_failure(statistics, fatal, 10, 8);
   ASSERT_TRUE(location.found);
-  EXPECT_EQ(location.i, -1000000000);
-  EXPECT_EQ(location.j, -700000000);
+  EXPECT_EQ(location.index, negative);
   EXPECT_EQ(location.component, 7);
   EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8),
                std::runtime_error);

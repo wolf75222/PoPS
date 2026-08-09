@@ -1,81 +1,115 @@
 #include <gtest/gtest.h>
 
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/amr/refinement_ratio.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/parallel/comm.hpp>
 
+#include <array>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace {
-void set_env_var(const char* key, const char* value) {
-#if defined(_WIN32)
-  _putenv_s(key, value);
-#else
-  setenv(key, value, 1);
-#endif
+
+constexpr int kDim = pops::kNativeDimension;
+
+template <class Ranked, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
 }
+
+pops::EllipticBuildRequest<kDim> request(int cells, pops::mesh::BoxArray<kDim> layout) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{}, filled<pops::Index<kDim>>(cells - 1)};
+  const auto geometry = pops::Geometry<kDim>::from_bounds(
+      domain, pops::RealVector<kDim>{}, filled<pops::RealVector<kDim>>(pops::Real(1)));
+  pops::Extent<kDim> rank_extent = filled<pops::Extent<kDim>>(std::int64_t{1});
+  rank_extent[0] = pops::n_ranks();
+  pops::Index<kDim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{}, rank_extent};
+  const auto distribution = pops::mesh::Distribution<kDim>::replicated(layout, ranks);
+  std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  faces.fill(pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<kDim> spacing{};
+  for (int axis = 0; axis < kDim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {geometry,
+          layout,
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<kDim>{pops::BoundaryTopology<kDim>::physical(), faces,
+                                                 spacing},
+          pops::Extent<kDim>{},
+          filled<pops::Extent<kDim>>(std::int64_t{1}),
+          {layout.size(), layout.size() * (layout.size() - 1) / 2}};
+}
+
+pops::EllipticBuildRequest<kDim> complete_request(int cells) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{}, filled<pops::Index<kDim>>(cells - 1)};
+  return request(cells, pops::mesh::BoxArray<kDim>{std::vector<pops::Box<kDim>>{domain}});
+}
+
+void expect_report_is_structured(const pops::SolveReport& report, int maximum_iterations) {
+  EXPECT_TRUE(report.valid());
+  EXPECT_TRUE(pops::solve_report_is_publishable(report, maximum_iterations));
+  EXPECT_FALSE(report.reason.empty());
+  EXPECT_GE(report.iters, 0);
+  EXPECT_GE(report.evaluations, 0);
+  EXPECT_TRUE(std::isfinite(static_cast<double>(report.reference_residual_norm)));
+  EXPECT_TRUE(std::isfinite(static_cast<double>(report.residual_norm)));
+  EXPECT_TRUE(std::isfinite(static_cast<double>(report.rel_residual)));
+}
+
 }  // namespace
 
-TEST(test_structured_solver_diagnostics, Runs) {
-  using namespace pops;
-  static constexpr double kPi = 3.14159265358979323846;
+TEST(test_structured_solver_diagnostics, geometric_multigrid_publishes_the_unified_solve_report) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::Real(1e-8);
+  options.absolute_tolerance = pops::Real(1e-11);
+  options.maximum_cycles = 100;
+  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(16), options);
+  solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                           pops::PreparedVectorDistribution<kDim>::replicated());
+  solver.rhs().set_val(pops::Real(1));
+  solver.phi().set_val(pops::Real(0));
 
-  set_env_var("POPS_TRACE_SOLVE_FIELDS", "1");
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  expect_report_is_structured(report, solver.maximum_iterations());
+  EXPECT_EQ(report.reason, "geometric_mg_converged");
+  EXPECT_EQ(solver.last_solve_report().status, report.status);
+  EXPECT_EQ(solver.last_solve_report().residual_norm, report.residual_norm);
+}
 
-  {
-    const int n = 16;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-    const BoxArray ba = BoxArray::from_domain(dom, n);
-    BCRec bc;
-    bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-    GeometricMG mg(geom, ba, bc);
-    Array4 rhs = mg.rhs().fab(0).array();
-    for_each_cell(dom, [rhs, geom](int i, int j) {
-      const double x = geom.x_cell(i);
-      const double y = geom.y_cell(j);
-      rhs(i, j, 0) = -2.0 * kPi * kPi * std::sin(kPi * x) * std::sin(kPi * y);
-    });
-    mg.phi().set_val(0.0);
-    mg.solve(Real(1e-6), 2);
-
-    const RuntimeDiagnosticsReport& report = mg.diagnostics_report();
-    ASSERT_TRUE(report.source == "pops.numerics.elliptic.geometric_mg") << "MG report source";
-    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0) << "MG trace events recorded structurally";
-    ASSERT_TRUE(report.events.front().severity == "trace") << "MG trace severity";
+TEST(test_structured_solver_diagnostics,
+     composite_fac_publishes_the_same_report_contract_for_the_exact_ranked_hierarchy) {
+  auto coarse = complete_request(8);
+  const pops::Box<kDim> fine_patch{filled<pops::Index<kDim>>(4), filled<pops::Index<kDim>>(11)};
+  auto fine = request(16, pops::mesh::BoxArray<kDim>{std::vector<pops::Box<kDim>>{fine_patch}});
+  pops::elliptic::mg::CompositeFacBuildRequest<kDim> build{
+      {std::move(coarse), std::move(fine)},
+      {pops::amr::RefinementRatio<kDim>{filled<std::array<int, kDim>>(2)}}};
+  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build));
+  solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                           {pops::PreparedVectorDistribution<kDim>::replicated(),
+                            pops::PreparedVectorDistribution<kDim>::replicated()});
+  for (int level = 0; level < solver.n_levels(); ++level) {
+    solver.rhs_level(level).set_val(pops::Real(0));
+    solver.phi_level(level).set_val(pops::Real(0));
   }
 
-  {
-    const int n = 16;
-    const int ratio = 2;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
-    const BoxArray ba_c = BoxArray::from_domain(dom, n);
-    BCRec bc;
-    bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-    const int ic0 = n / 4;
-    const int ic1 = 3 * n / 4 - 1;
-    const Box2D fine_box{{ratio * ic0, ratio * ic0},
-                         {ratio * ic1 + ratio - 1, ratio * ic1 + ratio - 1}};
-
-    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, ratio);
-    fac.set_verbose(true);
-    const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2,
-                                    /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
-    const RuntimeDiagnosticsReport& report = fac.diagnostics_report();
-    ASSERT_TRUE(std::isfinite(static_cast<double>(residual))) << "FAC residual finite";
-    ASSERT_TRUE(report.source == "pops.numerics.elliptic.composite_fac_poisson")
-        << "FAC report source";
-    ASSERT_TRUE(report.count("elliptic.fac.residual") > 0)
-        << "FAC residual events recorded structurally";
-    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson") << "FAC event component";
-  }
-
-  std::printf("OK test_structured_solver_diagnostics\n");
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  expect_report_is_structured(report, solver.maximum_iterations());
+  EXPECT_EQ(report.reason, "composite_fac_initial_residual");
+  EXPECT_EQ(report.iters, 0);
+  EXPECT_EQ(solver.last_solve_report().status, report.status);
 }

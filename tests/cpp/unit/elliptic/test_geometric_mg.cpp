@@ -1,109 +1,198 @@
-// Multigrille geometrique : convergence rapide et quasi independante du maillage
-// sur des solutions manufacturees (Dirichlet et periodique), precision O(dx^2).
-
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
-#include <pops/validation/numerics/geometric_mg.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
-#include <cstdio>
+#include <exception>
 #include <limits>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-using namespace pops;
-
-static constexpr double kPi = 3.14159265358979323846;
-
 namespace {
+
+constexpr int kDim = pops::kNativeDimension;
+using Field = pops::MultiFab<kDim>;
+using Solver = pops::elliptic::mg::GeometricMG<kDim>;
 
 class CommEnvironment final : public ::testing::Environment {
  public:
-  void SetUp() override { comm_init(); }
-  void TearDown() override { comm_finalize(); }
+  void SetUp() override { pops::comm_init(); }
+  void TearDown() override { pops::comm_finalize(); }
 };
 
 [[maybe_unused]] const ::testing::Environment* const kCommEnvironment =
     ::testing::AddGlobalTestEnvironment(new CommEnvironment);
 
-GeometricMG make_replicated_geometric_mg(int n = 8) {
-  const Box2D domain = Box2D::from_extents(n, n);
-  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  BCRec boundary;
-  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
-  return GeometricMG(geometry, BoxArray::from_domain(domain, n), boundary, {},
-                     FieldDistribution::Replicated);
+template <class Ranked, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-void set_isometric_rank_permutation(MultiFab& field) {
-  field.set_val(Real(0));
-  field.sync_host();
-  const int local = field.local_index_of(0);
-  ASSERT_GE(local, 0);
-  Array4 values = field.fab(local).array();
-  const Box2D box = field.box(local);
-  const int i = my_rank() == 0 ? box.lo[0] : box.lo[0] + 1;
-  values(i, box.lo[1], 0) = Real(1);
-}
-
-template <class Operation>
-void expect_uniform_collective_rejection(Operation&& operation) {
-  bool rejected = false;
-  std::string message;
-  try {
-    std::forward<Operation>(operation)();
-  } catch (const std::exception& error) {
-    rejected = true;
-    message = error.what();
+pops::Index<kDim> index_from_ordinal(const pops::Box<kDim>& box, std::size_t ordinal) {
+  pops::Index<kDim> result{};
+  for (int axis = 0; axis < kDim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
   }
-
-  const long rejected_ranks = all_reduce_sum(rejected ? 1L : 0L);
-  const bool same_message = all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("geometric-mg-collective-rejection"), std::string_view(message)}});
-  EXPECT_EQ(rejected_ranks, n_ranks());
-  EXPECT_TRUE(same_message);
-  EXPECT_FALSE(message.empty());
+  return result;
 }
 
-std::string canonical_valid_bytes(const MultiFab& field) {
-  field.sync_host();
+std::size_t storage_ordinal(const pops::Box<kDim>& box, const pops::Index<kDim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < kDim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
+  }
+  return result;
+}
+
+pops::EllipticBuildRequest<kDim> request(int cells, bool periodic = false,
+                                         pops::Real boundary_value = pops::Real(0)) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{}, filled<pops::Index<kDim>>(cells - 1)};
+  const auto geometry = pops::Geometry<kDim>::from_bounds(
+      domain, pops::RealVector<kDim>{}, filled<pops::RealVector<kDim>>(pops::Real(1)));
+  const pops::mesh::BoxArray<kDim> layout(std::vector<pops::Box<kDim>>{domain});
+  pops::Extent<kDim> rank_extent = filled<pops::Extent<kDim>>(std::int64_t{1});
+  rank_extent[0] = pops::n_ranks();
+  pops::Index<kDim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{}, rank_extent};
+  const auto distribution = pops::mesh::Distribution<kDim>::replicated(layout, ranks);
+  std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  if (!periodic)
+    faces.fill(pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, boundary_value});
+  std::array<bool, kDim> periodic_axes{};
+  periodic_axes.fill(periodic);
+  pops::RealVector<kDim> spacing{};
+  for (int axis = 0; axis < kDim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  const auto topology = periodic ? pops::BoundaryTopology<kDim>::axis_periodic(periodic_axes)
+                                 : pops::BoundaryTopology<kDim>::physical();
+  return {geometry,
+          layout,
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<kDim>{topology, faces, spacing},
+          pops::Extent<kDim>{},
+          filled<pops::Extent<kDim>>(std::int64_t{1}),
+          {layout.size(), 0}};
+}
+
+void install_nullspace(Solver& solver, bool periodic) {
+  if (!periodic) {
+    solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                             pops::PreparedVectorDistribution<kDim>::replicated());
+    return;
+  }
+  pops::Real measure = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    measure *= solver.geom().spacing(axis);
+  solver.install_nullspace(
+      pops::constant_mean_zero_nullspace<kDim>("periodic-geometric-mg", "unit-test", measure),
+      pops::PreparedVectorDistribution<kDim>::replicated());
+}
+
+pops::Real exact_mode(const pops::Geometry<kDim>& geometry, const pops::Index<kDim>& index) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  pops::Real result = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    result *= std::sin(pi * geometry.cell_coordinate(axis, index[axis]));
+  return result;
+}
+
+void fill_dirichlet_mode(Solver& solver) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real eigenvalue = static_cast<pops::Real>(kDim) * pi * pi;
+  for (std::size_t local = 0; local < solver.rhs().local_size(); ++local) {
+    auto& fab = solver.rhs().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      host(storage_ordinal(fab.grown_box(), index)) = eigenvalue * exact_mode(solver.geom(), index);
+    }
+    fab.copy_from_host(host);
+  }
+}
+
+double maximum_mode_error(const Solver& solver) {
+  double result = 0;
+  for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
+    const auto& fab = solver.phi().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      result = std::max(result,
+                        std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) -
+                                                     exact_mode(solver.geom(), index))));
+    }
+  }
+  return pops::all_reduce_max(result);
+}
+
+double maximum_difference_from(const Field& field, pops::Real expected) {
+  double result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      result = std::max(
+          result,
+          std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) - expected)));
+    }
+  }
+  return pops::all_reduce_max(result);
+}
+
+std::string canonical_valid_bytes(const Field& field) {
   std::string bytes;
-  for (int global = 0; global < field.box_array().size(); ++global) {
-    const int local = field.local_index_of(global);
-    if (local < 0)
+  for (std::size_t global = 0; global < field.layout().size(); ++global) {
+    const std::size_t local = field.local_index_of(global);
+    if (local == Field::not_local)
       return {};
-    const ConstArray4 values = field.fab(local).const_array();
-    const Box2D box = field.box(local);
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
     for (int component = 0; component < field.ncomp(); ++component) {
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
-          const Real value = values(i, j, component);
-          bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
-        }
+      const std::size_t component_offset =
+          static_cast<std::size_t>(component) * static_cast<std::size_t>(fab.grown_box().numPts());
+      for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+           ++ordinal) {
+        const auto index = index_from_ordinal(fab.box(), ordinal);
+        const pops::Real value = host(component_offset + storage_ordinal(fab.grown_box(), index));
+        bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
       }
     }
   }
   return bytes;
 }
 
-bool published_replicas_agree_exactly(const MultiFab& field) {
+bool replicas_agree_exactly(const Field& field) {
   const std::string bytes = canonical_valid_bytes(field);
-  return !bytes.empty() &&
-         all_ranks_agree_exact_ordered_byte_pairs(
-             {{std::string_view("geometric-mg-published-phi"), std::string_view(bytes)}});
+  return !bytes.empty() && pops::all_ranks_agree_exact_ordered_byte_pairs(
+                               {{std::string_view("geometric-mg-phi"), bytes}});
 }
 
 }  // namespace
@@ -111,399 +200,94 @@ bool published_replicas_agree_exactly(const MultiFab& field) {
 TEST(GeometricMgCollectiveContract, MpiRouteInitializesRequestedCommunicator) {
   const char* expected_ranks = std::getenv("POPS_TEST_EXPECT_RANKS");
   if (expected_ranks != nullptr)
-    ASSERT_EQ(n_ranks(), std::atoi(expected_ranks))
-        << "the MPI CTest route must initialize the requested communicator";
-  else if (n_ranks() == 1)
+    EXPECT_EQ(pops::n_ranks(), std::atoi(expected_ranks));
+  else if (pops::n_ranks() == 1)
     GTEST_SKIP() << "the serial registration has no remote rank";
 }
 
-TEST(GeometricMgCollectiveContract, RejectsRankDivergentValidControls) {
-  if (n_ranks() != 2)
-    GTEST_SKIP() << "the collective contract regression is registered at exactly two MPI ranks";
-
-  GeometricMG mg = make_replicated_geometric_mg();
-  mg.rhs().set_val(Real(0));
-  mg.phi().set_val(Real(0));
-  const Real rel_tol = my_rank() == 0 ? Real(1e-8) : Real(1e-6);
-  expect_uniform_collective_rejection(
-      [&] { (void)mg.solve(rel_tol, /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+TEST(GeometricMgTest, prepared_options_fail_closed_before_the_hierarchy_is_published) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.maximum_cycles = 0;
+  EXPECT_THROW((void)Solver(request(8), options), std::exception);
+  options = {};
+  options.relative_tolerance = std::numeric_limits<pops::Real>::quiet_NaN();
+  EXPECT_THROW((void)Solver(request(8), options), std::exception);
+  options = {};
+  options.absolute_tolerance = pops::Real(-1);
+  EXPECT_THROW((void)Solver(request(8), options), std::exception);
 }
 
-TEST(GeometricMgCollectiveContract, ConvertsOneRankInvalidControlsToOneUniformFailure) {
-  if (n_ranks() != 2)
-    GTEST_SKIP() << "the collective contract regression is registered at exactly two MPI ranks";
+TEST(GeometricMgCollectiveContract,
+     manufactured_dirichlet_mode_converges_and_publishes_exact_replicas) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::Real(1e-10);
+  options.absolute_tolerance = pops::Real(1e-12);
+  options.maximum_cycles = 100;
+  options.bottom_sweeps = 60;
+  auto build = request(16);
+  const auto expected_contract = Solver::expected_operator_contract(build, options);
+  Solver solver(std::move(build), options);
+  install_nullspace(solver, false);
+  EXPECT_EQ(solver.prepared_operator_contract().exact_fingerprint(),
+            expected_contract.exact_fingerprint());
+  fill_dirichlet_mode(solver);
+  solver.phi().set_val(pops::Real(0));
 
-  GeometricMG mg = make_replicated_geometric_mg();
-  mg.rhs().set_val(Real(0));
-  mg.phi().set_val(Real(0));
-  const Real rel_tol = my_rank() == 0 ? Real(1e-8) : Real(0);
-  expect_uniform_collective_rejection(
-      [&] { (void)mg.solve(rel_tol, /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_GT(report.iters, 0);
+  EXPECT_LT(report.rel_residual, pops::Real(1e-10));
+  EXPECT_LT(maximum_mode_error(solver), 0.01);
+  EXPECT_TRUE(replicas_agree_exactly(solver.phi()));
 }
 
-TEST(GeometricMgCollectiveContract, RejectsDivergentReplicatedRhsBeforeIteration) {
-  if (n_ranks() != 2)
-    GTEST_SKIP() << "the replica contract regression is registered at exactly two MPI ranks";
-
-  {
-    GeometricMG mg = make_replicated_geometric_mg();
-    mg.rhs().set_val(my_rank() == 0 ? Real(1) : Real(2));
-    mg.phi().set_val(Real(0));
-    expect_uniform_collective_rejection(
-        [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
-  }
-
-  // Equal max norms and equal sums are not replica equality certificates.
-  {
-    GeometricMG mg = make_replicated_geometric_mg();
-    set_isometric_rank_permutation(mg.rhs());
-    mg.phi().set_val(Real(0));
-    expect_uniform_collective_rejection(
-        [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
-  }
+TEST(GeometricMgTest, zero_problem_exits_without_mutating_the_exact_zero_state) {
+  Solver solver(request(8));
+  install_nullspace(solver, false);
+  solver.rhs().set_val(pops::Real(0));
+  solver.phi().set_val(pops::Real(0));
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_EQ(report.iters, 0);
+  EXPECT_EQ(report.reason, "geometric_mg_initial_residual");
+  EXPECT_EQ(maximum_difference_from(solver.phi(), pops::Real(0)), 0.0);
 }
 
-TEST(GeometricMgCollectiveContract, RejectsDivergentReplicatedWarmStartBeforeIteration) {
-  if (n_ranks() != 2)
-    GTEST_SKIP() << "the replica contract regression is registered at exactly two MPI ranks";
-
-  GeometricMG mg = make_replicated_geometric_mg();
-  mg.rhs().set_val(Real(0));
-  set_isometric_rank_permutation(mg.phi());
-  expect_uniform_collective_rejection(
-      [&] { (void)mg.solve(Real(1e-8), /*max_cycles=*/4, /*abs_tol=*/Real(0)); });
+TEST(GeometricMgTest, inhomogeneous_dirichlet_faces_recover_one_constant_solution) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::Real(1e-9);
+  options.absolute_tolerance = pops::Real(1e-11);
+  options.maximum_cycles = 100;
+  Solver solver(request(16, false, pops::Real(1)), options);
+  install_nullspace(solver, false);
+  solver.rhs().set_val(pops::Real(0));
+  solver.phi().set_val(pops::Real(0));
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_LT(maximum_difference_from(solver.phi(), pops::Real(1)), 2e-7);
 }
 
-TEST(GeometricMgCollectiveContract, PublishesOneExactReplicatedPhi) {
-  if (n_ranks() != 2)
-    GTEST_SKIP() << "the replica publication regression is registered at exactly two MPI ranks";
-
-  constexpr int n = 8;
-  GeometricMG mg = make_replicated_geometric_mg(n);
-  const Geometry& geometry = mg.geom();
-  for (int li = 0; li < mg.rhs().local_size(); ++li) {
-    Array4 rhs = mg.rhs().fab(li).array();
-    const Box2D box = mg.rhs().box(li);
-    for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
-      for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
-        const Real exact = std::sin(kPi * geometry.x_cell(i)) * std::sin(kPi * geometry.y_cell(j));
-        rhs(i, j, 0) = Real(-2) * Real(kPi * kPi) * exact;
-      }
-    }
-  }
-  mg.phi().set_val(Real(0));
-
-  const int cycles = mg.solve(Real(1e-8), /*max_cycles=*/100, /*abs_tol=*/Real(0));
-  ASSERT_TRUE(mg.last_solve_report().solved()) << mg.last_solve_report().status_name();
-  EXPECT_GT(cycles, 0);
-  EXPECT_EQ(all_reduce_min(static_cast<long>(cycles)), all_reduce_max(static_cast<long>(cycles)));
-  EXPECT_GT(norm_inf(mg.phi()), Real(0));
-  EXPECT_TRUE(published_replicas_agree_exactly(mg.phi()));
+TEST(GeometricMgTest, periodic_nullspace_rejects_incompatible_rhs_without_mutation) {
+  Solver solver(request(8, true));
+  install_nullspace(solver, true);
+  solver.rhs().set_val(pops::Real(1));
+  solver.phi().set_val(pops::Real(3));
+  const pops::SolveReport report = solver.solve();
+  EXPECT_EQ(report.status, pops::SolveStatus::kIncompatibleRhs);
+  EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
+  EXPECT_EQ(maximum_difference_from(solver.phi(), pops::Real(3)), 0.0);
 }
 
-static void expect_zero_probe_forcing_scale(const BCRec& bc) {
-  constexpr int n = 16;
-  const Box2D domain = Box2D::from_extents(n, n);
-  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray boxes = BoxArray::from_domain(domain, n);
-
-  GeometricMG zero_start(geometry, boxes, bc);
-  zero_start.rhs().set_val(Real(0));
-  zero_start.phi().set_val(Real(0));
-  const Real forcing_norm = zero_start.current_residual();
-  ASSERT_TRUE(std::isfinite(static_cast<double>(forcing_norm)));
-  ASSERT_GT(forcing_norm, Real(2));  // distinguishes R(0) from the zero-RHS fallback scale 1
-  EXPECT_EQ(zero_start.solve(Real(1), /*max_cycles=*/4), 0);
-  const SolveReport& zero_report = zero_start.last_solve_report();
-  EXPECT_TRUE(zero_report.solved());
-  EXPECT_NEAR(zero_report.rel_residual, Real(1), Real(1e-14));
-
-  GeometricMG warm_start(geometry, boxes, bc);
-  warm_start.rhs().set_val(Real(0));
-  warm_start.phi().set_val(Real(0.375));
-  const Real warm_residual = warm_start.current_residual();
-  ASSERT_TRUE(std::isfinite(static_cast<double>(warm_residual)));
-  ASSERT_GT(warm_residual, Real(0));
-  const Real expected_relative = warm_residual / forcing_norm;
-  const Real warm_tolerance =
-      expected_relative * (Real(1) + Real(128) * std::numeric_limits<Real>::epsilon());
-  EXPECT_EQ(warm_start.solve(warm_tolerance, /*max_cycles=*/4), 0);
-  const SolveReport& warm_report = warm_start.last_solve_report();
-  EXPECT_TRUE(warm_report.solved());
-  EXPECT_NEAR(warm_report.rel_residual, expected_relative, Real(1e-14));
-
-  EXPECT_EQ(validation::GeometricMGValidationAccess::solve_robust(warm_start, warm_tolerance,
-                                                                  /*max_cycles=*/4),
-            0);
-  const SolveReport& robust_report = warm_start.last_solve_report();
-  EXPECT_TRUE(robust_report.solved());
-  EXPECT_NEAR(robust_report.rel_residual, expected_relative, Real(1e-14));
-}
-
-// Resout lap(phi)=f pour phi_ex donne, renvoie (cycles, erreur_inf).
-template <class PhiEx, class RhsF>
-static void solve_case(int n, const BCRec& bc, bool periodic, PhiEx phi_ex, RhsF rhs_f, int& cycles,
-                       double& err) {
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba = BoxArray::from_domain(dom, n);
-
-  GeometricMG mg(geom, ba, bc);
-  Array4 af = mg.rhs().fab(0).array();
-  for_each_cell(dom, [af, geom, rhs_f](int i, int j) {
-    af(i, j, 0) = rhs_f(geom.x_cell(i), geom.y_cell(j));
-  });
-  mg.phi().set_val(0.0);
-
-  const Real r0 = mg.current_residual();
-  Real rn = r0;
-  cycles = 0;
-  while (rn > 1e-9 * r0 && cycles < 50) {
-    mg.vcycle();
-    rn = mg.current_residual();
-    ++cycles;
-  }
-
-  // pour le cas periodique, la solution est definie a une constante pres
-  Fab2D& p = mg.phi().fab(0);
-  if (periodic) {
-    Real mean = sum(mg.phi()) / static_cast<Real>(dom.num_cells());
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        p(i, j, 0) -= mean;
-  }
-  err = 0;
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      err = std::max(err, std::fabs(p(i, j, 0) - phi_ex(geom.x_cell(i), geom.y_cell(j))));
-}
-
-TEST(GeometricMgTest, rejects_invalid_field_distribution) {
-  const Box2D domain = Box2D::from_extents(8, 8);
-  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray boxes = BoxArray::from_domain(domain, 8);
-
-  EXPECT_THROW(GeometricMG(geometry, boxes, BCRec{}, {}, static_cast<FieldDistribution>(0xff)),
-               std::invalid_argument);
-}
-
-// --- Dirichlet : phi = sin(pi x) sin(pi y), lap phi = -2 pi^2 phi ---
-TEST(GeometricMgTest, dirichlet_converges_mesh_independent_second_order) {
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  auto pe = [](double x, double y) { return std::sin(kPi * x) * std::sin(kPi * y); };
-  auto fr = [&](double x, double y) { return -2 * kPi * kPi * pe(x, y); };
-
-  int c32 = 0, c64 = 0;
-  double e32 = 0, e64 = 0;
-  solve_case(32, bc, false, pe, fr, c32, e32);
-  solve_case(64, bc, false, pe, fr, c64, e64);
-  std::printf("Dirichlet : c32=%d e32=%.2e | c64=%d e64=%.2e\n", c32, e32, c64, e64);
-  EXPECT_TRUE(c64 <= 25) << "dir_converged_fast: c64=" << c64;
-  EXPECT_TRUE(std::abs(c64 - c32) <= 5) << "dir_mesh_independent: c32=" << c32 << " c64=" << c64;
-  EXPECT_TRUE(e64 < 5e-3) << "dir_accurate: e64=" << e64;
-  EXPECT_TRUE(e64 < e32) << "dir_second_order: e32=" << e32
-                         << " e64=" << e64;  // erreur baisse en raffinant
-}
-
-// --- periodique : phi = sin(2 pi x) sin(2 pi y), lap phi = -8 pi^2 phi ---
-TEST(GeometricMgTest, periodic_converges_accurate) {
-  BCRec bc;  // periodique par defaut sur les 4 faces
-  auto pe = [](double x, double y) { return std::sin(2 * kPi * x) * std::sin(2 * kPi * y); };
-  auto fr = [&](double x, double y) { return -8 * kPi * kPi * pe(x, y); };
-
-  int c64 = 0;
-  double e64 = 0;
-  solve_case(64, bc, true, pe, fr, c64, e64);
-  std::printf("Periodique : c64=%d e64=%.2e\n", c64, e64);
-  EXPECT_TRUE(c64 <= 30) << "per_converged: c64=" << c64;
-  EXPECT_TRUE(e64 < 5e-3) << "per_accurate: e64=" << e64;
-}
-
-TEST(GeometricMgTest, periodic_mean_zero_warm_start_exits_without_mutation) {
-  constexpr int n = 32;
-  constexpr Real rel_tol = Real(1e-8);
-
-  const Box2D dom = Box2D::from_extents(n, n);
-  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray ba = BoxArray::from_domain(dom, n);
-  GeometricMG mg(geom, ba, BCRec{});  // periodic on all four faces
-
-  // A periodic Laplacian is solvable only on the mean-zero subspace.  Subtract the
-  // discrete mean explicitly so this test remains valid for every even resolution,
-  // independently of floating-point summation symmetry.
-  Fab2D& rhs = mg.rhs().fab(0);
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-      const double x = geom.x_cell(i);
-      const double y = geom.y_cell(j);
-      rhs(i, j, 0) = std::sin(2.0 * kPi * x) * std::sin(2.0 * kPi * y);
-    }
-  const Real rhs_mean = sum(mg.rhs()) / static_cast<Real>(dom.num_cells());
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      rhs(i, j, 0) -= rhs_mean;
-  mg.phi().set_val(Real(0));
-
-  const int first_cycles = mg.solve(rel_tol, /*max_cycles=*/100);
-  const SolveReport first = mg.last_solve_report();
-  ASSERT_TRUE(first.solved()) << "status=" << first.status_name();
-  ASSERT_GT(first_cycles, 0);
-
-  device_fence();
-  const MultiFab phi_before = mg.phi();
-
-  // A second solve with the same RHS must publish a solved, zero-cycle report and preserve
-  // the warm-start iterate bit-for-bit.  No explicit absolute floor is supplied: this catches
-  // the old relative-criterion path that needlessly re-cycled an already converged state.
-  const int second_cycles = mg.solve(rel_tol, /*max_cycles=*/100);
-  const SolveReport second = mg.last_solve_report();
-  ASSERT_TRUE(second.solved()) << "status=" << second.status_name();
-  EXPECT_EQ(second_cycles, 0);
-  EXPECT_EQ(second.iters, 0);
-  EXPECT_LE(second.rel_residual, rel_tol);
-
-  device_fence();
-  Real max_delta = Real(0);
-  for (int li = 0; li < mg.phi().local_size(); ++li) {
-    const ConstArray4 before = phi_before.fab(li).const_array();
-    const ConstArray4 after = mg.phi().fab(li).const_array();
-    const Box2D valid = mg.phi().box(li);
-    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-        max_delta = std::max(max_delta, std::fabs(after(i, j, 0) - before(i, j, 0)));
-  }
-  EXPECT_EQ(max_delta, Real(0));
-}
-
-TEST(GeometricMgTest, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
-  constexpr int n = 8;
-  const Box2D domain = Box2D::from_extents(n, n);
-  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray boxes = BoxArray::from_domain(domain, n);
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-
-  GeometricMG mg(geometry, boxes, bc);
-  mg.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
-  mg.phi().set_val(Real(1e-6));
-  const Real initial_residual = mg.current_residual();
-  ASSERT_GT(initial_residual, Real(0));
-  ASSERT_LT(initial_residual, Real(1));
-
-  // A unit fallback in the stop would accept this nonzero residual at rel_tol=1. The correct
-  // zero-forcing threshold is exactly zero, so at least one V-cycle must be attempted.
-  EXPECT_EQ(mg.solve(Real(1), /*max_cycles=*/1, /*abs_tol=*/Real(0)), 1);
-
-  mg.phi().set_val(Real(1e-6));
-  const Real reset_residual = mg.current_residual();
-  EXPECT_EQ(mg.solve(Real(1e-8), /*max_cycles=*/1, /*abs_tol=*/Real(2) * reset_residual), 0);
-  EXPECT_TRUE(mg.last_solve_report().solved());
-  EXPECT_NEAR(mg.last_solve_report().rel_residual, reset_residual, Real(1e-14));
-
-  mg.phi().set_val(Real(1e-6));
-  EXPECT_NE(validation::GeometricMGValidationAccess::solve_robust(mg, Real(1), /*max_cycles=*/1,
-                                                                  /*abs_tol=*/Real(0)),
-            0);
-  mg.phi().set_val(Real(1e-6));
-  const Real robust_residual = mg.current_residual();
-  EXPECT_EQ(
-      validation::GeometricMGValidationAccess::solve_robust(mg, Real(1e-8), /*max_cycles=*/1,
-                                                            /*abs_tol=*/Real(2) * robust_residual),
-      0);
-  EXPECT_TRUE(mg.last_solve_report().solved());
-  EXPECT_NEAR(mg.last_solve_report().rel_residual, robust_residual, Real(1e-14));
-}
-
-TEST(GeometricMgTest, inhomogeneous_dirichlet_uses_zero_probe_scale) {
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  bc.xlo_val = Real(1.0);
-  bc.xhi_val = Real(-0.5);
-  bc.ylo_val = Real(0.75);
-  bc.yhi_val = Real(-1.25);
-  expect_zero_probe_forcing_scale(bc);
-}
-
-TEST(GeometricMgTest, inhomogeneous_robin_uses_zero_probe_scale) {
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Robin;
-  bc.xlo_alpha = bc.xhi_alpha = bc.ylo_alpha = bc.yhi_alpha = Real(1);
-  bc.xlo_beta = bc.xhi_beta = bc.ylo_beta = bc.yhi_beta = Real(0.25);
-  bc.xlo_val = Real(1.5);
-  bc.xhi_val = Real(-0.75);
-  bc.ylo_val = Real(0.5);
-  bc.yhi_val = Real(-1.0);
-  expect_zero_probe_forcing_scale(bc);
-}
-
-TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
-  constexpr int n = 8;
-  const Box2D domain = Box2D::from_extents(n, n);
-  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray boxes = BoxArray::from_domain(domain, n);
-
-  for (const Real invalid :
-       {std::numeric_limits<Real>::quiet_NaN(), std::numeric_limits<Real>::infinity()}) {
-    GeometricMG mg(geometry, boxes, BCRec{});
-    mg.rhs().set_val(invalid);
-    EXPECT_TRUE(std::isinf(static_cast<double>(norm_inf(mg.rhs()))));
-    EXPECT_EQ(mg.solve(Real(1e-8), /*max_cycles=*/4), 0);
-    const SolveReport& report = mg.last_solve_report();
-    EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
-    EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
-    EXPECT_FALSE(report.solved());
-    EXPECT_TRUE(std::isfinite(static_cast<double>(report.rel_residual)));
-    EXPECT_EQ(report.rel_residual, std::numeric_limits<Real>::max());
-    EXPECT_TRUE(solve_report_is_publishable(report, /*maximum_iterations=*/4));
-  }
-
-  GeometricMG invalid_iterate(geometry, boxes, BCRec{});
-  invalid_iterate.rhs().set_val(Real(0));
-  invalid_iterate.phi().set_val(std::numeric_limits<Real>::infinity());
-  EXPECT_TRUE(std::isinf(static_cast<double>(invalid_iterate.current_residual())));
-  EXPECT_EQ(invalid_iterate.solve(Real(1e-8), /*max_cycles=*/4), 0);
-  EXPECT_EQ(invalid_iterate.last_solve_report().status, SolveStatus::kInvalidEvaluation);
-
-  GeometricMG invalid_robust(geometry, boxes, BCRec{});
-  invalid_robust.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
-  EXPECT_EQ(validation::GeometricMGValidationAccess::solve_robust(invalid_robust, Real(1e-8),
-                                                                  /*max_cycles=*/4),
-            0);
-  EXPECT_EQ(invalid_robust.last_solve_report().status, SolveStatus::kInvalidEvaluation);
-
-  GeometricMG invalid_legacy(geometry, boxes, BCRec{});
-  invalid_legacy.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
-  EXPECT_THROW(invalid_legacy.solve(), std::runtime_error);
-  EXPECT_EQ(invalid_legacy.last_solve_report().status, SolveStatus::kInvalidEvaluation);
-}
-
-TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
-  const Box2D domain = Box2D::from_extents(4, 4);
-  GeometricMG mg(Geometry{domain, 0.0, 1.0, 0.0, 1.0}, BoxArray(std::vector<Box2D>{domain}),
-                 BCRec{});
-  const Real nan = std::numeric_limits<Real>::quiet_NaN();
-  EXPECT_THROW((void)mg.solve(nan, 4), std::invalid_argument);
-  EXPECT_THROW((void)mg.solve(Real(1e-8), 0), std::invalid_argument);
-  EXPECT_THROW((void)mg.solve(Real(1e-8), 4, nan), std::invalid_argument);
-  EXPECT_THROW((void)validation::GeometricMGValidationAccess::solve_robust(mg, nan, 4),
-               std::invalid_argument);
-  EXPECT_THROW(mg.set_abs_tol(nan), std::invalid_argument);
-}
-
-TEST(GeometricMgTest, nullspace_compatibility_rejects_nonfinite_moment) {
-  const Box2D domain = Box2D::from_extents(4, 4);
-  const BoxArray boxes(std::vector<Box2D>{domain});
-  const DistributionMapping mapping(1, 1);
-  MultiFab rhs(boxes, mapping, 1, 0);
-  rhs.set_val(std::numeric_limits<Real>::quiet_NaN());
-  const FieldNullspacePlan plan = constant_mean_zero_nullspace("nonfinite-test", "unit-test");
-
-  try {
-    (void)require_field_nullspace_compatible(rhs, plan);
-    FAIL() << "a non-finite nullspace compatibility moment must be rejected";
-  } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string(error.what()).find("non-finite compatibility moment"), std::string::npos)
-        << error.what();
+TEST(GeometricMgTest, nonfinite_rhs_is_a_structured_fail_run) {
+  for (const pops::Real invalid : {std::numeric_limits<pops::Real>::quiet_NaN(),
+                                   std::numeric_limits<pops::Real>::infinity()}) {
+    Solver solver(request(8));
+    install_nullspace(solver, false);
+    solver.rhs().set_val(invalid);
+    solver.phi().set_val(pops::Real(0));
+    const pops::SolveReport report = solver.solve();
+    EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
+    EXPECT_TRUE(report.valid());
   }
 }
