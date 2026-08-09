@@ -20,7 +20,8 @@ _SOURCE_KEYS = {
         "native_route", "frame_id", "components", "projection",
     },
     "field_mapped_analytic_expression": {
-        "native_route", "frame_id", "seed_components", "components", "inputs", "projection",
+        "native_route", "frame_id", "seed_components", "components", "consumer_qid", "inputs",
+        "projection",
     },
 }
 _CARTESIAN_AXIS_NAMES = ("x", "y", "z")
@@ -110,6 +111,8 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     elif route == "field_mapped_analytic_expression":
         if not isinstance(source["frame_id"], str) or not source["frame_id"]:
             raise TypeError("%s field-mapped analytic frame_id must be non-empty" % where)
+        if not isinstance(source["consumer_qid"], str) or not source["consumer_qid"]:
+            raise TypeError("%s field-mapped analytic consumer_qid must be non-empty" % where)
         for key in ("seed_components", "components"):
             components = source[key]
             if isinstance(components, (str, bytes)) or not isinstance(components, Sequence) \
@@ -120,21 +123,36 @@ def validate_initial_source(source: Any, *, where: str) -> str:
             raise TypeError("%s inputs must be a non-empty sequence" % where)
         ids = []
         for index, row in enumerate(inputs):
-            if not isinstance(row, Mapping) \
-                    or set(row) != {"value_id", "source", "component"}:
+            if not isinstance(row, Mapping):
+                raise TypeError("%s inputs[%d] has an unsupported shape" % (where, index))
+            if "value_id" not in row or "source" not in row:
                 raise TypeError("%s inputs[%d] has an unsupported shape" % (where, index))
             value_id = row["value_id"]
             source_name = row["source"]
-            component = row["component"]
             if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
                 raise TypeError("%s inputs[%d].value_id must be a non-negative integer"
                                 % (where, index))
-            if source_name not in ("state", "aux"):
-                raise ValueError("%s inputs[%d].source must be 'state' or 'aux'"
+            if source_name == "state":
+                if set(row) != {"value_id", "source", "component"}:
+                    raise TypeError("%s inputs[%d] has an unsupported state shape" % (where, index))
+                component = row["component"]
+                if isinstance(component, bool) or not isinstance(component, int) or component < 0:
+                    raise TypeError("%s inputs[%d].component must be a non-negative integer"
+                                    % (where, index))
+            elif source_name == "provider":
+                if set(row) != {"value_id", "source", "key"}:
+                    raise TypeError("%s inputs[%d] has an unsupported provider shape" % (where, index))
+                key = row["key"]
+                if not isinstance(key, Mapping) or set(key) != {
+                    "owner_qid", "space_kind", "space_name", "component",
+                } or not all(isinstance(value, str) and value for value in key.values()):
+                    raise TypeError(
+                        "%s inputs[%d].key must be one exact owner-qualified ComponentKey"
+                        % (where, index)
+                    )
+            else:
+                raise ValueError("%s inputs[%d].source must be 'state' or 'provider'"
                                  % (where, index))
-            if isinstance(component, bool) or not isinstance(component, int) or component < 0:
-                raise TypeError("%s inputs[%d].component must be a non-negative integer"
-                                % (where, index))
             ids.append(value_id)
         if sorted(ids) != list(range(len(ids))):
             raise ValueError("%s inputs value_id entries must be contiguous from zero" % where)

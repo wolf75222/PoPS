@@ -256,15 +256,28 @@ class _SystemUnifiedInstall(_System):
                 bindings=params,
             )
             inputs = sorted(source["inputs"], key=lambda row: row["value_id"])
-            input_sources = [
-                "%s:%d" % (row["source"], int(row["component"]))
-                for row in inputs
-            ]
+            input_bindings = []
+            for row in inputs:
+                if row["source"] == "state":
+                    input_bindings.append({
+                        "source": "state",
+                        "component": int(row["component"]),
+                    })
+                elif row["source"] == "provider":
+                    input_bindings.append({
+                        "source": "provider",
+                        "key": dict(row["key"]),
+                    })
+                else:  # schema validation must already have rejected this branch.
+                    raise ValueError(
+                        "field-mapped analytic input has no exact state/provider source"
+                    )
             self._s._set_analytic_mapped_state(
                 name,
                 [list(opcodes) for opcodes, _ in mapped],
                 [list(literals) for _, literals in mapped],
-                input_sources,
+                input_bindings,
+                source["consumer_qid"],
             )
             return
         raise NotImplementedError("uniform initial source route %r is not native" % route)

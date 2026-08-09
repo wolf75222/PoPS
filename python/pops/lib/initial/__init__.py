@@ -427,13 +427,14 @@ class FieldMappedAnalytic:
     frame: Any
     seed_components: tuple[Any, ...]
     components: tuple[Any, ...]
-    inputs: tuple[tuple[int, str, int], ...]
+    inputs: tuple[tuple[int, str, Any], ...]
+    consumer_qid: str
     native_route = "field_mapped_analytic_expression"
     reprojectable = False
     __pops_ir_immutable__ = True
 
     def __init__(self, *, frame: Any, seed_components: Any,
-                 components: Any, inputs: Any) -> None:
+                 components: Any, inputs: Any, consumer_qid: Any) -> None:
         frame_id = getattr(frame, "canonical_id", None)
         axes = getattr(frame, "axes", None)
         if not isinstance(frame_id, str) or not frame_id \
@@ -463,18 +464,33 @@ class FieldMappedAnalytic:
 
         if not isinstance(inputs, Mapping):
             raise TypeError("FieldMappedAnalytic inputs must map integer ids to sources")
+        if not isinstance(consumer_qid, str) or not consumer_qid:
+            raise TypeError("FieldMappedAnalytic consumer_qid must be a non-empty exact string")
         normalized_inputs = []
         for value_id, source in inputs.items():
             if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
                 raise TypeError("FieldMappedAnalytic input ids must be non-negative integers")
             if not isinstance(source, (tuple, list)) or len(source) != 2:
                 raise TypeError(
-                    "FieldMappedAnalytic inputs values must be ('state'|'aux', component)")
+                    "FieldMappedAnalytic inputs values must be ('state', component) or "
+                    "('provider', ComponentKey)")
             kind, component = source
-            if kind not in ("state", "aux"):
-                raise ValueError("FieldMappedAnalytic input source must be 'state' or 'aux'")
-            if isinstance(component, bool) or not isinstance(component, int) or component < 0:
-                raise TypeError("FieldMappedAnalytic input component must be a non-negative integer")
+            if kind == "state":
+                if isinstance(component, bool) or not isinstance(component, int) or component < 0:
+                    raise TypeError(
+                        "FieldMappedAnalytic state input component must be a non-negative integer"
+                    )
+            elif kind == "provider":
+                from pops.model.provider_pack import ComponentKey
+
+                if type(component) is not ComponentKey:
+                    raise TypeError(
+                        "FieldMappedAnalytic provider input must be an exact ComponentKey"
+                    )
+            else:
+                raise ValueError(
+                    "FieldMappedAnalytic input source must be 'state' or 'provider'"
+                )
             normalized_inputs.append((value_id, kind, component))
         if not normalized_inputs or [row[0] for row in sorted(normalized_inputs)] \
                 != list(range(len(normalized_inputs))):
@@ -493,6 +509,7 @@ class FieldMappedAnalytic:
         object.__setattr__(self, "seed_components", seed)
         object.__setattr__(self, "components", mapped)
         object.__setattr__(self, "inputs", tuple(sorted(normalized_inputs)))
+        object.__setattr__(self, "consumer_qid", consumer_qid)
 
     def validate_for(self, state: Any) -> bool:
         count = _component_count(state)
@@ -510,8 +527,13 @@ class FieldMappedAnalytic:
             "frame_id": self.frame.canonical_id,
             "seed_components": [expression.to_data() for expression in self.seed_components],
             "components": [expression.to_data() for expression in self.components],
+            "consumer_qid": self.consumer_qid,
             "inputs": [
-                {"value_id": value_id, "source": source, "component": component}
+                (
+                    {"value_id": value_id, "source": "state", "component": component}
+                    if source == "state"
+                    else {"value_id": value_id, "source": "provider", "key": component.to_data()}
+                )
                 for value_id, source, component in self.inputs
             ],
         }
