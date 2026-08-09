@@ -99,13 +99,10 @@ def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():
     geometric_mg = (
         ROOT / "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
     ).read_text(encoding="utf-8")
-    robust_solve = geometric_mg.index("int solve_robust(")
-    assert geometric_mg.rfind("private:", 0, robust_solve) > geometric_mg.rfind(
-        "public:", 0, robust_solve
-    )
+    assert "solve_robust" not in geometric_mg
     assert (
         PurePosixPath("pops/validation/numerics/geometric_mg.hpp")
-        in manifest.test_only
+        not in manifest.test_only
     )
 
 
