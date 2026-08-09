@@ -7,6 +7,7 @@
 #include <pops/physics/composition/exact_brick_contract.hpp>
 
 #include <cstdint>
+#include <type_traits>
 
 /// @file
 /// @brief Exact-ranked local source bricks S(U, aux).
@@ -15,23 +16,41 @@ namespace pops {
 
 namespace source_detail {
 
-template <int Axis, class Force>
-POPS_HD int momentum_component(const Force& force) {
-  static_assert(Axis >= 0 && Axis < 3, "source momentum axis is outside the supported rank");
-  if constexpr (Axis == 0)
-    return force.c_mx;
-  else if constexpr (Axis == 1)
-    return force.c_my;
-  else
-    return force.c_mz;
-}
+/// Exact-ranked component map used by source bricks after host-side role binding.
+///
+/// A source compiled for `Dim` owns exactly `Dim` momentum indices.  There are no dormant y/z
+/// fields in lower-rank artifacts and no axis-name branch in device code.
+template <int Dim>
+struct MomentumComponents {
+  static_assert(Dim >= 1 && Dim <= 3, "source momentum components support dimensions 1..3");
+
+  static constexpr int dimension = Dim;
+  int values[Dim]{};
+
+  POPS_HD constexpr MomentumComponents() {
+    for (int axis = 0; axis < Dim; ++axis)
+      values[axis] = axis + 1;
+  }
+
+  POPS_HD constexpr int& operator[](int axis) { return values[axis]; }
+  POPS_HD constexpr int operator[](int axis) const { return values[axis]; }
+};
+
+static_assert(std::is_trivially_copyable_v<MomentumComponents<1>> &&
+                  std::is_trivially_copyable_v<MomentumComponents<2>> &&
+                  std::is_trivially_copyable_v<MomentumComponents<3>>,
+              "ranked source component maps must remain device-copyable");
+static_assert(sizeof(MomentumComponents<1>) == sizeof(int) &&
+                  sizeof(MomentumComponents<2>) == 2 * sizeof(int) &&
+                  sizeof(MomentumComponents<3>) == 3 * sizeof(int),
+              "ranked source component maps must not retain inactive axes");
 
 template <int Axis, int Dim, class Force, class State>
 POPS_HD void apply_gradient_force(const Force& force, const State& state,
                                   const AuxState<Dim>& auxiliary, Real coefficient, State& source,
                                   Real& work) {
   static_assert(Axis >= 0 && Axis < Dim, "source gradient axis is outside the spatial rank");
-  const int momentum = momentum_component<Axis>(force);
+  const int momentum = force.momentum_components[Axis];
   const Real field = -auxiliary.template gradient<Axis>();
   source[momentum] = coefficient * state[force.c_rho] * field;
   if constexpr (State::size() == Dim + 2)
@@ -74,22 +93,17 @@ struct PotentialForceND {
 
   Real qom = Real(1);
   int c_rho = 0;
-  int c_mx = 1;
-  int c_my = 2;
-  int c_mz = 3;
+  source_detail::MomentumComponents<Dim> momentum_components{};
   int c_E = Dim + 1;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.source.potential-force-nd", 1};
+    return {"pops.physics.source.potential-force-nd", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim})
-        .scalar(qom)
-        .scalar(std::int32_t{c_rho})
-        .scalar(std::int32_t{c_mx})
-        .scalar(std::int32_t{c_my})
-        .scalar(std::int32_t{c_mz})
-        .scalar(std::int32_t{c_E});
+    contract.scalar(std::int32_t{Dim}).scalar(qom).scalar(std::int32_t{c_rho});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
+    contract.scalar(std::int32_t{c_E});
   }
 
   template <class State>
@@ -113,21 +127,17 @@ struct GravityForceND {
   static constexpr bool requires_energy_role(int state_size) { return state_size == Dim + 2; }
 
   int c_rho = 0;
-  int c_mx = 1;
-  int c_my = 2;
-  int c_mz = 3;
+  source_detail::MomentumComponents<Dim> momentum_components{};
   int c_E = Dim + 1;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.source.gravity-force-nd", 1};
+    return {"pops.physics.source.gravity-force-nd", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim})
-        .scalar(std::int32_t{c_rho})
-        .scalar(std::int32_t{c_mx})
-        .scalar(std::int32_t{c_my})
-        .scalar(std::int32_t{c_mz})
-        .scalar(std::int32_t{c_E});
+    contract.scalar(std::int32_t{Dim}).scalar(std::int32_t{c_rho});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
+    contract.scalar(std::int32_t{c_E});
   }
 
   template <class State>
@@ -156,17 +166,15 @@ struct MagneticLorentzForceND {
   static constexpr int n_aux = AuxComponentLayout<Dim>::b_z + 1;
 
   Real qom = Real(1);
-  int c_mx = 1;
-  int c_my = 2;
+  source_detail::MomentumComponents<Dim> momentum_components{};
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.source.magnetic-lorentz-force-nd", 1};
+    return {"pops.physics.source.magnetic-lorentz-force-nd", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim})
-        .scalar(qom)
-        .scalar(std::int32_t{c_mx})
-        .scalar(std::int32_t{c_my});
+    contract.scalar(std::int32_t{Dim}).scalar(qom);
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
   }
 
   template <class State>
@@ -177,8 +185,8 @@ struct MagneticLorentzForceND {
                   "MagneticLorentzForceND requires one momentum component per spatial axis");
     const Real rotation = qom * auxiliary.B_z;
     State source{};
-    source[c_mx] = rotation * state[c_my];
-    source[c_my] = -rotation * state[c_mx];
+    source[momentum_components[0]] = rotation * state[momentum_components[1]];
+    source[momentum_components[1]] = -rotation * state[momentum_components[0]];
     return source;
   }
 };

@@ -295,9 +295,8 @@ TEST(AuxSingleSource, CompositeExactContractRecursesThroughEveryBrickParameter) 
   expect_changed([](Model& model) { model.hyp.B0 = Real(7); });
   expect_changed([](Model& model) { model.src.qom = Real(7); });
   expect_changed([](Model& model) { model.src.c_rho = 7; });
-  expect_changed([](Model& model) { model.src.c_mx = 7; });
-  expect_changed([](Model& model) { model.src.c_my = 7; });
-  expect_changed([](Model& model) { model.src.c_mz = 7; });
+  for (int axis = 0; axis < Model::dimension; ++axis)
+    expect_changed([axis](Model& model) { model.src.momentum_components[axis] = 7 + axis; });
   expect_changed([](Model& model) { model.src.c_E = 7; });
   expect_changed([](Model& model) { model.ell.alpha = Real(7); });
   expect_changed([](Model& model) { model.ell.n0 = Real(7); });
@@ -309,6 +308,9 @@ TEST(AuxSingleSource, CompositeExactContractRecursesThroughEveryBrickParameter) 
   NestedModel nested{};
   const std::string nested_expected = exact_model_parameters(nested);
   nested.src.b.qom = Real(9);
+  EXPECT_NE(exact_model_parameters(nested), nested_expected);
+  nested = NestedModel{};
+  nested.src.b.momentum_components[1] = 9;
   EXPECT_NE(exact_model_parameters(nested), nested_expected);
 }
 
@@ -328,19 +330,45 @@ TEST(AuxSingleSource, NativeRoleBinderConnectsEveryCompiledMomentumAxis) {
   variables.names.resize(static_cast<std::size_t>(variables.size), "component");
   variables.roles.push_back(VariableRole::Energy);
   variables.roles.push_back(VariableRole::Density);
-  if constexpr (kNativeDimension >= 3)
-    variables.roles.push_back(VariableRole::MomentumZ);
-  if constexpr (kNativeDimension >= 2)
-    variables.roles.push_back(VariableRole::MomentumY);
-  variables.roles.push_back(VariableRole::MomentumX);
+  for (int axis = kNativeDimension - 1; axis >= 0; --axis)
+    variables.roles.push_back(detail::momentum_role_for_axis<kNativeDimension>(axis));
 
   PotentialForce force{};
   detail::bind_variable_roles(force, variables);
   EXPECT_EQ(force.c_E, 0);
   EXPECT_EQ(force.c_rho, 1);
-  EXPECT_EQ(force.c_mx, variables.size - 1);
-  if constexpr (kNativeDimension >= 2)
-    EXPECT_EQ(force.c_my, variables.size - 2);
-  if constexpr (kNativeDimension >= 3)
-    EXPECT_EQ(force.c_mz, 2);
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    EXPECT_EQ(force.momentum_components[axis], kNativeDimension + 1 - axis);
+}
+
+TEST(AuxSingleSource, NativeFactoryRoutesOnlyExactRankedSourceCapabilities) {
+  const auto route = [](const char* tag) {
+    ModelSpec spec;
+    spec.source = tag;
+    bool routed = false;
+    int source_dimension = -1;
+    try {
+      detail::dispatch_source<kNativeDimension + 2>(spec, [&](const auto& source) {
+        using Source = std::remove_cvref_t<decltype(source)>;
+        routed = true;
+        source_dimension = source_detail::declared_dimension<Source>();
+      });
+    } catch (const std::runtime_error&) {
+      routed = false;
+    }
+    return std::pair{routed, source_dimension};
+  };
+
+  const auto potential = route("potential");
+  EXPECT_TRUE(potential.first);
+  EXPECT_EQ(potential.second, kNativeDimension);
+
+  const auto expect_planar_route = [&](const char* tag) {
+    const auto result = route(tag);
+    EXPECT_EQ(result.first, MagneticLorentzForce::planar_capability);
+    if (result.first)
+      EXPECT_EQ(result.second, kNativeDimension);
+  };
+  expect_planar_route("magnetic");
+  expect_planar_route("potential_magnetic");
 }

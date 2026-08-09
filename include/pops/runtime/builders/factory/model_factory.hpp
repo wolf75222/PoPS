@@ -8,8 +8,10 @@
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <algorithm>  // std::find, std::sort (resolve_implicit_components)
+#include <array>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 /// @file
@@ -52,6 +54,45 @@ static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),
               "registry n_vars drift: compressible");
 static_assert(IsothermalFlux::n_vars == transport_n_vars_ct("isothermal"),
               "registry n_vars drift: isothermal");
+
+template <int Dim>
+constexpr VariableRole momentum_role_for_axis(int axis) {
+  static_assert(Dim >= 1 && Dim <= 3, "momentum roles support dimensions 1..3");
+  constexpr std::array roles{VariableRole::MomentumX, VariableRole::MomentumY,
+                             VariableRole::MomentumZ};
+  return roles[static_cast<std::size_t>(axis)];
+}
+
+struct MagneticSourceFactory {
+  template <int Dim>
+  static MagneticLorentzForceND<Dim> make(const ModelSpec& model) {
+    return MagneticLorentzForceND<Dim>{Real(model.qom)};
+  }
+};
+
+struct PotentialMagneticSourceFactory {
+  template <int Dim>
+  static CompositeSource<PotentialForceND<Dim>, MagneticLorentzForceND<Dim>> make(
+      const ModelSpec& model) {
+    return {PotentialForceND<Dim>{Real(model.qom)}, MagneticLorentzForceND<Dim>{Real(model.qom)}};
+  }
+};
+
+/// Dispatch one provider that requires the x-y plane.  The overload is selected by the immutable
+/// native specialization; no run-time dimension branch exists and the unsupported 1D provider type
+/// is never constructed.
+template <class Factory, int Dim, class Visitor>
+  requires(Dim >= 2)
+POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&& visitor) {
+  visitor(Factory::template make<Dim>(model));
+}
+
+template <class Factory, int Dim, class Visitor>
+  requires(Dim < 2)
+[[noreturn]] POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&&) {
+  throw std::runtime_error("source '" + model.source.get() +
+                           "' invalid here (requires one momentum per native axis, or 'none')");
+}
 
 /// Builds the transport brick and calls v(transport). The tag is validated ONCE against the registry
 /// (the historical rejection message stays byte-identical, single-sourced by validate_transport) and
@@ -114,14 +155,9 @@ POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
         case SourceRouteId::kGravity:
           return v(GravityForce{});
         case SourceRouteId::kMagneticLorentz:
-          if constexpr (kNativeDimension >= 2)
-            return v(MagneticLorentzForce{Real(m.qom)});
-          break;
+          return dispatch_planar_source<MagneticSourceFactory, kNativeDimension>(m, v);
         case SourceRouteId::kPotentialMagneticLorentz:
-          if constexpr (kNativeDimension >= 2)
-            return v(CompositeSource<PotentialForce, MagneticLorentzForce>{
-                PotentialForce{Real(m.qom)}, MagneticLorentzForce{Real(m.qom)}});
-          break;
+          return dispatch_planar_source<PotentialMagneticSourceFactory, kNativeDimension>(m, v);
       }
     }
   }
@@ -152,7 +188,7 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 }
 
 /// AUTOMATIC resolution by ROLES (audit sec.5): fills the component indices of a SOURCE or ELLIPTIC
-/// brick (`c_rho`, one exact momentum role per native axis, and optional `c_E`) from the
+/// brick (`c_rho`, one exact-ranked momentum component per native axis, and optional `c_E`) from the
 /// conservative descriptor @p cons of the TRANSPORT.
 /// This is a TRANSPARENT resolution, with no new user parameter: the native bricks adapt to the
 /// transport layout (density/momentum/energy located by their ROLE and not by a hard-coded index).
@@ -162,7 +198,8 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// required role raises during assembly; canonical component defaults are never executable authority.
 ///
 /// Member detection via `requires` (if constexpr): the bricks have HETEROGENEOUS index sets
-/// (PotentialForce/GravityForce: rho/mx[/my[/mz]]/E; MagneticLorentzForce: mx/my only;
+/// (PotentialForce/GravityForce: rho/momentum_components[Dim]/E;
+/// MagneticLorentzForce: momentum_components[Dim];
 /// ChargeDensity/Background/GravityCoupling: rho; NoSource: none); only the EXISTING members
 /// are touched. CompositeSource<A,B> has no indices of its own: we recurse into its two sub-bricks.
 ///
@@ -174,17 +211,17 @@ POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
     brk.c_rho = require_role_index(cons, VariableRole::Density, "bind_variable_roles",
                                    "model conservative state");
   }
-  if constexpr (requires { brk.c_mx; }) {
-    brk.c_mx = require_role_index(cons, VariableRole::MomentumX, "bind_variable_roles",
-                                  "model conservative state");
-  }
-  if constexpr (kNativeDimension >= 2 && requires { brk.c_my; }) {
-    brk.c_my = require_role_index(cons, VariableRole::MomentumY, "bind_variable_roles",
-                                  "model conservative state");
-  }
-  if constexpr (kNativeDimension >= 3 && requires { brk.c_mz; }) {
-    brk.c_mz = require_role_index(cons, VariableRole::MomentumZ, "bind_variable_roles",
-                                  "model conservative state");
+  if constexpr (requires { brk.momentum_components; }) {
+    using Components = std::remove_cvref_t<decltype(brk.momentum_components)>;
+    static_assert(
+        requires { Brick::dimension; },
+        "a source with momentum components must declare its spatial dimension");
+    static_assert(Components::dimension == Brick::dimension,
+                  "source momentum-component rank must equal the source spatial dimension");
+    for (int axis = 0; axis < Brick::dimension; ++axis)
+      brk.momentum_components[axis] =
+          require_role_index(cons, momentum_role_for_axis<Brick::dimension>(axis),
+                             "bind_variable_roles", "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
     if constexpr (requires { Brick::requires_energy_role(cons.size); }) {
