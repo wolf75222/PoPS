@@ -1,291 +1,206 @@
-// Poisson FFT sous MPI via remap box<->slabs (ADC-287). Avec set_poisson(..., "fft") sous mpirun
-// -np>1, System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc
-// certains rangs ont local_size()==0. Historiquement PoissonFFTSolver::solve() dereferencait fab(0)
-// sur un rang sans box -> SIGSEGV (#93), et le chemin (#93) REFUSAIT explicitement "fft" sous MPI.
-//
-// ADC-287 remplace ce refus par un chemin distribue : RemappedFFTSolver presente vers l'exterieur la
-// MEME box unique (rhs()/phi() sur ba/dm, alignes avec l'aux) et cache un scatter/gather box<->slabs
-// autour de PoissonFFT dans solve(). Le chemin solve_fields reste donc intact. C'est un changement
-// STRUCTUREL en attente du vote de design ADC-273.
-//
-// Ce test, sous -np {1,2,4} :
-//   - np=1 : "fft" marche (solve_fields() tourne, potentiel fini non trivial), bit-coherent avec le
-//            chemin geometric_mg du meme probleme (a la tolerance FP du solveur direct vs iteratif).
-//   - np>1 : "fft" marche aussi (RemappedFFTSolver) : solve_fields() ne leve pas, le potentiel est
-//            fini non trivial, et il coincide avec geometric_mg du meme probleme (apres recentrage de
-//            moyenne pour neutraliser la jauge), a la tolerance FP. n=16 -> Ny=16 divisible par 1/2/4,
-//            donc la garde Ny % n_ranks() de RemappedFFTSolver passe.
-//
-// ADC-316 : en complement de la parite phi vs geometric_mg ci-dessus, on assure aussi le residu
-// discret du RemappedFFTSolver (residual(), DIRECTEMENT car l'API System ne l'expose pas) sur deux
-// tailles -- 16 (radix-2) et 12 (NON puissance de 2 -> repli DFT directe O(n^2) de PoissonFFT, le
-// chemin du remap jusqu'ici non couvert) -- toutes deux machine-zero sous np = 1/2/4.
+// Exact distributed FFT provider gate.  The historical executable name is retained so CI keeps
+// exercising np={1,2,4}, but this test no longer constructs the retired System single-box remap.
+// It proves that the only concrete provider is PoissonFFTSolver<2> on canonical ordered slabs and
+// that a multi-rank single-box request is rejected instead of being silently remapped.
 
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>  // RemappedFFTSolver, BoxArray (direct residual check)
-#include <pops/mesh/geometry/geometry.hpp>                        // Geometry, Box2D
-#include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity
-#include <pops/physics/bricks/source.hpp>                // NoSource
-#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/system.hpp>
-
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
-#include <cstring>
-#include <string>
+#include <exception>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
 #endif
 
-#ifdef POPS_HAS_MPI
-#include <mpi.h>
-#endif
+namespace {
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+constexpr int kDim = 2;
+constexpr int kCells = 16;
+constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
-// Residu discret machine-zero du RemappedFFTSolver (le solveur "fft"/"fft_spectral" sous MPI) sur la
-// MEME disposition mono-box que System (ba.size()==1, dm(1, np) -> box sur le rang proprietaire, fab
-// vide ailleurs). L'API System n'expose pas residual(), on teste donc le solveur DIRECTEMENT.
-// rho = sin(2 pi x) sin(2 pi y) : mode periodique a moyenne nulle (solvabilite Poisson). Le solve
-// direct etant EXACT pour le Laplacien discret 5 points, residual() (COLLECTIF : poisson_residual sur
-// l'owner + all_reduce_max) est machine-zero. N divisible par np ; radix-2 si puissance de 2, sinon
-// repli DFT directe O(n^2) de PoissonFFT.
-static double remap_residual(int N) {
-  Geometry geom{Box2D::from_extents(N, N), 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba(std::vector<Box2D>{Box2D::from_extents(N, N)});  // box unique = disposition System
-  const double dx = geom.dx(), dy = geom.dy();
-  RemappedFFTSolver fft(geom, ba);
-  for (int li = 0; li < fft.rhs().local_size(); ++li) {  // seul le proprietaire possede une fab
-    Array4 r = fft.rhs().fab(li).array();
-    const Box2D b = fft.rhs().box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        r(i, j) = std::sin(2 * kPi * (i + 0.5) * dx) * std::sin(2 * kPi * (j + 0.5) * dy);
-  }
-  fft.solve();            // scatter/gather box<->bandes + PoissonFFT + wrap periodique des ghosts
-  return fft.residual();  // COLLECTIF : poisson_residual (owner) + all_reduce_max
+using Request = pops::EllipticBuildRequest<kDim>;
+using Layout = pops::mesh::BoxArray<kDim>;
+using RankSpace = pops::mesh::RankSpace<kDim>;
+using Distribution = pops::mesh::Distribution<kDim>;
+
+static_assert(!pops::PoissonFFTCapabilities<1>::available);
+static_assert(pops::PoissonFFTCapabilities<2>::available);
+static_assert(!pops::PoissonFFTCapabilities<3>::available);
+
+std::size_t storage_ordinal(const pops::Box<kDim>& storage, const pops::Index<kDim>& index) {
+  return static_cast<std::size_t>(index[0] - storage.lo[0]) +
+         static_cast<std::size_t>(index[1] - storage.lo[1]) *
+             static_cast<std::size_t>(storage.length(0));
 }
 
-// Bloc de CHARGE : alimente le second membre du Poisson (elliptic_rhs = densite de charge q n).
-struct ChargeEll {
-  template <class State>
-  POPS_HD Real rhs(const State& u) const {
-    return u[0];
-  }  // rho = comp 0
-};
+Request fft_request(bool canonical_slabs) {
+  const int ranks = pops::n_ranks();
+  if (ranks < 1 || kCells % ranks != 0)
+    throw std::invalid_argument("FFT provider test extent must divide the communicator size");
 
-using ProbeModel =
-    CompositeModel<ExBVelocity, NoSource, ChargeEll>;  // transporte + charge le Poisson
+  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0},
+                               pops::Index<kDim>{kCells - 1, kCells - 1}};
+  const pops::Geometry<kDim> geometry = pops::Geometry<kDim>::from_bounds(
+      domain, pops::RealVector<kDim>{0, 0}, pops::RealVector<kDim>{1, 1});
+  const RankSpace rank_space{pops::Index<kDim>{0, 0}, pops::Extent<kDim>{ranks, 1}};
 
-// Construit le probleme (charge a moyenne nulle pour le Poisson periodique soluble) et cable "fft".
-// Le rang proprietaire (0) ecrit la densite. Renvoie le System pret a solve_fields().
-static void build_problem(System& sys, int n, bool owns) {
-  add_compiled_model(sys, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
-  sys.set_poisson("composite", "fft");  // f = somme des briques elliptiques (ici la charge)
-  if (owns) {
-    const std::size_t nn = static_cast<std::size_t>(n) * n;
-    std::vector<double> q(nn, 0.0);  // charge a moyenne nulle : +1 gauche, -1 droite (somme = 0)
-    for (int j = 0; j < n; ++j)
-      for (int i = 0; i < n; ++i)
-        q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
-    sys.set_density("probe", q);
+  std::vector<pops::Box<kDim>> boxes;
+  std::vector<pops::Index<kDim>> owners;
+  if (canonical_slabs) {
+    const int local_y = kCells / ranks;
+    boxes.reserve(static_cast<std::size_t>(ranks));
+    owners.reserve(static_cast<std::size_t>(ranks));
+    for (int rank = 0; rank < ranks; ++rank) {
+      boxes.emplace_back(pops::Index<kDim>{0, rank * local_y},
+                         pops::Index<kDim>{kCells - 1, (rank + 1) * local_y - 1});
+      owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
+    }
+  } else {
+    boxes.push_back(domain);
+    owners.push_back(rank_space.coordinate(0));
+  }
+
+  Layout layout(std::move(boxes));
+  const Distribution distribution =
+      Distribution::partitioned(layout, rank_space, std::move(owners));
+  const std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  const pops::RealVector<kDim> spacing{geometry.spacing(0), geometry.spacing(1)};
+  const std::size_t pairs = layout.size() * (layout.size() - 1) / 2;
+  return {geometry,
+          std::move(layout),
+          distribution,
+          rank_space.coordinate(static_cast<std::size_t>(pops::my_rank())),
+          pops::PhysicalBoundaryConditions<kDim>{
+              pops::BoundaryTopology<kDim>::axis_periodic({true, true}), faces, spacing},
+          pops::Extent<kDim>{0, 0},
+          pops::Extent<kDim>{1, 1},
+          {static_cast<std::size_t>(ranks), pairs}};
+}
+
+void fill_manufactured_rhs(pops::MultiFab<kDim>& rhs, const pops::Geometry<kDim>& geometry) {
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const pops::Box<kDim>& valid = fab.box();
+    const pops::Box<kDim>& storage = fab.grown_box();
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        host(storage_ordinal(storage, pops::Index<kDim>{i, j})) =
+            std::sin(pops::Real(2) * kPi * geometry.cell_coordinate(0, i)) *
+            std::sin(pops::Real(2) * kPi * geometry.cell_coordinate(1, j));
+    fab.copy_from_host(host);
   }
 }
 
-static int pops_run_test_mpi_system_fft(int argc, char** argv) {
-  comm_init(&argc, &argv);
+pops::Real manufactured_error(const pops::PoissonFFTSolver<kDim>& solver) {
+  const pops::Real dx = solver.geom().spacing(0);
+  const pops::Real dy = solver.geom().spacing(1);
+  const pops::Real theta = pops::Real(2) * kPi / pops::Real(kCells);
+  const pops::Real eigenvalue = pops::Real(2) * (pops::Real(1) - std::cos(theta)) / (dx * dx) +
+                                pops::Real(2) * (pops::Real(1) - std::cos(theta)) / (dy * dy);
+  pops::Real local_error = 0;
+  const auto& field = solver.phi();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const auto& fab = field.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const pops::Box<kDim>& valid = fab.box();
+    const pops::Box<kDim>& storage = fab.grown_box();
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const pops::Real rhs =
+            std::sin(pops::Real(2) * kPi * solver.geom().cell_coordinate(0, i)) *
+            std::sin(pops::Real(2) * kPi * solver.geom().cell_coordinate(1, j));
+        const pops::Real value =
+            host(storage_ordinal(storage, pops::Index<kDim>{i, j}));
+        local_error = std::max(local_error, std::abs(value - rhs / eigenvalue));
+      }
+  }
+  return pops::all_reduce_max(local_error);
+}
+
+int run_exact_mpi_fft_provider(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
-  const int me = my_rank(), np = n_ranks();
-
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("[rank %d/%d] FAIL %s\n", me, np, w);
-      ++fails;
+  long local_failures = 0;
+  auto check = [&](bool condition, const char* label) {
+    if (!condition) {
+      std::printf("[rank %d/%d] FAIL %s\n", pops::my_rank(), pops::n_ranks(), label);
+      ++local_failures;
     }
   };
 
-  // RemappedFFTSolver residual() machine-zero (ADC-316). Le solveur "fft" sous MPI est
-  // RemappedFFTSolver ; on verifie son residu discret DIRECTEMENT (l'API System n'expose pas
-  // residual()) sur la grille mono-box System a deux tailles : 16 (puissance de 2 -> radix-2) et
-  // 12 (NON puissance de 2 -> repli DFT directe O(n^2) de PoissonFFT, chemin du remap jusqu'ici non
-  // couvert). Les deux doivent etre divisibles par np (transposee a bandes : Nx ET Ny divisibles par
-  // n_ranks()) ; 12 = 2^2 * 3 valide np = 1/2/4.
-  for (int Nr : {16, 12}) {
-    if (Nr % np != 0) {
-      if (me == 0)
-        std::printf("[rank 0/%d] SKIP remap residual N=%d (non divisible par np)\n", np, Nr);
-      continue;
-    }
-    const double res = remap_residual(Nr);
-    if (me == 0)
-      std::printf("[rank 0/%d] RemappedFFTSolver residual (N=%d, %s) = %.3e\n", np, Nr,
-                  is_pow2(Nr) ? "radix-2" : "DFT O(n^2)", res);
-    chk(res < 1e-9, "remap_residual_machine_zero");
+  {
+    Request request = fft_request(true);
+    const auto expected = pops::PoissonFFTSolver<kDim>::expected_operator_contract(request);
+    const pops::Real cell_measure = request.geometry.spacing(0) * request.geometry.spacing(1);
+    pops::PoissonFFTSolver<kDim> solver =
+        pops::make_elliptic_solver<pops::PoissonFFTSolver<kDim>>(
+            std::move(request), pops::PoissonFFTFactory<kDim>{});
+    solver.install_nullspace(
+        pops::constant_mean_zero_nullspace<kDim>(
+            "periodic-mpi-fft", "test-mpi-system-fft", cell_measure),
+        pops::PreparedVectorDistribution<kDim>::distributed());
+    check(solver.prepared_operator_contract().exact_fingerprint() ==
+              expected.exact_fingerprint(),
+          "exact_operator_contract");
+
+    fill_manufactured_rhs(solver.rhs(), solver.geom());
+    const pops::SolveReport first = solver.solve();
+    const pops::Real first_error = manufactured_error(solver);
+    const pops::SolveReport second = solver.solve();
+    const pops::Real second_error = manufactured_error(solver);
+    check(first.solved() && second.solved(), "exact_fft_solved_twice");
+    check(first.residual_norm < pops::Real(1e-9) &&
+              second.residual_norm < pops::Real(1e-9),
+          "exact_fft_roundoff_residual");
+    check(first_error < pops::Real(1e-12) && second_error < pops::Real(1e-12),
+          "exact_fft_manufactured_solution");
+    if (pops::my_rank() == 0)
+      std::printf(
+          "PoissonFFTSolver<2> np=%d residual=%.3e manufactured_error=%.3e\n",
+          pops::n_ranks(), static_cast<double>(second.residual_norm),
+          static_cast<double>(second_error));
   }
 
-  const int n = 16;
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  const bool owns = (me == 0);  // box 0 -> rang 0 sous DistributionMapping(1, np)
-
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-
-  if (np == 1) {
-    // np=1 : "fft" doit marcher. solve_fields() construit le solveur FFT mono-rang et resout.
-    System sys(cfg);
-    build_problem(sys, n, owns);
-    bool threw = false;
+  if (pops::n_ranks() > 1) {
+    bool rejected = false;
     try {
-      (void)pops::consume_solve_outcome(sys.solve_fields());
-      (void)pops::consume_solve_outcome(sys.solve_fields());  // construit-puis-reutilise
-    } catch (const std::exception& e) {
-      threw = true;
-      std::printf("[rank 0/1] np=1 inattendu : fft a leve : %s\n", e.what());
+      Request remap_request = fft_request(false);
+      pops::PoissonFFTSolver<kDim> forbidden =
+          pops::make_elliptic_solver<pops::PoissonFFTSolver<kDim>>(
+              std::move(remap_request), pops::PoissonFFTFactory<kDim>{});
+      (void)forbidden;
+    } catch (const std::exception&) {
+      rejected = true;
     }
-    chk(!threw, "np1_fft_runs");
-
-    const std::vector<double> phi = sys.potential();
-    chk(phi.size() == nn, "np1_potential_size");
-    double maxabs = 0;
-    bool finite = true;
-    for (double v : phi) {
-      if (!std::isfinite(v))
-        finite = false;
-      maxabs = std::fmax(maxabs, std::fabs(v));
-    }
-    chk(finite, "np1_potential_finite");
-    chk(maxabs > 0.0, "np1_potential_nonzero");
-
-    // Reference : meme probleme via geometric_mg. La FFT directe et le MG iteratif resolvent le MEME
-    // Laplacien 5-points periodique -> meme potentiel a la tolerance FP (jauge : moyenne nulle des
-    // deux cotes). On compare apres recentrage de moyenne pour neutraliser la constante de jauge.
-    System ref(cfg);
-    add_compiled_model(ref, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
-    ref.set_poisson("composite", "geometric_mg");
-    std::vector<double> q(nn, 0.0);
-    for (int j = 0; j < n; ++j)
-      for (int i = 0; i < n; ++i)
-        q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
-    ref.set_density("probe", q);
-    (void)pops::consume_solve_outcome(ref.solve_fields());
-    const std::vector<double> phi_ref = ref.potential();
-    chk(phi_ref.size() == nn, "np1_ref_size");
-
-    double mean_fft = 0, mean_ref = 0;
-    for (std::size_t k = 0; k < nn; ++k) {
-      mean_fft += phi[k];
-      mean_ref += phi_ref[k];
-    }
-    mean_fft /= static_cast<double>(nn);
-    mean_ref /= static_cast<double>(nn);
-    double linf = 0, ampl = 0;
-    for (std::size_t k = 0; k < nn; ++k) {
-      const double a = phi[k] - mean_fft, b = phi_ref[k] - mean_ref;
-      linf = std::fmax(linf, std::fabs(a - b));
-      ampl = std::fmax(ampl, std::fabs(b));
-    }
-    // Tolerance relative a l'amplitude du potentiel de reference (MG converge a sa tolerance interne).
-    const double rel = (ampl > 0) ? linf / ampl : linf;
-    std::printf("[rank 0/1] np=1 fft OK : |phi|max=%.3e  ||phi_fft - phi_mg||inf/ampl=%.3e\n",
-                maxabs, rel);
-    chk(rel < 5e-3, "np1_fft_matches_mg");
-  } else {
-    // np>1 : "fft" doit MARCHER (RemappedFFTSolver). solve_fields() (-> ensure_elliptic) construit le
-    // solveur distribue sur TOUS les rangs (collectif) ; aucun ne leve. Le scatter/gather box<->slabs
-    // est interne a solve(). On compare ensuite a geometric_mg du meme probleme.
-    System sys(cfg);
-    build_problem(sys, n, owns);  // set_poisson ne construit pas encore le solveur (paresseux)
-    bool threw = false;
-    std::string msg;
-    try {
-      (void)pops::consume_solve_outcome(sys.solve_fields());
-      (void)pops::consume_solve_outcome(
-          sys.solve_fields());  // construit-puis-reutilise (le solveur paresseux n'est bati qu'une fois)
-    } catch (const std::exception& e) {
-      threw = true;
-      msg = e.what();
-    }
-    if (threw)
-      std::printf("[rank %d/%d] np=%d inattendu : fft a leve : %s\n", me, np, np, msg.c_str());
-    chk(!threw, "npN_fft_runs");
-
-    // potential_global() est COLLECTIF : il renvoie le champ global n*n sur CHAQUE rang (la box vit
-    // sur le rang 0, all_reduce_sum_inplace le diffuse). On verifie qu'il est fini et non trivial.
-    const std::vector<double> phi = sys.potential_global();
-    chk(phi.size() == nn, "npN_potential_size");
-    double maxabs = 0;
-    bool finite = true;
-    for (double v : phi) {
-      if (!std::isfinite(v))
-        finite = false;
-      maxabs = std::fmax(maxabs, std::fabs(v));
-    }
-    chk(finite, "npN_potential_finite");
-    chk(maxabs > 0.0, "npN_potential_nonzero");
-
-    // Reference : MEME probleme distribue via geometric_mg. La FFT remappee et le MG iteratif resolvent
-    // le MEME Laplacien 5-points periodique -> meme potentiel a la tolerance FP (jauge : moyenne nulle).
-    // On compare apres recentrage de moyenne pour neutraliser la constante de jauge.
-    System ref(cfg);
-    add_compiled_model(ref, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
-    ref.set_poisson("composite", "geometric_mg");
-    if (owns) {
-      std::vector<double> q(nn, 0.0);
-      for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i)
-          q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
-      ref.set_density("probe", q);
-    }
-    (void)pops::consume_solve_outcome(ref.solve_fields());
-    const std::vector<double> phi_ref = ref.potential_global();
-    chk(phi_ref.size() == nn, "npN_ref_size");
-
-    double mean_fft = 0, mean_ref = 0;
-    for (std::size_t k = 0; k < nn; ++k) {
-      mean_fft += phi[k];
-      mean_ref += phi_ref[k];
-    }
-    mean_fft /= static_cast<double>(nn);
-    mean_ref /= static_cast<double>(nn);
-    double linf = 0, ampl = 0;
-    for (std::size_t k = 0; k < nn; ++k) {
-      const double a = phi[k] - mean_fft, b = phi_ref[k] - mean_ref;
-      linf = std::fmax(linf, std::fabs(a - b));
-      ampl = std::fmax(ampl, std::fabs(b));
-    }
-    const double rel = (ampl > 0) ? linf / ampl : linf;
-    if (me == 0)
-      std::printf("[rank 0/%d] np=%d fft OK : |phi|max=%.3e  ||phi_fft - phi_mg||inf/ampl=%.3e\n",
-                  np, np, maxabs, rel);
-    chk(rel < 5e-3, "npN_fft_matches_mg");
+    check(rejected, "multi_rank_single_box_remap_is_rejected");
   }
 
-#ifdef POPS_HAS_MPI
-  if (np > 1) {
-    long g = 0;
-    MPI_Allreduce(&fails, &g, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
-    fails = g;
-  }
-#endif
-  if (me == 0 && fails == 0)
-    std::printf("OK test_mpi_system_fft (np=%d)\n", np);
-  comm_finalize();
-  return fails == 0 ? 0 : 1;
+  const long failures = pops::all_reduce_sum(local_failures);
+  if (failures == 0 && pops::my_rank() == 0)
+    std::printf("OK test_mpi_system_fft exact provider (np=%d)\n", pops::n_ranks());
+  pops::comm_finalize();
+  return failures == 0 ? 0 : 1;
 }
 
-TEST(test_mpi_system_fft, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_system_fft, "test_mpi_system_fft"), 0);
+}  // namespace
+
+TEST(test_mpi_system_fft, exact_rank_two_provider_has_no_single_box_remap) {
+  EXPECT_EQ(pops::test::RunTestBody(&run_exact_mpi_fft_provider, "test_mpi_system_fft"), 0);
 }
