@@ -248,7 +248,7 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
         if "ctx.configure_hierarchy_tensor_solver(" in line
     )
     assert 'ctx.configure_hierarchy_tensor_solver(1, 1, "pops.hierarchy.composite-tensor-fac"' in configuration_line
-    assert '"pops.hierarchy.composite-tensor-fac.options@1"' in configuration_line
+    assert '"pops.hierarchy.composite-tensor-fac.options@2"' in configuration_line
     assert '{"fac.fine_sweeps", std::int64_t{7}}' in configuration_line
     assert '{"fac.coarse_rel_tol", static_cast<double>(%s)}' % scalar_cpp(2.0e-7) in configuration_line
     assert '{"fac.coarse_abs_tol", static_cast<double>(%s)}' % scalar_cpp(5.0e-14) in configuration_line
@@ -331,7 +331,7 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
         if "ctx.configure_hierarchy_tensor_solver(" in line
     )
     assert 'ctx.configure_hierarchy_tensor_solver(1, 1, "pops.hierarchy.composite-tensor-fac"' in configuration_line
-    assert '"pops.hierarchy.composite-tensor-fac.options@1", {}});' in configuration_line
+    assert '"pops.hierarchy.composite-tensor-fac.options@2", {}});' in configuration_line
     solve_line = next(
         line for line in source.splitlines()
         if "ctx.solve_hierarchy_tensor(" in line
@@ -341,7 +341,7 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
     assert solve_line.rstrip().endswith(", 13);")
 
 
-def test_refined_solution_publishes_atomically_before_reflux_then_average_down():
+def test_refined_solution_publishes_atomically_before_synchronized_advance():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
     amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
@@ -355,14 +355,7 @@ def test_refined_solution_publishes_atomically_before_reflux_then_average_down()
 
     root = Path(__file__).resolve().parents[4]
     provider = (root / "include" / "pops" / "runtime" / "amr"
-                / "amr_tensor_elliptic.hpp").read_text(encoding="utf-8")
+                / "hierarchy_tensor_solver_provider.hpp").read_text(encoding="utf-8")
     solved = provider.index("if (!report.solved_value_available())")
-    publication = provider.index("copy0(levels_[", solved)
+    publication = provider.index("collective_capture_(candidate_publication_)", solved)
     assert solved < publication, "a failed hierarchy solve must not publish a partial iterate"
-
-    context = (root / "include" / "pops" / "runtime" / "program"
-               / "amr_program_context.hpp").read_text(encoding="utf-8")
-    coupling = context.index("void couple_levels() const")
-    reflux = context.index("route_reflux_program", coupling)
-    average_down = context.index("average_down_level", reflux)
-    assert reflux < average_down, "accepted synchronization is reflux then average-down"

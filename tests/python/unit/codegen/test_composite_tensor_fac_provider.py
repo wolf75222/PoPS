@@ -107,12 +107,14 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert identity["schema_version"] == 1
     authority = identity["provider"]
     assert authority["provider_id"] == "pops.hierarchy.composite-tensor-fac"
-    assert authority["interface_version"] == 1
+    assert authority["interface_version"] == 2
     assert authority["capabilities"] == [
-        "pops.hierarchy.composite-tensor-fac.exact-preparation@1",
-        "pops.hierarchy.composite-tensor-fac.flat-krylov@1",
-        "pops.hierarchy.composite-tensor-fac.mixed-level-distribution@1",
-        "pops.hierarchy.composite-tensor-fac.refined-direct@1",
+        "pops.hierarchy.composite-tensor-fac.exact-rank@2",
+        "pops.hierarchy.composite-tensor-fac.flat-krylov@2",
+        "pops.hierarchy.composite-tensor-fac.partitioned-mpi@2",
+        "pops.hierarchy.composite-tensor-fac.preallocated-publication@2",
+        "pops.hierarchy.composite-tensor-fac.rank2-only@2",
+        "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac@2",
     ]
     assert authority["flat_execution"]["mode"] == "prepared_krylov_fallback"
     assert authority["flat_execution"]["krylov"]["method_provider"]["provider_id"] == (
@@ -966,7 +968,7 @@ class Provider final
       const pops::runtime::program::HierarchyTensorSolverBuildRequest& request) {
     auto converted = request;
     converted.options = {
-        "pops.hierarchy.composite-tensor-fac.options@1", request.options.values};
+        "pops.hierarchy.composite-tensor-fac.options@2", request.options.values};
     return converted;
   }
 
