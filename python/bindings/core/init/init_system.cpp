@@ -902,6 +902,14 @@ void bind_system_data(py::class_<System>& cls) {
           py::arg("provider_slot"), py::arg("level"),
           "Exact compact valid-cell field pieces owned by this rank.")
       .def(
+          "output_embedded_boundary_local_pieces",
+          [](const System& s, const std::string& name, int level) {
+            return output_pieces_to_python(
+                s.output_embedded_boundary_local_pieces(name, level));
+          },
+          py::arg("name"), py::arg("level"),
+          "Exact compact prepared embedded-boundary sidecar pieces owned by this rank.")
+      .def(
           "output_state_root_pieces",
           [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
             std::vector<OutputPiece<pops::kNativeDimension>> pieces;
@@ -925,6 +933,18 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
+      .def(
+          "output_embedded_boundary_root_pieces",
+          [](const System& s, const ObserverMpiLane& lane, const std::string& name, int level) {
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_embedded_boundary_root_pieces(lane, name, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("lane"), py::arg("name"), py::arg("level"),
+          "Collectively gather prepared embedded-boundary sidecars on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
           [](const System& s, const std::array<double, pops::kNativeDimension>& origin,

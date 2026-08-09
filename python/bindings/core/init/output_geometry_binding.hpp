@@ -189,6 +189,9 @@ py::dict native_output_geometry_snapshot(int level, std::uint64_t topology_epoch
     }
   }
 
+  // This is the full coordinate-cell measure.  Embedded-boundary volume fractions are emitted
+  // independently as the reserved ``pops_kappa`` sidecar; folding them into this geometry array
+  // would make the mesh metric ambiguous and would double-apply kappa in downstream consumers.
   for_each_output_index(domain, [&](const Index<Dim>& index) {
     volumes[output_linear_offset(index, cell_shape)] =
         output_cell_volume(cell_measure, origin, spacing, index);

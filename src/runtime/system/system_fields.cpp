@@ -48,6 +48,22 @@ using runtime::system::marshaling::gather_local_compact;
 using runtime::system::marshaling::storage_ordinal;
 using runtime::system::marshaling::write_global;
 
+template <int Dim, class Implementation>
+const MultiFab<Dim>& embedded_boundary_output_field(const Implementation& implementation,
+                                                    std::string_view name) {
+  if (!implementation.embedded_boundary_)
+    throw std::runtime_error(
+        "System has no prepared embedded-boundary output sidecar");
+  if (name == "pops_active")
+    return implementation.embedded_boundary_->active_mask();
+  if (name == "pops_phi")
+    return implementation.embedded_boundary_->phi();
+  if (name == "pops_kappa")
+    return implementation.embedded_boundary_->volume_fraction();
+  throw std::invalid_argument(
+      "System embedded-boundary output name must be pops_active, pops_phi, or pops_kappa");
+}
+
 template <int Dim, class Species>
 void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& candidate,
                                    std::string_view operation) {
@@ -1017,6 +1033,14 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_field_local_pieces(
 }
 
 template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_embedded_boundary_local_pieces(
+    const std::string& name, int level) const {
+  if (level != 0)
+    throw std::out_of_range("Uniform System output has only level zero");
+  return output_local_pieces(embedded_boundary_output_field<Dim>(*p_, name), 0, false);
+}
+
+template <int Dim>
 std::vector<OutputPiece<Dim>> System<Dim>::output_state_root_pieces(const ObserverMpiLane& lane,
                                                                     const std::string& name,
                                                                     int level) const {
@@ -1031,6 +1055,14 @@ std::vector<OutputPiece<Dim>> System<Dim>::output_field_root_pieces(
   return output_pieces_to_root(
       lane, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
+}
+
+template <int Dim>
+std::vector<OutputPiece<Dim>> System<Dim>::output_embedded_boundary_root_pieces(
+    const ObserverMpiLane& lane, const std::string& name, int level) const {
+  return output_pieces_to_root(
+      lane, detail::output_collective_identity("System", "embedded-boundary", name, level),
+      [&] { return output_embedded_boundary_local_pieces(name, level); });
 }
 
 template <int Dim>
@@ -1150,10 +1182,15 @@ System<kNativeDimension>::output_state_local_pieces(const std::string&, int) con
 template std::vector<OutputPiece<kNativeDimension>>
 System<kNativeDimension>::output_field_local_pieces(const std::string&, int);
 template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_embedded_boundary_local_pieces(const std::string&, int) const;
+template std::vector<OutputPiece<kNativeDimension>>
 System<kNativeDimension>::output_state_root_pieces(const ObserverMpiLane&, const std::string&,
                                                    int) const;
 template std::vector<OutputPiece<kNativeDimension>>
 System<kNativeDimension>::output_field_root_pieces(const ObserverMpiLane&, const std::string&, int);
+template std::vector<OutputPiece<kNativeDimension>>
+System<kNativeDimension>::output_embedded_boundary_root_pieces(const ObserverMpiLane&,
+                                                               const std::string&, int) const;
 template std::vector<Box<kNativeDimension>> System<kNativeDimension>::local_boxes(
     const std::string&) const;
 template std::vector<double> System<kNativeDimension>::local_state(const std::string&, int) const;

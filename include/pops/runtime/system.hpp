@@ -1255,6 +1255,15 @@ class System {
   std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int level) const;
   std::vector<OutputPiece<Dim>> output_field_local_pieces(const std::string& provider_slot,
                                                           int level);
+  /// Exact embedded-boundary geometry sidecars.  These arrays are never appended to a physical
+  /// state or field payload: each reserved name selects one scalar native field on the same
+  /// (layout, level) ownership map.  Uniform layouts expose only level zero.
+  ///
+  /// Supported names are ``pops_active`` (binary cell mask), ``pops_phi`` (signed level set), and
+  /// ``pops_kappa`` (cell volume fraction).  A System without a prepared embedded boundary fails
+  /// explicitly so a non-owning MPI rank cannot be confused with an absent sidecar.
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(
+      const std::string& name, int level) const;
   /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
   /// zero receives complete pieces and every non-root rank receives an empty vector.
   std::vector<OutputPiece<Dim>> output_state_root_pieces(const ObserverMpiLane& lane,
@@ -1262,6 +1271,8 @@ class System {
   std::vector<OutputPiece<Dim>> output_field_root_pieces(const ObserverMpiLane& lane,
                                                          const std::string& provider_slot,
                                                          int level);
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_root_pieces(
+      const ObserverMpiLane& lane, const std::string& name, int level) const;
   /// @}
 
   /// @name LOCAL per-fab accessors -- exact native ownership inspection
