@@ -45,6 +45,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -212,7 +213,7 @@ Model external_model(Real gamma) {
 template <nd::ReconstructionVariables Variables, int Dim, class Model, class Flux,
           class Reconstruction>
 void external_residual_prepared(const double* state_values, double* residual_values,
-                                const double* auxiliary_values, const Extent<Dim>& shape,
+                                const double* provider_values, const Extent<Dim>& shape,
                                 const RealVector<Dim>& spacing,
                                 const std::array<bool, Dim>& periodic, Real positivity_floor,
                                 Real weno_epsilon) {
@@ -233,22 +234,28 @@ void external_residual_prepared(const double* state_values, double* residual_val
   const mesh::RankSpace<Dim> ranks{Index<Dim>{}, rank_extent};
   const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
   MultiFab<Dim> state(layout, distribution, Index<Dim>{}, Model::n_vars, ghosts);
-  MultiFab<Dim> auxiliary(layout, distribution, Index<Dim>{}, aux_comps_for<Model, Dim>(), ghosts);
   MultiFab<Dim> residual(layout, distribution, Index<Dim>{}, Model::n_vars, ghosts);
   state.set_val(Real(0));
-  auxiliary.set_val(Real(0));
   residual.set_val(Real(0));
   import_component_major(state.fab(0), state_values, Model::n_vars);
-  import_component_major(auxiliary.fab(0), auxiliary_values, auxiliary.ncomp());
+  constexpr int provider_count = flux_provider_count<Model>;
+  std::optional<MultiFab<Dim>> provider_storage;
+  if constexpr (provider_count > 0) {
+    provider_storage.emplace(layout, distribution, Index<Dim>{}, provider_count, ghosts);
+    provider_storage->set_val(Real(0));
+    import_component_major(provider_storage->fab(0), provider_values, provider_count);
+  }
 
   const BoundaryTopology<Dim> topology(periodic);
   fill_boundary(state, domain, topology, external_halo_budget(domain, ghosts, state.ncomp()));
-  fill_boundary(auxiliary, domain, topology,
-                external_halo_budget(domain, ghosts, auxiliary.ncomp()));
+  if constexpr (provider_count > 0)
+    fill_boundary(*provider_storage, domain, topology,
+                  external_halo_budget(domain, ghosts, provider_count));
   external_flat_boundary<Dim>(periodic, state.ncomp(), "external-riemann/state")
       .fill_physical(state, geometry);
-  external_flat_boundary<Dim>(periodic, auxiliary.ncomp(), "external-riemann/auxiliary")
-      .fill_physical(auxiliary, geometry);
+  if constexpr (provider_count > 0)
+    external_flat_boundary<Dim>(periodic, provider_count, "external-riemann/providers")
+        .fill_physical(*provider_storage, geometry);
 
   Model model{};
   const auto spatial = nd::prepare_cartesian_operator<Dim, Model, Reconstruction, Flux, Variables>(
@@ -257,13 +264,13 @@ void external_residual_prepared(const double* state_values, double* residual_val
   if constexpr (flux_provider_count<Model> == 0)
     spatial.assemble_residual(state, residual);
   else
-    spatial.assemble_residual(state, auxiliary, residual);
+    spatial.assemble_residual(state, *provider_storage, residual);
   export_component_major(residual.fab(0), residual_values, Model::n_vars);
 }
 
 template <int Dim, class Model, class Flux>
 void external_residual(const double* state_values, double* residual_values,
-                       const double* auxiliary_values, const int* shape_values,
+                       const double* provider_values, const int* shape_values,
                        const double* spacing_values, const int* periodic_values,
                        const std::string& limiter, bool reconstruct_primitive,
                        double positivity_floor,
@@ -272,6 +279,9 @@ void external_residual(const double* state_values, double* residual_values,
   if (state_values == nullptr || residual_values == nullptr || shape_values == nullptr ||
       spacing_values == nullptr || periodic_values == nullptr)
     throw std::invalid_argument("external riemann brick: ranked residual arguments are null");
+  if constexpr (flux_provider_count<Model> > 0)
+    if (provider_values == nullptr)
+      throw std::invalid_argument("external riemann brick: model requires compact provider values");
   if (!std::isfinite(positivity_floor) || positivity_floor < 0.0 || !std::isfinite(weno_epsilon) ||
       weno_epsilon <= 0.0)
     throw std::invalid_argument("external riemann brick: numerical parameters are invalid");
@@ -295,12 +305,12 @@ void external_residual(const double* state_values, double* residual_values,
         if (reconstruct_primitive)
           external_residual_prepared<nd::ReconstructionVariables::Primitive, Dim, Model, Flux,
                                      Reconstruction>(
-              state_values, residual_values, auxiliary_values, shape, spacing, periodic,
+              state_values, residual_values, provider_values, shape, spacing, periodic,
               static_cast<Real>(positivity_floor), static_cast<Real>(weno_epsilon));
         else
           external_residual_prepared<nd::ReconstructionVariables::Conservative, Dim, Model, Flux,
                                      Reconstruction>(
-              state_values, residual_values, auxiliary_values, shape, spacing, periodic,
+              state_values, residual_values, provider_values, shape, spacing, periodic,
               static_cast<Real>(positivity_floor), static_cast<Real>(weno_epsilon));
       });
 }
@@ -365,15 +375,18 @@ void external_install_system(System<Dim>& system, std::string_view flux_identity
   static_assert(Model::dimension == Dim);
   validate_external_install(name, limiter, reconstruction, time, gamma, substeps, stride,
                             positivity_floor, weno_epsilon);
-  system.ensure_aux_width(aux_comps_for<Model, Dim>());
   CompiledSystemBlockRoutes routes{limiter, "external:" + std::string(flux_identity),
                                    reconstruction, time, static_cast<Real>(positivity_floor)};
+  const auto* provider_storage = system.prepared_block_provider_storage_groups();
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
+  if constexpr (provider_count_for<Model, Dim>() > 0)
+    provider_plan = &system.prepared_auxiliary_consumer_plan(name);
   auto prepared = prepare_external_system_block<Dim, Model, Flux>(
       CompiledSystemBlockPreparation<Dim, Model>{
           name, external_model<Model>(static_cast<Real>(gamma)), std::move(routes),
           system.prepared_block_geometry(),
           BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()),
-          &system.prepared_block_auxiliary()},
+          provider_storage, provider_plan},
       static_cast<Real>(weno_epsilon));
   prepared.name = name;
   prepared.ncomp = Model::n_vars;
@@ -735,7 +748,8 @@ class ExternalBrickHandle {
 //
 // The emitted pops_brick_residual_v3 instantiates the exact-ranked Cartesian operator at the .so's
 // compile time: the flux and native rank are STATIC template arguments, never per-cell or runtime
-// dimension lookups. pops_brick_nvars / pops_brick_naux let the host size its marshaling arrays.
+// dimension lookups. pops_brick_nvars / pops_brick_naux let the host size its compact provider
+// marshaling arrays (the ABI spelling is retained by the external-brick manifest version).
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
 // same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
@@ -760,7 +774,7 @@ class ExternalBrickHandle {
     return Model::n_vars;                                                                          \
   }                                                                                                \
   extern "C" int pops_brick_naux() {                                                               \
-    return pops::aux_comps_for<Model, ::pops::kNativeDimension>();                                 \
+    return pops::provider_count_for<Model, ::pops::kNativeDimension>();                            \
   }                                                                                                \
   extern "C" const char* pops_brick_model_identity() {                                             \
     return (model_identity);                                                                       \

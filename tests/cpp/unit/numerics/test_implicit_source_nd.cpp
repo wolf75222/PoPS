@@ -57,16 +57,16 @@ void expect_valid_value(const Fab<Dim>& field, Real expected) {
 template <int Dim>
 struct RankedLinearImplicitModel {
   using State = StateVec<1>;
-  using Aux = AuxState<Dim>;
   static constexpr int n_vars = 1;
+  static constexpr int n_providers = 0;
 
-  POPS_HD State source(const State& state, const Aux&) const {
+  POPS_HD State source(const State& state, const auto&) const {
     State result{};
     result[0] = -state[0];
     return result;
   }
 
-  POPS_HD void source_jacobian(const State&, const Aux&, Real (&jacobian)[1][1]) const {
+  POPS_HD void source_jacobian(const State&, const auto&, Real (&jacobian)[1][1]) const {
     jacobian[0][0] = Real(-1);
   }
 };
@@ -76,12 +76,11 @@ void check_ranked_implicit_provider() {
   using Model = RankedLinearImplicitModel<Dim>;
   const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(2));
   auto state = one_patch_field(box, Model::n_vars);
-  auto aux = one_patch_field(box, aux_comps_for<Model, Dim>());
   state.set_val(Real(2));
-  aux.set_val(Real(0));
 
   NewtonOptions options{};
-  auto outcome = backward_euler_source(Model{}, aux, state, Real(0.25), options);
+  const auto provider_at = [](std::size_t) { return ProviderStorageView<Dim, 0>{}; };
+  auto outcome = backward_euler_source(Model{}, provider_at, state, Real(0.25), options);
   ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
   const SolveReport accepted = outcome.consume(SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());

@@ -138,15 +138,6 @@ void check_constant_face_axis(const nd::FaceField<Dim>& fluxes,
     check_constant_face_axis<Axis + 1, Dim>(fluxes, expected);
 }
 
-template <int Axis, int Dim>
-void check_loaded_aux_gradients(const AuxState<Dim>& auxiliary, Real coordinate_sum) {
-  EXPECT_EQ(
-      auxiliary.template gradient<Axis>(),
-      Real(10 * AuxComponentLayout<Dim>::template gradient_component<Axis>()) + coordinate_sum);
-  if constexpr (Axis + 1 < Dim)
-    check_loaded_aux_gradients<Axis + 1>(auxiliary, coordinate_sum);
-}
-
 struct TwoComponentEllipticModel {
   using State = StateVec<2>;
   static constexpr int n_vars = 2;
@@ -156,9 +147,9 @@ struct TwoComponentEllipticModel {
 
 template <int Dim>
 void check_ranked_state_access() {
-  using layout = AuxComponentLayout<Dim>;
   const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(2));
-  Fab<Dim> field(box, layout::named_begin);
+  constexpr int ncomp = Dim < 2 ? 2 : Dim;
+  Fab<Dim> field(box, ncomp);
   fill_periodic(field, [](const Index<Dim>& index, int component) {
     Real value = Real(10 * component);
     for (int axis = 0; axis < Dim; ++axis)
@@ -174,11 +165,14 @@ void check_ranked_state_access() {
   EXPECT_EQ(state[0], coordinate_sum);
   EXPECT_EQ(state[1], Real(10) + coordinate_sum);
 
-  const AuxState<Dim> auxiliary = load_aux<layout::named_begin>(view, sample);
-  EXPECT_EQ(auxiliary.phi, coordinate_sum);
-  check_loaded_aux_gradients<0>(auxiliary, coordinate_sum);
-  EXPECT_EQ(auxiliary.B_z, Real(10 * layout::b_z) + coordinate_sum);
-  EXPECT_EQ(auxiliary.T_e, Real(10 * layout::t_e) + coordinate_sum);
+  ProviderStorageView<Dim, Dim> mapped{};
+  for (int slot = 0; slot < Dim; ++slot) {
+    mapped.storage[slot] = view;
+    mapped.storage_components[slot] = ncomp - 1 - slot;
+  }
+  const ProviderValues<Dim> providers = load_provider_values<Dim>(mapped, sample);
+  for (int slot = 0; slot < Dim; ++slot)
+    EXPECT_EQ(providers[slot], Real(10 * (ncomp - 1 - slot)) + coordinate_sum);
 }
 
 }  // namespace

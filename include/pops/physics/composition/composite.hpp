@@ -144,24 +144,24 @@ concept RoeDissipationAt =
       { h.template roe_dissipation<Axis>(left, right) } -> std::same_as<typename Hyperbolic::State>;
     };
 
-template <int Axis, class Hyperbolic, class Auxiliary>
+template <int Axis, class Hyperbolic, class Providers>
 concept StabilitySpeedAt =
     requires(const Hyperbolic h, const typename Hyperbolic::State state,
-             const Auxiliary& auxiliary) {
-      { h.template stability_speed<Axis>(state, auxiliary) } -> std::convertible_to<Real>;
+             const Providers& providers) {
+      { h.template stability_speed<Axis>(state, providers) } -> std::convertible_to<Real>;
     } ||
     requires(const Hyperbolic h, const typename Hyperbolic::State state,
-             const Auxiliary& auxiliary) {
-      { h.stability_speed(state, auxiliary, Axis) } -> std::convertible_to<Real>;
+             const Providers& providers) {
+      { h.stability_speed(state, providers, Axis) } -> std::convertible_to<Real>;
     };
 
-template <int Axis, int Dim, class Hyperbolic, class Auxiliary>
+template <int Axis, int Dim, class Hyperbolic, class Providers>
 consteval bool hyperbolic_axes_contract() {
-  if constexpr (!FluxAt<Axis, Hyperbolic, Auxiliary> ||
-                !MaximumWaveSpeedAt<Axis, Hyperbolic, Auxiliary>)
+  if constexpr (!FluxAt<Axis, Hyperbolic, Providers> ||
+                !MaximumWaveSpeedAt<Axis, Hyperbolic, Providers>)
     return false;
   else if constexpr (Axis + 1 < Dim)
-    return hyperbolic_axes_contract<Axis + 1, Dim, Hyperbolic, Auxiliary>();
+    return hyperbolic_axes_contract<Axis + 1, Dim, Hyperbolic, Providers>();
   return true;
 }
 
@@ -169,7 +169,7 @@ template <class Hyperbolic, int Dim>
 consteval bool hyperbolic_contract() {
   using State = typename Hyperbolic::State;
   using Prim = typename PrimitiveType<Hyperbolic>::type;
-  using Auxiliary = AuxState<Dim>;
+  using Providers = ProviderValues<provider_count_for<Hyperbolic, Dim>()>;
   constexpr bool legacy_contract =
       requires(const Hyperbolic h, const State state, const Prim primitive) {
         { Hyperbolic::n_vars } -> std::convertible_to<int>;
@@ -186,7 +186,7 @@ consteval bool hyperbolic_contract() {
         h.admissibility(state);
         h.make_conservative(primitive);
       };
-  return hyperbolic_axes_contract<0, Dim, Hyperbolic, Auxiliary>() &&
+  return hyperbolic_axes_contract<0, Dim, Hyperbolic, Providers>() &&
          (legacy_contract || conservation_law_contract);
 }
 
@@ -214,14 +214,13 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
 
   using State = typename Hyperbolic::State;
   using Prim = typename composite_detail::PrimitiveType<Hyperbolic>::type;
-  using Aux = AuxState<dimension>;
   static constexpr int n_vars = Hyperbolic::n_vars;
-  static constexpr int n_aux = [] {
-    int width = aux_comps_for<Hyperbolic, dimension>();
-    if (aux_comps_for<Source, dimension>() > width)
-      width = aux_comps_for<Source, dimension>();
-    if (aux_comps_for<Elliptic, dimension>() > width)
-      width = aux_comps_for<Elliptic, dimension>();
+  static constexpr int n_providers = [] {
+    int width = provider_count_for<Hyperbolic, dimension>();
+    if (provider_count_for<Source, dimension>() > width)
+      width = provider_count_for<Source, dimension>();
+    if (provider_count_for<Elliptic, dimension>() > width)
+      width = provider_count_for<Elliptic, dimension>();
     return width;
   }();
 
@@ -246,7 +245,7 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
         .scalar(std::uint32_t{1})
         .scalar(std::int32_t{dimension})
         .scalar(std::int32_t{n_vars})
-        .scalar(std::int32_t{n_aux});
+        .scalar(std::int32_t{n_providers});
     physics_contract_detail::append_exact_brick(contract, "hyperbolic", hyp);
     physics_contract_detail::append_exact_brick(contract, "source", src);
     physics_contract_detail::append_exact_brick(contract, "elliptic", ell);
@@ -307,8 +306,9 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
     return max_wave_speed_at_runtime_axis(state, providers, axis);
   }
 
-  POPS_HD State source(const State& state, const Aux& auxiliary) const {
-    return src.apply(state, auxiliary);
+  template <class Providers>
+  POPS_HD State source(const State& state, const Providers& providers) const {
+    return src.apply(state, providers);
   }
   POPS_HD Real elliptic_rhs(const State& state) const { return ell.rhs(state); }
   POPS_HD Prim to_primitive(const State& state) const
@@ -534,62 +534,69 @@ struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic> {
     return hyp.polar_geom_source(state, radius);
   }
 
-  template <int Axis>
-    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Aux>
-  POPS_HD Real stability_speed(const State& state, const Aux& auxiliary) const {
-    if constexpr (requires { hyp.template stability_speed<Axis>(state, auxiliary); })
-      return hyp.template stability_speed<Axis>(state, auxiliary);
+  template <int Axis, class Providers>
+    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Providers>
+  POPS_HD Real stability_speed(const State& state, const Providers& providers) const {
+    if constexpr (requires { hyp.template stability_speed<Axis>(state, providers); })
+      return hyp.template stability_speed<Axis>(state, providers);
     else
-      return hyp.stability_speed(state, auxiliary, Axis);
+      return hyp.stability_speed(state, providers, Axis);
   }
 
-  template <int Axis = 0>
-    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Aux>
-  POPS_HD Real stability_speed_at_runtime_axis(const State& state, const Aux& auxiliary,
+  template <int Axis = 0, class Providers>
+    requires composite_detail::StabilitySpeedAt<Axis, Hyperbolic, Providers>
+  POPS_HD Real stability_speed_at_runtime_axis(const State& state, const Providers& providers,
                                                int axis) const {
     if (axis == Axis)
-      return stability_speed<Axis>(state, auxiliary);
+      return stability_speed<Axis>(state, providers);
     if constexpr (Axis + 1 < dimension)
-      return stability_speed_at_runtime_axis<Axis + 1>(state, auxiliary, axis);
+      return stability_speed_at_runtime_axis<Axis + 1>(state, providers, axis);
     return std::numeric_limits<Real>::quiet_NaN();
   }
 
-  POPS_HD Real stability_speed(const State& state, const Aux& auxiliary, int axis) const
-    requires composite_detail::StabilitySpeedAt<0, Hyperbolic, Aux>
+  template <class Providers>
+  POPS_HD Real stability_speed(const State& state, const Providers& providers, int axis) const
+    requires composite_detail::StabilitySpeedAt<0, Hyperbolic, Providers>
   {
-    return stability_speed_at_runtime_axis(state, auxiliary, axis);
+    return stability_speed_at_runtime_axis(state, providers, axis);
   }
 
-  POPS_HD Real stability_dt(const State& state, const Aux& auxiliary) const
-    requires requires(const Hyperbolic h, const State value, const Aux aux) {
-      h.stability_dt(value, aux);
+  template <class Providers>
+  POPS_HD Real stability_dt(const State& state, const Providers& providers) const
+    requires requires(const Hyperbolic h, const State value, const Providers& values) {
+      h.stability_dt(value, values);
     }
   {
-    return hyp.stability_dt(state, auxiliary);
+    return hyp.stability_dt(state, providers);
   }
 
-  POPS_HD Real source_frequency(const State& state, const Aux& auxiliary) const
-    requires requires(const Source source_brick, const State value, const Aux aux) {
-      source_brick.frequency(value, aux);
+  template <class Providers>
+  POPS_HD Real source_frequency(const State& state, const Providers& providers) const
+    requires requires(const Source source_brick, const State value, const Providers& values) {
+      source_brick.frequency(value, values);
     }
   {
-    return src.frequency(state, auxiliary);
+    return src.frequency(state, providers);
   }
 
-  POPS_HD State project(const State& state, const Aux& auxiliary) const
-    requires requires(const Hyperbolic h, const State value, const Aux aux) {
-      h.project(value, aux);
+  template <class Providers>
+  POPS_HD State project(const State& state, const Providers& providers) const
+    requires requires(const Hyperbolic h, const State value, const Providers& values) {
+      h.project(value, values);
     }
   {
-    return hyp.project(state, auxiliary);
+    return hyp.project(state, providers);
   }
 
-  POPS_HD void source_jacobian(const State& state, const Aux& auxiliary,
+  template <class Providers>
+  POPS_HD void source_jacobian(const State& state, const Providers& providers,
                                Real (&jacobian)[n_vars][n_vars]) const
-    requires requires(const Source source_brick, const State value, const Aux aux,
-                      Real (&matrix)[n_vars][n_vars]) { source_brick.jacobian(value, aux, matrix); }
+    requires requires(const Source source_brick, const State value, const Providers& values,
+                      Real (&matrix)[n_vars][n_vars]) {
+      source_brick.jacobian(value, values, matrix);
+    }
   {
-    src.jacobian(state, auxiliary, jacobian);
+    src.jacobian(state, providers, jacobian);
   }
 };
 

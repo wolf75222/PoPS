@@ -20,21 +20,21 @@ static_assert(ExBVelocityPolar::planar_polar_capability);
 static_assert(IsothermalFluxPolar::dimension == 2);
 static_assert(IsothermalFluxPolar::planar_polar_capability);
 static_assert(PolarFluid::dimension == 2);
-static_assert(std::is_same_v<PolarFluid::Aux, AuxState<2>>);
+static_assert(PolarFluid::n_providers == 2);
 
 }  // namespace
 
 TEST(PolarFluidTransport, ExBUsesTheTwoPhysicalPolarGradientComponents) {
-  AuxState<2> auxiliary{};
-  auxiliary.template gradient<0>() = Real(6);
-  auxiliary.template gradient<1>() = Real(-4);
+  ProviderValues<2> providers{};
+  providers[0] = Real(6);
+  providers[1] = Real(-4);
   const ExBVelocityPolar drift{Real(2)};
   const StateVec<1> density{Real(3)};
 
-  EXPECT_EQ(drift.template velocity<0>(auxiliary), Real(2));
-  EXPECT_EQ(drift.template velocity<1>(auxiliary), Real(3));
-  EXPECT_EQ(drift.template flux<0>(density, auxiliary)[0], Real(6));
-  EXPECT_EQ(drift.template flux<1>(density, auxiliary)[0], Real(9));
+  EXPECT_EQ(drift.template velocity<0>(providers), Real(2));
+  EXPECT_EQ(drift.template velocity<1>(providers), Real(3));
+  EXPECT_EQ(drift.template flux<0>(density, providers)[0], Real(6));
+  EXPECT_EQ(drift.template flux<1>(density, providers)[0], Real(9));
 }
 
 TEST(PolarFluidTransport, IsothermalCurvatureSourceRemainsPlanarAndPointwise) {

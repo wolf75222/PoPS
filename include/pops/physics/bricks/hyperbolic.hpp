@@ -26,21 +26,28 @@ namespace pops {
 
 namespace hyperbolic_detail {
 
-template <class Providers>
-consteval int provider_dimension() {
-  using Provider = std::remove_cvref_t<Providers>;
-  if constexpr (requires { Provider::dimension; })
-    return static_cast<int>(Provider::dimension);
-  return kNativeDimension;
-}
+template <int Dim>
+struct DefaultGradientProviderSlots;
+template <>
+struct DefaultGradientProviderSlots<1> {
+  using type = ProviderSlots<0>;
+};
+template <>
+struct DefaultGradientProviderSlots<2> {
+  using type = ProviderSlots<0, 1>;
+};
+template <>
+struct DefaultGradientProviderSlots<3> {
+  using type = ProviderSlots<0, 1, 2>;
+};
 
-template <int Axis, int Dim, class Providers>
+template <int Axis, int Dim, class GradientSlots, class Providers>
 POPS_HD Real gradient_provider(const Providers& providers) {
   static_assert(Axis >= 0 && Axis < Dim, "gradient provider axis is outside the spatial rank");
-  static_assert(provider_dimension<Providers>() == Dim,
-                "physical brick and provider pack carry different spatial ranks");
-  constexpr int component = AuxComponentLayout<Dim>::template gradient_component<Axis>();
-  return providers.template flux_provider<component>();
+  static_assert(GradientSlots::count == Dim,
+                "gradient consumer requires one explicit provider slot per axis");
+  constexpr int component = GradientSlots::template slot<Axis>();
+  return provider_value<component>(providers);
 }
 
 template <int Axis, int Dim, class Brick, class Providers>
@@ -59,7 +66,7 @@ POPS_HD Real runtime_velocity(const Brick& brick, const Providers& providers, in
 /// In 2D this is `(-d_y phi, d_x phi)/B0`. A 3D Cartesian build carries the same planar drift
 /// with a zero z component. Under a 1D invariant reduction the projected velocity is zero because
 /// the transverse derivative is absent. Every available axis is selected at compile time.
-template <int Dim>
+template <int Dim, class GradientSlots = typename hyperbolic_detail::DefaultGradientProviderSlots<Dim>::type>
 struct ExBVelocityND {
   static_assert(Dim >= 1 && Dim <= 3, "ExBVelocityND supports dimensions 1, 2, and 3");
   static constexpr int n_vars = 1;
@@ -68,7 +75,10 @@ struct ExBVelocityND {
   using State = typename Schema::Conservative;
   using Primitive = typename Schema::Primitive;
   using Prim = Primitive;
-  using Aux = AuxState<Dim>;
+  using gradient_slots = GradientSlots;
+  static_assert(gradient_slots::count == Dim,
+                "ExBVelocityND requires one explicit gradient provider slot per axis");
+  static constexpr int n_providers = gradient_slots::required_count();
   Real B0 = 1;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
@@ -76,6 +86,8 @@ struct ExBVelocityND {
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
     contract.scalar(std::int32_t{Dim}).scalar(B0);
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
   }
 
   template <int Axis, class Providers>
@@ -84,9 +96,9 @@ struct ExBVelocityND {
     if constexpr (Dim < 2 || Axis >= 2)
       return Real(0);
     else if constexpr (Axis == 0)
-      return -hyperbolic_detail::gradient_provider<1, Dim>(providers) / B0;
+      return -hyperbolic_detail::gradient_provider<1, Dim, gradient_slots>(providers) / B0;
     else
-      return hyperbolic_detail::gradient_provider<0, Dim>(providers) / B0;
+      return hyperbolic_detail::gradient_provider<0, Dim, gradient_slots>(providers) / B0;
   }
 
   POPS_HD Real velocity(const auto& providers, int dir) const {
@@ -165,21 +177,26 @@ struct ExBVelocityPolar {
   static constexpr int dimension = 2;
   static constexpr bool planar_polar_capability = true;
   using State = StateVec<1>;
-  using Aux = AuxState<2>;
+  using gradient_slots = ProviderSlots<0, 1>;
+  static constexpr int n_providers = gradient_slots::required_count();
   Real B0 = 1;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.physics.hyperbolic.exb-velocity-polar", 1};
   }
-  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(B0); }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(B0);
+    for (int axis = 0; axis < dimension; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
+  }
 
   template <int Axis, class Providers>
   POPS_HD Real velocity(const Providers& providers) const {
     static_assert(Axis >= 0 && Axis < dimension, "polar E x B axis must be radial or azimuthal");
     if constexpr (Axis == 0)
-      return -hyperbolic_detail::gradient_provider<1, dimension>(providers) / B0;
+      return -hyperbolic_detail::gradient_provider<1, dimension, gradient_slots>(providers) / B0;
     else
-      return hyperbolic_detail::gradient_provider<0, dimension>(providers) / B0;
+      return hyperbolic_detail::gradient_provider<0, dimension, gradient_slots>(providers) / B0;
   }
 
   POPS_HD Real velocity(const auto& providers, int dir) const {
@@ -472,7 +489,6 @@ using IsothermalFlux = IsothermalFluxND<kNativeDimension>;
 struct IsothermalFluxPolar : IsothermalFluxND<2> {
   static constexpr int dimension = 2;
   static constexpr bool planar_polar_capability = true;
-  using Aux = AuxState<2>;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.physics.hyperbolic.isothermal-flux-polar", 1};

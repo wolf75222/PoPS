@@ -36,7 +36,7 @@ TEST(test_primitive_recon, euler_round_trip_and_wave_speed) {
     for (int component = 0; component < EulerND<Dim>::n_vars; ++component)
       EXPECT_TRUE(close(primitive[component], restored[component]));
 
-    const AuxState<Dim> providers{};
+    const ProviderValues<0> providers{};
     const Real sound_speed =
         std::sqrt(model.gamma * primitive[EulerND<Dim>::energy_component] / primitive[0]);
     for (int axis = 0; axis < Dim; ++axis) {

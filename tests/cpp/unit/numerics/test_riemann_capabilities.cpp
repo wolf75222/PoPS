@@ -22,7 +22,7 @@ using pops::Real;
 
 namespace {
 
-using Aux2 = pops::AuxState<2>;
+using Providers2 = pops::ProviderValues<0>;
 
 struct PlanarEuler : pops::EulerND<2> {
   explicit PlanarEuler(Real gamma_value) { gamma = gamma_value; }
@@ -95,7 +95,6 @@ struct HookedEuler : pops::EulerND<2> {
 // this permutation: the provider alone maps its declared representation.
 struct PermutedEuler {
   using State = pops::StateVec<4>;
-  using Aux = Aux2;
   static constexpr int dimension = 2;
   static constexpr int n_vars = 4;
 
@@ -139,7 +138,6 @@ struct PermutedEuler {
 // ---------------------------------------------------------------------------------------------
 struct IsoHLLC {
   using State = pops::StateVec<5>;
-  using Aux = Aux2;
   static constexpr int dimension = 2;
   static constexpr int n_vars = 5;
   Real cs2 = 0.5;
@@ -200,7 +198,6 @@ struct DimensionalIsoHLLC {
   static_assert(Dimension >= 1 && Dimension <= 3);
 
   using State = pops::StateVec<Dimension + 2>;
-  using Aux = pops::AuxState<Dimension>;
   static constexpr int dimension = Dimension;
   static constexpr int n_vars = Dimension + 2;
   static constexpr int tracer_component = Dimension + 1;
@@ -288,13 +285,10 @@ double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
 template <class Policy, class Model>
 typename Model::State face_density(
     const Policy& policy, const Model& model, const typename Model::State& left,
-    const pops::AuxState<pops::physical_model_dimension<Model>>& left_providers,
+    const pops::ProviderValues<0>& left_providers,
     const typename Model::State& right,
-    const pops::AuxState<pops::physical_model_dimension<Model>>& right_providers, int axis) {
+    const pops::ProviderValues<0>& right_providers, int axis) {
   pops::FluxProviderValues<Model> left_values{}, right_values{};
-  constexpr int dimension = pops::physical_model_dimension<Model>;
-  left_values[pops::AuxComponentLayout<dimension>::phi] = left_providers.phi;
-  right_values[pops::AuxComponentLayout<dimension>::phi] = right_providers.phi;
   return pops::evaluate_numerical_flux(
              policy, model, left, pops::bind_flux_providers<Model>(left_values), right,
              pops::bind_flux_providers<Model>(right_values), pops::FaceContext::axis_aligned(axis))
@@ -345,7 +339,7 @@ TEST(test_riemann_capabilities, euler_preserves_provider_oracle_through_generic_
   oracle.gamma = 1.4;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
-  Aux2 a{};
+  Providers2 a{};
 
   // The independent provider body is the accepted pre-cutover oracle. Both values travel through
   // the same layout-blind numerical policy; only their constitutive capability differs.
@@ -370,7 +364,7 @@ TEST(test_riemann_capabilities, state_layout_permutation_is_provider_owned) {
   PermutedEuler permuted;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
-  Aux2 aux{};
+  Providers2 aux{};
   const State4 left = cons(1.2, 0.3, -0.1, 1.5, 1.4);
   const State4 right = cons(0.7, -0.2, 0.4, 0.9, 1.4);
   const PermutedEuler::State permuted_left = PermutedEuler::pack(left);
@@ -420,7 +414,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   // (3a) consistance : F*(U, U) == flux(U).
   IsoHLLC iso;
   pops::HLLCFlux hllc;
-  Aux2 a{};
+  Providers2 a{};
   StateIso U{};
   U[0] = 1.3;
   U[1] = 0.4;
@@ -453,7 +447,7 @@ TEST(test_riemann_capabilities, exact_rank_euler_and_isothermal_serve_hllc_and_r
       isothermal_primitive[pops::IsothermalFluxND<Dimension>::momentum_component(axis)] =
           Real(-0.15) * Real(axis + 1);
     const auto isothermal_value = isothermal.to_conservative(isothermal_primitive);
-    const pops::AuxState<Dimension> providers{};
+    const pops::ProviderValues<0> providers{};
 
     const auto expect_consistency = [&]<class Model>(const Model& model,
                                                      const typename Model::State& value) {
@@ -481,7 +475,7 @@ TEST(test_riemann_capabilities, exact_rank_isothermal_contact_is_not_replaced_by
     static_assert(Dimension >= 2);
     pops::IsothermalFluxND<Dimension> model;
     model.cs2 = Real(0.5);
-    const pops::AuxState<Dimension> providers{};
+    const pops::ProviderValues<0> providers{};
     typename pops::IsothermalFluxND<Dimension>::State left{}, right{};
     left[0] = right[0] = Real(1);
     left[1] = right[1] = Real(0);
@@ -508,7 +502,7 @@ TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent)
     for (int component = 0; component < Dimension; ++component)
       value[component + 1] = Real(0.2) * Real(component + 1);
     value[DimensionalIsoHLLC<Dimension>::tracer_component] = Real(-0.7);
-    const pops::AuxState<Dimension> providers{};
+    const pops::ProviderValues<0> providers{};
     for (int axis = 0; axis < Dimension; ++axis) {
       const auto numerical =
           face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
@@ -523,7 +517,7 @@ TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent)
 
 TEST(test_riemann_capabilities, three_dimensional_tangential_contact_is_provider_owned) {
   DimensionalIsoHLLC<3> model;
-  const pops::AuxState<3> providers{};
+  const pops::ProviderValues<0> providers{};
 
   for (int axis = 0; axis < 3; ++axis) {
     DimensionalIsoHLLC<3>::State left{}, right{};
@@ -555,7 +549,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear)
   IsoHLLC iso;
   pops::HLLCFlux hllc;
   pops::HLLFlux hll;
-  Aux2 a{};
+  Providers2 a{};
   StateIso UL{}, UR{};
   UL[0] = 1.0;
   UL[1] = 0.0;

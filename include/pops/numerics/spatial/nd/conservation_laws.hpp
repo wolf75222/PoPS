@@ -139,7 +139,6 @@ class IdealGasEuler {
   // `Prim` and the component helpers are the public hyperbolic-brick spelling.  They are
   // aliases into this law's schema, never a second Euler layout or constitutive path.
   using Prim = Primitive;
-  using Aux = AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Schema::nvars;
   static constexpr int density_component = Schema::density;

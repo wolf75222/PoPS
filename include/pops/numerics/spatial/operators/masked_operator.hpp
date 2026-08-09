@@ -248,6 +248,19 @@ class PreparedMaskedCartesianOperator {
     assemble_residual_(state, providers.view(), active_cells, residual, omission);
   }
 
+  /// Plan-mapped provider route.  `ProviderStorageView` is a compact immutable consumer map,
+  /// not an auxiliary field layout or a fallback storage allocation.
+  template <class MemorySpace, int Count>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const ProviderStorageView<Dim, Count>& providers,
+                         const Fab<Dim, MemorySpace>& active_cells,
+                         Fab<Dim, MemorySpace>& residual,
+                         BoundaryFaceOmission<Dim> omission = {}) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    assemble_residual_(state, providers, active_cells, residual, omission);
+  }
+
   template <class MemorySpace>
   void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
                          const MultiFab<Dim, MemorySpace>& active_cells,

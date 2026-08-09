@@ -7,6 +7,7 @@
 // slot.  The spatial operator remains the sole owner of geometric face measures.
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/mesh/index/index.hpp>
 
@@ -173,9 +174,7 @@ inline constexpr int physical_model_dimension = [] {
 
 template <class Model>
 inline constexpr int flux_provider_count = [] {
-  if constexpr (requires { Model::n_aux; })
-    return static_cast<int>(Model::n_aux);
-  return kAuxBaseCompsFor<physical_model_dimension<Model>>;
+  return provider_count_for<Model, physical_model_dimension<Model>>();
 }();
 
 template <class Model>
@@ -218,37 +217,20 @@ consteval bool qualified_flux_provider_requirements_valid() {
   }
 }
 
-/// Exact, model-qualified values before they are sealed into a bound device pack.
+/// Exact values before they are sealed into a model-qualified bound pack.
 ///
-/// Unlike the historical global Aux object this type has exactly the width requested by Model.
-/// The model type is part of the ABI, so values for two unrelated physical providers cannot be
-/// exchanged accidentally.  The values are populated only by resolve/bind or by a typed test
-/// fixture; a missing component cannot be requested through this interface.
+/// This is deliberately the same compact POD used by sources, stability rules, and projections;
+/// only `BoundFluxProviders<Model>` adds the consumer identity required by a numerical face.
+/// Zero-provider models remain valid.
 template <class Model>
-struct FluxProviderValues {
-  static constexpr int dimension = physical_model_dimension<Model>;
-  static constexpr int size = flux_provider_count<Model>;
-  static_assert(dimension >= 1 && dimension <= 3,
-                "physical flux provider model dimension must be 1, 2, or 3");
-  static_assert(qualified_flux_provider_requirements_valid<Model>(),
-                "generated physical flux provider requirements are invalid");
-  static_assert(size >= kAuxBaseCompsFor<dimension>,
-                "physical flux provider packs must declare the required base providers");
-  static_assert(size <= kAuxMaxCompsFor<dimension>,
-                "physical flux provider pack exceeds the native model capability");
-
-  Real values[size]{};
-
-  POPS_HD Real& operator[](int component) { return values[component]; }
-  POPS_HD Real operator[](int component) const { return values[component]; }
-};
+using FluxProviderValues = ProviderValues<flux_provider_count<Model>>;
 
 /// Opaque, model-qualified provider values used by the native pointwise bridge.
 ///
 /// The public/provider ABI is the exact qualified ProviderPack generated from the Module.  This
 /// small native value is its device representation after resolve/bind.  It stores exactly the
-/// model-qualified values, never the process-global Aux representation: numerical fluxes cannot
-/// inspect fixed slots, named extras, or missing-value sentinels.  Only the narrow
+/// model-qualified values, never a process-global provider representation: numerical fluxes cannot
+/// inspect unrelated slots or missing-value sentinels.  Only the narrow
 /// PhysicalFluxView for the same Model type can consume it.
 template <class Model>
 class BoundFluxProviders {
@@ -260,7 +242,7 @@ class BoundFluxProviders {
   BoundFluxProviders& operator=(const BoundFluxProviders&) = delete;
 
   template <int Component>
-  POPS_HD Real flux_provider() const {
+  POPS_HD Real provider() const {
     static_assert(Component >= 0 && Component < value_count,
                   "physical law requested a provider outside its exact qualified pack");
     return values_[Component];
@@ -299,7 +281,7 @@ POPS_HD BoundFluxProviders<Model> bind_qualified_flux_providers_at(
 }  // namespace detail
 
 /// Bind one exact provider pack directly from native field storage.  The caller supplies a
-/// model-qualified component count at compile time; there is no global Aux object, truncation, or
+/// model-qualified component count at compile time; there is no global provider object, truncation, or
 /// zero-on-missing branch on this path.
 template <class Model, int Dim, class Storage>
 POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage,
@@ -779,7 +761,7 @@ POPS_HD typename Model::State model_roe_dissipation_at_runtime_axis(
 
 /// Narrow physical constitutive interface over a bound provider pack.  Numerical-flux policies see
 /// this value, never the complete runtime Model. Physical laws consume BoundFluxProviders directly;
-/// no global Aux value is reconstructed on the finite-volume path.
+/// no global provider value is reconstructed on the finite-volume path.
 template <class Model>
 struct PhysicalFluxView {
   using State = typename Model::State;

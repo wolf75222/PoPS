@@ -41,11 +41,9 @@ double maxdiff(const State<Dim>& left, const State<Dim>& right) {
 
 template <int Dim, class Policy>
 State<Dim> face_density(const Policy& policy, const Model<Dim>& model, const State<Dim>& left,
-                        const pops::AuxState<Dim>& left_providers, const State<Dim>& right,
-                        const pops::AuxState<Dim>& right_providers, int axis) {
+                        const pops::ProviderValues<0>& left_providers, const State<Dim>& right,
+                        const pops::ProviderValues<0>& right_providers, int axis) {
   pops::FluxProviderValues<Model<Dim>> left_values{}, right_values{};
-  left_values[pops::AuxComponentLayout<Dim>::phi] = left_providers.phi;
-  right_values[pops::AuxComponentLayout<Dim>::phi] = right_providers.phi;
   return pops::evaluate_numerical_flux(policy, model, left,
                                        pops::bind_flux_providers<Model<Dim>>(left_values), right,
                                        pops::bind_flux_providers<Model<Dim>>(right_values),
@@ -67,7 +65,7 @@ std::array<double, Dim> velocities(double normal, int normal_axis, double tangen
 TEST(test_roe_flux, consistent_at_constant_state_in_every_exact_rank) {
   const auto check = []<int Dim>() {
     const Model<Dim> model{1.4};
-    const pops::AuxState<Dim> providers{};
+    const pops::ProviderValues<0> providers{};
     const pops::RoeFlux roe;
     for (int axis = 0; axis < Dim; ++axis) {
       const State<Dim> values[] = {
@@ -90,7 +88,7 @@ TEST(test_roe_flux, consistent_at_constant_state_in_every_exact_rank) {
 TEST(test_roe_flux, supersonic_upwind_property_in_every_exact_rank_and_axis) {
   const auto check = []<int Dim>() {
     const Model<Dim> model{1.4};
-    const pops::AuxState<Dim> providers{};
+    const pops::ProviderValues<0> providers{};
     const pops::RoeFlux roe;
     for (int axis = 0; axis < Dim; ++axis) {
       const State<Dim> positive_left =
@@ -122,7 +120,7 @@ TEST(test_roe_flux, supersonic_upwind_property_in_every_exact_rank_and_axis) {
 TEST(test_roe_flux, spectrum_contains_acoustic_material_and_shear_waves_in_every_rank) {
   const auto check = []<int Dim>() {
     const Model<Dim> model{1.4};
-    const pops::AuxState<Dim> providers{};
+    const pops::ProviderValues<0> providers{};
     for (int axis = 0; axis < Dim; ++axis) {
       const auto velocity = velocities<Dim>(0.5, axis, -0.1);
       const State<Dim> value = conservative<Dim>(1.0, velocity, 1.0, 1.4);

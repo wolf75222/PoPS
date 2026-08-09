@@ -7,8 +7,9 @@
 ///   HyperbolicPhysicalModel: complete hyperbolic brick (flux + conversions + Variables).
 ///   HyperbolicModel: compat alias for HyperbolicPhysicalModel.
 ///
-/// Aux INVARIANT: `PhysicalModelFor<M, Dim>` receives exactly `AuxState<Dim>`; the public
-/// `PhysicalModel` concept binds that contract to the immutable native build rank.
+/// PROVIDER INVARIANT: every pointwise consumer receives an exact compact
+/// `ProviderValues<N>` pack.  Slots are resolved by the host-side qualified provider plan; this
+/// layer never reserves physical names, axes, or a process-global auxiliary layout.
 ///
 /// device INVARIANT: the concept methods (flux, source, ...) must be POPS_HD if
 /// they are called in kernels. The concept does not check it -- that is the
@@ -41,56 +42,52 @@
 // (aux in the flux) and the self-gravitating compressible fluid (aux in the
 // source) under one same spatial operator.
 //
-// Aux contract: the model and its field loader carry one immutable compile-time rank. The build
-// facade names AuxState<kNativeDimension> as pops::Aux, while generic core proofs use AuxState<Dim>
-// directly. No arbitrary Model::Aux can pass the contract without matching that exact rank.
+// Provider contract: the model's `n_providers` is the exact number of values consumed by the
+// assembled model.  A provider-free law declares none and receives ProviderValues<0>.
 
 namespace pops {
 
-/// Width of the aux channel a model CONSUMES.
+/// Number of values a model consumes from its qualified provider plan.
 ///
-/// Returns `M::n_aux` if the model declares it, otherwise the exact ranked base width
-/// (`phi + Dim gradients`).
-/// Lives in this header (contract) and not in the spatial operator, so that
-/// CompositeModel can propagate n_aux without pulling in all the numerics.
-// POPS_HD : aux_comps() est evaluee a la compilation (argument de template non-type
-// load_aux<aux_comps<Model>()>) DANS les kernels device (cf. spatial_operator_eb.hpp). Sous nvcc,
-// appeler une constexpr __host__ depuis une fonction __host__ __device__ est refuse (#20013-D) ;
-// la marquer POPS_HD la rend callable des deux cotes. Hors nvcc, POPS_HD est vide -> constexpr pur.
+/// This is intentionally independent from spatial rank.  A field-free Euler law is a real
+/// `ProviderValues<0>` consumer; an electrostatic source can consume exactly `Dim` gradient
+/// values only when that source is selected.  The number is evaluated in device-instantiated
+/// templates, hence POPS_HD.
 template <class M, int Dim>
-POPS_HD constexpr int aux_comps_for() {
-  if constexpr (requires { M::n_aux; })
-    return M::n_aux;
+POPS_HD constexpr int provider_count_for() {
+  static_assert(Dim >= 1 && Dim <= 3, "physical model rank must be 1, 2, or 3");
+  if constexpr (requires { M::n_providers; })
+    return M::n_providers;
   else
-    return kAuxBaseCompsFor<Dim>;
+    return 0;
 }
 
-/// Auxiliary width of a model in this compiled native artifact.
+/// Exact provider value count of a model in this compiled native artifact.
 template <class M>
-POPS_HD constexpr int aux_comps() {
-  return aux_comps_for<M, kNativeDimension>();
+POPS_HD constexpr int provider_count() {
+  return provider_count_for<M, kNativeDimension>();
 }
 
 /// Minimal contract of a physical model.
 ///
-/// Requires: State, Aux == AuxState<Dim>, a valid ranked aux width, n_vars, flux(u,a,dir),
-/// source(u,a), elliptic_rhs(u). All these methods must be POPS_HD if called
+/// Requires: State, a non-negative exact provider count, n_vars, flux(u,p,dir),
+/// source(u,p), elliptic_rhs(u). All these methods must be POPS_HD if called
 /// in kernels (not checked by the concept; responsibility of the author).
 /// Finite-volume execution additionally instantiates the hyperbolic methods with the exact
-/// BoundFluxProviders<Model> protocol; Aux remains the pointwise source/implicit carrier.
+/// The numerical flux may receive its qualified opaque carrier, while source, stability, and
+/// projection use the same compact value protocol.
 /// Do not confuse with HyperbolicPhysicalModel which adds the variables and conversions.
 template <class M, int Dim>
 concept PhysicalModelFor =
-    requires(const M m, const typename M::State u, const typename M::Aux a, int dir) {
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count_for<M, Dim>()> providers, int dir) {
       typename M::State;
-      typename M::Aux;
-      requires std::same_as<typename M::Aux, AuxState<Dim>>;
-      requires(aux_comps_for<M, Dim>() >= kAuxBaseCompsFor<Dim>);
-      requires(aux_comps_for<M, Dim>() <= kAuxMaxCompsFor<Dim>);
+      requires(M::dimension == Dim);
+      requires(provider_count_for<M, Dim>() >= 0);
       { M::n_vars } -> std::convertible_to<int>;
-      { m.flux(u, a, dir) } -> std::same_as<typename M::State>;
-      { m.max_wave_speed(u, a, dir) } -> std::convertible_to<Real>;
-      { m.source(u, a) } -> std::same_as<typename M::State>;
+      { m.flux(u, providers, dir) } -> std::same_as<typename M::State>;
+      { m.max_wave_speed(u, providers, dir) } -> std::convertible_to<Real>;
+      { m.source(u, providers) } -> std::same_as<typename M::State>;
       { m.elliptic_rhs(u) } -> std::convertible_to<Real>;
     };
 
@@ -135,20 +132,26 @@ concept PhysicalModel = PhysicalModelFor<M, kNativeDimension>;
 
 /// OPTIONAL trait: stability speed lambda* replacing max_wave_speed in the block CFL.
 template <class M>
-concept HasStabilitySpeed = requires(const M m, const typename M::State u, const Aux a, int dir) {
-  { m.stability_speed(u, a, dir) } -> std::convertible_to<Real>;
+concept HasStabilitySpeed =
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count<M>()> providers, int dir) {
+      { m.stability_speed(u, providers, dir) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: local source frequency mu [1/s] (bound dt <= cfl / max mu, without h).
 template <class M>
-concept HasSourceFrequency = requires(const M m, const typename M::State u, const Aux a) {
-  { m.source_frequency(u, a) } -> std::convertible_to<Real>;
+concept HasSourceFrequency =
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count<M>()> providers) {
+      { m.source_frequency(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// OPTIONAL trait: direct admissible step per cell (bound dt <= min stability_dt, without cfl).
 template <class M>
-concept HasStabilityDt = requires(const M m, const typename M::State u, const Aux a) {
-  { m.stability_dt(u, a) } -> std::convertible_to<Real>;
+concept HasStabilityDt =
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count<M>()> providers) {
+      { m.stability_dt(u, providers) } -> std::convertible_to<Real>;
 };
 
 /// Trait OPTIONNEL : PROJECTION PONCTUELLE post-pas U -> project(U, aux) (ADC-177). Le stepper
@@ -158,8 +161,10 @@ concept HasStabilityDt = requires(const M m, const typename M::State u, const Au
 /// de voisin) ; les formules elles-memes (realisabilite, clamps -- ecrits en max/min via abs/sign)
 /// restent cote cas, seul le hook est coeur. POPS_HD obligatoire (evaluee dans un kernel).
 template <class M>
-concept HasPointwiseProjection = requires(const M m, const typename M::State u, const Aux a) {
-  { m.project(u, a) } -> std::same_as<typename M::State>;
+concept HasPointwiseProjection =
+    requires(const M m, const typename M::State u,
+             const ProviderValues<provider_count<M>()> providers) {
+      { m.project(u, providers) } -> std::same_as<typename M::State>;
 };
 
 /// OPTIONAL extension of a PhysicalModel: primitive variables + cons<->prim conversions.
@@ -199,12 +204,13 @@ concept HasRecoveryAdmissibility =
 /// No source nor elliptic RHS here: those are other bricks of CompositeModel.
 template <class M>
 concept HyperbolicPhysicalModel =
-    requires(const M m, const typename M::State u, const typename M::Prim p, const Aux a, int dir) {
+    requires(const M m, const typename M::State u, const typename M::Prim p,
+             const ProviderValues<provider_count<M>()> providers, int dir) {
       typename M::State;
       typename M::Prim;
       { M::n_vars } -> std::convertible_to<int>;
-      { m.flux(u, a, dir) } -> std::same_as<typename M::State>;
-      { m.max_wave_speed(u, a, dir) } -> std::convertible_to<Real>;
+      { m.flux(u, providers, dir) } -> std::same_as<typename M::State>;
+      { m.max_wave_speed(u, providers, dir) } -> std::convertible_to<Real>;
       { m.to_primitive(u) } -> std::same_as<typename M::Prim>;
       { m.to_conservative(p) } -> std::same_as<typename M::State>;
       { M::conservative_vars() } -> std::same_as<VariableSet>;

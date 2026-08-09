@@ -330,6 +330,30 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
+  /// Plan-mapped provider route.  The host has already validated the immutable consumer plan and
+  /// gathered its storage-component map; this operator sees only dense local slots.
+  template <class MemorySpace, int Count>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const ProviderStorageView<Dim, Count>& providers,
+                               FaceField<Dim, MemorySpace>& output) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+
+    FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state, providers, candidate, statuses);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+
+    cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
+    device_fence();
+  }
+
   /// Assemble a conservative residual from one already integrated axis-indexed face field.  This
   /// explicit seam lets boundary topology apply post-Riemann conditions (notably NoFlux) without
   /// introducing a boundary type or a two-dimensional adapter into the numerical operator.
@@ -388,6 +412,19 @@ class PreparedCartesianOperator {
     require_provider_patch_(state, providers);
     cartesian_operator_detail::require_residual_output(state, residual, n_vars);
 
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    materialize_face_fluxes(state, providers, integrated_fluxes);
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace, int Count>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const ProviderStorageView<Dim, Count>& providers,
+                         Fab<Dim, MemorySpace>& residual) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
     FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
     materialize_face_fluxes(state, providers, integrated_fluxes);
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);

@@ -7,7 +7,7 @@
 ///     cartesian_operator.hpp).
 ///   - SourceFreeModel<M>: adapter that zeroes the source (explicit IMEX half-step).
 ///   - load_state<Model>: reads the conservative state from a ranked FieldView (POPS_HD).
-///   - load_aux<NComp>: reads `AuxState<Dim>` (phi, Dim gradients, extras) from that authority.
+///   - load_provider_values<N>: reads one exact compact provider pack from resolved storage.
 ///
 /// This module carries no grid loop: every entry is POINTWISE (POPS_HD) or a compile-time
 /// model adapter. It is the bottom of the spatial/ dependency DAG and depends only on the core
@@ -15,18 +15,20 @@
 
 #pragma once
 
-#include <pops/core/model/physical_model.hpp>  // aux_comps, HasPrimitiveVars: optional primitive reconstruction
+#include <pops/core/model/physical_model.hpp>  // provider_count, HasPrimitiveVars
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableSet: SourceFreeModel::conservative_vars forwarding
 #include <pops/mesh/storage/field_view.hpp>
 
 #include <concepts>
+#include <array>
+#include <cassert>
 
 namespace pops {
 
-// aux_comps<Model>() (aux channel width of a model) now lives in the contract header
-// pops/core/physical_model.hpp (included above) so that CompositeModel can propagate it.
+// provider_count<Model>() lives in the contract header so CompositeModel can propagate the exact
+// compact consumer width without depending on a storage layout.
 
 /// DiffusiveModel: optional concept for models with isotropic scalar diffusion.
 ///
@@ -50,10 +52,8 @@ concept DiffusiveModel = requires(const M m) {
 template <class M>
 struct SourceFreeModel {
   using State = typename M::State;
-  using Aux = typename M::Aux;
   static constexpr int n_vars = M::n_vars;
-  static constexpr int n_aux =
-      aux_comps_for<M, Aux::dimension>();  // transparent to the wrapped model's ranked width
+  static constexpr int n_providers = provider_count_for<M, kNativeDimension>();
   M m;
   template <class Providers>
   POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
@@ -63,7 +63,10 @@ struct SourceFreeModel {
   POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {
     return m.max_wave_speed(u, providers, dir);
   }
-  POPS_HD State source(const State&, const Aux&) const { return State{}; }
+  template <class Providers>
+  POPS_HD State source(const State&, const Providers&) const {
+    return State{};
+  }
   POPS_HD Real elliptic_rhs(const State& u) const { return m.elliptic_rhs(u); }
   // SourceFreeModel does not expose the primitive variables: the explicit IMEX half-step that
   // uses it therefore reconstructs in conservative variables (the direct explicit path itself
@@ -132,34 +135,39 @@ POPS_HD inline typename Model::State load_state(const FieldView<const Real, Dim>
   return u;
 }
 
-/// Read exactly `NComp` ranked auxiliary components at one cell.
+/// Device-copyable indirection from a consumer's compact slots to accepted provider storage.
 ///
-/// The required prefix is `phi` plus one gradient per axis. Canonical and named extras are loaded
-/// only when present in `NComp`; every offset comes from `AuxComponentLayout<Dim>`. The returned POD
-/// therefore has the same spatial rank as the field view, including when several ranks are
-/// instantiated in one compile-only proof.
-template <int NComp, int Dim>
-POPS_HD inline AuxState<Dim> load_aux(const FieldView<const Real, Dim>& field,
-                                      const Index<Dim>& index) {
-  using layout = AuxComponentLayout<Dim>;
-  static_assert(NComp >= layout::base_components,
-                "provider pack is missing required ranked base aux fields");
-  static_assert(NComp <= layout::max_components,
-                "provider pack exceeds ranked capacity; never clamp it");
+/// Every local slot carries its resolved field view and component.  The host resolves each
+/// qualified `{storage_group, component}` address once from the immutable consumer plan: two
+/// consumers can read the same producer in different local slots, and a consumer may read values
+/// from different compatible groups without encoding a process-global field prefix.
+template <int Dim, int Count>
+struct ProviderStorageView {
+  static_assert(Count >= 0, "provider value count cannot be negative");
 
-  AuxState<Dim> result{};
-  result.phi = field(index, layout::phi);
-  for (int axis = 0; axis < Dim; ++axis)
-    result.gradients[axis] = field(index, layout::gradient_begin + axis);
-  if constexpr (NComp > layout::b_z)
-    result.B_z = field(index, layout::b_z);
-  if constexpr (NComp > layout::t_e)
-    result.T_e = field(index, layout::t_e);
-  if constexpr (NComp > layout::named_begin) {
-    constexpr int named_count = NComp - layout::named_begin;
-    for (int slot = 0; slot < named_count; ++slot)
-      result.extra[slot] = field(index, layout::named_begin + slot);
+  std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Count)> storage{};
+  std::array<int, static_cast<std::size_t>(Count)> storage_components{};
+
+  POPS_HD Real operator()(const Index<Dim>& index, int consumer_slot) const {
+    assert(consumer_slot >= 0 && consumer_slot < Count);
+    const std::size_t slot = static_cast<std::size_t>(consumer_slot);
+    return storage[slot](index, storage_components[slot]);
   }
+};
+
+/// Read exactly `Count` resolved provider slots at one cell.
+///
+/// The caller has already selected this consumer's storage view from the immutable provider plan.
+/// Therefore this routine knows neither names nor physical meaning: slot ``i`` is copied to the
+/// same compact pack position ``i``.  `Count == 0` has no storage argument/dereference path in its
+/// callers and returns a valid empty POD.
+template <int Count, int Dim, class Storage>
+POPS_HD inline ProviderValues<Count> load_provider_values(const Storage& storage,
+                                                          const Index<Dim>& index) {
+  static_assert(Count >= 0, "provider value count cannot be negative");
+  ProviderValues<Count> result{};
+  for (int slot = 0; slot < Count; ++slot)
+    result[slot] = storage(index, slot);
   return result;
 }
 

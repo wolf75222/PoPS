@@ -29,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-using pops::Aux;
 using pops::Real;
 
 namespace {
@@ -38,6 +37,13 @@ constexpr int kDim = pops::kNativeDimension;
 using Field = pops::MultiFab<kDim>;
 using Layout = pops::mesh::BoxArray<kDim>;
 using Distribution = pops::mesh::Distribution<kDim>;
+using Providers = pops::ProviderValues<0>;
+
+struct NoProviders {
+  pops::ProviderStorageView<kDim, 0> operator()(std::size_t) const { return {}; }
+};
+
+inline constexpr NoProviders no_providers{};
 
 template <class Ranked, class Value>
 Ranked filled_ranked(Value value) {
@@ -165,7 +171,7 @@ struct BackwardEulerResidual {
     typename Model::State state{};
     for (int component = 0; component < Model::n_vars; ++component)
       state[component] = candidate(index, component);
-    const typename Model::State source = model.source(state, Aux{});
+    const typename Model::State source = model.source(state, Providers{});
     Real maximum = Real(0);
     for (int component = 0; component < Model::n_vars; ++component) {
       const Real residual = Kokkos::abs(candidate(index, component) - initial(index, component) -
@@ -182,12 +188,12 @@ struct BackwardEulerResidual {
 //   S0 = -k (u0 - u1 u2) ; S1 = -k (u1 - u0/2) ; S2 = -k u2^3.
 struct StiffModel {
   using State = pops::StateVec<3>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 3;
+  static constexpr int n_providers = 0;
   Real k = 200.0;
   POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
-  POPS_HD State source(const State& u, const Aux&) const {
+  POPS_HD State source(const State& u, const Providers&) const {
     State s{};
     s[0] = -k * (u[0] - u[1] * u[2]);
     s[1] = -k * (u[1] - Real(0.5) * u[0]);
@@ -200,7 +206,7 @@ struct StiffModel {
 // StiffModel + JACOBIEN ANALYTIQUE exact (trait HasSourceJacobian, vague 3) : le Newton doit
 // converger vers la MEME racine que les differences finies (l'equation BE est identique).
 struct JacStiffModel : StiffModel {
-  POPS_HD void source_jacobian(const State& u, const Aux&, Real (&J)[3][3]) const {
+  POPS_HD void source_jacobian(const State& u, const Providers&, Real (&J)[3][3]) const {
     J[0][0] = -k;
     J[0][1] = k * u[2];
     J[0][2] = k * u[1];
@@ -217,11 +223,11 @@ struct JacStiffModel : StiffModel {
 // composante 1 SEULEMENT quand u0 < seuil bas (pour viser UNE cellule fautive).
 struct NanModel {
   using State = pops::StateVec<3>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 3;
+  static constexpr int n_providers = 0;
   POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
-  POPS_HD State source(const State& u, const Aux&) const {
+  POPS_HD State source(const State& u, const Providers&) const {
     State s{};
     s[0] = -u[0];
     s[1] = u[0] < Real(0) ? std::sqrt(u[0]) : -u[1];  // u0 < 0 -> NaN sur la composante 1
@@ -235,18 +241,18 @@ struct NanModel {
 // J00 = 1 - dt*dS0/du0 = 0 alors que le residu reste fini et non nul.
 struct SingularModel {
   using State = pops::StateVec<3>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 3;
+  static constexpr int n_providers = 0;
   POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
-  POPS_HD State source(const State& u, const Aux&) const {
+  POPS_HD State source(const State& u, const Providers&) const {
     State s{};
     s[0] = Real(8) * u[0] + Real(1);
     s[1] = -u[1];
     s[2] = -u[2];
     return s;
   }
-  POPS_HD void source_jacobian(const State&, const Aux&, Real (&J)[3][3]) const {
+  POPS_HD void source_jacobian(const State&, const Providers&, Real (&J)[3][3]) const {
     J[0][0] = Real(8);
     J[0][1] = J[0][2] = Real(0);
     J[1][0] = J[1][2] = Real(0);
@@ -279,17 +285,17 @@ POPS_HD static pops::ImplicitEvaluationResult configured_evaluation(
 // remains present to prove that evaluate_source() takes precedence when a model opts in.
 struct FallibleSourceModel {
   using State = pops::StateVec<3>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 3;
+  static constexpr int n_providers = 0;
   pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
   std::uint32_t reason = 0;
 
   POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
-  POPS_HD State source(const State&, const Aux&) const {
+  POPS_HD State source(const State&, const Providers&) const {
     return State{Real(1e6), Real(1e6), Real(1e6)};
   }
-  POPS_HD pops::ImplicitEvaluationResult evaluate_source(const State& u, const Aux&,
+  POPS_HD pops::ImplicitEvaluationResult evaluate_source(const State& u, const Providers&,
                                                          State& output) const {
     output = State{-u[0], -u[1], -u[2]};
     return configured_evaluation(evaluation, reason);
@@ -301,7 +307,7 @@ struct FallibleJacobianModel : StiffModel {
   pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
   std::uint32_t reason = 0;
 
-  POPS_HD pops::ImplicitEvaluationResult evaluate_source_jacobian(const State& u, const Aux&,
+  POPS_HD pops::ImplicitEvaluationResult evaluate_source_jacobian(const State& u, const Providers&,
                                                                   Real (&J)[3][3]) const {
     J[0][0] = -k;
     J[0][1] = k * u[2];
@@ -330,7 +336,6 @@ class NewtonRobustnessTest : public ::testing::Test {
     rank_extent[0] = pops::n_ranks();
     dm_ = new Distribution(Distribution::replicated(
         *ba_, pops::mesh::RankSpace<kDim>{pops::Index<kDim>{}, rank_extent}));
-    aux_ = new Field(make_mf(*ba_, *dm_, pops::kAuxBaseComps));
     U0_ = new Field(make_mf(*ba_, *dm_, 3));
     for (std::size_t local = 0; local < U0_->local_size(); ++local)
       pops::for_each_cell(U0_->box(local), FillInitialState{U0_->fab(local).view()});
@@ -339,25 +344,21 @@ class NewtonRobustnessTest : public ::testing::Test {
     delete dom_;
     delete ba_;
     delete dm_;
-    delete aux_;
     delete U0_;
     dom_ = nullptr;
     ba_ = nullptr;
     dm_ = nullptr;
-    aux_ = nullptr;
     U0_ = nullptr;
   }
 
   static pops::Box<kDim>* dom_;
   static Layout* ba_;
   static Distribution* dm_;
-  static Field* aux_;
   static Field* U0_;  // etat initial commun (verification BE, damping, jacobien, observateur)
 };
 pops::Box<kDim>* NewtonRobustnessTest::dom_ = nullptr;
 Layout* NewtonRobustnessTest::ba_ = nullptr;
 Distribution* NewtonRobustnessTest::dm_ = nullptr;
-Field* NewtonRobustnessTest::aux_ = nullptr;
 Field* NewtonRobustnessTest::U0_ = nullptr;
 
 TEST(SolveOutcomeContract, unconsumed_outcome_fails_loud) {
@@ -423,7 +424,7 @@ TEST_F(NewtonRobustnessTest, stiff_multivariable_relaxation_converges_to_backwar
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  auto outcome = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto outcome = pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(outcome.report().solved_value_available());
   (void)outcome.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0)
@@ -456,7 +457,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  auto reference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto reference = pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(reference.report().solved_value_available());
   (void)reference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine de reference non convergee";
@@ -467,7 +468,7 @@ TEST_F(NewtonRobustnessTest, damped_newton_converges_to_same_root_as_undamped) {
   od.damping = 0.5;
   od.max_iters = 80;
   pops::NewtonReport repd;
-  auto damped = pops::backward_euler_source(m, *aux_, Ud, kDt, od, {}, &repd);
+  auto damped = pops::backward_euler_source(m, no_providers, Ud, kDt, od, {}, &repd);
   ASSERT_TRUE(damped.report().solved_value_available());
   (void)damped.consume(pops::SolveConsumption::kAccept);
 
@@ -495,7 +496,7 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
   copy3(Un2, accepted);
   pops::NewtonOptions options;
   pops::NewtonReport repf;
-  auto outcome = pops::backward_euler_source(nm, *aux_, Un2, 0.1, options, {}, &repf);
+  auto outcome = pops::backward_euler_source(nm, no_providers, Un2, 0.1, options, {}, &repf);
   ASSERT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
@@ -529,7 +530,8 @@ TEST_F(NewtonRobustnessTest, iteration_limit_fails_closed_without_publishing) {
   options.abs_tol = 1e-15;
   pops::NewtonReport report;
 
-  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, options, {}, &report);
+  auto outcome =
+      pops::backward_euler_source(model, no_providers, state, kDt, options, {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kIterationLimit);
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le dernier itere non converge a ete publie";
   const pops::SolveReport rejected = outcome.consume(pops::SolveConsumption::kRejectAttempt);
@@ -546,7 +548,8 @@ TEST_F(NewtonRobustnessTest, singular_jacobian_fails_closed_without_publishing) 
   pops::NewtonOptions options;
   pops::NewtonReport report;
 
-  auto outcome = pops::backward_euler_source(model, *aux_, state, 0.125, options, {}, &report);
+  auto outcome =
+      pops::backward_euler_source(model, no_providers, state, 0.125, options, {}, &report);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kSingular);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
   (void)outcome.consume(pops::SolveConsumption::kFailRun);
@@ -569,7 +572,8 @@ TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_r
   pops::NewtonOptions options;
   pops::NewtonReport diagnostics;
 
-  auto outcome = pops::backward_euler_source(model, *aux_, state, 0.1, options, {}, &diagnostics);
+  auto outcome =
+      pops::backward_euler_source(model, no_providers, state, 0.1, options, {}, &diagnostics);
   EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_THROW(outcome.consume(static_cast<pops::SolveConsumption>(255)), std::logic_error);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
@@ -584,7 +588,7 @@ TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_r
 
 TEST_F(NewtonRobustnessTest,
        fallible_source_propagates_retry_reject_fail_and_invalid_without_publication) {
-  static_assert(pops::HasFallibleSourceEvaluationFor<FallibleSourceModel, pops::Aux>);
+  static_assert(pops::HasFallibleSourceEvaluationFor<FallibleSourceModel, Providers>);
   constexpr std::uint32_t reason = 0xfedcba98u;
   struct FailureCase {
     pops::ImplicitEvaluationStatus status;
@@ -608,7 +612,8 @@ TEST_F(NewtonRobustnessTest,
     copy3(accepted, state);
     FallibleSourceModel model{failure.status, reason};
 
-    auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, pops::NewtonOptions{});
+    auto outcome =
+        pops::backward_euler_source(model, no_providers, state, kDt, pops::NewtonOptions{});
     EXPECT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
     EXPECT_EQ(outcome.report().action, failure.action);
     EXPECT_NE(outcome.report().reason.find(failure.reason_fragment), std::string::npos);
@@ -624,7 +629,7 @@ TEST_F(NewtonRobustnessTest,
 
 TEST_F(NewtonRobustnessTest,
        fallible_analytic_jacobian_rejects_privately_and_success_keeps_legacy_result) {
-  static_assert(pops::HasFallibleSourceJacobianEvaluationFor<FallibleJacobianModel, pops::Aux>);
+  static_assert(pops::HasFallibleSourceJacobianEvaluationFor<FallibleJacobianModel, Providers>);
   constexpr std::uint32_t reason = 0x1234abcdu;
   Field accepted = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, accepted);
@@ -634,7 +639,7 @@ TEST_F(NewtonRobustnessTest,
   rejected_model.evaluation = pops::ImplicitEvaluationStatus::kReject;
   rejected_model.reason = reason;
 
-  auto rejected = pops::backward_euler_source(rejected_model, *aux_, rejected_state, kDt,
+  auto rejected = pops::backward_euler_source(rejected_model, no_providers, rejected_state, kDt,
                                               pops::NewtonOptions{});
   EXPECT_EQ(rejected.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(rejected.report().action, pops::SolveAction::kRejectAttempt);
@@ -654,8 +659,10 @@ TEST_F(NewtonRobustnessTest,
   copy3(accepted, legacy_state);
   FallibleJacobianModel fallible_model;
   JacStiffModel legacy_model;
-  auto fallible = pops::backward_euler_source(fallible_model, *aux_, fallible_state, kDt, options);
-  auto legacy = pops::backward_euler_source(legacy_model, *aux_, legacy_state, kDt, options);
+  auto fallible =
+      pops::backward_euler_source(fallible_model, no_providers, fallible_state, kDt, options);
+  auto legacy =
+      pops::backward_euler_source(legacy_model, no_providers, legacy_state, kDt, options);
   ASSERT_TRUE(fallible.report().solved_value_available());
   ASSERT_TRUE(legacy.report().solved_value_available());
   (void)fallible.consume(pops::SolveConsumption::kAccept);
@@ -676,7 +683,7 @@ TEST_F(NewtonRobustnessTest, prepared_success_publishes_only_on_single_accept) {
   options.rel_tol = 1e-12;
   options.abs_tol = 1e-13;
 
-  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, options);
+  auto outcome = pops::backward_euler_source(model, no_providers, state, kDt, options);
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(max_difference3(state, accepted), 0.0) << "le candidat est visible avant consommation";
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
@@ -695,7 +702,8 @@ TEST_F(NewtonRobustnessTest, publication_layout_failure_does_not_consume_the_out
   Field state = make_mf(*ba_, *dm_, 3);
   copy3(accepted, state);
 
-  auto outcome = pops::backward_euler_source(model, *aux_, state, kDt, pops::NewtonOptions{});
+  auto outcome =
+      pops::backward_euler_source(model, no_providers, state, kDt, pops::NewtonOptions{});
   ASSERT_TRUE(outcome.report().solved_value_available());
 
   // A caller changing the destination structure between prepare and consume used to let lincomb
@@ -719,11 +727,11 @@ TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnost
   copy3(*U0_, Ub);
 
   pops::NewtonOptions odef;
-  auto without_report = pops::backward_euler_source(m, *aux_, Ua, kDt, odef);
+  auto without_report = pops::backward_euler_source(m, no_providers, Ua, kDt, odef);
   ASSERT_TRUE(without_report.report().solved_value_available());
   (void)without_report.consume(pops::SolveConsumption::kAccept);
   pops::NewtonReport repo;
-  auto with_report = pops::backward_euler_source(m, *aux_, Ub, kDt, odef, {}, &repo);
+  auto with_report = pops::backward_euler_source(m, no_providers, Ub, kDt, odef, {}, &repo);
   ASSERT_TRUE(with_report.report().solved_value_available());
   (void)with_report.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(repo.converged);
@@ -735,9 +743,9 @@ TEST_F(NewtonRobustnessTest, default_contract_converges_with_or_without_diagnost
 
 // (5) JACOBIEN ANALYTIQUE (vague 3) : meme racine que les differences finies.
 TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
-  static_assert(!pops::HasSourceJacobianFor<StiffModel, pops::Aux>,
+  static_assert(!pops::HasSourceJacobianFor<StiffModel, Providers>,
                 "StiffModel sans jacobien : FD historiques");
-  static_assert(pops::HasSourceJacobianFor<JacStiffModel, pops::Aux>,
+  static_assert(pops::HasSourceJacobianFor<JacStiffModel, Providers>,
                 "JacStiffModel doit declarer le trait");
 
   StiffModel m;
@@ -748,7 +756,8 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   opts.rel_tol = 1e-12;
   opts.abs_tol = 1e-13;
   pops::NewtonReport rep;
-  auto finite_difference = pops::backward_euler_source(m, *aux_, U, kDt, opts, {}, &rep);
+  auto finite_difference =
+      pops::backward_euler_source(m, no_providers, U, kDt, opts, {}, &rep);
   ASSERT_TRUE(finite_difference.report().solved_value_available());
   (void)finite_difference.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(rep.converged && rep.n_failed == 0) << "racine FD de reference non convergee";
@@ -757,7 +766,8 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   Field Uj = make_mf(*ba_, *dm_, 3);
   copy3(*U0_, Uj);
   pops::NewtonReport repj;
-  auto analytic = pops::backward_euler_source(jm, *aux_, Uj, kDt, opts, {}, &repj);
+  auto analytic =
+      pops::backward_euler_source(jm, no_providers, Uj, kDt, opts, {}, &repj);
   ASSERT_TRUE(analytic.report().solved_value_available());
   (void)analytic.consume(pops::SolveConsumption::kAccept);
 

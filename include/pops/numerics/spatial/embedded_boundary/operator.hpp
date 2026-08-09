@@ -145,6 +145,23 @@ class PreparedEmbeddedBoundaryOperator2D {
     masked.assemble_residual(state, providers, active_cells, residual, omission);
   }
 
+  template <class MemorySpace, int Count>
+  void assemble_residual(const Fab<2, MemorySpace>& state,
+                         const ProviderStorageView<2, Count>& providers,
+                         const Fab<2, MemorySpace>& active_cells,
+                         const Fab<2, MemorySpace>& inverse_volume_fraction,
+                         Fab<2, MemorySpace>& residual,
+                         BoundaryFaceOmission<2> omission = {}) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    const auto cut_metric = PreparedEmbeddedBoundaryMetric2D<BaseMetric>::prepare(
+        metric_, inverse_volume_fraction, state.box());
+    PreparedMaskedCartesianOperator<2, Model, decltype(cut_metric), Reconstruction, NumericalFlux,
+                                    Variables>
+        masked(model_, cut_metric, reconstruction_, numerical_flux_, positivity_floor_);
+    masked.assemble_residual(state, providers, active_cells, residual, omission);
+  }
+
   template <class MemorySpace>
   void assemble_residual(const MultiFab<2, MemorySpace>& state,
                          const MultiFab<2, MemorySpace>& active_cells,

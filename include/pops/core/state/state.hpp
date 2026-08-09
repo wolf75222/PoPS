@@ -1,5 +1,5 @@
 /// @file
-/// @brief Device-safe pointwise state and exact-ranked auxiliary-provider values.
+/// @brief Device-safe pointwise state and exact provider-value packs.
 
 #pragma once
 
@@ -7,7 +7,7 @@
 #include <pops/core/foundation/types.hpp>
 
 #include <cassert>
-#include <limits>
+#include <array>
 #include <type_traits>
 
 namespace pops {
@@ -44,140 +44,81 @@ POPS_HD StateVec<N> operator*(Real s, StateVec<N> a) {
   return a;
 }
 
-/// Maximum number of model-named provider values retained in the pointwise POD.
-inline constexpr int kAuxMaxExtra = 4;
-
-/// Compile-time component map for one spatial rank.
+/// A compact pointwise value pack for exactly one consumer's resolved providers.
 ///
-/// The channel is exactly `phi`, one gradient component per spatial axis, `B_z`, `T_e`, then the
-/// bounded model-named values. Consequently every index after `phi` moves with `Dim`; a 1D channel
-/// has no `grad_y` slot and a 3D channel has a real third gradient slot.
-template <int Dim>
-struct AuxComponentLayout {
-  static_assert(Dim >= 1 && Dim <= 3, "pops::AuxComponentLayout supports dimensions 1, 2, and 3");
+/// `Count` comes from the consumer/provider requirement graph.  Its slots are deliberately
+/// *only* the dense, local ABI positions ``0..Count-1``: a value has no implicit physical name,
+/// spatial axis, model, or globally reserved channel.  A consumer owns the interpretation through
+/// its explicitly bound indices.  The zero-provider pack is valid and device-copyable.
+template <int Count>
+struct ProviderValues {
+  static_assert(Count >= 0, "provider value count cannot be negative");
 
-  static constexpr int dimension = Dim;
-  static constexpr int phi = 0;
-  static constexpr int gradient_begin = phi + 1;
+  static constexpr int size = Count;
+  std::array<Real, static_cast<std::size_t>(Count)> values{};
 
-  template <int Axis>
-  POPS_HD static constexpr int gradient_component() {
-    static_assert(Axis >= 0 && Axis < Dim, "aux gradient axis is outside the spatial rank");
-    return gradient_begin + Axis;
+  POPS_HD Real& operator[](int slot) {
+    assert(slot >= 0 && slot < Count);
+    return values[static_cast<std::size_t>(slot)];
+  }
+  POPS_HD Real operator[](int slot) const {
+    assert(slot >= 0 && slot < Count);
+    return values[static_cast<std::size_t>(slot)];
   }
 
-  static constexpr int base_components = gradient_begin + Dim;
-  static constexpr int b_z = base_components;
-  static constexpr int t_e = b_z + 1;
-  static constexpr int named_begin = t_e + 1;
-  static constexpr int max_components = named_begin + kAuxMaxExtra;
-};
-
-template <int Dim>
-inline constexpr int kAuxBaseCompsFor = AuxComponentLayout<Dim>::base_components;
-
-template <int Dim, int Axis>
-inline constexpr int kAuxGradientComponentFor =
-    AuxComponentLayout<Dim>::template gradient_component<Axis>();
-
-template <int Dim>
-inline constexpr int kAuxBzComponentFor = AuxComponentLayout<Dim>::b_z;
-
-template <int Dim>
-inline constexpr int kAuxTeComponentFor = AuxComponentLayout<Dim>::t_e;
-
-template <int Dim>
-inline constexpr int kAuxNamedBaseFor = AuxComponentLayout<Dim>::named_begin;
-
-template <int Dim>
-inline constexpr int kAuxMaxCompsFor = AuxComponentLayout<Dim>::max_components;
-
-/// Build-specialized compatibility constants. They describe only the immutable native rank.
-inline constexpr int kAuxBaseComps = kAuxBaseCompsFor<kNativeDimension>;
-template <int Axis>
-inline constexpr int kAuxGradientComponent = kAuxGradientComponentFor<kNativeDimension, Axis>;
-inline constexpr int kAuxBzComponent = kAuxBzComponentFor<kNativeDimension>;
-inline constexpr int kAuxTeComponent = kAuxTeComponentFor<kNativeDimension>;
-inline constexpr int kAuxNamedBase = kAuxNamedBaseFor<kNativeDimension>;
-inline constexpr int kAuxMaxComps = kAuxMaxCompsFor<kNativeDimension>;
-
-/// Build-specialized canonical-extra table retained for native host/code-generation adapters.
-#define POPS_AUX_FIELDS(X)        \
-  X(B_z, ::pops::kAuxBzComponent) \
-  X(T_e, ::pops::kAuxTeComponent)
-
-/// Pointwise auxiliary-provider value with storage exact to the compile-time spatial rank.
-template <int Dim>
-struct AuxState {
-  static_assert(Dim >= 1 && Dim <= 3, "pops::AuxState supports dimensions 1, 2, and 3");
-
-  using component_layout = AuxComponentLayout<Dim>;
-  static constexpr int dimension = Dim;
-
-  Real phi{};
-  Real gradients[Dim]{};
-  Real B_z{};
-  Real T_e{};
-  Real extra[kAuxMaxExtra]{};
-
-  /// Access the physical gradient component carried by compile-time axis `Axis`.
-  template <int Axis>
-  POPS_HD Real& gradient() {
-    static_assert(Axis >= 0 && Axis < Dim, "aux gradient axis is outside the spatial rank");
-    return gradients[Axis];
-  }
-
-  template <int Axis>
-  POPS_HD Real gradient() const {
-    static_assert(Axis >= 0 && Axis < Dim, "aux gradient axis is outside the spatial rank");
-    return gradients[Axis];
-  }
-
-  /// Read one declared model-named provider slot.
-  POPS_HD Real extra_field(int slot) const {
-    assert(slot >= 0 && slot < kAuxMaxExtra);
-    return (slot >= 0 && slot < kAuxMaxExtra) ? extra[slot]
-                                              : std::numeric_limits<Real>::quiet_NaN();
-  }
-
-  /// Compile-time provider read shared by the finite-volume and pointwise source laws.
-  template <int Component>
-  POPS_HD Real flux_provider() const {
-    static_assert(Component >= 0 && Component < component_layout::max_components,
-                  "physical flux provider component is outside the ranked native capability");
-    if constexpr (Component == component_layout::phi)
-      return phi;
-    else if constexpr (Component >= component_layout::gradient_begin &&
-                       Component < component_layout::base_components)
-      return gradients[Component - component_layout::gradient_begin];
-    else if constexpr (Component == component_layout::b_z)
-      return B_z;
-    else if constexpr (Component == component_layout::t_e)
-      return T_e;
-    else
-      return extra[Component - component_layout::named_begin];
+  template <int Slot>
+  POPS_HD Real value() const {
+    static_assert(Slot >= 0 && Slot < Count,
+                  "provider slot is outside this consumer's exact compact pack");
+    return values[static_cast<std::size_t>(Slot)];
   }
 };
 
-/// Pointwise auxiliary type of this compiled native artifact.
-using Aux = AuxState<kNativeDimension>;
+/// Compile-time binding of one consumer's logical inputs to compact provider slots.
+///
+/// This type carries no semantic label: a brick gives each position its physical role.  Keeping
+/// the binding in the consumer type makes a permuted assignment a different native specialization,
+/// which is important for the exact artifact identity and prevents accidental name-based aliasing.
+template <int... Slots>
+struct ProviderSlots {
+  static_assert(((Slots >= 0) && ...), "provider slots cannot be negative");
+  static constexpr int count = sizeof...(Slots);
+  inline static constexpr std::array<int, count> values{Slots...};
 
-static_assert(kAuxMaxExtra >= 1, "kAuxMaxExtra must allow at least one model-named aux field");
-static_assert(std::is_trivially_copyable_v<AuxState<1>> &&
-                  std::is_trivially_copyable_v<AuxState<2>> &&
-                  std::is_trivially_copyable_v<AuxState<3>>,
-              "AuxState must remain trivially copyable for device kernels");
-static_assert(std::is_standard_layout_v<AuxState<1>> && std::is_standard_layout_v<AuxState<2>> &&
-                  std::is_standard_layout_v<AuxState<3>>,
-              "AuxState must remain standard-layout");
-static_assert(std::is_aggregate_v<AuxState<1>> && std::is_aggregate_v<AuxState<2>> &&
-                  std::is_aggregate_v<AuxState<3>>,
-              "AuxState must remain an aggregate POD");
-static_assert(sizeof(AuxState<1>) == sizeof(Real) * kAuxMaxCompsFor<1> &&
-                  sizeof(AuxState<2>) == sizeof(Real) * kAuxMaxCompsFor<2> &&
-                  sizeof(AuxState<3>) == sizeof(Real) * kAuxMaxCompsFor<3>,
-              "AuxState storage must contain exactly its ranked channel components");
-static_assert(static_cast<int>(sizeof(Aux::extra) / sizeof(Real)) == kAuxMaxExtra,
-              "AuxState::extra[] must match the declared named-provider bound");
+  template <int Position>
+  static consteval int slot() {
+    static_assert(Position >= 0 && Position < count,
+                  "provider binding position is outside this consumer map");
+    return values[static_cast<std::size_t>(Position)];
+  }
+
+  static consteval int required_count() {
+    int count_required = 0;
+    for (const int value : values)
+      if (value + 1 > count_required)
+        count_required = value + 1;
+    return count_required;
+  }
+};
+
+/// Read a provider through either the common compact pack or a qualified bound carrier.
+template <int Slot, class Providers>
+POPS_HD Real provider_value(const Providers& providers) {
+  static_assert(Slot >= 0, "provider slot cannot be negative");
+  if constexpr (requires { providers.template value<Slot>(); })
+    return providers.template value<Slot>();
+  else
+    return providers.template provider<Slot>();
+}
+
+static_assert(std::is_trivially_copyable_v<ProviderValues<0>> &&
+                  std::is_trivially_copyable_v<ProviderValues<1>> &&
+                  std::is_trivially_copyable_v<ProviderValues<7>>,
+              "ProviderValues must remain trivially copyable for device kernels");
+static_assert(std::is_standard_layout_v<ProviderValues<0>> &&
+                  std::is_standard_layout_v<ProviderValues<7>>,
+              "ProviderValues must remain standard-layout");
+static_assert(std::is_aggregate_v<ProviderValues<0>> && std::is_aggregate_v<ProviderValues<7>>,
+              "ProviderValues must remain an aggregate POD");
 
 }  // namespace pops

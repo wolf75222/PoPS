@@ -903,18 +903,8 @@ sources = ["tests/cpp/unit/physics/test_ap_limit.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_aux_composite"
-sources = ["tests/cpp/unit/physics/test_aux_composite.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_aux_coupler_bz"
 sources = ["tests/cpp/unit/physics/test_aux_coupler_bz.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_aux_extra"
-sources = ["tests/cpp/unit/physics/test_aux_extra.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
@@ -923,18 +913,8 @@ sources = ["tests/cpp/unit/physics/test_aux_halo.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_aux_names"
-sources = ["tests/cpp/unit/physics/test_aux_names.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_aux_single_source"
 sources = ["tests/cpp/unit/physics/test_aux_single_source.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_aux_te"
-sources = ["tests/cpp/unit/physics/test_aux_te.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]

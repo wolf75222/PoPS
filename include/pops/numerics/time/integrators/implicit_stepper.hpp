@@ -268,9 +268,10 @@ POPS_HD inline auto prepare_implicit_source_problem(const Model& model,
 template <int Dim, class Model>
 struct PreparedImplicitSourceKernel {
   static constexpr int N = Model::n_vars;
+  static constexpr int provider_count = provider_count_for<Model, Dim>();
   Model model;
   FieldView<const Real, Dim> state{};
-  FieldView<const Real, Dim> aux{};
+  ProviderStorageView<Dim, provider_count> providers{};
   FieldView<const Real, Dim> active_cells{};
   bool has_active_cells = false;
   FieldView<Real, Dim> candidate{};
@@ -289,15 +290,18 @@ struct PreparedImplicitSourceKernel {
       return;
     }
 
-    const AuxState<Dim> cell_aux = load_aux<aux_comps_for<Model, Dim>()>(aux, index);
+    ProviderValues<provider_count> cell_providers{};
+    if constexpr (provider_count > 0)
+      cell_providers = load_provider_values<provider_count>(providers, index);
     typename Model::State initial_source{};
     bool requires_initial_source = false;
     for (int component = 0; component < N; ++component)
       requires_initial_source =
           requires_initial_source || !is_implicit_component<Model>(mask, component);
     const ImplicitEvaluationResult initial_evaluation =
-        requires_initial_source ? evaluate_implicit_source(model, initial, cell_aux, initial_source)
-                                : ImplicitEvaluationResult::ok();
+        requires_initial_source
+            ? evaluate_implicit_source(model, initial, cell_providers, initial_source)
+            : ImplicitEvaluationResult::ok();
     LocalNonlinearCellResult<N> solved;
     for (int component = 0; component < N; ++component)
       solved.value[component] = initial[component];
@@ -306,8 +310,8 @@ struct PreparedImplicitSourceKernel {
       solved.status = local_status(initial_evaluation);
       solved.reason_code = initial_evaluation.reason_code;
     } else {
-      const auto problem = prepare_implicit_source_problem(model, initial, initial_source, cell_aux,
-                                                           dt, options, mask);
+      const auto problem = prepare_implicit_source_problem(model, initial, initial_source,
+                                                           cell_providers, dt, options, mask);
       Real guess[N];
       for (int component = 0; component < N; ++component)
         guess[component] = initial[component];
@@ -467,10 +471,26 @@ struct ImplicitSourcePublication {
 
 }  // namespace detail
 
+/// Host-side binder for the exact provider slots of one local patch.
+///
+/// The prepared consumer plan resolves the producer-qualified storage addresses before a
+/// numerical kernel is launched.  This callback transports the resulting device-copyable view
+/// for the requested local patch; it deliberately has no representation for a process-global
+/// auxiliary component prefix.  Provider-free models never invoke the binder.
+template <class ProviderAt, int Dim, int Count>
+concept ImplicitProviderPatchBinding =
+    Count == 0 || requires(const ProviderAt& provider_at, std::size_t local_patch) {
+      {
+        provider_at(local_patch)
+      } -> std::same_as<ProviderStorageView<Dim, Count>>;
+    };
+
 /// Prepare a local backward-Euler source solve without publishing its ranked candidate.
-template <int Dim, class Model, class MemorySpace>
+template <int Dim, class Model, class MemorySpace, class ProviderAt>
+  requires ImplicitProviderPatchBinding<ProviderAt, Dim, provider_count_for<Model, Dim>()>
 [[nodiscard]] SolveOutcome backward_euler_source(
-    const Model& model, const MultiFab<Dim, MemorySpace>& aux, MultiFab<Dim, MemorySpace>& state,
+    const Model& model, const ProviderAt& provider_at,
+    MultiFab<Dim, MemorySpace>& state,
     Real dt, const NewtonOptions& options, const ImplicitMask<Model::n_vars>& mask = {},
     NewtonReport* diagnostics = nullptr, const MultiFab<Dim, MemorySpace>* active_cells = nullptr) {
   validate_newton_options(options, "backward_euler_source");
@@ -478,10 +498,9 @@ template <int Dim, class Model, class MemorySpace>
     return state.layout() == other.layout() && state.distribution() == other.distribution() &&
            state.local_rank() == other.local_rank() && state.local_size() == other.local_size();
   };
-  if (state.ncomp() != Model::n_vars || aux.ncomp() < aux_comps_for<Model, Dim>() ||
-      !layout_matches(aux))
-    throw std::invalid_argument(
-        "Implicit source state and auxiliary ranked layouts or components differ");
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  if (state.ncomp() != Model::n_vars)
+    throw std::invalid_argument("Implicit source state component count differs from its Model");
   if (active_cells != nullptr && (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
     throw std::invalid_argument(
         "Implicit source active-cell mask must have one component and match the state layout");
@@ -494,12 +513,15 @@ template <int Dim, class Model, class MemorySpace>
                                         13, Extent<Dim>{});
   for (std::size_t local_index = 0; local_index < state.local_size(); ++local_index) {
     FieldView<const Real, Dim> active{};
+    ProviderStorageView<Dim, provider_count> provider_view{};
     if (active_cells != nullptr)
       active = active_cells->fab(local_index).view();
+    if constexpr (provider_count > 0)
+      provider_view = provider_at(local_index);
     for_each_cell(state.box(local_index), detail::PreparedImplicitSourceKernel<Dim, Model>{
                                               model,
                                               std::as_const(state).fab(local_index).view(),
-                                              aux.fab(local_index).view(),
+                                              provider_view,
                                               active,
                                               active_cells != nullptr,
                                               candidate->fab(local_index).view(),
@@ -597,7 +619,8 @@ struct ImplicitSourceStepper {
   template <class Coupler, class Block>
   void operator()(Coupler& coupler, Block& block, Real dt, int /*substep*/,
                   int /*substep_count*/) const {
-    auto outcome = backward_euler_source(block.model, coupler.aux(), block.U(), dt, options);
+    auto outcome = backward_euler_source(block.model, coupler.provider_values_for(block),
+                                         block.U(), dt, options);
     (void)consume_implicit_source_fail_run(outcome);
   }
 };

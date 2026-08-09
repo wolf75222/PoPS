@@ -133,13 +133,13 @@ double interface_jump_budget(const PeriodicFaceStates& states) {
 struct PrimitiveTestModel {
   using State = StateVec<2>;
   using Prim = StateVec<2>;
-  using Aux = pops::Aux;
+using Providers = pops::ProviderValues<0>;
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
 
   POPS_HD State flux(const State& state, const auto&, int) const { return state; }
   POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(1); }
-  POPS_HD State source(const State&, const Aux&) const { return State{}; }
+POPS_HD State source(const State&, const Providers&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 
   POPS_HD Prim to_primitive(const State& state) const {

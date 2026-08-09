@@ -45,7 +45,8 @@ struct CompiledSystemBlockPreparation {
   CompiledSystemBlockRoutes routes;
   Geometry<Dim> geometry;
   BoundaryTopology<Dim> topology;
-  MultiFab<Dim>* auxiliary = nullptr;
+  const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage = nullptr;
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
 };
 
 namespace compiled_system_detail {
@@ -83,8 +84,10 @@ inline void validate_routes(const CompiledSystemBlockRoutes& routes) {
 /// Ask the generated model package to prepare one exact-ranked block image.
 ///
 /// The generated preparer owns every route-specific instantiation. The core supplies only the
-/// immutable ranked geometry and the stable auxiliary-field owner. A provider that does not
-/// support an authored route must reject it while preparing; there is no alternate 2D builder.
+/// immutable ranked geometry, nullable accepted provider storage, and one sealed consumer plan.
+/// A provider-free model carries an exact empty plan and no storage allocation. A provider that
+/// does not support an authored route must reject it while preparing; there is no alternate 2D
+/// builder.
 template <int Dim, class Model>
 PreparedSystemBlock<Dim> prepare_compiled_system_block(
     System<Dim>& system, const std::string& name, Model model, const std::string& limiter,
@@ -118,10 +121,14 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
     } -> std::same_as<PreparedSystemBlock<Dim>>;
   }, "generated model package lacks prepare_exact_system_block for its exact native dimension");
 
+  const auto* provider_storage = system.prepared_block_provider_storage_groups();
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
+  if constexpr (provider_count_for<Model, Dim>() > 0)
+    provider_plan = &system.prepared_auxiliary_consumer_plan(name);
   PreparedSystemBlock<Dim> prepared = compiled_system_detail::invoke_package_preparer(
       Request{name, std::move(model), std::move(routes), system.prepared_block_geometry(),
               BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()),
-              &system.prepared_block_auxiliary()});
+              provider_storage, provider_plan});
 
   // Authoritative structural metadata comes from compile-time model facts and the resolved install
   // request, never from an independently mutable runtime description.
@@ -133,8 +140,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   prepared.substeps = substeps;
   prepared.evolve = evolve;
   prepared.stride = stride;
-  if (prepared.aux_components == 0)
-    prepared.aux_components = aux_comps<Model>();
+  if (prepared.provider_components == 0)
+    prepared.provider_components = provider_count_for<Model, Dim>();
   return prepared;
 }
 

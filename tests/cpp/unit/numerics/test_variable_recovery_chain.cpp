@@ -108,11 +108,11 @@ struct RepairCandidate {
 struct GuardedScalarHyperbolic {
   using State = pops::StateVec<1>;
   using Prim = pops::StateVec<1>;
-  using Aux = pops::Aux;
+using Providers = pops::ProviderValues<0>;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State& value, const Aux&, int) const { return value; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(1); }
+POPS_HD State flux(const State& value, const Providers&, int) const { return value; }
+POPS_HD Real max_wave_speed(const State&, const Providers&, int) const { return Real(1); }
   POPS_HD Prim to_primitive(const State& value) const { return value; }
   POPS_HD State to_conservative(const Prim& value) const { return value; }
   POPS_HD bool recovery_admissible(const Prim& value, int* failing_component) const {

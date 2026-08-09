@@ -18,7 +18,7 @@
 
 using namespace pops;
 
-static const Aux kAux{};
+static const ProviderValues<0> kProviders{};
 static constexpr Real kCs2 = Real(0.5);
 
 // Cellule quasi-vide : rho ~ 1e-9 avec une quantite de mouvement O(1) -> u brut = m/rho ~ 1e8
@@ -39,13 +39,13 @@ TEST(test_isothermal_vacuum_floor, OffIsBitIdenticalToRaw) {
   const Real vx = uvac[1] / rho, vy = uvac[2] / rho;
   const auto p = off.to_primitive(uvac);
   EXPECT_TRUE(p[0] == rho && p[1] == vx && p[2] == vy) << "off_to_primitive_raw";
-  EXPECT_TRUE(off.max_wave_speed(uvac, kAux, 0) == (vx < 0 ? -vx : vx) + std::sqrt(kCs2))
+  EXPECT_TRUE(off.max_wave_speed(uvac, kProviders, 0) == (vx < 0 ? -vx : vx) + std::sqrt(kCs2))
       << "off_mws_raw_x";
-  EXPECT_TRUE(off.flux(uvac, kAux, 0)[1] == uvac[1] * vx + kCs2 * rho) << "off_flux_raw_x";
+  EXPECT_TRUE(off.flux(uvac, kProviders, 0)[1] == uvac[1] * vx + kCs2 * rho) << "off_flux_raw_x";
   // L'init agregat a un seul argument doit aussi etre OFF (vacuum_floor par defaut a 0) :
   // bit-identique.
   const IsothermalFlux dflt{kCs2};
-  EXPECT_TRUE(dflt.max_wave_speed(uvac, kAux, 0) == off.max_wave_speed(uvac, kAux, 0))
+  EXPECT_TRUE(dflt.max_wave_speed(uvac, kProviders, 0) == off.max_wave_speed(uvac, kProviders, 0))
       << "default_is_off";
 }
 
@@ -59,11 +59,11 @@ TEST(test_isothermal_vacuum_floor, OnBoundsVelocityBelowFloor) {
   const auto p = on.to_primitive(uvac);
   EXPECT_TRUE(p[1] == vx_b && p[2] == vy_b) << "on_velocity_bounded";
   EXPECT_TRUE(p[0] == uvac[0]) << "on_rho_is_raw";
-  const Real mws = on.max_wave_speed(uvac, kAux, 0);
+  const Real mws = on.max_wave_speed(uvac, kProviders, 0);
   EXPECT_TRUE(std::isfinite(mws) && mws == (vx_b < 0 ? -vx_b : vx_b) + std::sqrt(kCs2))
       << "on_mws_bounded";
   // flux : vitesse advective plafonnee, pression cs2*rho utilise toujours le rho brut.
-  EXPECT_TRUE(on.flux(uvac, kAux, 0)[1] == uvac[1] * vx_b + kCs2 * uvac[0])
+  EXPECT_TRUE(on.flux(uvac, kProviders, 0)[1] == uvac[1] * vx_b + kCs2 * uvac[0])
       << "on_flux_bounded_raw_pressure";
 }
 
@@ -77,7 +77,7 @@ TEST(test_isothermal_vacuum_floor, OnInactiveAboveFloor) {
   u[1] = Real(0.6);
   u[2] = Real(0.4);
   EXPECT_TRUE(on.to_primitive(u)[1] == u[1] / u[0]) << "on_inactive_above_floor";
-  EXPECT_TRUE(on.max_wave_speed(u, kAux, 1) == off.max_wave_speed(u, kAux, 1))
+  EXPECT_TRUE(on.max_wave_speed(u, kProviders, 1) == off.max_wave_speed(u, kProviders, 1))
       << "on_eq_off_above_floor";
 }
 

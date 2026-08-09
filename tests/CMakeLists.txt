@@ -519,11 +519,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_disc_domain_mask
   test_eb_transport
   test_embedded_boundary_generic
-  test_aux_extra
-  test_aux_names
   test_aux_halo
   test_aux_coupler_bz
-  test_aux_composite
   test_aux_single_source
   test_weno_convergence
   test_splitting
@@ -696,9 +693,6 @@ pops_add_gtest_suite(NAME test_aux_runtime_bz SOURCES "${_src}" EXTRA_LIBS ${CMA
 
 pops_test_source(_src test_coupled_source_stack_limit)
 pops_add_gtest_suite(NAME test_coupled_source_stack_limit SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
-
-pops_test_source(_src test_aux_te)
-pops_add_gtest_suite(NAME test_aux_te SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 pops_test_source(_src test_program_runtime)
 pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)

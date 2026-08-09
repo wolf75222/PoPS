@@ -37,6 +37,13 @@ template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::m
 using PreparedRootAmrGhostFill = PreparedProvider<void(
     MultiFab<Dim, MemorySpace>&, const runtime::multiblock::BoundaryEvaluationPoint&)>;
 
+/// Provider groups are independently allocated by resolved storage address, so AMR ghost filling
+/// operates on the complete group carrier rather than pretending it is one component slab.
+template <int Dim>
+using PreparedProviderGroupsGhostFill = PreparedProvider<void(
+    runtime::system::AuxiliaryStorageGroups<Dim>&,
+    const runtime::multiblock::BoundaryEvaluationPoint&)>;
+
 /// Every value required to materialize one generated block on one live hierarchy level.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct GeneratedAmrLevelContext {
@@ -46,15 +53,18 @@ struct GeneratedAmrLevelContext {
   std::size_t level = 0;
   Geometry<Dim> geometry;
   BoundaryTopology<Dim> topology;
-  MultiFab<Dim, MemorySpace>* auxiliary = nullptr;
+  /// Global owner-qualified provider storage.  It is null exactly when the sealed registry
+  /// contains no values; kernels never receive this field directly.
+  runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage = nullptr;
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
   runtime::amr::PreparedAmrGhostFill<Dim, MemorySpace> state_ghost_fill;
-  runtime::amr::PreparedAmrGhostFill<Dim, MemorySpace> auxiliary_ghost_fill;
+  PreparedProviderGroupsGhostFill<Dim> provider_ghost_fill;
   PreparedRootAmrGhostFill<Dim, MemorySpace> root_state_ghost_fill;
-  PreparedRootAmrGhostFill<Dim, MemorySpace> root_auxiliary_ghost_fill;
+  PreparedProviderGroupsGhostFill<Dim> root_provider_ghost_fill;
   std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical_boundary;
   std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>> embedded_boundary;
   std::string state_identity;
-  std::string auxiliary_identity;
+  std::string provider_storage_identity;
   std::string boundary_identity;
   std::string embedded_boundary_provider_identity;
 };
@@ -168,29 +178,44 @@ inline void append_variable_set_contract(ExactContractBuilder& contract,
 template <int Dim, class MemorySpace>
 void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
                            const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
-                           int state_components, int auxiliary_components,
+                           int state_components, int provider_components,
                            const Extent<Dim>& required_ghosts,
                            std::string_view staircase_provider_identity,
                            std::string_view cut_cell_provider_identity) {
   if (context.level >= runtime.hierarchy().num_levels())
     throw std::out_of_range("generated AMR block level lies outside the live hierarchy");
-  if (context.state_identity.empty() || context.auxiliary_identity.empty())
-    throw std::invalid_argument(
-        "generated AMR block requires exact state and auxiliary identities");
+  if (context.state_identity.empty() || context.provider_storage_identity.empty())
+    throw std::invalid_argument("generated AMR block requires exact state and provider identities");
   if (context.geometry.domain() != runtime.hierarchy().layout(context.level).domain())
     throw std::invalid_argument(
         "generated AMR level geometry differs from the live hierarchy domain");
-  if (context.auxiliary == nullptr)
-    throw std::invalid_argument("generated AMR block requires a level auxiliary owner");
+  if (provider_components > 0) {
+    if (context.provider_storage == nullptr || context.provider_plan == nullptr ||
+        context.provider_plan->value_count() != static_cast<std::size_t>(provider_components))
+      throw std::invalid_argument("generated AMR block requires resolved provider storage");
+  } else if (context.provider_storage != nullptr || context.provider_plan != nullptr) {
+    throw std::invalid_argument("provider-free generated AMR block cannot retain provider state");
+  }
   if (context.level == 0) {
-    if (!context.root_state_ghost_fill || !context.root_auxiliary_ghost_fill ||
-        context.state_ghost_fill || context.auxiliary_ghost_fill)
+    if (!context.root_state_ghost_fill || context.state_ghost_fill)
       throw std::invalid_argument(
-          "generated AMR root level requires only prepared full-domain ghost providers");
-  } else if (!context.state_ghost_fill || !context.auxiliary_ghost_fill ||
-             context.root_state_ghost_fill || context.root_auxiliary_ghost_fill) {
+          "generated AMR root level requires one prepared state ghost provider");
+    if (provider_components > 0) {
+      if (!context.root_provider_ghost_fill || context.provider_ghost_fill)
+        throw std::invalid_argument(
+            "generated AMR root providers require one prepared full-domain ghost provider");
+    } else if (context.root_provider_ghost_fill || context.provider_ghost_fill) {
+      throw std::invalid_argument("provider-free generated AMR block cannot retain provider ghosts");
+    }
+  } else if (!context.state_ghost_fill || context.root_state_ghost_fill) {
     throw std::invalid_argument(
-        "generated AMR fine level requires only prepared sparse coarse/fine ghost providers");
+        "generated AMR fine level requires one prepared sparse state ghost provider");
+  } else if (provider_components > 0) {
+    if (!context.provider_ghost_fill || context.root_provider_ghost_fill)
+      throw std::invalid_argument(
+          "generated AMR fine providers require one prepared sparse coarse/fine ghost provider");
+  } else if (context.provider_ghost_fill || context.root_provider_ghost_fill) {
+    throw std::invalid_argument("provider-free generated AMR block cannot retain provider ghosts");
   }
   if (has_physical_faces(context.topology) &&
       (!context.physical_boundary || context.boundary_identity.empty()))
@@ -229,17 +254,24 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
   }
 
   const auto& state = runtime.hierarchy().state(context.level);
-  const auto& auxiliary = *context.auxiliary;
-  if (state.ncomp() != state_components || auxiliary.ncomp() < auxiliary_components ||
-      state.layout() != auxiliary.layout() || state.distribution() != auxiliary.distribution() ||
-      state.local_rank() != auxiliary.local_rank() || state.local_size() != auxiliary.local_size())
-    throw std::invalid_argument(
-        "generated AMR state and auxiliary storage do not share one exact level layout");
+  if (state.ncomp() != state_components)
+    throw std::invalid_argument("generated AMR state component count differs from its model");
+  if (provider_components > 0) {
+    for (const auto& value : context.provider_plan->values) {
+      const auto* const group = context.provider_storage->find(value.address.group);
+      if (group == nullptr || value.address.component >= static_cast<std::size_t>(group->ncomp()) ||
+          group->layout() != state.layout() || group->distribution() != state.distribution() ||
+          group->local_rank() != state.local_rank() || group->local_size() != state.local_size() ||
+          value.contract.centering != "cell" || value.shape.value_components != 1)
+        throw std::invalid_argument(
+            "generated AMR provider group is not pointwise compatible with state");
+    }
+  }
   for (int axis = 0; axis < Dim; ++axis) {
-    if (state.ghosts()[axis] < required_ghosts[axis] ||
-        auxiliary.ghosts()[axis] < required_ghosts[axis])
+    if (state.ghosts()[axis] < required_ghosts[axis])
       throw std::invalid_argument(
-          "generated AMR level storage is narrower than its reconstruction stencil");
+          "generated AMR state storage is narrower than its reconstruction stencil");
+    if (provider_components > 0)
     if (context.embedded_boundary) {
       const auto require_embedded_field = [&](const MultiFab<Dim, MemorySpace>& field,
                                               int components, const char* label) {
@@ -269,16 +301,16 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
       .scalar(static_cast<std::uint64_t>(context.level))
       .text(provider_identity)
       .text(context.state_identity)
-      .text(context.auxiliary_identity)
+      .text(context.provider_storage_identity)
       .text(context.boundary_identity)
       .text(context.embedded_boundary_provider_identity)
       .bytes(runtime.spatial_contract())
       .scalar(runtime.topology_epoch())
       .scalar(runtime.materialization_generation())
       .optional_collective_contract(context.state_ghost_fill)
-      .optional_collective_contract(context.auxiliary_ghost_fill)
+      .optional_collective_contract(context.provider_ghost_fill)
       .optional_collective_contract(context.root_state_ghost_fill)
-      .optional_collective_contract(context.root_auxiliary_ghost_fill);
+      .optional_collective_contract(context.root_provider_ghost_fill);
   contract.presence(static_cast<bool>(context.embedded_boundary));
   if (context.embedded_boundary)
     contract
@@ -309,93 +341,30 @@ void collective_phase(Operation&& operation, const char* failure_message) {
 }
 
 template <int Dim, class Model>
-MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
-                                 const MultiFab<Dim>& auxiliary) {
-  collective_phase(
-      [&] {
-        generated_system_detail::require_same_layout(state, auxiliary, auxiliary.ncomp(),
-                                                     "generated AMR source auxiliary");
-        if (auxiliary.ncomp() < aux_comps_for<Model, Dim>())
-          throw std::invalid_argument("generated AMR source auxiliary field is too narrow");
-      },
-      "generated AMR source preflight failed collectively");
-
-  std::optional<MultiFab<Dim>> candidate;
-  std::optional<MultiFab<Dim>> status;
-  collective_phase(
-      [&] {
-        candidate.emplace(state.layout(), state.distribution(), state.local_rank(), Model::n_vars,
-                          state.ghosts());
-        status.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-      },
-      "generated AMR source workspace allocation failed collectively");
-
-  Real local_status = Real(0);
-  collective_phase(
-      [&] {
-        for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        generated_system_detail::MaterializeSource<Dim, Model>{
-                            model, state.fab(local).view(), auxiliary.fab(local).view(),
-                            candidate->fab(local).view(), status->fab(local).view()});
-        local_status = reduce_max_local(*status);
-      },
-      "generated AMR source materialization failed collectively");
-  if (all_reduce_max(local_status) != Real(0))
-    throw std::runtime_error("generated AMR source produced a non-finite component");
-  return std::move(*candidate);
+MultiFab<Dim> materialize_source(
+    const Model& model, const MultiFab<Dim>& state,
+    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+  return generated_system_detail::materialize_source<Dim>(model, state, provider_storage,
+                                                           provider_plan);
 }
 
 template <int Dim, class Model>
 MultiFab<Dim> materialize_masked_source(
-    const Model& model, const MultiFab<Dim>& state, const MultiFab<Dim>& auxiliary,
+    const Model& model, const MultiFab<Dim>& state,
+    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
     const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded) {
-  MultiFab<Dim> candidate = materialize_source<Dim>(model, state, auxiliary);
-  const MultiFab<Dim>& active = embedded.active_mask();
-  collective_phase(
-      [&] {
-        generated_system_detail::require_same_layout(state, active, 1, "generated AMR active mask");
-        for (std::size_t local = 0; local < candidate.local_size(); ++local)
-          for_each_cell(candidate.box(local),
-                        generated_system_detail::ApplyActiveMask<Dim>{
-                            candidate.fab(local).view(), active.fab(local).view(), Model::n_vars});
-        device_fence();
-      },
-      "generated AMR source masking failed collectively");
-  return candidate;
+  return generated_system_detail::materialize_masked_source<Dim>(
+      model, state, provider_storage, provider_plan, embedded);
 }
 
 template <int Dim, class Model>
-Real maximum_speed(const Model& model, const MultiFab<Dim>& state, const MultiFab<Dim>& auxiliary) {
-  collective_phase(
-      [&] {
-        generated_system_detail::require_same_layout(state, auxiliary, auxiliary.ncomp(),
-                                                     "generated AMR speed auxiliary");
-        if (auxiliary.ncomp() < flux_provider_count<Model>)
-          throw std::invalid_argument("generated AMR speed auxiliary field is too narrow");
-      },
-      "generated AMR speed preflight failed collectively");
-  std::optional<MultiFab<Dim>> values;
-  collective_phase(
-      [&] {
-        values.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-      },
-      "generated AMR speed workspace allocation failed collectively");
-  Real local_result = Real(0);
-  collective_phase(
-      [&] {
-        for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        generated_system_detail::MaterializeMaximumSpeed<Dim, Model>{
-                            model, state.fab(local).view(), auxiliary.fab(local).view(),
-                            values->fab(local).view()});
-        local_result = reduce_max_local(*values);
-      },
-      "generated AMR speed materialization failed collectively");
-  const Real result = static_cast<Real>(all_reduce_max(local_result));
-  if (!std::isfinite(result) || result < Real(0))
-    throw std::runtime_error("generated AMR model produced an invalid maximum speed");
-  return result;
+Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
+                   const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+                   const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+  return generated_system_detail::maximum_speed<Dim>(model, state, provider_storage,
+                                                      provider_plan);
 }
 
 template <int Dim, class Model>
@@ -443,62 +412,35 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
 
 template <int Dim, class Model>
 Real source_frequency(const Model& model, const MultiFab<Dim>& state,
-                      const MultiFab<Dim>& auxiliary) {
-  collective_phase(
-      [&] {
-        generated_system_detail::require_same_layout(state, auxiliary, auxiliary.ncomp(),
-                                                     "generated AMR source-frequency auxiliary");
-      },
-      "generated AMR source-frequency preflight failed collectively");
-  std::optional<MultiFab<Dim>> values;
-  collective_phase(
-      [&] {
-        values.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-      },
-      "generated AMR source-frequency workspace allocation failed collectively");
-  Real local_frequency = Real(0);
-  collective_phase(
-      [&] {
-        for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
-                            model, state.fab(local).view(), auxiliary.fab(local).view(),
-                            values->fab(local).view()});
-        local_frequency = reduce_max_local(*values);
-      },
-      "generated AMR source-frequency materialization failed collectively");
-  const Real frequency = static_cast<Real>(all_reduce_max(local_frequency));
+                      const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+                      const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
+                                        model, state.fab(local).view(),
+                                        generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                                            provider_plan, provider_storage, local),
+                                        values.fab(local).view()});
+  const Real frequency = reduce_max(values);
   if (!std::isfinite(frequency) || frequency < Real(0))
     throw std::runtime_error("generated AMR source frequency is invalid");
   return frequency;
 }
 
 template <int Dim, class Model>
-Real stability_dt(const Model& model, const MultiFab<Dim>& state, const MultiFab<Dim>& auxiliary) {
-  collective_phase(
-      [&] {
-        generated_system_detail::require_same_layout(state, auxiliary, auxiliary.ncomp(),
-                                                     "generated AMR stability auxiliary");
-      },
-      "generated AMR stability preflight failed collectively");
-  std::optional<MultiFab<Dim>> values;
-  collective_phase(
-      [&] {
-        values.emplace(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
-      },
-      "generated AMR stability workspace allocation failed collectively");
-  Real local_dt = Real(0);
-  collective_phase(
-      [&] {
-        for (std::size_t local = 0; local < state.local_size(); ++local)
-          for_each_cell(state.box(local),
-                        generated_system_detail::MaterializeStabilityDt<Dim, Model>{
-                            model, state.fab(local).view(), auxiliary.fab(local).view(),
-                            values->fab(local).view()});
-        local_dt = reduce_min_local(*values);
-      },
-      "generated AMR stability materialization failed collectively");
-  const Real dt = static_cast<Real>(all_reduce_min(local_dt));
+Real stability_dt(const Model& model, const MultiFab<Dim>& state,
+                  const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+                  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan) {
+  constexpr int provider_count = provider_count_for<Model, Dim>();
+  MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    for_each_cell(state.box(local), generated_system_detail::MaterializeStabilityDt<Dim, Model>{
+                                        model, state.fab(local).view(),
+                                        generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                                            provider_plan, provider_storage, local),
+                                        values.fab(local).view()});
+  const Real dt = reduce_min(values);
   if (!std::isfinite(dt) || !(dt > Real(0)))
     throw std::runtime_error("generated AMR stability dt is invalid");
   return dt;
@@ -669,7 +611,7 @@ struct PreparedAmrSystemBlock {
   std::string cut_cell_provider_identity;
   std::string collective_contract;
   int ncomp = 0;
-  int aux_components = 0;
+  int provider_components = 0;
   VariableSet conservative_variables{};
   VariableSet primitive_variables{};
   double gamma = 1.0;
@@ -692,11 +634,11 @@ struct PreparedAmrSystemBlock {
 namespace generated_amr_detail {
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
-          class Reconstruction, class Numerical, class MemorySpace>
+          class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
 void materialize_masked_patch(const Model& model, const Metric& metric,
                               const Reconstruction& reconstruction, const Numerical& numerical,
                               Real positivity_floor, const Fab<Dim, MemorySpace>& state,
-                              const Fab<Dim, MemorySpace>& auxiliary,
+                              const ProviderStorageView<Dim, ProviderCount>& providers,
                               const Fab<Dim, MemorySpace>& active,
                               nd::FaceField<Dim, MemorySpace>& faces,
                               Fab<Dim, MemorySpace>& residual) {
@@ -705,7 +647,7 @@ void materialize_masked_patch(const Model& model, const Metric& metric,
   nd::FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
   nd::masked_operator_detail::materialize_axes<0, Variables>(
       model, metric, reconstruction, numerical, positivity_floor, positivity_component, state,
-      active, auxiliary.view(), faces, face_statuses, {});
+      active, providers, faces, face_statuses, {});
   const Real face_failure = nd::cartesian_operator_detail::maximum_face_status<0>(face_statuses);
   if (face_failure != static_cast<Real>(nd::FiniteVolumeStatus::Success))
     throw std::runtime_error("generated AMR embedded face evaluation refused publication");
@@ -727,11 +669,11 @@ void materialize_masked_patch(const Model& model, const Metric& metric,
 }
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
-          class Reconstruction, class Numerical, class MemorySpace>
+          class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
   requires(Dim != 2)
 void materialize_cut_cell_patch(const Model&, const Spatial&, const Reconstruction&,
                                 const Numerical&, Real, const Fab<Dim, MemorySpace>&,
-                                const Fab<Dim, MemorySpace>&,
+                                const ProviderStorageView<Dim, ProviderCount>&,
                                 const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>&,
                                 std::size_t, nd::FaceField<Dim, MemorySpace>&,
                                 Fab<Dim, MemorySpace>&) {
@@ -740,19 +682,19 @@ void materialize_cut_cell_patch(const Model&, const Spatial&, const Reconstructi
 }
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
-          class Reconstruction, class Numerical, class MemorySpace>
+          class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
   requires(Dim == 2)
 void materialize_cut_cell_patch(
     const Model& model, const Spatial& spatial, const Reconstruction& reconstruction,
     const Numerical& numerical, Real positivity_floor, const Fab<Dim, MemorySpace>& state,
-    const Fab<Dim, MemorySpace>& auxiliary,
+    const ProviderStorageView<Dim, ProviderCount>& providers,
     const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded, std::size_t local,
     nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual) {
   const auto metric =
       nd::PreparedEmbeddedBoundaryMetric2D<std::remove_cvref_t<decltype(spatial.metric())>>::
           prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
   materialize_masked_patch<Dim, Variables>(model, metric, reconstruction, numerical,
-                                           positivity_floor, state, auxiliary,
+                                           positivity_floor, state, providers,
                                            embedded.active_mask().fab(local), faces, residual);
 }
 
@@ -761,6 +703,7 @@ template <int Dim, class Model, class Reconstruction, class Numerical,
 PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction reconstruction,
                                                Numerical numerical) {
   static_assert(Model::dimension == Dim);
+  constexpr int provider_count = provider_count_for<Model, Dim>();
   const auto spatial_factory =
       [model = request.model, reconstruction, numerical,
        positivity_floor = request.routes.positivity_floor](const Geometry<Dim>& geometry) {
@@ -789,7 +732,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.staircase_provider_identity = staircase_provider_identity;
   result.cut_cell_provider_identity = cut_cell_provider_identity;
   result.ncomp = Model::n_vars;
-  result.aux_components = aux_comps_for<Model, Dim>();
+  result.provider_components = provider_count;
   result.conservative_variables = Model::conservative_vars();
   result.primitive_variables = Model::primitive_vars();
   result.gamma = request.gamma;
@@ -807,7 +750,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .text(staircase_provider_identity)
       .text(cut_cell_provider_identity)
       .scalar(std::int32_t{Model::n_vars})
-      .scalar(std::int32_t{aux_comps_for<Model, Dim>()})
+      .scalar(std::int32_t{provider_count})
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})
       .scalar(std::int32_t{request.stride})
@@ -826,32 +769,35 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                               provider_identity, staircase_provider_identity,
                               cut_cell_provider_identity](runtime::amr::AmrRuntime<Dim>& runtime,
                                                           GeneratedAmrLevelContext<Dim> context) {
-    require_level_context(runtime, context, Model::n_vars, aux_comps_for<Model, Dim>(),
+    require_level_context(runtime, context, Model::n_vars, provider_count,
                           required_ghosts, staircase_provider_identity, cut_cell_provider_identity);
     const auto spatial = spatial_factory(context.geometry);
-    MultiFab<Dim>* const auxiliary = context.auxiliary;
+    runtime::system::AuxiliaryStorageGroups<Dim>* const provider_storage =
+        context.provider_storage;
+    const auto* const provider_plan = context.provider_plan;
     const auto state_ghost_fill = context.state_ghost_fill;
-    const auto auxiliary_ghost_fill = context.auxiliary_ghost_fill;
+    const auto provider_ghost_fill = context.provider_ghost_fill;
     const auto root_state_ghost_fill = context.root_state_ghost_fill;
-    const auto root_auxiliary_ghost_fill = context.root_auxiliary_ghost_fill;
+    const auto root_provider_ghost_fill = context.root_provider_ghost_fill;
     const auto physical_boundary = context.physical_boundary;
     const auto embedded_boundary = context.embedded_boundary;
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
 
-    auto prepare_state = [auxiliary, state_ghost_fill, auxiliary_ghost_fill, root_state_ghost_fill,
-                          root_auxiliary_ghost_fill, physical_boundary, geometry,
+    auto prepare_state = [provider_storage, state_ghost_fill, provider_ghost_fill,
+                          root_state_ghost_fill, root_provider_ghost_fill, physical_boundary, geometry,
                           level](const runtime::multiblock::BoundaryEvaluationPoint& point,
                                  MultiFab<Dim>& state) {
-      MultiFab<Dim>& aux = *auxiliary;
       collective_phase(
           [&] {
             if (level == 0) {
               root_state_ghost_fill(state, point);
-              root_auxiliary_ghost_fill(aux, point);
+              if constexpr (provider_count > 0)
+                root_provider_ghost_fill(*provider_storage, point);
             } else {
               state_ghost_fill(state, point);
-              auxiliary_ghost_fill(aux, point);
+              if constexpr (provider_count > 0)
+                provider_ghost_fill(*provider_storage, point);
             }
             if (physical_boundary)
               physical_boundary->fill_physical(state, geometry);
@@ -859,12 +805,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           "generated AMR ghost/boundary phase failed collectively");
     };
 
-    auto evaluator = [model, spatial, reconstruction, numerical, positivity_floor, auxiliary,
+    auto evaluator = [model, spatial, reconstruction, numerical, positivity_floor, provider_storage,
+                      provider_plan,
                       prepare_state, physical_boundary, embedded_boundary,
                       geometry](const runtime::multiblock::BoundaryEvaluationPoint& point,
                                 MultiFab<Dim>& state) {
       prepare_state(point, state);
-      MultiFab<Dim>& aux = *auxiliary;
       std::optional<std::vector<nd::FaceField<Dim>>> faces;
       std::optional<MultiFab<Dim>> residual;
       collective_phase(
@@ -883,18 +829,30 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                     runtime::system::PreparedEmbeddedBoundaryMode::staircase) {
                   materialize_masked_patch<Dim, Variables>(
                       model, spatial.metric(), reconstruction, numerical, positivity_floor,
-                      state.fab(local), aux.fab(local), embedded_boundary->active_mask().fab(local),
+                      state.fab(local),
+                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                          provider_plan, provider_storage, local),
+                      embedded_boundary->active_mask().fab(local),
                       (*faces)[local], residual->fab(local));
                 } else {
                   materialize_cut_cell_patch<Dim, Variables>(
                       model, spatial, reconstruction, numerical, positivity_floor, state.fab(local),
-                      aux.fab(local), *embedded_boundary, local, (*faces)[local],
+                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                          provider_plan, provider_storage, local),
+                      *embedded_boundary, local, (*faces)[local],
                       residual->fab(local));
                 }
               }
             } else {
               for (std::size_t local = 0; local < state.local_size(); ++local) {
-                spatial.materialize_face_fluxes(state.fab(local), aux.fab(local), (*faces)[local]);
+                if constexpr (provider_count == 0)
+                  spatial.materialize_face_fluxes(state.fab(local), (*faces)[local]);
+                else
+                  spatial.materialize_face_fluxes(
+                      state.fab(local),
+                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                          provider_plan, provider_storage, local),
+                      (*faces)[local]);
                 if (physical_boundary)
                   physical_boundary->apply_physical_flux_conditions((*faces)[local],
                                                                     geometry.domain());
@@ -906,32 +864,35 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       MultiFab<Dim> source =
           embedded_boundary && embedded_boundary->mode() !=
                                    runtime::system::PreparedEmbeddedBoundaryMode::inactive
-              ? materialize_masked_source<Dim>(model, state, aux, *embedded_boundary)
-              : materialize_source<Dim>(model, state, aux);
+              ? materialize_masked_source<Dim>(model, state, provider_storage, provider_plan,
+                                               *embedded_boundary)
+              : materialize_source<Dim>(model, state, provider_storage, provider_plan);
       saxpy(*residual, Real(1), source);
       return PreparedAmrLevelEvaluation<Dim>{.residual = std::move(*residual),
                                              .integrated_face_fluxes = std::move(*faces)};
     };
-    auto speed = [model, auxiliary](const MultiFab<Dim>& state) {
-      return maximum_speed<Dim>(model, state, *auxiliary);
+    auto speed = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
+      return maximum_speed<Dim>(model, state, provider_storage, provider_plan);
     };
     auto poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
       add_poisson_rhs<Dim>(model, state, rhs);
     };
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed source_frequency_bound;
     if constexpr (requires(const Model& value, const typename Model::State& state,
-                           const typename Model::Aux& aux) {
-                    value.source_frequency(state, aux);
+                           const ProviderValues<provider_count>& providers) {
+                    value.source_frequency(state, providers);
                   }) {
-      source_frequency_bound = [model, auxiliary](const MultiFab<Dim>& state) {
-        return source_frequency<Dim>(model, state, *auxiliary);
+      source_frequency_bound = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
+        return source_frequency<Dim>(model, state, provider_storage, provider_plan);
       };
     }
     typename PreparedGeneratedAmrLevelBlock<Dim>::Speed stability_dt_bound;
     if constexpr (requires(const Model& value, const typename Model::State& state,
-                           const typename Model::Aux& aux) { value.stability_dt(state, aux); }) {
-      stability_dt_bound = [model, auxiliary](const MultiFab<Dim>& state) {
-        return stability_dt<Dim>(model, state, *auxiliary);
+                           const ProviderValues<provider_count>& providers) {
+                    value.stability_dt(state, providers);
+                  }) {
+      stability_dt_bound = [model, provider_storage, provider_plan](const MultiFab<Dim>& state) {
+        return stability_dt<Dim>(model, state, provider_storage, provider_plan);
       };
     }
     std::string contract = level_contract(runtime, context, provider_identity);
