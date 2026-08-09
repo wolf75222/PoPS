@@ -59,7 +59,7 @@ class CompiledComponent:
             "cons_roles": ("VelocityX",),
             "n_vars": 1,
             "params": {},
-            "aux_names": (),
+            "provider_components": (),
             "n_aux": 0,
             "native_dimension": 2,
             "capabilities": dict(self.caps),

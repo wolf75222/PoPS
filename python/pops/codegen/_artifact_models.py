@@ -13,7 +13,7 @@ _METADATA_KEYS = frozenset({
     "cons_roles",
     "n_vars",
     "params",
-    "aux_names",
+    "provider_components",
     "n_aux",
     "native_dimension",
     "capabilities",
@@ -40,7 +40,7 @@ class ArtifactModelMetadata:
     cons_roles: tuple[str, ...]
     n_vars: int
     params: dict[str, Any]
-    aux_names: tuple[str, ...]
+    provider_components: tuple[str, ...]
     n_aux: int
     native_dimension: int
     state_space: str
@@ -112,13 +112,15 @@ def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
                     % (owners[name], row.block_name, name))
             params[name] = value
             owners.setdefault(name, row.block_name)
-    aux_names = list(dict.fromkeys(name for row in rows for name in row.aux_names))
+    provider_components = list(
+        dict.fromkeys(component for row in rows for component in row.provider_components)
+    )
     state_spaces = {row.state_space for row in rows}
     return (
         cons_names,
         sum(row.n_vars for row in rows),
         params,
-        aux_names,
+        provider_components,
         sum(row.n_aux for row in rows),
         next(iter(state_spaces)) if len(state_spaces) == 1 else None,
     )
@@ -165,10 +167,10 @@ def _metadata(
     params = dict(data["params"])
     if any(not isinstance(name, str) or not name for name in params):
         raise TypeError("compiled model parameter names must be non-empty strings")
-    aux_names = _strings(data["aux_names"], where="aux_names")
+    provider_components = _strings(data["provider_components"], where="provider_components")
     n_aux = data["n_aux"]
-    if not isinstance(n_aux, int) or isinstance(n_aux, bool) or n_aux < len(aux_names):
-        raise ValueError("compiled model n_aux cannot be smaller than its named aux metadata")
+    if not isinstance(n_aux, int) or isinstance(n_aux, bool) or n_aux < len(provider_components):
+        raise ValueError("compiled model n_aux cannot be smaller than its provider component metadata")
     native_dimension = data["native_dimension"]
     if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
         raise TypeError("compiled model native_dimension must be an exact integer")
@@ -193,7 +195,7 @@ def _metadata(
         cons_roles=cons_roles,
         n_vars=n_vars,
         params=params,
-        aux_names=aux_names,
+        provider_components=provider_components,
         n_aux=n_aux,
         native_dimension=native_dimension,
         state_space=state_spaces[0],

@@ -97,9 +97,6 @@ def _emit_real_spectrum_blocks(blocks: Any, *, indent: str, im_tol: str, max_ite
     return lines
 
 
-_MOMENTUM_ROLES = ("MomentumX", "MomentumY", "MomentumZ")
-
-
 def _unique_role_index(roles: list[str], role: str, *, capability: str) -> int:
     matches = [index for index, value in enumerate(roles) if value == role]
     if len(matches) != 1:
@@ -111,18 +108,18 @@ def _unique_role_index(roles: list[str], role: str, *, capability: str) -> int:
 
 
 def _ranked_fluid_roles(model: Any, *, capability: str) -> tuple:
-    """Resolve Density/Energy and one momentum component per emitted axis."""
+    """Resolve density/energy and one axis-qualified momentum per emitted axis."""
     axes = _ranked_axes(model)
     roles = _roles_for(model.cons_names, model.cons_roles)
-    density = _unique_role_index(roles, "Density", capability=capability)
+    density = _unique_role_index(roles, "density", capability=capability)
     momenta = [
-        _unique_role_index(roles, _MOMENTUM_ROLES[axis], capability=capability)
+        _unique_role_index(roles, "momentum:%d" % axis, capability=capability)
         for axis in range(len(axes))
     ]
-    energy_matches = [index for index, role in enumerate(roles) if role == "Energy"]
+    energy_matches = [index for index, role in enumerate(roles) if role == "energy"]
     if len(energy_matches) > 1:
         raise ValueError(
-            "%s: at most one Energy role is supported; current roles %r"
+            "%s: at most one energy role is supported; current roles %r"
             % (capability, roles)
         )
     energy = energy_matches[0] if energy_matches else -1
@@ -327,8 +324,10 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         for axis in axes
         for expression in model._roe_rows[axis]
     )
-    aux_names = tuple(name for name in model.aux_names if name in aux_dependencies)
-    has_aux = bool(aux_names)  # names are bound only when this consumer actually reads them
+    provider_components = tuple(
+        name for name in model._provider_components if name in aux_dependencies
+    )
+    has_aux = bool(provider_components)  # bound only when this consumer actually reads them
     aL = "const auto& aL" if has_aux else "const auto&"
     aR = "const auto& aR" if has_aux else "const auto&"
     out.append("  // CAPABILITY ROE FOURNIE (m.roe_dissipation) : dissipation d ecrite par")
@@ -345,8 +344,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
                 for p, e in model.prim_defs.items()]
         if has_aux:
             out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
-                    % (side, n, av, model._aux_flux_provider_index(n))
-                    for n in aux_names]
+                    % (side, n, av, model._physical_flux_consumer_slot(n))
+                    for n in provider_components]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):
         out.append(_axis_branch(ordinal))

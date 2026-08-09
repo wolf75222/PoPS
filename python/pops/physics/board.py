@@ -645,7 +645,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if set(components) != set(frame.axes):
             raise ValueError("vector components must name every typed frame axis exactly once")
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (self, "_fields")):
+        with atomic_attrs((hyp, "_provider_components"), (self, "_fields")):
             h = VectorHandle(
                 name,
                 frame=frame,
@@ -751,7 +751,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 return h
 
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "_flux"),
+        with atomic_attrs((hyp, "_provider_components"), (hyp, "_flux"),
                           (hyp, "_eig"), (self, "_fluxes")):
             expressions = {
                 axis: [_wrap(self._to_expr(value)) for value in values]
@@ -960,7 +960,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._invalidate_authoring_views()
             return h
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"),
+        with atomic_attrs((hyp, "_provider_components"),
                           (hyp, "_source_terms"), (hyp, "_source"), (self, "_sources")):
             self._dsl.source_term(
                 reg, [_wrap(self._to_expr(expression)) for expression in values])
@@ -1019,7 +1019,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 require_name(input_name, "operator input")
             hyp = self._dsl._m
             with atomic_attrs(
-                    (hyp, "aux_names"), (hyp, "_linear_sources"),
+                    (hyp, "_provider_components"), (hyp, "_linear_sources"),
                     (self, "_operators"), (self, "_operator_inputs")):
                 self._dsl.linear_source(
                     reg, [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix])

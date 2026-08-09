@@ -10,7 +10,6 @@ from pops.codegen._phases import _resolve_problem_model
 from pops.codegen.module_lowering import lower_and_validate
 from pops._ir.expr import Const
 from pops.model import Module, Rate
-from pops.model.provider_pack import MissingInputProvider
 from pops.physics._facade import Model
 
 
@@ -131,19 +130,27 @@ def test_facade_and_formula_carrier_share_one_minimal_flux_provider_pack():
     source = model.__pops_native_loader_source__()
     assert rows[0]["key"]["owner_qid"] in source
     assert '"grad_x"' in source
-    assert "true, 1" in source
+    # ``grad_x`` is component 1 in its FieldSpace but component 0 in this
+    # flux consumer.  The emitted code must use the consumer-local plan, never
+    # the field-storage ordinal.
+    assert "true, 0" in source
+    assert "flux_provider<0>()" in source
     assert "static constexpr int n_flux_providers = 1;" in source
     assert "flux_provider_requirements" in source
+    assert "AuxState" not in source
     assert "template <int Axis>\n  POPS_HD State flux(const State& U, const auto& a)" in source
     assert "static constexpr int dimension = 2;" in source
-    assert "a.template flux_provider<1>()" in source
+    assert "a.template flux_provider<1>()" not in source
 
 
-def test_field_dependent_flux_without_provider_fails_before_native_source():
+def test_field_dependent_flux_without_field_operator_is_an_exact_runtime_input():
     model = _field_dependent_flux_model("missing-flux-provider", with_provider=False)
 
-    with pytest.raises(MissingInputProvider, match="unset"):
-        lower_and_validate(model, facade=model)
+    lower_and_validate(model, facade=model)
+    source = model.__pops_native_loader_source__()
+
+    assert "AuxiliaryProviderKind::input" in source
+    assert "grad_x" in source
 
 
 def test_same_field_spelling_under_distinct_model_owners_stays_distinct_in_emitted_pack():

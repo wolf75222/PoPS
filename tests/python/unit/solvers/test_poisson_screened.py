@@ -174,7 +174,7 @@ def test_constant_reaction_reaches_both_native_install_protocols(
 
     host = type("InstallHost", (), {"_s": Native()})()
     models = {
-        "charge": type("CompiledModel", (), {"aux_extra_names": ("screened_phi",)})()
+        "charge": type("CompiledModel", (), {"provider_components": ("screened_phi",)})()
     }
     if installer == "system":
         from pops.runtime._system_unified_install import _SystemUnifiedInstall

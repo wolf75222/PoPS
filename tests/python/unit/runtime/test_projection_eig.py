@@ -313,7 +313,7 @@ def test_system_end_to_end():
             prim_names=model.prim_state,
             n_vars=model.n_vars,
             gamma=1.4,
-            n_aux=len(model.aux_names) + len(model.aux_extra_names),
+            n_aux=len(model._provider_components),
             params={},
             caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
             abi_key=_abi_key_python(INCLUDE, cxx, loader_cxx_std()),

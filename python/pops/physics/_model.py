@@ -88,7 +88,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
             "n_vars": self.n_vars,
             "params": params,
-            "aux_names": tuple(self.aux_names),
+            "provider_components": tuple(self._provider_components),
             "n_aux": self._total_n_aux(),
             "capabilities": {},
             "wave_speed_provider": wave_speed_provider,
@@ -116,7 +116,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self._recovery_admissibility = {}  # primitive component -> symbolic Boolean predicate
-        self.aux_names = []      # Ordered generic auxiliary declarations.
+        self._provider_components = []  # Ordered ordinary provider component declarations.
         self._flux = {}         # "x" / "y" -> list of Expr (one per conservative component)
         self._flux_terms = {}   # NAMED physical fluxes (flux_term, ADC-419): name -> {"x": [Expr],
                                 # "y": [Expr]} (n_cons each). The implicit "default" flux lives in

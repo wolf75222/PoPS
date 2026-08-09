@@ -128,7 +128,7 @@ class _SourceMixin(_HyperbolicModel):
         # field would compile to an undefined local -> reject it loud (the default set_elliptic_rhs has
         # the same surface). A source/flux READING the named field's solved aux is the supported pattern;
         # it is the named-elliptic RHS itself that must be a function of U only.
-        rhs_aux = rhs.deps() & set(self.aux_names)
+        rhs_aux = rhs.deps() & set(self._provider_components)
         if rhs_aux:
             raise ValueError(
                 "elliptic_field('%s'): rhs may not read aux fields %s; the elliptic "

@@ -123,11 +123,26 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
     output_block = operator.unknown.block_ref
     if output_block is None:
         raise RuntimeError("resolved field output lost its owner-qualified block")
+    declaration = operator.unknown.declaration_ref
+    if declaration is None:
+        raise RuntimeError("resolved field output lost its FieldSpace declaration")
+    # ``components`` remains the small human-facing report used by the field
+    # authoring API.  Installation deliberately carries the complete key for
+    # each value instead: an output may be homonymous with another block's
+    # field and storage locations are allocated only by the global native
+    # provider registry.
+    output_keys = tuple({
+        "owner_qid": output_block.canonical_identity(),
+        "space_kind": "field",
+        "space_name": declaration.local_id,
+        "component": component,
+    } for component in components)
     return {
         "owner_identity": output_block.canonical_identity(),
         "owner_block": output_block.local_id,
         "key": operator.name,
         "components": components,
+        "component_keys": output_keys,
         "dimension": dimension,
         "gradient_sign": gradient_sign,
     }, gradient_sign
@@ -653,22 +668,34 @@ def _prepare_output(
     if model is None:
         raise ValueError("field output route names unknown block %r" % block)
     components = tuple(route["components"])
-    try:
-        indices = [model._aux_component_index(component) for component in components]
-    except ValueError as error:
+    keys = tuple(route.get("component_keys", ()))
+    if len(keys) != len(components):
         raise ValueError(
-            "field output route %r is absent from block %r native aux layout: %s"
-            % (operator.name, block, ", ".join(components))
-        ) from error
+            "field output route %r has no exact ComponentKey for each output"
+            % operator.name
+        )
+    for component, key in zip(components, keys, strict=True):
+        if (
+            not isinstance(key, Mapping)
+            or set(key) != {"owner_qid", "space_kind", "space_name", "component"}
+            or key["owner_qid"] != route["owner_identity"]
+            or key["space_kind"] != "field"
+            or key["component"] != component
+            or not all(isinstance(value, str) and value for value in key.values())
+        ):
+            raise ValueError(
+                "field output route %r carries an invalid owner-qualified ComponentKey"
+                % operator.name
+            )
     gradient_sign = route.get("gradient_sign")
     if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
         raise ValueError("field output route has no valid GradientOutput sign")
-    if len(indices) == 1 and gradient_sign != 1:
+    if len(keys) == 1 and gradient_sign != 1:
         raise ValueError("field output route carries a sign without gradient components")
     return {
         "block": block,
         "key": route["key"],
-        "indices": indices,
+        "output_keys": keys,
         "gradient_sign": gradient_sign,
     }
 
@@ -680,11 +707,11 @@ def _install_output(
 ) -> None:
     """Commit the provider-owned output payload after every input preflight succeeded."""
     del binding
-    indices = output_payload["indices"]
+    output_keys = output_payload["output_keys"]
     context.engine.register_elliptic_field(
         output_payload["block"],
         output_payload["key"],
-        indices,
+        output_keys,
         output_payload["gradient_sign"],
     )
 

@@ -28,7 +28,7 @@ class CompiledModel:
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, native_dimension: Any,
                  target: Any = "system",
-                 hllc: Any = False, roe: Any = False, aux_names: Any = None,
+                 hllc: Any = False, roe: Any = False, provider_components: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
                  state_spaces: Any = ("U",), wave_speed_provider: Any = None,
@@ -94,10 +94,9 @@ class CompiledModel:
         self.n_vars = int(n_vars)
         self.gamma = gamma           # None = historical default 1.4 on the System side
         self.n_aux = int(n_aux)
-        # Ordered generic auxiliary component names. Exact provider identity,
-        # contracts and compact slots are emitted separately in ProviderPack
-        # metadata; names are detached inspection data only.
-        self.aux_names = list(aux_names) if aux_names else []
+        # Ordered source-level component spellings are report-only. Exact identity,
+        # contracts, producer and storage address are all carried by ProviderPack metadata.
+        self.provider_components = list(provider_components) if provider_components else []
         # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
         # second-or-further elliptic solve the native loader wires via register_elliptic_field +
         # set_block_elliptic_field after the block is installed. The names remain detached compiled
@@ -174,7 +173,7 @@ class CompiledModel:
             "cons_roles": tuple(self.cons_roles),
             "n_vars": self.n_vars,
             "params": dict(self.params),
-            "aux_names": tuple(self.aux_names),
+            "provider_components": tuple(self.provider_components),
             "n_aux": self.n_aux,
             "native_dimension": self.native_dimension,
             "capabilities": dict(self.caps),

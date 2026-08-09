@@ -39,7 +39,7 @@ from pops.identity.scalar import scalar_cpp
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
                    hoist_reciprocals: Any = False) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
-    2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
+    2bis). The produced struct uses StateVec / ProviderValues / POPS_HD / Variables and exposes flux,
     max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
     therefore enter a CompositeModel and run in the compiled solver.
 
@@ -102,13 +102,13 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         return model._flux_provider_locals_lines()
 
     # Physical laws consume the exact provider-read protocol. The parameter remains generic so
-    # direct pointwise callers may pass Aux while the FV route passes BoundFluxProviders<Model>
-    # without reconstructing the process-wide POD.
+    # the FV route may pass its exact model-qualified provider view without reconstructing a
+    # process-wide auxiliary carrier.
     aux_param = "const auto& a" if model._reads_aux() else "const auto&"
 
     def eig_reduce(cpps: Any, ind: Any) -> list:
         # cpps : C++ already generated (possibly CSE) for the eigenvalues. Internal names suffixed
-        # '_' : they shadow neither a user variable nor the Aux parameter 'a' (see adversarial review).
+        # '_' : they shadow neither a user variable nor the provider parameter 'a'.
         lines = ["%sconst pops::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
         lines.append("%spops::Real mws_ = lam0_ < 0 ? -lam0_ : lam0_;" % ind)
         for k in range(1, len(cpps)):
@@ -229,7 +229,20 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Keeping the vectors total also makes metadata validation independent of particular model
     # families (moments, passive scalars, user-defined systems, ...).
     def roles_init(roles: Any) -> Any:
-        return ", ".join("pops::VariableRole::%s" % r for r in roles)
+        scalar = {
+            "density": "Density", "energy": "Energy", "pressure": "Pressure",
+            "temperature": "Temperature", "scalar": "Scalar", "custom": "Custom",
+        }
+
+        def cpp_semantic(role: str) -> str:
+            if role in scalar:
+                return "pops::VariableSemantic::%s" % scalar[role]
+            family, separator, axis = role.partition(":")
+            if family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal():
+                return "pops::VariableSemantic::%s(%s)" % (family, axis)
+            raise ValueError("generated model has unsupported structured variable role %r" % role)
+
+        return ", ".join(cpp_semantic(r) for r in roles)
 
     croles = roles_init(_roles_for(model.cons_names, model.cons_roles))
     proles = roles_init(_roles_for(model.prim_state, model.prim_roles))
@@ -261,7 +274,6 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "  using Prim  = pops::StateVec<%d>;" % npr,
         "  using Primitive = Prim;",
         "  static constexpr int dimension = %d;" % dimension,
-        "  using Aux   = pops::AuxState<dimension>;",
         "  static constexpr int n_vars = %d;" % nc,
         "  struct Schema {",
         "    using Conservative = State;",

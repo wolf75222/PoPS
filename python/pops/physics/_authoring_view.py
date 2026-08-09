@@ -27,7 +27,7 @@ class _OperatorViewMixin(_HyperbolicModel):
 
     def _aux_name_set(self) -> Any:
         """Names that denote an explicitly declared auxiliary field."""
-        return set(self.aux_names)
+        return set(self._provider_components)
 
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
@@ -76,7 +76,9 @@ class _OperatorViewMixin(_HyperbolicModel):
         Field names stay semantic only.  The provider pack assigns their native
         storage slots after the complete module has been resolved.
         """
-        return _model.FieldSpace(name=name, components=tuple(self.aux_names), layout="cell")
+        return _model.FieldSpace(
+            name=name, components=tuple(self._provider_components), layout="cell"
+        )
 
     def operator_registry(self, state_name: str = "U") -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.

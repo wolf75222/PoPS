@@ -507,10 +507,11 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
         shape = shape_for(route)
         if producer == "runtime_input":
             kind = "AuxiliaryProviderKind::input"
-        elif row["key"]["space_kind"] == "field" and (
-            producer.startswith("field_provider_set:[")
-            or "/" in producer
-        ):
+        elif row["key"]["space_kind"] == "field":
+            # FieldSpace is the sole authority for native field outputs.  The
+            # producer spelling is an opaque canonical operator identity (not
+            # a path syntax), therefore classify by the typed space rather
+            # than guessing from a slash or a historical field name.
             kind = "AuxiliaryProviderKind::field_output"
         elif producer == "derived" or producer.startswith("derived:"):
             if route is None or route.get("kind") != "derived":

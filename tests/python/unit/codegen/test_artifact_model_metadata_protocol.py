@@ -16,7 +16,7 @@ class ExternalMetadataProvider:
             "cons_roles": ("Density", "MomentumX"),
             "n_vars": 2,
             "params": {},
-            "aux_names": ("electric_field",),
+            "provider_components": ("electric_field",),
             "n_aux": 3,
             "native_dimension": 2,
             "capabilities": {"cpu": True, "amr": False},

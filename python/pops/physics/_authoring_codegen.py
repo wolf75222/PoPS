@@ -57,7 +57,7 @@ class _CodegenMixin(_HyperbolicModel):
     def emit_cpp_brick(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                        hoist_reciprocals: bool = False) -> Any:
         """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
-        2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
+        2bis). The produced struct uses StateVec / ProviderValues / POPS_HD / Variables and exposes flux,
         max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
         therefore enter a CompositeModel and run in the compiled solver.
 

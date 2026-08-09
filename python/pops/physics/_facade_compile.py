@@ -226,7 +226,7 @@ class _FacadeCompileMixin(_FacadeModel):
             roe_entropy_policy=riemann_evidence.roe_entropy_policy,
             roe_entropy_delta=riemann_evidence.roe_entropy_delta,
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
-            aux_names=m.aux_names,
+            provider_components=m._provider_components,
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(
                 None if wave_speed_provider is None else wave_speed_provider.kind

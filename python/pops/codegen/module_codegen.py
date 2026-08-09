@@ -38,7 +38,6 @@ from pops.codegen.cpp_writer import _cpp_identifier
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
 from pops.codegen.module_emit_helpers import (  # noqa: F401
     _CANONICAL_ROLES,
-    _aux_component_index,
     _codegen_exprs,
     _exact_brick_contract,
     _jac_entries,
@@ -84,7 +83,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
         expression
         for axis in axes
         for expression in model._flux[axis]
-    ) & set(model.aux_names)
+    ) & set(model._provider_components)
     if aux_reads:
         raise ValueError(
             "emit_cpp standalone flux cannot bind ProviderPack consumers %s; "
@@ -185,7 +184,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         n_vars=nc,
         runtime_params=bool(rt_member),
     )
-    S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const pops::Aux& a) const {"
+    S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const auto& a) const {"
              % (nc, nc))
     src_exprs = [_ir_wrap(e) for e in model._source]
     S += cons_locals() + prim_locals(_live_prims(model, src_exprs)) + aux_locals()
@@ -200,7 +199,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     # CompositeModel (HasSourceFrequency) and aggregated by step_cfl. Without a call: nothing emitted.
     if model._src_freq is not None:
         S.append("")
-        S.append("  POPS_HD pops::Real frequency(const pops::StateVec<%d>& U, const pops::Aux& a) "
+        S.append("  POPS_HD pops::Real frequency(const pops::StateVec<%d>& U, const auto& a) "
                  "const {" % nc)
         S += cons_locals() + prim_locals(_live_prims(model, [model._src_freq])) + aux_locals()
         ftl, fcpps = _codegen_exprs(model, [model._src_freq], cse)
@@ -213,7 +212,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         if len(model._src_jac) != nc or any(len(r) != nc for r in model._src_jac):
             raise ValueError("source_jacobian: expected %dx%d matrix (dS_r/dU_c)" % (nc, nc))
         S.append("")
-        S.append("  POPS_HD void jacobian(const pops::StateVec<%d>& U, const pops::Aux& a, "
+        S.append("  POPS_HD void jacobian(const pops::StateVec<%d>& U, const auto& a, "
                  "pops::Real (&J)[%d][%d]) const {" % (nc, nc, nc))
         flat = [e for row in model._src_jac for e in row]
         S += cons_locals() + prim_locals(_live_prims(model, flat)) + aux_locals()
@@ -289,19 +288,31 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
 def _elliptic_field_registrations(model: Any, nm: Any) -> list:
     """Return exact-ranked named-field registrations for the native loader.
 
-    Each row is ``(field, brick_struct, components)``. ``components`` contains
-    either the scalar output alone or that scalar followed by one gradient slot
-    per physical axis. No two-dimensional padding enters the emitted ABI.
+    Each row is ``(field, brick_struct, output_keys)``. ``output_keys`` contains
+    either the scalar output alone or that scalar followed by one gradient
+    component per physical axis. They are full owner-qualified ComponentKeys:
+    a field solver must never inherit a package-local numeric slot.
     """
-    def comp(name: Any) -> int:
-        try:
-            return _aux_component_index(model, name)
-        except ValueError as error:
+    pack = getattr(model, "_auxiliary_provider_pack", None)
+    if pack is None:
+        raise ValueError(
+            "elliptic_field registrations require the exact ProviderPack; compile through Module"
+        )
+    owner_qid = str(model.owner_path.canonical())
+
+    def output_key(name: Any) -> Any:
+        matches = [
+            key for key in pack
+            if key.owner_qid == owner_qid and key.space_kind == "field"
+            and key.component == name
+        ]
+        if len(matches) != 1:
+            detail = "absent" if not matches else "ambiguous"
             raise ValueError(
-                "elliptic_field: aux output '%s' is not a declared aux field; declare it with "
-                "m.aux('%s') (so it gets an exact ProviderPack slot a source can read)"
-                % (name, name)
-            ) from error
+                "elliptic_field output %r is %s as an owner-qualified FieldSpace component"
+                % (name, detail)
+            )
+        return matches[0]
     regs = []
     dimension = len(_ranked_axes(model))
     for fld in sorted(model._elliptic_fields):
@@ -310,8 +321,8 @@ def _elliptic_field_registrations(model: Any, nm: Any) -> list:
             raise ValueError(
                 "elliptic_field('%s'): aux outputs must have length 1 or %d; got %d"
                 % (fld, 1 + dimension, len(aux)))
-        components = tuple(comp(name) for name in aux)
-        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), components))
+        output_keys = tuple(output_key(name) for name in aux)
+        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), output_keys))
     return regs
 
 

@@ -178,17 +178,6 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         _declare_aux(a.name, "aux/%s/%s" % (a.name, a.name))
         coverage_rows.append(LoweringCoverageRow(
             "aux:%s" % a.name, "lowered", ("dsl:aux:%s" % a.name,)))
-    if module._eigenvalues is not None:
-        m.eigenvalues(**{
-            axis: _body_for_state(values)
-            for axis, values in module._eigenvalues.items()
-        })
-        coverage_rows.append(LoweringCoverageRow(
-            "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
-    else:
-        coverage_rows.append(LoweringCoverageRow(
-            "module:%s:eigenvalues" % module.name, "documentary"))
-
     for key in provider_packs.complete:
         key_data = key.to_data()
         stable_key = "%s/%s/%s" % (
@@ -369,6 +358,20 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             _reject(source, "operator_lowering_failed", str(exc))
         coverage_rows.append(LoweringCoverageRow(
             source, "lowered", (builder_targets[op.kind],)))
+    # The executable DSL validates the spectrum against the already-selected
+    # physical flux axes.  A Module deliberately stores those two declarations
+    # independently, so materialize all grid operators before attaching the
+    # exact-ranked eigenvalue provider.
+    if module._eigenvalues is not None:
+        m.eigenvalues(**{
+            axis: _body_for_state(values)
+            for axis, values in module._eigenvalues.items()
+        })
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
+    else:
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "documentary"))
     coverage_report = LoweringCoverageReport(coverage_rows)
     object.__setattr__(m, "lowering_coverage_report", coverage_report)
     object.__setattr__(m, "_lowering_coverage_report", coverage_report)

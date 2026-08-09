@@ -194,7 +194,7 @@ def build_arguments(compiled: Any) -> Arguments:
         each is required and carries the model's conservative state space + component count;
       - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
-      - aux: the model's generic external auxiliary inputs (``model.aux_names`` minus the exact,
+      - provider components: the model's generic external inputs (report-only; exact identity is
         owner-scoped components produced by resolved field plans), each required;
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
       - layout_runtime: every exact compiled layout partition, its target, MPI optionality and
@@ -349,7 +349,7 @@ def _build_aux_arguments(model_rows: Any, produced_by_block: Any) -> dict[str, d
     aux_args: dict[str, dict[str, Any]] = {}
     for row in model_rows:
         produced = frozenset(produced_by_block.get(row.block_name, ()))
-        for name in row.aux_names:
+        for name in row.provider_components:
             if name not in produced:
                 aux_args.setdefault(name, {"layout": "cell", "required": True})
     return aux_args
@@ -745,7 +745,7 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     context = _native_memory_context()
     program = getattr(compiled, "program", None)
     cells, shape = _mesh_shape(mesh, context)
-    _cons, n_cons, _params, _aux_names, n_aux, _space = _model_metadata(compiled)
+    _cons, n_cons, _params, _provider_components, n_aux, _space = _model_metadata(compiled)
     if n_cons < 0 or n_aux < 0:
         raise MemoryEstimateCapabilityError(
             "estimate_memory requires non-negative compiled component counts (got n_cons=%r, n_aux=%r)"

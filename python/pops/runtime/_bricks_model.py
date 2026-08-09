@@ -129,14 +129,15 @@ class GravityForce:
 
 
 class MagneticLorentzForce:
-    """MAGNETIC Lorentz force q (v x B_z) on the momentum (native C++ brick
-    pops::MagneticLorentzForce, exposed to the Python API by the 2026-06 audit).
+    """Magnetic Lorentz force ``q (v x B)`` on the momentum.
 
     EXPLICIT regime (moderate omega_c): pointwise algebraic term, no work (F . v = 0, energy
-    unchanged). Reads B_z from the aux channel (canonical component 3): call
-    ``sim.set_magnetic_field(Bz)`` to populate it. Requires a fluid transport >= 3 variables (momentum
-    on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) is authored as an explicit
-    condensed ``Program.solve`` graph, NOT through this pointwise brick.
+    unchanged). Its field dependency is an ordinary owner-qualified provider: declare an
+    ``InputAux`` or field output on the model ``Module`` and stage external values with
+    ``sim.stage_auxiliary_input(ComponentKey(...), values)``.  ProviderPack, not this brick,
+    resolves its component/address. Requires a fluid transport with the required momentum axes;
+    the stiff regime is authored as an explicit condensed ``Program.solve`` graph, not through
+    this pointwise brick.
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
@@ -145,10 +146,12 @@ class MagneticLorentzForce:
 
 
 class PotentialMagneticForce:
-    """Electrostatic force + magnetic Lorentz SUMMED: (q/m) rho E + q (v x B_z) (native C++
-    brick CompositeSource<PotentialForce, MagneticLorentzForce>, the full magnetized diocotron
-    force). Same q/m for both forces (same species). Reads B_z (set_magnetic_field); requires a
-    fluid transport >= 3 variables. ``charge`` = q/m, sign included."""
+    """Electrostatic plus magnetic Lorentz force.
+
+    Both field dependencies use the exact ``ComponentKey``/ProviderPack route described by the
+    constituent bricks; there is no reserved magnetic component or name-based setter. ``charge``
+    is q/m with its sign included.
+    """
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
         self.charge = exact_real(charge, where="PotentialMagneticForce.charge")

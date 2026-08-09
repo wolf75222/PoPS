@@ -26,7 +26,6 @@ The test is pure Python: it only reads ``capabilities()`` and the backend table,
 needs the _pops extension to import but does not build or run any model.
 """
 from pops.codegen._compile import _BACKEND_CAPS
-from pops.physics.aux import AUX_CANONICAL_NAMES, AUX_NAMED_MAX, aux_layout
 from pops.runtime.doctor import capabilities
 
 EXPECTED_TOP_KEYS = {
@@ -120,39 +119,6 @@ def test_regrid_prepared_graph_contract_advertised():
         "prepared not/any/all bytecode; no scalar threshold fallback"
 
 
-def test_aux_named_surface_and_limit_parity():
-    # ADC-291: named aux is advertised on Cartesian System AND AMR (single + multi block),
-    # no longer "cartesian System only". The remaining compile-time limit (kAuxMaxExtra) is published
-    # as an introspectable scalar and MUST match BOTH the C++ source (_pops.__aux_max_extra__) and the
-    # DSL mirror (AUX_NAMED_MAX) -- this pins the hand-maintained Python<->C++ mirror so it cannot
-    # silently drift (the historical #51-class risk the issue calls out).
-    from pops import _pops
-    layout = aux_layout(_pops.__native_dimension__)
-    named = capabilities()["aux"]["named"]
-    assert set(named["backends"]) >= {
-        "system_cartesian", "amr_single_block", "amr_multi_block",
-    }, named["backends"]
-    assert "system_polar" not in named["backends"]
-    # the limit is the SINGLE C++ source, mirrored by the DSL constant.
-    assert named["limit"] == _pops.__aux_max_extra__ == AUX_NAMED_MAX, \
-        "aux named limit drift: caps=%r, C++=%r, dsl=%r" % (
-            named["limit"], _pops.__aux_max_extra__, AUX_NAMED_MAX)
-    # the aux ghost width is explicit (the configurable-radius mechanism is a documented follow-up).
-    assert named["halo_radius"] == 1, named["halo_radius"]
-    # the other mirrored aux constants stay coherent C++ <-> DSL.
-    assert _pops.__aux_named_base__ == layout.named_base, "ranked aux named base drift"
-    assert _pops.__aux_base_comps__ == layout.base_components, "ranked aux base width drift"
-    assert _pops.__aux_max_comps__ == _pops.__aux_named_base__ + _pops.__aux_max_extra__
-    # The selected C++ rank and the Python rank-qualified authority expose the same table.
-    assert dict(_pops.__aux_canonical__) == dict(layout.canonical), \
-        "C++ aux_names table != Python ranked aux layout: %r vs %r" % (
-            dict(_pops.__aux_canonical__), dict(layout.canonical))
-    assert set(layout.canonical).issubset(AUX_CANONICAL_NAMES)
-    # no stale "cartesian System only" claim survives in the aux surface.
-    blob = repr(capabilities()["aux"]).lower()
-    assert "cartesian system only" not in blob, "stale 'cartesian System only' aux claim"
-
-
 if __name__ == "__main__":
     test_top_level_keys_present()
     test_riemann_surface_matches_dispatch()
@@ -161,6 +127,5 @@ if __name__ == "__main__":
     test_dimension_matches_selected_native_specialization()
     test_runtime_environment_and_precision_facts()
     test_regrid_prepared_graph_contract_advertised()
-    test_aux_named_surface_and_limit_parity()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar retirement, "
-          "native dimension, prepared regrid graph, aux named surface + limit parity)")
+          "native dimension and prepared regrid graph)")

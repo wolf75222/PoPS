@@ -195,7 +195,7 @@ def _structured_region_krylov(kind, name="structured_region_krylov"):
     return P
 
 
-def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
+def _model(*, n_vars=3, n_aux=1, provider_components=("magnetic",)):
     """A real CompiledModel metadata carrier (no .so) -- the engine class, carrying only metadata."""
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
@@ -205,7 +205,7 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
         n_aux=n_aux, params={}, caps={"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
         native_dimension=2,
-        aux_extra_names=list(aux_names))
+        provider_components=list(provider_components))
 
 
 def _compiled(program):

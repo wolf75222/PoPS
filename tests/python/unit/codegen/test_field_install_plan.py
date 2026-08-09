@@ -288,6 +288,26 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
         "electric_field_x",
         "electric_field_y",
     )
+    assert plan.native_options["output_route"]["component_keys"] == (
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "potential",
+        },
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "electric_field_x",
+        },
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "electric_field_y",
+        },
+    )
     assert plan.native_options["output_route"]["gradient_sign"] == sign
 
 

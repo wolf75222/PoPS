@@ -33,7 +33,7 @@ class _HyperbolicModel:
     prim_roles: Any
     prim_state: Any
     _recovery_admissibility: Any
-    aux_names: Any
+    _provider_components: Any
     gamma: Any
     _flux: Any
     _flux_terms: Any

@@ -27,7 +27,7 @@ class _RiemannAuthoringMixin(_BoardModel):
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
         hyp = self._dsl._m
         with atomic_attrs(
-                (hyp, "aux_names"), (hyp, "_hllc"), (hyp, "_roe"),
+                (hyp, "_provider_components"), (hyp, "_hllc"), (hyp, "_roe"),
                 (hyp, "_riemann_hook_forms"), (self, "_riemann")):
             enabler = _GENERIC_CAPABILITY_ENABLERS.get(kind)
             if enabler is not None:
@@ -46,7 +46,10 @@ class _RiemannAuthoringMixin(_BoardModel):
         hyp = self._dsl._m
         roles = set(_roles_for(hyp))
         has_pressure = "p" in hyp.prim_defs or pressure is not None
-        fluid = {"Density", "MomentumX", "MomentumY"}
+        axes = tuple(getattr(getattr(self, "domain", None), "axes", ()))
+        if not axes:
+            axes = tuple(getattr(hyp, "_flux", {}))
+        fluid = {"density", *("momentum:%d" % axis for axis in range(len(axes)))}
         if kind in _PRESSURE_ROLE_FLUXES:
             if not has_pressure:
                 raise ValueError(

@@ -280,8 +280,6 @@
   "tests/python/unit/runtime/test_amr_checkpoint_contract.py": 1.0,
   "tests/python/unit/runtime/test_amr_tagging_lowering.py": 1.0,
   "tests/python/unit/runtime/test_analytic_expression_lowering.py": 2.0,
-  "tests/python/unit/runtime/test_aux_halo.py": 64.2,
-  "tests/python/unit/runtime/test_aux_named.py": 135.7,
   "tests/python/unit/runtime/test_backend_platform.py": 0.5,
   "tests/python/unit/runtime/test_bind_validation.py": 1.0,
   "tests/python/unit/runtime/test_board_multispecies.py": 0.5,

@@ -34,8 +34,7 @@ def _snapshot(model):
         "cons_names": tuple(hyp.cons_names),
         "cons_roles": None if hyp.cons_roles is None else tuple(hyp.cons_roles),
         "n_vars": hyp.n_vars,
-        "aux_names": tuple(hyp.aux_names),
-        "aux_extra_names": tuple(hyp.aux_extra_names),
+        "provider_components": tuple(hyp._provider_components),
         "flux": _expr_lists(hyp._flux),
         "eigenvalues": _expr_lists(hyp._eig),
         "sources_ir": _expr_lists(hyp._source_terms),
@@ -152,8 +151,9 @@ def test_field_operator_builder_failure_is_observationally_atomic(monkeypatch):
     before = _snapshot(model)
 
     def fail_after_mutation(
-        name, rhs, operator="poisson", aux=None, *, gradient_sign=1,
+        name, rhs, operator="poisson", aux=None, *, gradient_sign=1, dimension=None,
     ):
+        del dimension
         model._dsl._m._elliptic_fields[name] = {
             "rhs": rhs, "operator": operator, "aux": aux,
             "gradient_sign": gradient_sign,

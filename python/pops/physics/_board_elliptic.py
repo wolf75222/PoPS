@@ -135,10 +135,10 @@ class _EllipticAuthoringMixin(_BoardModel):
                 raise ValueError(
                     "field_operator outputs must start with FieldOutput for the solved unknown"
                 )
-            aux_names = [output_tuple[0].name]
+            outputs = [output_tuple[0].name]
             gradient_sign = 1
             if len(output_tuple) == 2 and isinstance(output_tuple[1], GradientOutput):
-                aux_names.extend(
+                outputs.extend(
                     output_tuple[1].name + "_" + axis_name
                     for axis_name in self._ranked_frame_axes(
                         where="field_operator %r GradientOutput" % name
@@ -154,22 +154,22 @@ class _EllipticAuthoringMixin(_BoardModel):
                 self.owner_path._definition_fingerprint_transaction(),
                 atomic_attrs(
                     (model, "_elliptic_fields"),
-                    (model, "aux_names"),
+                          (model, "_provider_components"),
                     (model, "_operator_registry_cache"),
                     (self._dsl, "_module_cache"),
                     (self, "_module_cache"),
                     (self, "_field_operators"),
                 ),
             ):
-                for aux_name in aux_names:
-                    if aux_name in model.aux_names:
+                for component in outputs:
+                    if component in model._provider_components:
                         continue
-                    self._dsl.aux(aux_name)
+                    self._dsl.aux(component)
                 self._dsl.elliptic_field(
                     name,
                     rhs,
                     operator="poisson",
-                    aux=aux_names,
+                    aux=outputs,
                     gradient_sign=gradient_sign,
                     dimension=(
                         None
