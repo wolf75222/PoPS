@@ -42,6 +42,8 @@ from pops.output._writers.common import (
     writer_session_authority,
 )
 from pops.output.data import (
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     OutputRequest,
     OutputSnapshot,
     _field_family_identity,
@@ -67,7 +69,7 @@ _VTK_FIELD_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 _VTK_RESERVED_ARRAY_NAMES = frozenset({
     "Points", "connectivity", "offsets", "types", "TimeValue",
     "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
-    "pops_cell_volume", "pops_output_manifest",
+    "pops_cell_volume", "pops_output_manifest", *EMBEDDED_BOUNDARY_ARRAY_NAMES,
 })
 
 
@@ -352,6 +354,36 @@ def _physical_point_coordinates(
 
 def _spatial_slices(lower: Any, upper: Any) -> tuple[slice, ...]:
     return tuple(slice(lo, hi) for lo, hi in zip(lower, upper, strict=True))
+
+
+def _embedded_values_on_mask(
+    sidecar: EmbeddedBoundaryPayload,
+    name: str,
+    mask: Any,
+    *,
+    require_piece_subset: bool,
+) -> Any:
+    """Project one exact scalar EB sidecar onto a writer-owned emission mask."""
+    import numpy as np
+
+    selected = np.asarray(mask, dtype=np.bool_)
+    if selected.shape != sidecar.global_shape:
+        raise ValueError("embedded-boundary emission mask differs from its geometry")
+    dense = np.empty(sidecar.global_shape, dtype=np.float64)
+    written = np.zeros(sidecar.global_shape, dtype=np.bool_)
+    for piece in sidecar.pieces(name):
+        spatial = _spatial_slices(piece.lower, piece.upper)
+        if np.any(written[spatial]):
+            raise ValueError("embedded-boundary output pieces overlap")
+        dense[spatial] = piece.values[0]
+        written[spatial] = True
+    if np.any(selected & ~written):
+        raise ValueError("embedded-boundary sidecar does not cover every emitted geometry cell")
+    if require_piece_subset and np.any(written & ~selected):
+        raise ValueError(
+            "embedded-boundary sidecar ownership differs from physical field ownership"
+        )
+    return np.ascontiguousarray(dense[selected])
 
 
 def _point_mask(cell_mask: Any) -> Any:
@@ -900,14 +932,19 @@ import json
 import sys
 from paraview.simple import (
     ColorBy, GetActiveViewOrCreate, GetAnimationScene, GetColorTransferFunction, OpenDataFile,
-    Render, ResetCamera, SaveState, Show,
+    Render, ResetCamera, SaveState, Show, Threshold,
 )
 pvd, state, raw = sys.argv[1:4]
 config = json.loads(raw)
 reader = OpenDataFile(pvd)
 reader.UpdatePipeline()
+source = reader
+if config["threshold_active"]:
+    source = Threshold(registrationName="PoPS active cells", Input=reader)
+    source.Scalars = ["CELLS", "pops_active"]
+    source.LowerThreshold = 0.5
 view = GetActiveViewOrCreate("RenderView")
-display = Show(reader, view)
+display = Show(source, view)
 scene = GetAnimationScene()
 scene.UpdateAnimationUsingDataTimeSteps()
 scene.GoToLast()
@@ -963,7 +1000,18 @@ def _resolved_preset_data(schema: dict[str, Any], preset: Any) -> dict[str, Any]
     if preset.component is not None \
             and preset.component not in matches[0]["component_names"]:
         raise ValueError("ParaViewPreset.component is not declared by the selected field")
-    return dict(preset.to_data(), color_by=color_name)
+    active = [row for row in schema["cell_arrays"] if row["name"] == "pops_active"]
+    if (
+        len(active) > 1
+        or active
+        and (active[0]["components"] != 1 or active[0]["type"] != "Float64")
+    ):
+        raise ValueError("pops_active sidecar has an invalid ParaView scalar schema")
+    return dict(
+        preset.to_data(),
+        color_by=color_name,
+        threshold_active=bool(active),
+    )
 
 
 def _stage_pvsm(
@@ -1658,6 +1706,16 @@ class ParaViewWriter:
                 seen.add(geometry.key)
                 geometries.append(geometry)
         geometries.sort(key=lambda item: item.key)
+        geometry_keys = {geometry.key for geometry in geometries}
+        sidecars = {
+            sidecar.key: sidecar
+            for sidecar in snapshot.embedded_boundaries
+            if sidecar.key in geometry_keys
+        }
+        if sidecars and set(sidecars) != geometry_keys:
+            raise ValueError(
+                "one ParaView artifact cannot mix embedded and non-embedded geometries"
+            )
         dimensions = {geometry.spatial_rank for geometry in geometries}
         if len(dimensions) != 1 or not dimensions.issubset({1, 2, 3}):
             raise ValueError(
@@ -1782,7 +1840,7 @@ class ParaViewWriter:
             "TimeValue": np.asarray(
                 [float.fromhex(snapshot.clock.time_hex)], dtype="<f8"),
         }
-        datasets = {"fields": {}, "geometries": {}}
+        datasets = {"fields": {}, "geometries": {}, "embedded_boundaries": {}}
         for ordinal, geometry in enumerate(geometries):
             ranges = geometry_ranges[geometry.key]
             datasets["geometries"]["%s#%d" % geometry.key] = {
@@ -1840,6 +1898,31 @@ class ParaViewWriter:
                 cell_field_names.append(name)
             else:
                 point_field_names.append(name)
+        if sidecars:
+            for geometry in geometries:
+                ranges = geometry_ranges[geometry.key]
+                datasets["embedded_boundaries"]["%s#%d" % geometry.key] = {
+                    "layout_ordinal": ranges["ordinal"],
+                    "cell_range": list(ranges["cell"]),
+                    "arrays": {},
+                }
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                combined = np.empty(n_cells, dtype=np.float64)
+                for geometry in geometries:
+                    ranges = geometry_ranges[geometry.key]
+                    start, end = ranges["cell"]
+                    values = _embedded_values_on_mask(
+                        sidecars[geometry.key],
+                        name,
+                        emission_masks[geometry.key],
+                        require_piece_subset=True,
+                    )
+                    combined[start:end] = values
+                    datasets["embedded_boundaries"]["%s#%d" % geometry.key]["arrays"][name] = (
+                        array_evidence(values)
+                    )
+                combined.setflags(write=False)
+                arrays[name] = combined
         evidence = {name: array_evidence(value) for name, value in arrays.items()}
         output_manifest, identity = manifest(
             self.format, snapshot, request, evidence, datasets=datasets)
@@ -1851,7 +1934,7 @@ class ParaViewWriter:
         cell_names = (
             "pops_layout", "pops_level", "pops_coverage", "vtkGhostType",
             "pops_cell_volume",
-        ) + tuple(cell_field_names)
+        ) + (EMBEDDED_BOUNDARY_ARRAY_NAMES if sidecars else ()) + tuple(cell_field_names)
 
         def data_arrays(names: Any) -> str:
             result = []

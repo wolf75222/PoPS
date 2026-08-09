@@ -16,6 +16,8 @@ from pops.output._catalyst_backend import CatalystPythonProvider
 from pops.output._consumer_contracts import ParallelMode
 from pops.output.data import (
     ArrayPiece,
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     FieldKey,
     FieldPayload,
     LevelGeometry,
@@ -133,6 +135,7 @@ def _frame(
     spacing: tuple[float, ...] | None = None,
     field_name="temperature",
     component_names=("temperature",),
+    embedded: bool = False,
 ):
     dimension = len(cell_shape)
     if origin is None:
@@ -185,6 +188,34 @@ def _frame(
         False,
     )
     field = FieldPayload(key, centering, "K", component_names, spatial_shape, (piece,))
+    embedded_boundaries = ()
+    if embedded:
+        sidecar_values = {
+            "pops_active": np.ones(cell_shape, dtype=np.float64),
+            "pops_phi": np.arange(np.prod(cell_shape), dtype=np.float64).reshape(cell_shape),
+            "pops_kappa": np.full(cell_shape, 0.5, dtype=np.float64),
+        }
+        sidecar_values["pops_active"].reshape(-1)[-1] = 0.0
+        embedded_boundaries = (
+            EmbeddedBoundaryPayload(
+                layout,
+                0,
+                cell_shape,
+                {
+                    name: (
+                        ArrayPiece(
+                            (0,) * dimension,
+                            cell_shape,
+                            values.reshape((1,) + cell_shape),
+                            0,
+                            0,
+                            False,
+                        ),
+                    )
+                    for name, values in sidecar_values.items()
+                },
+            ),
+        )
     snapshot = OutputSnapshot(
         OutputClock.at("macro", 0.25, 4, stage="accepted"),
         OutputProvenance(
@@ -196,6 +227,7 @@ def _frame(
         (geometry,),
         (field,),
         {"test": "post-commit-observer"},
+        embedded_boundaries=embedded_boundaries,
     )
     request = OutputRequest(
         "live-temperature", (key,), mode, rank=0, size=(1 if mode is ParallelMode.SERIAL else 2)
@@ -220,6 +252,16 @@ def _without_local_pieces(base: ObserverFrame) -> ObserverFrame:
         base.snapshot.geometries,
         (empty_field,),
         dict(base.snapshot.metadata),
+        embedded_boundaries=tuple(
+            EmbeddedBoundaryPayload(
+                sidecar.layout_identity,
+                sidecar.level,
+                sidecar.global_shape,
+                {name: () for name in EMBEDDED_BOUNDARY_ARRAY_NAMES},
+                dtype=sidecar.dtype,
+            )
+            for sidecar in base.snapshot.embedded_boundaries
+        ),
     )
     return ObserverFrame(snapshot, base.request)
 
@@ -457,7 +499,7 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
         provider=provider,
     )
     session = declaration.open_session(_serial_context())
-    frame = _frame()
+    frame = _frame(embedded=True)
     run = ObserverRun(frame.snapshot.provenance.run_identity, {"case": "heat"})
 
     with PostCommitObserverQueue(session, run, consumer_id="live-temperature") as dispatcher:
@@ -491,6 +533,18 @@ def test_optional_real_catalyst_provider_executes_blueprint_lifecycle(tmp_path: 
         paths[temperature_prefixes[0] + "/values"],
         np.asarray([1.0, 2.0, 3.0, 4.0]),
     )
+    expected_sidecars = {
+        "pops_active": np.asarray([1.0, 1.0, 1.0, 0.0]),
+        "pops_phi": np.asarray([0.0, 1.0, 2.0, 3.0]),
+        "pops_kappa": np.full(4, 0.5),
+    }
+    for name, expected in expected_sidecars.items():
+        prefix = next(
+            path.removesuffix("/display_name")
+            for path, value in paths.items()
+            if path.endswith("/display_name") and value == name
+        )
+        assert np.array_equal(paths[prefix + "/values"], expected)
     assert any(
         path.endswith("/display_name") and value == "vtkGhostType" for path, value in paths.items()
     )

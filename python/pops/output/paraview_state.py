@@ -29,6 +29,7 @@ _SCHEMA_VERSION = 1
 _PRESENTATION_KEYS = frozenset({
     "color_by", "component", "color_map", "representation", "show_scalar_bar",
 })
+_RESOLVED_PRESENTATION_KEYS = _PRESENTATION_KEYS | {"threshold_active"}
 _REPRESENTATIONS = frozenset({
     "Surface", "Surface With Edges", "Wireframe", "Points",
 })
@@ -87,9 +88,13 @@ def _sha256(payload: bytes) -> str:
 
 
 def _presentation(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _PRESENTATION_KEYS:
+    if not isinstance(value, Mapping) or frozenset(value) not in {
+        _PRESENTATION_KEYS,
+        _RESOLVED_PRESENTATION_KEYS,
+    }:
         raise TypeError(
-            "portable ParaView presentation must contain exactly %s"
+            "portable ParaView presentation must contain exactly %s, with only the "
+            "derived threshold_active key permitted in an authenticated payload"
             % sorted(_PRESENTATION_KEYS)
         )
     color_by = _text(value["color_by"], "portable presentation color_by")
@@ -105,13 +110,19 @@ def _presentation(value: Any) -> dict[str, Any]:
     show_scalar_bar = value["show_scalar_bar"]
     if type(show_scalar_bar) is not bool:
         raise TypeError("portable presentation show_scalar_bar must be an exact bool")
-    return {
+    threshold_active = value.get("threshold_active")
+    if threshold_active is not None and type(threshold_active) is not bool:
+        raise TypeError("portable presentation threshold_active must be an exact bool")
+    result = {
         "color_by": color_by,
         "component": component,
         "color_map": color_map,
         "representation": representation,
         "show_scalar_bar": show_scalar_bar,
     }
+    if threshold_active is not None:
+        result["threshold_active"] = threshold_active
+    return result
 
 
 def _cell_arrays(value: Any, presentation: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -158,6 +169,16 @@ def _cell_arrays(value: Any, presentation: Mapping[str, Any]) -> list[dict[str, 
     if component is not None and component not in selected[0]["component_names"]:
         raise ValueError(
             "portable presentation component is not declared by the selected array")
+    active = [row for row in result if row["name"] == "pops_active"]
+    if presentation.get("threshold_active", False) and (
+        len(active) != 1
+        or active[0]["type"] != "Float64"
+        or active[0]["components"] != 1
+        or active[0]["component_names"]
+    ):
+        raise ValueError(
+            "portable active-cell Threshold requires one scalar Float64 pops_active array"
+        )
     return result
 
 
@@ -295,7 +316,7 @@ def main():
 
     from paraview.simple import (
         ColorBy, GetActiveViewOrCreate, GetAnimationScene, GetColorTransferFunction,
-        OpenDataFile, Render, ResetCamera, SaveState, Show,
+        OpenDataFile, Render, ResetCamera, SaveState, Show, Threshold,
     )
 
     config = payload["presentation"]
@@ -303,8 +324,13 @@ def main():
     if reader is None:
         raise RuntimeError("ParaView could not open " + str(pvd))
     reader.UpdatePipeline()
+    source = reader
+    if config["threshold_active"]:
+        source = Threshold(registrationName="PoPS active cells", Input=reader)
+        source.Scalars = ["CELLS", "pops_active"]
+        source.LowerThreshold = 0.5
     view = GetActiveViewOrCreate("RenderView")
-    display = Show(reader, view)
+    display = Show(source, view)
     scene = GetAnimationScene()
     scene.UpdateAnimationUsingDataTimeSteps()
     scene.GoToLast()
@@ -359,6 +385,23 @@ def build_portable_paraview_state(
         pvd_identity, domain="paraview-pvd", where="portable pvd_identity")
     checked_presentation = _presentation(presentation)
     checked_arrays = _cell_arrays(cell_arrays, checked_presentation)
+    active = [row for row in checked_arrays if row["name"] == "pops_active"]
+    threshold_active = bool(active)
+    if threshold_active and (
+        len(active) != 1
+        or active[0]["type"] != "Float64"
+        or active[0]["components"] != 1
+        or active[0]["component_names"]
+    ):
+        raise ValueError(
+            "portable active-cell Threshold requires one scalar Float64 pops_active array"
+        )
+    supplied_threshold = checked_presentation.get("threshold_active")
+    if supplied_threshold is not None and supplied_threshold != threshold_active:
+        raise ValueError(
+            "portable presentation threshold_active differs from its exact CellData schema"
+        )
+    checked_presentation = dict(checked_presentation, threshold_active=threshold_active)
     payload = {
         "pvd": {"file": checked_pvd, "identity": checked_identity},
         "presentation": checked_presentation,

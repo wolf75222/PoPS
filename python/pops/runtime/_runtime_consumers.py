@@ -34,6 +34,8 @@ from pops.output.data import (
     ArrayPiece,
     DiagnosticKey,
     DiagnosticPayload,
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     FieldKey,
     FieldPayload,
     LevelGeometry,
@@ -5039,6 +5041,8 @@ class RuntimeOutputSnapshot:
                 "%s output snapshot requires a native MPI ExecutionContext" % mode.name
             )
         entries: list[dict[str, Any]] = []
+        embedded_entries: dict[tuple[str, int], dict[str, Any]] = {}
+        sidecar_entries: tuple[dict[str, Any], ...] = ()
         geometries: dict[tuple[str, int], LevelGeometry] = {}
         preflight_error = None
         preflight_schema: tuple[dict[str, Any], ...] = ()
@@ -5118,6 +5122,36 @@ class RuntimeOutputSnapshot:
                         "reduction_levels": reduction_levels,
                     }
                     entries.append(entry)
+                    embedded_plan = layout.options.get("embedded_boundary")
+                    if embedded_plan is not None:
+                        if layout.adaptive:
+                            raise NotImplementedError(
+                                "scientific output has no prepared AMR embedded-boundary "
+                                "sidecar provider"
+                            )
+                        sidecar_engine = self._owner._executor_for_layout(
+                            layout.handle.qualified_id
+                        )._s
+                        method_name = "output_embedded_boundary_local_pieces"
+                        if not callable(getattr(sidecar_engine, method_name, None)):
+                            raise RuntimeError(
+                                "installed native provider lacks required %s() output view"
+                                % method_name
+                            )
+                        previous = embedded_entries.get(geometry.key)
+                        sidecar_entry = {
+                            "geometry": geometry,
+                            "native_engine": sidecar_engine,
+                            "method_name": method_name,
+                        }
+                        if previous is not None and (
+                            previous["native_engine"] is not sidecar_engine
+                            or previous["method_name"] != method_name
+                        ):
+                            raise RuntimeError(
+                                "one layout/level resolved multiple embedded-boundary providers"
+                            )
+                        embedded_entries[geometry.key] = sidecar_entry
             diagnostic_schema = []
             for quantity in manifest.diagnostic_quantities:
                 layout = self._layout(quantity.layout_id)
@@ -5126,6 +5160,30 @@ class RuntimeOutputSnapshot:
                 for level in levels:
                     geometry = self._geometry(layout, level)
                     geometries[geometry.key] = geometry
+                    embedded_plan = layout.options.get("embedded_boundary")
+                    if embedded_plan is not None:
+                        if layout.adaptive:
+                            raise NotImplementedError(
+                                "scientific output has no prepared AMR embedded-boundary "
+                                "sidecar provider"
+                            )
+                        sidecar_engine = self._owner._executor_for_layout(
+                            layout.handle.qualified_id
+                        )._s
+                        method_name = "output_embedded_boundary_local_pieces"
+                        if not callable(getattr(sidecar_engine, method_name, None)):
+                            raise RuntimeError(
+                                "installed native provider lacks required %s() output view"
+                                % method_name
+                            )
+                        embedded_entries.setdefault(
+                            geometry.key,
+                            {
+                                "geometry": geometry,
+                                "native_engine": sidecar_engine,
+                                "method_name": method_name,
+                            },
+                        )
                 diagnostic_schema.append(
                     {
                         "quantity": quantity.identity.token,
@@ -5135,6 +5193,9 @@ class RuntimeOutputSnapshot:
                         "execution": thaw_data(quantity.execution),
                     }
                 )
+            sidecar_entries = tuple(
+                embedded_entries[key] for key in sorted(embedded_entries)
+            )
             preflight_schema = tuple(
                 {
                     "kind": "field",
@@ -5149,6 +5210,14 @@ class RuntimeOutputSnapshot:
                     "reduction_levels": list(entry["reduction_levels"]),
                 }
                 for entry in entries
+            ) + tuple(
+                {
+                    "kind": "embedded-boundary",
+                    "geometry": entry["geometry"].to_data(),
+                    "method": entry["method_name"],
+                    "names": list(EMBEDDED_BOUNDARY_ARRAY_NAMES),
+                }
+                for entry in sidecar_entries
             ) + (
                 {
                     "kind": "diagnostics",
@@ -5226,11 +5295,56 @@ class RuntimeOutputSnapshot:
                 )
             extracted.append((entry, pieces))
 
+        embedded_extracted: list[tuple[dict[str, Any], dict[str, tuple[ArrayPiece, ...]]]] = []
+        for entry in sidecar_entries:
+            geometry = entry["geometry"]
+            arrays: dict[str, tuple[ArrayPiece, ...]] = {}
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                args = (name, geometry.level)
+                if communicator is None:
+                    pieces = self._local_pieces(
+                        entry["native_engine"],
+                        entry["method_name"],
+                        args,
+                        mode=mode,
+                        rank=rank,
+                        dimension=geometry.spatial_rank,
+                    )
+                    if any(
+                        piece.values.ndim != geometry.spatial_rank + 1 or piece.values.shape[0] != 1
+                        for piece in pieces
+                    ):
+                        raise ValueError(
+                            "native embedded-boundary sidecar is not one scalar component"
+                        )
+                    self._validate_piece_bounds(
+                        pieces,
+                        geometry.boxes,
+                        dimension=geometry.spatial_rank,
+                        complete=True,
+                        rank=rank,
+                    )
+                else:
+                    pieces = self._distributed_pieces(
+                        entry["native_engine"],
+                        entry["method_name"],
+                        args,
+                        mode=mode,
+                        rank=rank,
+                        communicator=communicator,
+                        boxes=geometry.boxes,
+                        dimension=geometry.spatial_rank,
+                        components=1,
+                    )
+                arrays[name] = pieces
+            embedded_extracted.append((entry, arrays))
+
         snapshot = request = None
         final_error = None
         canonical = None
         try:
             fields, keys = [], []
+            embedded_boundaries = []
             native_integrals: dict[str, _NativeCompositeIntegral] = {}
             for entry, pieces in extracted:
                 geometry = entry["geometry"]
@@ -5260,6 +5374,17 @@ class RuntimeOutputSnapshot:
                     evidence = self._native_composite_integral(entry, key)
                     if evidence is not None:
                         native_integrals[authority_identity.token] = evidence
+            for entry, arrays in embedded_extracted:
+                geometry = entry["geometry"]
+                embedded_boundaries.append(
+                    EmbeddedBoundaryPayload(
+                        geometry.layout_identity,
+                        geometry.level,
+                        geometry.cell_shape,
+                        arrays,
+                        dtype=np.dtype(np.float64).str,
+                    )
+                )
             selected_handles = {
                 value.handle.qualified_id for value in manifest.diagnostic_quantities
             }
@@ -5328,6 +5453,7 @@ class RuntimeOutputSnapshot:
                     "runtime_plan": self._owner._runtime_plan.identity.token,
                 },
                 diagnostics=selected_diagnostics,
+                embedded_boundaries=tuple(embedded_boundaries),
                 _native_composite_integrals=tuple(native_integrals.values()),
             )
             canonical = snapshot.to_data(request)
@@ -5335,6 +5461,13 @@ class RuntimeOutputSnapshot:
             selection.pop("rank")
             canonical["selection"] = selection
             canonical["fields"] = [dict(row, pieces=[]) for row in canonical["fields"]]
+            canonical["embedded_boundaries"] = [
+                dict(
+                    row,
+                    arrays={name: [] for name in EMBEDDED_BOUNDARY_ARRAY_NAMES},
+                )
+                for row in canonical["embedded_boundaries"]
+            ]
         except BaseException as exc:
             if communicator is None:
                 raise

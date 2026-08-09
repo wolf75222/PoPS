@@ -112,11 +112,57 @@ def test_portable_documents_are_deterministic_and_import_no_paraview_at_build_ti
         "file": "solution.pvd",
         "identity": identity,
     }
-    assert manifest["payload"]["presentation"] == _presentation()
+    assert manifest["payload"]["presentation"] == _presentation(threshold_active=False)
     assert first.manifest.endswith(b"\n")
     assert b"from paraview.simple import" in first.script
     assert b"Path(__file__).resolve().parent" in first.script
     assert b"/opt/" not in first.script
+
+
+def test_portable_recipe_derives_active_cell_threshold_from_exact_schema():
+    identity = make_identity("paraview-pvd", {"series": "embedded"}).token
+    arrays = _arrays() + [
+        {
+            "name": "pops_active",
+            "type": "Float64",
+            "components": 1,
+            "component_names": [],
+        }
+    ]
+    documents = build_portable_paraview_state(
+        pvd_file="solution.pvd",
+        pvd_identity=identity,
+        presentation=_presentation(),
+        cell_arrays=arrays,
+        manifest_file="solution.view.json",
+        script_file="solution.view.py",
+    )
+    manifest = json.loads(documents.manifest)
+
+    assert manifest["payload"]["presentation"]["threshold_active"] is True
+    assert b'Threshold(registrationName="PoPS active cells"' in documents.script
+    assert b'source.Scalars = ["CELLS", "pops_active"]' in documents.script
+    assert b"source.LowerThreshold = 0.5" in documents.script
+
+    invalid = dict(arrays[-1], type="Float32")
+    with pytest.raises(ValueError, match="scalar Float64 pops_active"):
+        build_portable_paraview_state(
+            pvd_file="solution.pvd",
+            pvd_identity=identity,
+            presentation=_presentation(),
+            cell_arrays=_arrays() + [invalid],
+            manifest_file="solution.view.json",
+            script_file="solution.view.py",
+        )
+    with pytest.raises(ValueError, match="differs from its exact CellData schema"):
+        build_portable_paraview_state(
+            pvd_file="solution.pvd",
+            pvd_identity=identity,
+            presentation=_presentation(threshold_active=False),
+            cell_arrays=arrays,
+            manifest_file="solution.view.json",
+            script_file="solution.view.py",
+        )
 
 
 def test_portable_bundle_roundtrips_after_whole_directory_relocation(tmp_path):

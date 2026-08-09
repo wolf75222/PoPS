@@ -18,14 +18,25 @@ from pops.output import (
     OutputProvenance,
     OutputRequest,
     OutputSnapshot,
+    ParaViewPreset,
     ParaViewWriter,
     PortableState,
     read_paraview,
     read_paraview_parallel,
 )
 from pops.output._consumer_contracts import ParallelMode
-from pops.output.data import _NATIVE_GEOMETRY_ARRAYS
-from pops.output._writers.paraview import _series_identity, _stage_pvtu, _vtu_schema
+from pops.output.data import (
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
+    _NATIVE_GEOMETRY_ARRAYS,
+)
+from pops.output._writers.paraview import (
+    _PVSM_SAVE_SCRIPT,
+    _resolved_preset_data,
+    _series_identity,
+    _stage_pvtu,
+    _vtu_schema,
+)
 
 
 def _identity(domain: str, name: str):
@@ -37,6 +48,7 @@ def _snapshot(
     *,
     centering: str = "cell",
     values: np.ndarray | None = None,
+    embedded: bool = False,
 ) -> tuple[OutputSnapshot, OutputRequest]:
     dimension = len(cell_shape)
     layout = _identity("layout-plan", "cartesian-%dd" % dimension)
@@ -69,6 +81,36 @@ def _snapshot(
         np.zeros(cell_shape, dtype=np.bool_),
         np.ones(cell_shape, dtype=np.float64),
     )
+    sidecars = ()
+    if embedded:
+        sidecar_values = {
+            "pops_active": np.ones(cell_shape, dtype=np.float64),
+            "pops_phi": np.linspace(
+                -1.0, 1.0, num=int(np.prod(cell_shape)), dtype=np.float64
+            ).reshape(cell_shape),
+            "pops_kappa": np.full(cell_shape, 0.25, dtype=np.float64),
+        }
+        sidecar_values["pops_active"].reshape(-1)[-1] = 0.0
+        sidecars = (
+            EmbeddedBoundaryPayload(
+                layout,
+                0,
+                cell_shape,
+                {
+                    name: (
+                        ArrayPiece(
+                            lower,
+                            cell_shape,
+                            value.reshape((1,) + cell_shape),
+                            0,
+                            0,
+                            False,
+                        ),
+                    )
+                    for name, value in sidecar_values.items()
+                },
+            ),
+        )
     snapshot = OutputSnapshot(
         OutputClock.at("macro", 0.5, 2, stage="accepted"),
         OutputProvenance(
@@ -79,6 +121,7 @@ def _snapshot(
         ),
         (geometry,),
         (field,),
+        embedded_boundaries=sidecars,
     )
     return snapshot, OutputRequest("vtk", (key,), ParallelMode.SERIAL)
 
@@ -174,6 +217,43 @@ def test_vtu_round_trip_uses_shared_points_and_hexahedra_in_three_dimensions(tmp
     assert np.array_equal(reopened.arrays["Points"][0], [1.0, 2.0, 3.0])
     assert np.array_equal(reopened.arrays["Points"][-1], [1.5, 2.5, 4.5])
     assert np.array_equal(reopened.arrays["phi"], np.arange(4, dtype=np.float64))
+    session.abort_prepare()
+
+
+@pytest.mark.parametrize(
+    ("cell_shape", "vtk_type"),
+    (((3,), 3), ((2, 2), 9), ((2, 1, 2), 12)),
+    ids=("line", "quad", "hex"),
+)
+def test_vtu_emits_exact_embedded_boundary_sidecars_without_replacing_cartesian_cells(
+    tmp_path,
+    cell_shape,
+    vtk_type,
+):
+    snapshot, request = _snapshot(cell_shape, embedded=True)
+    session = _stage(tmp_path, snapshot, request, "embedded.vtu")
+    reopened = read_paraview(session.temporary).require_selection(request)
+
+    assert set(EMBEDDED_BOUNDARY_ARRAY_NAMES).issubset(reopened.arrays)
+    assert np.array_equal(
+        reopened.arrays["pops_active"],
+        snapshot.embedded_boundaries[0].pieces("pops_active")[0].values.reshape(-1),
+    )
+    assert np.all(reopened.arrays["pops_kappa"] == 0.25)
+    assert np.all(reopened.arrays["pops_cell_volume"] == 1.0)
+    assert np.all(reopened.arrays["types"] == vtk_type)
+    assert reopened.arrays["phi"].shape == (int(np.prod(cell_shape)),)
+    sidecar_manifest = reopened.manifest["datasets"]["embedded_boundaries"]
+    assert len(sidecar_manifest) == 1
+    assert set(next(iter(sidecar_manifest.values()))["arrays"]) == set(
+        EMBEDDED_BOUNDARY_ARRAY_NAMES
+    )
+    materialized = _resolved_preset_data(
+        _vtu_schema(session.temporary), ParaViewPreset(color_by="phi")
+    )
+    assert materialized["threshold_active"] is True
+    assert 'source.Scalars = ["CELLS", "pops_active"]' in _PVSM_SAVE_SCRIPT
+    assert "source.LowerThreshold = 0.5" in _PVSM_SAVE_SCRIPT
     session.abort_prepare()
 
 

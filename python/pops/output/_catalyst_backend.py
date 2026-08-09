@@ -23,7 +23,13 @@ from pops._geometry_contracts import (
     POLAR_ANNULUS_2D_COORDINATES,
 )
 from pops.output._consumer_contracts import ParallelMode
-from pops.output.data import FieldPayload, LevelGeometry, _field_family_identity
+from pops.output.data import (
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
+    FieldPayload,
+    LevelGeometry,
+    _field_family_identity,
+)
 from pops.output.observers import (
     ObserverFrame,
     ObserverReceipt,
@@ -32,6 +38,7 @@ from pops.output.observers import (
 )
 from pops.output._writers.paraview import (
     _cell_corner_offsets,
+    _embedded_values_on_mask,
     _field_display_names,
     _field_families,
 )
@@ -69,6 +76,20 @@ def _piece_for_box(field: FieldPayload, box_index: int) -> Any:
         raise ValueError(
             "Catalyst complete snapshot requires exactly one field piece for geometry box %d"
             % box_index
+        )
+    return rows[0]
+
+
+def _embedded_piece_for_box(
+    sidecar: EmbeddedBoundaryPayload,
+    name: str,
+    box_index: int,
+) -> Any:
+    rows = [piece for piece in sidecar.pieces(name) if piece.global_box_index == box_index]
+    if len(rows) != 1:
+        raise ValueError(
+            "Catalyst complete embedded-boundary sidecar requires exactly one %s piece "
+            "for geometry box %d" % (name, box_index)
         )
     return rows[0]
 
@@ -667,6 +688,11 @@ class _CatalystPythonSession:
         ghost_field = cell_field("vtkGhostType", coverage * np.uint8(8))
         root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
         cell_field("pops_cell_volume", geometry.cell_volumes[spatial])
+        sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+        if sidecar is not None:
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                piece = _embedded_piece_for_box(sidecar, name, box_index)
+                cell_field(name, piece.values[0])
 
         names: set[str] = set()
         for field in self._geometry_fields(frame, geometry):
@@ -745,6 +771,10 @@ class _CatalystPythonSession:
         ghost_field = empty_cell_field("vtkGhostType", np.uint8)
         root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
         empty_cell_field("pops_cell_volume", np.float64)
+        sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+        if sidecar is not None:
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                empty_cell_field(name, np.float64)
 
         names: set[str] = set()
         for field in self._geometry_fields(frame, geometry):
@@ -762,6 +792,8 @@ class _CatalystPythonSession:
             )
 
     def _prepare_execute_node(self, frame: ObserverFrame) -> Any:
+        import numpy as np
+
         if not self._initialized or self._finalized:
             raise RuntimeError("Catalyst observer session is not active")
         if self._execution_failed:
@@ -815,6 +847,28 @@ class _CatalystPythonSession:
         ]
         if not geometries:
             raise ValueError("Catalyst frame has no selected geometry")
+        for geometry in geometries:
+            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+            if sidecar is None:
+                continue
+            expected_mask = None
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                pieces = sidecar.pieces(name)
+                mask = np.zeros(geometry.cell_shape, dtype=np.bool_)
+                for piece in pieces:
+                    mask[_spatial_slices(piece.lower, piece.upper)] = True
+                if expected_mask is None:
+                    expected_mask = mask
+                elif not np.array_equal(mask, expected_mask):
+                    raise ValueError(
+                        "Catalyst embedded-boundary arrays disagree on local ownership"
+                    )
+                _embedded_values_on_mask(
+                    sidecar,
+                    name,
+                    mask,
+                    require_piece_subset=True,
+                )
         dimensions = {geometry.spatial_rank for geometry in geometries}
         if len(dimensions) != 1:
             raise ValueError("one Catalyst channel requires one common spatial rank")
@@ -829,6 +883,14 @@ class _CatalystPythonSession:
                 for field in fields
             ):
                 raise ValueError("Catalyst fields disagree on the local geometry-box ownership set")
+            sidecar = frame.snapshot.embedded_boundary(geometry.layout_identity, geometry.level)
+            if sidecar is not None and any(
+                {piece.global_box_index for piece in sidecar.pieces(name)} != local_boxes
+                for name in EMBEDDED_BOUNDARY_ARRAY_NAMES
+            ):
+                raise ValueError(
+                    "Catalyst embedded-boundary ownership differs from physical fields"
+                )
             for box_index in range(len(geometry.boxes)):
                 # ParaView's multimesh protocol defines every data child as one Blueprint mesh.
                 # A global AMR box is that indivisible block; its qualified name stays unique and

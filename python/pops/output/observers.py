@@ -24,6 +24,8 @@ from pops.identity import Identity, canonical_bytes, make_identity
 from pops.model import Handle
 from pops.output.data import (
     ArrayPiece,
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     FieldPayload,
     LevelGeometry,
     OutputRequest,
@@ -264,6 +266,31 @@ def detach_observer_frame(frame: ObserverFrame) -> ObserverFrame:
                 dtype=field_value.array_dtype,
             )
         )
+    embedded_boundaries = []
+    for sidecar in frame.snapshot.embedded_boundaries:
+        arrays = {
+            name: tuple(
+                ArrayPiece(
+                    piece.lower,
+                    piece.upper,
+                    piece.values,
+                    piece.global_box_index,
+                    piece.owner_rank,
+                    piece.replicated,
+                )
+                for piece in sidecar.pieces(name)
+            )
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES
+        }
+        embedded_boundaries.append(
+            EmbeddedBoundaryPayload(
+                sidecar.layout_identity,
+                sidecar.level,
+                sidecar.global_shape,
+                arrays,
+                dtype=sidecar.dtype,
+            )
+        )
     snapshot = OutputSnapshot(
         frame.snapshot.clock,
         frame.snapshot.provenance,
@@ -271,6 +298,7 @@ def detach_observer_frame(frame: ObserverFrame) -> ObserverFrame:
         tuple(fields),
         dict(frame.snapshot.metadata),
         diagnostics=frame.snapshot.diagnostics,
+        embedded_boundaries=tuple(embedded_boundaries),
         _native_composite_integrals=frame.snapshot._native_composite_integrals,
     )
     detached = ObserverFrame(snapshot, frame.request)
