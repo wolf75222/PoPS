@@ -248,12 +248,21 @@ def test_vtu_emits_exact_embedded_boundary_sidecars_without_replacing_cartesian_
     assert set(next(iter(sidecar_manifest.values()))["arrays"]) == set(
         EMBEDDED_BOUNDARY_ARRAY_NAMES
     )
-    materialized = _resolved_preset_data(
-        _vtu_schema(session.temporary), ParaViewPreset(color_by="phi")
-    )
+    schema = _vtu_schema(session.temporary)
+    materialized = _resolved_preset_data(schema, ParaViewPreset(color_by="phi"))
     assert materialized["threshold_active"] is True
     assert 'source.Scalars = ["CELLS", "pops_active"]' in _PVSM_SAVE_SCRIPT
     assert "source.LowerThreshold = 0.5" in _PVSM_SAVE_SCRIPT
+    invalid_schema = dict(
+        schema,
+        cell_arrays=[
+            dict(row, component_names=["invalid"])
+            if row["name"] == "pops_active" else row
+            for row in schema["cell_arrays"]
+        ],
+    )
+    with pytest.raises(ValueError, match="invalid ParaView scalar schema"):
+        _resolved_preset_data(invalid_schema, ParaViewPreset(color_by="phi"))
     session.abort_prepare()
 
 

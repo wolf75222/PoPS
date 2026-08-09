@@ -1004,7 +1004,11 @@ def _resolved_preset_data(schema: dict[str, Any], preset: Any) -> dict[str, Any]
     if (
         len(active) > 1
         or active
-        and (active[0]["components"] != 1 or active[0]["type"] != "Float64")
+        and (
+            active[0]["components"] != 1
+            or active[0]["type"] != "Float64"
+            or active[0]["component_names"]
+        )
     ):
         raise ValueError("pops_active sidecar has an invalid ParaView scalar schema")
     return dict(
