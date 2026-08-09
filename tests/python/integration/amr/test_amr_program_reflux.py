@@ -4,8 +4,8 @@ hierarchy.
 
 The synchronous per-level Program driver (AmrProgramContext) advances every level with the same dt, then
 couples fine->coarse by average_down THEN conservative REFLUX at the coarse-fine interface. The per-level
-effective flux is captured through the Program's OWN linear combination (the flux ledger,
-amr_program_context.hpp) and routed through the native route_reflux at level sync (amr_program_reflux.hpp).
+effective flux is captured through the Program's OWN linear combination in the canonical face ledger
+and reconciled by ``PreparedAmrSubcycleTransition<Dim>`` at level sync (``amr_subcycling.hpp``).
 So on a genuinely MULTILEVEL run the total conserved quantity is conserved across the C/F interface to
 ROUND-OFF, matching the native reflux -- while the coarse-only / flat Program stays bit-identical (locked
 by test_amr_program_parity).

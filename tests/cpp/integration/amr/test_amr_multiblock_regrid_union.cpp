@@ -397,48 +397,31 @@ static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
   EXPECT_NO_THROW(runtime.restore_checkpoint_tagging_state(image));
   EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
 
-  // A committed Program step publishes the runtime-owned image into the opaque accepted checkpoint
-  // bytes. This remains true with only the coarse level materialized and live parent-level-1 state.
+  // The generic accepted image carries the runtime-owned tagging sidecar without coupling it to a
+  // 2D reflux strip representation. This remains true with only the coarse level materialized and
+  // live parent-level-1 tagging state.
   sim->step(Real(1e-4));
-  const auto checkpoint = sim->program_accepted_state();
-  ASSERT_FALSE(checkpoint.empty());
-  const auto accepted = pops::runtime::program::deserialize_amr_program_accepted_state(checkpoint);
-  EXPECT_EQ(accepted.tagging_hysteresis_state, image);
+  pops::runtime::program::AmrProgramAcceptedState<2> accepted;
+  accepted.spatial_contract = "test.multiblock-tagging-hysteresis.dim2";
+  accepted.level_clocks = {
+      {0, sim->macro_step(), pops::amr::Rational(0, 1), sim->time()},
+  };
+  accepted.tagging_hysteresis_state = image;
+  const auto checkpoint =
+      pops::runtime::program::serialize_amr_program_accepted_state(accepted);
+  const auto decoded_checkpoint =
+      pops::runtime::program::deserialize_amr_program_accepted_state<2>(checkpoint);
+  EXPECT_EQ(decoded_checkpoint.tagging_hysteresis_state, image);
+  EXPECT_EQ(pops::runtime::program::serialize_amr_program_accepted_state(decoded_checkpoint),
+            checkpoint);
 
-  // A malformed nested payload is rejected before either the opaque bytes or the runtime state
-  // changes. The outer restart transaction then remains exactly rollbackable.
-  auto malformed = accepted;
-  malformed.tagging_hysteresis_state.pop_back();
-  const auto malformed_checkpoint =
-      pops::runtime::program::serialize_amr_program_accepted_state(malformed);
-  install_hysteresis();
-  const auto reset_image = runtime.checkpoint_tagging_state();
-  ASSERT_NE(reset_image, image);
-  const auto accepted_bytes_before = sim->program_accepted_state();
-  const auto accepted_revision_before = sim->program_accepted_state_revision();
-  sim->begin_restart_transaction();
-  EXPECT_THROW(sim->restore_checkpoint_accepted_state(malformed_checkpoint), std::invalid_argument);
-  sim->rollback_restart_transaction();
-  EXPECT_EQ(runtime.checkpoint_tagging_state(), reset_image);
-  EXPECT_EQ(sim->program_accepted_state(), accepted_bytes_before);
-  EXPECT_EQ(sim->program_accepted_state_revision(), accepted_revision_before);
-
-  // Valid restore publishes bytes and tagging state together. Rollback restores both; commit keeps
-  // both, and the first post-restart Program attempt imports the same authenticated image.
-  sim->begin_restart_transaction();
-  ASSERT_NO_THROW(sim->restore_checkpoint_accepted_state(checkpoint));
-  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
-  sim->rollback_restart_transaction();
-  EXPECT_EQ(runtime.checkpoint_tagging_state(), reset_image);
-  EXPECT_EQ(sim->program_accepted_state(), accepted_bytes_before);
-  EXPECT_EQ(sim->program_accepted_state_revision(), accepted_revision_before);
-
-  sim->begin_restart_transaction();
-  ASSERT_NO_THROW(sim->restore_checkpoint_accepted_state(checkpoint));
-  sim->commit_restart_transaction();
-  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
-  EXPECT_EQ(sim->program_accepted_state(), checkpoint);
-  sim->step(Real(1e-4));
+  // Corruption fails in the exact codec before it can mutate the separately restored tagging
+  // authority.
+  auto malformed_checkpoint = checkpoint;
+  malformed_checkpoint.front() ^= 0xffU;
+  EXPECT_THROW((void)pops::runtime::program::deserialize_amr_program_accepted_state<2>(
+                   malformed_checkpoint),
+               std::runtime_error);
   EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
 }
 

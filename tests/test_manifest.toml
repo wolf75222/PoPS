@@ -143,13 +143,13 @@ mpi_nproc = [2]
 [[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
-labels = ["backend", "mpi", "medium"]
+labels = ["backend", "mpi", "amr", "nd", "checkpoint", "medium"]
 mpi_nproc = [2, 4]
 
 [[cpp.suite]]
 name = "test_mpi_amr_rebalance_migration"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_rebalance_migration.cpp"]
-labels = ["backend", "mpi", "amr", "medium"]
+labels = ["backend", "mpi", "amr", "nd", "checkpoint", "medium"]
 mpi_nproc = [2, 4]
 
 [[cpp.suite]]
@@ -1174,12 +1174,12 @@ labels = ["unit", "runtime", "accelerator", "fast"]
 [[cpp.suite]]
 name = "test_program_reflux_ledger"
 sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
-labels = ["integration", "amr", "medium"]
+labels = ["integration", "amr", "nd", "checkpoint", "medium"]
 
 [[cpp.suite]]
 name = "test_temporal_partition_restart"
 sources = ["tests/cpp/integration/amr/test_temporal_partition_restart.cpp"]
-labels = ["integration", "runtime", "amr", "medium"]
+labels = ["integration", "runtime", "amr", "nd", "checkpoint", "medium"]
 
 [[cpp.suite]]
 name = "test_cell_temporal_partition_executor"

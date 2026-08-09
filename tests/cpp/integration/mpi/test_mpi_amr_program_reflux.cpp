@@ -1,328 +1,281 @@
-// Native MPI regression for the compiled-Program AMR reflux strip samplers.
-//
-// The level-0 distributed layout deliberately has four parent boxes while each
-// child patch crosses a parent-box seam.  At np=2 the second child is owned by
-// rank 1 with local index 0 and global index 1.  At np=4 ranks 2 and 3 own
-// required parent source tiles but no child destination: the result therefore
-// proves a real cross-rank redistribution rather than a coincidental local
-// copy.  The test fails if a sampler reads parent fab(0), confuses a local
-// index with the global patch identity, discards its persistent copy schedule,
-// or lets every rank write a strip merely because the parent is replicated.
-// The complete route_reflux_program transaction deliberately stays in the generated-Program MPI
-// acceptance (tests/python/integration/mpi/test_amr_clean_route_program_mpi.py): constructing it here
-// would duplicate AmrSystem/compiled-Program installation rather than test the native sampler seam in
-// isolation.
+/// @file
+/// @brief MPI proof for exact-ranked AMR reflux and accepted-ledger restart.
 
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/amr/hierarchy/amr_hierarchy.hpp>
+#include <pops/amr/reflux/face_flux_ledger.hpp>
+#include <pops/amr/reflux/metric_reflux.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
+#include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/parallel/comm.hpp>
-#include <pops/runtime/amr/amr_program_reflux.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 
+#include <Kokkos_Core.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <exception>
+#include <memory>
+#include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
-using namespace pops;
-
 namespace {
 
-constexpr int kNcomp = 2;
+namespace hierarchy = pops::amr::hierarchy;
+namespace reflux = pops::amr::reflux;
+namespace time_amr = pops::numerics::time::amr;
+namespace program = pops::runtime::program;
 
-Real x_flux_value(int i, int j, int c) {
-  return Real(100000 * c + 1000 * j + i) + Real(0.25);
+constexpr pops::mesh::BoxArrayValidationBudget kLayoutBudget{64, 2'048};
+constexpr hierarchy::HierarchyValidationBudget kHierarchyBudget{2, 4'096};
+constexpr reflux::FaceFluxLedgerBudget kLedgerBudget{256, 256, 4};
+constexpr reflux::MetricRefluxBudget kMetricBudget{32, 256, 64};
+
+template <int Dim>
+pops::Extent<Dim> filled_extent(int value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-Real y_flux_value(int i, int j, int c) {
-  return Real(200000 + 100000 * c + 1000 * j + i) + Real(0.5);
+template <int Dim>
+pops::Index<Dim> rank_coordinate(int rank) {
+  pops::Index<Dim> result{};
+  result[0] = rank;
+  return result;
 }
 
-BoxArray face_boxes(const BoxArray& cells, bool x_direction) {
-  std::vector<Box2D> boxes;
-  boxes.reserve(static_cast<std::size_t>(cells.size()));
-  for (int g = 0; g < cells.size(); ++g)
-    boxes.push_back(x_direction ? xface_box(cells[g]) : yface_box(cells[g]));
-  return BoxArray(std::move(boxes));
+template <int Dim>
+pops::amr::RefinementRatio<Dim> ratio_two() {
+  std::array<int, Dim> values{};
+  values.fill(2);
+  return pops::amr::RefinementRatio<Dim>(values);
 }
 
-void fill_faces(MultiFab& fx, MultiFab& fy) {
-  for (int li = 0; li < fx.local_size(); ++li) {
-    Fab2D& fab = fx.fab(li);
-    const Box2D box = fab.box();
-    for (int c = 0; c < kNcomp; ++c)
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          fab(i, j, c) = x_flux_value(i, j, c);
+template <int Dim>
+std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>> load_balance() {
+  return std::make_shared<const pops::PreparedLoadBalanceAuthority<Dim>>(
+      pops::prepare_load_balance_authority<Dim>(
+          "space_filling_curve", "test.mpi-program-reflux.sfc",
+          pops::PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}}));
+}
+
+template <int Dim>
+pops::runtime::amr::AmrRuntime<Dim> make_partitioned_runtime(int ranks, int rank) {
+  pops::Index<Dim> coarse_lower{};
+  pops::Index<Dim> coarse_upper{};
+  coarse_lower[0] = -2;
+  coarse_upper[0] = coarse_lower[0] + 4 * ranks - 1;
+  for (int axis = 1; axis < Dim; ++axis) {
+    coarse_lower[axis] = -1 - axis;
+    coarse_upper[axis] = coarse_lower[axis] + 3;
   }
-  for (int li = 0; li < fy.local_size(); ++li) {
-    Fab2D& fab = fy.fab(li);
-    const Box2D box = fab.box();
-    for (int c = 0; c < kNcomp; ++c)
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
-          fab(i, j, c) = y_flux_value(i, j, c);
+  const pops::Box<Dim> coarse_domain{coarse_lower, coarse_upper};
+  const auto ratio = ratio_two<Dim>();
+  const pops::Box<Dim> fine_domain = hierarchy::refine_box(coarse_domain, ratio);
+
+  std::vector<pops::Box<Dim>> coarse_patches;
+  std::vector<pops::Box<Dim>> fine_patches;
+  std::vector<pops::Index<Dim>> owners;
+  coarse_patches.reserve(static_cast<std::size_t>(ranks));
+  fine_patches.reserve(static_cast<std::size_t>(ranks));
+  owners.reserve(static_cast<std::size_t>(ranks));
+  for (int owner = 0; owner < ranks; ++owner) {
+    pops::Index<Dim> lower = coarse_lower;
+    pops::Index<Dim> upper = coarse_upper;
+    lower[0] = coarse_lower[0] + 4 * owner;
+    upper[0] = lower[0] + 3;
+    const pops::Box<Dim> patch{lower, upper};
+    coarse_patches.push_back(patch);
+    fine_patches.push_back(hierarchy::refine_box(patch, ratio));
+    owners.push_back(rank_coordinate<Dim>(owner));
   }
+
+  const pops::mesh::BoxArray<Dim> coarse_boxes(std::move(coarse_patches));
+  const pops::mesh::BoxArray<Dim> fine_boxes(std::move(fine_patches));
+  pops::Extent<Dim> rank_extent = filled_extent<Dim>(1);
+  rank_extent[0] = ranks;
+  const pops::mesh::RankSpace<Dim> rank_space(pops::Index<Dim>{}, rank_extent);
+  const auto coarse_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(coarse_boxes, rank_space, owners);
+  const auto fine_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(fine_boxes, rank_space, owners);
+  const pops::Index<Dim> local_rank = rank_coordinate<Dim>(rank);
+
+  hierarchy::LevelLayout<Dim> coarse_layout(0, coarse_domain, coarse_boxes, coarse_distribution,
+                                            pops::amr::RefinementRatio<Dim>{}, kLayoutBudget);
+  hierarchy::LevelLayout<Dim> fine_layout(1, fine_domain, fine_boxes, fine_distribution, ratio,
+                                          kLayoutBudget);
+  pops::MultiFab<Dim> coarse(coarse_boxes, coarse_distribution, local_rank, 1,
+                             filled_extent<Dim>(1));
+  pops::MultiFab<Dim> fine(fine_boxes, fine_distribution, local_rank, 1, filled_extent<Dim>(1));
+  std::vector<hierarchy::AmrLevelState<Dim>> levels;
+  levels.emplace_back(std::move(coarse_layout), std::move(coarse));
+  levels.emplace_back(std::move(fine_layout), std::move(fine));
+  return pops::runtime::amr::AmrRuntime<Dim>(
+      hierarchy::AmrHierarchy<Dim>(std::move(levels), kHierarchyBudget), load_balance<Dim>(),
+      "test.mpi-program-reflux.spatial");
 }
 
-bool strip_is_empty(const EdgeStrip& strip) {
-  return strip.cL.empty() && strip.cR.empty() && strip.cB.empty() && strip.cT.empty() &&
-         strip.fL.empty() && strip.fR.empty() && strip.fB.empty() && strip.fT.empty();
+void payload_axpy(program::AmrProgramFacePayload& destination, double coefficient,
+                  const program::AmrProgramFacePayload& source) {
+  if (destination.empty())
+    destination.assign(source.size(), pops::Real(0));
+  if (destination.size() != source.size())
+    throw std::invalid_argument("MPI Program face payload width mismatch");
+  for (std::size_t component = 0; component < source.size(); ++component)
+    destination[component] += static_cast<pops::Real>(coefficient) * source[component];
 }
 
-long check_coarse_strip(const EdgeStrip& strip, const Box2D& fine_box) {
-  const PatchRange range(fine_box);
-  long fails = 0;
-  fails +=
-      strip.I0 != range.I0 || strip.I1 != range.I1 || strip.J0 != range.J0 || strip.J1 != range.J1;
-  fails += strip.cL.size() != static_cast<std::size_t>((range.J1 - range.J0 + 1) * kNcomp);
-  fails += strip.cB.size() != static_cast<std::size_t>((range.I1 - range.I0 + 1) * kNcomp);
-  if (fails != 0)
-    return fails;
-
-  for (int j = range.J0; j <= range.J1; ++j)
-    for (int c = 0; c < kNcomp; ++c) {
-      const std::size_t q = static_cast<std::size_t>((j - range.J0) * kNcomp + c);
-      fails += strip.cL[q] != x_flux_value(range.I0, j, c);
-      fails += strip.cR[q] != x_flux_value(range.I1 + 1, j, c);
-    }
-  for (int i = range.I0; i <= range.I1; ++i)
-    for (int c = 0; c < kNcomp; ++c) {
-      const std::size_t q = static_cast<std::size_t>((i - range.I0) * kNcomp + c);
-      fails += strip.cB[q] != y_flux_value(i, range.J0, c);
-      fails += strip.cT[q] != y_flux_value(i, range.J1 + 1, c);
-    }
-  return fails;
+template <int Dim>
+reflux::CoarseFaceRefluxKey<Dim> coarse_key(int axis) {
+  reflux::CoarseFaceRefluxKey<Dim> key;
+  key.owner = "test.mpi-program-reflux.spatial";
+  key.state = "tracer.U";
+  key.levels = {0, 1};
+  key.axis = axis;
+  key.attempt = 17 + static_cast<std::uint64_t>(axis);
+  key.macro_step = 4;
+  return key;
 }
 
-long check_fine_strip(const EdgeStrip& strip, const Box2D& fine_box) {
-  const PatchRange range(fine_box);
-  long fails = 0;
-  fails +=
-      strip.I0 != range.I0 || strip.I1 != range.I1 || strip.J0 != range.J0 || strip.J1 != range.J1;
-  fails += strip.fL.size() != static_cast<std::size_t>((range.J1 - range.J0 + 1) * kNcomp);
-  fails += strip.fB.size() != static_cast<std::size_t>((range.I1 - range.I0 + 1) * kNcomp);
-  if (fails != 0)
-    return fails;
-
-  for (int j = range.J0; j <= range.J1; ++j)
-    for (int c = 0; c < kNcomp; ++c) {
-      const std::size_t q = static_cast<std::size_t>((j - range.J0) * kNcomp + c);
-      const Real left = Real(0.5) * (x_flux_value(2 * range.I0, 2 * j, c) +
-                                     x_flux_value(2 * range.I0, 2 * j + 1, c));
-      const Real right = Real(0.5) * (x_flux_value(2 * range.I1 + 2, 2 * j, c) +
-                                      x_flux_value(2 * range.I1 + 2, 2 * j + 1, c));
-      fails += strip.fL[q] != left;
-      fails += strip.fR[q] != right;
-    }
-  for (int i = range.I0; i <= range.I1; ++i)
-    for (int c = 0; c < kNcomp; ++c) {
-      const std::size_t q = static_cast<std::size_t>((i - range.I0) * kNcomp + c);
-      const Real bottom = Real(0.5) * (y_flux_value(2 * i, 2 * range.J0, c) +
-                                       y_flux_value(2 * i + 1, 2 * range.J0, c));
-      const Real top = Real(0.5) * (y_flux_value(2 * i, 2 * range.J1 + 2, c) +
-                                    y_flux_value(2 * i + 1, 2 * range.J1 + 2, c));
-      fails += strip.fB[q] != bottom;
-      fails += strip.fT[q] != top;
-    }
-  return fails;
+template <int Dim>
+reflux::FaceFluxFragment<Dim, program::AmrProgramFacePayload> fragment(
+    const reflux::CoarseFaceRefluxKey<Dim>& query, pops::Index<Dim> face,
+    reflux::FaceLedgerRole role, double face_measure, pops::Real value) {
+  reflux::FaceFluxFragment<Dim, program::AmrProgramFacePayload> result;
+  result.key.owner = query.owner;
+  result.key.state = query.state;
+  result.key.levels = query.levels;
+  result.key.axis = query.axis;
+  result.key.face = face;
+  result.key.coarse_face = query.coarse_face;
+  result.key.clock = {role == reflux::FaceLedgerRole::Coarse ? 0 : 1, query.macro_step,
+                      pops::amr::Rational(1, 2), 4.5};
+  result.key.stage = "rk.accepted";
+  result.key.attempt = query.attempt;
+  result.key.role = role;
+  result.measure.stage_weight = {1, 1};
+  result.measure.substep_begin = {0, 1};
+  result.measure.substep_end = {1, 1};
+  result.measure.substep_duration = 1.0;
+  result.measure.face_measure = face_measure;
+  result.payload = {value};
+  return result;
 }
 
-long check_one_writer_per_patch(const std::vector<EdgeStrip>& strips, bool coarse_role) {
-  long fails = 0;
-  for (std::size_t g = 0; g < strips.size(); ++g) {
-    const long local_writer =
-        coarse_role ? (!strips[g].cL.empty() ? 1L : 0L) : (!strips[g].fL.empty() ? 1L : 0L);
-    const long writers = all_reduce_sum(local_writer);
-    if (my_rank() == 0 && writers != 1)
-      ++fails;
+template <int Dim>
+void publish_complete_face(
+    reflux::TransactionalFaceFluxLedger<Dim, program::AmrProgramFacePayload>& ledger,
+    const reflux::CoarseFaceRefluxKey<Dim>& query,
+    const reflux::FaceRefinementMapping<Dim>& mapping,
+    const pops::amr::RefinementRatio<Dim>& ratio) {
+  const auto fine_faces = reflux::fine_faces_for_coarse_face(query, ratio, mapping, kMetricBudget);
+  std::vector<reflux::FaceFluxFragment<Dim, program::AmrProgramFacePayload>> entries;
+  entries.reserve(fine_faces.size() + 1);
+  entries.push_back(
+      fragment(query, query.coarse_face, reflux::FaceLedgerRole::Coarse, 1.0, pops::Real(3)));
+  const double fine_measure = 1.0 / static_cast<double>(fine_faces.size());
+  for (const auto& face : fine_faces)
+    entries.push_back(
+        fragment(query, face, reflux::FaceLedgerRole::Fine, fine_measure, pops::Real(5)));
+  std::sort(entries.begin(), entries.end(),
+            [](const auto& left, const auto& right) { return left.key < right.key; });
+  ledger.begin(query.attempt);
+  for (auto& entry : entries)
+    ledger.accumulate(std::move(entry.key), entry.measure, std::move(entry.payload));
+  ledger.commit();
+}
+
+template <int Dim>
+void prove_collective_reflux_checkpoint(int ranks, int rank) {
+  auto runtime = make_partitioned_runtime<Dim>(ranks, rank);
+  ASSERT_EQ(runtime.hierarchy().state(0).local_size(), 1);
+  ASSERT_EQ(runtime.hierarchy().state(1).local_size(), 1);
+
+  const std::array<int, 1> substeps{2};
+  const auto plan = time_amr::PreparedAmrSubcyclePlan<Dim>::prepare(
+      runtime, std::span<const int>(substeps), {1, kLayoutBudget});
+  const auto& transition = plan.transition(0);
+  const auto ratio = runtime.hierarchy().layout(1).ratio_from_parent();
+  const time_amr::PatchRange<Dim> local_patch(runtime.hierarchy().state(1).box(0), ratio);
+  EXPECT_FALSE(local_patch.parent_footprint().empty());
+  const reflux::FaceRefinementMapping<Dim> mapping{transition.interface_identity().parent.domain.lo,
+                                                   transition.interface_identity().child.domain.lo};
+
+  reflux::TransactionalFaceFluxLedger<Dim, program::AmrProgramFacePayload> ledger(kLedgerBudget);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto query = coarse_key<Dim>(axis);
+    publish_complete_face(ledger, query, mapping, ratio);
+    const auto reconciled = transition.reconcile_reflux(runtime, ledger, query, "tracer.U",
+                                                        kMetricBudget, payload_axpy);
+    EXPECT_EQ(reconciled.mismatch, (program::AmrProgramFacePayload{pops::Real(2)}));
+    EXPECT_EQ(reconciled.fine_face_count, static_cast<std::size_t>(std::size_t{1} << (Dim - 1)));
   }
-  return fails;
+
+  program::CellTemporalPartitionAcceptedState temporal;
+  auto accepted = program::accepted_amr_program_state<Dim>(
+      std::string(runtime.spatial_contract()), runtime.topology_epoch(),
+      runtime.materialization_generation(),
+      {{0, 4, pops::amr::Rational(0, 1), 4.0}, {1, 4, pops::amr::Rational(0, 1), 4.0}}, temporal,
+      ledger);
+  accepted.logical_clock_ticks.emplace("clock.macro", 4);
+  EXPECT_NO_THROW(program::require_collective_amr_program_checkpoint_consensus(accepted));
+  EXPECT_NO_THROW(program::require_live_amr_program_checkpoint(accepted, runtime));
+
+  auto restored = program::restore_amr_program_face_flux_ledger(accepted, kLedgerBudget);
+  const auto replay = transition.reconcile_reflux(runtime, restored, coarse_key<Dim>(0), "tracer.U",
+                                                  kMetricBudget, payload_axpy);
+  EXPECT_EQ(replay.mismatch, (program::AmrProgramFacePayload{pops::Real(2)}));
+
+  auto divergent = accepted;
+  if (rank == 1)
+    divergent.spatial_contract += ".rank-one-divergence";
+  bool rejected = false;
+  try {
+    program::require_collective_amr_program_checkpoint_consensus(divergent);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  EXPECT_EQ(pops::all_reduce_sum(rejected ? 1L : 0L), static_cast<long>(ranks));
+}
+
+int run_exact_mpi_program_reflux(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
+  int result = 0;
+  {
+    Kokkos::ScopeGuard kokkos(argc, argv);
+    try {
+      prove_collective_reflux_checkpoint<pops::kNativeDimension>(pops::n_ranks(), pops::my_rank());
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "rank %d exact MPI Program reflux proof failed: %s\n", pops::my_rank(),
+                   error.what());
+      result = 1;
+    }
+    result = static_cast<int>(
+        pops::all_reduce_max(static_cast<long>(result || ::testing::Test::HasFailure())));
+    if (pops::my_rank() == 0 && result == 0)
+      std::printf("OK test_mpi_amr_program_reflux np=%d dim=%d exact-ledger-checkpoint\n",
+                  pops::n_ranks(), pops::kNativeDimension);
+  }
+  pops::comm_finalize();
+  return result;
 }
 
 }  // namespace
 
-static int pops_run_test_mpi_amr_program_reflux(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  const int me = my_rank();
-  const int np = n_ranks();
-  long fails = 0;
-
-  if (np != 2 && np != 4) {
-    if (me == 0)
-      std::printf("FAIL test_mpi_amr_program_reflux requires two or four MPI ranks\n");
-    comm_finalize();
-    return 1;
-  }
-
-  // Negative/non-zero origin: the coarse/fine formulas must remain in global index space and may
-  // not silently fall back to zero-based modulo/division.
-  const Box2D parent_domain{{-8, -8}, {7, 7}};
-  const BoxArray parent_boxes = BoxArray::from_domain(parent_domain, 8);  // four parent tiles
-  const DistributionMapping parent_dm(parent_boxes.size(), np);
-  MultiFab parent(parent_boxes, parent_dm, kNcomp, 0);
-  MultiFab distributed_fx(face_boxes(parent_boxes, true), parent_dm, kNcomp, 0);
-  MultiFab distributed_fy(face_boxes(parent_boxes, false), parent_dm, kNcomp, 0);
-  fill_faces(distributed_fx, distributed_fy);
-
-  // Both fine patches cross the x=0 parent-tile seam.  Global child 1 belongs to rank 1,
-  // where its local index is 0: this makes local/global index confusion observable.
-  const BoxArray child_boxes(
-      std::vector<Box2D>{Box2D{{-8, -16}, {7, -1}}, Box2D{{-8, 0}, {7, 15}}});
-  const DistributionMapping child_dm(child_boxes.size(), np);
-  MultiFab child(child_boxes, child_dm, kNcomp, 0);
-
-  // The coarse-role redistribution target is persistent.  Its first use builds one cached schedule
-  // per face direction, the next use hits those schedules, and an epoch change rebuilds both targets.
-  // The process-local counters are deterministic because every rank participates in parallel_copy.
-  detail::CoarseRoleScratch scratch;
-  reset_copy_schedule_build_count();
-  EdgeFlux distributed;
-  scratch.prepare(parent, child, /*replicated=*/false, 7, kNcomp);
-  detail::prepare_edge_flux_coarse_role(distributed, child, kNcomp);
-  detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 7, kNcomp,
-                                   scratch, distributed);
-  fails += copy_schedule_build_count() != 2;
-  const std::int64_t hits_after_first = copy_schedule_hit_count();
-  const AllocationEventStats allocations_before_replay = allocation_event_stats();
-  detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 7, kNcomp,
-                                   scratch, distributed);
-  const AllocationEventStats allocations_after_replay = allocation_event_stats();
-  fails += !(allocations_before_replay == allocations_after_replay);
-  fails += copy_schedule_build_count() != 2;
-  fails += copy_schedule_hit_count() != hits_after_first + 2;
-  scratch.prepare(parent, child, /*replicated=*/false, 8, kNcomp);
-  detail::sample_coarse_role_strip(parent, distributed_fx, distributed_fy, child, false, 8, kNcomp,
-                                   scratch, distributed);
-  fails += copy_schedule_build_count() != 4;
-  fails += scratch.topology_epoch != 8;
-  fails += distributed.coarse.size() != static_cast<std::size_t>(child_boxes.size());
-  if (distributed.coarse.size() == static_cast<std::size_t>(child_boxes.size())) {
-    for (int g = 0; g < child_boxes.size(); ++g) {
-      if (child_dm[g] == me)
-        fails +=
-            check_coarse_strip(distributed.coarse[static_cast<std::size_t>(g)], child_boxes[g]);
-      else
-        fails += !strip_is_empty(distributed.coarse[static_cast<std::size_t>(g)]);
-    }
-    fails += check_one_writer_per_patch(distributed.coarse, true);
-  }
-  if (np == 4) {
-    const long source_only = parent.local_size() > 0 && child.local_size() == 0 ? 1L : 0L;
-    const long source_only_ranks = all_reduce_sum(source_only);
-    if (me == 0)
-      fails += source_only_ranks != 2;
-  }
-
-  // Replicated parent: every rank owns a full parent copy, but child ownership remains the
-  // single-writer authority.  Its local strip must be bit-identical to the distributed route.
-  const BoxArray replicated_boxes(std::vector<Box2D>{parent_domain});
-  const DistributionMapping replicated_dm(std::vector<int>{me});
-  MultiFab replicated_parent(replicated_boxes, replicated_dm, kNcomp, 0);
-  MultiFab replicated_fx(face_boxes(replicated_boxes, true), replicated_dm, kNcomp, 0);
-  MultiFab replicated_fy(face_boxes(replicated_boxes, false), replicated_dm, kNcomp, 0);
-  fill_faces(replicated_fx, replicated_fy);
-
-  detail::CoarseRoleScratch replicated_scratch;
-  EdgeFlux replicated;
-  replicated_scratch.prepare(replicated_parent, child, /*replicated=*/true, 8, kNcomp);
-  detail::prepare_edge_flux_coarse_role(replicated, child, kNcomp);
-  detail::sample_coarse_role_strip(replicated_parent, replicated_fx, replicated_fy, child, true, 8,
-                                   kNcomp, replicated_scratch, replicated);
-  fails += replicated.coarse.size() != static_cast<std::size_t>(child_boxes.size());
-  if (replicated.coarse.size() == static_cast<std::size_t>(child_boxes.size())) {
-    for (int g = 0; g < child_boxes.size(); ++g) {
-      const std::size_t q = static_cast<std::size_t>(g);
-      if (child_dm[g] == me) {
-        fails += check_coarse_strip(replicated.coarse[q], child_boxes[g]);
-        fails += replicated.coarse[q].cL != distributed.coarse[q].cL;
-        fails += replicated.coarse[q].cR != distributed.coarse[q].cR;
-        fails += replicated.coarse[q].cB != distributed.coarse[q].cB;
-        fails += replicated.coarse[q].cT != distributed.coarse[q].cT;
-      } else {
-        fails += !strip_is_empty(replicated.coarse[q]);
-      }
-    }
-    fails += check_one_writer_per_patch(replicated.coarse, true);
-  }
-
-  // Fine-role sampling uses the same distributed child layout.  Rank 1 must write global slot 1,
-  // never slot 0, even though this is its first local face Fab.
-  MultiFab fine_fx(face_boxes(child_boxes, true), child_dm, kNcomp, 0);
-  MultiFab fine_fy(face_boxes(child_boxes, false), child_dm, kNcomp, 0);
-  fill_faces(fine_fx, fine_fy);
-  EdgeFlux fine;
-  detail::prepare_edge_flux_fine_role(fine, child, kNcomp);
-  detail::sample_fine_role_strip(child, fine_fx, fine_fy, kNcomp, fine);
-  fails += fine.fine.size() != static_cast<std::size_t>(child_boxes.size());
-  if (fine.fine.size() == static_cast<std::size_t>(child_boxes.size())) {
-    for (int g = 0; g < child_boxes.size(); ++g) {
-      if (child_dm[g] == me)
-        fails += check_fine_strip(fine.fine[static_cast<std::size_t>(g)], child_boxes[g]);
-      else
-        fails += !strip_is_empty(fine.fine[static_cast<std::size_t>(g)]);
-    }
-    fails += check_one_writer_per_patch(fine.fine, false);
-  }
-
-  // The prepared route authenticates each global strip against the child owner before launching
-  // correction kernels.  A role materialized only on one non-owner rank must therefore make EVERY
-  // rank leave through the same consensus failure, never strand healthy peers in the later sum.
-  AmrLevelMP parent_level{parent, nullptr, Real(1), Real(1)};
-  AmrLevelMP child_level{child, nullptr, Real(0.5), Real(0.5)};
-  parent_level.U.set_val(Real(0));
-  auto transition = PreparedAmrProgramRefluxTransition::prepare(
-      parent_level, child_level, parent_domain, Periodicity{false, false},
-      world_communicator_view());
-  transition.synchronize_integrated(parent_level.U, parent_level.dx, parent_level.dy,
-                                    distributed.coarse, fine.fine, world_communicator_view());
-
-  std::vector<EdgeStrip> duplicated_coarse = distributed.coarse;
-  std::vector<EdgeStrip> duplicated_fine = fine.fine;
-  const int intruder = (child_dm[0] + 1) % np;
-  if (me == intruder) {
-    const Box2D footprint = PatchRange(child_boxes[0]).box();
-    duplicated_coarse[0].alloc(footprint, kNcomp);
-    duplicated_fine[0].alloc(footprint, kNcomp);
-  }
-  bool rejected_non_owner = false;
-  try {
-    transition.synchronize_integrated(parent_level.U, parent_level.dx, parent_level.dy,
-                                      duplicated_coarse, duplicated_fine,
-                                      world_communicator_view());
-  } catch (const std::runtime_error&) {
-    rejected_non_owner = true;
-  }
-  const long rejecting_ranks = all_reduce_sum(rejected_non_owner ? 1L : 0L);
-  fails += rejecting_ranks != np;
-
-  // A face array with the right local size but the wrong centering/order must fail before sampling;
-  // no local-index fallback is allowed after regridding or redistribution.
-  MultiFab wrong_fy(face_boxes(child_boxes, true), child_dm, kNcomp, 0);
-  bool rejected_wrong_layout = false;
-  try {
-    EdgeFlux invalid;
-    detail::sample_fine_role_strip(child, fine_fx, wrong_fy, kNcomp, invalid);
-  } catch (const std::runtime_error&) {
-    rejected_wrong_layout = true;
-  }
-  fails += !rejected_wrong_layout;
-
-  const long global_fails = all_reduce_sum(fails);
-  if (me == 0) {
-    if (global_fails == 0)
-      std::printf(
-          "OK test_mpi_amr_program_reflux np=%d (persistent remap, distributed multi-box, "
-          "global patch identity, replicated-parent single writer)\n",
-          np);
-    else
-      std::printf("FAIL test_mpi_amr_program_reflux: %ld contract violations\n", global_fails);
-  }
-  comm_finalize();
-  return global_fails == 0 ? 0 : 1;
-}
-
-TEST(test_mpi_amr_program_reflux, Runs) {
-  EXPECT_EQ(
-      pops::test::RunTestBody(&pops_run_test_mpi_amr_program_reflux, "test_mpi_amr_program_reflux"),
-      0);
+TEST(test_mpi_amr_program_reflux, ExactLedgerRestartAndCollectiveRefusal) {
+  EXPECT_EQ(pops::test::RunTestBody(&run_exact_mpi_program_reflux, "test_mpi_amr_program_reflux"),
+            0);
 }

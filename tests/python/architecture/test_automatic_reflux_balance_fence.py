@@ -1,103 +1,75 @@
-"""ADC-686: automatic reflux evidence stays exact, sparse, and fail-closed."""
+"""Accepted AMR reflux evidence is exact, transactional, and restartable."""
 
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PROGRAM_STATE = (
-    ROOT / "include" / "pops" / "runtime" / "program" / "program_runtime_state.hpp"
+LEDGER = ROOT / "include" / "pops" / "amr" / "reflux" / "face_flux_ledger.hpp"
+METRIC_REFLUX = LEDGER.with_name("metric_reflux.hpp")
+CHECKPOINT = ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_checkpoint.hpp"
+SUBCYCLING = (
+    ROOT / "include" / "pops" / "numerics" / "time" / "amr" / "levels" / "amr_subcycling.hpp"
 )
-AMR_CONTEXT = (
-    ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
-)
-AMR_REFLUX = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_program_reflux.hpp"
-AMR_SUBCYCLING = (
-    ROOT / "include" / "pops" / "numerics" / "time" / "amr" / "levels"
-    / "amr_subcycling.hpp"
-)
-AMR_PATCH_RANGE = (
-    ROOT / "include" / "pops" / "numerics" / "time" / "amr" / "levels"
-    / "amr_patch_range.hpp"
-)
-UNIFORM_IMPL = ROOT / "src" / "runtime" / "system" / "system_impl.hpp"
-AMR_IMPL = ROOT / "src" / "runtime" / "amr" / "amr_system.cpp"
+RETIRED_PROGRAM_REFLUX = ROOT / "include" / "pops" / "runtime" / "amr" / "amr_program_reflux.hpp"
 
 
-def _between(text: str, begin: str, end: str) -> str:
-    return text.split(begin, 1)[1].split(end, 1)[0]
+def test_pending_fragments_never_cross_the_accepted_boundary() -> None:
+    ledger = LEDGER.read_text(encoding="utf-8")
+    checkpoint = CHECKPOINT.read_text(encoding="utf-8")
+    assert "active_attempt_" in ledger
+    assert "savepoints_" in ledger
+    assert "pending_" in ledger
+    assert "published_" in ledger
+    assert "if (ledger.in_transaction())" in checkpoint
+    assert "cannot observe an active face-flux transaction" in checkpoint
+    assert "ledger.published_entries(axis)" in checkpoint
+    assert "pending_entries" not in checkpoint
 
 
-def test_automatic_balance_mailbox_is_attempt_local_and_not_a_route_fallback() -> None:
-    state = PROGRAM_STATE.read_text()
-    assert "struct AutomaticBalanceKey" in state
-    assert "std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;" in state
-    assert "automatic_balance_terms_.clear();" in state
-    assert "record_automatic_balance_term(" in state
-    assert "automatic_balance_capture_due()" in state
-
-    accepted = _between(
-        state,
-        "std::map<std::string, Real> accepted_balance_terms(",
-        "void begin_balance_due_window(",
-    )
-    explicit_only = accepted.split(
-        "std::map<std::string, Real> selected_accepted_balance_terms(", 1
-    )[0]
-    assert "step_balance_terms_" in explicit_only
-    assert "automatic_balance_terms_" not in explicit_only
-    assert "automatic_balance_terms_" in accepted
-
-    uniform = UNIFORM_IMPL.read_text()
-    adaptive = AMR_IMPL.read_text()
-    for source in (uniform, adaptive):
-        assert "automatic_balance_terms" in source
-        assert "impl.program_.automatic_balance_terms_" in source
+def test_checkpoint_persists_exact_ranked_face_fragments_not_2d_strips() -> None:
+    source = CHECKPOINT.read_text(encoding="utf-8")
+    assert "template <int Dim>\nstruct AmrProgramAcceptedState" in source
+    assert "FaceFluxFragment<Dim, AmrProgramFacePayload>" in source
+    assert "std::array<std::vector" in source
+    assert "write_face_fragment" in source
+    assert "read_face_fragment" in source
+    assert "write_rational" in source
+    assert "write_clock" in source
+    for retired in ("EdgeStrip", "EdgeFlux", "Box2D", "ConstArray4", "ring_flux"):
+        assert retired not in source
 
 
-def test_reflux_integral_comes_from_the_gathered_sparse_correction() -> None:
-    register = AMR_PATCH_RANGE.read_text()
-    component_sums = _between(
-        register,
-        "[[nodiscard]] std::vector<Real> component_sums(",
-        "[[nodiscard]] std::size_t lookup_capacity()",
-    )
-    assert "device_fence();" in component_sums
-    assert "cell_measure * buf[offset + component]" in component_sums
-    assert "all_reduce" not in component_sums
-
-    transition = AMR_SUBCYCLING.read_text()
-    synchronize = _between(
-        transition,
-        "void synchronize_integrated(",
-        "\n private:",
-    )
-    assert synchronize.index("correction_.gather(communicator);") < synchronize.index(
-        "correction_.component_sums(dx * dy)"
-    )
-    assert synchronize.index("correction_.component_sums(dx * dy)") < synchronize.index(
-        "ApplyRefluxRegisterKernel"
-    )
-
-    route = AMR_REFLUX.read_text()
-    routing = _between(route, "inline void route_reflux_program(", "\n}\n\n}  // namespace detail")
-    assert "std::vector<Real>* integrated_state_correction = nullptr" in routing
-    assert "integrated_state_correction);" in routing
+def test_checkpoint_is_canonical_dimension_qualified_and_budgeted() -> None:
+    source = CHECKPOINT.read_text(encoding="utf-8")
+    assert "out.i32(Dim);" in source
+    assert "native dimension does not match the artifact" in source
+    assert "std::sort(destination.begin(), destination.end()" in source
+    assert "face fragments must be uniquely ordered" in source
+    assert "FaceFluxLedgerBudget budget" in source
+    assert "restore_amr_program_face_flux_ledger" in source
+    assert "ledger.rollback();" in source
 
 
-def test_amr_records_reflux_before_average_down_only_when_balance_is_due() -> None:
-    context = AMR_CONTEXT.read_text()
-    synchronize = _between(
-        context,
-        "void synchronize_level_pair_(",
-        "void finalize_history_rotation_()",
-    )
-    assert "automatic_balance_capture_due()" in synchronize
-    assert "record_automatic_balance_term(" in synchronize
-    assert '"reflux"' in synchronize
-    assert "reduce_sum(" not in synchronize
-    assert synchronize.index("route_reflux_program(") < synchronize.index(
-        "record_automatic_balance_term("
-    )
-    assert synchronize.index("record_automatic_balance_term(") < synchronize.index(
-        "SyncPhase::AverageDown"
-    )
+def test_restart_and_collective_preflight_fail_closed_before_publication() -> None:
+    source = CHECKPOINT.read_text(encoding="utf-8")
+    assert "require_live_amr_program_checkpoint" in source
+    assert "runtime.spatial_contract()" in source
+    assert "runtime.topology_epoch()" in source
+    assert "runtime.materialization_generation()" in source
+    assert "require_collective_amr_program_checkpoint_consensus" in source
+    assert "all_ranks_agree_exact_ordered_byte_pairs" in source
+    assert "differs between communicator ranks" in source
+
+
+def test_metric_reconciliation_authenticates_the_complete_substep_window() -> None:
+    metric = METRIC_REFLUX.read_text(encoding="utf-8")
+    transition = SUBCYCLING.read_text(encoding="utf-8")
+    assert "substeps do not form a contiguous exact clock partition" in metric
+    assert "stage weights do not close one accepted substep" in metric
+    assert "coarse and fine physical clocks do not cover the same window" in metric
+    assert "has an incomplete " in metric
+    assert "runtime.reconcile_reflux(" in transition
+
+
+def test_no_parallel_program_reflux_authority_remains() -> None:
+    assert not RETIRED_PROGRAM_REFLUX.exists()

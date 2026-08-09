@@ -166,8 +166,8 @@ def test_real_regrid_stable_and_layout_consistent(
     is defined on the NEW hierarchy (flat size == sum_k ncomp*nf_k*nf_k).
 
     ROUND-OFF conservation (ADC-639): the synchronous Program driver now couples fine->coarse by
-    average_down THEN conservative REFLUX at the coarse-fine interface (amr_program_context.hpp::
-    couple_levels + amr_program_reflux.hpp). The per-level effective flux is captured through the AB2
+    average_down THEN conservative REFLUX at the coarse-fine interface through the canonical face
+    ledger and ``PreparedAmrSubcycleTransition<Dim>``. The per-level effective flux is captured through the AB2
     Program's own linear combination (1.5 R_n - 0.5 R_{n-1}, the flux ledger + the persistent per-ring
     strip that carries R_{n-1}'s flux across steps), so the coarse cell's flux at the interface is
     corrected by exactly (fine effective flux - coarse effective flux). The total mass is therefore

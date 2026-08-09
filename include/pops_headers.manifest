@@ -176,7 +176,6 @@ api pops/physics/composition/composite.hpp
 api pops/physics/composition/exact_brick_contract.hpp
 api pops/physics/fluids/euler.hpp
 sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
-sdk-support pops/runtime/amr/amr_program_reflux.hpp
 sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/tensor_composite_fac_2d.hpp

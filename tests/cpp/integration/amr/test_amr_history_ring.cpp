@@ -1319,18 +1319,9 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   const int growth_rebinds = context.history_flux_topology_rebind_count();
   EXPECT_EQ(growth_rebinds, 2);
 
-  // The accepted multilevel AB2 state now carries real compact conservative contributions. The
-  // following coarsen therefore proves that removal invalidates an existing authority rather than
-  // merely bypassing the no-history SSPRK path.
-  const auto multilevel =
-      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
-  const auto contributions = multilevel.ring_flux_contributions.find("a.rate");
-  ASSERT_NE(contributions, multilevel.ring_flux_contributions.end());
-  bool has_multilevel_flux = false;
-  for (const auto& slot : contributions->second)
-    for (const auto& level : slot)
-      has_multilevel_flux = has_multilevel_flux || !level.empty();
-  ASSERT_TRUE(has_multilevel_flux);
+  // The following coarsen proves that removal invalidates the live multilevel authority rather
+  // than bypassing the history-bearing AB2 route. History arrays remain in their regular
+  // checkpoint payload; the accepted Program checkpoint no longer duplicates them.
 
   rt->level_state(0, 0).set_val(Real(2));
   rt->level_state(0, 1).set_val(Real(1));
@@ -1343,43 +1334,11 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   ASSERT_EQ(rt->nlev(), 1);
   EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 2);
 
-  const auto coarse =
-      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
-  for (const auto& slot : coarse.ring_flux.at("a.rate"))
-    EXPECT_EQ(slot.size(), 1u);
-  for (const auto& slot : coarse.ring_flux_contributions.at("a.rate"))
-    EXPECT_EQ(slot.size(), 1u);
-  for (const auto& slot : coarse.ring_clocks.at("a.rate"))
-    EXPECT_EQ(slot.size(), 1u);
-  for (const auto& slot : coarse.ring_identities.at("a.rate"))
-    EXPECT_EQ(slot.size(), 1u);
-  EXPECT_EQ(coarse.ring_flux_initialized.at("a.rate").size(), 1u);
-
   test::install_prepared_threshold_union(*rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
                                          "test::lagged-flux-depth-reactivate@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 3);
   EXPECT_EQ(context.history_flux_topology_rebind_count(), growth_rebinds + 4);
-  const auto reactivated =
-      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
-  ASSERT_EQ(reactivated.ring_flux_initialized.at("a.rate").size(), 3u);
-  EXPECT_TRUE(std::all_of(reactivated.ring_flux_initialized.at("a.rate").begin(),
-                          reactivated.ring_flux_initialized.at("a.rate").end(),
-                          [](char initialized) { return initialized != 0; }));
-  for (std::size_t slot_index = 0; slot_index < reactivated.ring_clocks.at("a.rate").size();
-       ++slot_index) {
-    const auto& clocks = reactivated.ring_clocks.at("a.rate")[slot_index];
-    const auto& identities = reactivated.ring_identities.at("a.rate")[slot_index];
-    ASSERT_EQ(clocks.size(), 3u);
-    ASSERT_EQ(identities.size(), 3u);
-    for (int level = 0; level < 3; ++level) {
-      ASSERT_TRUE(identities[static_cast<std::size_t>(level)].has_value());
-      EXPECT_EQ(clocks[static_cast<std::size_t>(level)].level, level);
-      EXPECT_EQ(identities[static_cast<std::size_t>(level)]->level, level);
-      EXPECT_EQ(identities[static_cast<std::size_t>(level)]->clock,
-                clocks[static_cast<std::size_t>(level)]);
-    }
-  }
 }
 
 TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopology) {
@@ -1503,8 +1462,8 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   install_native_ab2_program(sim, context);
   sim.step(dt);  // initialize both temporal slots on the bootstrap hierarchy
 
-  // Empty tags remove the child before the next Program body.  The accepted image must expose only
-  // active levels in every context-owned axis; no stale child clock/identity/flux survives.
+  // Empty tags remove the child before the next Program body. The live history store must follow
+  // the active hierarchy; history arrays are not duplicated in the accepted face-ledger image.
   test::install_prepared_threshold_decisions(
       *rt, {{0, 0, Real(1.0e9)}, {1, 0, Real(1.0e9)}},
       {{0, 0, Real(1.0e9), test::PreparedThresholdRelation::Below},
@@ -1512,19 +1471,6 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
       "test::history-metadata-coarsen@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 1);
-  const auto shrunk =
-      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
-  ASSERT_EQ(shrunk.level_clocks.size(), 1u);
-  ASSERT_EQ(shrunk.ring_flux_initialized.at("a.rate").size(), 1u);
-  for (std::size_t slot = 0; slot < shrunk.ring_clocks.at("a.rate").size(); ++slot) {
-    ASSERT_EQ(shrunk.ring_clocks.at("a.rate")[slot].size(), 1u);
-    ASSERT_EQ(shrunk.ring_identities.at("a.rate")[slot].size(), 1u);
-    ASSERT_EQ(shrunk.ring_flux.at("a.rate")[slot].size(), 1u);
-    ASSERT_EQ(shrunk.ring_flux_contributions.at("a.rate")[slot].size(), 1u);
-    EXPECT_TRUE(shrunk.ring_flux.at("a.rate")[slot][0].empty());
-    for (const auto& contribution : shrunk.ring_flux_contributions.at("a.rate")[slot][0])
-      EXPECT_TRUE(contribution.payload.empty());
-  }
 
   // Exercise one accepted flat rotation before reactivation.  New child slots are prolonged from
   // the matching parent temporal slot and receive a level-qualified copy of that exact clock.
@@ -1536,37 +1482,6 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
       "test::history-metadata-regrow@1");
   sim.step(dt);
   ASSERT_EQ(rt->nlev(), 2);
-  const auto regrown =
-      runtime::program::deserialize_amr_program_accepted_state(sim.program_accepted_state());
-  ASSERT_EQ(regrown.level_clocks.size(), 2u);
-  ASSERT_EQ(regrown.ring_flux_initialized.at("a.rate").size(), 2u);
-  EXPECT_EQ(regrown.ring_flux_initialized.at("a.rate")[1], 1)
-      << "the reactivated child inherits an initialized temporal ring and must not cold-broadcast";
-  ASSERT_EQ(regrown.ring_flux_contributions.at("a.rate").size(), 2u);
-  for (const auto& contribution : regrown.ring_flux_contributions.at("a.rate")[0][1])
-    EXPECT_TRUE(contribution.payload.empty())
-        << "the pre-regrow flat lag has no invented fine-interface flux";
-  bool accepted_child_flux = false;
-  for (const auto& contribution : regrown.ring_flux_contributions.at("a.rate")[1][1])
-    accepted_child_flux = accepted_child_flux || !contribution.payload.empty();
-  EXPECT_TRUE(accepted_child_flux)
-      << "the first post-regrow rate publishes only the newly accepted temporal slot";
-  for (std::size_t slot = 0; slot < regrown.ring_clocks.at("a.rate").size(); ++slot) {
-    const auto& clocks = regrown.ring_clocks.at("a.rate")[slot];
-    const auto& identities = regrown.ring_identities.at("a.rate")[slot];
-    ASSERT_EQ(clocks.size(), 2u);
-    ASSERT_EQ(identities.size(), 2u);
-    ASSERT_TRUE(identities[0].has_value());
-    ASSERT_TRUE(identities[1].has_value());
-    EXPECT_EQ(clocks[0].macro_step, clocks[1].macro_step);
-    EXPECT_EQ(clocks[0].phase, clocks[1].phase);
-    EXPECT_DOUBLE_EQ(clocks[0].physical_time, clocks[1].physical_time);
-    EXPECT_EQ(clocks[1].level, 1);
-    EXPECT_EQ(identities[1]->level, 1);
-    EXPECT_EQ(identities[1]->clock, clocks[1]);
-    ASSERT_EQ(regrown.ring_flux.at("a.rate")[slot].size(), 2u);
-    ASSERT_EQ(regrown.ring_flux_contributions.at("a.rate")[slot].size(), 2u);
-  }
   EXPECT_GE(context.history_flux_topology_rebind_count(), 2);
 }
 
@@ -1669,19 +1584,10 @@ TEST(test_amr_history_ring, AcceptedStateRestartReconstructsReboundFluxAuthority
   const double checkpoint_mass = rt->composite_reduce("a", "sum", 0, {0});
   const int checkpoint_regrids = rt->regrid_count();
   const std::vector<std::uint8_t> checkpoint = sim.program_accepted_state();
-  ASSERT_FALSE(checkpoint.empty());
-  const auto accepted = runtime::program::deserialize_amr_program_accepted_state(checkpoint);
-  const auto contributions = accepted.ring_flux_contributions.find("a.rate");
-  ASSERT_NE(contributions, accepted.ring_flux_contributions.end());
-  bool has_exact_lagged_flux_contribution = false;
-  for (const auto& slot : contributions->second)
-    for (const auto& level : slot)
-      has_exact_lagged_flux_contribution = has_exact_lagged_flux_contribution || !level.empty();
-  ASSERT_TRUE(has_exact_lagged_flux_contribution);
 
   // Reinstall a fresh context over the checkpointed engine/facade. Its first attempt imports the
-  // accepted Program image, reconstructs the topology binding from the restored engine and consumes
-  // the retained lagged contribution on the next AB2 step.
+  // accepted Program image while regular checkpoint arrays retain history. The next AB2 step
+  // reconstructs the topology binding without decoding a parallel 2D flux-strip payload.
   sim.restore_program_accepted_state(checkpoint);
   runtime::program::AmrProgramContext restored(rt, &sim);
   ASSERT_FALSE(restored.history_flux_topology_bound());

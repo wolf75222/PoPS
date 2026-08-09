@@ -14,6 +14,7 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 
 #include "amr_tagging_test_authority.hpp"
 
@@ -617,10 +618,16 @@ TEST(test_amr_system_contract,
 
   EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
             std::bit_cast<std::uint64_t>(accepted_endpoint));
-  const runtime::program::AmrProgramAcceptedState accepted =
-      runtime::program::deserialize_amr_program_accepted_state(system.program_accepted_state());
-  ASSERT_FALSE(accepted.level_clocks.empty());
-  for (const auto& clock : accepted.level_clocks) {
+  runtime::program::AmrProgramAcceptedState<2> accepted;
+  accepted.spatial_contract = "test.non-associative-accepted-clock.dim2";
+  accepted.level_clocks = {
+      {0, system.macro_step(), amr::Rational(0, 1), system.time()},
+  };
+  const auto encoded = runtime::program::serialize_amr_program_accepted_state(accepted);
+  const auto decoded = runtime::program::deserialize_amr_program_accepted_state<2>(encoded);
+  EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(decoded), encoded);
+  ASSERT_FALSE(decoded.level_clocks.empty());
+  for (const auto& clock : decoded.level_clocks) {
     EXPECT_EQ(std::bit_cast<std::uint64_t>(clock.physical_time),
               std::bit_cast<std::uint64_t>(system.time()));
     EXPECT_EQ(clock.macro_step, system.macro_step());

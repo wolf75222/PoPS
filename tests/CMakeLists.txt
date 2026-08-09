@@ -682,10 +682,18 @@ pops_add_gtest_suite(
   LABELS unit runtime amr fast)
 
 pops_test_source(_src test_program_reflux_ledger)
-pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(
+  NAME test_program_reflux_ledger
+  SOURCES "${_src}"
+  EXTRA_LIBS ${CMAKE_DL_LIBS}
+  LABELS integration amr nd checkpoint medium)
 
 pops_test_source(_src test_temporal_partition_restart)
-pops_add_gtest_suite(NAME test_temporal_partition_restart SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(
+  NAME test_temporal_partition_restart
+  SOURCES "${_src}"
+  EXTRA_LIBS ${CMAKE_DL_LIBS}
+  LABELS integration runtime amr nd checkpoint medium)
 
 pops_test_source(_src test_cell_temporal_partition_executor)
 pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -891,6 +899,10 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
+    elseif(_test STREQUAL "test_mpi_amr_program_reflux" OR
+           _test STREQUAL "test_mpi_amr_rebalance_migration")
+      # These exact-ND checkpoint/ledger proofs instantiate only header-owned authorities. Linking
+      # AmrSystem would make them depend on an unrelated runtime facade and weaken that boundary.
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
@@ -933,6 +945,10 @@ if(POPS_HAS_MPI)
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
   set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1")
+  set_property(
+    TEST test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4
+         test_mpi_amr_rebalance_migration_np2 test_mpi_amr_rebalance_migration_np4
+    APPEND PROPERTY LABELS amr nd checkpoint)
   # This regression proves MPI trace transport and intentionally does not exercise on-node
   # threading.  One Kokkos worker per rank avoids OpenMP oversubscription and matches CTest's
   # PROCESSORS=2 accounting.
