@@ -4581,6 +4581,24 @@ class RuntimeOutputSnapshot:
             raise KeyError("consumer selected unknown layout %s" % layout_id)
         return rows[0]
 
+    def _embedded_boundary_output_entry(
+        self, layout: Any, geometry: LevelGeometry
+    ) -> dict[str, Any] | None:
+        """Resolve one authenticated Uniform or AMR EB sidecar provider."""
+        if layout.options.get("embedded_boundary") is None:
+            return None
+        native_engine = self._owner._executor_for_layout(layout.handle.qualified_id)._s
+        method_name = "output_embedded_boundary_local_pieces"
+        if not callable(getattr(native_engine, method_name, None)):
+            raise RuntimeError(
+                "installed native provider lacks required %s() output view" % method_name
+            )
+        return {
+            "geometry": geometry,
+            "native_engine": native_engine,
+            "method_name": method_name,
+        }
+
     def _geometry(self, layout: Any, level: int) -> LevelGeometry:
         engine = self._owner._executor_for_layout(layout.handle.qualified_id)
         native_engine = getattr(engine, "_s", None)
@@ -5122,31 +5140,12 @@ class RuntimeOutputSnapshot:
                         "reduction_levels": reduction_levels,
                     }
                     entries.append(entry)
-                    embedded_plan = layout.options.get("embedded_boundary")
-                    if embedded_plan is not None:
-                        if layout.adaptive:
-                            raise NotImplementedError(
-                                "scientific output has no prepared AMR embedded-boundary "
-                                "sidecar provider"
-                            )
-                        sidecar_engine = self._owner._executor_for_layout(
-                            layout.handle.qualified_id
-                        )._s
-                        method_name = "output_embedded_boundary_local_pieces"
-                        if not callable(getattr(sidecar_engine, method_name, None)):
-                            raise RuntimeError(
-                                "installed native provider lacks required %s() output view"
-                                % method_name
-                            )
+                    sidecar_entry = self._embedded_boundary_output_entry(layout, geometry)
+                    if sidecar_entry is not None:
                         previous = embedded_entries.get(geometry.key)
-                        sidecar_entry = {
-                            "geometry": geometry,
-                            "native_engine": sidecar_engine,
-                            "method_name": method_name,
-                        }
                         if previous is not None and (
-                            previous["native_engine"] is not sidecar_engine
-                            or previous["method_name"] != method_name
+                            previous["native_engine"] is not sidecar_entry["native_engine"]
+                            or previous["method_name"] != sidecar_entry["method_name"]
                         ):
                             raise RuntimeError(
                                 "one layout/level resolved multiple embedded-boundary providers"
@@ -5160,29 +5159,11 @@ class RuntimeOutputSnapshot:
                 for level in levels:
                     geometry = self._geometry(layout, level)
                     geometries[geometry.key] = geometry
-                    embedded_plan = layout.options.get("embedded_boundary")
-                    if embedded_plan is not None:
-                        if layout.adaptive:
-                            raise NotImplementedError(
-                                "scientific output has no prepared AMR embedded-boundary "
-                                "sidecar provider"
-                            )
-                        sidecar_engine = self._owner._executor_for_layout(
-                            layout.handle.qualified_id
-                        )._s
-                        method_name = "output_embedded_boundary_local_pieces"
-                        if not callable(getattr(sidecar_engine, method_name, None)):
-                            raise RuntimeError(
-                                "installed native provider lacks required %s() output view"
-                                % method_name
-                            )
+                    sidecar_entry = self._embedded_boundary_output_entry(layout, geometry)
+                    if sidecar_entry is not None:
                         embedded_entries.setdefault(
                             geometry.key,
-                            {
-                                "geometry": geometry,
-                                "native_engine": sidecar_engine,
-                                "method_name": method_name,
-                            },
+                            sidecar_entry,
                         )
                 diagnostic_schema.append(
                     {
