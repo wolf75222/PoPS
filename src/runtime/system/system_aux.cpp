@@ -345,6 +345,87 @@ System<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid) c
 }
 
 template <int Dim>
+runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
+System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
+  runtime::system::AuxiliaryCheckpointAcceptedState<Dim> result;
+  long local_failure = 0;
+  std::string collective_contract;
+  try {
+    result = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_);
+    if (result.groups.empty()) {
+      if (p_->provider_carrier_)
+        throw std::logic_error("System auxiliary checkpoint has storage without registry groups");
+    } else {
+      if (!p_->provider_carrier_)
+        throw std::logic_error("System auxiliary checkpoint has no storage groups");
+      runtime::system::require_auxiliary_checkpoint_storage(result, *p_->provider_carrier_);
+    }
+    const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(result);
+    ExactContractBuilder exact;
+    exact.text("pops.uniform-exact-auxiliary-checkpoint")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    collective_contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+  }
+  if (all_reduce_max(local_failure) != 0)
+    throw std::runtime_error("System auxiliary checkpoint capture failed on at least one rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.uniform-auxiliary-checkpoint"), collective_contract}}))
+    throw std::runtime_error("System auxiliary checkpoint differs between communicator ranks");
+  return result;
+}
+
+template <int Dim>
+void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
+    const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state) {
+  long local_failure = 0;
+  std::string collective_contract;
+  try {
+    if (state.groups.empty()) {
+      if (p_->provider_carrier_)
+        throw std::invalid_argument("System auxiliary checkpoint storage groups differ from runtime");
+    } else {
+      if (!p_->provider_carrier_)
+        throw std::invalid_argument("System auxiliary checkpoint requires live storage groups");
+      runtime::system::require_auxiliary_checkpoint_storage(state, *p_->provider_carrier_);
+    }
+    const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(state);
+    ExactContractBuilder exact;
+    exact.text("pops.uniform-exact-auxiliary-checkpoint")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    collective_contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+  }
+  if (all_reduce_max(local_failure) != 0)
+    throw std::invalid_argument(
+        "System auxiliary checkpoint preflight failed on at least one rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.uniform-auxiliary-checkpoint"), collective_contract}}))
+    throw std::runtime_error("System auxiliary checkpoint differs between communicator ranks");
+
+  const auto registry_snapshot = p_->auxiliary_registry_;
+  const auto storage_snapshot = p_->provider_carrier_;
+  const auto staged_snapshot = p_->staged_auxiliary_inputs_;
+  const auto dirty_snapshot = p_->dirty_auxiliary_providers_;
+  try {
+    runtime::system::restore_auxiliary_checkpoint_state(state, p_->auxiliary_registry_);
+    p_->dirty_auxiliary_providers_.clear();
+  } catch (...) {
+    p_->auxiliary_registry_ = registry_snapshot;
+    p_->provider_carrier_ = storage_snapshot;
+    p_->staged_auxiliary_inputs_ = staged_snapshot;
+    p_->dirty_auxiliary_providers_ = dirty_snapshot;
+    throw;
+  }
+}
+
+template <int Dim>
 const MultiFab<Dim>* System<Dim>::prepared_block_auxiliary_storage() const {
   if (!p_->auxiliary_registry_.sealed())
     throw std::logic_error("System auxiliary storage is unavailable before registry seal");
@@ -386,6 +467,10 @@ template std::vector<double> System<kNativeDimension>::auxiliary_component(
 template std::string System<kNativeDimension>::auxiliary_registry_contract() const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 System<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
+template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
+System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
+template void System<kNativeDimension>::restore_auxiliary_checkpoint_accepted_state(
+    const runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>&);
 template const MultiFab<kNativeDimension>*
 System<kNativeDimension>::prepared_block_auxiliary_storage() const;
 template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*

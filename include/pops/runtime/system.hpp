@@ -19,6 +19,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
@@ -452,6 +453,16 @@ class System {
   [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
+  /// Durable accepted auxiliary metadata for the Uniform runtime.  Rank-local group payloads are
+  /// staged by the checkpoint backend; this image authenticates exact group identities,
+  /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
+  capture_auxiliary_checkpoint_accepted_state() const;
+  /// Restore the accepted provider provenance only after the checkpoint backend has staged a
+  /// compatible rank-local group payload privately.  The collective preflight and rollback image
+  /// ensure a rejected checkpoint cannot expose a partial auxiliary generation.
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
+      const runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state);
   /// @}
 
   /// Configures the shared Poisson.

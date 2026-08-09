@@ -346,6 +346,25 @@ void bind_system_checkpoint(py::class_<System>& cls) {
          },
          py::arg("contract"),
          "Validate the exact rank-generic checkpoint schema before restart state work.")
+      .def(
+          "capture_auxiliary_checkpoint_accepted_state",
+          [](const System& s) {
+            const auto bytes = pops::runtime::system::serialize_auxiliary_checkpoint_state(
+                s.capture_auxiliary_checkpoint_accepted_state());
+            return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          },
+          "Capture only exact auxiliary accepted metadata; field payloads remain backend-owned.")
+      .def(
+          "restore_auxiliary_checkpoint_accepted_state",
+          [](System& s, py::bytes payload) {
+            std::string bytes = payload;
+            const std::vector<std::uint8_t> image(bytes.begin(), bytes.end());
+            s.restore_auxiliary_checkpoint_accepted_state(
+                pops::runtime::system::deserialize_auxiliary_checkpoint_state<kNativeDimension>(
+                    image));
+          },
+          py::arg("payload"),
+          "Preflight and restore exact auxiliary provenance after private payload staging.")
       // Multistep history checkpoint/restart seam (ADC-406b): the facade gathers/restores the
       // System-owned rings DIRECTLY (no .so checkpoint_extra ABI). history_global mirrors state_global
       // (collective gather, component-major); restore_history mirrors set_state (owner-rank scatter).
