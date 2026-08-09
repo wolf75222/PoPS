@@ -10,6 +10,7 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.fields import bcs, rhs, coefficients, nullspace, aux  # noqa: E402
+from pops._ir import ValueExpr  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.numerics.terms import DefaultSource, Flux, SourceTerm, LocalTerm  # noqa: E402
 from pops.physics._facade import Model as PhysicsModel  # noqa: E402
@@ -18,6 +19,10 @@ from pops.problem import Case  # noqa: E402
 
 def _shared_field(name):
     return Handle(name, kind="field", owner=OwnerPath.shared("mesh.fields_authoring"))
+
+
+def _shared_aux(name):
+    return Handle(name, kind="aux", owner=OwnerPath.shared("mesh.fields_authoring"))
 
 
 def _registered_blocks(*names):
@@ -101,12 +106,45 @@ def test_coefficients_and_nullspace():
     }
 
 
-def test_aux_static_derived_and_halo():
-    sa = aux.StaticAux("eps0", value=8.85e-12)
-    da = aux.DerivedAux("E", expression=None)
-    assert sa.options()["kind"] == "static"
-    assert da.options()["kind"] == "derived"
+def test_aux_inputs_and_derived_values_are_owner_qualified():
+    imposed = _shared_aux("imposed_coefficient")
+    temperature = _shared_aux("temperature")
+    pressure = _shared_field("pressure")
+    density = _shared_field("density")
+
+    supplied = aux.InputAux(imposed)
+    derived = aux.DerivedAux(
+        temperature, ValueExpr(pressure) / ValueExpr(density)
+    )
+
+    assert supplied.options() == {
+        "target": imposed.qualified_id,
+        "producer": "input",
+        "freshness": "dependency_generation",
+        "restart": "persist",
+        "regrid": "transfer",
+    }
+    assert derived.options()["producer"] == "derived"
+    assert derived.options()["freshness"] == "dependency_generation"
+    assert derived.options()["restart"] == "recompute"
+    assert derived.options()["regrid"] == "recompute"
+    assert derived.requirements().to_dict()["aux_dependencies"] == (
+        pressure.qualified_id,
+        density.qualified_id,
+    )
+    assert derived.declaration_references() == (temperature, pressure, density)
+    assert derived.capabilities().supports("native_kernel")
     assert not hasattr(aux, "AuxHalo")
+
+
+def test_aux_producers_reject_bare_names_and_opaque_formulas():
+    target = _shared_aux("coefficient")
+    with pytest.raises(TypeError, match="Module.aux_field"):
+        aux.InputAux("coefficient")
+    with pytest.raises(TypeError, match="pops Expr"):
+        aux.DerivedAux(target, object())
+    with pytest.raises(TypeError, match="Module.aux_field"):
+        aux.DerivedAux(_shared_field("wrong-space"), ValueExpr(target))
 
 
 def test_numerics_terms_construct_and_options():
@@ -145,7 +183,8 @@ def test_print_summaries_are_short_and_named():
     # and stay short too.
     problem, (ions,) = _registered_blocks("ions")
     for obj in (rhs.ChargeDensity.from_blocks(ions).resolve_references(problem.resolve),
-                coefficients.ScalarCoefficient(_shared_field("eps")), aux.StaticAux("eps0")):
+                coefficients.ScalarCoefficient(_shared_field("eps")),
+                aux.InputAux(_shared_aux("eps0"))):
         text = str(obj)
         assert len(text) < 300, "summary too long for %s: %r" % (type(obj).__name__, text)
         assert text.startswith(obj.name), text

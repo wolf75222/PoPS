@@ -14,6 +14,7 @@ from .context import (
     UseHeldField,
     UseMaterializedField,
 )
+from .aux import DerivedAux, InputAux
 from .discretization import (
     CompositeHierarchySolve,
     FieldDiscretization,
@@ -122,6 +123,7 @@ __all__ = [
     "ConstantNullspace",
     "DerivedField",
     "DirichletContribution",
+    "DerivedAux",
     "FailFieldRead",
     "FieldAttemptRejected",
     "FieldArtifactUnavailable",
@@ -154,6 +156,7 @@ __all__ = [
     "GradientOutput",
     "HoldLastValue",
     "InferHierarchyFromLayout",
+    "InputAux",
     "LayoutBinding",
     "LogicalTimeCoordinate",
     "LogicalTimeValue",
