@@ -71,6 +71,26 @@ template <int Dim, class MemorySpace>
       components);
 }
 
+/// Prepare explicitly selected first-order parent injection through the live AMR authority.
+/// This route is intentionally separate from linear prolongation: a missing linear stencil never
+/// causes an implicit downgrade.
+template <int Dim, class MemorySpace>
+::pops::amr::transfer::PreparedTransfer<Dim> prepare_constant_injection(
+    const ::pops::runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime, std::size_t parent_level,
+    FieldView<const Real, Dim> parent, FieldView<Real, Dim> child, const Box<Dim>& child_region,
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+    ::pops::amr::transfer::ComponentRange components = {}) {
+  if (parent_level >= runtime.hierarchy().num_levels() ||
+      runtime.hierarchy().num_levels() - parent_level < 2)
+    throw std::invalid_argument("AMR injection requires adjacent live levels");
+  const std::size_t child_level = parent_level + 1;
+  return runtime.template prepare_transfer<::pops::amr::transfer::Centering::Cell>(
+      parent_level, child_level, runtime.hierarchy().level(parent_level).spatial_contract(),
+      runtime.hierarchy().level(child_level).spatial_contract(),
+      ::pops::amr::transfer::TransferKind::ConstantInjection, parent, child, child_region, mapping,
+      components);
+}
+
 /// Prepare parent-to-child coarse/fine ghost interpolation through the live runtime authority.
 template <int Dim, class MemorySpace>
 ::pops::amr::transfer::PreparedTransfer<Dim> prepare_fill_patch(

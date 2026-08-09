@@ -5,6 +5,7 @@
 #include <pops/numerics/time/amr/prepared_coarse_fine_operator.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <type_traits>
@@ -23,6 +24,7 @@ using pops::amr::transfer::ComponentRange;
 using pops::amr::transfer::IndexMapping;
 using pops::amr::transfer::PreparedTransfer;
 using pops::amr::RefinementRatio;
+using pops::amr::transfer::SlopeLimiter;
 using pops::amr::transfer::TransferKind;
 using pops::amr::transfer::TransferProvider;
 
@@ -225,6 +227,151 @@ void execute(const PreparedTransfer<Dim>& prepared) {
 }
 
 template <int Dim>
+Index<Dim> parent_of(const Index<Dim>& fine, const RefinementRatio<Dim>& ratio,
+                     const IndexMapping<Dim>& mapping) {
+  Index<Dim> parent{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const int relative = fine[axis] - mapping.fine_origin[axis];
+    parent[axis] = mapping.coarse_origin[axis] + relative / ratio[axis];
+  }
+  return parent;
+}
+
+template <int Dim>
+Real nonlinear_coarse(const Index<Dim>& index, const IndexMapping<Dim>& mapping) {
+  Real value = Real(0.75);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real relative = Real(index[axis] - mapping.coarse_origin[axis]);
+    value += Real(0.25 * (axis + 1)) * relative * relative;
+    if (index[axis] > mapping.coarse_origin[axis])
+      value += Real(0.5 * (axis + 1));
+  }
+  return value;
+}
+
+template <int Dim>
+void expect_limited_prolongation_is_conservative() {
+  const auto ratio = sample_ratio<Dim>();
+  const auto mapping = sample_mapping<Dim>();
+  const Box<Dim> coarse_region = sample_coarse_region(mapping);
+  const Box<Dim> fine_region = refine_for_test(coarse_region, ratio, mapping);
+  HostField<Dim> coarse(sample_coarse_source(mapping), 1);
+  HostField<Dim> fine(fine_region, 1);
+  visit(coarse.box(),
+        [&](const Index<Dim>& index) { coarse(index) = nonlinear_coarse(index, mapping); });
+
+  const auto prepared = TransferProvider<Dim, Centering::Cell>::linear_prolongation().prepare(
+      coarse.const_view(), fine.view(), fine_region, ratio, mapping);
+  EXPECT_EQ(prepared.slope_limiter(), SlopeLimiter::MonotonizedCentral);
+  execute(prepared);
+
+  visit(coarse_region, [&](const Index<Dim>& parent) {
+    const Box<Dim> children = refine_for_test(Box<Dim>{parent, parent}, ratio, mapping);
+    Real child_sum = Real(0);
+    visit(children, [&](const Index<Dim>& child) { child_sum += fine(child); });
+    EXPECT_NEAR(child_sum / static_cast<Real>(ratio.child_count()), coarse(parent), 2e-13);
+
+    Index<Dim> neighborhood_lo = parent;
+    Index<Dim> neighborhood_hi = parent;
+    for (int axis = 0; axis < Dim; ++axis) {
+      --neighborhood_lo[axis];
+      ++neighborhood_hi[axis];
+    }
+    Real lower_bound = coarse(neighborhood_lo);
+    Real upper_bound = lower_bound;
+    visit(Box<Dim>{neighborhood_lo, neighborhood_hi}, [&](const Index<Dim>& neighbor) {
+      const Real value = coarse(neighbor);
+      if (value < lower_bound)
+        lower_bound = value;
+      if (value > upper_bound)
+        upper_bound = value;
+    });
+    visit(children, [&](const Index<Dim>& child) {
+      EXPECT_GE(fine(child), lower_bound - Real(2e-13));
+      EXPECT_LE(fine(child), upper_bound + Real(2e-13));
+    });
+  });
+}
+
+template <int Dim>
+void expect_injection_is_explicit() {
+  const auto ratio = sample_ratio<Dim>();
+  const auto mapping = sample_mapping<Dim>();
+  const Box<Dim> coarse_region = sample_coarse_region(mapping);
+  const Box<Dim> fine_region = refine_for_test(coarse_region, ratio, mapping);
+  HostField<Dim> coarse(coarse_region, 1);
+  HostField<Dim> injected(fine_region, 1);
+  HostField<Dim> rejected_linear(fine_region, 1);
+  visit(coarse_region,
+        [&](const Index<Dim>& index) { coarse(index) = nonlinear_coarse(index, mapping); });
+  visit(fine_region, [&](const Index<Dim>& index) {
+    injected(index) = Real(-31);
+    rejected_linear(index) = Real(-47);
+  });
+
+  const auto injection = TransferProvider<Dim, Centering::Cell>::constant_injection().prepare(
+      coarse.const_view(), injected.view(), fine_region, ratio, mapping);
+  EXPECT_EQ(injection.kind(), TransferKind::ConstantInjection);
+  EXPECT_EQ(injection.slope_limiter(), SlopeLimiter::None);
+  execute(injection);
+  visit(fine_region, [&](const Index<Dim>& child) {
+    EXPECT_DOUBLE_EQ(injected(child), coarse(parent_of(child, ratio, mapping)));
+  });
+
+  EXPECT_THROW((void)(TransferProvider<Dim, Centering::Cell>::linear_prolongation().prepare(
+                   coarse.const_view(), rejected_linear.view(), fine_region, ratio, mapping)),
+               std::invalid_argument);
+  visit(fine_region,
+        [&](const Index<Dim>& child) { EXPECT_DOUBLE_EQ(rejected_linear(child), Real(-47)); });
+}
+
+Real exponential_cell_average(int cell, int cells, int axis) {
+  const Real alpha = Real(0.2 * (axis + 1));
+  const Real lower = Real(cell) / Real(cells);
+  const Real upper = Real(cell + 1) / Real(cells);
+  return (std::exp(alpha * upper) - std::exp(alpha * lower)) / (alpha * (upper - lower));
+}
+
+template <int Dim>
+Real smooth_cell_average(const Index<Dim>& index, int cells) {
+  Real value = Real(0.125);
+  for (int axis = 0; axis < Dim; ++axis)
+    value += exponential_cell_average(index[axis], cells, axis);
+  return value;
+}
+
+template <int Dim>
+Real prolongation_l1_error(int cells) {
+  Index<Dim> source_lo{};
+  Index<Dim> source_hi{};
+  Index<Dim> fine_lo{};
+  Index<Dim> fine_hi{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    source_lo[axis] = -1;
+    source_hi[axis] = cells;
+    fine_hi[axis] = 2 * cells - 1;
+  }
+  const Box<Dim> source_region{source_lo, source_hi};
+  const Box<Dim> fine_region{fine_lo, fine_hi};
+  std::array<int, Dim> ratio_values{};
+  ratio_values.fill(2);
+  const RefinementRatio<Dim> ratio{ratio_values};
+  const IndexMapping<Dim> mapping{};
+  HostField<Dim> coarse(source_region, 1);
+  HostField<Dim> fine(fine_region, 1);
+  visit(source_region,
+        [&](const Index<Dim>& index) { coarse(index) = smooth_cell_average(index, cells); });
+  const auto prepared = TransferProvider<Dim, Centering::Cell>::linear_prolongation().prepare(
+      coarse.const_view(), fine.view(), fine_region, ratio, mapping);
+  execute(prepared);
+  Real error = Real(0);
+  visit(fine_region, [&](const Index<Dim>& index) {
+    error += std::abs(fine(index) - smooth_cell_average(index, 2 * cells));
+  });
+  return error / static_cast<Real>(fine_region.numPts());
+}
+
+template <int Dim>
 void expect_constant_restriction() {
   const auto ratio = sample_ratio<Dim>();
   const auto mapping = sample_mapping<Dim>();
@@ -332,9 +479,12 @@ TEST(test_nd_transfer, prepared_contract_is_fixed_size_and_reports_exact_capabil
   static_assert(std::is_trivially_copyable_v<TransferProvider<3, Centering::Cell>>);
 
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::conservative_restriction().capabilities()),
-            (pops::amr::transfer::TransferCapabilities{1, 0, true, true}));
+            (pops::amr::transfer::TransferCapabilities{1, 0, true, true, SlopeLimiter::None}));
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::linear_prolongation().capabilities()),
-            (pops::amr::transfer::TransferCapabilities{2, 1, false, true}));
+            (pops::amr::transfer::TransferCapabilities{2, 1, true, true,
+                                                       SlopeLimiter::MonotonizedCentral}));
+  EXPECT_EQ((TransferProvider<2, Centering::Cell>::constant_injection().capabilities()),
+            (pops::amr::transfer::TransferCapabilities{1, 0, true, true, SlopeLimiter::None}));
   EXPECT_THROW((void)(TransferProvider<2, Centering::Node>::linear_prolongation().capabilities()),
                std::invalid_argument);
   EXPECT_THROW(
@@ -352,6 +502,27 @@ TEST(test_nd_transfer, linear_prolongation_and_restriction_reproduce_affine_fiel
   expect_affine_prolongation_and_conservative_round_trip<1>();
   expect_affine_prolongation_and_conservative_round_trip<2>();
   expect_affine_prolongation_and_conservative_round_trip<3>();
+}
+
+TEST(test_nd_transfer, limited_linear_prolongation_preserves_every_parent_average_in_1d_2d_3d) {
+  expect_limited_prolongation_is_conservative<1>();
+  expect_limited_prolongation_is_conservative<2>();
+  expect_limited_prolongation_is_conservative<3>();
+}
+
+TEST(test_nd_transfer, constant_injection_is_explicit_and_never_a_linear_fallback) {
+  expect_injection_is_explicit<1>();
+  expect_injection_is_explicit<2>();
+  expect_injection_is_explicit<3>();
+}
+
+TEST(test_nd_transfer, limited_linear_prolongation_converges_at_second_order_in_1d_2d_3d) {
+  const Real coarse_1d = prolongation_l1_error<1>(8);
+  const Real coarse_2d = prolongation_l1_error<2>(8);
+  const Real coarse_3d = prolongation_l1_error<3>(8);
+  EXPECT_LT(prolongation_l1_error<1>(16), coarse_1d * Real(0.3));
+  EXPECT_LT(prolongation_l1_error<2>(16), coarse_2d * Real(0.3));
+  EXPECT_LT(prolongation_l1_error<3>(16), coarse_3d * Real(0.3));
 }
 
 TEST(test_nd_transfer, coarse_fine_ghost_interpolation_handles_negative_offsets_in_1d_2d_3d) {

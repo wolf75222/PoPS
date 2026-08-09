@@ -142,6 +142,24 @@ struct ChildError {
 };
 
 template <int Dim>
+struct InjectionError {
+  pops::FieldView<const pops::Real, Dim> child{};
+  pops::FieldView<const pops::Real, Dim> parent{};
+  pops::amr::RefinementRatio<Dim> ratio{};
+  transfer::IndexMapping<Dim> mapping{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& fine) const {
+    pops::Index<Dim> coarse{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int relative = fine[axis] - mapping.fine_origin[axis];
+      coarse[axis] = mapping.coarse_origin[axis] + relative / ratio[axis];
+    }
+    const pops::Real difference = child(fine) - parent(coarse);
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
 void prove_live_runtime_transfers() {
   auto runtime = make_runtime<Dim>();
   auto& parent = runtime.hierarchy().state(0);
@@ -175,6 +193,16 @@ void prove_live_runtime_transfers() {
   EXPECT_LT(pops::for_each_cell_reduce_max(
                 parent.box(0), ParentError<Dim>{std::as_const(restricted.fab(0)).view(), mapping}),
             pops::Real(2e-13));
+
+  const auto injection = time_amr::prepare_constant_injection(
+      runtime, 0, std::as_const(parent.fab(0)).view(), child.fab(0).view(), child.box(0), mapping);
+  EXPECT_EQ(injection.kind(), transfer::TransferKind::ConstantInjection);
+  time_amr::execute_prepared_transfer(injection);
+  EXPECT_EQ(
+      pops::for_each_cell_reduce_max(
+          child.box(0), InjectionError<Dim>{std::as_const(child.fab(0)).view(),
+                                            std::as_const(parent.fab(0)).view(), ratio, mapping}),
+      pops::Real(0));
 
   pops::Box<Dim> ghost_region = child.box(0);
   ghost_region.hi[0] = ghost_region.lo[0] - 1;

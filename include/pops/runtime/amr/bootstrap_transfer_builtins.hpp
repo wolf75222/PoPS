@@ -20,6 +20,17 @@ template <int Dim, class MemorySpace>
       runtime, parent_level, parent, child, child_region, mapping, components);
 }
 
+/// Prepare explicitly requested first-order conservative parent injection.
+template <int Dim, class MemorySpace>
+::pops::amr::transfer::PreparedTransfer<Dim> prepare_conservative_injection(
+    const AmrRuntime<Dim, MemorySpace>& runtime, std::size_t parent_level,
+    FieldView<const Real, Dim> parent, FieldView<Real, Dim> child, const Box<Dim>& child_region,
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+    ::pops::amr::transfer::ComponentRange components = {}) {
+  return ::pops::numerics::time::amr::prepare_constant_injection(
+      runtime, parent_level, parent, child, child_region, mapping, components);
+}
+
 /// Prepare fine-to-parent conservative volume restriction.
 template <int Dim, class MemorySpace>
 ::pops::amr::transfer::PreparedTransfer<Dim> prepare_volume_average(

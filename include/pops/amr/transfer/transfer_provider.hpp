@@ -24,13 +24,18 @@ enum class TransferKind : unsigned char {
   ConservativeRestriction = 0,
   LinearProlongation = 1,
   CoarseFineGhostInterpolation = 2,
+  ConstantInjection = 3,
 };
+
+/// Limiter carried by an authenticated interpolation strategy.
+enum class SlopeLimiter : unsigned char { None = 0, MonotonizedCentral = 1 };
 
 struct TransferCapabilities {
   int interpolation_order = 0;
   int source_stencil_radius = 0;
   bool conservative = false;
   bool allocation_free_hot_path = false;
+  SlopeLimiter slope_limiter = SlopeLimiter::None;
 
   constexpr bool operator==(const TransferCapabilities&) const = default;
 };
@@ -179,7 +184,7 @@ Box<Dim> refined_source_box(const Box<Dim>& coarse_region, const RefinementRatio
 
 template <int Dim>
 Box<Dim> interpolation_source_box(const Box<Dim>& fine_region, const RefinementRatio<Dim>& ratio,
-                                  const IndexMapping<Dim>& mapping) {
+                                  const IndexMapping<Dim>& mapping, int stencil_radius) {
   Box<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis) {
     const std::int64_t lower_relative =
@@ -192,9 +197,11 @@ Box<Dim> interpolation_source_box(const Box<Dim>& fine_region, const RefinementR
     std::int64_t upper = checked_transfer_add(
         mapping.coarse_origin[axis], floor_div_positive(upper_relative, ratio[axis]),
         "prepared ND interpolation upper source index exceeds int64_t");
-    if (ratio[axis] > 1) {
-      --lower;
-      ++upper;
+    if (ratio[axis] > 1 && stencil_radius > 0) {
+      lower = checked_transfer_add(lower, -stencil_radius,
+                                   "prepared ND interpolation lower stencil exceeds int64_t");
+      upper = checked_transfer_add(upper, stencil_radius,
+                                   "prepared ND interpolation upper stencil exceeds int64_t");
     }
     result.lo[axis] = checked_transfer_index(
         lower, "prepared ND interpolation lower stencil exceeds signed coordinates");
@@ -202,6 +209,31 @@ Box<Dim> interpolation_source_box(const Box<Dim>& fine_region, const RefinementR
         upper, "prepared ND interpolation upper stencil exceeds signed coordinates");
   }
   return result;
+}
+
+POPS_HD inline Real absolute_value(Real value) {
+  return value < Real(0) ? -value : value;
+}
+
+/// Monotonized-central slope in coarse-cell index units.  For smooth affine data it returns the
+/// exact centered slope; at extrema and discontinuities it collapses without changing the parent
+/// average because every child offset remains antisymmetric about the parent center.
+POPS_HD inline Real monotonized_central_slope(Real lower, Real center, Real upper) {
+  const Real backward = center - lower;
+  const Real centered = Real(0.5) * (upper - lower);
+  const Real forward = upper - center;
+  const bool positive = backward > Real(0) && centered > Real(0) && forward > Real(0);
+  const bool negative = backward < Real(0) && centered < Real(0) && forward < Real(0);
+  if (!positive && !negative)
+    return Real(0);
+  Real magnitude = absolute_value(Real(2) * backward);
+  const Real centered_magnitude = absolute_value(centered);
+  const Real forward_magnitude = absolute_value(Real(2) * forward);
+  if (centered_magnitude < magnitude)
+    magnitude = centered_magnitude;
+  if (forward_magnitude < magnitude)
+    magnitude = forward_magnitude;
+  return positive ? magnitude : -magnitude;
 }
 
 template <int Dim>
@@ -238,6 +270,8 @@ class PreparedTransfer {
   POPS_HD void operator()(const Index<Dim>& destination_index) const {
     if (kind_ == TransferKind::ConservativeRestriction)
       restrict_cell(destination_index);
+    else if (kind_ == TransferKind::ConstantInjection)
+      inject_cell(destination_index);
     else
       interpolate_cell(destination_index);
   }
@@ -246,6 +280,12 @@ class PreparedTransfer {
   POPS_HD const Box<Dim>& destination_region() const { return destination_region_; }
   POPS_HD const RefinementRatio<Dim>& refinement_ratio() const { return ratio_; }
   POPS_HD ComponentRange components() const { return components_; }
+  POPS_HD SlopeLimiter slope_limiter() const {
+    return kind_ == TransferKind::LinearProlongation ||
+                   kind_ == TransferKind::CoarseFineGhostInterpolation
+               ? SlopeLimiter::MonotonizedCentral
+               : SlopeLimiter::None;
+  }
 
  private:
   template <int, Centering>
@@ -302,8 +342,9 @@ class PreparedTransfer {
         Index<Dim> upper = parent;
         --lower[axis];
         ++upper[axis];
-        const Real slope =
-            Real(0.5) * (source_(upper, source_component) - source_(lower, source_component));
+        const Real slope = detail::monotonized_central_slope(source_(lower, source_component),
+                                                             source_(parent, source_component),
+                                                             source_(upper, source_component));
         const std::int64_t offset_numerator = std::int64_t{2} * child[axis] + 1 - ratio_[axis];
         const std::int64_t offset_denominator = std::int64_t{2} * ratio_[axis];
         value +=
@@ -311,6 +352,16 @@ class PreparedTransfer {
       }
       destination_(fine, destination_component) = value;
     }
+  }
+
+  POPS_HD void inject_cell(const Index<Dim>& fine) const {
+    Index<Dim> parent{};
+    Index<Dim> child{};
+    detail::fine_parent_and_child(fine, ratio_, mapping_, parent, child);
+    (void)child;
+    for (int component = 0; component < components_.count; ++component)
+      destination_(fine, components_.destination_begin + component) =
+          source_(parent, components_.source_begin + component);
   }
 
   TransferKind kind_;
@@ -342,6 +393,12 @@ class TransferProvider {
     return TransferProvider(TransferKind::LinearProlongation);
   }
 
+  /// First-order parent injection is retained only as an explicitly selected strategy.  It is
+  /// never used as a fallback when the conservative linear stencil is unavailable.
+  static constexpr TransferProvider constant_injection() {
+    return TransferProvider(TransferKind::ConstantInjection);
+  }
+
   static constexpr TransferProvider coarse_fine_ghost_interpolation() {
     return TransferProvider(TransferKind::CoarseFineGhostInterpolation);
   }
@@ -349,8 +406,12 @@ class TransferProvider {
   TransferCapabilities capabilities() const {
     require_supported_route();
     if (kind_ == TransferKind::ConservativeRestriction)
-      return {1, 0, true, true};
-    return {2, 1, false, true};
+      return {1, 0, true, true, SlopeLimiter::None};
+    if (kind_ == TransferKind::ConstantInjection)
+      return {1, 0, true, true, SlopeLimiter::None};
+    if (kind_ == TransferKind::LinearProlongation)
+      return {2, 1, true, true, SlopeLimiter::MonotonizedCentral};
+    return {2, 1, false, true, SlopeLimiter::MonotonizedCentral};
   }
 
   PreparedTransfer<Dim> prepare(FieldView<const Real, Dim> source, FieldView<Real, Dim> destination,
@@ -370,10 +431,12 @@ class TransferProvider {
     if (source_view.begin < destination_view.end && destination_view.begin < source_view.end)
       throw std::invalid_argument("prepared ND transfer requires non-overlapping field storage");
 
+    const int interpolation_radius = kind_ == TransferKind::ConstantInjection ? 0 : 1;
     const Box<Dim> required_source =
         kind_ == TransferKind::ConservativeRestriction
             ? detail::refined_source_box(destination_region, ratio, mapping)
-            : detail::interpolation_source_box(destination_region, ratio, mapping);
+            : detail::interpolation_source_box(destination_region, ratio, mapping,
+                                               interpolation_radius);
     if (!source_view.box.contains(required_source))
       throw std::invalid_argument(
           "prepared ND transfer source FieldView does not contain the complete stencil");
@@ -391,6 +454,7 @@ class TransferProvider {
       case TransferKind::ConservativeRestriction:
       case TransferKind::LinearProlongation:
       case TransferKind::CoarseFineGhostInterpolation:
+      case TransferKind::ConstantInjection:
         return;
     }
     throw std::invalid_argument("ND transfer provider identity is not registered");
