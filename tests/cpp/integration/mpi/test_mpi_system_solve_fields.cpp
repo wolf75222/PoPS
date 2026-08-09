@@ -1,5 +1,5 @@
-// Bug HOTE MPI de System::solve_fields() (#98) : System repartit UNE box unique en round-robin
-// (DistributionMapping(1, n_ranks())), donc a np>1 un seul rang possede la box ; les autres ont
+// Bug HOTE MPI de System::solve_fields() (#98) : System répartit UNE box exacte en round-robin,
+// donc à np>1 un seul rang possède la box ; les autres ont
 // local_size()==0. Le post-traitement par cellule de solve_fields() (derivation phi/grad,
 // apply_te, apply_epsilon*, apply_reaction) appelait fab(0) SANS tester local_size() -> les rangs
 // sans box locale dereferencaient un fab inexistant et segfaultaient cote hote.
@@ -17,11 +17,14 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/fluids/euler.hpp>                 // Euler (bloc fluide source de T_e)
-#include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity
+#include <pops/physics/bricks/elliptic.hpp>
+#include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
@@ -40,32 +43,59 @@
 
 using namespace pops;
 
-// Source qui lit T_e : exerce le canal aux derive (apply_te) dans solve_fields() (composante 4).
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
+namespace {
+
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using NativeGasLaw = nd::IdealGasEuler<kTestDimension>;
+
+// Source qui lit T_e : exerce le canal auxiliaire dérivé (apply_te) dans solve_fields().
 struct TeSource {
-  static constexpr int n_aux = 5;
+  static constexpr int n_aux = AuxComponentLayout<kTestDimension>::named_begin;
   template <class State>
-  POPS_HD State apply(const State& u, const Aux& a) const {
+  POPS_HD State apply(const State& u, const AuxState<kTestDimension>& a) const {
     State s{};
     s[0] = a.T_e * u[0];
     return s;
   }
 };
 // Bloc de CHARGE : alimente le second membre du Poisson (elliptic_rhs = densite de charge q n).
-struct ChargeEll {
-  template <class State>
-  POPS_HD Real rhs(const State& u) const {
-    return u[0];
-  }  // rho = comp 0
-};
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
+using ProbeModel =
+    CompositeModel<ExBVelocity, TeSource, ChargeDensity>;             // lit T_e + charge le Poisson
+using GasModel = CompositeModel<NativeGasLaw, NoSource, NoElliptic>;  // fournit p/rho
 
-using ProbeModel = CompositeModel<ExBVelocity, TeSource, ChargeEll>;  // lit T_e + charge le Poisson
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;              // fournit p/rho
+std::size_t cell_count(int n) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    result *= static_cast<std::size_t>(n);
+  return result;
+}
+
+NativeSystemConfig native_config(int n) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+  }
+  config.boxes = {Box<kTestDimension>::from_extents(config.shape)};
+  return config;
+}
+
+}  // namespace
 
 static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   comm_init(&argc, &argv);
@@ -86,36 +116,38 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   const double gamma = 1.4, rho_gas = 1.0, p_gas = 3.0;
   const double Te = p_gas / rho_gas;  // T = p / rho = 3
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  const NativeSystemConfig cfg = native_config(n);
 
-  System sys(cfg);
-  add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", gamma);
+  NativeSystem sys(cfg);
+  GasModel gas_model{};
+  gas_model.hyp = NativeGasLaw::prepare(static_cast<Real>(gamma));
+  sys.install_block_state_route("gas", "test.mpi-system-solve-fields.gas.state@1");
+  add_compiled_model(sys, "gas", std::move(gas_model), "minmod", "rusanov", "conservative",
+                     "explicit", gamma);
+  sys.install_block_state_route("probe", "test.mpi-system-solve-fields.probe.state@1");
   add_compiled_model(sys, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
   sys.set_poisson("composite",
-                  "geometric_mg");  // f = somme des briques elliptiques (ici la charge)
+                  "cartesian_cg");  // f = somme des briques elliptiques (ici la charge)
 
-  // La box unique vit sur rang 0 (round-robin de 1 box). set_state / set_density ecrivent la box ;
+  // La box unique vit sur rang 0 (round-robin de 1 box). set_state / set_density écrivent la box ;
   // on ne les appelle donc QUE sur le rang proprietaire. set_electron_temperature_from cable un
   // INDICE (pas d'acces par cellule), inoffensif sur tous les rangs. La densite de charge a moyenne
   // nulle (rho - rho0) pour que le Poisson periodique soit soluble : on met un creneau symetrique.
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  const bool owns = (me == 0);  // box 0 -> rang 0 sous DistributionMapping(1, np)
+  const std::size_t nn = cell_count(n);
+  const bool owns = (me == 0);  // box 0 -> rang 0 sous le mapping round-robin exact
   if (owns) {
-    std::vector<double> Ug(4 * nn, 0.0);
+    std::vector<double> Ug(static_cast<std::size_t>(GasModel::n_vars) * nn, 0.0);
     for (std::size_t k = 0; k < nn; ++k) {
       Ug[0 * nn + k] = rho_gas;
-      Ug[3 * nn + k] = p_gas / (gamma - 1.0);
+      Ug[static_cast<std::size_t>(NativeGasLaw::Schema::energy) * nn + k] = p_gas / (gamma - 1.0);
     }
     sys.set_state("gas", Ug);
     // charge a moyenne nulle : +1 sur la moitie gauche, -1 sur la moitie droite (somme = 0).
     std::vector<double> q(nn, 0.0);
-    for (int j = 0; j < n; ++j)
-      for (int i = 0; i < n; ++i)
-        q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
+    for (std::size_t linear = 0; linear < nn; ++linear) {
+      const int first_axis = static_cast<int>(linear % static_cast<std::size_t>(n));
+      q[linear] = (first_axis < n / 2) ? 1.0 : -1.0;
+    }
     sys.set_density("probe", q);
   }
   sys.set_electron_temperature_from("gas");  // T_e <- p/rho du gaz, recalcule a chaque solve
@@ -158,7 +190,7 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
 
   const double mtot = sys.mass("gas");  // collectif (sum -> all_reduce) : appele par TOUS les rangs
   chk(std::isfinite(mtot), "mass_finite");
-  // masse du gaz = rho_gas * n*n (la box vit sur rang 0, repliquee logiquement par l'all_reduce).
+  // masse du gaz = rho_gas * produit des cellules classées (réduite collectivement).
   chk(std::fabs(mtot - rho_gas * static_cast<double>(nn)) < 1e-9, "mass_value");
 
 #ifdef POPS_HAS_MPI
