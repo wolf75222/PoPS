@@ -715,7 +715,7 @@ def run_bind_gates(
             (
                 "platform-execution-field-view",
                 validate_platform_bind(
-                    platform_manifest, execution_context, platform_fields, layout
+                    platform_manifest, execution_context, platform_fields, compiled.plan
                 ),
             )
         )
