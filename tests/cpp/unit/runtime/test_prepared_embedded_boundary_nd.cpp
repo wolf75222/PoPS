@@ -156,6 +156,54 @@ TEST(PreparedEmbeddedBoundaryND, PeriodicHaloUsesExactTopologyInThreeDimensions)
   prove_periodic_halo<3>();
 }
 
+template <int Dim>
+void prove_sparse_in_domain_ghosts_are_analytic() {
+  auto world = pops::ExecutionLane::world("test/prepared-eb-sparse-serial");
+  if (world.size() != 1)
+    GTEST_SKIP() << "serial exact-rank fixture";
+
+  const auto domain = pops::Box<Dim>::from_extents(filled_extent<Dim>(16));
+  const auto geometry =
+      pops::Geometry<Dim>::from_bounds(domain, filled_real<Dim>(0.0), filled_real<Dim>(1.0));
+  pops::Box<Dim> patch{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    patch.lo[axis] = 4;
+    patch.hi[axis] = 7;
+  }
+  const pops::mesh::BoxArray<Dim> layout{std::vector<pops::Box<Dim>>{patch}};
+  const pops::mesh::RankSpace<Dim> ranks{pops::Index<Dim>{}, filled_extent<Dim>(1)};
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  const pops::MultiFab<Dim> prototype{layout, distribution, pops::Index<Dim>{}, 1,
+                                      pops::Extent<Dim>{}};
+  const auto prepared = pops::runtime::system::prepare_embedded_boundary_geometry_collectively(
+      {"x", "constant", "sub"}, {0.0, 0.5, 0.0}, geometry, pops::BoundaryTopology<Dim>::physical(),
+      prototype, pops::runtime::system::PreparedEmbeddedBoundaryMode::staircase,
+      pops::EbThresholds{}, 7, world);
+
+  pops::sync_host();
+  const auto phi = prepared->phi().fab(0).view();
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = 4;
+    upper[axis] = 7;
+  }
+  lower[0] = 3;
+  upper[0] = 8;
+  EXPECT_DOUBLE_EQ(phi(lower), pops::Real(3.5 / 16.0 - 0.5));
+  EXPECT_DOUBLE_EQ(phi(upper), pops::Real(8.5 / 16.0 - 0.5));
+}
+
+TEST(PreparedEmbeddedBoundaryND, SparseInDomainGhostsAreAnalyticInOneDimension) {
+  prove_sparse_in_domain_ghosts_are_analytic<1>();
+}
+TEST(PreparedEmbeddedBoundaryND, SparseInDomainGhostsAreAnalyticInTwoDimensions) {
+  prove_sparse_in_domain_ghosts_are_analytic<2>();
+}
+TEST(PreparedEmbeddedBoundaryND, SparseInDomainGhostsAreAnalyticInThreeDimensions) {
+  prove_sparse_in_domain_ghosts_are_analytic<3>();
+}
+
 TEST(PreparedEmbeddedBoundaryND, NonFiniteReplacementRollsBackAcceptedOwner) {
   auto world = pops::ExecutionLane::world("test/prepared-eb-serial-preflight");
   if (world.size() != 1)

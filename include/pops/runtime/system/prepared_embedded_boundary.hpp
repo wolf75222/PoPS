@@ -117,8 +117,10 @@ class PreparedEmbeddedBoundaryGeometry final {
 /// Prepare one exact-ranked EB owner collectively and publish nothing on failure.
 ///
 /// `prototype` supplies the immutable global layout, distribution, and local process coordinate.
-/// The expression is sampled on valid cells only. Internal and periodic ghosts are then populated
-/// by the exact halo plan; analytic evaluation is used only for remaining physical ghosts.
+/// The expression is sampled over every locally allocated valid and ghost cell. Internal and
+/// periodic ghosts with an authoritative same-level source are then overwritten by the exact halo
+/// plan. Sparse in-domain ghosts retain the analytic value until a parent transfer is prepared;
+/// physical ghosts retain the topology-qualified analytic value.
 template <int Dim>
 [[nodiscard]] std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<Dim>>
 prepare_embedded_boundary_geometry_collectively(

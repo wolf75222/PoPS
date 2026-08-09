@@ -5,6 +5,7 @@
 # they never repeat the source list or instantiate a parallel legacy block product.
 
 set(POPS_RUNTIME_CORE_SOURCES
+    runtime/prepared_embedded_boundary.cpp
     runtime/program/step_transaction.cpp)
 
 set(POPS_RUNTIME_SYSTEM_SOURCES
