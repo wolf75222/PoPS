@@ -195,14 +195,13 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
   stage.set_val(pops::Real(3));
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(evaluation_point<Dim>(4), "field/tracer", 0, stage);
-  ASSERT_TRUE(outcome.report().solved_value_available());
-  EXPECT_EQ(pops::reduce_min(context->state(0), 0), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  const pops::SolveReport accepted = pops::consume_solve_outcome(std::move(outcome));
+  EXPECT_EQ(pops::reduce_min_local(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
 
-  const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_EQ(pops::reduce_min(context->state(0), 0), pops::Real(1));
-  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_min_local(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
   EXPECT_EQ(observed_stage, pops::Real(3));
   EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));
