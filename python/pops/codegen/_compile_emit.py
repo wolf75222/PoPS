@@ -376,7 +376,7 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
                 derived_expression_cpp(expression.b, bindings),
             )
         if isinstance(expression, Pow):
-            return "std::pow(%s, %s)" % (
+            return "Kokkos::pow(%s, %s)" % (
                 derived_expression_cpp(expression.a, bindings),
                 derived_expression_cpp(expression.b, bindings),
             )
@@ -393,9 +393,9 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
         if isinstance(expression, Neg):
             return "(-%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Sqrt):
-            return "std::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
+            return "Kokkos::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
         if isinstance(expression, Abs):
-            return "std::fabs(%s)" % derived_expression_cpp(expression.a, bindings)
+            return "Kokkos::abs(%s)" % derived_expression_cpp(expression.a, bindings)
         raise TypeError(
             "DerivedAux native lowering supports scalar constants, ValueExpr, and standard "
             "pointwise arithmetic; got %s" % type(expression).__name__
@@ -439,28 +439,36 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
             "            if (context.outputs.size() != 1) throw std::logic_error(\"derived auxiliary route requires one output\");",
             "            if (context.dependencies.size() != %d) throw std::logic_error(\"derived auxiliary route dependency mismatch\");" % len(dependencies),
             "            auto* const candidate = context.storage.candidate;",
-            "            if (candidate == nullptr) throw std::logic_error(\"derived auxiliary route has no candidate carrier\");",
-            "            const auto output_slot = context.outputs[0].slot;",
+            "            if (candidate == nullptr) throw std::logic_error(\"derived auxiliary route has no candidate storage groups\");",
+            "            auto* const output_group = candidate->find(context.outputs[0].address.group);",
+            "            if (output_group == nullptr) throw std::logic_error(\"derived auxiliary output group is absent\");",
+            "            const auto output_component = context.outputs[0].address.component;",
         ]
         for index in range(len(dependencies)):
-            lines.append("            const auto dependency_slot_%d = context.dependencies[%d].slot;" % (index, index))
+            lines.extend((
+                "            const auto* const dependency_group_%d = candidate->find(context.dependencies[%d].address.group);" % (index, index),
+                "            if (dependency_group_%d == nullptr || dependency_group_%d->layout() != output_group->layout() || dependency_group_%d->distribution() != output_group->distribution() || dependency_group_%d->local_rank() != output_group->local_rank()) throw std::logic_error(\"derived auxiliary dependency storage is not cell-compatible with its output\");" % (index, index, index, index),
+                "            const auto dependency_component_%d = context.dependencies[%d].address.component;" % (index, index),
+            ))
         lines.extend((
-            "            for (std::size_t local_fab = 0; local_fab < candidate->local_size(); ++local_fab) {",
-            "              const auto carrier = candidate->fab(local_fab).view();",
+            "            for (std::size_t local_fab = 0; local_fab < output_group->local_size(); ++local_fab) {",
+            "              const auto output = output_group->fab(local_fab).view();",
             "              std::size_t cells = 1;",
-            "              for (int axis = 0; axis < pops::kNativeDimension; ++axis) cells *= static_cast<std::size_t>(carrier.extents[axis]);",
+            "              for (int axis = 0; axis < pops::kNativeDimension; ++axis) cells *= static_cast<std::size_t>(output.extents[axis]);",
             "              Kokkos::parallel_for(\"pops_derived_aux\", Kokkos::RangePolicy<>(0, cells), KOKKOS_LAMBDA(const std::size_t linear) {",
             "                std::size_t remainder = linear;",
             "                pops::Index<pops::kNativeDimension> index{};",
             "                for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
-            "                  index[axis] = carrier.origin[axis] + static_cast<int>(remainder % static_cast<std::size_t>(carrier.extents[axis]));",
-            "                  remainder /= static_cast<std::size_t>(carrier.extents[axis]);",
+            "                  index[axis] = output.origin[axis] + static_cast<int>(remainder % static_cast<std::size_t>(output.extents[axis]));",
+            "                  remainder /= static_cast<std::size_t>(output.extents[axis]);",
             "                }",
         ))
         for index in range(len(dependencies)):
-            lines.append("                const pops::Real aux_dependency_%d = carrier(index, dependency_slot_%d);" % (index, index))
+            lines.append("                const auto dependency_%d = dependency_group_%d->fab(local_fab).view();" % (index, index))
+        for index in range(len(dependencies)):
+            lines.append("                const pops::Real aux_dependency_%d = dependency_%d(index, dependency_component_%d);" % (index, index, index))
         lines.extend((
-            "                carrier(index, output_slot) = %s;" % expression,
+            "                output(index, output_component) = %s;" % expression,
             "              });",
             "            }",
             "          }))",
@@ -584,7 +592,8 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     nm = _cpp_identifier(name or (m.name.capitalize() + "Gen"))
     ell_field_regs = _elliptic_field_registrations(m, nm)
-    head = ('#include <cmath>\n'
+    head = ('#include <Kokkos_Core.hpp>\n'
+            '#include <cmath>\n'
             '#include <vector>\n'
             '#include <array>\n'
             '#include <cstddef>\n'

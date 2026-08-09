@@ -48,6 +48,10 @@ def test_input_and_derived_aux_routes_are_exact_and_emit_native_launcher() -> No
     source = _emit_auxiliary_route_registration(carrier)
     assert "AuxiliaryProviderKind::derived" in source
     assert "Provider::launcher_type::trusted_extension" in source
+    assert ".address.group" in source
+    assert ".address.component" in source
+    assert "candidate->find" in source
+    assert "Kokkos::parallel_for" in source
     assert '"imposed"' in source
     assert "halo[axis] = 2" in source
     assert "BoundaryKind::first_order_extrapolation" in source
