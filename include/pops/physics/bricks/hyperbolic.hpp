@@ -19,7 +19,7 @@
 ///        n_vars, flux, max_wave_speed, to_primitive/to_conservative, conservative_vars/primitive_vars
 ///        (+ pressure/wave_speeds if HLLC flux). Source and elliptic right-hand side are SEPARATE
 ///        bricks (physics/source.hpp, physics/elliptic.hpp); CompositeModel (physics/composite.hpp)
-///        assembles them. ExBVelocity has one scalar; CompressibleFlux and IsothermalFlux carry
+///        assembles them. CartesianExBDrift has one scalar; CompressibleFlux and IsothermalFlux carry
 ///        respectively Dim+2 and Dim+1 variables in the selected native rank.
 
 namespace pops {
@@ -50,6 +50,15 @@ POPS_HD Real gradient_provider(const Providers& providers) {
   return provider_value<component>(providers);
 }
 
+template <int Axis, class MagneticSlots, class Providers>
+POPS_HD Real magnetic_provider(const Providers& providers) {
+  static_assert(Axis >= 0 && Axis < 3, "magnetic provider axis is outside Cartesian 3-space");
+  static_assert(MagneticSlots::count == 3,
+                "magnetic consumer requires all three Cartesian provider components");
+  constexpr int component = MagneticSlots::template slot<Axis>();
+  return provider_value<component>(providers);
+}
+
 template <int Axis, int Dim, class Brick, class Providers>
 POPS_HD Real runtime_velocity(const Brick& brick, const Providers& providers, int axis) {
   if (axis == Axis)
@@ -59,16 +68,37 @@ POPS_HD Real runtime_velocity(const Brick& brick, const Providers& providers, in
   return std::numeric_limits<Real>::quiet_NaN();
 }
 
+/// Sign of the three-dimensional Levi-Civita symbol.  Every operand is a template argument, so
+/// this is resolved while compiling the selected axis kernel rather than by an Axis-specific branch.
+template <int I, int J, int K>
+consteval int levi_civita_3() {
+  static_assert(I >= 0 && I < 3 && J >= 0 && J < 3 && K >= 0 && K < 3,
+                "Levi-Civita indices are outside the ambient Cartesian frame");
+  constexpr std::array<int, 3> permutation{I, J, K};
+  constexpr bool repeated = I == J || I == K || J == K;
+  if constexpr (repeated)
+    return 0;
+  int inversions = 0;
+  for (int left = 0; left < 3; ++left)
+    for (int right = left + 1; right < 3; ++right)
+      inversions += permutation[left] > permutation[right] ? 1 : 0;
+  return inversions % 2 == 0 ? 1 : -1;
+}
+
 }  // namespace hyperbolic_detail
 
-/// Exact-ranked scalar advection by the Cartesian E x B drift for `B = B0 e_z`.
+/// Exact-ranked scalar advection by the Cartesian E x B drift.
 ///
-/// In 2D this is `(-d_y phi, d_x phi)/B0`. A 3D Cartesian build carries the same planar drift
-/// with a zero z component. Under a 1D invariant reduction the projected velocity is zero because
-/// the transverse derivative is absent. Every available axis is selected at compile time.
-template <int Dim, class GradientSlots = typename hyperbolic_detail::DefaultGradientProviderSlots<Dim>::type>
-struct ExBVelocityND {
-  static_assert(Dim >= 1 && Dim <= 3, "ExBVelocityND supports dimensions 1, 2, and 3");
+/// The magnetic field is an explicit three-component provider and the potential gradient is
+/// embedded from the exact native rank in the same ambient Cartesian frame.  One Levi-Civita
+/// contraction implements every rank: `v_i = epsilon_ijk B_j grad(phi)_k / |B|^2`.  Thus 3-D
+/// consumes all magnetic and gradient components; 2-D can explicitly bind a normal B component;
+/// and 1-D evaluates the honest longitudinal projection without a special transport branch.
+template <int Dim,
+          class GradientSlots = typename hyperbolic_detail::DefaultGradientProviderSlots<Dim>::type,
+          class MagneticSlots = ProviderSlots<Dim, Dim + 1, Dim + 2>>
+struct CartesianExBDriftND {
+  static_assert(Dim >= 1 && Dim <= 3, "CartesianExBDriftND supports exact dimensions 1, 2, and 3");
   static constexpr int n_vars = 1;
   static constexpr int dimension = Dim;
   using Schema = nd::ScalarStateSchema<Dim>;
@@ -76,29 +106,34 @@ struct ExBVelocityND {
   using Primitive = typename Schema::Primitive;
   using Prim = Primitive;
   using gradient_slots = GradientSlots;
+  using magnetic_slots = MagneticSlots;
   static_assert(gradient_slots::count == Dim,
-                "ExBVelocityND requires one explicit gradient provider slot per axis");
-  static constexpr int n_providers = gradient_slots::required_count();
-  Real B0 = 1;
+                "CartesianExBDriftND requires one explicit gradient provider slot per axis");
+  static_assert(magnetic_slots::count == 3,
+                "CartesianExBDriftND requires all three magnetic provider slots");
+  static constexpr int n_providers = gradient_slots::required_count() >
+                                             magnetic_slots::required_count()
+                                         ? gradient_slots::required_count()
+                                         : magnetic_slots::required_count();
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.hyperbolic.exb-velocity-nd", 1};
+    return {"pops.physics.hyperbolic.cartesian-exb-drift-nd", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim}).scalar(B0);
+    contract.scalar(std::int32_t{Dim});
     for (int axis = 0; axis < Dim; ++axis)
       contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
+    for (int axis = 0; axis < 3; ++axis)
+      contract.scalar(std::int32_t{magnetic_slots::values[static_cast<std::size_t>(axis)]});
   }
 
   template <int Axis, class Providers>
   POPS_HD Real velocity(const Providers& providers) const {
     static_assert(Axis >= 0 && Axis < Dim, "Cartesian E x B axis is outside the spatial rank");
-    if constexpr (Dim < 2 || Axis >= 2)
-      return Real(0);
-    else if constexpr (Axis == 0)
-      return -hyperbolic_detail::gradient_provider<1, Dim, gradient_slots>(providers) / B0;
-    else
-      return hyperbolic_detail::gradient_provider<0, Dim, gradient_slots>(providers) / B0;
+    const Real norm_squared = magnetic_field_squared(providers, std::make_index_sequence<3>{});
+    if (!Kokkos::isfinite(norm_squared) || !(norm_squared > Real(0)))
+      return std::numeric_limits<Real>::quiet_NaN();
+    return velocity_impl<Axis>(providers, std::make_index_sequence<3>{}) / norm_squared;
   }
 
   POPS_HD Real velocity(const auto& providers, int dir) const {
@@ -155,9 +190,46 @@ struct ExBVelocityND {
   static VariableSet primitive_vars() {
     return {VariableKind::Primitive, {"n"}, 1, {VariableRole::Density}};
   }
+
+ private:
+  template <int GradientAxis, class Providers>
+  POPS_HD Real embedded_gradient(const Providers& providers) const {
+    if constexpr (GradientAxis < Dim)
+      return hyperbolic_detail::gradient_provider<GradientAxis, Dim, gradient_slots>(providers);
+    return Real(0);
+  }
+
+  template <class Providers, std::size_t... MagneticAxis>
+  POPS_HD Real magnetic_field_squared(const Providers& providers,
+                                      std::index_sequence<MagneticAxis...>) const {
+    return ((hyperbolic_detail::magnetic_provider<static_cast<int>(MagneticAxis), magnetic_slots>(
+                 providers) *
+             hyperbolic_detail::magnetic_provider<static_cast<int>(MagneticAxis), magnetic_slots>(
+                 providers)) +
+            ...);
+  }
+
+  template <int Axis, int MagneticAxis, class Providers, std::size_t... GradientAxis>
+  POPS_HD Real magnetic_contribution(const Providers& providers,
+                                     std::index_sequence<GradientAxis...>) const {
+    return ((Real(hyperbolic_detail::levi_civita_3<Axis, MagneticAxis,
+                                                   static_cast<int>(GradientAxis)>()) *
+             embedded_gradient<static_cast<int>(GradientAxis)>(providers)) +
+            ...);
+  }
+
+  template <int Axis, class Providers, std::size_t... MagneticAxis>
+  POPS_HD Real velocity_impl(const Providers& providers,
+                             std::index_sequence<MagneticAxis...>) const {
+    return ((hyperbolic_detail::magnetic_provider<static_cast<int>(MagneticAxis), magnetic_slots>(
+                 providers) *
+             magnetic_contribution<Axis, static_cast<int>(MagneticAxis)>(
+                 providers, std::make_index_sequence<3>{})) +
+            ...);
+  }
 };
 
-using ExBVelocity = ExBVelocityND<kNativeDimension>;
+using CartesianExBDrift = CartesianExBDriftND<kNativeDimension>;
 
 /// Scalar advection by the E x B drift in POLAR coordinates (r, theta) -- "annular polar grid"
 /// capability. This type is intrinsically two-dimensional and remains separate from the ranked

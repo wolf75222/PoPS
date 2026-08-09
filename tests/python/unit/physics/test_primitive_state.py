@@ -207,7 +207,7 @@ def test_scalar_conversion_is_identity():
         "tracer",
         engine.Model(
             state=engine.Scalar(),
-            transport=engine.ExB(B0=1.0),
+            transport=engine.ExB(),
             source=engine.NoSource(),
             elliptic=engine.ChargeDensity(charge=1.0),
         ),

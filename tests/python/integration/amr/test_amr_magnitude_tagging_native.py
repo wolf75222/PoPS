@@ -96,7 +96,7 @@ def _native_hierarchy(node_type):
         "tracer",
         engine.Model(
             engine.Scalar(),
-            engine.ExB(B0=1.0),
+            engine.ExB(),
             engine.NoSource(),
             engine.BackgroundDensity(alpha=0.0, n0=0.0),
         ),

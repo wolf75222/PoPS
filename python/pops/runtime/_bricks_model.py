@@ -14,7 +14,6 @@ from pops._bootstrap import ModelSpec
 from pops.runtime._numeric import exact_real, native_real
 from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_ALPHA,
-    PHYSICAL_DEFAULT_B0,
     PHYSICAL_DEFAULT_BACKGROUND_N0,
     PHYSICAL_DEFAULT_CHARGE_Q,
     PHYSICAL_DEFAULT_FLUID_STATE_CS2,
@@ -86,10 +85,14 @@ class FluidState:
 
 # --- Transport bricks ---------------------------------------------------
 class ExB:
-    """Scalar advection by the E x B drift (magnetic field B0)."""
+    """Scalar advection by the Cartesian E x B drift.
 
-    def __init__(self, B0: Any = PHYSICAL_DEFAULT_B0) -> None:
-        self.B0 = exact_real(B0, where="ExB.B0")
+    The three magnetic components are exact auxiliary providers, not ModelSpec parameters.  The
+    native route consumes them with the potential-gradient providers at evaluation time.
+    """
+
+    def __init__(self) -> None:
+        pass
 
 
 class CompressibleFlux:
@@ -226,7 +229,6 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
 
     if isinstance(transport, ExB):
         spec.transport = "exb"
-        spec.B0 = native_real(transport.B0, where="Model.B0")
     elif isinstance(transport, CompressibleFlux):
         spec.transport = "compressible"
     elif isinstance(transport, IsothermalFlux):

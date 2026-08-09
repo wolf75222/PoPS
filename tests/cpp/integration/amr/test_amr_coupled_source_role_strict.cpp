@@ -42,9 +42,9 @@ using namespace pops;
 
 // Modele ExB scalaire (1 var, role density) a charge q. Bloc scalaire : conservative_vars() == {density},
 // donc momentum_x est CANONIQUE mais NON EXPOSE -> support du cas (B).
-using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_charge(double q, double B0) {
-  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double) {
+  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // densite a moyenne nulle (solvable en periodique) : creneau centre, n*n row-major.

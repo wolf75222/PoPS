@@ -73,7 +73,7 @@ struct TeSource {
 };
 // Bloc de CHARGE : alimente le second membre du Poisson (elliptic_rhs = densite de charge q n).
 using ProbeModel =
-    CompositeModel<ExBVelocity, TeSource, ChargeDensity>;             // lit T_e + charge le Poisson
+    CompositeModel<CartesianExBDrift, TeSource, ChargeDensity>;       // lit T_e + charge le Poisson
 using GasModel = CompositeModel<NativeGasLaw, NoSource, NoElliptic>;  // fournit p/rho
 
 std::size_t cell_count(int n) {

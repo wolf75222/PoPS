@@ -73,7 +73,7 @@ chk(abs(sim.mass("ions") - m0) < 1e-10 * abs(m0), "masse conservee (periodique)"
 # --- 2. hll sur scalaire ExB (pas de wave_speeds) -> erreur explicite ------------
 print("== hll sans wave_speeds (scalaire ExB) : rejet explicite ==")
 sim2 = System(n=16, L=1.0, periodicity=(True, True))
-scal = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0), source=engine.NoSource(),
+scal = engine.Model(state=engine.Scalar(), transport=engine.ExB(), source=engine.NoSource(),
                  elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 try:
     sim2.add_equation("e", scal, spatial=engine.Spatial(limiter=Minmod(), flux=HLL()))

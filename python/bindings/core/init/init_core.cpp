@@ -830,7 +830,6 @@ void init_core(py::module_& m) {
             data["transport"] = spec.transport.get();
             data["source"] = spec.source.get();
             data["elliptic"] = spec.elliptic.get();
-            data["B0"] = spec.B0.get();
             data["gamma"] = spec.gamma.get();
             data["cs2"] = spec.cs2.get();
             data["vacuum_floor"] = spec.vacuum_floor.get();
@@ -861,7 +860,6 @@ void init_core(py::module_& m) {
   bind_model_spec_property(model_spec, "transport", &ModelSpec::transport);
   bind_model_spec_property(model_spec, "source", &ModelSpec::source);
   bind_model_spec_property(model_spec, "elliptic", &ModelSpec::elliptic);
-  bind_model_spec_property(model_spec, "B0", &ModelSpec::B0);
   bind_model_spec_property(model_spec, "gamma", &ModelSpec::gamma);
   bind_model_spec_property(model_spec, "cs2", &ModelSpec::cs2);
   bind_model_spec_property(model_spec, "vacuum_floor", &ModelSpec::vacuum_floor);

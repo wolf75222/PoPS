@@ -56,7 +56,7 @@ def density_block(n0=1.0):
     chemin de production tout en evitant qu'un etage partiel du splitting cree artificiellement une
     charge periodique non neutre entre les mises a jour des especes.
     """
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(),
                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
 
 

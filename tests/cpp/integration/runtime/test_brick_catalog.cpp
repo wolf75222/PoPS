@@ -1,7 +1,7 @@
 // pops brick_catalog.hpp: the generated builtin component catalog (ADC-679). The schema catalog is
 // the only declaration; this test locks the light C++ inspection behavior without Kokkos or MPI.
 //   (1) catalog_entry lookup roundtrip for ALL 11 rows (found, category + id + route_index match) ;
-//   (2) a spot native_entry ("pops::ExBVelocity") and an unknown id -> nullptr ;
+//   (2) a spot native_entry ("pops::CartesianExBDrift") and an unknown id -> nullptr ;
 //   (3) catalog_csv(category) matches the registry csv helpers over the CANONICAL set ;
 //   (4) brick_catalog_json() lists every id and parses as the same minimal grammar external_brick
 //       uses (string checks: "{\"bricks\":[", each "\"id\":\"<id>\"", the extra columns present) ;
@@ -41,8 +41,9 @@ TEST(BrickCatalog, EntryRoundTripsAllElevenRows) {
 
 TEST(BrickCatalog, NativeEntryKnownAndUnknownIdReturnsNullptr) {
   EXPECT_TRUE(catalog_entry("transport", "exb") != nullptr &&
-              std::string(catalog_entry("transport", "exb")->native_entry) == "pops::ExBVelocity")
-      << "catalog_entry('transport','exb')->native_entry == 'pops::ExBVelocity'";
+              std::string(catalog_entry("transport", "exb")->native_entry) ==
+                  "pops::CartesianExBDrift")
+      << "catalog_entry('transport','exb')->native_entry == 'pops::CartesianExBDrift'";
   EXPECT_TRUE(std::string(catalog_entry("source", "potential")->native_entry) ==
                   "pops::PotentialForce" &&
               std::string(catalog_entry("source", "potential")->parameters) == "qom")
@@ -78,13 +79,14 @@ TEST(BrickCatalog, JsonListsEveryIdWithExternalBrickGrammar) {
     ok = ok && contains(j, id_field.c_str());
   }
   EXPECT_TRUE(ok) << "brick_catalog_json() exposes both digests and every catalog id";
-  EXPECT_TRUE(
-      contains(j, "\"catalog_digest\":\"") && contains(j, "\"catalog_semantic_digest\":\"") &&
-      contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":[]") &&
-      contains(j, "\"limitations\":[") && contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
-      contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") && contains(j, "\"route_index\":") &&
-      contains(j, "\"n_vars_by_dimension\":[") && contains(j, "\"min_vars\":") &&
-      contains(j, "\"polar_ok\":true"))
+  EXPECT_TRUE(contains(j, "\"catalog_digest\":\"") &&
+              contains(j, "\"catalog_semantic_digest\":\"") &&
+              contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":[]") &&
+              contains(j, "\"limitations\":[") &&
+              contains(j, "\"native_entry\":\"pops::CartesianExBDrift\"") &&
+              contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") &&
+              contains(j, "\"route_index\":") && contains(j, "\"n_vars_by_dimension\":[") &&
+              contains(j, "\"min_vars\":") && contains(j, "\"polar_ok\":true"))
       << "brick_catalog_json() exposes structured generated component facts";
 }
 

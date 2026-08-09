@@ -104,8 +104,8 @@ class ConsensusElliptic {
   }
 
  private:
-  static mesh::Distribution<dimension> materialized_distribution(
-      const request_type& request, EllipticFactoryFault fault) {
+  static mesh::Distribution<dimension> materialized_distribution(const request_type& request,
+                                                                 EllipticFactoryFault fault) {
     if (fault == EllipticFactoryFault::WrongDistributionOnRankOne && my_rank() == 1)
       return mesh::Distribution<dimension>::replicated(request.boxes,
                                                        request.distribution.rank_space());
@@ -113,7 +113,7 @@ class ConsensusElliptic {
   }
 
   static Extent<dimension> materialized_rhs_ghosts(const request_type& request,
-                                                    EllipticFactoryFault fault) {
+                                                   EllipticFactoryFault fault) {
     Extent<dimension> ghosts = request.rhs_ghosts;
     if (fault == EllipticFactoryFault::WrongGhostsOnRankOne && my_rank() == 1)
       ++ghosts[0];
@@ -150,13 +150,13 @@ struct ConsensusEllipticFactory {
       ++*constructions;
       return {};
     }
-    return capture_local_elliptic_factory_build<ConsensusElliptic>([this,
-                                                                    request = std::move(request)] {
-      ++*constructions;
-      if (fault == EllipticFactoryFault::ThrowOnRankOne && my_rank() == 1)
-        throw std::runtime_error("intentional rank-local elliptic factory failure");
-      return ConsensusElliptic(std::move(request), fault);
-    });
+    return capture_local_elliptic_factory_build<ConsensusElliptic>(
+        [this, request = std::move(request)] {
+          ++*constructions;
+          if (fault == EllipticFactoryFault::ThrowOnRankOne && my_rank() == 1)
+            throw std::runtime_error("intentional rank-local elliptic factory failure");
+          return ConsensusElliptic(std::move(request), fault);
+        });
   }
 };
 
@@ -283,8 +283,7 @@ bool local_field_equals(const MultiFab& field, Real expected) {
   return true;
 }
 
-class ConsensusHierarchyPrepared final
-    : public runtime::program::PreparedHierarchyTensorSolver<2> {
+class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierarchyTensorSolver<2> {
  public:
   explicit ConsensusHierarchyPrepared(SolveReportFault fault) : fault_(fault) {}
 
@@ -383,7 +382,7 @@ mesh::RankSpace<2> consensus_rank_space() {
 }
 
 mesh::Distribution<2> consensus_distribution(const mesh::BoxArray<2>& boxes,
-                                              std::vector<int> linear_owners = {}) {
+                                             std::vector<int> linear_owners = {}) {
   mesh::RankSpace<2> ranks = consensus_rank_space();
   if (linear_owners.empty()) {
     linear_owners.resize(boxes.size());
@@ -400,8 +399,8 @@ mesh::Distribution<2> consensus_distribution(const mesh::BoxArray<2>& boxes,
   return mesh::Distribution<2>::partitioned(boxes, std::move(ranks), std::move(owners));
 }
 
-PhysicalBoundaryConditions<2> consensus_boundary(
-    const Geometry<2>& geometry, std::optional<Real> x_lower_value = std::nullopt) {
+PhysicalBoundaryConditions<2> consensus_boundary(const Geometry<2>& geometry,
+                                                 std::optional<Real> x_lower_value = std::nullopt) {
   std::array<PhysicalBoundaryFace, 4> faces{};
   if (x_lower_value) {
     faces[static_cast<std::size_t>(Face<2>{0, BoundarySide::lower}.ordinal())].kind =
@@ -414,8 +413,7 @@ PhysicalBoundaryConditions<2> consensus_boundary(
 }
 
 EllipticBuildRequest<2> consensus_elliptic_request(
-    const Geometry<2>& geometry, const mesh::BoxArray<2>& boxes,
-    mesh::Distribution<2> distribution,
+    const Geometry<2>& geometry, const mesh::BoxArray<2>& boxes, mesh::Distribution<2> distribution,
     std::optional<PhysicalBoundaryConditions<2>> boundary = std::nullopt,
     std::optional<Index<2>> local_rank = std::nullopt) {
   const std::size_t count = boxes.size();
@@ -434,9 +432,8 @@ EllipticBuildRequest<2> consensus_elliptic_request(
 }
 
 bool elliptic_request_rejected(
-    const Geometry<2>& geometry, const mesh::BoxArray<2>& boxes,
-    mesh::Distribution<2> distribution, int& constructions,
-    std::string factory_contract = "pops.test.consensus-elliptic-factory@1",
+    const Geometry<2>& geometry, const mesh::BoxArray<2>& boxes, mesh::Distribution<2> distribution,
+    int& constructions, std::string factory_contract = "pops.test.consensus-elliptic-factory@1",
     std::optional<PhysicalBoundaryConditions<2>> boundary = std::nullopt,
     std::optional<Index<2>> local_rank = std::nullopt) {
   try {
@@ -456,8 +453,7 @@ bool elliptic_materialization_rejected(EllipticFactoryFault fault, int& construc
   const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
   const Geometry<2> geometry =
       Geometry<2>::from_bounds(domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
-  const mesh::BoxArray<2> boxes =
-      mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+  const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
   try {
     (void)make_elliptic_solver<ConsensusElliptic>(
         consensus_elliptic_request(geometry, boxes, consensus_distribution(boxes)),
@@ -521,10 +517,10 @@ AmrFieldHierarchyPolicyAuthority level_local_hierarchy_policy() {
   };
 }
 
-using StagePackModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+using StagePackModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
 
 StagePackModel stage_pack_model() {
-  return StagePackModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(1)}};
+  return StagePackModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(1)}};
 }
 
 std::vector<double> stage_pack_density(int n, double amplitude) {
@@ -1541,13 +1537,11 @@ int run_field_plan_consensus(int argc, char** argv) {
   // factory can enter MPI. These are deliberately rank-local descriptor faults.
   {
     const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
-    const Geometry<2> geometry = Geometry<2>::from_bounds(
-        domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
-    const mesh::BoxArray<2> boxes =
-        mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+    const Geometry<2> geometry =
+        Geometry<2>::from_bounds(domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
+    const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
     mesh::Distribution<2> distribution = consensus_distribution(boxes);
-    Index<2> local_rank =
-        distribution.rank_space().coordinate(static_cast<std::size_t>(my_rank()));
+    Index<2> local_rank = distribution.rank_space().coordinate(static_cast<std::size_t>(my_rank()));
     if (rank == 1)
       local_rank[0] = ranks;
     int constructions = 0;
@@ -1562,56 +1556,49 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
     const Geometry<2> geometry = Geometry<2>::from_bounds(
-        domain, RealVector<2>{{0.0, 0.0}},
-        RealVector<2>{{rank == 0 ? 1.0 : 2.0, 1.0}});
-    const mesh::BoxArray<2> boxes =
-        mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+        domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{rank == 0 ? 1.0 : 2.0, 1.0}});
+    const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
     int constructions = 0;
-    require(elliptic_request_rejected(geometry, boxes, consensus_distribution(boxes),
-                                      constructions));
+    require(
+        elliptic_request_rejected(geometry, boxes, consensus_distribution(boxes), constructions));
     require(constructions == 0);
   }
   {
     const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
-    const Geometry<2> geometry = Geometry<2>::from_bounds(
-        domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
-    const mesh::BoxArray<2> boxes =
-        mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+    const Geometry<2> geometry =
+        Geometry<2>::from_bounds(domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
+    const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
     const std::string contract =
         rank == 0 ? "pops.test.factory.rank-0@1" : "pops.test.factory.rank-1@1";
     int constructions = 0;
-    require(elliptic_request_rejected(geometry, boxes, consensus_distribution(boxes),
-                                      constructions, contract));
+    require(elliptic_request_rejected(geometry, boxes, consensus_distribution(boxes), constructions,
+                                      contract));
     require(constructions == 0);
   }
   {
     const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
-    const Geometry<2> geometry = Geometry<2>::from_bounds(
-        domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
-    const mesh::BoxArray<2> boxes =
-        mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+    const Geometry<2> geometry =
+        Geometry<2>::from_bounds(domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
+    const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
     int constructions = 0;
-    require(elliptic_request_rejected(
-        geometry, boxes, consensus_distribution(boxes), constructions,
-        "pops.test.consensus-elliptic-factory@1",
-        consensus_boundary(geometry, rank == 0 ? Real(0) : Real(1))));
+    require(elliptic_request_rejected(geometry, boxes, consensus_distribution(boxes), constructions,
+                                      "pops.test.consensus-elliptic-factory@1",
+                                      consensus_boundary(geometry, rank == 0 ? Real(0) : Real(1))));
     require(constructions == 0);
   }
   {
     const Box<2> domain = Box<2>::from_extents(Extent<2>{{8, 8}});
-    const Geometry<2> geometry = Geometry<2>::from_bounds(
-        domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
-    const mesh::BoxArray<2> boxes =
-        mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
+    const Geometry<2> geometry =
+        Geometry<2>::from_bounds(domain, RealVector<2>{{0.0, 0.0}}, RealVector<2>{{1.0, 1.0}});
+    const mesh::BoxArray<2> boxes = mesh::BoxArray<2>::from_domain(domain, Extent<2>{{4, 4}});
     std::vector<int> owners(boxes.size());
     for (std::size_t box = 0; box < boxes.size(); ++box)
       owners[box] = static_cast<int>(box % static_cast<std::size_t>(ranks));
     if (rank == 1)
       std::swap(owners[0], owners[1]);
     int constructions = 0;
-    require(elliptic_request_rejected(geometry, boxes,
-                                      consensus_distribution(boxes, std::move(owners)),
-                                      constructions));
+    require(elliptic_request_rejected(
+        geometry, boxes, consensus_distribution(boxes, std::move(owners)), constructions));
     require(constructions == 0);
   }
 

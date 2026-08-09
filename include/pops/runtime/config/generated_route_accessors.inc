@@ -1,4 +1,4 @@
-// Generated from component catalog 06e90f38d927e8543e9020d9b2ce1a4f6722630d5c65f347cc9a175cc31f7746; DO NOT EDIT.
+// Generated from component catalog 4806be6ce7a26431de34be4449d9a28ce34f53af78e2087bc7047663ff0450b2; DO NOT EDIT.
 // POPS_DEFINE_ROUTE_ACCESSORS must be defined by the including behavior header.
 POPS_DEFINE_ROUTE_ACCESSORS(riemann, RiemannRouteId, kRiemannRoutes, kRiemann);
 POPS_DEFINE_ROUTE_ACCESSORS(limiter, LimiterRouteId, kLimiterRoutes, kLimiter);

@@ -49,9 +49,9 @@ constexpr double kNeutralFieldCharge = 0.0;
 
 // Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi (le couplage Poisson lit q*n).
 // q=0 -> bloc neutre (ne contribue PAS au Poisson), advecte par le MEME phi que les autres.
-using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_charge(double q, double B0) {
-  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
+static ExBModel exb_charge(double q, double) {
+  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // densite a moyenne nulle (solvable en periodique) : un creneau centre +/- amplitude, n*n row-major.

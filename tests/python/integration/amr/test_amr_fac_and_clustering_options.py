@@ -13,7 +13,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 
 def _model():
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(),
                       source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 

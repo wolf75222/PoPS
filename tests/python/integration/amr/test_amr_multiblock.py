@@ -31,7 +31,7 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _build(n=32, regrid_every=0, *, tagging=()):
@@ -87,7 +87,7 @@ def main():
             "ne",
             engine.Model(
                 engine.Scalar(),
-                engine.ExB(B0=1.0),
+                engine.ExB(),
                 engine.NoSource(),
                 engine.BackgroundDensity(alpha=1.0, n0=1.0),
             ),

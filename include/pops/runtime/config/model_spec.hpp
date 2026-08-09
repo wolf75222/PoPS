@@ -99,7 +99,6 @@ struct ModelSpec {
                                                     ///< | "magnetic" | "potential_magnetic"
   detail::FrozenModelValue<std::string> elliptic;   ///< REQUIRED: charge/background/gravity
 
-  detail::FrozenModelValue<double> B0;            ///< ExBVelocity: magnetic field
   detail::FrozenModelValue<double> gamma;         ///< CompressibleFlux: adiabatic index
   detail::FrozenModelValue<double> cs2;           ///< IsothermalFlux: sound speed squared
   detail::FrozenModelValue<double> vacuum_floor;  ///< IsothermalFlux: quasi-vacuum density floor
@@ -119,7 +118,6 @@ struct ModelSpec {
       : transport(frozen_, "transport", std::string{}),
         source(frozen_, "source", std::string{"none"}),
         elliptic(frozen_, "elliptic", std::string{}),
-        B0(frozen_, "B0", static_cast<double>(kPhysicalDefaultB0)),
         gamma(frozen_, "gamma", static_cast<double>(kPhysicalDefaultGamma)),
         cs2(frozen_, "cs2", static_cast<double>(kPhysicalDefaultFluidStateCs2)),
         vacuum_floor(frozen_, "vacuum_floor", static_cast<double>(kPhysicalDefaultVacuumFloor)),
@@ -136,7 +134,6 @@ struct ModelSpec {
         transport(frozen_, "transport", other.transport.get()),
         source(frozen_, "source", other.source.get()),
         elliptic(frozen_, "elliptic", other.elliptic.get()),
-        B0(frozen_, "B0", other.B0.get()),
         gamma(frozen_, "gamma", other.gamma.get()),
         cs2(frozen_, "cs2", other.cs2.get()),
         vacuum_floor(frozen_, "vacuum_floor", other.vacuum_floor.get()),
@@ -157,7 +154,6 @@ struct ModelSpec {
     transport = other.transport;
     source = other.source;
     elliptic = other.elliptic;
-    B0 = other.B0;
     gamma = other.gamma;
     cs2 = other.cs2;
     vacuum_floor = other.vacuum_floor;

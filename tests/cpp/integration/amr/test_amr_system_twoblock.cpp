@@ -48,9 +48,9 @@ using namespace pops;
 
 // Modele ExB scalaire (1 var) a charge q : transport E x B (advection pilotee par grad phi), densite
 // de charge q n pour le Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_model(double q, double B0) {
-  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double) {
+  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 static ModelSpec exb_spec(double q, double B0) {
@@ -59,7 +59,6 @@ static ModelSpec exb_spec(double q, double B0) {
   spec.source = "none";
   spec.elliptic = "charge";
   spec.q = q;
-  spec.B0 = B0;
   return spec;
 }
 
@@ -74,7 +73,6 @@ static ModelSpec exb_neutralized_charge(double q, double B0, double n0) {
   s.elliptic = "background";
   s.alpha = q;
   s.n0 = n0;
-  s.B0 = B0;
   return s;
 }
 

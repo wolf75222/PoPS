@@ -22,7 +22,7 @@
 //
 // CHOIX DE COMPILABILITE (limitation connue nvcc, cf. tache). Un test AMR complet avec concept + lambda
 // GENERIQUE (auto m) NE COMPILE PAS sous nvcc. Ici on utilise donc des FONCTEURS / TYPES CONCRETS :
-// les modeles sont des CompositeModel<ExBVelocity, NoSource, ChargeDensity> instancies a la main (pas
+// les modeles sont des CompositeModel<CartesianExBDrift, NoSource, ChargeDensity> instancies a la main (pas
 // de dispatch_model generique), et add_compiled_model capture ces types concrets. Le noyau AMR
 // (residu spatial Limiter/Flux) reste capture par dispatch_amr_block via une fonction template NOMMEE
 // (recette device-clean #64/#97), jamais une lambda etendue cross-TU. Le test compile donc partout
@@ -34,7 +34,7 @@
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
 #include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
-#include <pops/physics/bricks/hyperbolic.hpp>               // ExBVelocity
+#include <pops/physics/bricks/hyperbolic.hpp>               // CartesianExBDrift
 #include <pops/physics/bricks/source.hpp>                   // NoSource
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
@@ -58,9 +58,9 @@ using namespace pops;
 
 // Modele ExB scalaire (1 var) a charge q, CONNU A LA COMPILATION (type concret, pas de dispatch). q
 // (signe inclus) distingue ions (+1) / electrons (-1) ; q=0 -> bloc neutre (pas de contribution Poisson).
-using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_model(double q, double B0) {
-  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
+using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
+static ExBModel exb_model(double q, double) {
+  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
 }
 
 // Spec ExB scalaire NATIVE (pour le melange compile + natif du point C) : meme physique, via ModelSpec.
@@ -70,7 +70,6 @@ static ModelSpec exb_spec(double q, double B0) {
   s.source = "none";
   s.elliptic = "charge";
   s.q = q;
-  s.B0 = B0;
   return s;
 }
 

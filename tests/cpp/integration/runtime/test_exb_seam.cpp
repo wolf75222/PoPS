@@ -1,6 +1,6 @@
 // C++ equivalent of the ExB row of tests/python/unit/runtime/test_seam_combinations.py
 // (test_system_generated_seam_advances): the Python smoke drives the native System engine seam with
-// model=pops.Model(state=Scalar(), transport=ExB(B0=...), source=NoSource(),
+// model=pops.Model(state=Scalar(), transport=ExB(), source=NoSource(),
 // elliptic=BackgroundDensity(...)) and asserts step_cfl returns a finite, positive dt. There was no C++
 // counterpart exercising the SAME (transport="exb", flux=None) seam through System::add_block(ModelSpec)
 // -- this closes that gap.
@@ -51,7 +51,6 @@ ModelSpec exb_seam_model(double n0) {
   spec.transport = "exb";
   spec.source = "none";
   spec.elliptic = "background";
-  spec.B0 = 1.0;
   spec.alpha = 1.0;
   spec.n0 = n0;
   return spec;

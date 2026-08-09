@@ -43,7 +43,7 @@ TEST(VariableRole, IndexOfResolvesEulerIsothermalAndExBRoles) {
   EXPECT_EQ(v.role, R::velocity(0)) << "Variable::at";
   EXPECT_EQ(v.component, 1) << "Variable::at";
 
-  EXPECT_EQ(pops::ExBVelocity::conservative_vars().index_of(R::Density), 0) << "role ExB";
+  EXPECT_EQ(pops::CartesianExBDrift::conservative_vars().index_of(R::Density), 0) << "role ExB";
 }
 
 TEST(VariableRole, AxialRolesRoundTripThroughStableTextAbi) {
@@ -79,8 +79,8 @@ TEST(VariableRole, AxisSemanticsAreValidatedAgainstTheExactNativeRank) {
       2,
       {R::Density, R::momentum(0)},
   };
-  EXPECT_NO_THROW(pops::validate_variable_semantics<1>(
-      one_dimensional, "test", "one-dimensional state"));
+  EXPECT_NO_THROW(
+      pops::validate_variable_semantics<1>(one_dimensional, "test", "one-dimensional state"));
 
   const pops::VariableSet invalid_for_one_dimensional{
       pops::VariableKind::Conservative,
@@ -88,9 +88,9 @@ TEST(VariableRole, AxisSemanticsAreValidatedAgainstTheExactNativeRank) {
       2,
       {R::Density, R::momentum(1)},
   };
-  EXPECT_THROW(pops::validate_variable_semantics<1>(
-                   invalid_for_one_dimensional, "test", "one-dimensional state"),
+  EXPECT_THROW(pops::validate_variable_semantics<1>(invalid_for_one_dimensional, "test",
+                                                    "one-dimensional state"),
                std::invalid_argument);
-  EXPECT_NO_THROW(pops::validate_variable_semantics<3>(
-      invalid_for_one_dimensional, "test", "three-dimensional state"));
+  EXPECT_NO_THROW(pops::validate_variable_semantics<3>(invalid_for_one_dimensional, "test",
+                                                       "three-dimensional state"));
 }

@@ -27,7 +27,7 @@
 #include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var)
+#include <pops/physics/bricks/hyperbolic.hpp>  // CartesianExBDrift (scalaire 1 var)
 #include <pops/physics/bricks/source.hpp>      // NoSource
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
@@ -58,7 +58,7 @@ struct NoEll {
   }
 };
 // Modele scalaire : transport E x B (vitesse nulle ici car phi=0) + source nulle + elliptic nul.
-using ScalarModel = CompositeModel<ExBVelocity, NoSource, NoEll>;
+using ScalarModel = CompositeModel<CartesianExBDrift, NoSource, NoEll>;
 
 struct DirectDtProbe {
   using State = StateVec<1>;

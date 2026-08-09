@@ -42,7 +42,7 @@ def _model():
     """A minimal scalar block whose zero elliptic RHS isolates AMR inspection."""
     return engine.Model(
         state=engine.Scalar(),
-        transport=engine.ExB(B0=1.0),
+        transport=engine.ExB(),
         source=engine.NoSource(),
         elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
     )

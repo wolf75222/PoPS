@@ -159,7 +159,6 @@ void build_two_charge_blocks(System& s) {
   spec.source = "none";
   spec.elliptic = "charge";
   spec.q = 1.0;
-  spec.B0 = 1.0;
   s.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   s.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   s.set_poisson("composite", "geometric_mg");  // f = sum of the per-block elliptic bricks
@@ -271,7 +270,6 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
     spec.source = "none";
     spec.elliptic = "charge";
     spec.q = 1.0;
-    spec.B0 = 1.0;
     se.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
     se.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
     se.set_poisson("composite", "geometric_mg", "auto", "none", 0.0, 2.0, 0.0);  // eps = 2
@@ -309,7 +307,6 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
   spec.source = "none";
   spec.elliptic = "charge";
   spec.q = 1.0;
-  spec.B0 = 1.0;
   system.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   system.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
 
@@ -467,7 +464,6 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   spec.source = "none";
   spec.elliptic = "charge";
   spec.q = 1.0;
-  spec.B0 = 1.0;
   system.add_block("plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
   const auto potential_outputs =
       install_field_outputs(system, "test.gradient-sign", "potential", kNativeDimension + 1);

@@ -6,7 +6,7 @@
 ///        a scenario is a COMPOSITION of bricks, chosen from the application (adc_cases).
 ///
 /// Split by category (to match the target tree physics/{hyperbolic,source,elliptic,...}):
-///   - physics/hyperbolic.hpp: ExBVelocity, CompressibleFlux (= Euler), IsothermalFlux;
+///   - physics/hyperbolic.hpp: CartesianExBDrift, CompressibleFlux (= Euler), IsothermalFlux;
 ///   - physics/source.hpp:     NoSource, PotentialForce, GravityForce;
 ///   - physics/elliptic.hpp:   NoElliptic, ChargeDensity, BackgroundDensity, GravityCoupling;
 ///   - physics/composite.hpp:  CompositeModel<Hyperbolic, Source, Elliptic>.

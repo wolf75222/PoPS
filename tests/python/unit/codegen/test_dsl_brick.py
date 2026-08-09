@@ -57,14 +57,14 @@ int main() {
 
 
 def build_exb_brick():
-    """Transport scalaire par derive E x B (B0=1) : flux qui DEPEND des champs auxiliaires (grad phi).
+    """Transport scalaire par derive E x B : flux qui DEPEND des champs auxiliaires (grad phi).
     Sert a verifier que la brique generee lit le pack provider exact dans flux et max_wave_speed,
-    et reproduit la brique manuelle pops::ExBVelocity{B0=1}."""
+    et reproduit la brique manuelle pops::CartesianExBDrift avec B=(0,0,1)."""
     e = HyperbolicModel("exb")
     (n,) = e.conservative_vars("n")
     gx = e.aux("grad_x")
     gy = e.aux("grad_y")
-    e.set_flux(x=[n * (-gy)], y=[n * gx])     # v = (-d_y phi, d_x phi)/B0 ; flux = n v
+    e.set_flux(x=[n * (-gy)], y=[n * gx])     # B=(0,0,1), v = (-d_y phi, d_x phi)
     e.set_eigenvalues(x=[-gy], y=[gx])        # |v_dir| comme borne
     e.set_primitive_state(n)                  # scalaire : primitif = conservatif
     e.set_conservative_from([n])
@@ -78,11 +78,11 @@ EXB_HARNESS = r"""
 #include <cstdio>
 #include <cmath>
 
-static_assert(pops::HyperbolicModel<pops::ExBVelocity>, "oracle ExB non conforme (setup du test)");
+static_assert(pops::HyperbolicModel<pops::CartesianExBDrift>, "oracle ExB non conforme (setup du test)");
 static_assert(pops::HyperbolicModel<pops_generated::ExBGen>, "brique ExB generee non conforme au concept");
 
 int main() {
-  pops::ExBVelocity ref; ref.B0 = 1.0;
+  pops::CartesianExBDrift ref;
   pops_generated::ExBGen gen;
   const double S[] = {0.5, 1.0, 2.0, -0.3};
   const double A[][2] = {{0.5,-0.3},{-0.2,0.7},{0.0,0.4},{1.1,-0.9}};
@@ -91,7 +91,8 @@ int main() {
   for (int k=0;k<4;++k){
     pops::StateVec<1> u{}; u[0]=S[k];
     for (int j=0;j<4;++j){
-      pops::Aux a{}; a.gradient<0>()=A[j][0]; a.gradient<1>()=A[j][1];
+      pops::ProviderValues<5> a{};
+      a[0] = A[j][0]; a[1] = A[j][1]; a[2] = 0.0; a[3] = 0.0; a[4] = 1.0;
       for (int dir=0; dir<2; ++dir){
         upd(ref.flux(u,a,dir)[0], gen.flux(u,a,dir)[0]);
         upd(ref.max_wave_speed(u,a,dir), gen.max_wave_speed(u,a,dir));
@@ -137,7 +138,7 @@ def main():
           % maxdiff)
 
     # (2) brique a flux dependant des AUXILIAIRES (ExB) : les locals aux doivent etre emis dans
-    # flux ET max_wave_speed, et la brique doit egaler pops::ExBVelocity ecrite a la main.
+    # flux ET max_wave_speed, et la brique doit egaler pops::CartesianExBDrift ecrite a la main.
     exb = build_exb_brick().emit_cpp_brick(name="ExBGen")
     assert exb.count("const pops::Real grad_x = a.template flux_provider<1>();") >= 2, \
         "lectures provider absentes (flux/vitesse)"
@@ -152,8 +153,8 @@ def main():
         subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
         out2 = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
     d2 = float(out2.strip())
-    assert d2 < 1e-12, "brique ExB generee != pops::ExBVelocity (ecart max %.2e)" % d2
-    print("OK  brique a flux auxiliaire (ExB) == pops::ExBVelocity (ecart max %.1e)" % d2)
+    assert d2 < 1e-12, "brique ExB generee != pops::CartesianExBDrift (ecart max %.2e)" % d2
+    print("OK  brique a flux auxiliaire (ExB) == pops::CartesianExBDrift (ecart max %.1e)" % d2)
     print("test_dsl_brick : tout est vert")
 
 

@@ -37,7 +37,7 @@ def _model(transport: str) -> engine.Model:
     if transport == "exb":
         return engine.Model(
             state=engine.Scalar(),
-            transport=engine.ExB(B0=1.0),
+            transport=engine.ExB(),
             source=engine.NoSource(),
             elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
         )

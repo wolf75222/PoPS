@@ -15,7 +15,7 @@
 
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var, role Density)
+#include <pops/physics/bricks/hyperbolic.hpp>  // CartesianExBDrift (scalaire 1 var, role Density)
 #include <pops/physics/bricks/source.hpp>      // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/program/program_context.hpp>
@@ -44,7 +44,8 @@ struct NoEll {
     return Real(0);
   }  // pas de charge -> phi=0 -> derive nulle
 };
-using Dens = CompositeModel<ExBVelocity, NoSource, NoEll>;  // densite scalaire, transport E x B
+using Dens =
+    CompositeModel<CartesianExBDrift, NoSource, NoEll>;  // densite scalaire, transport E x B
 
 static void install_ionization_program(System& system) {
   system.set_program_block_map({0, 1, 2});

@@ -54,7 +54,6 @@ static ModelSpec exb_spec(double q, double B0) {
   s.source = "none";
   s.elliptic = "charge";
   s.q = q;
-  s.B0 = B0;
   return s;
 }
 

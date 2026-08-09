@@ -2080,6 +2080,13 @@ A model is assembled by `dispatch_model(spec, visitor)`: it builds the transport
 `visitor(model)`. The core names no scenario; a scenario is this composition, named on the
 `adc_cases` side.
 
+The `exb` route is `CartesianExBDrift`: a scalar Cartesian transport for native dimensions 1, 2
+and 3. It consumes one explicit potential-gradient provider per native axis plus the three
+Cartesian magnetic providers, and the single Levi-Civita kernel evaluates
+\(v_i = \epsilon_{ijk} B_j\,\partial_k\phi/|B|^2\). The exact-ranked gradient is embedded in
+Cartesian 3-space: 3-D consumes every component, 2-D can explicitly provide its normal field,
+and 1-D obtains the mathematical longitudinal projection without a separate branch.
+
 ```
 function dispatch_model(spec, visitor):              # model_factory.hpp
     dispatch_transport(spec, TR ->                    # exb | compressible | isothermal

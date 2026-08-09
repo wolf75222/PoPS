@@ -47,7 +47,6 @@ static ModelSpec exb_background(double n0) {
   spec.transport = "exb";        // derive E x B (a divergence nulle)
   spec.source = "none";          // pas de force source
   spec.elliptic = "background";  // f = alpha (n - n0) : fond neutralisant
-  spec.B0 = 1.0;
   spec.alpha = 1.0;
   spec.n0 = n0;  // fond = moyenne -> source d'integrale nulle (Poisson periodique)
   return spec;

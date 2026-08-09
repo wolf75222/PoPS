@@ -69,7 +69,7 @@ TEST(test_primitive_recon, isothermal_round_trip) {
 }
 
 TEST(test_primitive_recon, scalar_exb_conversions_are_identity) {
-  ExBVelocity exb;
+  CartesianExBDrift exb;
   StateVec<1> n{};
   n[0] = 0.7;
   EXPECT_TRUE(close(exb.to_primitive(n)[0], 0.7) && close(exb.to_conservative(n)[0], 0.7))
@@ -79,7 +79,7 @@ TEST(test_primitive_recon, scalar_exb_conversions_are_identity) {
 TEST(test_primitive_recon, composed_models_expose_primitive_vars) {
   using Mc = CompositeModel<CompressibleFlux, NoSource, ChargeDensity>;
   using Mi = CompositeModel<IsothermalFlux, NoSource, ChargeDensity>;
-  using Ms = CompositeModel<ExBVelocity, NoSource, BackgroundDensity>;
+  using Ms = CompositeModel<CartesianExBDrift, NoSource, BackgroundDensity>;
   static_assert(HasPrimitiveVars<Mc>, "compose Euler doit exposer les variables primitives");
   static_assert(HasPrimitiveVars<Mi>, "compose isotherme doit exposer les variables primitives");
   static_assert(HasPrimitiveVars<Ms>, "compose scalaire : conversions identite");

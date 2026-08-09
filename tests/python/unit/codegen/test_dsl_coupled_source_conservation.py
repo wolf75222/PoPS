@@ -49,7 +49,7 @@ def density_block(n0=1.0):
     Le test isole l'echange conservatif. Un alpha nul evite qu'un etage partiel du splitting forme
     temporairement une charge periodique non neutre avant la mise a jour du second bloc.
     """
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(),
                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
 
 

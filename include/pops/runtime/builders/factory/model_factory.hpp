@@ -49,7 +49,8 @@ inline void validate_model_spec(const ModelSpec& m) {
 /// Non-drift guard (ADC-331): the registry's n_vars column (model_registry.hpp, a LIGHT header with
 /// no brick types) MUST agree with the real brick types' ::n_vars. This TU sees BOTH, so we lock it
 /// at compile time -- a registry row that disagrees with its brick fails the build here.
-static_assert(ExBVelocity::n_vars == transport_n_vars_ct("exb"), "registry n_vars drift: exb");
+static_assert(CartesianExBDriftND<kNativeDimension>::n_vars == transport_n_vars_ct("exb"),
+              "registry n_vars drift: exb");
 static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),
               "registry n_vars drift: compressible");
 static_assert(IsothermalFlux::n_vars == transport_n_vars_ct("isothermal"),
@@ -69,6 +70,11 @@ struct PotentialMagneticSourceFactory {
     return {PotentialForceND<Dim>{Real(model.qom)}, MagneticLorentzForceND<Dim>{Real(model.qom)}};
   }
 };
+
+template <int Dim, class Visitor>
+POPS_COLD_FN void dispatch_cartesian_exb_transport(const ModelSpec&, Visitor&& visitor) {
+  visitor(CartesianExBDriftND<Dim>{});
+}
 
 /// Dispatch one provider that requires the x-y plane.  The overload is selected by the immutable
 /// native specialization; no run-time dimension branch exists and the unsupported 1D provider type
@@ -98,7 +104,7 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
       m.transport);  // registry rejection (single source of the valid tags + message)
   switch (parse_transport_route(m.transport)) {
     case TransportRouteId::kExb:
-      return v(ExBVelocity{Real(m.B0)});
+      return dispatch_cartesian_exb_transport<kNativeDimension>(m, std::forward<Visitor>(v));
     case TransportRouteId::kCompressible:
       return v(CompressibleFlux{Real(m.gamma)});
     case TransportRouteId::kIsothermal:
@@ -111,19 +117,18 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 }
 
 /// Builds one exact-ranked source brick and calls v(source). Gradient forces require density plus
-/// one momentum component per native axis. The B_z Lorentz capability additionally requires the
-/// explicit x-y plane and is therefore unavailable in a 1D specialization.
+/// one momentum component per native axis. The Cartesian Lorentz capability consumes an explicit
+/// three-component magnetic provider vector in every exact native rank.
 ///   - "none": NoSource (neutral);
 ///   - "potential": PotentialForce (q/m) rho E (electrostatic);
 ///   - "gravity": GravityForce rho g;
-///   - "magnetic" | "lorentz": MagneticLorentzForce q v x B_z (B_z read from aux, EXPLICIT
+///   - "magnetic" | "lorentz": MagneticLorentzForce q v x B (B read from providers, EXPLICIT
 ///                                    regime; the stiff regime goes through the condensed Schur);
 ///   - "potential_magnetic" | "potential_lorentz": CompositeSource<PotentialForce, MagneticLorentz>
 ///                                    = electrostatic + Lorentz summed (the full magnetized force in a
 ///                                    polar setup, with no centrifugal workaround needed).
 /// qom (q/m, sign included) is shared by the two charged forces (same species). The magnetized bricks
-/// declare `n_aux = AuxComponentLayout<Dim>::b_z + 1`, so CompositeModel propagates the ranked
-/// B_z slot.
+/// declare three exact magnetic provider slots, so CompositeModel propagates the vector contract.
 /// The source tag is parsed ONCE into the typed SourceRouteId (route_ids.hpp) once it is a KNOWN
 /// source (is_source): parse_source_route resolves the alias spellings (lorentz -> kMagneticLorentz,
 /// potential_lorentz -> kPotentialMagneticLorentz), so the switch carries ONE case per canonical
@@ -214,9 +219,8 @@ POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
     static_assert(Components::dimension == Brick::dimension,
                   "source momentum-component rank must equal the source spatial dimension");
     for (int axis = 0; axis < Brick::dimension; ++axis)
-      brk.momentum_components[axis] =
-          require_role_index(cons, VariableRole::momentum(axis),
-                             "bind_variable_roles", "model conservative state");
+      brk.momentum_components[axis] = require_role_index(
+          cons, VariableRole::momentum(axis), "bind_variable_roles", "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
     if constexpr (requires { Brick::requires_energy_role(cons.size); }) {
@@ -252,7 +256,7 @@ POPS_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
     // freezing the composite. Native transport -> canonical roles -> resolved indices == defaults.
     const VariableSet cons = TR::conservative_vars();
     validate_variable_semantics<kNativeDimension>(cons, "dispatch_model",
-                                                   "model conservative state");
+                                                  "model conservative state");
     dispatch_source<TR::n_vars>(m, [&](auto src) {
       dispatch_elliptic(m, [&](auto ell) {
         bind_variable_roles(src,
@@ -277,7 +281,7 @@ template <class TR, class Visitor>
 POPS_COLD_FN void dispatch_model_for(const ModelSpec& m, TR tr, Visitor&& visitor) {
   const VariableSet cons = TR::conservative_vars();
   validate_variable_semantics<kNativeDimension>(cons, "dispatch_model_for",
-                                                 "model conservative state");
+                                                "model conservative state");
   dispatch_source<TR::n_vars>(m, [&](auto src) {
     dispatch_elliptic(m, [&](auto ell) {
       bind_variable_roles(src, cons);

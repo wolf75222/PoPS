@@ -108,7 +108,7 @@ enum class LimiterRouteId : int {
   kSuperbee = 5,
 };
 inline constexpr RouteInfo kLimiterRoutes[] = {
-  {0, "none", "pops::NoSlope", "", ""},
+  {0, "none", "pops::NoSlope", "provider_pack,ComponentKeys grad_phi[0:Dim],ComponentKeys B_x,B_y,B_z", ""},
   {1, "minmod", "pops::Minmod", "", ""},
   {2, "vanleer", "pops::VanLeer", "", ""},
   {3, "weno5", "pops::Weno5", "3-cell halo", ""},
@@ -187,7 +187,7 @@ enum class TransportRouteId : int {
   kIsothermal = 2,
 };
 inline constexpr RouteInfo kTransportRoutes[] = {
-  {0, "exb", "pops::ExBVelocity", "", "scalar (1 var); no fluid source"},
+  {0, "exb", "pops::CartesianExBDrift", "", "scalar (1 var); no fluid source,requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers"},
   {1, "compressible", "pops::CompressibleFlux", "", "polar geometry not wired"},
   {2, "isothermal", "pops::IsothermalFlux", "", ""},
 };
@@ -204,8 +204,8 @@ inline constexpr RouteInfo kSourceRoutes[] = {
   {0, "none", "pops::NoSource", "", ""},
   {1, "potential", "pops::PotentialForce", "fluid transport (>= 3 vars)", ""},
   {2, "gravity", "pops::GravityForce", "fluid transport (>= 3 vars)", ""},
-  {3, "magnetic", "pops::MagneticLorentzForce", "fluid transport (>= 3 vars),aux B_z channel", "explicit regime (stiff regime -> condensed Schur stage)"},
-  {4, "potential_magnetic", "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "fluid transport (>= 3 vars),aux B_z channel", ""},
+  {3, "magnetic", "pops::MagneticLorentzForce", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", "explicit regime (stiff regime -> condensed Schur stage)"},
+  {4, "potential_magnetic", "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", ""},
 };
 inline constexpr const char* kSourceRouteTokensCsv = "none|potential|gravity|magnetic|potential_magnetic";
 
@@ -258,7 +258,7 @@ struct TransportTag {
   bool polar_ok; const char* summary;
 };
 inline constexpr TransportTag kTransports[] = {
-  {"exb", {{1, 1, 1}}, true, "scalar ExB drift advection, v = (-d_y phi, d_x phi) / B0"},
+  {"exb", {{1, 1, 1}}, true, "scalar Cartesian E x B drift, v_i = epsilon_ijk B_j d_k(phi) / |B|^2"},
   {"compressible", {{3, 4, 5}}, false, "exact-ranked compressible Euler (density, one momentum per axis, energy)"},
   {"isothermal", {{2, 3, 4}}, true, "exact-ranked isothermal Euler (density and one momentum per axis)"},
 };
@@ -268,7 +268,7 @@ inline constexpr SourceTag kSources[] = {
   {"none", 1, "neutral: no source term"},
   {"potential", 3, "(q/m) rho E electrostatic force"},
   {"gravity", 3, "rho g gravity force"},
-  {"magnetic", 3, "q v x B_z magnetized Lorentz force (explicit regime)"},
+  {"magnetic", 3, "q v x B Cartesian magnetized Lorentz force (explicit regime)"},
   {"potential_magnetic", 3, "electrostatic + Lorentz, summed"},
 };
 
@@ -287,14 +287,14 @@ struct BrickCatalogEntry {
   const char* limitations; const char* limitations_json; const char* summary;
 };
 inline constexpr BrickCatalogEntry kBrickCatalog[] = {
-  {"exb", "transport", 0, "pops::ExBVelocity", "B0", "[\"B0\"]", {{1, 1, 1}}, -1, true, "", "[]", "scalar (1 var); no fluid source", "[\"scalar (1 var); no fluid source\"]", "scalar ExB drift advection, v = (-d_y phi, d_x phi) / B0"},
+  {"exb", "transport", 0, "pops::CartesianExBDrift", "", "[]", {{1, 1, 1}}, -1, true, "", "[]", "scalar (1 var); no fluid source,requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers", "[\"scalar (1 var); no fluid source\",\"requires one explicit potential-gradient provider per native axis and three explicit Cartesian magnetic providers\"]", "scalar Cartesian E x B drift, v_i = epsilon_ijk B_j d_k(phi) / |B|^2"},
   {"compressible", "transport", 1, "pops::CompressibleFlux", "gamma", "[\"gamma\"]", {{3, 4, 5}}, -1, false, "", "[]", "polar geometry not wired", "[\"polar geometry not wired\"]", "exact-ranked compressible Euler (density, one momentum per axis, energy)"},
   {"isothermal", "transport", 2, "pops::IsothermalFlux", "cs2,vacuum_floor", "[\"cs2\",\"vacuum_floor\"]", {{2, 3, 4}}, -1, true, "", "[]", "", "[]", "exact-ranked isothermal Euler (density and one momentum per axis)"},
   {"none", "source", 0, "pops::NoSource", "", "[]", {{-1, -1, -1}}, 1, false, "", "[]", "", "[]", "neutral: no source term"},
   {"potential", "source", 1, "pops::PotentialForce", "qom", "[\"qom\"]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars)", "[\"fluid transport (>= 3 vars)\"]", "", "[]", "(q/m) rho E electrostatic force"},
   {"gravity", "source", 2, "pops::GravityForce", "", "[]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars)", "[\"fluid transport (>= 3 vars)\"]", "", "[]", "rho g gravity force"},
-  {"magnetic", "source", 3, "pops::MagneticLorentzForce", "qom", "[\"qom\"]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars),aux B_z channel", "[\"fluid transport (>= 3 vars)\",\"aux B_z channel\"]", "explicit regime (stiff regime -> condensed Schur stage)", "[\"explicit regime (stiff regime -> condensed Schur stage)\"]", "q v x B_z magnetized Lorentz force (explicit regime)"},
-  {"potential_magnetic", "source", 4, "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "qom", "[\"qom\"]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars),aux B_z channel", "[\"fluid transport (>= 3 vars)\",\"aux B_z channel\"]", "", "[]", "electrostatic + Lorentz, summed"},
+  {"magnetic", "source", 3, "pops::MagneticLorentzForce", "qom", "[\"qom\"]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", "[\"fluid transport (>= 3 vars)\",\"aux Cartesian magnetic vector channel\"]", "explicit regime (stiff regime -> condensed Schur stage)", "[\"explicit regime (stiff regime -> condensed Schur stage)\"]", "q v x B Cartesian magnetized Lorentz force (explicit regime)"},
+  {"potential_magnetic", "source", 4, "pops::CompositeSource<PotentialForce, MagneticLorentzForce>", "qom", "[\"qom\"]", {{-1, -1, -1}}, 3, false, "fluid transport (>= 3 vars),aux Cartesian magnetic vector channel", "[\"fluid transport (>= 3 vars)\",\"aux Cartesian magnetic vector channel\"]", "", "[]", "electrostatic + Lorentz, summed"},
   {"charge", "elliptic", 0, "pops::ChargeDensity", "q", "[\"q\"]", {{-1, -1, -1}}, -1, false, "", "[]", "", "[]", "rho - q : charge density (Poisson source)"},
   {"background", "elliptic", 1, "pops::BackgroundDensity", "alpha,n0", "[\"alpha\",\"n0\"]", {{-1, -1, -1}}, -1, false, "", "[]", "", "[]", "alpha (rho - n0) : neutralizing background"},
   {"gravity", "elliptic", 2, "pops::GravityCoupling", "sign,four_pi_G,rho0", "[\"sign\",\"four_pi_G\",\"rho0\"]", {{-1, -1, -1}}, -1, false, "", "[]", "", "[]", "sign * 4 pi G (rho - rho0) : gravitational coupling"},
@@ -304,9 +304,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 2;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "06e90f38d927e8543e9020d9b2ce1a4f6722630d5c65f347cc9a175cc31f7746";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "27ac54a69188657111717e78b90d2b75c06fdb971ed6b70e96fe68be5de78ad2";
-inline constexpr const char* kRouteRegistrySignature = "v4:27ac54a69188657111717e78b90d2b75c06fdb971ed6b70e96fe68be5de78ad2";
+inline constexpr const char* kComponentCatalogSha256 = "4806be6ce7a26431de34be4449d9a28ce34f53af78e2087bc7047663ff0450b2";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078";
+inline constexpr const char* kRouteRegistrySignature = "v4:b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",
