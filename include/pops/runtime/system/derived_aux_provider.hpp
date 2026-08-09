@@ -23,32 +23,6 @@
 
 namespace pops::runtime::system {
 
-/// Storage namespace containing one component.  The namespace is structural, not a catalogue of
-/// physics: packages may use their own owners and spaces without extending this enum.
-enum class AuxiliarySpaceKind : std::uint8_t {
-  state = 0,
-  auxiliary = 1,
-  field = 2,
-  external = 3,
-};
-
-/// Location of a component on an exact-rank mesh.
-enum class AuxiliaryCentering : std::uint8_t {
-  cell = 0,
-  face = 1,
-  edge = 2,
-  node = 3,
-};
-
-/// Algebraic shape of one published component group.  The component key still addresses one
-/// compact carrier slot; @c value_components records the provider-visible group width.
-enum class AuxiliaryValueKind : std::uint8_t {
-  scalar = 0,
-  vector = 1,
-  tensor = 2,
-  opaque = 3,
-};
-
 /// Producer class.  Input data is supplied by an external native uploader, derived data by a
 /// prepared native launcher, and field output by a separately prepared field solver.  None of
 /// these values implies a physical formula.
@@ -77,34 +51,20 @@ enum class AuxiliaryFreshness : std::uint8_t {
   layout_generation = 3,
 };
 
-[[nodiscard]] inline std::string_view auxiliary_space_kind_name(AuxiliarySpaceKind value) {
-  switch (value) {
-    case AuxiliarySpaceKind::state:
-      return "state";
-    case AuxiliarySpaceKind::auxiliary:
-      return "auxiliary";
-    case AuxiliarySpaceKind::field:
-      return "field";
-    case AuxiliarySpaceKind::external:
-      return "external";
-  }
-  throw std::invalid_argument("auxiliary space kind is invalid");
-}
-
 /// Stable address of one component.  The owner prevents otherwise-valid packages from silently
 /// aliasing each other; (space_kind, space_name, component) identifies the carrier within it.
 struct AuxiliaryComponentKey {
-  std::string owner;
-  AuxiliarySpaceKind space_kind = AuxiliarySpaceKind::auxiliary;
+  std::string owner_qid;
+  std::string space_kind;
   std::string space_name;
-  int component = -1;
+  std::string component;
 
   friend bool operator==(const AuxiliaryComponentKey&, const AuxiliaryComponentKey&) = default;
 
   void validate() const {
-    if (owner.empty() || space_name.empty() || component < 0)
+    if (owner_qid.empty() || space_kind.empty() || space_name.empty() || component.empty())
       throw std::invalid_argument(
-          "auxiliary component key requires non-empty owner/space name and non-negative component");
+          "auxiliary component key requires non-empty owner/space kind/space name/component");
   }
 
   [[nodiscard]] std::string exact_key() const {
@@ -112,60 +72,82 @@ struct AuxiliaryComponentKey {
     ExactContractBuilder contract;
     contract.text("pops.auxiliary-component-key")
         .scalar(std::uint32_t{1})
-        .text(owner)
-        .scalar(space_kind)
+        .text(owner_qid)
+        .text(space_kind)
         .text(space_name)
-        .scalar(component);
+        .text(component);
     return std::move(contract).release();
   }
 
   void serialize_exact(ExactContractBuilder& contract) const { contract.bytes(exact_key()); }
 };
 
-/// Full carrier contract.  Text fields are deliberately package-defined; the registry compares
-/// their exact bytes and therefore cannot accidentally reinterpret units, layouts, or a model's
-/// representation.  @c spatial_rank must equal the compile-time native rank.
-template <int Dim>
+/// Python-isomorphic semantic component contract.  Text fields remain package-defined, so the
+/// registry compares their exact bytes without maintaining a closed vocabulary. Optional
+/// unit/value_kind keep an explicit presence bit instead of conflating absent with empty.
 struct AuxiliaryComponentContract {
-  static_assert(Dim >= 1 && Dim <= 3, "AuxiliaryComponentContract supports dimensions 1, 2, and 3");
-
   std::string representation;
-  AuxiliaryCentering centering = AuxiliaryCentering::cell;
-  std::string unit;
+  std::string centering;
+  std::optional<std::string> unit;
   std::string layout;
-  AuxiliaryValueKind value_kind = AuxiliaryValueKind::scalar;
-  int value_components = 1;
-  int spatial_rank = Dim;
-  Index<Dim> halo{};
+  std::optional<std::string> value_kind;
 
   friend bool operator==(const AuxiliaryComponentContract&,
                          const AuxiliaryComponentContract&) = default;
 
   void validate() const {
-    if (representation.empty() || unit.empty() || layout.empty())
+    if (representation.empty() || centering.empty() || layout.empty())
       throw std::invalid_argument(
-          "auxiliary component contract requires representation, unit, and layout");
-    if (value_components < 1)
-      throw std::invalid_argument("auxiliary component contract requires positive component width");
-    if (spatial_rank != Dim)
+          "auxiliary component contract requires representation, centering, and layout");
+    if ((unit && unit->empty()) || (value_kind && value_kind->empty()))
       throw std::invalid_argument(
-          "auxiliary component contract rank differs from native dimension");
-    for (int axis = 0; axis < Dim; ++axis)
-      if (halo[axis] < 0)
-        throw std::invalid_argument("auxiliary component halo extent must be non-negative");
+          "auxiliary component optional unit/value kind must be non-empty when provided");
   }
 
   void serialize_exact(ExactContractBuilder& contract) const {
     validate();
-    contract.text("pops.auxiliary-component-contract")
+    contract.text("pops.provider-pack.component-contract")
         .scalar(std::uint32_t{1})
         .text(representation)
-        .scalar(centering)
-        .text(unit)
-        .text(layout)
-        .scalar(value_kind)
-        .scalar(value_components)
-        .scalar(spatial_rank);
+        .text(centering)
+        .presence(unit.has_value());
+    if (unit)
+      contract.text(*unit);
+    contract.text(layout).presence(value_kind.has_value());
+    if (value_kind)
+      contract.text(*value_kind);
+  }
+};
+
+/// Native allocation shape. This deliberately stays separate from the Python ComponentContract:
+/// semantic lowerings compare the five Python fields exactly, while native rank/halo requirements
+/// remain validated before allocation and publication.
+template <int Dim>
+struct AuxiliaryStorageShape {
+  static_assert(Dim >= 1 && Dim <= 3, "AuxiliaryStorageShape supports dimensions 1, 2, and 3");
+
+  int spatial_rank = Dim;
+  int value_components = 1;
+  Index<Dim> halo{};
+
+  friend bool operator==(const AuxiliaryStorageShape&, const AuxiliaryStorageShape&) = default;
+
+  void validate() const {
+    if (spatial_rank != Dim)
+      throw std::invalid_argument("auxiliary storage shape rank differs from native dimension");
+    if (value_components < 1)
+      throw std::invalid_argument("auxiliary storage shape requires positive component width");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (halo[axis] < 0)
+        throw std::invalid_argument("auxiliary storage shape halo extent must be non-negative");
+  }
+
+  void serialize_exact(ExactContractBuilder& contract) const {
+    validate();
+    contract.text("pops.auxiliary-storage-shape")
+        .scalar(std::uint32_t{1})
+        .scalar(spatial_rank)
+        .scalar(value_components);
     for (int axis = 0; axis < Dim; ++axis)
       contract.scalar(halo[axis]);
   }
@@ -176,18 +158,21 @@ struct AuxiliaryComponentContract {
 template <int Dim>
 struct AuxiliaryOutput {
   AuxiliaryComponentKey key;
-  AuxiliaryComponentContract<Dim> contract;
+  AuxiliaryComponentContract contract;
+  AuxiliaryStorageShape<Dim> shape;
   std::size_t slot = 0;
 
   void validate() const {
     key.validate();
     contract.validate();
+    shape.validate();
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.bytes(key.exact_key());
     contract.serialize_exact(exact);
+    shape.serialize_exact(exact);
     exact.scalar(static_cast<std::uint64_t>(slot));
   }
 };
@@ -198,17 +183,20 @@ struct AuxiliaryOutput {
 template <int Dim>
 struct AuxiliaryDependency {
   AuxiliaryComponentKey key;
-  AuxiliaryComponentContract<Dim> contract;
+  AuxiliaryComponentContract contract;
+  AuxiliaryStorageShape<Dim> shape;
 
   void validate() const {
     key.validate();
     contract.validate();
+    shape.validate();
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.bytes(key.exact_key());
     contract.serialize_exact(exact);
+    shape.serialize_exact(exact);
   }
 };
 
@@ -286,7 +274,8 @@ template <int Dim>
 struct AuxiliaryResolvedSlot {
   std::size_t slot = 0;
   AuxiliaryComponentKey key;
-  AuxiliaryComponentContract<Dim> contract;
+  AuxiliaryComponentContract contract;
+  AuxiliaryStorageShape<Dim> shape;
 };
 
 /// Host launch description for a generated/native provider.  It deliberately carries no Python

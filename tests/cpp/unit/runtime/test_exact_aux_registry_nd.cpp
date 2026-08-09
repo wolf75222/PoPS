@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -12,9 +13,7 @@
 namespace {
 
 using pops::ExactContractBuilder;
-using pops::PreparedProvider;
 using pops::PreparedProviderIdentity;
-using pops::runtime::system::AuxiliaryCentering;
 using pops::runtime::system::AuxiliaryComponentContract;
 using pops::runtime::system::AuxiliaryComponentKey;
 using pops::runtime::system::AuxiliaryDependency;
@@ -24,38 +23,45 @@ using pops::runtime::system::AuxiliaryEvaluationPolicy;
 using pops::runtime::system::AuxiliaryFreshness;
 using pops::runtime::system::AuxiliaryOutput;
 using pops::runtime::system::AuxiliaryProviderKind;
-using pops::runtime::system::AuxiliarySpaceKind;
-using pops::runtime::system::AuxiliaryValueKind;
+using pops::runtime::system::AuxiliaryStorageShape;
 using pops::runtime::system::ExactAuxiliaryRegistry;
 using pops::runtime::system::PreparedAuxiliaryProvider;
 
-template <int Dim>
-AuxiliaryComponentContract<Dim> contract(std::string layout = "compact") {
-  AuxiliaryComponentContract<Dim> result;
+inline AuxiliaryComponentContract contract(std::string layout = "compact") {
+  AuxiliaryComponentContract result;
   result.representation = "cell-average";
-  result.centering = AuxiliaryCentering::cell;
+  result.centering = "cell";
   result.unit = "unitless";
   result.layout = std::move(layout);
-  result.value_kind = AuxiliaryValueKind::scalar;
-  result.value_components = 1;
+  result.value_kind = "scalar";
+  return result;
+}
+
+template <int Dim>
+AuxiliaryStorageShape<Dim> shape() {
+  AuxiliaryStorageShape<Dim> result;
   result.spatial_rank = Dim;
+  result.value_components = 1;
   for (int axis = 0; axis < Dim; ++axis)
     result.halo[axis] = 1;
   return result;
 }
 
-inline AuxiliaryComponentKey key(std::string owner, std::string space, int component) {
-  return {std::move(owner), AuxiliarySpaceKind::auxiliary, std::move(space), component};
+inline AuxiliaryComponentKey key(std::string owner_qid, std::string space_kind,
+                                 std::string space_name, std::string component) {
+  return {std::move(owner_qid), std::move(space_kind), std::move(space_name), std::move(component)};
 }
 
 template <int Dim>
-AuxiliaryOutput<Dim> output(std::string owner, std::string space, int component, std::size_t slot) {
-  return {key(std::move(owner), std::move(space), component), contract<Dim>(), slot};
+AuxiliaryOutput<Dim> output(std::string owner_qid, std::string space_name, std::string component,
+                            std::size_t slot) {
+  return {key(std::move(owner_qid), "auxiliary", std::move(space_name), std::move(component)),
+          contract(), shape<Dim>(), slot};
 }
 
 template <int Dim>
 AuxiliaryDependency<Dim> dependency(const AuxiliaryOutput<Dim>& output) {
-  return {output.key, output.contract};
+  return {output.key, output.contract, output.shape};
 }
 
 template <int Dim>
@@ -115,13 +121,13 @@ void verifies_empty_and_compact_registry() {
   EXPECT_TRUE(empty.topological_order().empty());
 
   ExactAuxiliaryRegistry<Dim> registry;
-  registry.add(input<Dim>("input-a", output<Dim>("owner-a", "space-a", 0, 0)));
-  registry.add(input<Dim>("input-b", output<Dim>("owner-b", "space-b", 3, 1)));
+  registry.add(input<Dim>("input-a", output<Dim>("owner-a", "space-a", "0", 0)));
+  registry.add(input<Dim>("input-b", output<Dim>("owner-b", "space-b", "3", 1)));
   registry.seal();
   EXPECT_EQ(registry.provider_count(), 2U);
   EXPECT_EQ(registry.slot_count(), 2U);
-  EXPECT_EQ(registry.slot_of(key("owner-b", "space-b", 3)), 1U);
-  EXPECT_THROW(registry.add(input<Dim>("late", output<Dim>("late", "space", 0, 2))),
+  EXPECT_EQ(registry.slot_of(key("owner-b", "auxiliary", "space-b", "3")), 1U);
+  EXPECT_THROW(registry.add(input<Dim>("late", output<Dim>("late", "space", "0", 2))),
                std::logic_error);
 }
 
@@ -133,43 +139,46 @@ TEST(ExactAuxiliaryRegistryNd, EmptyAndCompactPacksAreRankGeneric) {
 
 template <int Dim>
 void verifies_structural_rejections() {
-  const auto first = output<Dim>("owner", "space", 0, 0);
+  const auto first = output<Dim>("owner", "space", "0", 0);
   ExactAuxiliaryRegistry<Dim> duplicate;
   duplicate.add(input<Dim>("first", first));
-  duplicate.add(input<Dim>("second", {first.key, first.contract, 1}));
+  duplicate.add(input<Dim>("second", {first.key, first.contract, first.shape, 1}));
   EXPECT_THROW(duplicate.seal(), std::invalid_argument);
 
   ExactAuxiliaryRegistry<Dim> sparse;
-  sparse.add(input<Dim>("sparse", output<Dim>("owner", "sparse", 0, 1)));
+  sparse.add(input<Dim>("sparse", output<Dim>("owner", "sparse", "0", 1)));
   EXPECT_THROW(sparse.seal(), std::invalid_argument);
 
   auto calls = std::make_shared<std::vector<std::string>>();
-  const auto left = output<Dim>("owner", "cycle", 0, 0);
-  const auto right = output<Dim>("owner", "cycle", 1, 1);
+  const auto left = output<Dim>("owner", "cycle", "0", 0);
+  const auto right = output<Dim>("owner", "cycle", "1", 1);
   ExactAuxiliaryRegistry<Dim> cyclic;
   cyclic.add(derived<Dim>("left", left, {dependency(right)}, calls));
   cyclic.add(derived<Dim>("right", right, {dependency(left)}, calls));
   EXPECT_THROW(cyclic.seal(), std::invalid_argument);
 
   ExactAuxiliaryRegistry<Dim> missing;
-  missing.add(derived<Dim>("missing", output<Dim>("owner", "missing", 0, 0),
-                           {{key("missing-owner", "missing-space", 3), contract<Dim>()}}, calls));
+  missing.add(derived<Dim>(
+      "missing", output<Dim>("owner", "missing", "0", 0),
+      {{key("missing-owner", "auxiliary", "missing-space", "3"), contract(), shape<Dim>()}},
+      calls));
   EXPECT_THROW(missing.seal(), std::invalid_argument);
 
   ExactAuxiliaryRegistry<Dim> mismatch;
-  mismatch.add(input<Dim>("source", output<Dim>("owner", "mismatch", 0, 0)));
-  auto wrong = contract<Dim>("different-layout");
-  mismatch.add(derived<Dim>("consumer", output<Dim>("owner", "mismatch", 1, 1),
-                            {{key("owner", "mismatch", 0), wrong}}, calls));
+  mismatch.add(input<Dim>("source", output<Dim>("owner", "mismatch", "0", 0)));
+  auto wrong = contract("different-layout");
+  mismatch.add(derived<Dim>("consumer", output<Dim>("owner", "mismatch", "1", 1),
+                            {{key("owner", "auxiliary", "mismatch", "0"), wrong, shape<Dim>()}},
+                            calls));
   EXPECT_THROW(mismatch.seal(), std::invalid_argument);
 
-  auto invalid_rank = contract<Dim>();
+  auto invalid_rank = shape<Dim>();
   invalid_rank.spatial_rank = Dim + 1;
   EXPECT_THROW((PreparedAuxiliaryProvider<Dim>{
                    "invalid-rank",
                    AuxiliaryProviderKind::input,
                    {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-                   {{key("owner", "bad-rank", 0), invalid_rank, 0}},
+                   {{key("owner", "auxiliary", "bad-rank", "0"), contract(), invalid_rank, 0}},
                    {}}),
                std::invalid_argument);
 }
@@ -183,8 +192,8 @@ TEST(ExactAuxiliaryRegistryNd, RejectsDuplicateCycleMissingMismatchSparseAndRank
 template <int Dim>
 void verifies_topology_and_transaction() {
   auto calls = std::make_shared<std::vector<std::string>>();
-  const auto seed = output<Dim>("owner", "data", 0, 0);
-  const auto result = output<Dim>("owner", "data", 1, 1);
+  const auto seed = output<Dim>("owner", "data", "0", 0);
+  const auto result = output<Dim>("owner", "data", "1", 1);
   ExactAuxiliaryRegistry<Dim> registry;
   registry.add(input<Dim>("seed", seed));
   registry.add(derived<Dim>("derive", result, {dependency(seed)}, calls));
@@ -243,27 +252,41 @@ TEST(ExactAuxiliaryRegistryNd, RejectsInvalidProviderClassAndHaloBeforePublicati
                    "derived-without-launch",
                    AuxiliaryProviderKind::derived,
                    {AuxiliaryEvaluationEvent::before_residual, AuxiliaryFreshness::evaluation},
-                   {output<2>("owner", "derived", 0, 0)},
+                   {output<2>("owner", "derived", "0", 0)},
                    {}}),
                std::invalid_argument);
   EXPECT_THROW((PreparedAuxiliaryProvider<2>{
                    "input-with-launch",
                    AuxiliaryProviderKind::input,
                    {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-                   {output<2>("owner", "input", 0, 0)},
+                   {output<2>("owner", "input", "0", 0)},
                    {},
                    PreparedAuxiliaryProvider<2>::launcher_type(RecordingNativeLaunch<2>{calls})}),
                std::invalid_argument);
 
-  auto bad_halo = contract<3>();
+  auto bad_halo = shape<3>();
   bad_halo.halo[2] = -1;
   EXPECT_THROW((PreparedAuxiliaryProvider<3>{
                    "negative-halo",
                    AuxiliaryProviderKind::input,
                    {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-                   {{key("owner", "halo", 0), bad_halo, 0}},
+                   {{key("owner", "auxiliary", "halo", "0"), contract(), bad_halo, 0}},
                    {}}),
                std::invalid_argument);
+}
+
+TEST(ExactAuxiliaryRegistryNd, MirrorsOptionalProviderPackContractFields) {
+  AuxiliaryComponentContract absent_optional_fields{"cell-average", "cell", std::nullopt, "compact",
+                                                    std::nullopt};
+  EXPECT_NO_THROW(absent_optional_fields.validate());
+
+  auto empty_unit = absent_optional_fields;
+  empty_unit.unit = "";
+  EXPECT_THROW(empty_unit.validate(), std::invalid_argument);
+
+  auto empty_value_kind = absent_optional_fields;
+  empty_value_kind.value_kind = "";
+  EXPECT_THROW(empty_value_kind.validate(), std::invalid_argument);
 }
 
 }  // namespace

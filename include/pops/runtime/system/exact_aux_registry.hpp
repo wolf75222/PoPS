@@ -189,14 +189,16 @@ class ExactAuxiliaryRegistry final {
     for (std::size_t provider_index = 0; provider_index < providers_.size(); ++provider_index) {
       const provider_type& provider = providers_[provider_index];
       for (const AuxiliaryOutput<Dim>& output : provider.outputs())
-        resolved_outputs_[provider_index].push_back({output.slot, output.key, output.contract});
+        resolved_outputs_[provider_index].push_back(
+            {output.slot, output.key, output.contract, output.shape});
       for (const AuxiliaryDependency<Dim>& dependency : provider.dependencies()) {
         dependency.validate();
         const auto producer = output_by_key.find(dependency.key.exact_key());
         if (producer == output_by_key.end())
           throw std::invalid_argument(
               "auxiliary provider dependency has no registered producer for its component key");
-        if (!(producer->second.output.contract == dependency.contract))
+        if (!(producer->second.output.contract == dependency.contract) ||
+            !(producer->second.output.shape == dependency.shape))
           throw std::invalid_argument(
               "auxiliary provider dependency contract differs from the registered producer");
         const std::size_t producer_index = producer->second.provider_index;
@@ -207,7 +209,7 @@ class ExactAuxiliaryRegistry final {
               "auxiliary provider declares the same producer dependency more than once");
         dependency_providers_[provider_index].push_back(producer_index);
         resolved_dependencies_[provider_index].push_back(
-            {producer->second.output.slot, dependency.key, dependency.contract});
+            {producer->second.output.slot, dependency.key, dependency.contract, dependency.shape});
       }
     }
 
