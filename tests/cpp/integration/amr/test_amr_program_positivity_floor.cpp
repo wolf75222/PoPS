@@ -1,7 +1,7 @@
 // End-to-end positivity-floor coverage through the installed AMR Program.
 //
-// The local coarse/fine interpolation primitive is covered separately by test_cf_interface.  This
-// test deliberately starts from the public AmrSystem facade, materializes a genuine two-level
+// Exact-ranked coarse/fine interpolation is covered by test_prepared_amr_ghost_fill. This test
+// deliberately starts from the public AmrSystem facade, materializes a genuine two-level
 // hierarchy, installs the same explicit Program used by compiled AMR tests, and advances it through
 // AmrSystem::step.  The comparison with an otherwise identical floor-disabled run proves that the
 // block's positivity option reaches the face reconstruction evaluated by ProgramGraph on the refined

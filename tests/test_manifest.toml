@@ -96,16 +96,6 @@ sources = ["tests/cpp/integration/amr/test_amr_system_twoblock.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_cf_interface"
-sources = ["tests/cpp/integration/amr/test_cf_interface.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_flux_register"
-sources = ["tests/cpp/integration/amr/test_flux_register.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_refinement"
 sources = ["tests/cpp/integration/amr/test_refinement.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -656,11 +646,6 @@ sources = ["tests/cpp/unit/mesh/test_box_array.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
-name = "test_coverage_mask"
-sources = ["tests/cpp/unit/mesh/test_coverage_mask.cpp"]
-labels = ["unit", "mesh", "fast"]
-
-[[cpp.suite]]
 name = "test_dispatch_tags"
 sources = ["tests/cpp/unit/mesh/test_dispatch_tags.cpp"]
 labels = ["unit", "mesh", "fast"]
@@ -816,11 +801,6 @@ name = "test_mpi_prepared_amr_ghost_fill"
 sources = ["tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"]
 labels = ["backend", "mpi", "amr", "medium"]
 mpi_nproc = [3]
-
-[[cpp.suite]]
-name = "test_patch_range"
-sources = ["tests/cpp/unit/mesh/test_patch_range.cpp"]
-labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
 name = "test_physical_bc"

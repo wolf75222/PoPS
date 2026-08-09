@@ -1705,23 +1705,22 @@ state and prepared transfer/reflux services only. The umbrella
 [`amr_reflux_mf.hpp`](../include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp) aggregates those
 spatial helpers; it is not an alternate stepper. Their named types live in
 [`amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
-`PatchRange`
-(coarse footprint $[I_0..I_1]\times[J_0..J_1]$ of a fine patch), `FluxRegister` (a global-index
-buffer, accumulation `add`/`set` then `gather`), `CoverageMask` (shadowed cells), and
-`CoarseFineInterface::route_reflux_integrated` (bordering deposit from the Program-owned ledger).
-The inter-level transfers `average_down` (conservative average over $r\times r$ blocks),
+`PatchRange<Dim>` (the exact-ranked parent footprint of a fine patch). Reflux is represented by
+the transactional `FaceFluxLedger<Dim>` and metric reconciliation; prepared AMR ghost fill owns
+the corresponding coarse/fine coverage and interpolation. The inter-level transfers `average_down`
+(conservative average over the product of the per-axis refinement ratios),
 `interpolate` (piecewise-constant injection) and `parallel_copy` are in
 [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp). The per-cell fine ghost goes through
 `fill_cf_ghost_cell` (space + time interpolation), shared by the three variants `mf_fill_fine_ghosts_*`.
 
-**Constraints / remarks.** The spatial ratio remains fixed at $r_x = 2$: `PatchRange` uses the
-historical arithmetic $(hi-1)/2$ for the upper bound, which is not `Box2D::coarsen` (floor of both
-bounds), and assumes aligned patches (even lo, odd hi). The order of operations is critical:
+**Constraints / remarks.** Every level transition carries an explicit, possibly anisotropic,
+`RefinementRatio<Dim>` and validates alignment before transfer. The order of operations is critical:
 coarse/fine fluxes must be captured at the graph-authored stage points; at each catch-up, reflux
 precedes `average_down`; a rejected attempt publishes neither state nor flux. Validation:
 `test_refinement` (conservative average_down + interpolate), `test_amr_hierarchy` (coarse + nested
-fine + ghost interpolation), `test_flux_register` and `test_cf_interface` (register indexing,
-coverage and routing), `test_program_reflux_ledger` (exact Program coefficients and transactional
+fine + ghost interpolation), `test_nd_amr_consumers` (exact-ranked parent footprints and interfaces),
+`test_prepared_amr_ghost_fill` (coverage-aware coarse/fine ghost interpolation),
+`test_nd_flux_ledger` and `test_program_reflux_ledger` (exact Program coefficients and transactional
 ledger), `test_amr_program_diffusion` (diffusive flux crossing a coarse/fine interface),
 `test_amr_program_positivity_floor` (accepted refined trajectory through the Program),
 `test_amr_history_ring` (recursive clock/catch-up ordering and rollback), and `test_amr_diagnostics`
@@ -1735,35 +1734,33 @@ two sides are fine and the balance is already conservative; (b) the correction m
 parent box when the coarse is itself multi-box or distributed across several MPI ranks.
 
 **Formula / discretization.** The multi-patch reflux is the same operator as section 17, but filtered
-by a coverage mask. For a bordering coarse cell $(I,J)$ adjacent to the face of a patch $g$,
-the correction is poured only if $(I,J)$ is not shadowed by any fine patch:
+by the prepared fine-coverage relation. For a bordering coarse cell $\mathbf{i}$ adjacent to the
+face of a patch $g$ on axis $a$, the correction is poured only if $\mathbf{i}$ is not shadowed by
+any fine patch:
 
-$$U_c(I,J) \mathrel{-}= \mathbb{1}\big[\lnot\,\mathrm{covered}(I,J)\big]\cdot\frac{\bar F_f - F_c\,\Delta t}{\Delta x}$$
+$$U_c(\mathbf{i}) \mathrel{-}= \mathbb{1}\big[\lnot\,\mathrm{covered}(\mathbf{i})\big]\cdot\frac{\bar F_{f,a} - F_{c,a}\,\Delta t}{\Delta x_a}$$
 
-where $\mathrm{covered}(I,J)$ tests membership in the coarse footprint `PatchRange` of any fine
+where $\mathrm{covered}(\mathbf{i})$ tests membership in the coarse footprint `PatchRange<Dim>` of any fine
 patch. The mask is built on the global BoxArray (all patches, known to all ranks), so independent
 of the MPI distribution. The flux register has a global indexing: each rank fills its local
 contributions (zero elsewhere), then $\mathrm{buf} \leftarrow \sum_{\text{rangs}} \mathrm{buf}$ by
 `all_reduce_sum_inplace`; in serial the all_reduce is the identity, so bit-for-bit identical to the mono-rank.
 
 ```
-function reflux_multipatch(coarse_level, fine_boxarray_global, registers, distribution):
-    # masque sur le box_array global -> correct sous n'importe quelle distribution MPI
-    cfi = CoarseFineInterface(coarse_region, fine_boxarray_global)
+function reflux_multipatch<Dim>(coarse_level, fine_boxarray_global, registers, distribution):
+    # coverage on the global box array -> correct under every MPI distribution
+    coverage = prepared_cf_schedule(coarse_region, fine_boxarray_global)
         for g in fine_boxarray_global:
-            cfi.cmask.mark(PatchRange(g).box())        # empreinte grossiere de chaque patch
+            coverage.register(PatchRange<Dim>(g).parent_footprint())
 
-    flux_register = FluxRegister(coarse_region, nc)    # index global, buf=0
+    ledger = TransactionalFaceFluxLedger<Dim>()         # fragments identifies globally
     for patch g OWNED-LOCALLY by this rank:
-        # route gauche/droite (x) puis bas/haut (y), uniquement sur cellules non couvertes
-        for J in g.J0..g.J1, k in 0..nc:
-            if not cfi.covered(g.I0-1, J): ref.add(g.I0-1, J, -(fL - cL*dt)/dx)
-            if not cfi.covered(g.I1+1, J): ref.add(g.I1+1, J, +(fR - cR*dt)/dx)
-        for I in g.I0..g.I1, k in 0..nc:
-            if not cfi.covered(I, g.J0-1): ref.add(I, g.J0-1, -(fB - cB*dt)/dy)
-            if not cfi.covered(I, g.J1+1): ref.add(I, g.J1+1, +(fT - cT*dt)/dy)
+        for axis a in 0..Dim-1, side in {lower, upper}, tangential index, component k:
+            neighbour = coarse_cell_adjacent_to(g, a, side, tangential index)
+            if not coverage.covers(neighbour):
+                ledger.accumulate(face_fragment(g, a, side, k), local_flux_contribution(g, a, side, k))
 
-    flux_register.gather()                             # all_reduce_sum sur tous les rangs
+    reconcile_metric_reflux_collectively(ledger)       # contribution exacte de tous les rangs
 
     if coarse REPLICATED (default):
         apply correction locally (chaque rang a la copie complete)
@@ -1772,12 +1769,9 @@ function reflux_multipatch(coarse_level, fine_boxarray_global, registers, distri
         average_down zone couverte via mf_average_down_mb / parallel_copy
 ```
 
-**Code.** The coverage-aware types live in
-[`numerics/time/amr_patch_range.hpp`](../include/pops/numerics/time/amr/levels/amr_patch_range.hpp):
-`CoverageMask` (built on the coarse region, `mark` marks the intersected footprint, `covered` is
-bounded outside the region), `CoarseFineInterface` (assembles the mask on `fine_ba.size()` global patches and
-exposes `route_reflux`, a named function templated on an `EdgeStrip`-shaped register hence safe under nvcc),
-`FluxRegister::gather` (inter-rank sum by `all_reduce_sum_inplace`). The MPI routing of the distributed
+**Code.** The exact-ranked coverage and parent footprints are prepared with the hierarchy, and
+[`metric_reflux.hpp`](../include/pops/amr/reflux/metric_reflux.hpp) reconciles a
+`TransactionalFaceFluxLedger<Dim>` by authenticated, collectively complete face fragments. The MPI routing of the distributed
 coarse goes through `parallel_copy` in
 [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp) (general redistribution between two MultiFab
 on the same domain with different decompositions: local copies via `BoxHash::query`, then
@@ -1787,10 +1781,11 @@ prepared hierarchy manifest carries the parent ownership policy into `AmrRuntime
 transfer/reflux services. Without that explicit policy, a de-replicated coarse would revert to
 replicated routing (`mf_find_box` instead of `parallel_copy`).
 
-**Constraints / remarks.** Without a coverage mask, the fine-fine joint would be refluxed twice, hence
-non-conservation: the mask is the central invariant of the correction. The register must be filled locally
-(zero elsewhere) before `gather`, otherwise the all_reduce double-counts. Bit-for-bit reproducibility requires a
-deterministic enumeration order of the `parallel_copy` jobs (spatial hash on the source, sorted candidates).
+**Constraints / remarks.** Without prepared coverage, the fine-fine joint would be refluxed twice, hence
+non-conservation: the coverage relation is the central invariant of the correction. Each rank emits only its
+owned face fragments; collective ledger reconciliation rejects incomplete or duplicate coverage. Bit-for-bit
+reproducibility requires a deterministic enumeration order of the `parallel_copy` jobs (spatial hash on the
+source, sorted candidates).
 That job schedule is MEMOIZED per layout pair (dst BoxArray/DistributionMapping, src BoxArray/DistributionMapping)
 by `CopyScheduleCache` in [`mesh/copy_schedule.hpp`](../include/pops/mesh/layout/copy_schedule.hpp): the cache
 lives on the dst `MultiFab` (dropped when regrid move-assigns a fresh dst) but each entry is keyed on a src-layout

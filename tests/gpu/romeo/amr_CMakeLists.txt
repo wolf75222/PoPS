@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(amrgpu CXX)
 find_package(Kokkos REQUIRED)
-# Test AMR sur DONNEES DE CHAMP (kernel de registre de flux).
-# Le clustering / la hierarchie (test_amr_hierarchy, test_regrid) sont de la METADATA hote (box lists,
-# predicats std::function) : hors device, non compiles ici.
-foreach(t test_flux_register)
+# Exact-ranked AMR reflux ledger. The staged source is the final ND consumer,
+# not the retired 2-D implementation.
+foreach(t test_nd_flux_ledger)
   add_executable(${t} ${t}.cpp)
   target_include_directories(${t} PRIVATE ${POPS_INCLUDE})
   target_compile_definitions(${t} PRIVATE POPS_HAS_KOKKOS)

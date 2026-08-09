@@ -470,10 +470,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_finite_volume
   test_refinement
   test_amr_tensor_fac_provider
-  test_flux_register
-  test_coverage_mask
-  test_patch_range
-  test_cf_interface
   test_amr_diagnostics
   test_poisson_smoother
   test_poisson_smoother_cache

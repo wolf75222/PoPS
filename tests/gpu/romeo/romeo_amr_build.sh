@@ -7,6 +7,6 @@ cmake -S sim5 -B sbuild5 -DCMAKE_CXX_COMPILER="$PWD/kinstall/bin/nvcc_wrapper" \
   || { echo CFG_FAIL; tail -40 s5cfg.log; exit 1; }
 cmake --build sbuild5 -j 8 > s5build.log 2>&1 || { echo BUILD_FAIL; tail -50 s5build.log; exit 1; }
 echo P5_BUILD_OK
-for t in test_flux_register; do
+for t in test_nd_flux_ledger; do
   if ./sbuild5/$t >/dev/null 2>&1; then echo "[GPU ok] $t"; else echo "[GPU FAIL] $t (exit $?)"; fi
 done

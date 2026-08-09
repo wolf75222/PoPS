@@ -743,7 +743,8 @@ jobs:
             test_box2d test_fab2d test_box_array test_multifab test_reduce \
             test_fill_boundary test_physical_bc test_geometry test_dense_eig \
             test_refinement test_amr_hierarchy test_cluster test_regrid \
-            test_flux_register test_coverage_mask test_cf_interface \
+            test_nd_amr_consumers test_prepared_amr_ghost_fill test_nd_flux_ledger \
+            test_program_reflux_ledger \
             test_poisson_smoother test_geometric_mg test_poisson_fft \
             test_elliptic_operator
       - name: Analyse CodeQL
