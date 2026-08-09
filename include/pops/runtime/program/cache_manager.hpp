@@ -58,9 +58,9 @@ bool same_cache_value_layout(const MultiFab<Dim>& left, const MultiFab<Dim>& rig
          left.ghosts() == right.ghosts();
 }
 
-/// Copy valid cells and ghosts into persistent storage.  Every local Fab is launched before the
-/// single fence so Kokkos device builds keep this a batched native operation.  Reallocation occurs
-/// only when the exact decomposition/component/ghost contract changes.
+/// Copy valid cells and ghosts into persistent storage. Kokkos performs the transfer in the field's
+/// native memory space; reallocation occurs only when the exact decomposition/component/ghost
+/// contract changes.
 template <int Dim>
 void copy_cache_value_into(MultiFab<Dim>& destination, const MultiFab<Dim>& source) {
   if (!same_cache_value_layout(destination, source))
@@ -71,7 +71,7 @@ void copy_cache_value_into(MultiFab<Dim>& destination, const MultiFab<Dim>& sour
     const std::size_t source_local = source.local_index_of(global);
     if (source_local == MultiFab<Dim>::not_local)
       throw std::logic_error("cache value copy found inconsistent local ownership");
-    destination.fab(local) = source.fab(source_local);
+    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(source_local).storage());
   }
 }
 
