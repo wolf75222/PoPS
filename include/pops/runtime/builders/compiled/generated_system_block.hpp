@@ -84,7 +84,7 @@ concept GeneratedSourceModel =
     requires(const Model& model, const typename Model::State& state,
              const ProviderValues<provider_count_for<Model, Dim>()>& providers) {
       { model.source(state, providers) } -> std::same_as<typename Model::State>;
-};
+    };
 
 template <class Model>
 concept GeneratedEllipticRhsModel =
@@ -187,8 +187,8 @@ struct MaterializeSourceFrequency {
   FieldView<Real, Dim> value{};
 
   POPS_HD void operator()(const Index<Dim>& index) const {
-    value(index) = model.source_frequency(
-        load_state<Model>(state, index), load_provider_values<provider_count>(providers, index));
+    value(index) = model.source_frequency(load_state<Model>(state, index),
+                                          load_provider_values<provider_count>(providers, index));
   }
 };
 
@@ -201,8 +201,8 @@ struct MaterializeStabilityDt {
   FieldView<Real, Dim> value{};
 
   POPS_HD void operator()(const Index<Dim>& index) const {
-    value(index) = model.stability_dt(
-        load_state<Model>(state, index), load_provider_values<provider_count>(providers, index));
+    value(index) = model.stability_dt(load_state<Model>(state, index),
+                                      load_provider_values<provider_count>(providers, index));
   }
 };
 
@@ -271,9 +271,10 @@ void copy_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
 }
 
 template <int Dim, class Model>
-MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
-                                 const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
-                                 const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan) {
+MultiFab<Dim> materialize_source(
+    const Model& model, const MultiFab<Dim>& state,
+    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan) {
   constexpr int provider_count = provider_count_for<Model, Dim>();
   if constexpr (provider_count > 0) {
     if (provider_storage == nullptr)
@@ -287,13 +288,12 @@ MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
     MultiFab<Dim> status(state.layout(), state.distribution(), state.local_rank(), 1,
                          state.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
-      for_each_cell(
-          state.box(local),
-          MaterializeSource<Dim, Model>{
-              model, state.fab(local).view(),
-              runtime::system::bind_provider_storage_view<Dim, provider_count>(plan,
-                                                                                provider_storage, local),
-              candidate.fab(local).view(), status.fab(local).view()});
+      for_each_cell(state.box(local),
+                    MaterializeSource<Dim, Model>{
+                        model, state.fab(local).view(),
+                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                            plan, provider_storage, local),
+                        candidate.fab(local).view(), status.fab(local).view()});
     if (reduce_max(status) != Real(0))
       throw std::runtime_error("generated source produced a non-finite component");
   } else {
@@ -312,9 +312,9 @@ MultiFab<Dim> materialize_masked_source(
   const MultiFab<Dim>& active = embedded.active_mask();
   require_same_layout(state, active, 1, "generated embedded-boundary active mask");
   for (std::size_t local = 0; local < candidate.local_size(); ++local)
-    for_each_cell(candidate.box(local),
-                  ApplyActiveMask<Dim>{candidate.fab(local).view(), active.fab(local).view(),
-                                       Model::n_vars});
+    for_each_cell(
+        candidate.box(local),
+        ApplyActiveMask<Dim>{candidate.fab(local).view(), active.fab(local).view(), Model::n_vars});
   device_fence();
   return candidate;
 }
@@ -356,53 +356,41 @@ void assemble_masked_residual_with_plan(
     MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
                             residual.ncomp(), residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
-      masked.assemble_residual(
-          state.fab(local),
-              runtime::system::bind_provider_storage_view<Dim, provider_count>(plan,
-                                                                                provider_storage, local),
-          active_cells.fab(local), candidate.fab(local), omission);
+      masked.assemble_residual(state.fab(local),
+                               runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                                   plan, provider_storage, local),
+                               active_cells.fab(local), candidate.fab(local), omission);
     copy_valid(candidate, residual);
   }
 }
 
-template <class Model, class EmbeddedOperator>
+template <int Dim, class Model, class EmbeddedOperator>
 void assemble_embedded_residual_with_plan(
-    const EmbeddedOperator& embedded_operator, const MultiFab<2>& state,
-    const runtime::system::AuxiliaryStorageGroups<2>* provider_storage,
-    const runtime::system::ResolvedAuxiliaryConsumerPlan<2>* plan,
-    const MultiFab<2>& active_cells, const MultiFab<2>& inverse_volume_fraction,
-    MultiFab<2>& residual, nd::BoundaryFaceOmission<2> omission) {
+    const EmbeddedOperator& embedded_operator, const MultiFab<Dim>& state,
+    const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage,
+    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+    const MultiFab<Dim>& active_cells, const MultiFab<Dim>& inverse_volume_fraction,
+    MultiFab<Dim>& residual, nd::BoundaryFaceOmission<Dim> omission) {
   constexpr int provider_count = flux_provider_count<Model>;
   if constexpr (provider_count == 0) {
     embedded_operator.assemble_residual(state, active_cells, inverse_volume_fraction, residual,
                                         omission);
   } else {
-    MultiFab<2> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
-                          residual.ncomp(), residual.ghosts());
+    MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
+                            residual.ncomp(), residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       embedded_operator.assemble_residual(
-          state.fab(local), runtime::system::bind_provider_storage_view<2, provider_count>(
-                                plan, provider_storage, local),
-          active_cells.fab(local), inverse_volume_fraction.fab(local), candidate.fab(local), omission);
+          state.fab(local),
+          runtime::system::bind_provider_storage_view<Dim, provider_count>(plan, provider_storage,
+                                                                           local),
+          active_cells.fab(local), inverse_volume_fraction.fab(local), candidate.fab(local),
+          omission);
     copy_valid(candidate, residual);
   }
 }
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
           class Reconstruction, class Numerical, class PrepareState>
-  requires(Dim != 2)
-EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
-    const Model&, const Metric&, const Reconstruction&, const Numerical&, Real, PrepareState,
-    const runtime::system::AuxiliaryStorageGroups<Dim>*,
-    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>*,
-    nd::BoundaryFaceOmission<Dim>,
-    typename SystemBlockClosures<Dim>::EmbeddedResidual) {
-  return {};
-}
-
-template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
-          class Reconstruction, class Numerical, class PrepareState>
-  requires(Dim == 2)
 EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
     const Model& model, const Metric& metric, const Reconstruction& reconstruction,
     const Numerical& numerical, Real positivity_floor, PrepareState prepare_state,
@@ -410,13 +398,13 @@ EmbeddedResidualFamily<Dim> make_cut_cell_residual_family(
     const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan,
     nd::BoundaryFaceOmission<Dim> omission,
     typename SystemBlockClosures<Dim>::EmbeddedResidual source) {
-  auto embedded_operator = nd::prepare_embedded_boundary_operator<
-      Model, Metric, Reconstruction, Numerical, Variables>(model, metric, reconstruction, numerical,
-                                                           positivity_floor);
+  auto embedded_operator =
+      nd::prepare_embedded_boundary_operator<Model, Metric, Reconstruction, Numerical, Variables>(
+          model, metric, reconstruction, numerical, positivity_floor);
   auto flux = [embedded_operator, prepare_state, provider_storage, provider_plan, omission](
                   MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
     prepare_state(state, nullptr);
-    assemble_embedded_residual_with_plan<Model>(
+    assemble_embedded_residual_with_plan<Dim, Model>(
         embedded_operator, state, provider_storage, provider_plan, embedded.active_mask(),
         embedded.inverse_volume_fraction(), residual, omission);
   };
@@ -436,11 +424,12 @@ Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
   }
   MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
   for (std::size_t local = 0; local < state.local_size(); ++local)
-    for_each_cell(state.box(local), MaterializeMaximumSpeed<Dim, Model>{
-                                        model, state.fab(local).view(),
-                                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                            plan, provider_storage, local),
-                                        values.fab(local).view()});
+    for_each_cell(state.box(local),
+                  MaterializeMaximumSpeed<Dim, Model>{
+                      model, state.fab(local).view(),
+                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                          plan, provider_storage, local),
+                      values.fab(local).view()});
   const Real result = reduce_max(values);
   if (!std::isfinite(result) || result < Real(0))
     throw std::runtime_error("generated model produced an invalid maximum speed");
@@ -478,7 +467,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     if (request.provider_storage == nullptr)
       throw std::invalid_argument("generated System block requires accepted provider storage");
   } else if (request.provider_plan != nullptr || request.provider_storage != nullptr) {
-    throw std::invalid_argument("provider-free generated System block cannot retain provider state");
+    throw std::invalid_argument(
+        "provider-free generated System block cannot retain provider state");
   }
 
   Extent<Dim> ghosts{};
@@ -498,8 +488,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   auto prepare_state = [provider_storage, provider_plan, geometry, topology, ghosts](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
     const auto state_schedule = HaloSchedule<Dim>(
-        state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts, topology,
-        state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
+        state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
+        topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
     fill_boundary(state, state_schedule);
     if (provider_storage != nullptr) {
       runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
@@ -522,8 +512,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       else
         spatial.materialize_face_fluxes(
             state.fab(local),
-        runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
-            provider_plan, provider_storage, local),
+            runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
+                provider_plan, provider_storage, local),
             faces[local]);
       if (boundary != nullptr)
         boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
@@ -531,8 +521,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     spatial.assemble_residual_from_face_fluxes(faces, residual);
   };
 
-  auto full = [flux, model, provider_storage, provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                                       const PreparedHyperbolicBoundary<Dim>* boundary) {
+  auto full = [flux, model, provider_storage, provider_plan](
+                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                  const PreparedHyperbolicBoundary<Dim>* boundary) {
     MultiFab<Dim> candidate(residual.layout(), residual.distribution(), residual.local_rank(),
                             residual.ncomp(), residual.ghosts());
     flux(state, candidate, boundary);
@@ -540,13 +531,15 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     saxpy(candidate, Real(1), source);
     copy_valid(candidate, residual);
   };
-  auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual) {
-    MultiFab<Dim> candidate = materialize_source<Dim>(model, state, provider_storage, provider_plan);
+  auto source = [model, provider_storage, provider_plan](MultiFab<Dim>& state,
+                                                         MultiFab<Dim>& residual) {
+    MultiFab<Dim> candidate =
+        materialize_source<Dim>(model, state, provider_storage, provider_plan);
     copy_valid(candidate, residual);
   };
   typename SystemBlockClosures<Dim>::EmbeddedResidual embedded_source =
       [model, provider_storage, provider_plan](MultiFab<Dim>& state, MultiFab<Dim>& residual,
-                         const auto& embedded) {
+                                               const auto& embedded) {
         MultiFab<Dim> candidate =
             materialize_masked_source<Dim>(model, state, provider_storage, provider_plan, embedded);
         copy_valid(candidate, residual);
@@ -560,18 +553,18 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     physical_omission.upper[axis] = !periodic;
   }
   auto masked_operator =
-      nd::prepare_masked_cartesian_operator<
-          Dim, Model, std::remove_cvref_t<decltype(spatial.metric())>, Reconstruction, Numerical,
-          Variables>(
+      nd::prepare_masked_cartesian_operator<Dim, Model,
+                                            std::remove_cvref_t<decltype(spatial.metric())>,
+                                            Reconstruction, Numerical, Variables>(
           model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor);
-  auto staircase_flux =
-      [masked_operator, prepare_state, provider_storage, provider_plan, physical_omission](
-          MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
-        prepare_state(state, nullptr);
-        assemble_masked_residual_with_plan<Dim, Model>(
-            masked_operator, state, provider_storage, provider_plan, embedded.active_mask(),
-            residual, physical_omission);
-      };
+  auto staircase_flux = [masked_operator, prepare_state, provider_storage, provider_plan,
+                         physical_omission](MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                                            const auto& embedded) {
+    prepare_state(state, nullptr);
+    assemble_masked_residual_with_plan<Dim, Model>(masked_operator, state, provider_storage,
+                                                   provider_plan, embedded.active_mask(), residual,
+                                                   physical_omission);
+  };
 
   PreparedSystemBlock<Dim> result;
   result.provider_identity = "pops.generated.cartesian.nd/" + std::to_string(Dim) + "/" +
@@ -653,10 +646,11 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                            state.ghosts());
       for (std::size_t local = 0; local < state.local_size(); ++local)
         for_each_cell(state.box(local),
-                      MaterializeSourceFrequency<Dim, Model>{model, state.fab(local).view(),
-                                                             runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                                                 provider_plan, provider_storage, local),
-                                                             values.fab(local).view()});
+                      MaterializeSourceFrequency<Dim, Model>{
+                          model, state.fab(local).view(),
+                          runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                              provider_plan, provider_storage, local),
+                          values.fab(local).view()});
       const Real frequency = reduce_max(values);
       if (!std::isfinite(frequency) || frequency < Real(0))
         throw std::runtime_error("generated source frequency is invalid");
@@ -672,10 +666,11 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                            state.ghosts());
       for (std::size_t local = 0; local < state.local_size(); ++local)
         for_each_cell(state.box(local),
-                      MaterializeStabilityDt<Dim, Model>{model, state.fab(local).view(),
-                                                         runtime::system::bind_provider_storage_view<Dim, provider_count>(
-                                                             provider_plan, provider_storage, local),
-                                                         values.fab(local).view()});
+                      MaterializeStabilityDt<Dim, Model>{
+                          model, state.fab(local).view(),
+                          runtime::system::bind_provider_storage_view<Dim, provider_count>(
+                              provider_plan, provider_storage, local),
+                          values.fab(local).view()});
       const Real dt = reduce_min(values);
       if (!std::isfinite(dt) || !(dt > Real(0)))
         throw std::runtime_error("generated stability dt is invalid");
