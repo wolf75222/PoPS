@@ -866,16 +866,26 @@ class TensorCompositeFac {
       for (ScratchPatch& patch : scratch) {
         const Index<2>& owner = child->binding.solution->distribution().owner(patch.fine_patch);
         const int root = static_cast<int>(child->binding.solution->rank_space().linear_rank(owner));
-        if (lane->rank() == root) {
-          patch.restricted.copy_to_host(*patch.restricted_host);
-          for (std::size_t element = 0; element < patch.broadcast_buffer.size(); ++element)
-            patch.broadcast_buffer[element] = (*patch.restricted_host)(element);
+        long packing_failure = 0;
+        try {
+          if (!patch.restricted_host ||
+              patch.broadcast_buffer.size() >
+                  static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            throw std::overflow_error(
+                "rank-two tensor restriction has an invalid broadcast allocation");
+          if (lane->rank() == root) {
+            patch.restricted.copy_to_host(*patch.restricted_host);
+            for (std::size_t element = 0; element < patch.broadcast_buffer.size(); ++element)
+              patch.broadcast_buffer[element] = (*patch.restricted_host)(element);
+          }
+        } catch (...) {
+          packing_failure = 1;
         }
+        if (all_reduce_max(packing_failure, lane->communicator()) != 0)
+          throw std::runtime_error(
+              "rank-two tensor replicated restriction packing failed collectively");
 #ifdef POPS_HAS_MPI
         if (lane->size() > 1) {
-          if (patch.broadcast_buffer.size() >
-              static_cast<std::size_t>(std::numeric_limits<int>::max()))
-            throw std::overflow_error("rank-two tensor restriction exceeds MPI int count");
           const int code = MPI_Bcast(patch.broadcast_buffer.data(),
                                      static_cast<int>(patch.broadcast_buffer.size()), MPI_DOUBLE,
                                      root, lane->native_handle());
@@ -884,20 +894,28 @@ class TensorCompositeFac {
                 "rank-two tensor replicated restriction broadcast failed collectively");
         }
 #endif
-        if (lane->rank() != root) {
-          for (std::size_t element = 0; element < patch.broadcast_buffer.size(); ++element)
-            (*patch.restricted_host)(element) = patch.broadcast_buffer[element];
-          patch.restricted.copy_from_host(*patch.restricted_host);
+        long publication_failure = 0;
+        try {
+          if (lane->rank() != root) {
+            for (std::size_t element = 0; element < patch.broadcast_buffer.size(); ++element)
+              (*patch.restricted_host)(element) = patch.broadcast_buffer[element];
+            patch.restricted.copy_from_host(*patch.restricted_host);
+          }
+          for (std::size_t parent_patch = 0; parent_patch < destination.layout().size();
+               ++parent_patch) {
+            const Box<2> region =
+                patch.restricted.box().intersect(destination.layout()[parent_patch]);
+            detail::copy_region(destination.fab_global(parent_patch).view(),
+                                std::as_const(patch.restricted).view(), region);
+          }
+          Kokkos::fence();
+        } catch (...) {
+          publication_failure = 1;
         }
-        for (std::size_t parent_patch = 0; parent_patch < destination.layout().size();
-             ++parent_patch) {
-          const Box<2> region =
-              patch.restricted.box().intersect(destination.layout()[parent_patch]);
-          detail::copy_region(destination.fab_global(parent_patch).view(),
-                              std::as_const(patch.restricted).view(), region);
-        }
+        if (all_reduce_max(publication_failure, lane->communicator()) != 0)
+          throw std::runtime_error(
+              "rank-two tensor replicated restriction publication failed collectively");
       }
-      Kokkos::fence();
     }
   };
 
