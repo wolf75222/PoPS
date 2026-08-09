@@ -1,7 +1,7 @@
 {
   "catalog_schema_version": 1,
   "component_manifest_schema_version": 2,
-  "route_registry_version": 3,
+  "route_registry_version": 4,
   "capability_vocabulary_version": 4,
   "interface_vocabulary": [
     {
@@ -767,35 +767,23 @@
           "token": "fft",
           "wire_id": 1,
           "cpp_id": "kFft",
-          "native_entry": "pops::PoissonFFTSolver",
+          "native_entry": "pops::PoissonFFTSolver<2>",
           "requirements": [
+            "exact rank two",
             "periodic bc",
-            "constant coefficient"
+            "constant coefficient",
+            "power-of-two grid",
+            "canonical ordered MPI slabs"
           ],
           "limitations": [
-            "walls / variable epsilon not wired; non power-of-two grid falls back to O(n^2) DFT"
-          ],
-          "aliases": [],
-          "metadata": {}
-        },
-        {
-          "token": "fft_spectral",
-          "wire_id": 2,
-          "cpp_id": "kFftSpectral",
-          "native_entry": "pops::PoissonFFTSolver(spectral)",
-          "requirements": [
-            "periodic bc",
-            "constant coefficient"
-          ],
-          "limitations": [
-            "walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)"
+            "rank one / rank three, walls, variable epsilon and non-power-of-two grids are rejected"
           ],
           "aliases": [],
           "metadata": {}
         },
         {
           "token": "polar",
-          "wire_id": 3,
+          "wire_id": 2,
           "cpp_id": "kPolar",
           "native_entry": "pops::PolarPoissonSolver",
           "requirements": [
@@ -809,7 +797,7 @@
         },
         {
           "token": "cartesian_cg",
-          "wire_id": 4,
+          "wire_id": 3,
           "cpp_id": "kCartesianCg",
           "native_entry": "pops::elliptic::nd::CartesianPoissonSolver<Dim>",
           "requirements": [

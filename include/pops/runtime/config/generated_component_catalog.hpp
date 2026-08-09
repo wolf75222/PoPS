@@ -146,18 +146,16 @@ inline constexpr const char* kTimeRouteTokensCsv = "explicit|ssprk3|euler|imex|i
 enum class FieldSolverRouteId : int {
   kGeometricMg = 0,
   kFft = 1,
-  kFftSpectral = 2,
-  kPolar = 3,
-  kCartesianCg = 4,
+  kPolar = 2,
+  kCartesianCg = 3,
 };
 inline constexpr RouteInfo kFieldSolverRoutes[] = {
   {0, "geometric_mg", "pops::GeometricMG", "", ""},
-  {1, "fft", "pops::PoissonFFTSolver", "periodic bc,constant coefficient", "walls / variable epsilon not wired; non power-of-two grid falls back to O(n^2) DFT"},
-  {2, "fft_spectral", "pops::PoissonFFTSolver(spectral)", "periodic bc,constant coefficient", "walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)"},
-  {3, "polar", "pops::PolarPoissonSolver", "polar geometry", "annular polar only (r_min > 0)"},
-  {4, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
+  {1, "fft", "pops::PoissonFFTSolver<2>", "exact rank two,periodic bc,constant coefficient,power-of-two grid,canonical ordered MPI slabs", "rank one / rank three, walls, variable epsilon and non-power-of-two grids are rejected"},
+  {2, "polar", "pops::PolarPoissonSolver", "polar geometry", "annular polar only (r_min > 0)"},
+  {3, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
 };
-inline constexpr const char* kFieldSolverRouteTokensCsv = "geometric_mg|fft|fft_spectral|polar|cartesian_cg";
+inline constexpr const char* kFieldSolverRouteTokensCsv = "geometric_mg|fft|polar|cartesian_cg";
 
 enum class PoissonBcRouteId : int {
   kAuto = 0,
@@ -310,11 +308,11 @@ inline constexpr BrickCatalogEntry kBrickCatalog[] = {
 
 inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
-inline constexpr int kRouteRegistryVersion = 3;
+inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "43357f9ddb2df44452242552d368a58625b6f2cab4f3ddb542de761f2db17cdd";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef";
-inline constexpr const char* kRouteRegistrySignature = "v3:ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef";
+inline constexpr const char* kComponentCatalogSha256 = "70e3810ef372d4014b5f9ad36442bb24824acf5c0b5b7e06c5b0179456795edb";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec";
+inline constexpr const char* kRouteRegistrySignature = "v4:b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

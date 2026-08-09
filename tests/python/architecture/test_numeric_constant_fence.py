@@ -181,7 +181,6 @@ _REPORT_VALUE_TO_CONSTANT = {
     ("fac", "coarse_rel_tol"): "kFACInitialCoarseRelTol",
     ("fac", "coarse_abs_tol"): "kFACInitialCoarseAbsTol",
     ("fac", "coarse_cycles"): "kFACInitialCoarseMaxCycles",
-    ("fft", "spectral_default"): "kFFTDefaultSpectral",
     ("fft", "zero_mean_gauge"): "kFFTZeroMeanGauge",
     ("fft", "direct_dft_fallback"): "kFFTDirectDftFallback",
     ("eb", "cut_fraction_floor"): "kEbCutFractionFloor",

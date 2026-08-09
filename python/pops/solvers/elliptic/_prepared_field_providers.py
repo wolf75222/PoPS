@@ -253,13 +253,13 @@ def _install_configured(context: Any, binding: Any) -> None:
 
 
 def _fft_resolver(options: Mapping[str, Any], facts: Any, where: str) -> Any:
-    if set(options) != {"spectral"} or type(options["spectral"]) is not bool:
-        raise TypeError("%s FFT provider requires one exact spectral bool" % where)
+    if options:
+        raise TypeError("%s FFT provider has an exact empty option schema" % where)
     return _resolution(
         {
-            "factory_route": "fft_spectral" if options["spectral"] else "fft",
-            "schema_identity": "pops.system.fft-options@1",
-            "options": {"spectral": options["spectral"]},
+            "factory_route": "fft",
+            "schema_identity": "pops.system.fft-discrete-rank2-options.empty@1",
+            "options": {},
         },
         _builtin_topology(facts),
     )
@@ -287,10 +287,13 @@ def _validate_fft(use: Any, where: str) -> None:
     if facts.nonlinear:
         raise ValueError("%s FFT provider cannot serve a nonlinear outer solve" % where)
     cells = facts.layout.get("cells")
+    if not isinstance(cells, tuple) or len(cells) != 2:
+        dimension = len(cells) if isinstance(cells, tuple) else "unknown"
+        raise ValueError(
+            "%s FFT concrete backend requires exact Dim=2; got Dim=%s" % (where, dimension)
+        )
     if (
-        not isinstance(cells, tuple)
-        or not cells
-        or any(type(value) is not int or value < 1 or value & (value - 1) for value in cells)
+        any(type(value) is not int or value < 1 or value & (value - 1) for value in cells)
     ):
         raise ValueError("%s FFT provider requires a power-of-two cell count on every axis" % where)
 
@@ -356,17 +359,17 @@ def _register_ready_providers() -> tuple[Any, Any, Any]:
     fft = register(
         Provider(
             provider_id="pops.field-solver.fft",
-            version=1,
-            resolver_id="pops.field-solver.fft.resolve@1",
-            installer_id="pops.field-solver.fft.install@1",
+            version=2,
+            resolver_id="pops.field-solver.fft.resolve@2",
+            installer_id="pops.field-solver.fft.install@2",
             use_policy=UsePolicy(
                 "pops.field-solver.fft.use",
-                1,
+                2,
                 {
                     "targets": ("system",),
-                    "layout": "uniform-power-of-two",
+                    "layout": "uniform-exact-rank-two-power-of-two",
                     "boundary": "fully-periodic",
-                    "operator": "poisson",
+                    "operator": "discrete-five-point-poisson",
                 },
                 _validate_fft,
             ),

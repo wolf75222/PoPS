@@ -346,7 +346,7 @@
   "tests/python/unit/solvers/test_linalg.py": 0.5,
   "tests/python/unit/solvers/test_poisson_eps.py": 0.5,
   "tests/python/unit/solvers/test_poisson_eps_aniso.py": 0.5,
-  "tests/python/unit/solvers/test_poisson_fft_spectral.py": 0.5,
+  "tests/python/unit/solvers/test_poisson_fft_exact_rank.py": 0.5,
   "tests/python/unit/solvers/test_poisson_screened.py": 60.0,
   "tests/python/unit/solvers/test_set_poisson_bc_typed.py": 0.5,
   "tests/python/unit/solvers/test_solver_dsl.py": 0.5,

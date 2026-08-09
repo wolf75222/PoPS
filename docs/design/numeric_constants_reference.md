@@ -41,7 +41,6 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kFACInitialCoarseRelTol               | 1e-12   | public_knob      | CompositeTensorFAC(coarse_rel_tol=), distinct internal MG relative tolerance |
 | kFACInitialCoarseAbsTol               | 0       | public_knob      | CompositeTensorFAC(coarse_abs_tol=), distinct internal MG absolute floor |
 | kFACInitialCoarseMaxCycles            | 100     | public_knob      | CompositeTensorFAC(coarse_cycles=) |
-| kFFTDefaultSpectral                   | false   | public_knob      | FFT(spectral=) |
 | kFFTZeroMeanGauge                     | true    | internal_default | fixed gauge |
 | kFFTDirectDftFallback                 | true    | diagnostic_only  | counter in report |
 | kEbCutFractionFloor                   | 1e-3    | public_knob      | CutCell(cut_theta_min=) |

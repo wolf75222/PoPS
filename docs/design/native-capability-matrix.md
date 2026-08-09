@@ -384,8 +384,6 @@ ADC-601 also records audited native subsystem limitations as `partial` rows. The
 hard failures, but they make compatibility and performance constraints visible to reports and
 future validators:
 
-- `elliptic:fft_direct_dft_fallback`: non-power-of-two FFT grids use the correct direct `O(n^2)`
-  DFT fallback and expose fallback calls through `poisson_fft_direct_dft_fallback_count()`.
 - `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
   `SolverDefaults`/logger route.
 - `mesh:nd_storage_arithmetic`: one `Index<Dim>`/`Box<Dim>`/`Fab<Dim>`/`MultiFab<Dim>` core is

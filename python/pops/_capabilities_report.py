@@ -1037,20 +1037,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="periodic, constant coefficient, power-of-two uniform grid only",
-            source=source,
-        ),
-        _row(
-            "elliptic:fft_direct_dft_fallback",
-            layout="uniform",
-            backend="production",
-            platform="host",
-            mpi=mpi,
-            gpu=gpu,
-            status="partial",
             limitation=(
-                "non-power-of-two Nx/Ny remain correct by falling back to direct O(n^2) "
-                "DFT; fallback_diagnostics_report exposes the policy and count"
+                "exact Dim=2, periodic, constant coefficient, power-of-two uniform grid, "
+                "canonical ordered MPI slabs; rank one/three and non-power-of-two grids refuse"
             ),
             source=source,
         ),

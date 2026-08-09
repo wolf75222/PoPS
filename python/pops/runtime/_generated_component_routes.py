@@ -5,15 +5,15 @@ COMPONENT_CATALOG_SCHEMA_VERSION = 1
 
 COMPONENT_MANIFEST_SCHEMA_VERSION = 2
 
-ROUTE_REGISTRY_VERSION = 3
+ROUTE_REGISTRY_VERSION = 4
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '43357f9ddb2df44452242552d368a58625b6f2cab4f3ddb542de761f2db17cdd'
+COMPONENT_CATALOG_SHA256 = '70e3810ef372d4014b5f9ad36442bb24824acf5c0b5b7e06c5b0179456795edb'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec'
 
-ROUTE_REGISTRY_SIGNATURE = 'v3:ac69edcb76a64a8b7a8764d5d3b7a79f56a61f2f17e6999d8969114c8b6eebef'
+ROUTE_REGISTRY_SIGNATURE = 'v4:b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -70,14 +70,14 @@ ROUTE_TABLES = {'riemann': (('rusanov',
            ('typed implicit Program solve required; no block-local native advance',))),
  'field_solver': (('geometric_mg', 'pops::GeometricMG', (), ()),
                   ('fft',
-                   'pops::PoissonFFTSolver',
-                   ('periodic bc', 'constant coefficient'),
-                   ('walls / variable epsilon not wired; non power-of-two grid falls back to '
-                    'O(n^2) DFT',)),
-                  ('fft_spectral',
-                   'pops::PoissonFFTSolver(spectral)',
-                   ('periodic bc', 'constant coefficient'),
-                   ('walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)',)),
+                   'pops::PoissonFFTSolver<2>',
+                   ('exact rank two',
+                    'periodic bc',
+                    'constant coefficient',
+                    'power-of-two grid',
+                    'canonical ordered MPI slabs'),
+                   ('rank one / rank three, walls, variable epsilon and non-power-of-two grids are '
+                    'rejected',)),
                   ('polar',
                    'pops::PolarPoissonSolver',
                    ('polar geometry',),
@@ -149,11 +149,7 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
              'superbee': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True}},
  'recon': {'conservative': {}, 'primitive': {}},
  'time': {'explicit': {}, 'ssprk3': {}, 'euler': {}, 'imex': {}, 'imexrk_ars222': {}},
- 'field_solver': {'geometric_mg': {},
-                  'fft': {},
-                  'fft_spectral': {},
-                  'polar': {},
-                  'cartesian_cg': {}},
+ 'field_solver': {'geometric_mg': {}, 'fft': {}, 'polar': {}, 'cartesian_cg': {}},
  'poisson_bc': {'auto': {}, 'periodic': {}, 'dirichlet': {}, 'neumann': {}},
  'layout': {'uniform': {}, 'amr': {}},
  'transport': {'exb': {'n_vars': 1,
@@ -200,7 +196,7 @@ ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
           'ids': ('kExplicitSsprk2', 'kSsprk3', 'kForwardEuler', 'kImex', 'kImexRkArs222')},
  'field_solver': {'enum': 'FieldSolverRouteId',
                   'table': 'kFieldSolverRoutes',
-                  'ids': ('kGeometricMg', 'kFft', 'kFftSpectral', 'kPolar', 'kCartesianCg')},
+                  'ids': ('kGeometricMg', 'kFft', 'kPolar', 'kCartesianCg')},
  'poisson_bc': {'enum': 'PoissonBcRouteId',
                 'table': 'kPoissonBcRoutes',
                 'ids': ('kAuto', 'kPeriodic', 'kDirichlet', 'kNeumann')},

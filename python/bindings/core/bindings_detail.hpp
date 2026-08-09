@@ -412,7 +412,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   fac["coarse_cycles"] = kFACInitialCoarseMaxCycles;
 
   py::dict fft;
-  fft["spectral_default"] = kFFTDefaultSpectral;
   fft["zero_mean_gauge"] = kFFTZeroMeanGauge;
   fft["direct_dft_fallback"] = kFFTDirectDftFallback;
 
@@ -502,7 +501,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kFACInitialCoarseRelTol", "public_knob");
   klass("kFACInitialCoarseAbsTol", "public_knob");
   klass("kFACInitialCoarseMaxCycles", "public_knob");
-  klass("kFFTDefaultSpectral", "public_knob");
   klass("kFFTZeroMeanGauge", "internal_default");
   klass("kFFTDirectDftFallback", "diagnostic_only");
   klass("kEbCutFractionFloor", "public_knob");

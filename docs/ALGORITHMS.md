@@ -1060,7 +1060,7 @@ restarts cold ($\phi = 0$), strictly bit-identical when the solver already conve
 manufactured solutions), `test_poisson_convergence` (quantitative order 2 of the 5-point Laplacian),
 `test_solve_robust` (the anti-divergence safeguard).
 
-## 10. Elliptic: spectral Poisson (FFT), single-rank and distributed
+## 10. Elliptic: exact-rank-two discrete Poisson FFT
 
 **Intuition.** On a periodic constant-coefficient domain, the discrete Laplacian is diagonal
 in Fourier: one direct transform, one mode-by-mode division, one inverse transform solve
@@ -1078,36 +1078,35 @@ Laplacian). The resolution is $\hat\phi(k) = \hat f(k) / \lambda(k)$, with the m
 (gauge: $\phi$ of zero mean; the right-hand side must therefore be of zero mean, otherwise $\phi$ drifts).
 
 ```
-function solve():                                  # PoissonFFTSolver, boite unique
-    rho = aplatir rhs en tableau N_x * N_y (row-major)
-    fft_.solve(rho -> phil)                         # FFT directe, /lambda(k), k=0 -> 0, FFT inverse
-    phi = re-empaqueter phil dans le fab
-
-function solve():                                  # DistributedFFTSolver, FFT par bandes
-    rho = aplatir la bande locale [0..Nx-1] x [y0..y0+nyl-1]
-    fft_.solve(rho -> phil)                         # transposee parallele (MPI_Alltoall) interne
-    phi = re-empaqueter la bande locale
+function solve():                                  # PoissonFFTSolver<2>, un slab/rang
+    verifier la compatibilite du rhs avec le noyau constant
+    rho = aplatir -rhs sur la bande locale [0..Nx-1] x [y0..y0+nyl-1]
+    fft_.solve(rho -> phi_trial)                    # transposee MPI interne, symbole discret
+    remplir les halos periodiques de phi_trial
+    r = rhs - (-lap_h phi_trial)                    # meme operateur que celui inverse
+    publier phi_trial seulement si ||r|| est dans l'enveloppe d'arrondi authentifiee
 ```
 
 **Code.** [`numerics/elliptic/poisson_fft_solver.hpp`](../include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp):
-`PoissonFFTSolver` (single-rank, single box) and `DistributedFFTSolver` (FFT distributed by bands /
-slabs, 1 box per rank, `MPI_Alltoall` transpose internal to `PoissonFFT`). Both model the same
-`EllipticSolver` concept (`static_assert`) as multigrid, so the coupler is generic over the
-backend (`Coupler<Model, PoissonFFTSolver>` interchangeable with `GeometricMG`). The residual reuses
-the canonical operator `poisson_residual` of
+`PoissonFFTSolver<2>` is the single exact provider for serial and MPI execution: serial is simply
+the one-rank instance of the same ordered slab layout. It models the exact-ranked `EllipticSolver`
+concept and owns its immutable build request, explicit constant-nullspace workspace, trial field and
+transactional publication. The residual reuses the canonical operator `poisson_residual` of
 [`poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp); the
-distributed variant does a `fill_boundary` (inter-band halos) before the measurement and reduces by
-`all_reduce_max`. The FFT core lives in `poisson_fft.hpp` (a fix handles $n$ not a power of 2).
+same wrapper fills inter-slab periodic halos before measurement and reduces by `all_reduce_max`.
+The low-level transform core lives in `poisson_fft.hpp`.
 
 **Constraints / remarks.** The FFT requires periodic BCs and a constant coefficient: neither
 $\epsilon(x)$, nor an embedded mask, nor cross terms. The mode $k = 0$ must be fixed (right-hand side
-of zero mean), otherwise $\phi$ drifts. `PoissonFFTSolver` raises a hard safeguard (active in Release,
-not a plain `assert`) if `n_ranks() != 1` or `ba.size() != 1`: under a multi-rank `DistributionMapping`
-some ranks would have no local box and `solve()` would dereference a nonexistent `fab(0)`
-(SIGSEGV); the message points to `DistributedFFTSolver` or `geometric_mg`. The distributed
-variant requires $N_y$ divisible by `n_ranks()` and $N_x, N_y$ powers of 2.
-**Validation.** `test_poisson_fft` (non-regression, size $n$ not a power of 2); under MPI
-`test_mpi_fft_distributed` (FFT by bands). `test_elliptic_operator` applies the same canonical
+of zero mean), otherwise the solve returns `kIncompatibleRhs` and leaves the published solution
+unchanged. The concrete backend is intrinsically two-dimensional: rank one and rank three fail at
+the compile-time capability/provider boundary. It requires exactly one canonical ordered y-slab per
+communicator rank and both $N_x$ and $N_y$ divisible by `n_ranks()`. The public prepared route also
+requires power-of-two extents; it does not select the low-level direct DFT or another elliptic solver.
+The raw continuous Fourier symbol remains an internal transform capability only: without a matching
+apply/residual operator it cannot be advertised as an `EllipticSolver` route.
+**Validation.** `test_poisson_fft` proves the concrete capability and transactional residual gate;
+under MPI `test_mpi_fft_distributed` proves ordered slabs. `test_elliptic_operator` applies the same canonical
 operator `poisson_residual` to the MG and FFT solutions: residuals at roundoff (`~1e-14`) and solutions
 identical to `~1e-16`, so both provably invert the same discrete Laplacian.
 
@@ -2357,9 +2356,9 @@ of this page. The goal is not to present a partial capability as complete.
   mono-box coarse level on one MPI rank. Its FAC backend supports equal tensor diagonals plus cross
   terms; unequal `eps_x`/`eps_y`, multilevel MPI and multi-block Program scope return an explicit
   capability failure. The Program solve/provider protocol itself is not tied to these limitations.
-- Distributed FFT under System. `DistributedFFTSolver` (section 10) exists and is tested separately, but
-  `System` under MPI np > 1 refuses the FFT cleanly (no automatic routing); use the
-  geometric multigrid.
+- FFT rank/capability. The concrete `PoissonFFTSolver<2>` route supports serial and MPI ordered slabs
+  in exact dimension two only. Dimensions one and three, non-power-of-two public layouts and any
+  non-canonical decomposition fail closed; `CartesianCG` is the uniform exact-ranked alternative.
 - Polar Poisson. `PolarPoissonSolver` (FFT in theta, Thomas in r, section 16) is mono-rank and
   mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
 - Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it

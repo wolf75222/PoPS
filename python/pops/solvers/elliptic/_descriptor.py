@@ -11,9 +11,9 @@ parameter surface, not the bare string ``solver="geometric_mg"``:
   tolerance (:class:`pops.solvers.tolerances.Relative` / :class:`~pops.solvers.tolerances.Absolute`)
   and a V-cycle cap (``max_cycles``). It declares its AMR / MPI / GPU /
   variable_epsilon) so an unsupported route is refused before the runtime is touched.
-* :class:`FFT` -- the real ``pops::PoissonFFTSolver`` (periodic BC, constant coefficient,
-  power-of-two grid); ``available()`` reports ``partial`` for those route constraints (not
-  because it is unimplemented) and points at :class:`CartesianCG` for the non-spectral uniform case.
+* :class:`FFT` -- the concrete exact-rank-two ``pops::PoissonFFTSolver<2>`` (periodic BC,
+  constant coefficient, power-of-two grid); ``available()`` reports ``partial`` for those route
+  constraints and refuses rank one or three instead of substituting another algorithm.
 
 All are inert (Spec 5 sec.6): they record the choice and answer ``available`` / ``lower`` /
 ``inspect``; the C++ kernels perform the solve. The ``scheme`` attribute mirrors
@@ -483,22 +483,17 @@ class GeometricMG(Descriptor):
 
 
 class FFT(Descriptor):
-    """An FFT-based spectral Poisson solver (``pops::PoissonFFTSolver``).
+    """The exact-rank-two discrete FFT Poisson provider.
 
-    A real, runtime-wired elliptic solver selectable today via the ``fft`` / ``fft_spectral``
-    tokens (validated to ~1e-12); under MPI it routes through the remapped FFT path. Its
-    availability is :meth:`available` ``partial`` because the spectral route carries genuine
-    constraints, not because it is unimplemented: it requires a PERIODIC boundary, a
-    CONSTANT-coefficient operator (no wall / embedded boundary) and a power-of-two grid.
-    ``spectral=True`` selects the continuous symbol ``-(kx^2 + ky^2)`` (token ``fft_spectral``)
-    over the discrete stencil (token ``fft``). Inert -- the C++ runs the transform.
+    The concrete C++ engine performs FFT-x, a slab transpose and FFT-y.  It therefore accepts only
+    a two-dimensional uniform periodic layout, even though periodic Poisson is mathematically ND.
+    The public provider inverts the same discrete five-point operator used to authenticate its
+    residual.  There is deliberately no continuous-symbol selector: that engine has no matching
+    apply/residual provider and cannot publish an authenticated :class:`SolveReport` for it.
     """
 
     category = "elliptic_solver"
-    native_id = "pops::PoissonFFTSolver"
-
-    def __init__(self, spectral: bool = False) -> None:
-        self.spectral = bool(spectral)
+    native_id = "pops::PoissonFFTSolver<2>"
 
     @property
     def name(self) -> str:
@@ -506,7 +501,7 @@ class FFT(Descriptor):
 
     @property
     def scheme(self) -> str:
-        return "fft_spectral" if self.spectral else "fft"
+        return "fft"
 
     def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
@@ -515,13 +510,13 @@ class FFT(Descriptor):
         """Bind through the same authenticated provider protocol as every field solver."""
         from ._prepared_field_providers import fft_field_solver_provider
 
-        return fft_field_solver_provider(), {"spectral": self.spectral}
+        return fft_field_solver_provider(), {}
 
     def options(self) -> dict:
-        return {"spectral": self.spectral}
+        return {}
 
     def to_data(self) -> dict[str, Any]:
-        return {"scheme": self.scheme, "spectral": self.spectral}
+        return {"scheme": self.scheme}
 
     def available(self, context: Any = None) -> Any:
         # Spec 6 sec.8: FFT is mathematically incompatible with an AMR hierarchy (it needs a
@@ -534,11 +529,22 @@ class FFT(Descriptor):
                 missing=["uniform layout", "periodic boundary"],
                 alternatives=["pops.solvers.elliptic.GeometricMG()"],
             )
+        dimension = _context_layout_dimension(context)
+        if dimension is not None and dimension != 2:
+            return Availability.no(
+                "FFT requires an exact two-dimensional uniform periodic layout; got Dim=%d. "
+                "Use CartesianCG()." % dimension,
+                missing=["exact Dim=2 FFT backend"],
+                alternatives=["pops.solvers.elliptic.CartesianCG()"],
+            )
         return Availability.partial(
-            "the FFT Poisson solver requires a periodic boundary, a constant-coefficient "
-            "operator (no wall / embedded boundary) and a power-of-two grid; under MPI it uses "
-            "the remapped FFT route",
-            missing=["periodic BC", "constant coefficient", "power-of-two grid"],
+            "the exact Dim=2 FFT Poisson solver requires a periodic boundary, a "
+            "constant-coefficient operator (no wall / embedded boundary), a power-of-two grid "
+            "and canonical ordered MPI slabs",
+            missing=[
+                "exact Dim=2 layout", "periodic BC", "constant coefficient",
+                "power-of-two grid", "canonical MPI slabs",
+            ],
             alternatives=["pops.solvers.elliptic.CartesianCG()"],
         )
 
@@ -579,6 +585,39 @@ def _context_is_amr_layout(context: Any) -> bool:
         if hasattr(declared, "get") and declared.get("layout") == "amr":
             return True
     return False
+
+
+def _context_layout_dimension(context: Any) -> int | None:
+    """Best-effort exact layout rank for availability diagnostics; never raises."""
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        layout = context.get("layout")
+    else:
+        layout = getattr(context, "layout", None)
+    if layout is None:
+        layout = context
+
+    projection = getattr(layout, "normalized_geometry", None)
+    if callable(projection):
+        try:
+            dimension = getattr(projection(), "dimension", None)
+        except Exception:
+            dimension = None
+        if type(dimension) is int and dimension in (1, 2, 3):
+            return dimension
+
+    cells: Any = None
+    if isinstance(layout, dict):
+        cells = layout.get("cells")
+        geometry = layout.get("geometry")
+        if cells is None and isinstance(geometry, dict):
+            cells = geometry.get("cells")
+    else:
+        cells = getattr(getattr(layout, "mesh", layout), "cells", None)
+    if isinstance(cells, (tuple, list)) and len(cells) in (1, 2, 3):
+        return len(cells)
+    return None
 
 
 def _check_positive_int(value: Any, param: str, minimum: int) -> int:

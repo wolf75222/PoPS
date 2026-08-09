@@ -123,7 +123,7 @@ TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
   {
     const std::string m = throw_message([] { parse_field_solver_route("amg"); });
     EXPECT_TRUE(contains(m, "field_solver") && contains(m, "amg") &&
-                contains(m, "geometric_mg|fft|fft_spectral|polar") &&
+                contains(m, "geometric_mg|fft|polar|cartesian_cg") &&
                 contains(m, "never fall back to a default"))
         << "field_solver 'amg' refuse (famille, token, set valide, no-default)";
   }

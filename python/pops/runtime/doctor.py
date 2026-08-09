@@ -65,13 +65,11 @@ def _descriptor_tokens() -> Any:
     # printed list stays the historical set while still being sourced from the catalog.
     high_order = ["weno5"] if "weno5" in recon_tokens else []
     dsl_limiters = _ordered(["none", *limiter_tokens, *high_order], _LIMITER_ORDER)
-    # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
-    # GeometricMG plus the FFT discrete / spectral schemes.
+    # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors.
     poisson = {
         "cartesian_cg": CartesianCG().name,
         "geometric_mg": GeometricMG().name,
         "fft": FFT().scheme,
-        "fft_spectral": FFT(spectral=True).scheme,
     }
 
     return {
@@ -264,13 +262,26 @@ def capabilities() -> Any:
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
     tok = _descriptor_tokens()
     riemann_all = list(tok["riemann"])
+    poisson_cg = tok["poisson"]["cartesian_cg"]
     poisson_mg = tok["poisson"]["geometric_mg"]
     poisson_fft = tok["poisson"]["fft"]
-    poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
     from pops.runtime_environment import runtime_environment_report
 
     runtime_env = runtime_environment_report()
+    poisson_system = [
+        "%s (exact-ranked Cartesian Poisson; 1D/2D/3D)" % poisson_cg,
+    ]
+    if runtime_env["dimension"] == 2:
+        poisson_system.append(
+            "%s (exact Dim=2, periodic, n = 2^k, constant eps, ordered MPI slabs)"
+            % poisson_fft
+        )
+    else:
+        poisson_system.append(
+            "%s unavailable for Dim=%d (concrete backend is exact Dim=2)"
+            % (poisson_fft, runtime_env["dimension"])
+        )
     return {
         # Immutable rank selected by the loaded native artifact before runtime construction.
         "dimension": runtime_env["dimension"],
@@ -346,11 +357,7 @@ def capabilities() -> Any:
             ],
         },
         "poisson": {
-            "system_cartesian": [
-                "%s (wall, eps(x), aniso, screened)" % poisson_mg,
-                "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
-                "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral,
-            ],
+            "system_cartesian": poisson_system,
             "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {

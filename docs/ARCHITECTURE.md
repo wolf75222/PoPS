@@ -809,15 +809,13 @@ silently), or are assumed scope boundaries.
   remains independent of FAC and hierarchy storage. Unsupported hierarchy/MPI shapes return a typed
   capability failure consumed by the authored solve action; there is no fallback to a flat solve.
 
-- FFT under `System` in MPI np>1: supported since ADC-287. `System` distributes a single box in
-  round-robin, so `PoissonFFTSolver` (which needs the whole grid) is kept only for `n_ranks()==1`; at
-  np>1 [`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)
-  now SELECTS a `RemappedFFTSolver` instead of raising: it hides a box-slab scatter/gather around
-  `PoissonFFT` (the field-solve path is unchanged, it sees the single round-robin box outward).
-  `set_poisson(solver="fft"|"fft_spectral")` therefore SUCCEEDS under MPI np>1 for the periodic,
-  constant-coefficient case; it raises only when the slab remap cannot tile (`Ny % n_ranks() != 0`).
-  A wall, a variable `eps(x)`, the anisotropy and the kappa reaction term are still reserved to
-  `geometric_mg` (the MPI default and the only option for those), at any rank count.
+- FFT under a uniform `System` is one exact `PoissonFFTSolver<2>` route. The concrete engine performs
+  FFT-x, an MPI slab transpose and FFT-y, so the prepared provider accepts only a two-dimensional,
+  fully periodic, constant-coefficient, power-of-two layout with one canonical ordered slab per
+  communicator rank. Rank one or three, non-power-of-two grids, walls, variable epsilon, anisotropy
+  and reaction terms are rejected before installation; no remapped compatibility solver, spectral
+  token or fallback to a different elliptic algorithm is published. `CartesianCG` is the uniform
+  exact-ranked alternative in 1D/2D/3D, while `GeometricMG` owns the AMR MG/FAC route.
 
 - Standalone polar algorithms: the global ring $r \in [r_{min}, r_{max}] \times \theta \in [0, 2\pi)$
   and scalar ExB transport remain directly testable C++ components. The direct polar Poisson

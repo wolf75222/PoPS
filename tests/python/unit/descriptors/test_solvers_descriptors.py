@@ -293,21 +293,23 @@ def test_fft_is_a_real_solver_with_route_constraints():
     f = elliptic.FFT()
     assert f.name == "fft"
     # A real, runtime-wired solver -- not unimplemented.
-    assert f.native_id == "pops::PoissonFFTSolver"
+    assert f.native_id == "pops::PoissonFFTSolver<2>"
     assert f.scheme == "fft"
+    assert f.options() == {}
+    assert f.to_data() == {"scheme": "fft"}
     status = f.available()
     # partial = genuine route constraints (periodic / const-coeff / power-of-two), not "no symbol".
     assert status.status == "partial"
     assert any("periodic" in m for m in status.missing)
-    assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
+    assert "pops.solvers.elliptic.CartesianCG()" in status.alternatives
     assert f.inspect()["available"] == "partial"
     # ``partial`` is not a fake or unavailable implementation: authoring validation accepts the
     # route, then prepared-field resolution proves its concrete mesh/boundary constraints.
     assert f.validate()
-    # spectral=True selects the fft_spectral token.
-    spectral = elliptic.FFT(spectral=True)
-    assert spectral.scheme == "fft_spectral"
-    assert spectral.options() == {"spectral": True}
+    # The continuous-symbol route was retired: accepting the old knob would publish a solve
+    # without a residual authenticated by the same operator.
+    with pytest.raises(TypeError):
+        elliptic.FFT(spectral=True)
 
 
 def test_fft_rejects_amr_layout_with_precise_message():
@@ -327,6 +329,30 @@ def test_fft_rejects_amr_layout_with_precise_message():
     # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
     assert elliptic.FFT().available({"layout": Uniform(cartesian_grid(n=64))}).status == "partial"
     assert elliptic.FFT().available().status == "partial"
+
+
+@pytest.mark.parametrize("dimension", (1, 3))
+def test_fft_rejects_non_two_dimensional_uniform_layout(dimension):
+    from pops.domain import CartesianDomain
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+
+    frame = CartesianDomain(
+        "fft-rank-%d" % dimension,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+    ).frame()
+    layout = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(16,) * dimension,
+        periodic=PeriodicAxes(frame.axes),
+    ))
+    status = elliptic.FFT().available({"layout": layout})
+    assert status.status == "no"
+    assert "exact two-dimensional" in status.reason
+    assert "Dim=%d" % dimension in status.reason
+    with pytest.raises(ValueError, match="exact two-dimensional"):
+        elliptic.FFT().validate({"layout": layout})
 
 
 def test_fft_available_never_raises_on_odd_context():

@@ -41,7 +41,6 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kFACInitialCoarseRelTol": "public_knob",
     "kFACInitialCoarseAbsTol": "public_knob",
     "kFACInitialCoarseMaxCycles": "public_knob",
-    "kFFTDefaultSpectral": "public_knob",
     "kFFTZeroMeanGauge": "internal_default",
     "kFFTDirectDftFallback": "diagnostic_only",
     "kEbCutFractionFloor": "public_knob",
@@ -116,7 +115,6 @@ def _static_report() -> dict:
             "coarse_cycles": 100,
         },
         "fft": {
-            "spectral_default": False,
             "zero_mean_gauge": True,
             "direct_dft_fallback": True,
         },

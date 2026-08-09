@@ -63,7 +63,6 @@ inline constexpr Real kFACInitialCoarseAbsTol = Real(0);
 inline constexpr int kFACInitialCoarseMaxCycles = 100;
 
 // FFT Poisson route facts.
-inline constexpr bool kFFTDefaultSpectral = false;
 inline constexpr bool kFFTZeroMeanGauge = true;
 inline constexpr bool kFFTDirectDftFallback = true;
 
