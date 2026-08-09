@@ -122,7 +122,9 @@ template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace program
 namespace multiblock {
+template <int Dim>
 struct AxisAlignedInterface;
+template <int Dim>
 struct PreparedInterfaceFluxSpec;
 struct BoundaryEvaluationPoint;
 }  // namespace multiblock
@@ -411,8 +413,8 @@ class AmrSystem {
   /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
   /// only after the lazy AmrRuntime has been built and before bind freezes composition.
   POPS_EXPORT void install_interface_flux_component(
-      runtime::multiblock::AxisAlignedInterface route,
-      runtime::multiblock::PreparedInterfaceFluxSpec spec,
+      runtime::multiblock::AxisAlignedInterface<Dim> route,
+      runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec,
       std::shared_ptr<component::LoadedComponent> component);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();

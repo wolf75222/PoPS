@@ -83,10 +83,12 @@ api pops/mesh/storage/mf_arith.hpp
 api pops/mesh/storage/multifab.hpp
 api pops/mesh/topology/boundary_topology.hpp
 api pops/numerics/elliptic/eb/cut_fraction.hpp
+api pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
 api pops/numerics/elliptic/interface/elliptic_solver.hpp
 api pops/numerics/elliptic/interface/field_boundary_kernel.hpp
+api pops/numerics/elliptic/interface/field_newton_krylov.hpp
 api pops/numerics/elliptic/interface/field_nonlinear.hpp
 api pops/numerics/elliptic/interface/field_nullspace.hpp
 api pops/numerics/elliptic/interface/field_nullspace_workspace.hpp
@@ -269,6 +271,7 @@ api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
+sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_block_closures.hpp
