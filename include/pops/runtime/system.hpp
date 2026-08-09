@@ -248,23 +248,6 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Compatibility query for a report published by a typed implicit Program consumer. The current
-  /// Program-only System runtime rejects the opt-in request until such a consumer is installed.
-  /// Flat copy (no dependency on the numerics header).
-  struct SourceNewtonReport {
-    bool enabled;           ///< a report was computed (at least one IMEX advance played)
-    bool converged;         ///< no failed cell on the last advance
-    double max_residual;    ///< max over cells/substeps of ||F||_inf at the Newton exit
-    double max_iters_used;  ///< max over cells/substeps of the iterations consumed
-    double
-        n_failed;  ///< number of (cells x substeps) failed (non-finite / pivot / non-convergence)
-    double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
-    double failed_j;     ///< j of the same cell (-1 if none)
-    double failed_comp;  ///< conservative component of the worst residual of that cell (-1 unknown)
-    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
-  };
-  SourceNewtonReport newton_report(const std::string& name) const;
-
   /// Internal installation seam for a compiled production package. The loader
   /// inlines the header template pops::add_compiled_model<ProdModel>, which builds the closures on the
   /// real System context and installs a zero-copy native block. The complete canonical BindSchema

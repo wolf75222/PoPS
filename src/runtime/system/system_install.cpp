@@ -546,12 +546,6 @@ std::string System<Dim>::last_dt_bound() const {
 }
 
 template <int Dim>
-typename System<Dim>::SourceNewtonReport System<Dim>::newton_report(const std::string&) const {
-  throw std::logic_error(
-      "System Newton reports belong to an installed typed nonlinear Program provider");
-}
-
-template <int Dim>
 void System<Dim>::add_native_block(const std::string& name, const std::string& so_path,
                                    const std::string& limiter, const std::string& riemann,
                                    const std::string& recon, const std::string& time, double gamma,
@@ -646,8 +640,6 @@ template void System<kNativeDimension>::set_block_elliptic_field(
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
 template void System<kNativeDimension>::add_dt_bound(const std::string&, std::function<double()>);
 template std::string System<kNativeDimension>::last_dt_bound() const;
-template System<kNativeDimension>::SourceNewtonReport System<kNativeDimension>::newton_report(
-    const std::string&) const;
 template void System<kNativeDimension>::add_native_block(const std::string&, const std::string&,
                                                          const std::string&, const std::string&,
                                                          const std::string&, const std::string&,

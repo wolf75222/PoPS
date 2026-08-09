@@ -241,38 +241,6 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("level") = 0)
       .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Compatibility query for a Newton report published by a typed implicit Program consumer.
-      .def(
-          "newton_report",
-          [](const System& s, const std::string& name) {
-            const System::SourceNewtonReport r = s.newton_report(name);
-            py::dict d;
-            d["enabled"] = r.enabled;
-            d["converged"] = r.converged;
-            d["max_residual"] = r.max_residual;
-            d["max_iters_used"] = r.max_iters_used;
-            d["n_failed"] = r.n_failed;
-            if (r.failed_i >= 0)
-              d["failed_cell"] =
-                  py::make_tuple(static_cast<int>(r.failed_i), static_cast<int>(r.failed_j));
-            else
-              d["failed_cell"] = py::none();
-            d["failed_component"] = static_cast<int>(r.failed_comp);
-            py::list diagnostics;
-            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
-              py::dict row;
-              row["code"] = event.code;
-              row["component"] = event.component;
-              row["severity"] = event.severity;
-              row["message"] = event.message;
-              row["iteration"] = event.iteration;
-              row["value"] = event.value;
-              diagnostics.append(row);
-            }
-            d["diagnostics"] = diagnostics;
-            return d;
-          },
-          py::arg("name"))
       // ADC-510 (Spec 5 C5): changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT
       // recompiling the .so. prog_block = the PROGRAM block index (P.state order); values = that block's
       // params in sorted-name order (the .so pops_program_param_* metadata). cf.
