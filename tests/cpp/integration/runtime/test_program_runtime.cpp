@@ -15,6 +15,7 @@
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
 #include <pops/runtime/program/program_runtime_state.hpp>
@@ -37,6 +38,16 @@
 
 using namespace pops;
 
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
 #if defined(POPS_HAS_KOKKOS)
 static void ensure_kokkos() {
   static Kokkos::ScopeGuard guard;
@@ -45,37 +56,38 @@ static void ensure_kokkos() {
 #endif
 
 // Elliptic brick that contributes nothing (no charge): the Poisson RHS stays zero, phi = 0, and the
-// Euler flux ignores aux -> the residual is pure gas dynamics.
+// Euler flux has no provider requirements here, so the residual is pure gas dynamics.
 struct NoEll {
   template <class State>
   POPS_HD Real rhs(const State&) const {
     return Real(0);
   }
 };
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
+using GasModel = CompositeModel<EulerND<kNativeDimension>, NoSource, NoEll>;
 
 struct UnitDensitySource {
-  template <class State>
-  POPS_HD State apply(const State&, const Aux&) const {
+  template <class State, class Providers>
+  POPS_HD State apply(const State&, const Providers&) const {
     State source{};
     source[0] = Real(1);
     return source;
   }
 };
-using SourcedGasModel = CompositeModel<Euler, UnitDensitySource, NoEll>;
+using SourcedGasModel = CompositeModel<EulerND<kNativeDimension>, UnitDensitySource, NoEll>;
 
 struct DrainingDensitySource {
-  template <class State>
-  POPS_HD State apply(const State&, const Aux&) const {
+  template <class State, class Providers>
+  POPS_HD State apply(const State&, const Providers&) const {
     State source{};
     source[0] = Real(-1);
     return source;
   }
 };
-using DrainingGasModel = CompositeModel<Euler, DrainingDensitySource, NoEll>;
+using DrainingGasModel = CompositeModel<EulerND<kNativeDimension>, DrainingDensitySource, NoEll>;
 
-struct ProjectingEuler : Euler {
-  POPS_HD State project(const State& input, const Aux&) const {
+struct ProjectingEuler : EulerND<kNativeDimension> {
+  template <class Providers>
+  POPS_HD State project(const State& input, const Providers&) const {
     State output = input;
     output[0] = Real(2);
     return output;
@@ -85,6 +97,26 @@ using ProjectingGasModel = CompositeModel<ProjectingEuler, NoSource, NoEll>;
 
 struct DiffusiveGasModel : GasModel {
   POPS_HD Real diffusivity() const { return Real(0.1); }
+};
+
+template <int Dim>
+SystemConfig<Dim> unit_domain_config(int cells_per_axis) {
+  SystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = cells_per_axis;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = true;
+  }
+  return config;
+}
+
+template <class Context, class Field>
+concept HasUnqualifiedBoundaryLinearization = requires(
+    Context& context, const runtime::multiblock::BoundaryEvaluationPoint& point, Field& state,
+    Field& output) {
+  context.boundary_residual_into_at(point, 0, state, output);
+  context.boundary_jvp_into_at(point, 0, state, output, output);
 };
 
 static void fill_ic(std::vector<double>& U, int n, double gamma) {
@@ -104,38 +136,58 @@ static void fill_ic(std::vector<double>& U, int n, double gamma) {
     }
 }
 
-static void add_gas(System& s, double gamma, const std::string& limiter = "minmod") {
-  add_compiled_model(s, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, limiter, "rusanov",
-                     "conservative", "explicit", gamma);
+static void add_gas(System<kNativeDimension>& s, double gamma, const std::string& limiter = "minmod") {
+  s.install_block_state_route("gas", "test.program-runtime.gas.state@1");
+  s.seal_auxiliary_providers();
+  GasModel model;
+  model.hyp = EulerND<kNativeDimension>{gamma};
+  add_compiled_model(s, "gas", model, limiter, "rusanov", "conservative", "explicit", gamma);
   s.set_poisson("charge_density", "geometric_mg");
 }
 
-static void add_sourced_gas(System& system, double gamma) {
-  add_compiled_model(system, "gas", SourcedGasModel{Euler{gamma}, UnitDensitySource{}, NoEll{}},
-                     "none", "rusanov", "conservative", "explicit", gamma);
+static void add_sourced_gas(System<kNativeDimension>& system, double gamma) {
+  system.install_block_state_route("gas", "test.program-runtime.sourced-gas.state@1");
+  system.seal_auxiliary_providers();
+  SourcedGasModel model;
+  model.hyp = EulerND<kNativeDimension>{gamma};
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_draining_gas(System& system, const std::string& name, double gamma) {
-  add_compiled_model(
-      system, name, DrainingGasModel{Euler{gamma}, DrainingDensitySource{}, NoEll{}}, "none",
-      "rusanov", "conservative", "explicit", gamma);
+static void add_draining_gas(System<kNativeDimension>& system, const std::string& name, double gamma) {
+  system.install_block_state_route(name, "test.program-runtime." + name + ".state@1");
+  system.seal_auxiliary_providers();
+  DrainingGasModel model;
+  model.hyp = EulerND<kNativeDimension>{gamma};
+  add_compiled_model(system, name, model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_projecting_gas(System& system, double gamma) {
+static void add_projecting_gas(System<kNativeDimension>& system, double gamma) {
+  system.install_block_state_route("gas", "test.program-runtime.projecting-gas.state@1");
+  system.seal_auxiliary_providers();
   ProjectingEuler transport;
   transport.gamma = gamma;
-  add_compiled_model(system, "gas", ProjectingGasModel{transport, NoSource{}, NoEll{}}, "none",
-                     "rusanov", "conservative", "explicit", gamma);
+  ProjectingGasModel model;
+  model.hyp = transport;
+  add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_diffusive_gas(System& system, double gamma) {
+static void add_diffusive_gas(System<kNativeDimension>& system, double gamma) {
+  system.install_block_state_route("gas", "test.program-runtime.diffusive-gas.state@1");
+  system.seal_auxiliary_providers();
   DiffusiveGasModel model;
   model.hyp.gamma = gamma;
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
+static void add_scalar(System<kNativeDimension>& system) {
+  system.install_block_state_route("tracer", "test.program-runtime.tracer.state@1");
+  system.seal_auxiliary_providers();
+  add_compiled_model(system, "tracer", nd::ScalarAdvection<kNativeDimension>{}, "none", "rusanov",
+                     "conservative", "explicit");
+}
+
 TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
   const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '1');
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
 
@@ -157,7 +209,7 @@ TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailur
 }
 
 TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
 
   EXPECT_FALSE(state.automatic_balance_capture_due());
   EXPECT_THROW(state.note_automatic_balance_capture_due(true, "test"), std::logic_error);
@@ -182,7 +234,7 @@ TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySaf
 }
 
 TEST(ProgramRuntime, SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '5');
   state.begin_step_projection_report();
   state.run_balance_due_window(0, "test", [&] {
@@ -213,7 +265,7 @@ TEST(ProgramRuntime, SelectedAutomaticBalanceTermsRequireCompleteQualifiedEviden
 }
 
 TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
   const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '3');
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '4');
 
@@ -238,7 +290,7 @@ TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
 }
 
 TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
   state.history_replay_authorities_ = {{"gas.previous", 3}};
 
   EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 3))
@@ -270,7 +322,7 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
 }
 
 TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
-  runtime::program::ProgramRuntimeState state;
+  runtime::program::ProgramRuntimeState<kNativeDimension> state;
   int old_steps = 0;
   int new_steps = 0;
   int restart_preflights = 0;
@@ -337,7 +389,7 @@ TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  System system(SystemConfig{8, 1.0, Periodicity{true, true}});
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(8));
   system.enable_profiling();
   const double initial_time = system.time();
   const int initial_step = system.macro_step();
@@ -366,12 +418,9 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System subcycled(config);
+  System<kNativeDimension> subcycled(config);
   subcycled.set_clock(1.0, 10);
   runtime::program::ProgramContext subcycled_context(&subcycled);
   std::vector<double> subcycled_times;
@@ -390,7 +439,7 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_NEAR(subcycled.time(), 1.2, 1.0e-14);
   EXPECT_EQ(subcycled.macro_step(), 11);
 
-  System catchup(config);
+  System<kNativeDimension> catchup(config);
   runtime::program::ProgramContext catchup_context(&catchup);
   catchup_context.configure_primary_clock("macro");
   std::vector<double> catchup_times;
@@ -436,12 +485,9 @@ TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   runtime::program::ProgramContext context(&system);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '7');
   const std::array<std::pair<const char*, double>, 5> records{{
@@ -496,12 +542,9 @@ TEST(ProgramRuntime,
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   system.set_clock(0.1, 0);
   runtime::program::ProgramContext context(&system);
   std::vector<double> starts;
@@ -550,12 +593,9 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   std::vector<double> accepted_steps;
   bool reject = true;
   system.install_program_step([&](double h) {
@@ -581,7 +621,7 @@ TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
   EXPECT_EQ(system.program_cadence_window_steps(), 0);
 
-  System restarted(config);
+  System<kNativeDimension> restarted(config);
   std::vector<double> restarted_times;
   restarted.install_program_step([&](double) { restarted_times.push_back(restarted.time()); });
   restarted.set_program_cadence(/*substeps=*/1, /*stride=*/2);
@@ -601,12 +641,9 @@ TEST(ProgramRuntime, CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   system.install_program_step([](double) {});
   system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
 
@@ -679,12 +716,9 @@ TEST(ProgramRuntime, CadenceRejectsDtAbsorbedByThePhysicalClock) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   int calls = 0;
   system.install_program_step([&](double) { ++calls; });
   system.set_clock(1.0e16, 0);
@@ -699,12 +733,9 @@ TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresenta
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig config;
-  config.n = 4;
-  config.L = 1.0;
-  config.periodicity = {true, true};
+  auto config = unit_domain_config<kNativeDimension>(4);
 
-  System system(config);
+  System<kNativeDimension> system(config);
   int calls = 0;
   system.install_program_step([&](double) { ++calls; });
   system.set_program_cadence(/*substeps=*/3, /*stride=*/1);
@@ -725,16 +756,13 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   const double gamma = 1.4, dt = 1e-3;
   const std::size_t nn = static_cast<std::size_t>(n) * n;
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
   std::vector<double> U0(4 * nn);
   fill_ic(U0, n, gamma);
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
-  System ref(cfg);
+  System<kNativeDimension> ref(cfg);
   add_gas(ref, gamma);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -744,7 +772,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
     Uref[k] = U0[k] + dt * R0[k];
 
   // Program: the SAME step expressed as a ProgramContext closure and driven by sim.step(dt).
-  System sim(cfg);
+  System<kNativeDimension> sim(cfg);
   add_gas(sim, gamma);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -757,8 +785,8 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
     auto field_outcome = ctx.solve_fields();
     (void)field_outcome.consume(SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
-      MultiFab& U = ctx.state(b);
-      MultiFab R = ctx.rhs_scratch_like(U);
+      MultiFab<kNativeDimension>& U = ctx.state(b);
+      MultiFab<kNativeDimension> R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
     }
@@ -819,37 +847,34 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
   constexpr double gamma = 1.4;
   constexpr double dt = 1e-3;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  const auto install_forward_euler = [](System& system) {
+  const auto install_forward_euler = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
     context.install([context](double step) {
       context.begin_step(step);
       context.set_stage_time(0, 1);
-      MultiFab& state = context.state(0);
-      MultiFab residual = context.rhs_scratch_like(state);
+      MultiFab<kNativeDimension>& state = context.state(0);
+      MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
       context.rhs_into(0, state, residual, 0);
       context.axpy(state, Real(step), residual);
     });
     system.set_program_block_map({0});
   };
 
-  System cartesian(cfg);
+  System<kNativeDimension> cartesian(cfg);
   add_gas(cartesian, gamma, "none");
   cartesian.set_state("gas", initial);
   install_forward_euler(cartesian);
   cartesian.step(dt);
   const std::vector<double> cartesian_state = cartesian.get_state("gas");
 
-  System staircase(cfg);
+  System<kNativeDimension> staircase(cfg);
   add_gas(staircase, gamma, "none");
   staircase.set_state("gas", initial);
   staircase.set_disc_domain(0.5, 0.5, 0.34, "staircase");
@@ -858,7 +883,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
   staircase.step(dt);
   const std::vector<double> staircase_state = staircase.get_state("gas");
 
-  System cutcell(cfg);
+  System<kNativeDimension> cutcell(cfg);
   add_gas(cutcell, gamma, "none");
   cutcell.set_state("gas", initial);
   cutcell.set_disc_domain(0.5, 0.5, 0.34, "cutcell");
@@ -924,35 +949,32 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   constexpr double gamma = 1.4;
   constexpr double dt = 0.125;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  const auto install_source_step = [](System& system) {
+  const auto install_source_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
     context.install([context](double step) {
       context.begin_step(step);
-      MultiFab& state = context.state(0);
-      MultiFab source = context.rhs_scratch_like(state);
+      MultiFab<kNativeDimension>& state = context.state(0);
+      MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
       context.source_default_into(0, state, source);
       context.axpy(state, Real(step), source);
     });
     system.set_program_block_map({0});
   };
 
-  System cartesian(cfg);
+  System<kNativeDimension> cartesian(cfg);
   add_sourced_gas(cartesian, gamma);
   cartesian.set_state("gas", initial);
   install_source_step(cartesian);
   cartesian.step(dt);
   const auto cartesian_state = cartesian.get_state("gas");
 
-  System staircase(cfg);
+  System<kNativeDimension> staircase(cfg);
   add_sourced_gas(staircase, gamma);
   staircase.set_state("gas", initial);
   staircase.set_disc_domain(0.5, 0.5, 0.31, "staircase");
@@ -993,12 +1015,9 @@ TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) 
   constexpr int n = 8;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System system(cfg);
+  System<kNativeDimension> system(cfg);
   add_draining_gas(system, "gas", gamma);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
@@ -1008,9 +1027,9 @@ TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) 
   context.configure_primary_clock("test.clock.source-recovery");
   context.install([context](double step) {
     context.begin_step(step);
-    MultiFab& live = context.state(0);
-    MultiFab& source = context.rhs_scratch(920001, 0, live);
-    MultiFab& candidate = context.scratch_state(920002, 0, live);
+    MultiFab<kNativeDimension>& live = context.state(0);
+    MultiFab<kNativeDimension>& source = context.rhs_scratch(920001, 0, live);
+    MultiFab<kNativeDimension>& candidate = context.scratch_state(920002, 0, live);
     context.source_default_into(0, live, source);
     context.lincomb(candidate, Real(1), live, Real(0), live);
     context.axpy(candidate, Real(step), source);
@@ -1033,12 +1052,9 @@ TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommi
   constexpr int n = 8;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System system(cfg);
+  System<kNativeDimension> system(cfg);
   add_draining_gas(system, "first", gamma);
   add_draining_gas(system, "second", gamma);
   std::vector<double> initial(4 * cells);
@@ -1050,12 +1066,12 @@ TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommi
   context.configure_primary_clock("test.clock.source-recovery-multiblock");
   context.install([context](double step) {
     context.begin_step(step);
-    MultiFab& first = context.state(0);
-    MultiFab& second = context.state(1);
-    MultiFab& first_source = context.rhs_scratch(920011, 0, first);
-    MultiFab& second_source = context.rhs_scratch(920012, 1, second);
-    MultiFab& first_candidate = context.scratch_state(920013, 0, first);
-    MultiFab& second_candidate = context.scratch_state(920014, 1, second);
+    MultiFab<kNativeDimension>& first = context.state(0);
+    MultiFab<kNativeDimension>& second = context.state(1);
+    MultiFab<kNativeDimension>& first_source = context.rhs_scratch(920011, 0, first);
+    MultiFab<kNativeDimension>& second_source = context.rhs_scratch(920012, 1, second);
+    MultiFab<kNativeDimension>& first_candidate = context.scratch_state(920013, 0, first);
+    MultiFab<kNativeDimension>& second_candidate = context.scratch_state(920014, 1, second);
     context.source_default_into(0, first, first_source);
     context.source_default_into(1, second, second_source);
     context.lincomb(first_candidate, Real(1), first, Real(0), first);
@@ -1089,14 +1105,11 @@ TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
   constexpr double gamma = 1.4;
   constexpr double dt = 1e-3;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  System system(cfg);
+  System<kNativeDimension> system(cfg);
   add_sourced_gas(system, gamma);
   system.set_state("gas", initial);
   system.set_disc_domain(0.5, 0.5, 0.31, "staircase");
@@ -1106,8 +1119,8 @@ TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
   context.configure_primary_clock("macro");
   context.install([context](double step) {
     context.begin_step(step);
-    MultiFab& state = context.state(0);
-    MultiFab source = context.rhs_scratch_like(state);
+    MultiFab<kNativeDimension>& state = context.state(0);
+    MultiFab<kNativeDimension> source = context.rhs_scratch_like(state);
     context.source_default_into(0, state, source);
     context.axpy(state, Real(step), source);
   });
@@ -1139,12 +1152,9 @@ TEST(ProgramRuntime, EmbeddedBoundaryCflReductionIgnoresInactiveCells) {
   constexpr int n = 12;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System system(cfg);
+  System<kNativeDimension> system(cfg);
   add_gas(system, gamma, "none");
   system.set_disc_domain(0.5, 0.5, 0.31, "staircase");
   const auto mask = system.disc_mask();
@@ -1170,23 +1180,20 @@ TEST(ProgramRuntime, CutCellCflIncludesPreparedInverseVolumeFraction) {
   constexpr int n = 18;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
   std::vector<double> uniform(4 * cells, 0.0);
   for (std::size_t cell = 0; cell < cells; ++cell) {
     uniform[cell] = 1.0;
     uniform[3 * cells + cell] = 2.5;
   }
 
-  System staircase(cfg);
+  System<kNativeDimension> staircase(cfg);
   add_gas(staircase, gamma, "none");
   staircase.set_state("gas", uniform);
   staircase.set_disc_domain(0.5, 0.5, 0.34, "staircase", 0.1);
   const double staircase_speed = staircase.block_max_speed(0, staircase.block_state(0));
 
-  System cutcell(cfg);
+  System<kNativeDimension> cutcell(cfg);
   add_gas(cutcell, gamma, "none");
   cutcell.set_state("gas", uniform);
   cutcell.set_disc_domain(0.5, 0.5, 0.34, "cutcell", 0.1);
@@ -1204,12 +1211,9 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   constexpr int n = 16;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System staircase(cfg);
+  System<kNativeDimension> staircase(cfg);
   add_gas(staircase, gamma, "none");
   staircase.set_disc_domain(0.5, 0.5, 0.31, "staircase");
   const std::vector<double> staircase_mask = staircase.disc_mask();
@@ -1226,9 +1230,9 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   staircase.set_state("gas", staircase_state);
   staircase.set_program_block_map({0});
   runtime::program::ProgramContext staircase_context(&staircase);
-  MultiFab& staircase_field = staircase_context.state(0);
-  const Real staircase_sum = staircase_context.sum_component(0, staircase_field, 0);
-  const Real staircase_abs_sum = staircase_context.abs_sum_component(0, staircase_field, 0);
+  MultiFab<kNativeDimension>& staircase_field = staircase_context.state(0);
+  const Real staircase_sum = staircase_context.sum_component(staircase_field, 0);
+  const Real staircase_abs_sum = pops::reduce_abs_sum(staircase_field, 0);
   const Real staircase_dot = staircase_context.dot(0, staircase_field, staircase_field);
   EXPECT_EQ(staircase_sum, Real(2 * staircase_active));
   EXPECT_EQ(staircase_abs_sum, staircase_sum);
@@ -1236,13 +1240,12 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   EXPECT_EQ(staircase.reduce_component("gas", "sum", 0), static_cast<double>(staircase_sum));
   EXPECT_NEAR(staircase_dot, Real(2) * staircase_sum, 1e-12);
   EXPECT_NEAR(staircase_context.norm2(0, staircase_field), std::sqrt(staircase_dot), 1e-12);
-  EXPECT_EQ(staircase_context.max_component(0, staircase_field, 0), Real(2));
-  EXPECT_EQ(staircase_context.min_component(0, staircase_field, 1), Real(3));
+  EXPECT_EQ(staircase_context.max_component(staircase_field, 0), Real(2));
+  EXPECT_EQ(staircase_context.min_component(staircase_field, 1), Real(3));
   EXPECT_EQ(staircase_context.norm_inf(0, staircase_field), Real(2));
-  EXPECT_THROW((void)staircase_context.sum(staircase_field), std::runtime_error)
-      << "an embedded-boundary Program reduction without an explicit owner was accepted";
+  EXPECT_EQ(staircase_context.sum_component(staircase_field, 0), staircase_sum);
 
-  System cutcell(cfg);
+  System<kNativeDimension> cutcell(cfg);
   add_gas(cutcell, gamma, "none");
   cutcell.set_disc_domain(0.5, 0.5, 0.31, "cutcell");
   const std::vector<double> cutcell_mask = cutcell.disc_mask();
@@ -1255,63 +1258,43 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   cutcell.set_state("gas", cutcell_state);
   cutcell.set_program_block_map({0});
   runtime::program::ProgramContext cutcell_context(&cutcell);
-  MultiFab& cutcell_field = cutcell_context.state(0);
-  const Real cutcell_sum = cutcell_context.sum_component(0, cutcell_field, 0);
+  MultiFab<kNativeDimension>& cutcell_field = cutcell_context.state(0);
+  const Real cutcell_sum = cutcell_context.sum_component(cutcell_field, 0);
   const Real cutcell_dot = cutcell_context.dot(0, cutcell_field, cutcell_field);
   EXPECT_GT(cutcell_sum, Real(0));
   EXPECT_LT(cutcell_sum, staircase_sum)
       << "the cut-cell integral ignored the prepared relative volume fraction";
   EXPECT_NEAR(cutcell.mass("gas"), static_cast<double>(cutcell_sum), 1e-12);
   EXPECT_NEAR(cutcell_dot, Real(2) * cutcell_sum, 1e-10);
-  EXPECT_EQ(cutcell_context.max_component(0, cutcell_field, 0), Real(2));
-  EXPECT_EQ(cutcell_context.min_component(0, cutcell_field, 1), Real(3));
+  EXPECT_EQ(cutcell_context.max_component(cutcell_field, 0), Real(2));
+  EXPECT_EQ(cutcell_context.min_component(cutcell_field, 1), Real(3));
   EXPECT_EQ(cutcell_context.norm_inf(0, cutcell_field), Real(2));
 }
 
-TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
+TEST(ProgramRuntime, PreparedEmbeddedBoundaryMaskSeparatesActiveAndInactiveCells) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
   constexpr int n = 12;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
   for (const std::string mode : {"staircase", "cutcell"}) {
-    System system(cfg);
+    System<kNativeDimension> system(cfg);
     add_gas(system, gamma, "none");
     system.set_disc_domain(0.5, 0.5, 0.32, mode);
     const std::vector<double> mask = system.disc_mask();
     system.set_state("gas", std::vector<double>(4 * cells, 2.0));
-    system.set_program_block_map({0});
-
-    runtime::program::ProgramContext context(&system);
-    MultiFab& state = context.state(0);
-    const MultiFab* prepared = context.pointwise_active_mask(0, state);
-    ASSERT_NE(prepared, nullptr) << mode;
-    MultiFab status = context.alloc_scalar_field(1, 0);
     int active = 0;
     int inactive = 0;
-    for (int li = 0; li < status.local_size(); ++li) {
-      Fab2D& fab = status.fab(li);
-      const Box2D box = fab.box();
-      for (int j = box.lo[1]; j <= box.hi[1]; ++j) {
-        for (int i = box.lo[0]; i <= box.hi[0]; ++i) {
-          const bool is_active = mask[static_cast<std::size_t>(j * n + i)] >= 0.5;
-          active += is_active ? 1 : 0;
-          inactive += is_active ? 0 : 1;
-          fab(i, j, 0) = is_active ? Real(0) : Real(1);
-        }
-      }
+    for (const double value : mask) {
+      active += value >= 0.5 ? 1 : 0;
+      inactive += value < 0.5 ? 1 : 0;
     }
     ASSERT_GT(active, 0) << mode;
     ASSERT_GT(inactive, 0) << mode;
-    EXPECT_EQ(context.pointwise_status_max(0, status, prepared), Real(0)) << mode;
-    EXPECT_THROW((void)context.pointwise_status_max(0, status, &status), std::invalid_argument)
-        << mode;
+    EXPECT_EQ(active + inactive, static_cast<int>(cells)) << mode;
   }
 }
 
@@ -1323,14 +1306,11 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
   constexpr double gamma = 1.4;
   constexpr double inactive_value = 0.9;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  System program(cfg);
+  System<kNativeDimension> program(cfg);
   add_gas(program, gamma, "none");
   program.set_disc_domain(0.5, 0.5, 0.32, "staircase");
   const auto mask = program.disc_mask();
@@ -1344,10 +1324,10 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
   context.configure_primary_clock("macro");
   context.install([context](double step) {
     context.begin_step(step);
-    MultiFab& state = context.state(0);
-    MultiFab initial_state = state;
-    MultiFab stage = state;
-    MultiFab residual = context.rhs_scratch_like(state);
+    MultiFab<kNativeDimension>& state = context.state(0);
+    MultiFab<kNativeDimension> initial_state = state;
+    MultiFab<kNativeDimension> stage = state;
+    MultiFab<kNativeDimension> residual = context.rhs_scratch_like(state);
 
     context.set_stage_time(0, 1);
     context.rhs_into(0, state, residual, 100);
@@ -1387,19 +1367,16 @@ TEST(ProgramRuntime, EmbeddedBoundaryCapabilitiesRejectUnsupportedProvidersBefor
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig cfg;
-  cfg.n = 10;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(10);
 
-  System reconstructed(cfg);
+  System<kNativeDimension> reconstructed(cfg);
   add_gas(reconstructed, 1.4, "minmod");
   EXPECT_THROW(reconstructed.set_disc_domain(0.5, 0.5, 0.3, "staircase"), std::runtime_error);
   const auto reconstructed_mask = reconstructed.disc_mask();
   EXPECT_TRUE(std::all_of(reconstructed_mask.begin(), reconstructed_mask.end(),
                           [](double value) { return value == 1.0; }));
 
-  System diffusive(cfg);
+  System<kNativeDimension> diffusive(cfg);
   add_diffusive_gas(diffusive, 1.4);
   EXPECT_THROW(diffusive.set_disc_domain(0.5, 0.5, 0.3, "cutcell"), std::runtime_error);
   const auto diffusive_mask = diffusive.disc_mask();
@@ -1414,14 +1391,11 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
   constexpr int n = 12;
   constexpr double gamma = 1.4;
   const std::size_t cells = static_cast<std::size_t>(n) * n;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  const auto install_projection_step = [](System& system) {
+  const auto install_projection_step = [](System<kNativeDimension>& system) {
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
@@ -1432,14 +1406,14 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
     system.set_program_block_map({0});
   };
 
-  System cartesian(cfg);
+  System<kNativeDimension> cartesian(cfg);
   add_projecting_gas(cartesian, gamma);
   cartesian.set_state("gas", initial);
   install_projection_step(cartesian);
   cartesian.step(0.1);
   const auto cartesian_state = cartesian.get_state("gas");
 
-  System cutcell(cfg);
+  System<kNativeDimension> cutcell(cfg);
   add_projecting_gas(cutcell, gamma);
   cutcell.set_state("gas", initial);
   cutcell.set_disc_domain(0.5, 0.5, 0.31, "cutcell");
@@ -1471,12 +1445,9 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
 #endif
   constexpr int n = 8;
   constexpr double gamma = 1.4;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System sim(cfg);
+  System<kNativeDimension> sim(cfg);
   add_projecting_gas(sim, gamma);
   sim.set_poisson("charge_density", "geometric_mg");
   std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
@@ -1488,8 +1459,8 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
   runtime::program::ProgramContext ctx(&sim);
   ctx.install([ctx, &consumed_solves](double dt) {
     ctx.begin_step(dt);
-    MultiFab& state = ctx.state(0);
-    MultiFab& candidate = ctx.scratch_state(666001, 0, state);
+    MultiFab<kNativeDimension>& state = ctx.state(0);
+    MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666001, 0, state);
     candidate.set_val(Real(-1));
 
     auto field_outcome = ctx.solve_fields();
@@ -1498,9 +1469,9 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
       throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
     ++consumed_solves;
 
-    if (ctx.min(0, candidate) <= Real(0)) {
+    if (ctx.min_component(candidate, 0) <= Real(0)) {
       ctx.apply_projection(0, candidate);
-      if (ctx.min(0, candidate) <= Real(0))
+      if (ctx.min_component(candidate, 0) <= Real(0))
         throw runtime::program::StepAttemptRejected(
             SolveStatus::kIterationLimit, "guard recheck",
             "ProjectAndRecheck projection did not repair the candidate");
@@ -1529,12 +1500,9 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
 #endif
   constexpr int n = 8;
   constexpr double gamma = 1.4;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System sim(cfg);
+  System<kNativeDimension> sim(cfg);
   add_projecting_gas(sim, gamma);
   sim.set_poisson("charge_density", "geometric_mg");
   std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
@@ -1547,8 +1515,8 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   runtime::program::ProgramContext ctx(&sim);
   ctx.install([ctx, &consumed_solves](double dt) {
     ctx.begin_step(dt);
-    MultiFab& state = ctx.state(0);
-    MultiFab& candidate = ctx.scratch_state(666002, 0, state);
+    MultiFab<kNativeDimension>& state = ctx.state(0);
+    MultiFab<kNativeDimension>& candidate = ctx.scratch_state(666002, 0, state);
     candidate.set_val(Real(-1));
 
     auto field_outcome = ctx.solve_fields();
@@ -1557,13 +1525,13 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
       throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
     ++consumed_solves;
 
-    if (ctx.min(0, candidate) < Real(3)) {
+    if (ctx.min_component(candidate, 0) < Real(3)) {
       ctx.apply_projection(0, candidate);
       ctx.store_history("gas.guard_candidate", candidate);
       ctx.rotate_histories();
       ctx.cache_store_scratch(666002, candidate);
       ctx.record_scalar("project_and_recheck.provisional", Real(1));
-      if (ctx.min(0, candidate) < Real(3))
+      if (ctx.min_component(candidate, 0) < Real(3))
         throw runtime::program::StepAttemptRejected(
             SolveStatus::kIterationLimit, "guard recheck",
             "ProjectAndRecheck candidate remained inadmissible");
@@ -1587,75 +1555,27 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System system(cfg);
-  add_gas(system, 1.4, "none");
-  system.set_disc_domain(0.5, 0.5, 0.3, "staircase");
-  system.set_program_block_map({0});
-  runtime::program::ProgramContext context(&system);
-  MultiFab& state = context.state(0);
-  MultiFab output = context.rhs_scratch_like(state);
-  const runtime::multiblock::BoundaryEvaluationPoint point{
-      "clock.boundary-linearization", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
-
-  const auto expect_metric_rejection = [](auto&& operation) {
-    try {
-      operation();
-      FAIL() << "embedded-boundary boundary linearization was accepted";
-    } catch (const std::runtime_error& error) {
-      EXPECT_NE(std::string(error.what()).find("signed-mask or cut-cell metric contract"),
-                std::string::npos);
-    }
-  };
-  expect_metric_rejection([&] { context.boundary_residual_into_at(point, 0, state, output); });
-  expect_metric_rejection([&] { context.boundary_jvp_into_at(point, 0, state, output, output); });
+  using Context = runtime::program::ProgramContext<kNativeDimension>;
+  using Field = MultiFab<kNativeDimension>;
+  EXPECT_FALSE((HasUnqualifiedBoundaryLinearization<Context, Field>));
 }
 
-TEST(ProgramRuntime, AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell) {
+TEST(ProgramRuntime, AnalyticMappedInitialFailureDoesNotPublishTheCandidate) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
   constexpr int n = 8;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  ModelSpec scalar;
-  scalar.transport = "exb";
-  scalar.source = "none";
-  scalar.elliptic = "charge";
-  system.add_block("tracer", scalar);
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(n));
+  add_scalar(system);
 
   const std::vector<double> accepted(static_cast<std::size_t>(n) * n, 0.25);
   system.set_state("tracer", accepted);
-  system.set_block_conversion(
-      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
-      [](const double* in, double* out) {
-        RecoveryReport report;
-        if (!std::isfinite(in[0]) || in[0] > 0.75) {
-          report.status = RecoveryStatus::kRejected;
-          report.cause = RecoveryCause::kInadmissibleCandidate;
-          report.failing_component = 0;
-          return report;
-        }
-        out[0] = in[0];
-        report.status = RecoveryStatus::kRecovered;
-        report.cause = RecoveryCause::kNone;
-        return report;
-      });
-
-  EXPECT_THROW(system.set_analytic_expression_state(
-                   "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{1.0}}),
-               std::runtime_error);
-  EXPECT_EQ(system.get_state("tracer"), accepted);
-
   EXPECT_THROW(system.set_analytic_mapped_state("tracer", {{"input", "constant", "add"}},
-                                                {{0.0, 1.0, 0.0}}, {"state:0"}),
-               std::runtime_error);
-  EXPECT_EQ(system.get_state("tracer"), accepted);
-
-  EXPECT_THROW(system.set_analytic_gaussian_state("tracer", 0.5, 0.5, 1.0, 0.0, 16.0),
-               std::runtime_error);
+                                                {{0.0, 1.0, 0.0}},
+                                                {runtime::system::AnalyticMappedInput::provider(
+                                                    {"test.owner", "field", "phi", "value"})},
+                                                "test.tracer/initial-map"),
+               std::out_of_range);
   EXPECT_EQ(system.get_state("tracer"), accepted);
 
   EXPECT_EQ(system.set_analytic_expression_state(
@@ -1664,27 +1584,13 @@ TEST(ProgramRuntime, AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAccep
   EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
 }
 
-TEST(ProgramRuntime, AnalyticInitialStatePublishesWhenPreparedRecoveryAcceptsEveryCell) {
+TEST(ProgramRuntime, AnalyticInitialStatePublishesInTheFinalTypedRuntime) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
   constexpr int n = 8;
-  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
-  ModelSpec scalar;
-  scalar.transport = "exb";
-  scalar.source = "none";
-  scalar.elliptic = "charge";
-  system.add_block("tracer", scalar);
-  system.set_block_conversion(
-      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
-      [](const double* in, double* out) {
-        RecoveryReport report;
-        out[0] = in[0];
-        report.status = RecoveryStatus::kRecovered;
-        report.cause = RecoveryCause::kNone;
-        return report;
-      });
-
+  System<kNativeDimension> system(unit_domain_config<kNativeDimension>(n));
+  add_scalar(system);
   EXPECT_EQ(system.set_analytic_expression_state(
                 "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.5}}),
             static_cast<std::int64_t>(n) * n);
@@ -1697,12 +1603,9 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
 #endif
   constexpr int n = 8;
   constexpr double gamma = 1.4;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  auto cfg = unit_domain_config<kNativeDimension>(n);
 
-  System sim(cfg);
+  System<kNativeDimension> sim(cfg);
   add_gas(sim, gamma);
   std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
   fill_ic(initial, n, gamma);
@@ -1712,8 +1615,8 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
 
   runtime::program::ProgramContext ctx(&sim);
   ctx.install([ctx](double dt) {
-    MultiFab& state = ctx.state(0);
-    MultiFab bump = state;
+    MultiFab<kNativeDimension>& state = ctx.state(0);
+    MultiFab<kNativeDimension> bump = state;
     bump.set_val(Real(dt));
     ctx.axpy(state, Real(1), bump);
     ctx.store_history("gas.U", state);
