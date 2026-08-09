@@ -11,6 +11,7 @@ from pops.codegen._compile_emit import _emit_auxiliary_route_registration
 from pops.codegen.program_emit_kernels import ProgramProviderPlans
 from pops.codegen.component_provider_packs import (
     ComponentProviderPacks,
+    auxiliary_component_slot,
     compact_auxiliary_provider_pack,
     consumer_provider_plan,
     resolve_component_provider_packs,
@@ -196,3 +197,43 @@ def test_program_consumer_plan_is_first_use_local_and_owner_qualified() -> None:
     assert "ConsumerValue" in cpp
     assert "ProviderEntry" not in cpp
     assert "}}}, 7}" not in cpp  # package-local producer slots never cross the ABI
+
+
+def test_provider_pack_compacts_auxiliary_consumers_without_state_or_parameter_carriers() -> None:
+    owner = "model/demo"
+    contract = ComponentContract("auxiliary", "cell", None, "cell", "cell_scalar")
+    complete = ProviderPack((
+        (ComponentKey(owner, "state", "U", "density"), contract,
+         ProviderEntry("initial_state", True, 0)),
+        (ComponentKey(owner, "param", "material", "gamma"), contract,
+         ProviderEntry("runtime_parameter", True, 0)),
+        (ComponentKey(owner, "aux", "material", "collision_rate"), contract,
+         ProviderEntry("runtime_input", True, 9)),
+        (ComponentKey(owner, "field", "electrostatic", "potential"), contract,
+         ProviderEntry("field_solver", True, 17)),
+    ))
+
+    compact = compact_auxiliary_provider_pack(complete)
+    assert [entry.slot for entry in (compact.declared_entry(key) for key in compact)] == [0, 1]
+    assert auxiliary_component_slot(compact, owner_qid=owner, name="collision_rate") == 0
+    assert auxiliary_component_slot(compact, owner_qid=owner, name="potential") == 1
+    plan = consumer_provider_plan(complete)
+    assert [row["key"]["space_kind"] for row in plan] == ["aux", "field"]
+    assert [row["consumer_slot"] for row in plan] == [0, 1]
+
+
+def test_provider_pack_keeps_homonymous_owner_qualified_components_distinct() -> None:
+    contract = ComponentContract("auxiliary", "cell", None, "cell", "cell_scalar")
+    electron = "model/electron"
+    ion = "model/ion"
+    pack = ProviderPack((
+        (ComponentKey(electron, "aux", "material", "temperature"), contract,
+         ProviderEntry("runtime_input", True, 0)),
+        (ComponentKey(ion, "field", "thermodynamic", "temperature"), contract,
+         ProviderEntry("field_solver", True, 0)),
+    ))
+
+    compact = compact_auxiliary_provider_pack(pack)
+    assert len(compact) == 2
+    assert auxiliary_component_slot(compact, owner_qid=electron, name="temperature") == 0
+    assert auxiliary_component_slot(compact, owner_qid=ion, name="temperature") == 1

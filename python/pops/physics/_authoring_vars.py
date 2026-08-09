@@ -2,7 +2,7 @@
 
 Split out of the monolithic :class:`~pops.physics._model.HyperbolicModel` so no
 single file exceeds the Spec-4 500-line bound. The mixin holds only methods; the
-instance attributes they touch (``cons_names`` / ``prim_defs`` / ``aux_names``
+instance attributes they touch (``cons_names`` / ``prim_defs`` / ``_provider_components``
 / ``prim_state`` / ``cons_from`` / ``prim_roles``) are
 created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics._model`).
 
@@ -14,12 +14,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pops._ir import Var, _wrap
-from pops._aux_layout import require_aux_name
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
 else:
     _HyperbolicModel = object
+
+
+def _require_provider_component_name(value: Any, *, where: str = "provider") -> str:
+    """Validate one source-level component spelling used as a generated C++ local.
+
+    Identity and storage are resolved exclusively by the ProviderPack.  This
+    small authoring check only prevents an invalid formula local from reaching
+    the C++ compiler.
+    """
+    if not isinstance(value, str) or not value.isidentifier():
+        raise ValueError(
+            "%s name must be a valid identifier (letters/digits/_, without a leading digit)"
+            % where
+        )
+    return value
 
 
 class _VariablesMixin(_HyperbolicModel):
@@ -51,9 +65,9 @@ class _VariablesMixin(_HyperbolicModel):
         slot from the canonical ``ProviderPack``; no spelling has a reserved
         physical meaning.
         """
-        name = require_aux_name(name, where="aux")
-        if name not in self.aux_names:
-            self.aux_names.append(name)
+        name = _require_provider_component_name(name, where="provider")
+        if name not in self._provider_components:
+            self._provider_components.append(name)
             self._invalidate_authoring_views()
         return Var(name, "aux")
 
@@ -64,17 +78,16 @@ class _VariablesMixin(_HyperbolicModel):
         used = _dependencies(self._source or ())
         return [
             "    const pops::Real %s = a.template flux_provider<%d>();"
-            % (name, self._aux_consumer_provider_index("source_default", name))
-            for name in self.aux_names if name in used
+            % (name, self._consumer_provider_slot("source_default", name))
+            for name in self._provider_components if name in used
         ]
 
     def _flux_provider_locals_lines(self) -> Any:
         """C++ locals read from the exact physical-flux provider protocol.
 
-        Unlike ``_aux_locals_lines`` this emits no field access on the global ``pops::Aux`` POD.
-        Both ``pops::Aux`` (for non-FV pointwise callers) and ``BoundFluxProviders<Model>``
-        implement ``flux_provider<Component>()``, so generated physical laws keep one formula and
-        the finite-volume route consumes only its resolved model-qualified pack.
+        This emits no global auxiliary storage access. ``BoundFluxProviders<Model>`` implements
+        ``flux_provider<ConsumerSlot>()`` over the exact physical-flux consumer plan, so generated
+        physical laws keep one formula while the finite-volume route consumes only its resolved pack.
         """
         from pops._ir.visitors import _dependencies
 
@@ -96,13 +109,13 @@ class _VariablesMixin(_HyperbolicModel):
         used = _dependencies(expressions)
         return [
             "    const pops::Real %s = a.template flux_provider<%d>();"
-            % (name, self._aux_flux_provider_index(name))
-            for name in self.aux_names if name in used
+            % (name, self._physical_flux_consumer_slot(name))
+            for name in self._provider_components if name in used
         ]
 
     def _reads_aux(self) -> bool:
         """True if a formula reads an auxiliary provider."""
-        return bool(self.aux_names)
+        return bool(self._provider_components)
 
     def _total_n_aux(self) -> Any:
         """Total width of the resolved compact provider-pack channel."""
@@ -113,28 +126,14 @@ class _VariablesMixin(_HyperbolicModel):
             )
         return len(pack)
 
-    def _aux_component_index(self, name: Any) -> int:
-        from pops.codegen.component_provider_packs import auxiliary_component_slot
-
-        pack = getattr(self, "_auxiliary_provider_pack", None)
-        if pack is None:
-            raise ValueError(
-                "auxiliary ProviderPack is absent; compile through the canonical Module authority"
-            )
-        return auxiliary_component_slot(
-            pack,
-            owner_qid=str(self.owner_path.canonical()),
-            name=require_aux_name(name, where="aux"),
-        )
-
-    def _aux_flux_provider_index(self, name: Any) -> int:
+    def _physical_flux_consumer_slot(self, name: Any) -> int:
         """Return a physical-flux *consumer* slot, never a carrier slot."""
         plan = getattr(self, "_component_flux_consumer_plan", None)
         if plan is None:
             raise ValueError(
                 "physical-flux consumer plan is absent; compile through Module"
             )
-        checked = require_aux_name(name, where="aux")
+        checked = _require_provider_component_name(name, where="provider")
         matches = [
             row for row in plan if row["key"]["component"] == checked
         ]
@@ -146,7 +145,7 @@ class _VariablesMixin(_HyperbolicModel):
             )
         return matches[0]["consumer_slot"]
 
-    def _aux_consumer_provider_index(self, consumer: Any, name: Any) -> int:
+    def _consumer_provider_slot(self, consumer: Any, name: Any) -> int:
         """Return a named operator's local provider slot."""
         plans = getattr(self, "_component_operator_consumer_plans", None)
         if plans is None:
@@ -154,7 +153,7 @@ class _VariablesMixin(_HyperbolicModel):
         plan = plans.get(consumer)
         if plan is None:
             raise ValueError("auxiliary consumer plan %r is absent" % consumer)
-        checked = require_aux_name(name, where="aux")
+        checked = _require_provider_component_name(name, where="provider")
         matches = [row for row in plan if row["key"]["component"] == checked]
         if len(matches) != 1:
             detail = "absent" if not matches else "ambiguous"

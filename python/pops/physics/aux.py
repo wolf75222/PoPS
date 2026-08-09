@@ -1,14 +1,10 @@
-"""Generic auxiliary declaration helpers, physical roles, and runtime parameters.
+"""Physical roles and runtime-parameter helpers.
 
-The exact owner/space/component/slot authority is ``ProviderPack``.  The
-small detached ``AuxLayout`` helper is only an ordered name view for Python
-diagnostics; it has no dimension or physical-name convention.
+Auxiliary identity, contracts and storage are owned solely by ``ProviderPack``.
 """
 from __future__ import annotations
 
 from typing import Any
-
-from pops._aux_layout import AuxLayout, aux_component_index, aux_layout, aux_total_n_aux
 
 # Bound on the number of RUNTIME parameters per block (P7-b). MIRROR of kMaxRuntimeParams
 # (include/pops/runtime/config/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this
@@ -17,10 +13,6 @@ from pops._aux_layout import AuxLayout, aux_component_index, aux_layout, aux_tot
 from pops._native_facts import NATIVE_MAX_RUNTIME_PARAMS
 
 __all__ = [
-    "AuxLayout",
-    "aux_component_index",
-    "aux_layout",
-    "aux_total_n_aux",
     "max_runtime_params",
     "role_of",
     "roles_for",
