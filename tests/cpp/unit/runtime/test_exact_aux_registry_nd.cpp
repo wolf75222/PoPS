@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -335,6 +336,144 @@ TEST(ExactAuxiliaryRegistryNd, RejectsDuplicateOrSparseConsumerSlots) {
   sparse.add(input<2>("input", input_output));
   sparse.add_consumer_plan({"consumer", {{dependency(input_output), 1}}});
   EXPECT_THROW(sparse.seal(), std::invalid_argument);
+}
+
+template <int Dim>
+void verifies_provider_storage_binding_is_compact_and_group_qualified() {
+  using pops::Box;
+  using pops::Extent;
+  using pops::Index;
+  using pops::MultiFab;
+  using pops::mesh::Distribution;
+  using pops::mesh::RankSpace;
+  using pops::mesh::BoxArray;
+  using pops::runtime::system::AuxiliaryStorageGroups;
+  using pops::runtime::system::ResolvedAuxiliaryConsumerPlan;
+
+  Index<Dim> lower{};
+  Index<Dim> upper{};
+  Extent<Dim> one_rank{};
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 3;
+    one_rank[axis] = 1;
+    ghosts[axis] = 1;
+  }
+  const Box<Dim> domain{lower, upper};
+  const BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution = Distribution<Dim>::replicated(
+      layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
+  MultiFab<Dim> state(layout, distribution, Index<Dim>{}, 1, ghosts);
+
+  AuxiliaryStorageGroups<Dim> groups;
+  groups.groups.emplace("provider/group-a",
+                        MultiFab<Dim>(layout, distribution, Index<Dim>{}, 2, ghosts));
+  groups.groups.emplace("provider/group-b",
+                        MultiFab<Dim>(layout, distribution, Index<Dim>{}, 1, ghosts));
+
+  const auto first = output<Dim>("owner-a", "provider-a", "first", 0);
+  const auto second = output<Dim>("owner-b", "provider-b", "second", 1);
+  ResolvedAuxiliaryConsumerPlan<Dim> plan{
+      "consumer/exact",
+      {{second.key, second.contract, second.shape, {"provider/group-b", 0}, 0},
+       {first.key, first.contract, first.shape, {"provider/group-a", 1}, 1}}};
+
+  // The local packing deliberately reverses producer declaration order and crosses two storage
+  // groups.  Compact consumer slots must be independent from both global component and group.
+  const auto view = pops::runtime::system::bind_provider_storage_view<Dim, 2>(&plan, &groups, 0);
+  EXPECT_EQ(view.storage[0].data, groups.find("provider/group-b")->fab(0).view().data);
+  EXPECT_EQ(view.storage_components[0], 0);
+  EXPECT_EQ(view.storage[1].data, groups.find("provider/group-a")->fab(0).view().data);
+  EXPECT_EQ(view.storage_components[1], 1);
+  EXPECT_NO_THROW((pops::runtime::system::require_pointwise_provider_groups<Dim, 2>(
+      state, &groups, &plan, "test provider binding")));
+
+  auto invalid_component = plan;
+  invalid_component.values[0].address.component = 1;
+  EXPECT_THROW(((void)pops::runtime::system::bind_provider_storage_view<Dim, 2>(
+                    &invalid_component, &groups, 0)),
+               std::invalid_argument);
+
+  auto non_scalar = plan;
+  non_scalar.values[1].shape.value_components = 2;
+  EXPECT_THROW((pops::runtime::system::require_pointwise_provider_groups<Dim, 2>(
+                   state, &groups, &non_scalar, "test provider binding")),
+               std::invalid_argument);
+
+  // Provider-free consumers never inspect a plan or a storage carrier owned by another consumer.
+  EXPECT_NO_THROW(((void)pops::runtime::system::bind_provider_storage_view<Dim, 0>(
+      nullptr, nullptr, 0)));
+  EXPECT_NO_THROW((pops::runtime::system::require_pointwise_provider_groups<Dim, 0>(
+      state, &groups, &plan, "test provider-free binding")));
+}
+
+TEST(ExactAuxiliaryRegistryNd, ProviderStorageBindingIsExactAcrossRanksAndGroups) {
+  verifies_provider_storage_binding_is_compact_and_group_qualified<1>();
+  verifies_provider_storage_binding_is_compact_and_group_qualified<2>();
+  verifies_provider_storage_binding_is_compact_and_group_qualified<3>();
+}
+
+template <int Dim>
+void verifies_external_field_publication_defers_and_then_refreshes_dependents() {
+  const auto field_output = output<Dim>("field/owner", "electric", "potential", 0);
+  const auto derived_output = output<Dim>("model/owner", "electric", "acceleration", 1);
+  auto launches = std::make_shared<std::vector<std::string>>();
+
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(PreparedAuxiliaryProvider<Dim>{
+      "field-output-a",
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_residual, AuxiliaryFreshness::accepted_step},
+      {field_output},
+      {}});
+  registry.add(derived<Dim>("derived-b", derived_output, {dependency(field_output)}, launches,
+                            {AuxiliaryEvaluationEvent::before_residual,
+                             AuxiliaryFreshness::evaluation}));
+  registry.add_consumer_plan({"consumer/b", {{dependency(derived_output), 0}}});
+  registry.seal();
+
+  EXPECT_EQ(registry.dependent_provider_identities({"field-output-a"}),
+            (std::vector<std::string>{"derived-b"}));
+
+  const auto first = point("clock", 0, AuxiliaryEvaluationEvent::before_residual);
+  {
+    auto publication = registry.begin_external_publication(first, {"field-output-a"});
+    publication.stage_external("field-output-a");
+    publication.launch_ready_native();
+    EXPECT_TRUE(launches->empty())
+        << "an external field publish must not eagerly launch its downstream derived provider";
+    publication.accept();
+  }
+  EXPECT_TRUE(registry.last_accepted_point("field-output-a").has_value());
+  EXPECT_FALSE(registry.last_accepted_point("derived-b").has_value());
+
+  const auto second = point("clock", 1, AuxiliaryEvaluationEvent::before_residual);
+  {
+    auto incomplete = registry.begin_external_publication(second, {"field-output-a"});
+    EXPECT_THROW(incomplete.validate_complete(), std::logic_error)
+        << "a forced external root cannot publish without its exact candidate";
+    incomplete.reject();
+  }
+
+  {
+    auto refresh = registry.begin_publication(second, {}, {"consumer/b"});
+    refresh.launch_ready_native();
+    EXPECT_TRUE(launches->empty())
+        << "the derived provider waits for its due external prerequisite";
+    refresh.stage_external("field-output-a");
+    refresh.launch_ready_native();
+    ASSERT_EQ(launches->size(), 1U);
+    EXPECT_EQ((*launches)[0], "clock:2");
+    refresh.accept();
+  }
+  EXPECT_EQ(*registry.last_accepted_point("derived-b"), second);
+}
+
+TEST(ExactAuxiliaryRegistryNd,
+     ExternalFieldPublicationDefersDependentsUntilAnExactConsumerRefreshesThem) {
+  verifies_external_field_publication_defers_and_then_refreshes_dependents<1>();
+  verifies_external_field_publication_defers_and_then_refreshes_dependents<2>();
+  verifies_external_field_publication_defers_and_then_refreshes_dependents<3>();
 }
 
 }  // namespace

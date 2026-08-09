@@ -15,6 +15,7 @@
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/system.hpp>
+#include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <algorithm>
 #include <array>
@@ -52,7 +53,8 @@ class ProgramContext {
   static constexpr int dimension = Dim;
   using runtime_type = System<Dim>;
   using field_type = MultiFab<Dim>;
-  using auxiliary_plan_type = runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>;
+  template <int Count>
+  using provider_values_view_type = ProviderStorageView<Dim, Count>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
 
@@ -220,16 +222,28 @@ class ProgramContext {
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
   }
-  /// The compact provider carrier is nullable only for a provider-free program.  Generated code
-  /// resolves its own qid below and gathers plan.storage_component into dense ProviderValues<N>;
-  /// no independent DSO is allowed to bake a global component number.
-  [[nodiscard]] const field_type* auxiliary_storage() const {
-    return system_->prepared_block_auxiliary_storage();
-  }
-
-  [[nodiscard]] const auxiliary_plan_type& auxiliary_consumer_plan(
-      std::string_view consumer_qid) const {
-    return system_->prepared_auxiliary_consumer_plan(std::string(consumer_qid));
+  /// Bind one native consumer's exact compact provider ABI for one local state patch.
+  ///
+  /// The consumer qid resolves late at the prepared System boundary; generated packages never
+  /// embed global group/component addresses.  ``Count == 0`` returns an empty device-copyable view
+  /// without reading a consumer plan or provider storage, even if another block owns providers.
+  template <int Count>
+  [[nodiscard]] provider_values_view_type<Count> provider_values_view(
+      std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
+    static_assert(Count >= 0, "a provider consumer count cannot be negative");
+    if constexpr (Count == 0) {
+      (void)consumer_qid;
+      (void)program_block;
+      (void)local_fab;
+      return {};
+    } else {
+      const field_type& state_field = state(program_block);
+      const auto* const groups = system_->prepared_block_provider_storage_groups();
+      const auto& plan = system_->prepared_auxiliary_consumer_plan(std::string(consumer_qid));
+      runtime::system::require_pointwise_provider_groups<Dim, Count>(
+          state_field, groups, &plan, "ProgramContext provider values");
+      return runtime::system::bind_provider_storage_view<Dim, Count>(&plan, groups, local_fab);
+    }
   }
 
   field_type rhs_scratch_like(const field_type& prototype) const {
@@ -810,10 +824,6 @@ class ProgramContext {
     runtime_state().profiler_.count(due ? "cache_misses" : "cache_hits");
     return due;
   }
-  void cache_store_aux(int node_id) const {
-    runtime_state().cache_.store(node_id, aux(), macro_step());
-  }
-  void cache_restore_aux(int node_id) const { runtime_state().cache_.restore_into(node_id, aux()); }
   void cache_store_scratch(int node_id, const field_type& scratch) const {
     runtime_state().cache_.store(node_id, scratch, macro_step());
   }

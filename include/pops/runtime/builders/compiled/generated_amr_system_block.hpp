@@ -421,7 +421,7 @@ Real source_frequency(const Model& model, const MultiFab<Dim>& state,
   for (std::size_t local = 0; local < state.local_size(); ++local)
     for_each_cell(state.box(local), generated_system_detail::MaterializeSourceFrequency<Dim, Model>{
                                         model, state.fab(local).view(),
-                                        generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
                                             provider_plan, provider_storage, local),
                                         values.fab(local).view()});
   const Real frequency = reduce_max(values);
@@ -439,7 +439,7 @@ Real stability_dt(const Model& model, const MultiFab<Dim>& state,
   for (std::size_t local = 0; local < state.local_size(); ++local)
     for_each_cell(state.box(local), generated_system_detail::MaterializeStabilityDt<Dim, Model>{
                                         model, state.fab(local).view(),
-                                        generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
                                             provider_plan, provider_storage, local),
                                         values.fab(local).view()});
   const Real dt = reduce_min(values);
@@ -838,14 +838,14 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                   materialize_masked_patch<Dim, Variables>(
                       model, spatial.metric(), reconstruction, numerical, positivity_floor,
                       state.fab(local),
-                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
                           provider_plan, provider_storage, local),
                       embedded_boundary->active_mask().fab(local),
                       (*faces)[local], residual->fab(local));
                 } else {
                   materialize_cut_cell_patch<Dim, Variables>(
                       model, spatial, reconstruction, numerical, positivity_floor, state.fab(local),
-                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
                           provider_plan, provider_storage, local),
                       *embedded_boundary, local, (*faces)[local],
                       residual->fab(local));
@@ -858,7 +858,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                 else
                   spatial.materialize_face_fluxes(
                       state.fab(local),
-                      generated_system_detail::bind_provider_storage_view<Dim, provider_count>(
+                      runtime::system::bind_provider_storage_view<Dim, provider_count>(
                           provider_plan, provider_storage, local),
                       (*faces)[local]);
                 if (physical_boundary)

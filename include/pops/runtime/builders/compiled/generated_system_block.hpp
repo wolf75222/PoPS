@@ -11,10 +11,9 @@
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
-#include <pops/numerics/spatial/primitives/state_access.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
-#include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/provider_storage_binding.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
@@ -86,64 +85,6 @@ concept GeneratedSourceModel =
              const ProviderValues<provider_count_for<Model, Dim>()>& providers) {
       { model.source(state, providers) } -> std::same_as<typename Model::State>;
 };
-
-/// Materialize the device-copyable compact map for one patch from a sealed consumer plan.
-/// The registry owns all name/contract resolution; kernels receive only dense local slots.
-template <int Dim, int Count>
-ProviderStorageView<Dim, Count> bind_provider_storage_view(
-    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan,
-    const runtime::system::AuxiliaryStorageGroups<Dim>* storage, std::size_t local) {
-  if constexpr (Count == 0) {
-    return {};
-  } else {
-    if (plan == nullptr)
-      throw std::invalid_argument("generated provider consumer requires a sealed plan");
-    if (plan->value_count() != static_cast<std::size_t>(Count))
-      throw std::invalid_argument("generated provider plan count differs from native consumer");
-    if (storage == nullptr)
-      throw std::invalid_argument("generated provider consumer requires accepted storage groups");
-    ProviderStorageView<Dim, Count> result{};
-    for (const auto& value : plan->values) {
-      const MultiFab<Dim>* const group = storage->find(value.address.group);
-      if (value.consumer_slot >= static_cast<std::size_t>(Count) || group == nullptr ||
-          value.address.component >= static_cast<std::size_t>(group->ncomp()) ||
-          local >= group->local_size())
-        throw std::invalid_argument("generated provider plan has an invalid resolved slot");
-      result.storage[value.consumer_slot] = group->fab(local).view();
-      result.storage_components[value.consumer_slot] =
-          static_cast<int>(value.address.component);
-    }
-    return result;
-  }
-}
-
-/// Verify that every group named by a pointwise consumer plan can be indexed with the state patch.
-/// Staggered, face-centred, or differently decomposed providers must be projected by their own
-/// provider before this seam; silently sampling them as cell-centred scalars is forbidden.
-template <int Dim, int Count>
-void require_pointwise_provider_groups(
-    const MultiFab<Dim>& state, const runtime::system::AuxiliaryStorageGroups<Dim>* storage,
-    const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* plan, const char* operation) {
-  if constexpr (Count == 0) {
-    if (storage != nullptr || plan != nullptr)
-      throw std::invalid_argument(std::string(operation) + ": provider-free consumer retained state");
-  } else {
-    if (storage == nullptr || plan == nullptr ||
-        plan->value_count() != static_cast<std::size_t>(Count))
-      throw std::invalid_argument(std::string(operation) + ": missing compact provider plan");
-    for (const auto& value : plan->values) {
-      const MultiFab<Dim>* const group = storage->find(value.address.group);
-      if (group == nullptr || value.address.component >= static_cast<std::size_t>(group->ncomp()) ||
-          group->layout() != state.layout() || group->distribution() != state.distribution() ||
-          group->local_rank() != state.local_rank() || group->local_size() != state.local_size())
-        throw std::invalid_argument(std::string(operation) +
-                                    ": provider group is not pointwise compatible with state");
-      if (value.contract.centering != "cell" || value.shape.value_components != 1)
-        throw std::invalid_argument(std::string(operation) +
-                                    ": non-cell-scalar provider requires an explicit projection");
-    }
-  }
-}
 
 template <class Model>
 concept GeneratedEllipticRhsModel =
@@ -337,8 +278,8 @@ MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
   if constexpr (provider_count > 0) {
     if (provider_storage == nullptr)
       throw std::invalid_argument("generated source requires resolved provider storage");
-    require_pointwise_provider_groups<Dim, provider_count>(state, provider_storage, plan,
-                                                            "generated source providers");
+    runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+        state, provider_storage, plan, "generated source providers");
   }
   MultiFab<Dim> candidate(state.layout(), state.distribution(), state.local_rank(), Model::n_vars,
                           state.ghosts());
@@ -350,7 +291,8 @@ MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
           state.box(local),
           MaterializeSource<Dim, Model>{
               model, state.fab(local).view(),
-              bind_provider_storage_view<Dim, provider_count>(plan, provider_storage, local),
+              runtime::system::bind_provider_storage_view<Dim, provider_count>(plan,
+                                                                                provider_storage, local),
               candidate.fab(local).view(), status.fab(local).view()});
     if (reduce_max(status) != Real(0))
       throw std::runtime_error("generated source produced a non-finite component");
@@ -416,7 +358,8 @@ void assemble_masked_residual_with_plan(
     for (std::size_t local = 0; local < state.local_size(); ++local)
       masked.assemble_residual(
           state.fab(local),
-              bind_provider_storage_view<Dim, provider_count>(plan, provider_storage, local),
+              runtime::system::bind_provider_storage_view<Dim, provider_count>(plan,
+                                                                                provider_storage, local),
           active_cells.fab(local), candidate.fab(local), omission);
     copy_valid(candidate, residual);
   }
@@ -438,7 +381,8 @@ void assemble_embedded_residual_with_plan(
                           residual.ncomp(), residual.ghosts());
     for (std::size_t local = 0; local < state.local_size(); ++local)
       embedded_operator.assemble_residual(
-          state.fab(local), bind_provider_storage_view<2, provider_count>(plan, provider_storage, local),
+          state.fab(local), runtime::system::bind_provider_storage_view<2, provider_count>(
+                                plan, provider_storage, local),
           active_cells.fab(local), inverse_volume_fraction.fab(local), candidate.fab(local), omission);
     copy_valid(candidate, residual);
   }
@@ -487,14 +431,14 @@ Real maximum_speed(const Model& model, const MultiFab<Dim>& state,
   if constexpr (provider_count > 0) {
     if (provider_storage == nullptr)
       throw std::invalid_argument("generated speed requires resolved provider storage");
-    require_pointwise_provider_groups<Dim, provider_count>(state, provider_storage, plan,
-                                                            "generated speed providers");
+    runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+        state, provider_storage, plan, "generated speed providers");
   }
   MultiFab<Dim> values(state.layout(), state.distribution(), state.local_rank(), 1, state.ghosts());
   for (std::size_t local = 0; local < state.local_size(); ++local)
     for_each_cell(state.box(local), MaterializeMaximumSpeed<Dim, Model>{
                                         model, state.fab(local).view(),
-                                        bind_provider_storage_view<Dim, provider_count>(
+                                        runtime::system::bind_provider_storage_view<Dim, provider_count>(
                                             plan, provider_storage, local),
                                         values.fab(local).view()});
   const Real result = reduce_max(values);
@@ -558,7 +502,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
     fill_boundary(state, state_schedule);
     if (provider_storage != nullptr) {
-      require_pointwise_provider_groups<Dim, provider_count>(
+      runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
           state, provider_storage, provider_plan, "generated flux providers");
     }
     if (boundary != nullptr)
@@ -578,8 +522,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       else
         spatial.materialize_face_fluxes(
             state.fab(local),
-        bind_provider_storage_view<Dim, flux_provider_count<Model>>(provider_plan,
-                                                                          provider_storage, local),
+        runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
+            provider_plan, provider_storage, local),
             faces[local]);
       if (boundary != nullptr)
         boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
@@ -710,7 +654,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       for (std::size_t local = 0; local < state.local_size(); ++local)
         for_each_cell(state.box(local),
                       MaterializeSourceFrequency<Dim, Model>{model, state.fab(local).view(),
-                                                             bind_provider_storage_view<Dim, provider_count>(
+                                                             runtime::system::bind_provider_storage_view<Dim, provider_count>(
                                                                  provider_plan, provider_storage, local),
                                                              values.fab(local).view()});
       const Real frequency = reduce_max(values);
@@ -729,7 +673,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       for (std::size_t local = 0; local < state.local_size(); ++local)
         for_each_cell(state.box(local),
                       MaterializeStabilityDt<Dim, Model>{model, state.fab(local).view(),
-                                                         bind_provider_storage_view<Dim, provider_count>(
+                                                         runtime::system::bind_provider_storage_view<Dim, provider_count>(
                                                              provider_plan, provider_storage, local),
                                                          values.fab(local).view()});
       const Real dt = reduce_min(values);

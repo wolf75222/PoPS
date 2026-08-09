@@ -19,7 +19,6 @@
 //    fails closed; the reductions; laplacian == divergence(gradient); the scratch
 //    allocators; register/store/read/rotate history; record_scalar -> program_diagnostic; the runtime
 //    params round-trip; hmin / max_wave_speed are positive;
-//  - the per-stage FieldContext.matches() guard rejects a wrong (problem, block, stage) read.
 //
 // The compiled-.so runtime cadence, the held-node scheduler cache and the AOT ABI are Kokkos-only and
 // validated on ROMEO; here every seam is driven on the build-selected exact native dimension.
@@ -31,8 +30,6 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
-#include <pops/runtime/context/aux_layout.hpp>       // default_poisson_layout
-#include <pops/runtime/context/field_context.hpp>    // FieldContext (per-stage provenance token)
 #include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system.hpp>
@@ -44,6 +41,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -60,10 +58,21 @@ using NativeSystem = System<kTestDimension>;
 using NativeSystemConfig = SystemConfig<kTestDimension>;
 using NativeProgramContext = runtime::program::ProgramContext<kTestDimension>;
 using NativeField = MultiFab<kTestDimension>;
-using NativeLayout = mesh::BoxArray<kTestDimension>;
-using NativeDistribution = mesh::Distribution<kTestDimension>;
 using NativeConstView = FieldView<const Real, kTestDimension>;
 using NativeBox = Box<kTestDimension>;
+
+static_assert(std::is_same_v<
+              decltype(std::declval<const runtime::program::ProgramContext<1>&>()
+                           .template provider_values_view<0>("", 0, 0)),
+              ProviderStorageView<1, 0>>);
+static_assert(std::is_same_v<
+              decltype(std::declval<const runtime::program::ProgramContext<2>&>()
+                           .template provider_values_view<0>("", 0, 0)),
+              ProviderStorageView<2, 0>>);
+static_assert(std::is_same_v<
+              decltype(std::declval<const runtime::program::ProgramContext<3>&>()
+                           .template provider_values_view<0>("", 0, 0)),
+              ProviderStorageView<3, 0>>);
 
 NativeSystemConfig native_config(std::int64_t cells, Real length = Real(1)) {
   NativeSystemConfig config;
@@ -158,7 +167,6 @@ void add_gas_block(NativeSystem& s, const std::string& name) {
   prepared.name = name;
   prepared.provider_identity = "test.program-context.exact-ranked-euler";
   prepared.ncomp = GasModel::n_vars;
-  prepared.aux_components = kTestDimension + 1;
   prepared.conservative_variables = GasModel::conservative_vars();
   prepared.primitive_variables = GasModel::primitive_vars();
   prepared.gamma = kGamma;
@@ -246,28 +254,24 @@ std::vector<double> ic(int n) {
   return U;
 }
 
-std::vector<double> scalar_wave(int n) {
-  const std::size_t cell_count = uniform_cell_count(n);
-  const double pi = 3.14159265358979323846;
-  std::vector<double> values(cell_count);
-  for (std::size_t linear = 0; linear < cell_count; ++linear) {
-    std::size_t remainder = linear;
-    double value = 1.0;
-    for (int axis = 0; axis < kTestDimension; ++axis) {
-      const int index = static_cast<int>(remainder % static_cast<std::size_t>(n));
-      remainder /= static_cast<std::size_t>(n);
-      value *= std::sin(2.0 * pi * (index + 0.5) / n);
-    }
-    values[linear] = value;
-  }
-  return values;
-}
-
 TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
   ensure_kokkos();
   NativeSystem sim(native_config(2));
   NativeProgramContext context(&sim);
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(2));
+  NativeProgramContext context(&sim);
+
+  // This System has neither registered providers nor a program-block map.  Count zero therefore
+  // proves the API is a true empty ABI: it must not resolve the qid, map a block, or dereference
+  // any provider storage that belongs to another possible consumer.
+  const auto providers = context.template provider_values_view<0>("not-resolved", 73, 19);
+  EXPECT_TRUE(providers.storage.empty());
+  EXPECT_TRUE(providers.storage_components.empty());
 }
 
 TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilConsumed) {
@@ -417,68 +421,6 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
 
   EXPECT_TRUE(max_abs_diff(Up, Uref) < 1e-12) << "FE parity max|d|=" << max_abs_diff(Up, Uref);
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "step did not change the state";
-}
-
-TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
-  ensure_kokkos();
-  constexpr int n = 8;
-  NativeSystemConfig cfg = native_config(n);
-
-  NativeSystem sim(cfg);
-  add_gas_block(sim, "plasma");
-  sim.set_poisson("charge_density", "cartesian_cg");
-  sim.set_program_block_map({0});
-
-  std::vector<double> density = scalar_wave(n);
-  sim.set_density("plasma", density);
-
-  NativeProgramContext ctx(&sim);
-  NativeField accepted_aux_before(ctx.aux());
-  const NativeLayout aux_boxes = ctx.aux().layout();
-  const NativeDistribution aux_mapping = ctx.aux().distribution();
-  const Index<kTestDimension> aux_local_rank = ctx.aux().local_rank();
-  const int aux_components = ctx.aux().ncomp();
-  const Extent<kTestDimension> aux_ghosts = ctx.aux().ghosts();
-  const std::vector<double> accepted_potential_before = sim.potential();
-  SolveOutcome direct = sim.solve_fields();
-  ASSERT_TRUE(direct.report().solved_value_available()) << direct.report().reason;
-  EXPECT_EQ(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
-  EXPECT_EQ(sim.potential(), accepted_potential_before)
-      << "uniform aux and potential must remain physically unchanged before Accept";
-  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components + 1, aux_ghosts);
-  EXPECT_THROW((void)direct.consume(SolveConsumption::kAccept), std::logic_error)
-      << "Accept must validate every publication layout before copying a candidate";
-  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components, aux_ghosts);
-  EXPECT_THROW((void)sim.solve_fields(), std::logic_error);
-  EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
-  const SolveReport direct_report = direct.consume(SolveConsumption::kAccept);
-  ASSERT_TRUE(direct_report.solved_value_available()) << direct_report.reason;
-  EXPECT_GT(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
-
-  for (double& value : density)
-    value *= 0.5;
-  sim.set_density("plasma", density);
-  NativeField program_aux_before(ctx.aux());
-  const std::vector<double> program_potential_before = sim.potential();
-  SolveOutcome accepted = ctx.solve_fields();
-  ASSERT_TRUE(accepted.report().solved_value_available()) << accepted.report().reason;
-  EXPECT_EQ(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
-  EXPECT_EQ(sim.potential(), program_potential_before);
-  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components + 1, aux_ghosts);
-  EXPECT_THROW((void)accepted.consume(SolveConsumption::kAccept), std::logic_error)
-      << "NativeProgramContext must use the same read-only NativeSystem publication validation";
-  ctx.aux() = NativeField(aux_boxes, aux_mapping, aux_local_rank, aux_components, aux_ghosts);
-  EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
-  const SolveReport accepted_report = accepted.consume(SolveConsumption::kAccept);
-  ASSERT_TRUE(accepted_report.solved_value_available()) << accepted_report.reason;
-  EXPECT_GT(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
-  NativeField published_aux(ctx.aux());
-
-  std::fill(density.begin(), density.end(), std::numeric_limits<double>::quiet_NaN());
-  sim.set_density("plasma", density);
-  EXPECT_THROW((void)consume_solve_outcome(ctx.solve_fields()), std::runtime_error);
-  EXPECT_EQ(max_abs_diff(ctx.aux(), published_aux), Real(0))
-      << "a throwing field solve must restore every valid and ghost aux value";
 }
 
 TEST(ProgramContextContract, RankedHyperbolicBoundaryRefusesMappedPeriodicityWithoutProvider) {
@@ -1015,27 +957,4 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   EXPECT_THROW(sim.set_program_block_map({1}), std::out_of_range)
       << "mapped NativeSystem index outside n_blocks must fail before publication";
   EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}));
-}
-
-// The per-stage FieldContext.matches() guard rejects a context read at the wrong qualified provider,
-// owner or stage: a stage-k solve cannot be silently consumed as stage-k' or another block (ADC-588). This is
-// the "per-stage field contexts" the ADC-538 contract names; it fences the compile/bind seam.
-TEST(ProgramContextContract, PerStageFieldContextGuardsRejectWrongTriple) {
-  const pops::AuxLayout layout = pops::default_poisson_layout();
-  pops::FieldContext stage1;
-  stage1.provider_identity = "case/field/electric/provider-pack";
-  stage1.owner_identity = "case/block/plasma";
-  stage1.stage_id = 1;
-  stage1.layout = &layout;
-
-  EXPECT_TRUE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 1));
-  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 2));
-  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/other", 1));
-  EXPECT_FALSE(stage1.matches("case/field/other/provider-pack", "case/block/plasma", 1));
-  EXPECT_FALSE(stage1.matches("", "case/block/plasma", 1))
-      << "an empty provider is never a wildcard";
-  // the layout resolves a real output and fails loud on an unknown one.
-  EXPECT_TRUE(stage1.component_of("phi") == 0) << "phi resolves to component 0";
-  EXPECT_THROW(stage1.component_of("not_a_field"), std::out_of_range)
-      << "unknown output fails loud";
 }
