@@ -137,7 +137,7 @@ enum class TimeRouteId : int {
 inline constexpr RouteInfo kTimeRoutes[] = {
   {0, "explicit", "pops::SSPRK2", "", ""},
   {1, "ssprk3", "pops::SSPRK3", "", ""},
-  {2, "euler", "pops::ForwardEuler", "", "validation use, never default"},
+  {2, "euler", "pops::ForwardEuler<pops::kNativeDimension>", "", "validation use, never default"},
   {3, "imex", "generated ProgramGraph(additive_imex_euler)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
   {4, "imexrk_ars222", "generated ProgramGraph(additive_imex_ars222)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
 };
@@ -310,9 +310,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "d2b3539c2aefb10fc107755e062a1029593fbaa4509b7fe248970e345b3ae8ca";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "b0ac796b7a52315721b338cb838c0016746d183679be5535f284229725314450";
-inline constexpr const char* kRouteRegistrySignature = "v4:b0ac796b7a52315721b338cb838c0016746d183679be5535f284229725314450";
+inline constexpr const char* kComponentCatalogSha256 = "21d3882acc689c62b3b9f438d9483d0de0e184e9dcad473fa64966d82247a854";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df";
+inline constexpr const char* kRouteRegistrySignature = "v4:067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

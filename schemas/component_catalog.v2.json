@@ -710,7 +710,7 @@
           "token": "euler",
           "wire_id": 2,
           "cpp_id": "kForwardEuler",
-          "native_entry": "pops::ForwardEuler",
+          "native_entry": "pops::ForwardEuler<pops::kNativeDimension>",
           "requirements": [],
           "limitations": [
             "validation use, never default"

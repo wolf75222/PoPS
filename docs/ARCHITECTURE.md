@@ -135,7 +135,7 @@ PoPS is organized into five orthogonal layers. A high layer expresses the proble
 
 **Execution (seams).** The execution policy sees minimal exact-ranked views (`Box<Dim>`, `FieldView<Dim>`, scalar and rank), never a second dimension-specific container. `for_each_cell` ([`include/pops/mesh/execution/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp)) iterates the compile-time rank through Kokkos, and [`FieldView`](../include/pops/mesh/storage/field_view.hpp) is the non-owning host/device view. `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) provides rank/size and collectives; exact layout and ownership stay in prepared spatial providers. Halo exchange and field algebra are grid operators that orchestrate these seams.
 
-**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). Production composition is authored exclusively through `pops.Program`; its immutable normalized `ProgramGraph` is the sole temporal authority for uniform and AMR execution. The exact-ranked [`System<Dim>`](../include/pops/runtime/system.hpp) and [`AmrSystem<Dim>`](../include/pops/runtime/amr_system.hpp) own field preparation, residual assembly and state publication. There is no separate single-block `Coupler`, static `SystemAssembler`, `Fab2D`, or AMR level-stack authority. [`AmrCouplerMP<Dim>`](../include/pops/coupling/amr/amr_coupler_mp.hpp) is a thin spatial facade over [`AmrRuntime<Dim>`](../include/pops/runtime/amr/amr_runtime.hpp); it never chooses a stage tableau or field-solve cadence. On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program.
+**Time / coupling.** The layer that composes operators without knowing their implementation contains exact-ranked SSPRK objects ([`include/pops/numerics/time/integrators/time_steppers.hpp`](../include/pops/numerics/time/integrators/time_steppers.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). Production composition is authored exclusively through `pops.Program`; its immutable normalized `ProgramGraph` is the sole temporal authority for uniform and AMR execution. The exact-ranked [`System<Dim>`](../include/pops/runtime/system.hpp) and [`AmrSystem<Dim>`](../include/pops/runtime/amr_system.hpp) own field preparation, residual assembly and state publication. There is no separate single-block `Coupler`, static `SystemAssembler`, `Fab2D`, or AMR level-stack authority. [`AmrCouplerMP<Dim>`](../include/pops/coupling/amr/amr_coupler_mp.hpp) is a thin spatial facade over [`AmrRuntime<Dim>`](../include/pops/runtime/amr/amr_runtime.hpp); it never chooses a stage tableau or field-solve cadence. On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program.
 
 
 ## Component contracts and generated catalog
@@ -343,9 +343,8 @@ mandatory and owns every stage and cadence. The runtime supplies data,
 operator/provider seams and the native CFL-bound reduction; it has no implicit transport,
 coupling, projection or `AmrRuntime`
 fallback. The former adaptive multirate formula survives only as a test oracle in
-`tests/cpp/support/reference_time_scheduler.hpp` and
-`tests/cpp/support/reference_system_driver.hpp`; no installed header or production facade exposes it
-until `ProgramGraph` can lower that composition.
+`tests/cpp/support/reference_time_scheduler.hpp`; no installed header, reference driver, or
+production facade exposes it until `ProgramGraph` can lower that composition.
 
 The `solve_fields` delegates to `SystemFieldSolver`
 ([`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)): it
@@ -480,7 +479,7 @@ retained history depth. PoPS never silently changes patch geometry under
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
 Production stages and their coefficients are emitted by the installed Program (cf.
-[`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp), `SSPRK2Step` /
+[`include/pops/numerics/time/integrators/time_steppers.hpp`](../include/pops/numerics/time/integrators/time_steppers.hpp), `SSPRK2Step<Dim>` /
 `SSPRK3`). The step $dt$ returned by `step_cfl` is the min over the evolutive blocks of
 $cfl \cdot h \cdot \mathrm{substeps}_b / (\mathrm{stride}_b \cdot w_b)$, with $h = \min(dx, dy)$ in
 cartesian and $h = \min(dr,\, r_{\min}\, d\theta)$ in polar. Those metadata contribute only to the

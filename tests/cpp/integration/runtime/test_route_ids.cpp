@@ -173,7 +173,7 @@ TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
 
 TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
   const std::string signature = route_registry_signature();
-  EXPECT_TRUE(signature.rfind("v3:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.rfind("v4:", 0) == 0) << signature;
   EXPECT_TRUE(signature.size() == 67) << "v3: plus complete sha256 catalog digest";
   EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
               std::string::npos);
@@ -205,7 +205,7 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
               std::string(route_info(TimeRouteId::kSsprk3).limitations).empty())
       << "route_info(kSsprk3) : native production sans limitation obsolete";
   EXPECT_TRUE(std::string(route_info(TimeRouteId::kForwardEuler).native_entry) ==
-                  "pops::ForwardEuler" &&
+                  "pops::ForwardEuler<pops::kNativeDimension>" &&
               std::string(route_info(TimeRouteId::kForwardEuler).limitations) ==
                   "validation use, never default")
       << "route_info(kForwardEuler) : route native reservee a la validation";

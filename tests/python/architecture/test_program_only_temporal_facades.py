@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
-REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
+RETIRED_REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
 LEGACY_PUBLIC_TIME_SCHEDULER = (
     ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
@@ -135,10 +135,7 @@ def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
         not in HEADERS_MANIFEST.read_text(encoding="utf-8")
     )
 
-    reference = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
-    assert "class ReferenceSystemDriver" in reference
-    assert "Real step_adaptive(" in reference
-    assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+    assert not RETIRED_REFERENCE_SYSTEM_DRIVER.exists()
 
 
 def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
@@ -158,10 +155,8 @@ def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     assert violations == set()
 
     reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
-    reference_driver = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
     assert "namespace pops::test_support" in reference_scheduler
     assert "void advance_subcycled(" in reference_scheduler
-    assert '#include "reference_time_scheduler.hpp"' in reference_driver
     assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
         "tests/cpp/support/"
     )
@@ -236,47 +231,29 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
     assert "step(selected)" in step_cfl
 
 
-def test_amr_program_cfl_does_not_require_native_advance_closures():
-    source = AMR_RUNTIME.read_text(encoding="utf-8")
-    cfl = _function_body(source, "Real cfl_dt(")
-    assert "preflight_program_cfl_state_()" in cfl
-    assert "preflight_native_temporal_step_()" not in cfl
-    assert "preflight_native_temporal_step_" not in source
-    assert "void step(Real dt)" not in source
-    assert "Real step_cfl(Real cfl" not in source
-    assert "has_explicit_temporal_relations_" not in source
-    cfl_preflight = _function_body(source, "void preflight_program_cfl_state_(")
-    assert "temporal_relations_.size()" in cfl_preflight
-    assert "hierarchy_.refinement_ratios.size()" in cfl_preflight
-    assert "time-subcycling ratios" in cfl_preflight
-    temporal_product = _function_body(source, "Real temporal_refinement_product_(")
-    assert "temporal_relations_" in temporal_product
-    assert "hierarchy_.refinement_ratios" not in temporal_product
-    program_context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    refinement_preflight = _function_body(
-        program_context, "static void require_supported_program_refinement_ratios_("
-    )
-    assert "parent_child_temporal_relation(child)" in refinement_preflight
+def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
+    runtime = AMR_RUNTIME.read_text(encoding="utf-8")
+    system = AMR_SYSTEM_CPP.read_text(encoding="utf-8")
+    assert "cfl_dt(" not in runtime
+    assert "void step(" not in runtime
+    assert "step_cfl(" not in runtime
+    step_cfl = _function_body(system, "double AmrSystem<Dim>::step_cfl(")
+    assert "generated stability bound" in step_cfl
+    assert "program.dt_bound_(" in step_cfl
+    assert "step(selected);" in step_cfl
 
 
-def test_amr_regrid_cadence_is_decided_by_the_program_context():
+def test_amr_regrid_is_an_explicit_prepared_program_operation():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-
     assert "void regrid_if_due(" not in runtime
-    assert "int regrid_interval() const noexcept" in runtime
-    spatial_regrid = _function_body(runtime, "  void regrid()")
-    assert "macro_step" not in spatial_regrid
-    assert "regrid_every_" not in spatial_regrid
-
-    cadence = _function_body(context, "  void regrid_if_due_at_(")
-    assert "eng_->regrid_interval()" in cadence
-    assert "macro_step % interval" in cadence
-    assert "const bool regrid_due" in cadence
-    assert "interval <= 0" not in cadence
-    assert "eng_->regrid();" in cadence
-    assert "eng_->regrid_if_due(" not in cadence
-    assert cadence.count("materialize_capture_flux_scratch_();") == 1
+    assert "regrid_interval" not in runtime
+    assert "regrid_if_due" not in context
+    prepare = _function_body(context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(")
+    publish = _function_body(context, "  void publish_regrid(")
+    assert "runtime_->prepare_regrid(" in prepare
+    assert 'require_history_free_for_topology_change_("regrid")' in publish
+    assert "runtime_->publish_regrid(" in publish
 
 
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
@@ -296,8 +273,10 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
     assert "b.imex" not in runtime
     assert "bool imex" not in header
     assert "bimex" not in builder
-    assert "project_level_state" in runtime
-    assert "project_level_state" in builder
+    assert "project_level_state" not in runtime
+    assert "project_level_state" not in builder
+    assert "assemble_residual(" in builder
+    assert "spatial_operator_.assemble_residual(" in builder
 
 
 def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures():
@@ -358,17 +337,16 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
     assert "resolve_implicit_components_compiled" not in source
 
 
-def test_uniform_system_rejects_unpublished_newton_diagnostics_before_allocation():
+def test_uniform_legacy_model_route_and_unpublished_newton_diagnostics_fail_before_allocation():
     native = _function_body(
         SYSTEM_INSTALL.read_text(encoding="utf-8"),
-        "void System::add_block(",
+        "void System<Dim>::add_block(",
     )
     python = PYTHON_SYSTEM_INSTALL.read_text(encoding="utf-8")
     python_add_equation = _python_function_source(python, "add_equation")
 
-    assert "newton_diagnostics=true is unavailable" in native
-    assert "no typed implicit Program consumer publishes that report" in native
-    assert "diagnostics_.newton_reports[name]" not in native
+    assert "System::add_block(ModelSpec) was removed from the native core" in native
+    assert "PreparedSystemBlock<Dim>" in native
     assert python_add_equation.index(
         "_reject_unpublished_newton_diagnostics(time"
     ) < python_add_equation.index("native_block_scalars(")
@@ -420,11 +398,14 @@ def test_production_has_no_second_amr_time_engine():
     assert violations == {}
 
 
-def test_prepared_amr_program_reflux_plan_is_spatial_only():
+def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
     source = AMR_SUBCYCLING.read_text(encoding="utf-8")
-    assert "class PreparedAmrProgramRefluxPlan" in source
-    assert "class PreparedAmrProgramRefluxTransition" in source
-    assert "synchronize_integrated(" in source
+    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    assert "class PreparedAmrSubcyclePlan" in source
+    assert "class PreparedAmrSubcycleTransition" in source
+    assert "PreparedAmrProgramReflux" not in source
+    assert "reconcile_reflux(" in source
+    assert "runtime_->reconcile_reflux(" in context
     for retired_attempt_state in (
         "begin_attempt(",
         "publish_attempt(",
@@ -481,7 +462,8 @@ def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_s
     assert uniform.count("void apply_coupling_operators(") == 1
     assert "ProgramContext coupling requires every runtime block candidate" in uniform
     assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
-    assert "void apply_coupling_operators(" not in amr
+    assert "[[noreturn]] void apply_coupling_operators(" in amr
+    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
 

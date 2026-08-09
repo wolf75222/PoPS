@@ -33,13 +33,22 @@ namespace pops {
 /// reference (via EquationBlock::state) must outlive the CoupledSystem.
 /// Construction by deduction: CoupledSystem{b1, b2} deduces the types via the deduction
 /// guide provided at the end of the file.
-template <EquationBlockLike... Blocks>
+template <EquationBlockLike First, EquationBlockLike... Rest>
 struct CoupledSystem {
-  static constexpr std::size_t n_blocks = sizeof...(Blocks);
+  using field_type = typename First::field_type;
+  using memory_space = typename First::memory_space;
+  static constexpr int dimension = First::dimension;
+  static constexpr std::size_t n_blocks = 1 + sizeof...(Rest);
 
-  std::tuple<Blocks...> blocks;
+  static_assert(((Rest::dimension == dimension) && ...),
+                "CoupledSystem blocks must share one exact spatial rank");
+  static_assert((std::same_as<typename Rest::field_type, field_type> && ...),
+                "CoupledSystem blocks must share one exact field specialization");
 
-  explicit CoupledSystem(Blocks... bs) : blocks(std::move(bs)...) {}
+  std::tuple<First, Rest...> blocks;
+
+  explicit CoupledSystem(First first, Rest... rest)
+      : blocks(std::move(first), std::move(rest)...) {}
 
   template <std::size_t I>
   decltype(auto) block() {
@@ -82,11 +91,15 @@ struct ForEachBlockProbe {
 /// use ForEachBlockProbe or a named functor.
 template <class S>
 concept CoupledSystemLike = requires(S s) {
+  typename S::field_type;
+  typename S::memory_space;
+  requires(S::dimension >= 1 && S::dimension <= 3);
+  requires(S::field_type::dimension == S::dimension);
   { S::n_blocks } -> std::convertible_to<std::size_t>;
   s.for_each_block(detail::ForEachBlockProbe{});
 };
 
-template <EquationBlockLike... Blocks>
-CoupledSystem(Blocks...) -> CoupledSystem<Blocks...>;
+template <EquationBlockLike First, EquationBlockLike... Rest>
+CoupledSystem(First, Rest...) -> CoupledSystem<First, Rest...>;
 
 }  // namespace pops

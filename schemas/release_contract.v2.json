@@ -13,8 +13,8 @@
   "checkpoint_spatial_schema_version": 1,
   "uniform_checkpoint_payload_version": 7,
   "amr_checkpoint_payload_version": 8,
-  "component_catalog_sha256": "d2b3539c2aefb10fc107755e062a1029593fbaa4509b7fe248970e345b3ae8ca",
-  "component_catalog_semantic_sha256": "b0ac796b7a52315721b338cb838c0016746d183679be5535f284229725314450",
+  "component_catalog_sha256": "21d3882acc689c62b3b9f438d9483d0de0e184e9dcad473fa64966d82247a854",
+  "component_catalog_semantic_sha256": "067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df",
   "supported_matrix": {
     "language": {
       "python": ["3.12"],

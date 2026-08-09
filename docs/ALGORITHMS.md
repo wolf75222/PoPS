@@ -156,13 +156,13 @@ to their chain indices; diagnostics can therefore name the actual closed-form, n
 repair, or custom route without reconstructing policy from an erased plan. The pointwise route is
 fixed-size, `POPS_HD`, allocation-free and callback-free.
 
-**Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min(\Delta x,\Delta y)}{\max|\lambda|}$,
+**Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min_d\Delta x_d}{\max|\lambda|}$,
 where $\lambda$ is the local wave speed and $C \le 1$ at order 1; `max_wave_speed_mf` provides
 $\max|\lambda|$. A model without transport ($\max|\lambda| = 0$) does not constrain the step
 (`max_wave_speed_mf` returns 0). The operator writes only `R` (it touches neither `U` nor `aux`, no
 ghost fill). Validation: `test_spatial_discretisation` (the reconstruction x flux pair is a
-named type assembled by `assemble_rhs`), `test_cfl_dt` (`dt = cfl * min(dx,dy) / max|lambda|`
-multi-species). The Cartesian/polar invariant is checked bit-for-bit (the polar operator does not touch
+named type assembled by `assemble_rhs`) and `test_prepared_numerics_gate` (exact-ranked stability
+and admissibility contracts). The Cartesian/polar invariant is checked bit-for-bit (the polar operator does not touch
 this path). The end-to-end validations (diocotron, Euler-Poisson) live on the `adc_cases` side.
 
 ## 2. Numerical fluxes: Rusanov, HLL, HLLC, Roe
@@ -542,9 +542,8 @@ solved once per step limits the field to order 1, whatever SSPRK is chosen on th
 computing declared stability bounds. They do not create a scheduler: production subcycling,
 holds, or catch-up must appear as explicit Program composition (section 7).
 The `SSPRK2Step`/`SSPRK3Step` objects reproduce bit-for-bit the
-old static-driver inline copies (deduplication). Validation:
-`test_user_time_integrator` checks that a user-provided integrator gives the same result
-as a core SSPRK.
+old static-driver inline copies (deduplication). The installed `test_program_runtime` and native
+loader suites validate the typed Program cadence and integrator routes directly.
 
 
 ---
@@ -672,8 +671,7 @@ must place both the transport and the typed implicit primitive explicitly; the s
 runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
-`test_imex_partial` (a 2-variable model, only one implicit),
-`test_imex_transport` (the transport of an IMEX block is indeed advanced explicitly), and
+`test_implicit_source_nd` plus `test_amr_imex_native` (typed partial/transport composition), and
 `test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
 large signed indices, including fatal-over-recoverable precedence between ranks).
 
@@ -752,8 +750,7 @@ Lie/Strang endpoints and explicit field-solve placement.
 ## 7. Test-only multirate reference formulas
 
 **Scope.** This section records historical formulas retained only by
-`tests/cpp/support/reference_time_scheduler.hpp` and
-`tests/cpp/support/reference_system_driver.hpp`. They are not installed PoPS code and cannot become
+`tests/cpp/support/reference_time_scheduler.hpp`. They are not installed PoPS code and cannot become
 a production time engine. `System` and `AmrSystem` execute only their installed `ProgramGraph`;
 production subcycling, holds, catch-up, and adaptive-step placement must be authored as typed Program
 composition.
@@ -887,8 +884,8 @@ stride); to reproduce the historical test formula, supply the explicit historica
 the oracle rather than its CFL helper. Under MPI, the absence of `all_reduce_max` would desynchronize the
 ranks (each would see the max of its own boxes only) and would make the simulation diverge. The
 stride semantics is hold-then-catch-up: the slow block is loosely coupled, which is an assumed choice
-(the gas is not resolved at every step). Tests `test_multirate_stride`, `test_adaptive_multirate`
-and `test_cfl_dt` prove the test-only numerical oracle. The architecture gate separately proves that
+(the gas is not resolved at every step). `test_system_abstraction` proves the isolated metadata
+formula; `test_program_runtime` proves the installed hold/catch-up cadence. The architecture gate proves that
 no installed header and no `System` or `AmrSystem` launch can select it.
 
 ## 8. Parabolic term: diffusion as face flux
@@ -2114,8 +2111,8 @@ per level (exact at the coarse like `eps`, order 2 preserved). A base model (`n_
 falls back to 3 -> allocation and results bit-identical to the history. **Validation.**
 `test_aux_extra` (a model declares `n_aux > 3`), `test_aux_composite` (a `CompositeModel` propagates
 the aux width of its bricks), `test_aux_coupler_bz` / `test_aux_system_bz` /
-`test_amr_system_bz_pop` / `test_amr_system_bz_multibox` (B_z read and populated along the
-coupler, system, AMR, multi-box paths), `test_aux_te` (T_e derived from `p/rho`), `test_aux_single_source`
+`test_generated_amr_system_block` (B_z read and populated along exact-ranked system and AMR paths),
+`test_aux_te` (T_e derived from `p/rho`), `test_aux_single_source`
 (a single source generates all required `load_aux` accesses). Validated bit-identical on
 GH200 (B_z device single + multi-box, cf. GPU_RUNTIME_PORT.md).
 
@@ -2167,12 +2164,12 @@ materialized from one resolved `Case`; neither is an authoring API. `RuntimeInst
 qualified blocks, field plans, the temporal graph, layout authorities and consumer graph from the
 compiled artifact in one authenticated transaction. The single-level executor shares Poisson across
 the selected blocks; the adaptive executor runs the same graph over a shared hierarchy (same BoxArray,
-DistributionMapping and geometry per level via `same_layout_or_throw`), performs coarse co-located
+exact `Distribution<Dim>` and geometry per level), performs coarse co-located
 Poisson assembly, and conservatively transfers/refluxes every declared state. Inter-species sources
 are typed component-interface implementations in the graph; the bytecode and native registration
 calls remain internal lowering details. On the coupling side,
-`coupling/system_coupler.hpp` contains only `SystemAssembler`, while
-`coupling/amr_system_coupler.hpp` carries the static system over AMR without owning a time scheme.
+`coupling/system/amr_system_coupler.hpp` authenticates only shared exact-ranked AMR topology; it
+owns neither physics assembly nor a time scheme.
 [`runtime/model_factory.hpp`](../include/pops/runtime/builders/factory/model_factory.hpp):
 `dispatch_model` / `dispatch_transport` / `dispatch_source` / `dispatch_elliptic` assemble a
 `CompositeModel` from a `ModelSpec` (the core names no scenario).
@@ -2195,10 +2192,9 @@ or deferred compiled (`.so`) block. Without an explicit IMEX mask
 (`implicit_vars` / `implicit_roles` empty), an explicitly authored typed implicit
 Program primitive uses the model's component-selection default. The empty mask, an
 `IMEXTime` policy, or `time="imex"` never creates or schedules that primitive.
-**Validation.** `test_system_abstraction`, `test_system_coupler`, `test_two_species_minimal`,
-`test_coupled_source` (inter-species source), `test_system_two_explicit`, `test_assembler_driver`
-(the assembler assembles, the driver advances), `test_system_hardening`,
-`test_variable_role` (addressing a component by its physical role rather than by index).
+**Validation.** `test_system_abstraction` and `test_coupled_source` cover the exact-ranked static
+contracts; `test_coupling_operator_contract`, `test_program_runtime`,
+`test_generated_amr_system_block`, and `test_variable_role` cover the installed multi-block runtime.
 
 ## 23. Symbolic DSL and authenticated native components
 

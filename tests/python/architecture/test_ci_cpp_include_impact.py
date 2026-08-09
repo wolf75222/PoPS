@@ -239,7 +239,7 @@ def test_two_leaf_headers_select_the_union(tmp_path):
         tmp_path,
         [
             "include/pops/numerics/time/schemes/splitting.hpp",
-            "include/pops/numerics/time/integrators/ssprk.hpp",
+            "include/pops/numerics/time/integrators/time_steppers.hpp",
         ],
     )
     assert outputs["cpp_mode"] == "subset"

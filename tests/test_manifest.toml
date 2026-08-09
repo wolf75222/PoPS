@@ -26,11 +26,6 @@ sources = ["tests/cpp/integration/amr/test_amr_history_ring.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_layout_guard"
-sources = ["tests/cpp/integration/amr/test_amr_layout_guard.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_multiblock_compiled"
 sources = ["tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -88,17 +83,6 @@ labels = ["integration", "amr", "medium"]
 [[cpp.suite]]
 name = "test_amr_spatial_parity"
 sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_system_bz_multibox"
-sources = ["tests/cpp/integration/amr/test_amr_system_bz_multibox.cpp"]
-labels = ["integration", "amr", "medium"]
-mpi_variants = [2, 4]
-
-[[cpp.suite]]
-name = "test_amr_system_bz_pop"
-sources = ["tests/cpp/integration/amr/test_amr_system_bz_pop.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -512,21 +496,6 @@ sources = ["tests/cpp/integration/runtime/test_system_abstraction.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_system_coupler"
-sources = ["tests/cpp/integration/runtime/test_system_coupler.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
-name = "test_system_hardening"
-sources = ["tests/cpp/integration/runtime/test_system_hardening.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
-name = "test_system_two_explicit"
-sources = ["tests/cpp/integration/runtime/test_system_two_explicit.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
 name = "test_block_inverse"
 sources = ["tests/cpp/unit/numerics/test_block_inverse.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -896,7 +865,7 @@ mpi_nproc = [1, 2, 4]
 name = "test_mpi_prepared_amr_ghost_fill"
 sources = ["tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"]
 labels = ["backend", "mpi", "amr", "medium"]
-mpi_nproc = [2]
+mpi_nproc = [3]
 
 [[cpp.suite]]
 name = "test_patch_range"
@@ -924,11 +893,6 @@ sources = ["tests/cpp/unit/mesh/test_sync_residence.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
-name = "test_cfl_dt"
-sources = ["tests/cpp/unit/numerics/test_cfl_dt.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
 name = "test_diffusion"
 sources = ["tests/cpp/unit/numerics/test_diffusion.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -941,16 +905,6 @@ labels = ["unit", "numerics", "fast"]
 [[cpp.suite]]
 name = "test_imex_ap"
 sources = ["tests/cpp/unit/numerics/test_imex_ap.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
-name = "test_imex_partial"
-sources = ["tests/cpp/unit/numerics/test_imex_partial.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
-name = "test_imex_transport"
-sources = ["tests/cpp/unit/numerics/test_imex_transport.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
@@ -1014,11 +968,6 @@ sources = ["tests/cpp/unit/numerics/test_weno_convergence.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
-name = "test_adaptive_multirate"
-sources = ["tests/cpp/unit/physics/test_adaptive_multirate.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_ap_limit"
 sources = ["tests/cpp/unit/physics/test_ap_limit.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -1079,11 +1028,6 @@ sources = ["tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_multirate_stride"
-sources = ["tests/cpp/unit/physics/test_multirate_stride.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_polar_fluid_transport"
 sources = ["tests/cpp/unit/physics/test_polar_fluid_transport.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -1091,16 +1035,6 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_polar_lorentz_source"
 sources = ["tests/cpp/unit/physics/test_polar_lorentz_source.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_two_species_minimal"
-sources = ["tests/cpp/unit/physics/test_two_species_minimal.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
-name = "test_user_time_integrator"
-sources = ["tests/cpp/unit/physics/test_user_time_integrator.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]

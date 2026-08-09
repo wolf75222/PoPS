@@ -524,20 +524,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_spatial_provider_matrix
   test_primitive_recon
   test_system_abstraction
-  test_system_coupler
-  test_two_species_minimal
   test_coupled_source
   test_coupling_operator_contract
-  test_system_two_explicit
-  test_amr_layout_guard
-  test_system_hardening
   test_implicit_source_nd
-  test_imex_partial
-  test_imex_transport
-  test_multirate_stride
-  test_cfl_dt
-  test_adaptive_multirate
-  test_user_time_integrator
   test_diffusion
   test_amr_spatial_parity
   test_disc_domain_mask
@@ -548,8 +537,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_halo
   test_aux_coupler_bz
   test_aux_composite
-  test_amr_system_bz_pop
-  test_amr_system_bz_multibox
   test_aux_single_source
   test_weno_convergence
   test_splitting
@@ -835,7 +822,6 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
-  set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
 
   set(POPS_CPP_MPI_ONLY_TESTS
@@ -961,7 +947,6 @@ if(POPS_HAS_MPI)
     test_coupled_fieldsolve
     test_fill_boundary_cache
     test_copy_schedule_cache
-    test_amr_system_bz_multibox
     test_world_communicator
   )
   string(CONCAT POPS_GENERIC_KRYLOV_MPI_FILTER

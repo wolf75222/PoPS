@@ -1436,13 +1436,15 @@ taille/header de table et opérations requises avant de conserver le handle de b
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
 une boucle de cellules.
 
-Le contrat `Reflux` v1 possède maintenant un adaptateur préparé interne vers
-`PreparedAmrProgramRefluxTransition`. Pour chaque patch enfant local, l'adaptateur reçoit quatre
-paires de flux déjà intégrés et écrit quatre corrections dans des buffers persistants empoisonnés
-avant l'appel. PoPS vérifie que chaque valeur a été écrite et reste finie, atteint un consensus
-d'échec entre rangs, puis applique seul périodicité, masque de couverture, réduction MPI et
-publication transactionnelle. La présence et le contrat exact du provider sont également comparés
-entre rangs avant toute exécution.
+Le contrat `Reflux` v1 reste un kernel local sans autorité AMR. Le Program prépare une unique
+`PreparedAmrSubcycleTransition<Dim>` à partir des layouts vivants et publie les contributions
+face-centred, qualifiées par axe, horloge, stage et tentative dans le
+`TransactionalFaceFluxLedger<Dim, Payload>`. `metric_reflux` authentifie ensuite le pavage
+tangentiel et la couverture exacte de la fenêtre de sous-pas avant de comparer les flux intégrés.
+Seuls les fragments publiés franchissent une frontière acceptée ou un checkpoint ; une transaction
+active, une tentative périmée, une couverture incomplète ou une divergence entre rangs échoue avant
+publication. Il n'existe plus de façade parallèle `EdgeStrip`/`Fx`/`Fy` ni d'adaptateur 2D du
+Program.
 
 La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
 normalisée, identité de provider, artifact et transaction d'installation que `Tagger` et

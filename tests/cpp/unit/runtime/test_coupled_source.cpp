@@ -1,112 +1,130 @@
-// Source de COUPLAGE inter-especes (jalon 2.1.2).
-//
-// model.source(u, aux) est locale au bloc. Une CoupledSource lit PLUSIEURS blocs
-// pour exprimer un echange entre especes. Ici : un echange lineaire qui transfere
-// de la masse du bloc 1 vers le bloc 0 a un taux k(n1 - n0). Conservatif par
-// construction (ce que les sources locales ne pourraient pas garantir : elles ne
-// voient pas l'autre espece). Applique par le driver de reference test-only.
+/// @file
+/// @brief Exact-ranked inter-block source contract without a second runtime/time authority.
 
 #include <gtest/gtest.h>
 
-#include "reference_system_driver.hpp"
-
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/source/coupled_source.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
-#include <cstdio>
+#include <vector>
 
-using namespace pops;
+namespace {
 
-// Espece inerte : densite scalaire, aucune dynamique locale. Toute l'evolution
-// vient de la source de couplage, pas de model.source.
-struct Inert {
-  using State = StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
-};
+constexpr int kDim = pops::kNativeDimension;
+using Field = pops::MultiFab<kDim>;
 
-struct ZeroSystemRhs {
-  template <class System>
-  void operator()(const System&, MultiFab& rhs) const {
-    rhs.set_val(Real(0));
-  }
-};
-
-// Echange lineaire entre les deux premiers blocs : n0 += dt k (n1 - n0),
-// n1 -= dt k (n1 - n0). Lit l'etat des DEUX blocs -> c'est tout l'interet d'une
-// CoupledSource. Conserve n0 + n1 exactement (le flux quitte 1 et entre dans 0).
-struct LinearExchange {
-  Real k = Real(0.5);
-
-  template <CoupledSystemLike System>
-  void apply(System& sys, const MultiFab& /*aux*/, Real dt) const {
-    MultiFab& U0 = sys.template block<0>().U();
-    MultiFab& U1 = sys.template block<1>().U();
-    const Real coef = k * dt;
-    for (int li = 0; li < U0.local_size(); ++li) {
-      Array4 a0 = U0.fab(li).array();
-      Array4 a1 = U1.fab(li).array();
-      const Box2D b = U0.box(li);
-      const Real c = coef;
-      for_each_cell(b, [=] POPS_HD(int i, int j) {
-        const Real flux = c * (a1(i, j, 0) - a0(i, j, 0));
-        a0(i, j, 0) += flux;
-        a1(i, j, 0) -= flux;
-      });
-    }
-  }
-};
-
-using BlockA = EquationBlock<Inert, FirstOrder, ExplicitTime<SSPRK2, 1>>;
-using BlockB = EquationBlock<Inert, FirstOrder, ExplicitTime<SSPRK2, 1>>;
-
-static_assert(CoupledSourceFor<LinearExchange, CoupledSystem<BlockA, BlockB>>);
-static_assert(CoupledSourceFor<NoCoupledSource, CoupledSystem<BlockA, BlockB>>);
-
-TEST(CoupledSource, LinearExchangeConservesTotalMassBetweenBlocks) {
-  const Box2D dom = Box2D::from_extents(4, 4);
-  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  const BoxArray ba = BoxArray::from_domain(dom, 4);
-  const DistributionMapping dm(ba.size(), n_ranks());
-  const int ncell = 16;
-  BCRec bc;
-
-  MultiFab U0(ba, dm, 1, 2), U1(ba, dm, 1, 2);
-  U0.set_val(Real(1));
-  U1.set_val(Real(3));
-  const Real total0 = sum(U0) + sum(U1);
-
-  BlockA a{"a", Inert{}, U0, bc};
-  BlockB b{"b", Inert{}, U1, bc};
-  CoupledSystem system{a, b};
-  // The source under test ignores the field.  Its spatially constant non-neutral
-  // periodic charge has no Poisson solution, so keep this test on a solvable zero
-  // field instead of relying on a discarded iteration-limit outcome.
-  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
-
-  const Real dt = Real(0.1);
-  sim.coupled_source_step(LinearExchange{Real(0.5)}, dt);
-
-  // Echange : flux = 0.5*0.1*(3-1) = 0.1 par cellule. n0 -> 1.1, n1 -> 2.9.
-  EXPECT_TRUE(std::fabs(sum(U0) - Real(1.1) * ncell) < Real(1e-12)) << "block0_gained";
-  EXPECT_TRUE(std::fabs(sum(U1) - Real(2.9) * ncell) < Real(1e-12)) << "block1_lost";
-  // Conservation : la source de couplage ne cree ni ne detruit de masse totale.
-  EXPECT_TRUE(std::fabs((sum(U0) + sum(U1)) - total0) < Real(1e-12)) << "total_conserved";
-
-  // NoCoupledSource : no-op, etat inchange.
-  const Real s0 = sum(U0), s1 = sum(U1);
-  sim.coupled_source_step(NoCoupledSource{}, dt);
-  EXPECT_TRUE(std::fabs(sum(U0) - s0) < Real(1e-14) && std::fabs(sum(U1) - s1) < Real(1e-14))
-      << "no_coupled_source_noop";
+template <int Dim>
+pops::Extent<Dim> filled_extent(std::int64_t value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
+
+struct Inert {
+  using State = pops::StateVec<1>;
+  using Aux = pops::AuxState<kDim>;
+  static constexpr int n_vars = 1;
+
+  POPS_HD State flux(const State&, const Aux&, int) const { return State{pops::Real(0)}; }
+  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(0); }
+  POPS_HD State source(const State&, const Aux&) const { return State{pops::Real(0)}; }
+  POPS_HD pops::Real elliptic_rhs(const State& state) const { return state[0]; }
+};
+
+template <int Dim>
+struct ExchangeKernel {
+  pops::FieldView<pops::Real, Dim> first{};
+  pops::FieldView<pops::Real, Dim> second{};
+  pops::Real coefficient = pops::Real(0);
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real transfer = coefficient * (second(cell) - first(cell));
+    first(cell) += transfer;
+    second(cell) -= transfer;
+  }
+};
+
+template <int Dim>
+struct ReadScalar {
+  pops::FieldView<const pops::Real, Dim> field{};
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const { return field(cell); }
+};
+
+struct LinearExchange {
+  pops::Real rate = pops::Real(0.5);
+
+  template <pops::CoupledSystemLike System>
+  void apply(System& system, const typename System::field_type&, pops::Real dt) const {
+    static_assert(System::dimension == kDim);
+    auto& first = system.template block<0>().U();
+    auto& second = system.template block<1>().U();
+    if (first.layout() != second.layout() || first.distribution() != second.distribution() ||
+        first.local_rank() != second.local_rank())
+      throw std::invalid_argument(
+          "LinearExchange requires one exact co-distributed field identity");
+    for (std::size_t local = 0; local < first.local_size(); ++local)
+      pops::for_each_cell(
+          first.box(local),
+          ExchangeKernel<kDim>{first.fab(local).view(), second.fab(local).view(), rate * dt});
+  }
+};
+
+pops::Real sum_field(const Field& field) {
+  pops::Real result = pops::Real(0);
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result +=
+        pops::for_each_cell_reduce_sum(field.box(local), ReadScalar<kDim>{field.fab(local).view()});
+  return result;
+}
+
+using Block =
+    pops::EquationBlock<kDim, Inert, pops::FirstOrder, pops::ExplicitTime<pops::SSPRK2, 1>>;
+using System = pops::CoupledSystem<Block, Block>;
+
+static_assert(pops::CoupledSourceFor<LinearExchange, System>);
+static_assert(pops::CoupledSourceFor<pops::NoCoupledSource, System>);
+static_assert(System::dimension == kDim);
+
+TEST(CoupledSource, ExactRankExchangeConservesTotalMass) {
+  const auto extent = filled_extent<kDim>(4);
+  const auto domain = pops::Box<kDim>::from_extents(extent);
+  const pops::mesh::BoxArray<kDim> layout(std::vector<pops::Box<kDim>>{domain});
+  const pops::mesh::RankSpace<kDim> ranks(pops::Index<kDim>{}, filled_extent<kDim>(1));
+  const auto distribution = pops::mesh::Distribution<kDim>::replicated(layout, ranks);
+  const pops::Index<kDim> local_rank{};
+
+  Field first(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
+  Field second(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
+  Field auxiliary(layout, distribution, local_rank, 1, filled_extent<kDim>(0));
+  first.set_val(pops::Real(1));
+  second.set_val(pops::Real(3));
+  auxiliary.set_val(pops::Real(0));
+
+  Block first_block{"first", Inert{}, first};
+  Block second_block{"second", Inert{}, second};
+  System system{first_block, second_block};
+  const pops::Real initial_total = sum_field(first) + sum_field(second);
+
+  LinearExchange{pops::Real(0.5)}.apply(system, auxiliary, pops::Real(0.1));
+
+  const pops::Real cells = static_cast<pops::Real>(domain.numPts());
+  EXPECT_NEAR(sum_field(first), pops::Real(1.1) * cells, pops::Real(1e-12));
+  EXPECT_NEAR(sum_field(second), pops::Real(2.9) * cells, pops::Real(1e-12));
+  EXPECT_NEAR(sum_field(first) + sum_field(second), initial_total, pops::Real(1e-12));
+
+  const pops::Real first_before = sum_field(first);
+  const pops::Real second_before = sum_field(second);
+  pops::NoCoupledSource{}.apply(system, auxiliary, pops::Real(0.1));
+  EXPECT_EQ(sum_field(first), first_before);
+  EXPECT_EQ(sum_field(second), second_before);
+}
+
+}  // namespace

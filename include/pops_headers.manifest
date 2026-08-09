@@ -155,7 +155,6 @@ api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
 api pops/numerics/time/integrators/implicit_stepper.hpp
-test-only pops/numerics/time/integrators/ssprk.hpp
 api pops/numerics/time/integrators/time_integrator.hpp
 api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
