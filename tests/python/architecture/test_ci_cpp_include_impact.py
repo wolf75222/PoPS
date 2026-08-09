@@ -430,8 +430,8 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     assert max(len(shard) for shard in shards) == 2
     assert sum(len(shard) == 2 for shard in shards) == len(very_heavy) - 7
 
-    # Eleven five-minute TUs leave four paired shards. LPT must leave enough room around each pair:
-    # <= 650 s of modeled target build + parallel CTest load stays comfortably inside the
+    # Fourteen five-minute TUs pair every shard. LPT must leave enough room around each pair:
+    # <= 750 s of modeled target build + parallel CTest load stays comfortably inside the
     # workflow's 18 min build watchdog, while CTest alone must remain below its 7 min watchdog.
     full_shards = sel.cpp_target_shards(sorted(build), 7)
     weights = sel.cpp_target_weights(sorted(build))
@@ -445,7 +445,7 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     openmp_test_loads = [
         sum(tests[target] for target in shard) / 2.0 for shard in full_shards
     ]
-    assert max(modeled_loads) <= 650.0
+    assert max(modeled_loads) <= 750.0
     assert max(test_loads) <= 7.0 * 60.0
     assert max(openmp_test_loads) <= 7.0 * 60.0
 
