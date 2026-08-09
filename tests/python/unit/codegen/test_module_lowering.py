@@ -13,7 +13,7 @@ These checks stay pure Python (no compiler / no ``.so``); they pin:
   2  a facade Model resolves to its operator-first Module (``source_module``) with NO manual
      ``lower()`` and carries a ``module_hash``;
   3  a facade dependency error is remapped, citing the model name / states / operators;
-  4  the emit model of a facade Model is BYTE-IDENTICAL through ``lower_and_validate`` vs direct.
+  4  raw program emission fails closed until the model passed through the canonical Module route.
 
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
@@ -37,18 +37,17 @@ from pops.codegen.module_lowering import (  # noqa: E402
 from pops.frames import X_AXIS, Z_AXIS  # noqa: E402
 from pops.physics import Axial, Density, Momentum, Scalar  # noqa: E402
 from pops.physics._coupled_abi import role_canonical  # noqa: E402
-from pops.runtime._bricks_time import Role  # noqa: E402
 
 
 def test_module_role_lowering_preserves_typed_boundary_semantics():
-    assert _lower_native_role(Density()) == "Density"
-    assert _lower_native_role(Momentum(axis=X_AXIS)) == "MomentumX"
-    assert _lower_native_role(Axial(axis=X_AXIS)) == "AxialX"
-    assert _lower_native_role(Axial(axis=Z_AXIS)) == "AxialZ"
-    assert _lower_native_role(Scalar()) == "Scalar"
-    assert _lower_native_role("momentum_y") == "MomentumY"
+    assert _lower_native_role(Density()) == "density"
+    assert _lower_native_role(Momentum(axis=X_AXIS)) == "momentum:0"
+    assert _lower_native_role(Axial(axis=X_AXIS)) == "axial:0"
+    assert _lower_native_role(Axial(axis=Z_AXIS)) == "axial:2"
+    assert _lower_native_role(Scalar()) == "scalar"
+    assert _lower_native_role("momentum:1") == "momentum:1"
     assert _lower_native_role("Custom") is None
-    assert role_canonical("AxialZ") == Role.AxialZ == "axial_z"
+    assert role_canonical("axial:2") == "axial:2"
 
 
 def _facade_model(name="ep"):
@@ -134,16 +133,31 @@ def test_remap_without_facade_reraises_unchanged():
     assert exc.value is original, "no facade -> the original error is re-raised verbatim"
 
 
-# --- 4: byte-identical emit through lower_and_validate vs direct --------------------------------
+# --- 4: compilation consumes the canonical lowered Module authority -----------------------------
 
-def test_emit_is_byte_identical_through_lower_and_validate():
+def test_emit_requires_lowered_module_provider_authority():
     direct_model = _facade_model()
-    direct = emit_cpp_program(_fe_program(direct_model, "cmp"),
-        model=direct_model, target="system")
+    with pytest.raises(ValueError, match="exact auxiliary ProviderPack"):
+        emit_cpp_program(_fe_program(direct_model, "cmp"),
+                         model=direct_model, target="system")
+
     candidate = _facade_model()
     emit_model, _ = lower_and_validate(candidate, facade=None)
-    via = emit_cpp_program(_fe_program(emit_model, "cmp"), model=emit_model, target="system")
-    assert direct == via, "routing a facade Model through lower_and_validate is byte-identical"
+    first = emit_cpp_program(_fe_program(emit_model, "cmp"), model=emit_model, target="system")
+    second = emit_cpp_program(_fe_program(emit_model, "cmp"), model=emit_model, target="system")
+    assert first == second, "the canonical Module route is stable and deterministic"
+
+
+def test_lowered_program_installs_a_local_provider_plan_before_its_context():
+    model, _ = lower_and_validate(_facade_model(), facade=None)
+    source = emit_cpp_program(_fe_program(model, "provider-plan"), model=model, target="system")
+
+    assert "install_auxiliary_consumer_plan(ConsumerPlan{" in source
+    assert "ctx.template provider_values_view<2>(" in source
+    assert source.index("install_auxiliary_consumer_plan(ConsumerPlan{") < source.index(
+        "make_program_execution_provider"
+    )
+    assert "ctx.aux()" not in source
 
 
 def test_one_typed_named_flux_supplies_the_native_base_flux_without_losing_its_name():
@@ -220,6 +234,9 @@ def test_handle_carries_module_hash_and_trace():
 
 def _stub_toolchain(monkeypatch, tmp_path):
     import pops.codegen._compile_drivers as cd
+    import pops.codegen.toolchain as toolchain
+    import pops.native_components as native_components
+    import pops._native_selector as native_selector
 
     def fake_run_compile(cmd, what):
         del what
@@ -240,89 +257,25 @@ def _stub_toolchain(monkeypatch, tmp_path):
     monkeypatch.setattr(cd, "_probe_cxx_std", lambda cc, std: "c++23")
     monkeypatch.setattr(cd, "pops_header_signature", lambda inc: "TESTSIG")
     monkeypatch.setattr(cd, "_run_compile", fake_run_compile)
+    # This is a pure codegen trace test.  Compilation still receives one explicit
+    # native rank, but no extension is loaded from the test worktree.
+    monkeypatch.setattr(native_selector, "select_native_dimension", lambda dimension: dimension)
+    monkeypatch.setattr(toolchain, "loader_native_dimension", lambda: 2)
+    monkeypatch.setattr(toolchain, "_native_feature_key", lambda: "test-native-features")
+    monkeypatch.setattr(native_components, "verify_prepared_native_dependencies", lambda *args, **kwargs: None)
     monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path))
     return cd
-
-
-def _final_trace_artifact(compiled):
-    """Wrap the real low-level compile result in the exact final artifact/plan records."""
-
-    from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
-    from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
-    from pops.identity import make_identity
-    from pops.model.bind_schema import BindSchema
-    from pops.problem._snapshot import AuthoringSnapshot
-    from tests.python.support.layout_plan import resolved_layout_contract
-
-    class _CompiledTraceModel:
-        so_path = "/nonexistent/trace-model.so"
-        backend = "production"
-        target = "system"
-        abi_key = compiled.abi_key
-        cxx = compiled.cxx
-        std = compiled.std
-        native_dimension = compiled.native_dimension
-        model_hash = "trace-model"
-        module_manifest = compiled.module_manifest
-        module_hash = compiled.module_hash()
-        gamma = None
-        caps = {"cpu": True, "mpi": False, "amr": False, "gpu": False}
-        artifact_identity = make_identity("artifact", {"component": "trace-model"})
-
-        @staticmethod
-        def __pops_artifact_model_metadata__():
-            return {
-                "schema_version": 3,
-                "state_spaces": ("U",),
-                "cons_names": ("rho", "mx", "my"),
-                "cons_roles": ("Density", "MomentumX", "MomentumY"),
-                "n_vars": 3,
-                "params": {},
-                "aux_names": (),
-                "n_aux": 0,
-                "native_dimension": 2,
-                "capabilities": {"mpi": False},
-                "wave_speed_provider": None,
-            }
-
-    layout = {"kind": "uniform"}
-    layout_plan, coverage = resolved_layout_contract(
-        layout, target="system", block_names=("ep",))
-    schema = BindSchema()
-    plan = ResolvedSimulationPlan(
-        snapshot=AuthoringSnapshot({"case": "module-trace"}),
-        target="system",
-        backend="production",
-        layout=layout,
-        layout_plan=layout_plan,
-        layout_targets={layout_plan.layouts[0].handle.qualified_id: "system"},
-        time=compiled.program,
-        blocks=(ResolvedBlock(
-            "ep", {"model": "trace-model"}, {"ghost_depth": 2}, "production",
-            ("U",), ("test::ep::state::U",)),),
-        bind_schema=schema,
-        compile_values=schema.resolve_compile(),
-        field_plans={},
-        libraries=(),
-        requirements={},
-        capabilities={"cpu": True},
-        lowering_coverage=coverage,
-    )
-    block = CompiledBlockArtifact(
-        "ep", _CompiledTraceModel(), plan.blocks[0].spatial, ("U",))
-    return CompiledSimulationArtifact(plan=plan, program=compiled, blocks=(block,))
 
 
 def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_path):
     cd = _stub_toolchain(monkeypatch, tmp_path)
     model = _facade_model("ep")
     compiled = cd.compile_problem(time=_fe_program(model), model=model,
-                                  include=repo_include())
+                                  include=repo_include(), native_dimension=2)
     assert compiled.module_manifest is not None, \
         "the REAL compile chain attaches the operator-first Module manifest"
     assert compiled.module_hash(), "the REAL compile chain attaches the module_hash"
-    report = _final_trace_artifact(compiled).inspect().to_dict()
-    ops = [op.get("name") for op in report["module_manifest"]["operators"]]
+    ops = [op.get("name") for op in compiled.module_manifest.to_dict()["operators"]]
     assert "flux_default" in ops, "the trace lists the facade's operators: %s" % ops
 
 
@@ -365,7 +318,7 @@ def test_compile_problem_chain_refuses_a_moduleless_model_duck(monkeypatch, tmp_
         match="OperatorRegistry|Module authority|supported model|semantic model identity",
     ):
         cd.compile_problem(time=_fe_program_default(model), model=model,
-                           include=repo_include())
+                           include=repo_include(), native_dimension=2)
 
 
 if __name__ == "__main__":

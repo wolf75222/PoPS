@@ -15,7 +15,6 @@ from pops.model.state_symbols import state_component_symbol
 from pops.codegen.cpp_writer import _cse_emit
 
 from pops.codegen.program_emit_kernels import (
-    _aux_comp,  # noqa: F401
     _cell_locals,
     _coeff_cpp,
     _has_runtime_param,
@@ -25,9 +24,16 @@ from pops.codegen.program_emit_kernels import (
 )
 
 
+def _provider_binding(impl: Any, roots: Any, provider_plans: Any, consumer_qid: Any) -> Any:
+    """Bind one Program node's first-use provider plan before C++ text is emitted."""
+    if provider_plans is None or not isinstance(consumer_qid, str):
+        raise ValueError("model Program kernel requires an explicit provider-plan collector and qid")
+    return provider_plans.bind(impl, roots, consumer_qid)
+
+
 def _emit_local_transform_kernel(
     model: Any, name: Any, state_var: Any, out_var: Any, status_var: Any,
-    active_mask_var: Any, block_idx: Any = 0,
+    active_mask_var: Any, block_idx: Any = 0, *, provider_plans: Any, consumer_qid: str,
 ) -> list:
     """Lower one named pointwise State -> State map into a fail-closed device kernel."""
 
@@ -45,9 +51,11 @@ def _emit_local_transform_kernel(
             "local transform '%s' has %d outputs for %d conservative components"
             % (name, len(exprs), len(impl.cons_names)))
     roots = exprs + [valid_if]
+    provider_binding = _provider_binding(impl, roots, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(roots) else None
-    body = _kernel_open(out_var, state_var, params_block)
+    body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
+                        program_block=block_idx)
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -74,7 +82,7 @@ def _emit_local_transform_kernel(
         "    }",
     ]
     body += ["    " + line for line in _cell_locals(
-        impl, roots, state_var, with_cons=True, with_prim=True)]
+        impl, roots, state_var, with_cons=True, with_prim=True, provider_binding=provider_binding)]
     temporaries, rendered, temporary_names = _cse_emit(
         roots, "pops::Real", "    ", materialize_all=True, return_names=True)
     body.append("    pops::Real transform_failed_ = pops::Real(0);")
@@ -107,7 +115,8 @@ def _emit_local_transform_kernel(
     return body
 
 
-def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0) -> list:
+def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0,
+                        *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None) -> list:
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
@@ -121,11 +130,14 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
     exprs = impl._source_terms[name]
+    provider_binding = _provider_binding(
+        impl, exprs if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(exprs) else None
-    body = _kernel_open(out_var, state_var, params_block)
+    body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
+                        program_block=block_idx)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
-                                                 with_prim=True)]
+                                                 with_prim=True, provider_binding=provider_binding)]
     body += ["    outA(index, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
     body += _kernel_close()
     return body
@@ -376,6 +388,7 @@ def _emit_flux_kernel(
     state_var: Any,
     flux_vars: dict[str, str],
     block_idx: Any = 0,
+    *, provider_plans: Any, consumer_qid: str, plan_exprs: Any = None,
 ) -> list:
     """Lower a named physical-flux sum over the model's exact ranked axis set.
 
@@ -412,10 +425,13 @@ def _emit_flux_kernel(
             ]
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     roots = [expression for axis in axes for expression in expressions[axis]]
+    provider_binding = _provider_binding(
+        impl, roots if plan_exprs is None else plan_exprs, provider_plans, consumer_qid)
     params_block = block_idx if _has_runtime_param(roots) else None
     first_axis = axes[0]
     body = _kernel_open(
-        flux_vars[first_axis], state_var, params_block, ghost_depth=1
+        flux_vars[first_axis], state_var, params_block, ghost_depth=1,
+        provider_binding=provider_binding, program_block=block_idx,
     )
     insertion = 3
     handles = {first_axis: "outA"}
@@ -431,7 +447,8 @@ def _emit_flux_kernel(
     body += [
         "    " + line
         for line in _cell_locals(
-            impl, roots, state_var, with_cons=True, with_prim=True
+            impl, roots, state_var, with_cons=True, with_prim=True,
+            provider_binding=provider_binding,
         )
     ]
     for axis in axes:
@@ -443,7 +460,8 @@ def _emit_flux_kernel(
     return body
 
 
-def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0) -> list:
+def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, block_idx: Any = 0,
+                       *, provider_plans: Any, consumer_qid: str) -> list:
     """Lower ``apply`` (a named ``m.linear_source`` L): outA(i,j,r) = sum_c L[r][c](aux, params) *
     U(i,j,c). @p block_idx (ADC-510): the PROGRAM block whose RuntimeParams the L coefficients read
     when one references a runtime parameter (L may depend on aux / const / params, never on U)."""
@@ -451,12 +469,14 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
     rows = _linear_source_rows(impl, name)
     n = len(rows)
     flat = [e for row in rows for e in row]
+    provider_binding = _provider_binding(impl, flat, provider_plans, consumer_qid)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
-    body = _kernel_open(out_var, state_var, params_block)
+    body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
+                        program_block=block_idx)
     # L coefficients depend on aux / const / params only (linear_source invariant): cons/prim locals not needed.
     body += ["    " + ln for ln in _cell_locals(impl, flat, state_var, with_cons=False,
-                                                 with_prim=False)]
+                                                 with_prim=False, provider_binding=provider_binding)]
     for r in range(n):
         terms = [
             "(%s) * %sA(index, %d)" % (rows[r][c].to_cpp(), state_var, c)
@@ -468,7 +488,8 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
 
 
 def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var: Any, out_var: Any,
-                                    status_var: Any, block_idx: Any = 0) -> list:
+                                    status_var: Any, block_idx: Any = 0, *, provider_plans: Any,
+                                    consumer_qid: str) -> list:
     """Lower ``solve_local_linear``: per cell M = I - a*L (a = a_coeff(dt)), invert M (dense N x N
     via pops::detail::mat_inverse) and set outA(i,j,r) = sum_c Minv[r][c] * q(i,j,c), q = the rhs state.
     L's coefficients depend on aux / const / params only, so M is assembled from the aux / param locals +
@@ -477,10 +498,12 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     rows = _linear_source_rows(impl, name)
     n = len(rows)
     flat = [e for row in rows for e in row]
+    provider_binding = _provider_binding(impl, flat, provider_plans, consumer_qid)
     a_cpp = _coeff_cpp(a_coeff)
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
-    body = _kernel_open(out_var, rhs_var, params_block)
+    body = _kernel_open(out_var, rhs_var, params_block, provider_binding=provider_binding,
+                        program_block=block_idx)
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -488,7 +511,7 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
         "%s.fab(li).view();" % status_var,
     ]
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
-                                                 with_prim=False)]
+                                                 with_prim=False, provider_binding=provider_binding)]
     body.append("    const pops::Real a_ = %s;" % a_cpp)
     body.append("    pops::Real M_[%d][%d];" % (n, n))
     body.append("    int solve_failure_ = 0;")
@@ -609,6 +632,7 @@ def _emit_solve_local_nonlinear_kernel(
     status_var: Any,
     active_mask_var: Any,
     block_idx: Any = 0,
+    *, provider_plans: Any, consumer_qid: str,
 ) -> list:
     """Lower ``solve_local_nonlinear`` to the unique prepared local nonlinear provider.
 
@@ -623,9 +647,11 @@ def _emit_solve_local_nonlinear_kernel(
     for w in v.attrs["residual_block"]:
         if w.op in ("source", "apply"):
             term_exprs += _residual_term_exprs(impl, w)
+    provider_binding = _provider_binding(impl, term_exprs, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(term_exprs) else None
-    body = _kernel_open(out_var, guess_var, params_block)
+    body = _kernel_open(out_var, guess_var, params_block, provider_binding=provider_binding,
+                        program_block=block_idx)
     lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> solve_statusA = "
@@ -654,7 +680,10 @@ def _emit_solve_local_nonlinear_kernel(
     ]
     body += [
         "    " + line
-        for line in _cell_locals(impl, term_exprs, guess_var, with_cons=False, with_prim=False)
+        for line in _cell_locals(
+            impl, term_exprs, guess_var, with_cons=False, with_prim=False,
+            provider_binding=provider_binding,
+        )
     ]
     body.append("    pops::Real Gval[%d];" % n)
     for component in range(n):

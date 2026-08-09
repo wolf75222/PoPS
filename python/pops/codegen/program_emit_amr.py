@@ -65,7 +65,7 @@ def _require_bounded_cell_local_program(program: Any, target: Any,
 
 
 def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
-                      hierarchy_bodies: Any = None) -> str:
+                      hierarchy_bodies: Any = None, provider_plan_install: str = "") -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
@@ -101,6 +101,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
             '\n#include <pops/runtime/program/amr_program_context.hpp>\n'
             'extern "C" void pops_install_program_amr('
             'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
+            + provider_plan_install + ("\n" if provider_plan_install else "") +
             '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
             '  auto& ctx = *ctx_owner;\n'
             f'  ctx.configure_primary_clock({clock_identity});\n'
@@ -256,6 +257,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
         'extern "C" void pops_install_program_amr('
         'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
+        + provider_plan_install + ("\n" if provider_plan_install else "") +
         '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
         '  auto& ctx = *ctx_owner;\n'
         + transform_guard + level_resources +

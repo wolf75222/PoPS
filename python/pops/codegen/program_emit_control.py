@@ -172,7 +172,8 @@ def _emit_contiguous_rhs_group(
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
-               has_shared_interface_implicit_jacvec: bool = False) -> tuple:
+               has_shared_interface_implicit_jacvec: bool = False,
+               provider_plans: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -197,6 +198,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    if provider_plans is not None:
+        var[("program_provider_plans",)] = provider_plans
     prelude = []
     lines = []
     # ``var`` also carries emission-local schedule/coupled scratch tokens under tuple keys. Nothing
@@ -309,7 +312,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
 
 def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                                field_plans: Any = None, *,
-                               has_shared_interface_implicit_jacvec: bool) -> tuple | None:
+                               has_shared_interface_implicit_jacvec: bool,
+                               provider_plans: Any = None) -> tuple | None:
     """Emit gather / solve-once / publish regions for one hierarchy-scoped linear solve.
 
     The transform keys only on the generic solve scope.  It does not recognize a physical scheme.
@@ -418,6 +422,11 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
 
     def emit_phase(phase: str) -> str:
         var = {}
+        if provider_plans is not None:
+            # Hierarchy phases are still Program nodes.  Reuse the package-wide
+            # plan authority so their requirements are registered before the
+            # execution provider is installed; never fall back to a raw aux view.
+            var[("program_provider_plans",)] = provider_plans
         if phase == "solve":
             # The normal AMR body is the provider-declared flat fallback branch. This gathered
             # phase owns one provider-direct hierarchy solve, independently of solver family.

@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from pops._ir import ValueExpr
+from pops._ir.expr import Var
 from pops.codegen._compile_emit import _emit_auxiliary_route_registration
+from pops.codegen.program_emit_kernels import ProgramProviderPlans
 from pops.codegen.component_provider_packs import (
     ComponentProviderPacks,
     compact_auxiliary_provider_pack,
@@ -91,6 +93,46 @@ def test_auxiliary_boundary_rejects_ambiguous_physical_policy() -> None:
         AuxiliaryBoundary(kind="inherit", value=0.0)
 
 
+def test_auxiliary_boundary_and_derived_freshness_are_part_of_the_typed_route() -> None:
+    """Halo policy and freshness belong to the typed provider, never to a named setter."""
+    module = Module("fresh_derived_auxiliary")
+    imposed = module.aux_handle(module.aux_field("imposed"))
+    nonlinear = module.aux_handle(module.aux_field("nonlinear"))
+    module.aux_provider(InputAux(
+        imposed,
+        boundary=AuxiliaryBoundary(width=3, kind="dirichlet", value=2.0),
+    ))
+    module.aux_provider(DerivedAux(nonlinear, ValueExpr(imposed) * ValueExpr(imposed)))
+    packs = resolve_component_provider_packs(module)
+    carrier = SimpleNamespace(owner_path=module.owner_path)
+    packs.attach(carrier)
+    source = _emit_auxiliary_route_registration(carrier)
+
+    assert 'halo[axis] = 3' in source
+    assert 'BoundaryKind::dirichlet, std::optional<pops::Real>{2.0}' in source
+    assert 'AuxiliaryEvaluationEvent::before_residual' in source
+    assert 'AuxiliaryFreshness::evaluation' in source
+    assert 'Kokkos::parallel_for' in source
+
+
+def test_provider_pack_failure_does_not_publish_a_partial_route() -> None:
+    """A rejected duplicate cannot alter a previously built immutable provider authority."""
+    owner = "model/transactional_auxiliary"
+    key = ComponentKey(owner, "aux", "material", "coefficient")
+    contract = ComponentContract("auxiliary", "cell", None, "cell", "cell_scalar")
+    original = ProviderPack(((key, contract, ProviderEntry("runtime_input", True, 0)),))
+
+    with pytest.raises(ValueError, match="duplicate component provider"):
+        ProviderPack((
+            (key, contract, ProviderEntry("runtime_input", True, 0)),
+            (key, contract, ProviderEntry("derived:coefficient", True, 1)),
+        ))
+
+    assert original.lookup(key).to_data() == {
+        "producer": "runtime_input", "availability": True, "slot": 0,
+    }
+
+
 def test_native_route_registers_only_owned_outputs_but_consumes_foreign_keys() -> None:
     module = Module("auxiliary_consumer")
     own = str(module.owner_path.canonical())
@@ -120,3 +162,37 @@ def test_native_route_registers_only_owned_outputs_but_consumes_foreign_keys() -
     assert source.count("install_prepared_auxiliary_provider(Provider{") == 1
     assert '"remote_input"' in source
     assert "ConsumerValue" in source
+
+
+def test_program_consumer_plan_is_first_use_local_and_owner_qualified() -> None:
+    """A Program node never bakes a provider storage slot or reuses an operator plan."""
+    contract = ComponentContract("auxiliary", "cell", None, "cell", "cell_scalar")
+    left = ComponentKey("model/left", "aux", "material", "electric_x")
+    right = ComponentKey("model/right", "field", "electrostatic", "electric_y")
+    pack = ProviderPack((
+        (left, contract, ProviderEntry("runtime_input", True, 7)),
+        (right, contract, ProviderEntry("field/electrostatic", True, 2)),
+    ))
+    impl = SimpleNamespace(
+        _auxiliary_provider_pack=pack,
+        _provider_components=("electric_x", "electric_y"),
+    )
+    plans = ProgramProviderPlans()
+    binding = plans.bind(
+        impl,
+        (Var("electric_y", "aux") + Var("electric_x", "aux"),),
+        "case/program/17",
+    )
+
+    assert binding == {
+        "qid": "case/program/17",
+        "count": 2,
+        "slots": {"electric_y": 0, "electric_x": 1},
+    }
+    cpp = plans.cpp_install("system")
+    assert 'ConsumerPlan{"case/program/17"' in cpp
+    assert 'Key{"model/right", "field", "electrostatic", "electric_y"}' in cpp
+    assert 'Key{"model/left", "aux", "material", "electric_x"}' in cpp
+    assert "ConsumerValue" in cpp
+    assert "ProviderEntry" not in cpp
+    assert "}}}, 7}" not in cpp  # package-local producer slots never cross the ABI

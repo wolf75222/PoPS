@@ -16,10 +16,10 @@ def _source(lines: list[str]) -> str:
 def test_kernel_open_uses_native_ranked_fields_views_and_indices() -> None:
     source = _source(_kernel_open("out", "state"))
 
-    assert "pops::MultiFab<pops::kNativeDimension>& out_aux" in source
     assert "pops::FieldView<pops::Real, pops::kNativeDimension> outA" in source
     assert "pops::FieldView<const pops::Real, pops::kNativeDimension> stateA" in source
-    assert "pops::FieldView<const pops::Real, pops::kNativeDimension> auxA" in source
+    assert "ctx.aux()" not in source
+    assert "auxA" not in source
     assert "const pops::CellIndex<pops::kNativeDimension>& index" in source
     assert "std::as_const(state).fab(li).view()" in source
     assert "Array4" not in source

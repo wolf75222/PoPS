@@ -25,6 +25,7 @@ from pops.codegen.program_emit_kernels import (
     _emit_where_kernel,
     _model_impl,
     _named_fluxes,
+    program_provider_consumer_qid,
 )
 from pops.codegen.program_emit_model_kernels import (
     _emit_apply_kernel,
@@ -233,6 +234,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     from pops.codegen.program_models import model_for_node
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model
+    provider_plans = var.get(("program_provider_plans",))
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
@@ -527,7 +529,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             % (active_mask, bidx, var[v.id]))
         lines += _emit_local_transform_kernel(
             node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
-            active_mask, bidx)
+            active_mask, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         reduced = "transform_failed_%d" % v.id
         lines.append(
             "const pops::Real %s = ctx.pointwise_status_max(%d, %s, %s);"
@@ -658,14 +663,29 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                     "ctx.rhs_scratch(%d, %d, %s);"
                     % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
                 )
-            lines += _emit_flux_kernel(
-                node_model, named_fluxes, var[state_in.id], flux_vars, bidx
-            )
             lines.append(
                 "ctx.neg_div_named_flux_into(%s, {%s});"
                 % (var[v.id], ", ".join("&%s" % flux_vars[axis] for axis in axes))
             )
             named_source_subslot = 1 + len(axes)
+        plan_exprs = []
+        if named_fluxes is not None:
+            for flux_name in named_fluxes:
+                for axis_terms in impl._flux_terms[flux_name].values():
+                    plan_exprs.extend(axis_terms)
+        for source_name in named:
+            plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
+        consumer_qid = (
+            program_provider_consumer_qid(node_model, v.id) if plan_exprs else None
+        )
+        if named_fluxes is not None:
+            # The named-flux kernel and named sources below are one Program node:
+            # their shared plan is the first-use union, not an operator plan.
+            lines += _emit_flux_kernel(
+                node_model, named_fluxes, var[state_in.id], flux_vars, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
         for source_subslot, s in enumerate(named, start=named_source_subslot):
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
             # the standalone 'source' op) and axpy it onto R.
@@ -673,7 +693,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
                          "ctx.rhs_scratch(%d, %d, %s);"
                          % (ssrc, int(v.id), source_subslot, var[state_in.id]))
-            lines += _emit_source_kernel(node_model, s, var[state_in.id], ssrc, bidx)
+            lines += _emit_source_kernel(
+                node_model, s, var[state_in.id], ssrc, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
@@ -685,7 +709,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_source_kernel(
-            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
+            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
@@ -696,7 +723,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
-                                    bidx)
+                                    bidx, provider_plans=provider_plans,
+                                    consumer_qid=program_provider_consumer_qid(node_model, v.id))
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
@@ -711,7 +739,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
-            var[rhs_in.id], var[v.id], status, bidx)
+            var[rhs_in.id], var[v.id], status, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
@@ -733,7 +764,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         report = "ln_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
@@ -790,7 +824,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
         # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
         # its persistent row-major tensor field there.
-        emit_condensed_op(v, var, node_model, lines, prelude)
+        emit_condensed_op(
+            v, var, node_model, lines, prelude,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            program_block=bidx,
+        )
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so

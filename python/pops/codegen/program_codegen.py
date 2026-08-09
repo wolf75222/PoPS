@@ -46,7 +46,6 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _prepared_native_component_includes,
     ProgramValue,
     _apply_in_arg,
-    _aux_comp,
     _cell_locals,
     _coeff_cpp,
     _has_runtime_param,
@@ -270,6 +269,9 @@ def _emit_cpp_program_impl(
         )
     program.validate()
     _check_lowerable(program, authority, field_plans or {}, target=target)
+    from pops.codegen.program_emit_kernels import ProgramProviderPlans
+
+    provider_plans = ProgramProviderPlans()
     prelude, body, operator_authorities = _emit_body(
         program,
         authority,
@@ -277,6 +279,7 @@ def _emit_cpp_program_impl(
         field_plans=field_plans or {},
         balance_due_contract=balance_due_contract,
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+        provider_plans=provider_plans,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -301,7 +304,8 @@ def _emit_cpp_program_impl(
         model_helpers=_emit_program_model_helpers(program, authority),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
-        system_install=_emit_system_install(target, prelude, body),
+        system_install=_emit_system_install(
+            target, prelude, body, provider_plans.cpp_install(target)),
         prepared_native_component_includes=_prepared_native_component_includes(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
@@ -316,9 +320,11 @@ def _emit_cpp_program_impl(
                 has_shared_interface_implicit_jacvec=(
                     has_shared_interface_implicit_jacvec
                 ),
+                provider_plans=provider_plans,
             )
             if target == "amr_system"
             else None,
+            provider_plans.cpp_install(target),
         ),
     )
 
@@ -384,7 +390,7 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
-def _emit_system_install(target: str, prelude: str, body: str) -> str:
+def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
     """Emit only the install entry matching the artifact's declared runtime target.
 
     An AMR artifact may contain hierarchy-only providers. Emitting the uniform entry as well would
@@ -397,6 +403,7 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
         return ""
     return (
         'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {\n'
+        + provider_plan_install + ("\n" if provider_plan_install else "") +
         "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n" + prelude + "\n"
         "  ctx.install([=](double dt) {\n"

@@ -16,6 +16,7 @@ its public surface is unchanged.
 from __future__ import annotations
 
 from fractions import Fraction
+import json
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
@@ -92,6 +93,143 @@ _ALLOWED_OPS = frozenset(
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 
 _AUX_OUTPUT_OPS = frozenset({"solve_fields", "solve_fields_from_blocks"})
+
+
+class ProgramProviderPlans:
+    """One immutable local provider ABI per generated Program node.
+
+    A Program consumer does not inherit the model flux plan: it may read a different
+    union of auxiliary/field components and its compact local order is the source
+    expression's first-use order.  The native registry resolves each key to a late
+    storage address after all package providers have been registered.
+    """
+
+    def __init__(self) -> None:
+        self._plans: dict[str, tuple[tuple[Any, Any], ...]] = {}
+
+    def bind(self, impl: Any, exprs: Any, qid: str) -> dict[str, Any]:
+        if not isinstance(qid, str) or not qid:
+            raise ValueError("Program provider consumer qid must be a non-empty string")
+        pack = getattr(impl, "_auxiliary_provider_pack", None)
+        if pack is None:
+            raise ValueError(
+                "Program provider consumer requires the exact auxiliary ProviderPack"
+            )
+        from pops._ir.expr import Var
+        from pops._ir.visitors import _children
+
+        ordered_names: list[str] = []
+        seen_nodes: set[int] = set()
+
+        def visit(value: Any) -> None:
+            if id(value) in seen_nodes:
+                return
+            seen_nodes.add(id(value))
+            if isinstance(value, Var) and value.kind == "aux":
+                if value.name not in ordered_names:
+                    ordered_names.append(value.name)
+                return
+            for child in _children(value):
+                visit(child)
+
+        for expression in exprs:
+            visit(expression)
+        rows: list[tuple[Any, Any]] = []
+        slots: dict[str, int] = {}
+        for name in ordered_names:
+            matches = [
+                key for key in pack
+                if key.space_kind in {"aux", "field"} and key.component == name
+            ]
+            if len(matches) != 1:
+                detail = "absent" if not matches else "ambiguous"
+                raise ValueError(
+                    "Program provider component %r is %s in the exact ProviderPack; "
+                    "qualify the expression/provider declaration" % (name, detail)
+                )
+            key = matches[0]
+            contract = pack.contract(key)
+            if contract.centering != "cell" or contract.layout != "cell":
+                raise ValueError(
+                    "Program pointwise provider %s has centering=%r layout=%r; "
+                    "declare an explicit projection before use" % (
+                        key.space, contract.centering, contract.layout,
+                    )
+                )
+            slots[name] = len(rows)
+            rows.append((key, contract))
+        frozen = tuple(rows)
+        prior = self._plans.get(qid)
+        if prior is not None and prior != frozen:
+            raise ValueError(
+                "Program provider consumer qid %r was emitted with conflicting requirements" % qid
+            )
+        self._plans[qid] = frozen
+        return {"qid": qid, "count": len(rows), "slots": slots}
+
+    def cpp_install(self, target: str) -> str:
+        """Emit the registry calls before the Program execution context is installed."""
+        if target not in {"system", "amr_system"}:
+            raise ValueError("Program provider plan target must be system or amr_system")
+        import json
+
+        lines: list[str] = []
+        if self._plans:
+            lines.extend((
+                "  using namespace pops::runtime::system;",
+                "  using Key = AuxiliaryComponentKey;",
+                "  using Contract = AuxiliaryComponentContract;",
+                "  using Shape = AuxiliaryStorageShape<pops::kNativeDimension>;",
+                "  using Dependency = AuxiliaryDependency<pops::kNativeDimension>;",
+                "  using ConsumerValue = AuxiliaryConsumerValue<pops::kNativeDimension>;",
+                "  using ConsumerPlan = AuxiliaryConsumerProviderPlan<pops::kNativeDimension>;",
+            ))
+        for qid, rows in self._plans.items():
+            values = []
+            for slot, (key, contract) in enumerate(rows):
+                optional_unit = (
+                    "std::nullopt" if contract.unit is None
+                    else "std::optional<std::string>{%s}" % json.dumps(contract.unit)
+                )
+                optional_kind = (
+                    "std::nullopt" if contract.value_kind is None
+                    else "std::optional<std::string>{%s}" % json.dumps(contract.value_kind)
+                )
+                rendered_key = "Key{%s, %s, %s, %s}" % tuple(
+                    json.dumps(value) for value in (
+                        key.owner_qid, key.space_kind, key.space_name, key.component,
+                    )
+                )
+                rendered_contract = "Contract{%s, %s, %s, %s, %s}" % (
+                    json.dumps(contract.representation), json.dumps(contract.centering), optional_unit,
+                    json.dumps(contract.layout), optional_kind,
+                )
+                shape = (
+                    "Shape{pops::kNativeDimension, 1, [] { "
+                    "pops::Index<pops::kNativeDimension> halo{}; return halo; }()}"
+                )
+                values.append(
+                    "ConsumerValue{Dependency{%s, %s, %s}, %d}" % (
+                        rendered_key, rendered_contract, shape, slot,
+                    )
+                )
+            lines.extend((
+                "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % json.dumps(qid),
+                "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
+            ))
+        return "\n".join(lines)
+
+
+def program_provider_consumer_qid(model: Any, value_id: Any) -> str:
+    """Return the stable Program-node qid; block names never enter this identity."""
+    if isinstance(value_id, bool) or not isinstance(value_id, int) or value_id < 0:
+        raise ValueError("Program provider consumer value id must be a non-negative integer")
+    impl = _model_impl(model)
+    owner = getattr(impl, "owner_path", None)
+    canonical = getattr(owner, "canonical", None)
+    if not callable(canonical):
+        raise ValueError("Program provider consumer model has no canonical owner path")
+    return str(canonical()) + "/program/" + str(value_id)
 
 
 def _prepared_native_components(program: Any) -> tuple[Any, ...]:
@@ -313,17 +451,6 @@ def _named_fluxes(v: Any) -> Any:
     return named
 
 
-def _aux_comp(impl: Any, name: Any) -> int:
-    """Resolved carrier/storage component of one exact ProviderPack field."""
-    try:
-        return impl._aux_component_index(name)
-    except ValueError as error:
-        raise NotImplementedError(
-            "emit_cpp_program: aux field '%s' is absent from the model's exact ProviderPack"
-            % name
-        ) from error
-
-
 def _has_runtime_param(exprs: Any) -> bool:
     """True if any of @p exprs reads a RUNTIME parameter (a RuntimeParamRef anywhere in the tree).
     A runtime-param read lowers to ``params.get(<index>)``; the kernel binds a ``params`` local from
@@ -345,16 +472,18 @@ def _has_runtime_param(exprs: Any) -> bool:
     return False
 
 
-def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any) -> list:
+def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any,
+                 provider_binding: Any = None) -> list:
     """C++ local declarations binding the names the @p exprs reference to per-cell values:
-      - aux fields -> ``const pops::Real <name> = auxA(index, <comp>);`` (always, by dependency);
+      - provider fields -> ``const pops::Real <name> = providers(index, <local-slot>);``;
       - conservative vars -> ``const pops::Real <name> = <state>A(index, <idx>);`` (when @p with_cons);
       - primitives -> their dsl formula, in declaration order, only the LIVE ones (when @p with_prim).
     @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its read FieldView is
-    ``<state_var>A``, the aux FieldView is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
+    ``<state_var>A`` and the provider view is bound separately below. A runtime-param read lowers to
+    ``params.get(idx)``;
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
-    from pops._ir.visitors import _dependencies
+    from pops._ir.visitors import _children, _dependencies
 
     deps = _dependencies(exprs)
     lines = []
@@ -374,9 +503,37 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
                 lines.append("const pops::Real %s = %s;" % (p, expr.to_cpp()))
-    aux_deps = set(impl.aux_names)
-    for name in sorted(deps & aux_deps):
-        lines.append("const pops::Real %s = auxA(index, %d);" % (name, _aux_comp(impl, name)))
+    # The ProviderPack plan, not a model-side named component cache, is the sole
+    # authority for auxiliary/field values.  Walk typed leaves to distinguish a
+    # provider named ``rho`` from the conservative variable ``rho``.
+    from pops._ir.expr import Var
+
+    provider_names: set[str] = set()
+    seen_nodes: set[int] = set()
+
+    def collect(node: Any) -> None:
+        if id(node) in seen_nodes:
+            return
+        seen_nodes.add(id(node))
+        if isinstance(node, Var) and node.kind == "aux":
+            provider_names.add(node.name)
+            return
+        for child in _children(node):
+            collect(child)
+
+    for expression in exprs:
+        collect(expression)
+    used_provider_names = provider_names
+    if used_provider_names:
+        if provider_binding is None:
+            raise ValueError("Program kernel reads providers without one exact consumer plan")
+        slots = provider_binding["slots"]
+        if not used_provider_names <= set(slots):
+            raise ValueError(
+                "Program provider plan does not cover its emitted expressions"
+            )
+        for name in sorted(used_provider_names, key=lambda item: slots[item]):
+            lines.append("const pops::Real %s = providers(index, %d);" % (name, slots[name]))
     return lines
 
 
@@ -386,15 +543,15 @@ def _kernel_open(
     params_block: Any = None,
     *,
     ghost_depth: int = 0,
+    provider_binding: Any = None,
+    program_block: Any = 0,
 ) -> list:
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
-    write handle ``outA``, the read state handle ``<state_var>A`` and the aux read handle ``auxA``.
+    write handle ``outA``, the read state handle ``<state_var>A`` and the exact local provider view.
 
-    Pairing by local fab index ``li`` is sound: the System aux is built with the SAME box array AND
-    distribution map as the blocks (``aux(ba, dm, ...)`` in System::Impl), and a scratch state comes
-    from ``scratch_state_like(state(0))`` which copies that ``(ba, dm)`` -- so ``out``, the input
-    state and ``aux`` share one ``(ba, dm)`` and ``fab(li)`` is the same box on every rank. This is the
-    same co-distribution the authenticated native component and source kernels rely on.
+    The runtime resolves the consumer's ComponentKeys to immutable group/component addresses once;
+    the generated kernel sees only a compact local view for this `li`.  A zero-provider kernel does
+    not query the registry or storage at all.
 
     @p params_block (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads, or None
     when no formula reads a runtime parameter. When set, bind ``const pops::RuntimeParams params =
@@ -409,15 +566,20 @@ def _kernel_open(
         else "%s.fab(li).box().grow(%d)" % (out_var, ghost_depth)
     )
     lines = [
-        "pops::MultiFab<pops::kNativeDimension>& %s_aux = ctx.aux();" % out_var,
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::FieldView<pops::Real, pops::kNativeDimension> outA = %s.fab(li).view();"
         % out_var,
         "  const pops::FieldView<const pops::Real, pops::kNativeDimension> %sA = "
         "std::as_const(%s).fab(li).view();" % (state_var, state_var),
-        "  const pops::FieldView<const pops::Real, pops::kNativeDimension> auxA = "
-        "std::as_const(%s_aux).fab(li).view();" % out_var,
     ]
+    if provider_binding is not None:
+        count = provider_binding["count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("Program provider plan count must be a non-negative integer")
+        lines.append(
+            "  const auto providers = ctx.template provider_values_view<%d>(%s, %d, li);"
+            % (count, json.dumps(provider_binding["qid"]), program_block)
+        )
     if params_block is not None:
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device
         # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
@@ -436,7 +598,7 @@ def _kernel_close() -> list:
 # --- per-cell conditional select (spec op 17, ADC-418): model-free for_each_cell kernels --------------
 # `cell_compare` and `where` are pure layout ops over co-distributed MultiFabs (no aux / no model
 # coefficients): they reuse the same for_each_cell + FieldView per-Fab pattern as the source kernels, but
-# bind several read handles (no auxA) and loop over the runtime component count `<out>.ncomp()`. Pairing
+# bind several read handles and loop over the runtime component count `<out>.ncomp()`. Pairing
 # by local fab index li is sound: a cell_compare mask is alloc_scalar_field (the System (ba, dm)), a
 # where scratch is scratch_state_like(a) (a's (ba, dm)) and the inputs are the same co-distributed
 # states / scalar_fields, so fab(li) is the same box on every rank.
@@ -520,6 +682,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
+#include <optional>                            // exact ProviderPack contract optional unit/kind
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
 #include <utility>                             // std::as_const (read-only field views)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)

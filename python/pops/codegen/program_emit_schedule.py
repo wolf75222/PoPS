@@ -130,17 +130,17 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
         )
     if action is ScheduleAction.STORE:
         if is_aux:
-            return "ctx.cache_store_aux(%d);" % v.id
+            # Provider publication remains the single source of truth.  A held
+            # field simply keeps the registry's last accepted generation.
+            return ""
         return "ctx.cache_store_scratch(%d, %s);" % (v.id, out)
     if action is ScheduleAction.ZERO:
-        if is_aux:
-            return "ctx.aux().set_val(static_cast<pops::Real>(0));"
         return "%s.set_val(static_cast<pops::Real>(0));" % out
     if action is ScheduleAction.ACCUMULATE_DT:
         return "ctx.cache_accumulate_dt(%d, dt);" % v.id
     if action is ScheduleAction.RESTORE:
         if is_aux:
-            return "ctx.cache_restore_aux(%d);" % v.id
+            return ""
         return "ctx.cache_restore_scratch(%d, %s);" % (v.id, out)
     if action is ScheduleAction.ERROR:
         return "ctx.scheduler_error(%s);" % json.dumps(
@@ -153,8 +153,9 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
 
 def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
-    + policy branch (ADC-458, Spec 3 sections 17-18). Generic over the op: a field solve caches the
-    System aux, any other node caches its named scratch (var[v.id]). An always()/absent schedule
+    + policy branch (ADC-458, Spec 3 sections 17-18). Scratch nodes may cache their named output;
+    field output freshness belongs to the typed ProviderPack transaction and cannot be raw-cached.
+    An always()/absent schedule
     leaves the lines untouched (byte-identical to the unscheduled lowering)."""
     sched = v.attrs.get("schedule")
     if sched is None:
@@ -167,16 +168,22 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
     del lines[start:]
     due = _schedule_due_expression(v, lowering, var)
     policy = lowering.off
-    cache_backed = (
-        ScheduleAction.STORE in policy.after_due
-        and ScheduleAction.RESTORE in policy.off_cadence
-    )
+    is_aux = v.op in _AUX_OUTPUT_OPS
+    cache_backed = (not is_aux and ScheduleAction.STORE in policy.after_due
+                    and ScheduleAction.RESTORE in policy.off_cadence)
     # One decision seam surrounds every non-trivial due primitive (period, start, predicate,
     # logical clock, stage, AMR level). The profiler counts all due/skipped nodes, but only labels a
     # real STORE+RESTORE policy as a cache hit/miss; Skip/Zero/Error never fabricate cache traffic.
     due = "ctx.schedule_decision(%d, %s, %s)" % (
         v.id, due, "true" if cache_backed else "false")
-    is_aux = v.op in _AUX_OUTPUT_OPS
+    if is_aux and any(
+        action in {ScheduleAction.ZERO, ScheduleAction.ACCUMULATE_DT}
+        for action in (*policy.after_due, *policy.off_cadence)
+    ):
+        raise NotImplementedError(
+            "scheduled field outputs must be governed by their typed ProviderPack freshness "
+            "transaction; raw Program auxiliary caching/zeroing is not a supported route"
+        )
     # The scratch node's output token (the MultiFab the policy holds / zeroes). A field solve writes
     # the System aux and sets no var[v.id], so out is read only on the scratch path.
     out = None if is_aux else var.get(v.id)
@@ -190,14 +197,20 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
         comment = "  // skip: stale %s off-cadence" % ("aux" if is_aux else "value")
     lines.append("if (%s) {%s" % (due, comment))
     for action in policy.before_due:
-        lines.append("  " + _schedule_action_line(action, v=v, out=out, is_aux=is_aux))
+        statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+        if statement:
+            lines.append("  " + statement)
     lines += ["  " + line for line in guarded_body]
     for action in policy.after_due:
-        lines.append("  " + _schedule_action_line(action, v=v, out=out, is_aux=is_aux))
+        statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+        if statement:
+            lines.append("  " + statement)
     if policy.off_cadence:
         lines.append("} else {")
         for action in policy.off_cadence:
-            lines.append("  " + _schedule_action_line(action, v=v, out=out, is_aux=is_aux))
+            statement = _schedule_action_line(action, v=v, out=out, is_aux=is_aux)
+            if statement:
+                lines.append("  " + statement)
     lines.append("}")
 
 
