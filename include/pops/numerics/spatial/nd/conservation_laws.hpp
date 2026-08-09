@@ -7,6 +7,7 @@
 #include <pops/core/state/variables.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/spatial/nd/state_schema.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -135,24 +136,36 @@ class IdealGasEuler {
   using Schema = EulerStateSchema<Dim>;
   using State = typename Schema::Conservative;
   using Primitive = typename Schema::Primitive;
+  // `Prim` and the component helpers are the public hyperbolic-brick spelling.  They are
+  // aliases into this law's schema, never a second Euler layout or constitutive path.
+  using Prim = Primitive;
+  using Aux = AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Schema::nvars;
+  static constexpr int density_component = Schema::density;
+  static constexpr int energy_component = Schema::energy;
+
+  POPS_HD static constexpr int momentum_component(int axis) { return axis + 1; }
+
+  /// The EOS parameter stays a directly visible value because compiled model assembly writes it
+  /// into an aggregate law.  `prepare()` is the validating construction route; every operational
+  /// method still rejects an invalid value rather than manufacturing a physical state.
+  Real gamma = kPhysicalDefaultGamma;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.nd.ideal-gas-euler", 1};
   }
 
-  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(gamma_); }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const { contract.scalar(gamma); }
 
   IdealGasEuler() = default;
+  POPS_HD explicit constexpr IdealGasEuler(Real gamma_value) : gamma(gamma_value) {}
 
   static IdealGasEuler prepare(Real gamma) {
     if (!std::isfinite(static_cast<double>(gamma)) || !(gamma > Real(1)))
       throw std::invalid_argument("ND ideal-gas Euler requires a finite gamma greater than one");
     return IdealGasEuler(gamma);
   }
-
-  POPS_HD Real gamma() const { return gamma_; }
 
   static VariableSet conservative_vars() {
     constexpr std::array<const char*, 3> names{"rho_u", "rho_v", "rho_w"};
@@ -184,7 +197,7 @@ class IdealGasEuler {
 
   POPS_HD StateConversion<Primitive> recover(const State& conservative) const {
     StateConversion<Primitive> result{};
-    if (!conservation_law_detail::finite(gamma_) || !(gamma_ > Real(1))) {
+    if (!conservation_law_detail::finite(gamma) || !(gamma > Real(1))) {
       result.status = StateConversionStatus::InvalidEquationOfState;
       return result;
     }
@@ -206,7 +219,7 @@ class IdealGasEuler {
       result.value[axis + 1] = velocity;
       kinetic += Real(0.5) * density * velocity * velocity;
     }
-    const Real pressure = (gamma_ - Real(1)) * (conservative[Schema::energy] - kinetic);
+    const Real pressure = (gamma - Real(1)) * (conservative[Schema::energy] - kinetic);
     if (!conservation_law_detail::finite(kinetic) || !conservation_law_detail::finite(pressure)) {
       result.status = StateConversionStatus::NonFiniteState;
       return result;
@@ -222,7 +235,7 @@ class IdealGasEuler {
 
   POPS_HD StateConversion<State> make_conservative(const Primitive& primitive) const {
     StateConversion<State> result{};
-    if (!conservation_law_detail::finite(gamma_) || !(gamma_ > Real(1))) {
+    if (!conservation_law_detail::finite(gamma) || !(gamma > Real(1))) {
       result.status = StateConversionStatus::InvalidEquationOfState;
       return result;
     }
@@ -249,7 +262,7 @@ class IdealGasEuler {
       result.value[axis + 1] = density * velocity;
       kinetic += Real(0.5) * density * velocity * velocity;
     }
-    result.value[Schema::energy] = pressure / (gamma_ - Real(1)) + kinetic;
+    result.value[Schema::energy] = pressure / (gamma - Real(1)) + kinetic;
     if (!conservation_law_detail::finite_state(result.value)) {
       result.value = {};
       result.status = StateConversionStatus::NonFiniteState;
@@ -298,7 +311,7 @@ class IdealGasEuler {
       return std::numeric_limits<Real>::quiet_NaN();
     const Real velocity = primitive.value[Schema::template velocity<Axis>];
     const Real absolute_velocity = velocity < Real(0) ? -velocity : velocity;
-    return absolute_velocity + Kokkos::sqrt(gamma_ * primitive.value[Schema::pressure] /
+    return absolute_velocity + Kokkos::sqrt(gamma * primitive.value[Schema::pressure] /
                                             primitive.value[Schema::density]);
   }
 
@@ -312,7 +325,7 @@ class IdealGasEuler {
     }
     const Real velocity = primitive.value[Schema::template velocity<Axis>];
     const Real sound_speed =
-        Kokkos::sqrt(gamma_ * primitive.value[Schema::pressure] / primitive.value[Schema::density]);
+        Kokkos::sqrt(gamma * primitive.value[Schema::pressure] / primitive.value[Schema::density]);
     lower = velocity - sound_speed;
     upper = velocity + sound_speed;
   }
@@ -379,7 +392,15 @@ class IdealGasEuler {
       speed_squared += velocity[axis] * velocity[axis];
     }
 
-    const Real sound_squared = (gamma_ - Real(1)) * (enthalpy - Real(0.5) * speed_squared);
+    // Reconstruct gamma-1 through the exact left-state ideal-gas identity.  This keeps the Roe
+    // linearization self-authenticating and preserves the established bit-level provider oracle
+    // while still using this one canonical EOS/flux implementation.
+    Real left_speed_squared = Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      left_speed_squared += velocity_left[axis] * velocity_left[axis];
+    const Real gamma_minus_one =
+        pressure_left / (left[Schema::energy] - Real(0.5) * density_left * left_speed_squared);
+    const Real sound_squared = gamma_minus_one * (enthalpy - Real(0.5) * speed_squared);
     const Real sound = Kokkos::sqrt(sound_squared);
     const Real density_jump = density_right - density_left;
     const Real pressure_jump = pressure_right - pressure_left;
@@ -423,10 +444,126 @@ class IdealGasEuler {
     return result;
   }
 
- private:
-  POPS_HD explicit constexpr IdealGasEuler(Real gamma) : gamma_(gamma) {}
+  // The following spellings are an exact interface projection used by the generic physical-model
+  // and finite-volume contracts.  Each runtime axis is dispatched to the *same* compile-time
+  // `IdealGasEuler::template ...<Axis>` formula above; there is no planar branch or duplicate
+  // Euler implementation.
+  POPS_HD Prim to_primitive(const State& state) const {
+    const auto recovered = recover(state);
+    return recovered.succeeded() ? recovered.value : conservation_law_detail::invalid_state<Prim>();
+  }
 
-  Real gamma_ = Real(1.4);
+  POPS_HD State to_conservative(const Prim& primitive) const {
+    const auto conservative = make_conservative(primitive);
+    return conservative.succeeded() ? conservative.value
+                                    : conservation_law_detail::invalid_state<State>();
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD State flux_at_runtime_axis(const State& state, const Providers& providers,
+                                     int axis) const {
+    if (axis == Axis)
+      return flux<Axis>(state);
+    if constexpr (Axis + 1 < Dim)
+      return flux_at_runtime_axis<Axis + 1>(state, providers, axis);
+    return conservation_law_detail::invalid_state<State>();
+  }
+
+  template <class Providers>
+  POPS_HD State flux(const State& state, const Providers& providers, int axis) const {
+    return flux_at_runtime_axis(state, providers, axis);
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD Real max_wave_speed_at_runtime_axis(const State& state, const Providers& providers,
+                                              int axis) const {
+    if (axis == Axis)
+      return max_wave_speed<Axis>(state);
+    if constexpr (Axis + 1 < Dim)
+      return max_wave_speed_at_runtime_axis<Axis + 1>(state, providers, axis);
+    return std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  template <class Providers>
+  POPS_HD Real max_wave_speed(const State& state, const Providers& providers, int axis) const {
+    return max_wave_speed_at_runtime_axis(state, providers, axis);
+  }
+
+  template <int Axis = 0, class Providers>
+  POPS_HD void wave_speeds_at_runtime_axis(const State& state, const Providers& providers, int axis,
+                                           Real& lower, Real& upper) const {
+    if (axis == Axis) {
+      wave_speeds<Axis>(state, lower, upper);
+      return;
+    }
+    if constexpr (Axis + 1 < Dim) {
+      wave_speeds_at_runtime_axis<Axis + 1>(state, providers, axis, lower, upper);
+      return;
+    }
+    lower = upper = std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  template <class Providers>
+  POPS_HD void wave_speeds(const State& state, const Providers& providers, int axis, Real& lower,
+                           Real& upper) const {
+    wave_speeds_at_runtime_axis(state, providers, axis, lower, upper);
+  }
+
+  template <int Axis = 0>
+  POPS_HD Real contact_speed_at_runtime_axis(const State& left, const State& right,
+                                             Real pressure_left, Real pressure_right,
+                                             Real speed_left, Real speed_right, int axis) const {
+    if (axis == Axis)
+      return contact_speed<Axis>(left, right, pressure_left, pressure_right, speed_left,
+                                 speed_right);
+    if constexpr (Axis + 1 < Dim)
+      return contact_speed_at_runtime_axis<Axis + 1>(left, right, pressure_left, pressure_right,
+                                                     speed_left, speed_right, axis);
+    return std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real speed_left, Real speed_right,
+                             int axis) const {
+    return contact_speed_at_runtime_axis(left, right, pressure_left, pressure_right, speed_left,
+                                         speed_right, axis);
+  }
+
+  template <int Axis = 0>
+  POPS_HD State hllc_star_state_at_runtime_axis(const State& state, Real pressure_value, Real speed,
+                                                Real contact, int axis) const {
+    if (axis == Axis)
+      return star_state<Axis>(state, pressure_value, speed, contact);
+    if constexpr (Axis + 1 < Dim)
+      return hllc_star_state_at_runtime_axis<Axis + 1>(state, pressure_value, speed, contact, axis);
+    return conservation_law_detail::invalid_state<State>();
+  }
+
+  POPS_HD State hllc_star_state(const State& state, Real pressure_value, Real speed, Real contact,
+                                int axis) const {
+    return hllc_star_state_at_runtime_axis(state, pressure_value, speed, contact, axis);
+  }
+
+  template <int Axis = 0, class LeftProviders, class RightProviders>
+  POPS_HD State roe_dissipation_at_runtime_axis(const State& left,
+                                                const LeftProviders& left_providers,
+                                                const State& right,
+                                                const RightProviders& right_providers,
+                                                int axis) const {
+    if (axis == Axis)
+      return roe_dissipation<Axis>(left, right);
+    if constexpr (Axis + 1 < Dim)
+      return roe_dissipation_at_runtime_axis<Axis + 1>(left, left_providers, right, right_providers,
+                                                       axis);
+    return conservation_law_detail::invalid_state<State>();
+  }
+
+  template <class LeftProviders, class RightProviders>
+  POPS_HD State roe_dissipation(const State& left, const LeftProviders& left_providers,
+                                const State& right, const RightProviders& right_providers,
+                                int axis) const {
+    return roe_dissipation_at_runtime_axis(left, left_providers, right, right_providers, axis);
+  }
 };
 
 template <int Dim, class Model>

@@ -1,6 +1,6 @@
 // Chantier "Aux extensible", increment 8 : T_e, 2e champ aux supplementaire, peuple par DERIVATION
 // (et non fourni par l'utilisateur comme B_z). Un bloc fluide COMPRESSIBLE fournit T = p/rho ; un
-// bloc qui declare lire aux('T_e') (n_aux=5) le lit. Valide la generalisation du canal aux a un 2e
+// bloc qui declare lire aux('T_e') le lit. Valide la generalisation du canal aux a un 2e
 // champ (composante 4) et la population derivee cote System (set_electron_temperature_from + apply_te
 // recalcule a chaque solve_fields). Chemin de production : add_compiled_model + eval_rhs.
 
@@ -22,11 +22,21 @@
 
 using namespace pops;
 
-// Source qui lit T_e : S = T_e u (composante 0). n_aux=5 -> le compose expose n_aux=5.
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
+// Source qui lit T_e : S = T_e u (composante 0).
 struct TeSource {
-  static constexpr int n_aux = 5;
+  static constexpr int n_aux = AuxComponentLayout<kNativeDimension>::named_begin;
   template <class State>
-  POPS_HD State apply(const State& u, const Aux& a) const {
+  POPS_HD State apply(const State& u, const AuxState<kNativeDimension>& a) const {
     State s{};
     s[0] = a.T_e * u[0];
     return s;
@@ -39,9 +49,10 @@ struct NoEll {
   }
 };
 
-using ProbeModel = CompositeModel<ExBVelocity, TeSource, NoEll>;  // lit T_e
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;          // fournit p/rho
-static_assert(ProbeModel::n_aux == 5, "le probe lit T_e (composante aux 4)");
+using ProbeModel = CompositeModel<ExBVelocity, TeSource, NoEll>;  // reads T_e
+using GasModel = CompositeModel<Euler, NoSource, NoEll>;          // provides p/rho
+static_assert(ProbeModel::n_aux == AuxComponentLayout<kNativeDimension>::named_begin);
+static_assert(nd::ConservationLaw<kNativeDimension, GasModel>);
 
 TEST(AuxTe, DerivedFromGasDrivesProbeSource) {
 #if defined(POPS_HAS_KOKKOS)
@@ -53,23 +64,27 @@ TEST(AuxTe, DerivedFromGasDrivesProbeSource) {
   const double gamma = 1.4, rho_gas = 1.0, p_gas = 3.0;
   const double Te = p_gas / rho_gas;  // T = p / rho = 3
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  SystemConfig<kNativeDimension> cfg;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.periodicity[axis] = true;
+  }
 
-  System sys(cfg);
-  add_compiled_model(sys, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", gamma);
+  System<kNativeDimension> sys(cfg);
+  GasModel gas_model;
+  gas_model.hyp.gamma = gamma;
+  add_compiled_model(sys, "gas", gas_model, "minmod", "rusanov", "conservative", "explicit", gamma);
   add_compiled_model(sys, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
   sys.set_poisson("charge_density", "geometric_mg");
 
   // etat du gaz : rho=1, qte de mvt nulle, E = p/(gamma-1) -> p=3, donc T = p/rho = 3.
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  std::vector<double> Ug(4 * nn, 0.0);
+  std::size_t nn = 1;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    nn *= static_cast<std::size_t>(n);
+  std::vector<double> Ug(static_cast<std::size_t>(Euler::n_vars) * nn, 0.0);
   for (std::size_t k = 0; k < nn; ++k) {
     Ug[0 * nn + k] = rho_gas;
-    Ug[3 * nn + k] = p_gas / (gamma - 1.0);
+    Ug[static_cast<std::size_t>(Euler::energy_component) * nn + k] = p_gas / (gamma - 1.0);
   }
   sys.set_state("gas", Ug);
   sys.set_density("probe", std::vector<double>(nn, 1.0));

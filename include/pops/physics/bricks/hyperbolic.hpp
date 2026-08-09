@@ -5,6 +5,7 @@
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/physics/fluids/euler.hpp>  // Euler: reused as the CompressibleFlux hyperbolic brick
+#include <pops/numerics/fv/flux_interfaces.hpp>
 
 #include <array>
 #include <cmath>
@@ -18,7 +19,8 @@
 ///        n_vars, flux, max_wave_speed, to_primitive/to_conservative, conservative_vars/primitive_vars
 ///        (+ pressure/wave_speeds if HLLC flux). Source and elliptic right-hand side are SEPARATE
 ///        bricks (physics/source.hpp, physics/elliptic.hpp); CompositeModel (physics/composite.hpp)
-///        assembles them. ExBVelocity (1 var), CompressibleFlux (= Euler, 4 var), IsothermalFlux (3 var).
+///        assembles them. ExBVelocity has one scalar; CompressibleFlux and IsothermalFlux carry
+///        respectively Dim+2 and Dim+1 variables in the selected native rank.
 
 namespace pops {
 
@@ -62,7 +64,10 @@ struct ExBVelocityND {
   static_assert(Dim >= 1 && Dim <= 3, "ExBVelocityND supports dimensions 1, 2, and 3");
   static constexpr int n_vars = 1;
   static constexpr int dimension = Dim;
-  using State = StateVec<1>;
+  using Schema = nd::ScalarStateSchema<Dim>;
+  using State = typename Schema::Conservative;
+  using Primitive = typename Schema::Primitive;
+  using Prim = Primitive;
   using Aux = AuxState<Dim>;
   Real B0 = 1;
 
@@ -117,9 +122,21 @@ struct ExBVelocityND {
     return State{velocity(providers, dir)};
   }
 
-  using Prim = StateVec<1>;
-  POPS_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
-  POPS_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
+  /// The scalar E×B state is already primitive.  These are the same exact ranked law contract
+  /// used by generated Cartesian blocks; they contain no separate conversion algorithm.
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
+    return {state, Kokkos::isfinite(state[0]) ? nd::StateConversionStatus::Success
+                                              : nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return {primitive, Kokkos::isfinite(primitive[0]) ? nd::StateConversionStatus::Success
+                                                      : nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
+    return recover(state).status;
+  }
+  POPS_HD Prim to_primitive(const State& state) const { return state; }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
   static VariableSet conservative_vars() {
     return {VariableKind::Conservative, {"n"}, 1, {VariableRole::Density}};
   }
