@@ -122,6 +122,7 @@ def resolve(
     from pops.problem._detached import detached_frozen
     from pops.model.bind_schema import BindSchema
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+    from pops.codegen._native_spatial_layout import native_spatial_layouts
 
     detached_layout = resolved_layout
     bind_schema = BindSchema.from_problem(problem)
@@ -296,6 +297,7 @@ def resolve(
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
+        native_layouts=native_spatial_layouts(layout_plan),
         layout_targets={
             row.handle.qualified_id: ("amr_system" if row.adaptive else "system")
             for row in layout_plan.layouts

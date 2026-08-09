@@ -43,25 +43,6 @@ def _regrid_every(data: dict[str, Any]) -> int:
     raise ValueError("native AMR supports Always/Every regrid triggers")
 
 
-def _native_amr_grid_values(
-    data: Any,
-) -> tuple[
-    tuple[int, int], tuple[float, float], tuple[float, float], tuple[bool, bool]
-]:
-    """Authenticate one Cartesian grid without collapsing its axis topology."""
-    from pops.mesh.grid import CartesianGrid
-
-    grid = CartesianGrid.from_dict(data)
-    periodic_axes = grid.topology.periodic_axes
-    periodic_indices = {axis.index for axis in periodic_axes}
-    return (
-        grid.cells,
-        grid.frame.lower,
-        grid.frame.upper,
-        (0 in periodic_indices, 1 in periodic_indices),
-    )
-
-
 def _physical_patch_rectangles(
     patch_boxes: Any,
     *,
@@ -134,14 +115,26 @@ def _native_load_balance_options(options: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
+def amr_config_from_layout(native_layout: Any, *, hierarchy: Any = None) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
     from pops.mesh._amr import ResolvedHierarchy
 
-    data = _runtime_data(layout)
-    cells, lower, upper, periodicity = _native_amr_grid_values(data["grid"])
-    lengths = (upper[0] - lower[0], upper[1] - lower[1])
+    from pops.codegen._native_spatial_layout import NativeSpatialLayout
+    from pops.mesh import CARTESIAN_2D_COORDINATES
+
+    if type(native_layout) is not NativeSpatialLayout:
+        raise TypeError("native AMR lowering requires an exact NativeSpatialLayout")
+    if native_layout.coordinate_system != CARTESIAN_2D_COORDINATES \
+            or native_layout.dimension != 2:
+        raise NotImplementedError("native AMR lowering requires a 2D Cartesian specialization")
+    cells, lower, lengths, periodicity = (
+        native_layout.shape, native_layout.lower, native_layout.lengths, native_layout.periodicity)
+    options = native_layout.layout_options
+    regrid = options.get("regrid")
+    if not isinstance(regrid, Mapping):
+        raise TypeError("native AMR specialization lacks exact regrid authority")
+    data = {"regrid": dict(regrid), "load_balance": options.get("load_balance")}
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy

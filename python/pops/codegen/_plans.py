@@ -221,6 +221,7 @@ class ResolvedSimulationPlan:
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
+    native_layouts: Mapping[str, Any] = field(default_factory=dict)
     consumer_graph: Any = None
     restart_authority: Any = field(default_factory=_builtin_restart_authority)
     component_inputs: tuple[Any, ...] = ()
@@ -247,6 +248,26 @@ class ResolvedSimulationPlan:
             raise TypeError("ResolvedSimulationPlan backend must be a resolved non-empty string")
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("ResolvedSimulationPlan.layout_plan must be an exact LayoutPlan")
+        from pops.codegen._native_spatial_layout import (
+            NativeSpatialLayout,
+            native_spatial_layouts,
+        )
+        expected_native_layouts = native_spatial_layouts(self.layout_plan)
+        supplied_native_layouts = self.native_layouts or expected_native_layouts
+        if not isinstance(supplied_native_layouts, Mapping):
+            raise TypeError("ResolvedSimulationPlan.native_layouts must be a mapping")
+        if tuple(supplied_native_layouts) != tuple(expected_native_layouts):
+            raise ValueError(
+                "ResolvedSimulationPlan.native_layouts must match normalized layout order exactly")
+        for layout_id, expected in expected_native_layouts.items():
+            actual = supplied_native_layouts[layout_id]
+            if type(actual) is not NativeSpatialLayout:
+                raise TypeError(
+                    "ResolvedSimulationPlan.native_layouts must contain exact NativeSpatialLayout values")
+            if actual.identity != expected.identity:
+                raise ValueError(
+                    "ResolvedSimulationPlan.native_layouts differs from LayoutPlan normalization")
+        object.__setattr__(self, "native_layouts", _deep_freeze(supplied_native_layouts))
         from pops.time import Program
         if type(self.time) is not Program:
             raise TypeError(
@@ -378,6 +399,7 @@ class ResolvedSimulationPlan:
             "compile_values": _evidence(self.compile_values, where="plan.compile_values"),
             "layout": _evidence(self.layout, where="plan.layout"),
             "layout_plan": _evidence(self.layout_plan, where="plan.layout_plan"),
+            "native_layouts": _evidence(self.native_layouts, where="plan.native_layouts"),
             "layout_targets": dict(self.layout_targets),
             "time": _evidence(self.time, where="plan.time"),
             "blocks": [{

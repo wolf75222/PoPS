@@ -76,6 +76,7 @@ class CompiledPlanRecord:
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
+    native_layouts: Mapping[str, Any]
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
     consumer_graph: Any = None
@@ -102,6 +103,7 @@ class CompiledPlanRecord:
             layout=plan.layout,
             layout_plan=plan.layout_plan,
             layout_targets=plan.layout_targets,
+            native_layouts=plan.native_layouts,
             bind_schema=plan.bind_schema,
             compile_values=plan.compile_values,
             field_plans=plan.field_plans,
@@ -142,6 +144,20 @@ class CompiledPlanRecord:
         from pops.codegen.lowering_coverage import LoweringCoverageReport
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("CompiledPlanRecord.layout_plan must be an exact LayoutPlan")
+        from pops.codegen._native_spatial_layout import (
+            NativeSpatialLayout,
+            native_spatial_layouts,
+        )
+        expected_native_layouts = native_spatial_layouts(self.layout_plan)
+        if not isinstance(self.native_layouts, Mapping) \
+                or tuple(self.native_layouts) != tuple(expected_native_layouts):
+            raise ValueError("CompiledPlanRecord has invalid native layout specializations")
+        for layout_id, expected in expected_native_layouts.items():
+            actual = self.native_layouts[layout_id]
+            if type(actual) is not NativeSpatialLayout or actual.identity != expected.identity:
+                raise ValueError(
+                    "CompiledPlanRecord native layout specializations differ from LayoutPlan")
+        object.__setattr__(self, "native_layouts", _deep_freeze(self.native_layouts))
         targets = dict(self.layout_targets)
         expected_targets = tuple(row.handle.qualified_id for row in self.layout_plan.layouts)
         if tuple(targets) != expected_targets or any(
@@ -232,6 +248,8 @@ class CompiledPlanRecord:
             "layout": _evidence(self.layout, where="compiled plan layout"),
             "layout_plan": _evidence(
                 self.layout_plan, where="compiled plan layout plan"),
+            "native_layouts": _evidence(
+                self.native_layouts, where="compiled plan native layouts"),
             "layout_targets": _evidence(
                 self.layout_targets, where="compiled plan layout targets"),
             "bind_schema": _evidence(self.bind_schema, where="compiled plan bind schema"),

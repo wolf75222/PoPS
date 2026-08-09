@@ -411,8 +411,8 @@ def _validate_launch_facts(platform: PlatformManifest, context: ExecutionContext
     for name in ("storage", "compute", "accumulation", "reduction"):
         _require_same("precision.%s" % name, getattr(platform.precision, name),
                       getattr(backend.precision, name))
-    supported_dimensions = tuple(backend.capabilities["dimensions"].require(
-        "runtime.capabilities.dimensions"))
+    supported_dimensions = tuple(backend.capabilities["supported_dimensions"].require(
+        "runtime.capabilities.supported_dimensions"))
     supported_centerings = tuple(backend.capabilities["centerings"].require(
         "runtime.capabilities.centerings"))
     supported_scalars = tuple(backend.capabilities["scalars"].require(
@@ -558,7 +558,7 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                precision=PrecisionPolicy(*(proof("float64") for _ in range(4))),
                device=proof("host"), memory_spaces=proof(("host",)),
                communicator=proof("serial"), capabilities={
-                   "dimensions": proof((2,)), "centerings": proof(("cell",)),
+                   "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
                    "scalars": proof(("float64",)),
                    "layouts": proof(("right", "left", "strided")),
                    "ownership": proof(("borrowed", "owned", "shared")),
@@ -624,7 +624,7 @@ def artifact_platform_manifest(
         device_proof = proof(device_value) if device_value else unknown()
         memory_proof = proof(tuple(spaces)) if spaces else unknown()
         capabilities = {
-            "dimensions": proof((2,)), "centerings": proof(("cell",)),
+            "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
             "scalars": proof(("float64",)),
             "layouts": proof(("right", "left", "strided")),
             "ownership": proof(("borrowed", "owned", "shared")),

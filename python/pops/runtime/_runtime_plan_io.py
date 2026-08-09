@@ -104,7 +104,8 @@ def proved_platform(plan: Any) -> tuple[Any, Any, tuple[str, ...], dict[str, Any
             "compute": platform.precision.compute.require("platform.precision.compute"),
             "accumulation": platform.precision.accumulation.require("platform.precision.accumulation"),
             "reduction": platform.precision.reduction.require("platform.precision.reduction"),
-            "dimensions": platform.capabilities["dimensions"].require("platform.capabilities.dimensions"),
+            "dimension": platform.capabilities["supported_dimensions"].require(
+                "platform.capabilities.supported_dimensions"),
         }
         spaces = platform.memory_spaces.require("platform.memory_spaces")
     except (KeyError, TypeError, ValueError) as exc:
@@ -113,9 +114,9 @@ def proved_platform(plan: Any) -> tuple[Any, Any, tuple[str, ...], dict[str, Any
     if not isinstance(spaces, tuple) or not spaces or any(not isinstance(item, str) or not item for item in spaces) or len(spaces) != len(set(spaces)):
         refuse("invalid_memory_spaces", "platform.memory_spaces",
                "platform memory spaces must be a unique non-empty tuple", evidence=spaces)
-    dimensions = facts["dimensions"]
+    dimensions = facts.pop("dimension")
     if not isinstance(dimensions, tuple) or len(dimensions) != 1 or isinstance(dimensions[0], bool) or not isinstance(dimensions[0], int):
-        refuse("ambiguous_platform_dimension", "platform.capabilities.dimensions",
+        refuse("ambiguous_platform_dimension", "platform.capabilities.supported_dimensions",
                "runtime planning requires exactly one selected dimension", evidence=dimensions)
     facts["dimension"] = dimensions[0]
     return platform, context, spaces, facts

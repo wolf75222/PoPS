@@ -12,45 +12,30 @@ from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
-def _uniform_system_values(
-    mesh: Any,
-) -> tuple[int, float, tuple[bool, bool], float, float]:
-    """Project exactly the uniform mesh shapes representable by native ``SystemConfig``."""
-    from pops.mesh.grid import CartesianGrid
-
-    if type(mesh) is not CartesianGrid:
-        raise NotImplementedError(
-            "native uniform System lowering requires an exact pops.mesh.CartesianGrid; "
-            "construct it from a framed pops.domain.Rectangle")
-    if mesh.cells[0] != mesh.cells[1]:
-        raise NotImplementedError(
-            "native SystemConfig has one n and cannot represent a rectangular CartesianGrid")
-    lengths = mesh.frame.lengths
-    if lengths[0] != lengths[1]:
-        raise NotImplementedError(
-            "native SystemConfig has one L and cannot represent anisotropic CartesianGrid extents")
-    periodic_axes = mesh.topology.periodic_axes
-    periodic_indices = {axis.index for axis in periodic_axes}
-    return (
-        int(mesh.cells[0]),
-        float(lengths[0]),
-        (0 in periodic_indices, 1 in periodic_indices),
-        float(mesh.frame.lower[0]),
-        float(mesh.frame.lower[1]),
-    )
-
-
-def system_config_from_layout(layout: Any) -> Any:
-    """Build the native uniform config from an authenticated layout descriptor."""
+def system_config_from_layout(native_layout: Any) -> Any:
+    """Build a native uniform config only from its resolved immutable specialization."""
     from pops._bootstrap import SystemConfig
+    from pops.codegen._native_spatial_layout import NativeSpatialLayout
+    from pops.mesh import CARTESIAN_2D_COORDINATES
 
-    n, extent, periodicity, xlo, ylo = _uniform_system_values(layout.mesh)
+    if type(native_layout) is not NativeSpatialLayout:
+        raise TypeError("native System lowering requires an exact NativeSpatialLayout")
+    if native_layout.coordinate_system != CARTESIAN_2D_COORDINATES:
+        raise NotImplementedError("native uniform System lowering requires Cartesian coordinates")
+    if native_layout.dimension != 2:
+        raise NotImplementedError("native uniform System lowering requires dimension 2")
+    if native_layout.shape[0] != native_layout.shape[1] \
+            or native_layout.lengths[0] != native_layout.lengths[1]:
+        raise NotImplementedError(
+            "current native SystemConfig cannot represent a rectangular Cartesian specialization")
     cfg = SystemConfig()
-    cfg.n = n
-    cfg.L = extent
-    cfg.periodicity = periodicity
-    cfg.xlo = xlo
-    cfg.ylo = ylo
+    # This is the temporary native ABI projection.  Its source is the frozen
+    # specialization, never the authoring grid or a scalar shape inference.
+    cfg.n = native_layout.shape[0]
+    cfg.L = native_layout.lengths[0]
+    cfg.periodicity = native_layout.periodicity
+    cfg.xlo = native_layout.lower[0]
+    cfg.ylo = native_layout.lower[1]
     return cfg
 
 
