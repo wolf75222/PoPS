@@ -432,6 +432,38 @@ struct FiniteModelRecoveryAdmissibility {
   }
 };
 
+/// Exact conservation-law conversion contract used by the rank-generic hyperbolic bricks.
+///
+/// New models expose a fallible ``recover`` result rather than the historical unchecked
+/// ``to_primitive`` value.  Keep that refusal visible to the prepared recovery chain; treating such
+/// a model as identity would publish conservative energy in the primitive pressure slot.
+template <class Model>
+concept HasDeclaredStateRecovery = requires(const Model model, const typename Model::State state) {
+  typename Model::Primitive;
+  { model.recover(state).succeeded() } -> std::same_as<bool>;
+  { model.recover(state).value[0] } -> std::convertible_to<Real>;
+};
+
+template <HasDeclaredStateRecovery Model>
+struct ClosedFormDeclaredRecoveryMethod {
+  static constexpr RecoveryMethodKind kind = RecoveryMethodKind::kClosedForm;
+  Model model;
+
+  POPS_HD RecoveryMethodResult<Model::n_vars> operator()(
+      const Real (&conserved)[Model::n_vars], const Real (&)[Model::n_vars]) const {
+    typename Model::State state{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      state[component] = conserved[component];
+    const auto recovered = model.recover(state);
+    if (!recovered.succeeded())
+      return RecoveryMethodResult<Model::n_vars>::reject(RecoveryCause::kExplicitRejection);
+    Real candidate[Model::n_vars] = {};
+    for (int component = 0; component < Model::n_vars; ++component)
+      candidate[component] = recovered.value[component];
+    return RecoveryMethodResult<Model::n_vars>::candidate(candidate);
+  }
+};
+
 /// Adapter for a model-declared primitive admissibility predicate.
 ///
 /// The plan owns a concrete model value, so the predicate remains allocation-free and
@@ -484,7 +516,11 @@ struct IdentityModelRecoveryMethod {
 template <class Model>
 POPS_HD constexpr auto prepare_model_variable_recovery(const Model& model) {
   constexpr int N = Model::n_vars;
-  if constexpr (HasPrimitiveVars<Model>) {
+  if constexpr (HasDeclaredStateRecovery<Model>) {
+    return prepare_variable_recovery<N>(
+        FiniteModelRecoveryAdmissibility<N>{},
+        recovery_methods(ClosedFormDeclaredRecoveryMethod<Model>{model}));
+  } else if constexpr (HasPrimitiveVars<Model>) {
     const auto methods = recovery_methods(ClosedFormModelRecoveryMethod<Model>{model});
     if constexpr (HasRecoveryAdmissibility<Model>) {
       return prepare_variable_recovery<N>(DeclaredModelRecoveryAdmissibility<Model>{model},
