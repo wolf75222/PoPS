@@ -208,7 +208,7 @@ the ghost layers by simple evaluation.
 
 ### Polar algorithm components (not a `System` runtime)
 
-`PolarGeometry`, the polar transport operators and the direct/tensor polar elliptic solvers remain
+`PolarGeometry<2>`, the polar transport operators and the direct/tensor polar elliptic solvers remain
 standalone C++ numerical components with dedicated algorithm tests. The exact-ranked `System<Dim>`
 has one Cartesian coordinate-provider contract; the historical 2-D `geometry == "polar"` engine
 and its `SystemConfig` fields were removed. `pops.mesh.PolarMesh` can still describe annular geometry
@@ -819,10 +819,11 @@ silently), or are assumed scope boundaries.
 
 - Standalone polar algorithms: the global ring $r \in [r_{min}, r_{max}] \times \theta \in [0, 2\pi)$
   and scalar ExB transport remain directly testable C++ components. The direct polar Poisson
-  `PolarPoissonSolver` ([`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp))
+  `PolarPoissonSolver<2>` ([`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp))
   is single-rank, on a single box covering the ring: its FFT-in-theta + tridiagonal-in-r requires the
-  complete azimuthal line and the complete radial column on a same rank, so it raises if `n_ranks() > 1` or if
-  `ba.size() != 1`. They are not advertised as an exact-ranked `System` backend.
+  complete azimuthal line and the complete radial column on one rank, so its exact provider rejects
+  communicator sizes greater than one or a layout other than one full-annulus `Box<2>`. It is not
+  advertised as a Cartesian `System<Dim>` backend.
 
 - The final exact-ranked uniform `System` names its iterative Poisson backend `CartesianCG`. Its
   authenticated provider schema contains only `rel_tol`, `abs_tol`, and `max_iterations`, the three
@@ -841,7 +842,7 @@ file-by-file detail is in section 13.
 ```
 include/pops/
   core/               types de base, State/Aux, concept PhysicalModel, EquationBlock, CoupledSystem, seam Kokkos
-  mesh/               Box2D, BoxArray, Fab2D, MultiFab, Geometry (+ PolarGeometry), for_each_cell, fill_boundary, CL physiques, refinement AMR
+  mesh/               Index<Dim>, Box<Dim>, BoxArray<Dim>, Fab<Dim>, MultiFab<Dim>, Geometry<Dim>, halos, CL physiques
   physics/            briques generiques (etat/transport/source/elliptique) -> CompositeModel ; flux Euler, hyperbolique iso, pendants polaires
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
   numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Krylov generique prepare, Poisson FFT (mono + bandes), polaire direct + tensoriel, composite FAC AMR (mg/composite_fac_poisson)

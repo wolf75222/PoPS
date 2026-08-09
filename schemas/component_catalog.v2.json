@@ -785,12 +785,15 @@
           "token": "polar",
           "wire_id": 2,
           "cpp_id": "kPolar",
-          "native_entry": "pops::PolarPoissonSolver",
+          "native_entry": "pops::PolarPoissonSolver<2>",
           "requirements": [
-            "polar geometry"
+            "exact rank two",
+            "annular polar geometry",
+            "single MPI rank",
+            "single full-annulus patch"
           ],
           "limitations": [
-            "annular polar only (r_min > 0)"
+            "spatial dimensions one / three and distributed annuli are rejected"
           ],
           "aliases": [],
           "metadata": {}

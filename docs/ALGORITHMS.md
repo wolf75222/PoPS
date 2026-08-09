@@ -1648,21 +1648,21 @@ function polar_poisson_solve(geom, bc, rhs f, out phi):
     for i in 0..nr-1:  phi(i, .) = real( ifft( phat[i] ) )
 ```
 
-Boundary conditions in $r$ (via `BCRec.xlo/.xhi`): Dirichlet (value $v$ at the face, reflection ghost
+Boundary conditions in $r$ (via `PhysicalBoundaryConditions<2>`): Dirichlet (value $v$ at the face, reflection ghost
 $\phi_{-1} = 2v - \phi_0$ -> $b_0 \mathrel{-}= a_0$, and $2 a_0 v$ to the right-hand side of the mode
 $m=0$ alone) or homogeneous Neumann (Foextrap, $\phi_{-1} = \phi_0$ -> $b_0 \mathrel{+}= a_0$). Mode $m=0$
 + two Neumann boundaries: the radial operator has the constant in its kernel (singular tridiagonal); we fix
 the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thomas).
 
-**Code.** [`include/pops/mesh/geometry/geometry.hpp`](../include/pops/mesh/geometry/geometry.hpp)`::PolarGeometry`
+**Code.** [`include/pops/numerics/elliptic/polar/polar_geometry.hpp`](../include/pops/numerics/elliptic/polar/polar_geometry.hpp)`::PolarGeometry<2>`
 and the following polar solvers remain standalone algorithm components. `pops.mesh.PolarMesh`
 normalizes annular geometry for inspection/output, but the exact-ranked `System<Dim>` accepts only
 Cartesian providers and refuses the annulus before artifact creation. The old dimension-erased
 transport builder and its callback boundary plan have been removed; no public runtime route claims
 polar transport until a metric-aware `Dim`-ranked provider owns geometry, boundaries and storage.
 Poisson:
-[`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp)`::PolarPoissonSolver`
-(FFT-in-theta `fft1d` reused from `poisson_fft.hpp` + complex `thomas_solve` in r; models the
+[`include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp`](../include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp)`::PolarPoissonSolver<2>`
+(FFT-in-theta `fft1d` reused from `poisson_fft.hpp` + complex Thomas solve in r; models the
 concept `PolarEllipticSolver` `rhs()/phi()/solve()/residual()/geom()`). Publishing metric-derived
 auxiliary fields belongs to that future ranked provider rather than to a hidden runtime callback.
 
@@ -1671,12 +1671,13 @@ high $\omega_c$), the Schur condenses a full tensor operator
 $A = I + c\,\rho\, B^{-1}$ with cross terms $a_{rt}, a_{tr}$ and a theta-dependent coefficient: the
 FFT-in-theta of `PolarPoissonSolver` no longer applies (it requires a constant theta coefficient
 without cross coupling).
-[`include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp`](../include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp)`::PolarTensorKrylovSolver`
+[`include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp`](../include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp)`::PolarTensorKrylovSolver<2>`
 then solves by matrix-free BiCGStab (handles the non-symmetric of the cross term), preconditioned
 `Jacobi` or `RadialLine` (radial Thomas per theta line, default). No MG V-cycle (stagnation on
 $1/r^2$). Singular operator (pure radial Neumann + periodic theta): gauge fixed by projection onto
 the subspace of zero FV mean (`project_mean`, the iterative counterpart of the mode-0 pinning). The
-9-point stencil reads the diagonal corners filled by `fill_ghosts` (without which the cross term would be wrong at the
+9-point stencil reads the diagonal corners filled by the exact `HaloSchedule<2>` followed by
+`PreparedPhysicalBoundary<2>` (without which the cross term would be wrong at the
 box boundary). This specialized backend is not selected by the final prepared
 `Program.solve(LinearProblem(...), solver=...)` route; a future typed polar metric/operator provider
 must connect it explicitly rather than reviving the removed callback-based `solve_linear_matfree`
@@ -1684,15 +1685,15 @@ dispatch. Multi-rank MPI /
 multi-box is supported by azimuthal splitting under `RadialLine` (the Thomas sweep in r must stay local
 to a box, safeguard `check_radial_columns`) and free 2D tiling under `Jacobi`.
 
-**Constraints / remarks.** PolarPoissonSolver: single-rank scope, single box covering the ring
+**Constraints / remarks.** `PolarPoissonSolver<2>`: single-rank scope, single box covering the ring
 (the FFT-in-theta + tridiag-in-r requires the complete theta line AND the radial column on one rank; the
 distributed would impose a parallel transpose, out of Phase 2a scope) -> hard safeguard (active in Release)
-if `n_ranks() > 1` or `ba.size() != 1`, raised on all ranks (no deadlock); `solve()` /
-`residual()` are `local_size()==0`-safe. Theta spectral: exact for a band-limited datum
+if the communicator has more than one rank or the exact `BoxArray<2>` does not contain one
+full-annulus patch. Theta spectral: exact for a band-limited datum
 (diocotron = few azimuthal modes), `dtheta` does not enter the eigenvalue. The tridiag is
-diagonally dominant (azimuthal term $\le 0$, folded BC) -> Thomas stable without pivoting. The host
-residence of the RHS is synchronized (`sync_host`) before any host read (a device kernel possibly in
-flight; no-op under a host Kokkos space (Serial/OpenMP), targeted `device_fence` under Kokkos Cuda). PolarTensorKrylovSolver:
+diagonally dominant (azimuthal term $\le 0$, folded BC) -> Thomas stable without pivoting. Host
+reads and publication use explicit `Fab<2>::HostMirror` copies, including non-host memory spaces.
+`PolarTensorKrylovSolver<2>`:
 RadialLine $\sim$ moderately growing iteration count (isotropic $\times 2$ per grid doubling,
 tensor $\times 2.4$); Jacobi grows in $1/h^2$ (sanity check / fallback). The cross term and the azimuthal
 coupling are not in the preconditioner (an honest limit, later refinement possible).

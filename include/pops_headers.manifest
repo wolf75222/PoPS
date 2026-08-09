@@ -114,6 +114,7 @@ sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
 api pops/numerics/elliptic/poisson/poisson_fft.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
+api pops/numerics/elliptic/polar/polar_geometry.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 api pops/numerics/fv/flux_interfaces.hpp

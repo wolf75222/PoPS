@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 4
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '70e3810ef372d4014b5f9ad36442bb24824acf5c0b5b7e06c5b0179456795edb'
+COMPONENT_CATALOG_SHA256 = 'd2b3539c2aefb10fc107755e062a1029593fbaa4509b7fe248970e345b3ae8ca'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b0ac796b7a52315721b338cb838c0016746d183679be5535f284229725314450'
 
-ROUTE_REGISTRY_SIGNATURE = 'v4:b126d0db6c54ed304aaffe3b67efaa4a0391393fc6febedf9ae4faa05328e4ec'
+ROUTE_REGISTRY_SIGNATURE = 'v4:b0ac796b7a52315721b338cb838c0016746d183679be5535f284229725314450'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -79,9 +79,12 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                    ('rank one / rank three, walls, variable epsilon and non-power-of-two grids are '
                     'rejected',)),
                   ('polar',
-                   'pops::PolarPoissonSolver',
-                   ('polar geometry',),
-                   ('annular polar only (r_min > 0)',)),
+                   'pops::PolarPoissonSolver<2>',
+                   ('exact rank two',
+                    'annular polar geometry',
+                    'single MPI rank',
+                    'single full-annulus patch'),
+                   ('spatial dimensions one / three and distributed annuli are rejected',)),
                   ('cartesian_cg',
                    'pops::elliptic::nd::CartesianPoissonSolver<Dim>',
                    ('uniform Cartesian layout', 'constant-coefficient Poisson operator'),
