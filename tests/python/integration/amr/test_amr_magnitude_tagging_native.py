@@ -73,9 +73,8 @@ def _install_state_transfer_routes(simulation, subject):
             operation,
             kernel,
             order,
-            ghost_depth,
-            2,
-            2,
+            ghost_depth * 2,
+            [2, 2],
         )
     simulation._s._bind_bootstrap_block_subject(subject, "tracer")
 
@@ -116,7 +115,7 @@ def _native_hierarchy(node_type):
     simulation.set_density("tracer", values)
     _install_state_transfer_routes(simulation, subject)
     simulation._s._begin_bootstrap_plan()
-    created = bool(simulation._s._bootstrap_next_level(2))
+    created = bool(simulation._s._bootstrap_next_level())
     simulation._s._commit_bootstrap_level()
     return simulation, created
 

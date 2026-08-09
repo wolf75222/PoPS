@@ -206,12 +206,7 @@ class NativeAMRBootstrapConsumer:
         elif operation == "create_level":
             if not self._clustered or self._tagged_level != action.level - 1:
                 raise ValueError("native bootstrap create requires tag then cluster")
-            ratios = tuple(action.evidence["ratio"])
-            if len(set(ratios)) != 1:
-                raise NotImplementedError(
-                    "native bootstrap currently requires an isotropic resolved transition"
-                )
-            created = bool(self._engine._bootstrap_next_level(ratios[0]))
+            created = bool(self._engine._bootstrap_next_level())
             if not created:
                 self._inactive_from_level = action.level
                 self._pending_level = None

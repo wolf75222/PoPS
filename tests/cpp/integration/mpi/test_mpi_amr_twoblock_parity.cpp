@@ -2,6 +2,7 @@
 
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
+#include "amr_tagging_test_authority.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -11,8 +12,12 @@
 #include <Kokkos_Core.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -107,6 +112,13 @@ struct RunResult {
 };
 
 template <int Dim>
+struct RefinedRunResult {
+  std::vector<pops::AmrPatch<Dim>> patches;
+  int levels = 0;
+  double mass = 0.0;
+};
+
+template <int Dim>
 RunResult run_mode(bool distribute_coarse) {
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
@@ -136,6 +148,43 @@ RunResult run_mode(bool distribute_coarse) {
   return result;
 }
 
+template <int Dim>
+RefinedRunResult<Dim> run_refined_distributed_mode() {
+  pops::AmrSystemConfig<Dim> config;
+  config.regrid_every = 1;
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.coarse_max_grid[axis] = 16;
+  }
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", gaussian(config.shape));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
+
+  RefinedRunResult<Dim> result;
+  result.patches = system.patch_boxes();
+  result.levels = system.n_levels();
+  result.mass = system.mass("tracer");
+  return result;
+}
+
+template <int Dim>
+std::string exact_patch_contract(const std::vector<pops::AmrPatch<Dim>>& patches) {
+  pops::ExactContractBuilder contract;
+  contract.text("test.mpi-amr-prepared-tagging-layout")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .scalar(static_cast<std::uint64_t>(patches.size()));
+  for (const pops::AmrPatch<Dim>& patch : patches) {
+    contract.scalar(patch.level);
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(patch.box.lo[axis]).scalar(patch.box.hi[axis]);
+  }
+  return std::move(contract).release();
+}
+
 double checksum(const std::vector<double>& values) {
   double result = 0.0;
   for (const double value : values)
@@ -151,6 +200,8 @@ int run_collective_parity(int argc, char** argv) {
     try {
       const RunResult replicated = run_mode<pops::kNativeDimension>(false);
       const RunResult distributed = run_mode<pops::kNativeDimension>(true);
+      const RefinedRunResult<pops::kNativeDimension> refined =
+          run_refined_distributed_mode<pops::kNativeDimension>();
       const double replicated_checksum = checksum(replicated.state);
       const double distributed_checksum = checksum(distributed.state);
       const auto spread = [](double value) {
@@ -164,6 +215,12 @@ int run_collective_parity(int argc, char** argv) {
       EXPECT_EQ(spread(distributed_checksum), 0.0);
       EXPECT_EQ(spread(replicated.mass), 0.0);
       EXPECT_EQ(spread(distributed.mass), 0.0);
+      EXPECT_EQ(refined.levels, 2);
+      EXPECT_FALSE(refined.patches.empty());
+      const std::string patch_contract = exact_patch_contract(refined.patches);
+      EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("prepared-tagging-layout"), std::string_view(patch_contract)}}));
+      EXPECT_EQ(spread(refined.mass), 0.0);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "rank %d exact package parity failed: %s\n", pops::my_rank(),
                    error.what());

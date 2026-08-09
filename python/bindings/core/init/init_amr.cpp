@@ -634,7 +634,7 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("subjects"), py::arg("provider_identity"), py::arg("space"),
            py::arg("centering"), py::arg("representation"), py::arg("storage"),
            py::arg("operation"), py::arg("kernel"), py::arg("order"), py::arg("ghost_depth"),
-           py::arg("dimension"), py::arg("refinement_ratio"))
+           py::arg("refinement_ratio"))
       .def("_register_bootstrap_face_vector", &AmrSystem::register_bootstrap_face_vector,
            py::arg("subjects"))
       .def(

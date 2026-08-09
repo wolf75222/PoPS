@@ -359,7 +359,7 @@ std::string exact_program_contract(
     const PreparedTaggingProgram<Dim>& program,
     const std::vector<std::vector<PreparedTaggingFieldContract<Dim>>>& field_contracts,
     const std::vector<::pops::amr::hierarchy::LevelLayout<Dim>>& layouts,
-    const std::vector<PreparedTaggingExecutionBudget>& budgets, std::uint64_t topology_generation) {
+    std::uint64_t topology_generation) {
   ExactContractBuilder contract;
   contract.text("pops.amr.prepared-tagging-execution")
       .scalar(std::uint32_t{2})
@@ -409,18 +409,76 @@ std::string exact_program_contract(
             field.scalar(static_cast<std::int64_t>(identity.ghosts[axis]));
         });
       });
-  for (std::size_t level = 0; level < layouts.size(); ++level) {
-    append_level(contract, layouts[level].exact_identity());
-    const auto& budget = budgets[level];
-    contract.scalar(static_cast<std::uint64_t>(budget.candidate_mask.global_patches))
-        .scalar(static_cast<std::uint64_t>(budget.candidate_mask.owned_patches))
-        .scalar(static_cast<std::uint64_t>(budget.candidate_mask.cells_per_patch))
-        .scalar(static_cast<std::uint64_t>(budget.candidate_mask.owned_cells))
-        .scalar(static_cast<std::uint64_t>(budget.candidate_mask.bytes))
-        .scalar(static_cast<std::uint64_t>(budget.candidate_mask.identity_bytes))
-        .scalar(static_cast<std::uint64_t>(budget.scratch_bytes))
-        .scalar(static_cast<std::uint64_t>(budget.replicated_consensus_bytes));
+  for (const auto& layout : layouts)
+    append_level(contract, layout.exact_identity());
+  return std::move(contract).release();
+}
+
+inline std::array<std::size_t, 8> budget_fields(
+    const PreparedTaggingExecutionBudget& budget) noexcept {
+  return {budget.candidate_mask.global_patches,
+          budget.candidate_mask.owned_patches,
+          budget.candidate_mask.cells_per_patch,
+          budget.candidate_mask.owned_cells,
+          budget.candidate_mask.bytes,
+          budget.candidate_mask.identity_bytes,
+          budget.scratch_bytes,
+          budget.replicated_consensus_bytes};
+}
+
+inline std::string exact_rank_ordered_budget_contract(
+    const std::vector<PreparedTaggingExecutionBudget>& budgets,
+    const CommunicatorView& communicator) {
+  const long invalid_level_count =
+      budgets.size() > static_cast<std::size_t>(std::numeric_limits<long>::max()) ? 1L : 0L;
+  if (all_reduce_max(invalid_level_count, communicator) != 0)
+    throw std::length_error("prepared AMR tagging budget level count exceeds long");
+  const long local_level_count = static_cast<long>(budgets.size());
+  if (all_reduce_min(local_level_count, communicator) !=
+      all_reduce_max(local_level_count, communicator))
+    throw std::invalid_argument(
+        "prepared AMR tagging budget level count differs between ranks");
+  const std::size_t ranks = static_cast<std::size_t>(communicator.size());
+  constexpr std::size_t kFields = 8;
+  std::vector<std::uint64_t> gathered;
+  long allocation_failure = 0;
+  try {
+    gathered.resize(checked_product(
+        checked_product(ranks, budgets.size(),
+                        "prepared AMR tagging rank-budget matrix exceeds size_t"),
+        kFields, "prepared AMR tagging rank-budget matrix exceeds size_t"));
+  } catch (...) {
+    allocation_failure = 1;
   }
+  if (all_reduce_max(allocation_failure, communicator) != 0)
+    throw std::bad_alloc();
+
+  for (std::size_t source = 0; source < ranks; ++source)
+    for (std::size_t level = 0; level < budgets.size(); ++level) {
+      const auto fields = budget_fields(budgets[level]);
+      for (std::size_t field = 0; field < fields.size(); ++field) {
+        const std::uint64_t local =
+            static_cast<std::size_t>(communicator.rank()) == source
+                ? static_cast<std::uint64_t>(fields[field])
+                : std::uint64_t{0};
+        constexpr unsigned kChunkBits = 30;
+        constexpr std::uint64_t kChunkMask = (std::uint64_t{1} << kChunkBits) - 1u;
+        std::uint64_t exact = 0;
+        for (unsigned chunk = 0; chunk < 3; ++chunk) {
+          const long piece = all_reduce_max(
+              static_cast<long>((local >> (chunk * kChunkBits)) & kChunkMask), communicator);
+          exact |= static_cast<std::uint64_t>(piece) << (chunk * kChunkBits);
+        }
+        gathered[(source * budgets.size() + level) * kFields + field] = exact;
+      }
+    }
+
+  ExactContractBuilder contract;
+  contract.text("pops.amr.prepared-tagging-rank-budgets")
+      .scalar(std::uint32_t{1})
+      .scalar(static_cast<std::uint64_t>(ranks))
+      .scalar(static_cast<std::uint64_t>(budgets.size()))
+      .sequence(gathered);
   return std::move(contract).release();
 }
 
@@ -473,6 +531,38 @@ class PreparedTaggingExecutionPlan {
         std::rethrow_exception(local_error);
       throw std::runtime_error(
           "prepared AMR tagging construction failed on another communicator rank");
+    }
+
+    std::string rank_budget_contract;
+    local_error = nullptr;
+    try {
+      rank_budget_contract =
+          tagging_detail::exact_rank_ordered_budget_contract(budgets, communicator);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "prepared AMR tagging rank-budget authentication failed on another rank");
+    }
+    local_error = nullptr;
+    try {
+      ExactContractBuilder collective;
+      collective.text("pops.amr.prepared-tagging-collective")
+          .scalar(std::uint32_t{1})
+          .bytes(candidate->collective_contract_)
+          .bytes(rank_budget_contract);
+      candidate->collective_contract_ = std::move(collective).release();
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "prepared AMR tagging collective budget authentication failed on another rank");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("prepared-tagging"),
@@ -881,7 +971,7 @@ class PreparedTaggingExecutionPlan {
     }
 
     plan.collective_contract_ = tagging_detail::exact_program_contract(
-        program, field_contracts, layouts, budgets, topology_generation);
+        program, field_contracts, layouts, topology_generation);
     return plan;
   }
 

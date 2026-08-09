@@ -6,6 +6,7 @@
 #include <pops/runtime/amr_patch.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -96,6 +97,25 @@ std::vector<double> gaussian(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
+std::vector<double> corner_bump(const pops::Extent<Dim>& shape, bool upper) {
+  std::vector<double> values(cell_count(shape), 0.0);
+  for (std::size_t linear = 0; linear < values.size(); ++linear) {
+    std::size_t remainder = linear;
+    bool inside = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      const int coordinate = static_cast<int>(remainder % width);
+      remainder /= width;
+      const int lower = upper ? shape[axis] - 8 : 2;
+      const int upper_bound = upper ? shape[axis] - 2 : 8;
+      inside = inside && coordinate >= lower && coordinate < upper_bound;
+    }
+    values[linear] = inside ? 1.0 : 0.0;
+  }
+  return values;
+}
+
+template <int Dim>
 struct PhysicalPatch {
   std::array<double, Dim> lower{};
   std::array<double, Dim> extent{};
@@ -180,4 +200,40 @@ TEST(test_amr_seed_no_refine, PreparedTaggingSeedsExactGeometryWithoutReadMutati
   EXPECT_EQ(second, first);
   EXPECT_EQ(physical_patches(second, config), projected);
   EXPECT_EQ(system.block_level_state_global("tracer", 0), state_before);
+}
+
+TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDue) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 32;
+  config.regrid_every = 2;
+  auto system = make_system(config, corner_bump(config.shape, false));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}});
+  system.install_program_step([](double) {});
+
+  const std::vector<pops::AmrPatch<Dim>> initial = system.patch_boxes();
+  ASSERT_FALSE(initial.empty());
+  system.set_conservative_state("tracer", corner_bump(config.shape, true));
+
+  system.step(0.01);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_EQ(system.patch_boxes(), initial) << "non-due steps must not mutate hierarchy topology";
+
+  system.step(0.01);
+  EXPECT_EQ(system.macro_step(), 2);
+  const std::vector<pops::AmrPatch<Dim>> moved = system.patch_boxes();
+  ASSERT_FALSE(moved.empty());
+  EXPECT_NE(moved, initial) << "the due accepted step must publish the newly tagged topology";
+  const bool contains_upper_patch = std::any_of(
+      moved.begin(), moved.end(), [&](const pops::AmrPatch<Dim>& patch) {
+        if (patch.level == 0)
+          return false;
+        for (int axis = 0; axis < Dim; ++axis)
+          if (patch.box.hi[axis] < 2 * (config.shape[axis] - 8))
+            return false;
+        return true;
+      });
+  EXPECT_TRUE(contains_upper_patch)
+      << "the due accepted step must materialize refinement around the new upper-corner tags";
 }

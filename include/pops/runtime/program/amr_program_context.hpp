@@ -186,6 +186,22 @@ class AmrProgramContext {
   }
   field_type& state(std::size_t selected) const { return runtime_->hierarchy().state(selected); }
 
+  ::pops::runtime::amr::PreparedTaggerCandidates<Dim> execute_prepared_tagging(
+      int parent_level) const {
+    if (facade_ == nullptr)
+      throw std::logic_error(
+          "AMR Program tagging execution requires the exact-ranked facade authority");
+    return facade_->execute_prepared_tagging(parent_level);
+  }
+
+  bool regrid_from_prepared_tagging(int parent_level) const {
+    if (facade_ == nullptr)
+      throw std::logic_error(
+          "AMR Program regrid publication requires the exact-ranked facade authority");
+    require_history_free_for_topology_change_("prepared tagging regrid");
+    return facade_->regrid_from_prepared_tagging(parent_level);
+  }
+
   ProgramSpatialSnapshot<Dim> spatial_snapshot() const {
     return {std::string(runtime_->spatial_contract()), runtime_->topology_epoch(),
             runtime_->materialization_generation()};

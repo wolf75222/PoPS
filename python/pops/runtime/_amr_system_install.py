@@ -488,12 +488,20 @@ class _AmrSystemInstall(_AmrSystem):
             dimensions = {row.accuracy.dimension for row in entry.requirements}
             if len(dimensions) != 1:
                 raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
+            dimension = next(iter(dimensions))
             ratios = {
                 tuple(row.accuracy.refinement_ratio) for row in entry.requirements
             }
-            if len(ratios) != 1 or len(set(next(iter(ratios)))) != 1:
+            if len(ratios) != 1 or len(next(iter(ratios))) != dimension:
                 raise ValueError(
-                    "pops.bind: one native transfer route requires one isotropic ratio"
+                    "pops.bind: one native transfer route requires one exact-ranked ratio"
+                )
+            ghost_depth = tuple(ghost)
+            if len(ghost_depth) == 1:
+                ghost_depth *= dimension
+            if len(ghost_depth) != dimension:
+                raise ValueError(
+                    "pops.bind: one native transfer route requires exact-ranked ghost depth"
                 )
             self._s._register_bootstrap_transfer_route(
                 entry.identity.token,
@@ -506,9 +514,8 @@ class _AmrSystemInstall(_AmrSystem):
                 key["operation"]["name"],
                 options["native_route"],
                 order,
-                ghost,
-                next(iter(dimensions)),
-                next(iter(ratios))[0],
+                ghost_depth,
+                next(iter(ratios)),
             )
         for pair in sorted(face_vectors):
             self._s._register_bootstrap_face_vector(pair)

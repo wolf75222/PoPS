@@ -489,6 +489,14 @@ class AmrSystem {
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
       const std::string& clock_identity, const std::string& provider_identity);
+  /// Execute the immutable exact-ranked tagging program against one live parent level. The
+  /// returned masks are owner-local candidates; no clustering, hysteresis, or topology mutation is
+  /// performed by this inspection route.
+  runtime::amr::PreparedTaggerCandidates<Dim> execute_prepared_tagging(int parent_level);
+  /// Consume the prepared candidates for one parent, cluster their exact global union, transfer
+  /// accepted state into the candidate child, and publish the regrid atomically. Returns whether a
+  /// child remains active after publication.
+  bool regrid_from_prepared_tagging(int parent_level);
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
