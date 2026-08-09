@@ -35,7 +35,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial_operator.hpp>
-#include <pops/runtime/context/wall_predicate.hpp>  // detail::DiscDomain (descripteur source-unique)
+#include <pops/numerics/spatial/embedded_boundary/domain.hpp>
 
 #include <cmath>
 #include <cstdio>

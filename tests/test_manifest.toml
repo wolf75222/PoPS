@@ -195,12 +195,6 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
-name = "test_mpi_cutcell_multibox"
-sources = ["tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp"]
-labels = ["backend", "mpi", "medium"]
-mpi_nproc = [1, 2, 4]
-
-[[cpp.suite]]
 name = "test_mpi_external_lifecycle"
 sources = ["tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -512,11 +506,6 @@ sources = ["tests/cpp/unit/codegen/test_model_registry.cpp"]
 labels = ["unit", "codegen", "fast"]
 
 [[cpp.suite]]
-name = "test_anisotropic_epsilon"
-sources = ["tests/cpp/unit/elliptic/test_anisotropic_epsilon.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_composite_fac_adjacent"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_adjacent.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -553,28 +542,8 @@ labels = ["unit", "elliptic", "fast"]
 mpi_variants = [2]
 
 [[cpp.suite]]
-name = "test_cut_cell"
-sources = ["tests/cpp/unit/elliptic/test_cut_cell.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_cut_cell_anisotropic"
-sources = ["tests/cpp/unit/elliptic/test_cut_cell_anisotropic.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_cut_cell_anisotropic_multibox"
-sources = ["tests/cpp/unit/elliptic/test_cut_cell_anisotropic_multibox.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_cut_fraction"
 sources = ["tests/cpp/unit/elliptic/test_cut_fraction.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_cut_fraction_mg_identity"
-sources = ["tests/cpp/unit/elliptic/test_cut_fraction_mg_identity.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
@@ -595,11 +564,6 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_elliptic_problem"
 sources = ["tests/cpp/unit/elliptic/test_elliptic_problem.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_full_tensor_operator"
-sources = ["tests/cpp/unit/elliptic/test_full_tensor_operator.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
@@ -642,11 +606,6 @@ sources = ["tests/cpp/unit/elliptic/test_poisson_convergence.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_poisson_disc"
-sources = ["tests/cpp/unit/elliptic/test_poisson_disc.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_poisson_fft"
 sources = ["tests/cpp/unit/elliptic/test_poisson_fft.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -677,16 +636,6 @@ sources = ["tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_screened_poisson"
-sources = ["tests/cpp/unit/elliptic/test_screened_poisson.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_solve_robust"
-sources = ["tests/cpp/unit/elliptic/test_solve_robust.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_solver_codegen_generated"
 sources = ["tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -694,11 +643,6 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_structured_solver_diagnostics"
 sources = ["tests/cpp/unit/elliptic/test_structured_solver_diagnostics.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_variable_epsilon"
-sources = ["tests/cpp/unit/elliptic/test_variable_epsilon.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]

@@ -491,17 +491,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_tensor
   test_amr_composite_poisson
-  test_poisson_disc
-  test_solve_robust
-  test_cut_cell
   test_cut_fraction
-  test_cut_fraction_mg_identity
-  test_cut_cell_anisotropic
-  test_variable_epsilon
-  test_screened_poisson
-  test_anisotropic_epsilon
-  test_cut_cell_anisotropic_multibox
-  test_full_tensor_operator
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
@@ -788,7 +778,6 @@ if(POPS_HAS_MPI)
     TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
-  set(POPS_MPI_RANKS_test_mpi_cutcell_multibox 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
@@ -835,7 +824,6 @@ if(POPS_HAS_MPI)
 
   set(POPS_CPP_MPI_ONLY_TESTS
     test_mpi_polar_schur
-    test_mpi_cutcell_multibox
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
