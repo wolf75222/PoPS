@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,6 +71,48 @@ void expect_report_is_structured(const pops::SolveReport& report, int maximum_it
 
 }  // namespace
 
+TEST(test_structured_solver_diagnostics,
+     invalid_evaluation_canonicalizes_only_unavailable_evidence_and_keeps_exact_location) {
+  pops::SolveReport report;
+  report.iters = 2;
+  report.evaluations = 3;
+  report.rel_residual = std::numeric_limits<pops::Real>::quiet_NaN();
+  report.reference_residual_norm = pops::Real(4);
+  report.residual_norm = std::numeric_limits<pops::Real>::infinity();
+  report.step_norm = pops::Real(-1);
+  report.condition_evidence = pops::Real(7);
+  const pops::Index<kDim> failed_index = filled<pops::Index<kDim>>(-3);
+  report.failure = pops::SolveFailureLocation::from<kDim>(failed_index, 2);
+
+  report.mark_failed(pops::SolveStatus::kInvalidEvaluation, pops::SolveAction::kRejectAttempt,
+                     "non_finite_operator_evaluation");
+
+  EXPECT_TRUE(report.valid());
+  EXPECT_TRUE(pops::solve_report_is_publishable(report, 2));
+  EXPECT_EQ(report.rel_residual, pops::Real(0));
+  EXPECT_EQ(report.reference_residual_norm, pops::Real(4));
+  EXPECT_EQ(report.residual_norm, pops::Real(0));
+  EXPECT_EQ(report.step_norm, pops::Real(0));
+  EXPECT_EQ(report.condition_evidence, pops::Real(7));
+  ASSERT_TRUE(report.failure.found);
+  EXPECT_EQ(report.failure.rank, kDim);
+  EXPECT_EQ(report.failure.component, 2);
+  for (int axis = 0; axis < kDim; ++axis)
+    EXPECT_EQ(report.failure.index[static_cast<std::size_t>(axis)], -3);
+}
+
+TEST(test_structured_solver_diagnostics,
+     non_invalid_evaluation_status_does_not_hide_malformed_provider_evidence) {
+  pops::SolveReport report;
+  report.residual_norm = std::numeric_limits<pops::Real>::quiet_NaN();
+  report.mark_failed(pops::SolveStatus::kBreakdown, pops::SolveAction::kFailRun,
+                     "provider_claimed_breakdown");
+
+  EXPECT_TRUE(report.valid());
+  EXPECT_FALSE(pops::solve_report_is_publishable(report, 0));
+  EXPECT_TRUE(std::isnan(static_cast<double>(report.residual_norm)));
+}
+
 TEST(test_structured_solver_diagnostics, geometric_multigrid_publishes_the_unified_solve_report) {
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.relative_tolerance = pops::Real(1e-8);
@@ -87,6 +130,25 @@ TEST(test_structured_solver_diagnostics, geometric_multigrid_publishes_the_unifi
   EXPECT_EQ(report.reason, "geometric_mg_converged");
   EXPECT_EQ(solver.last_solve_report().status, report.status);
   EXPECT_EQ(solver.last_solve_report().residual_norm, report.residual_norm);
+}
+
+TEST(test_structured_solver_diagnostics,
+     geometric_multigrid_nonfinite_rhs_publishes_a_canonical_invalid_evaluation) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  pops::elliptic::mg::GeometricMG<kDim> solver(complete_request(8), options);
+  solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                           pops::PreparedVectorDistribution<kDim>::replicated());
+  solver.rhs().set_val(std::numeric_limits<pops::Real>::quiet_NaN());
+  solver.phi().set_val(pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
+  EXPECT_EQ(report.reason, "geometric_mg_non_finite_initial_residual");
+  expect_report_is_structured(report, solver.maximum_iterations());
+  EXPECT_EQ(report.reference_residual_norm, pops::Real(0));
+  EXPECT_EQ(report.residual_norm, pops::Real(0));
+  EXPECT_EQ(report.rel_residual, pops::Real(0));
 }
 
 TEST(test_structured_solver_diagnostics,
@@ -112,4 +174,31 @@ TEST(test_structured_solver_diagnostics,
   EXPECT_EQ(report.reason, "composite_fac_initial_residual");
   EXPECT_EQ(report.iters, 0);
   EXPECT_EQ(solver.last_solve_report().status, report.status);
+}
+
+TEST(test_structured_solver_diagnostics,
+     composite_fac_nonfinite_rhs_publishes_the_same_canonical_failure_contract) {
+  auto coarse = complete_request(8);
+  const pops::Box<kDim> fine_patch{filled<pops::Index<kDim>>(4), filled<pops::Index<kDim>>(11)};
+  auto fine = request(16, pops::mesh::BoxArray<kDim>{std::vector<pops::Box<kDim>>{fine_patch}});
+  pops::elliptic::mg::CompositeFacBuildRequest<kDim> build{
+      {std::move(coarse), std::move(fine)},
+      {pops::amr::RefinementRatio<kDim>{filled<std::array<int, kDim>>(2)}}};
+  pops::elliptic::mg::CompositeFacPoisson<kDim> solver(std::move(build));
+  solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                           {pops::PreparedVectorDistribution<kDim>::replicated(),
+                            pops::PreparedVectorDistribution<kDim>::replicated()});
+  solver.rhs_level(0).set_val(std::numeric_limits<pops::Real>::infinity());
+  solver.rhs_level(1).set_val(pops::Real(0));
+  solver.phi_level(0).set_val(pops::Real(0));
+  solver.phi_level(1).set_val(pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  EXPECT_EQ(report.status, pops::SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, pops::SolveAction::kFailRun);
+  EXPECT_EQ(report.reason, "composite_fac_non_finite_initial_residual");
+  expect_report_is_structured(report, solver.maximum_iterations());
+  EXPECT_EQ(report.reference_residual_norm, pops::Real(0));
+  EXPECT_EQ(report.residual_norm, pops::Real(0));
+  EXPECT_EQ(report.rel_residual, pops::Real(0));
 }

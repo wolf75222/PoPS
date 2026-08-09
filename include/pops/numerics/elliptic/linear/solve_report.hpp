@@ -156,6 +156,23 @@ struct SolveReport {
       throw std::invalid_argument("SolveReport::mark_failed requires a failure status");
     if (failed_action == SolveAction::kNone)
       throw std::invalid_argument("SolveReport::mark_failed requires an explicit failure action");
+    // An invalid evaluation means that one or more scientific measures are unavailable.  Keep
+    // every trustworthy finite, non-negative witness, but represent unavailable evidence with the
+    // one canonical value accepted by the publication contract.  This preserves the exact failure
+    // location/action/reason while preventing NaN or infinity from turning a structured numerical
+    // failure into a malformed outcome at the next runtime boundary.  Other failure statuses are
+    // deliberately not repaired: a provider that labels non-finite evidence as breakdown,
+    // singularity, or iteration exhaustion must still fail structural publication.
+    if (failed_status == SolveStatus::kInvalidEvaluation) {
+      const auto canonical_evidence = [](Real value) noexcept {
+        return std::isfinite(value) && value >= Real(0) ? value : Real(0);
+      };
+      rel_residual = canonical_evidence(rel_residual);
+      reference_residual_norm = canonical_evidence(reference_residual_norm);
+      residual_norm = canonical_evidence(residual_norm);
+      step_norm = canonical_evidence(step_norm);
+      condition_evidence = canonical_evidence(condition_evidence);
+    }
     status = failed_status;
     action = failed_action;
     reason = failure_reason.empty() ? solve_status_name(status) : std::move(failure_reason);

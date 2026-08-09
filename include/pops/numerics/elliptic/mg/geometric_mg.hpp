@@ -429,18 +429,18 @@ class GeometricMG {
     compute_residual_(fine);
     const Real reference = global_norm_inf_(fine.residual);
     SolveReport report;
-    report.reference_residual_norm = reference;
-    report.residual_norm = reference;
-    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
     report.evaluations = 1;
-    const Real stop =
-        std::max(options_.absolute_tolerance, options_.relative_tolerance * reference);
     if (!std::isfinite(static_cast<double>(reference))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "geometric_mg_non_finite_initial_residual");
       last_report_ = report;
       return last_report_;
     }
+    report.reference_residual_norm = reference;
+    report.residual_norm = reference;
+    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    const Real stop =
+        std::max(options_.absolute_tolerance, options_.relative_tolerance * reference);
     if (reference <= stop) {
       fill_ghosts_(fine);
       report.mark_solved("geometric_mg_initial_residual");

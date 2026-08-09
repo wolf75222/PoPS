@@ -668,25 +668,11 @@ inline SolveReport report_physical(const SolveNormalization& normalization, Real
                                    int iterations, SolveStatus status) {
   SolveReport result;
   result.iters = iterations;
-  // Invalid evaluation means that no trustworthy residual may exist. SolveReport nevertheless has
-  // one uniform, publishable scalar schema, so represent an unavailable norm with finite zero
-  // evidence instead of leaking NaN through the outcome boundary. Every other status must retain
-  // its exact measured values so a malformed provider report is still rejected by the wrapper.
-  if (status == SolveStatus::kInvalidEvaluation &&
-      (!finite(normalization.reference) || normalization.reference < Real(0) ||
-       !finite(physical_residual) || physical_residual < Real(0))) {
-    const SolveNormalization finite_normalization{
-        finite(normalization.reference) && normalization.reference >= Real(0)
-            ? normalization.reference
-            : Real(0),
-        Real(1),
-        Real(0),
-        Real(0),
-    };
-    set_report_physical_residuals(result, finite_normalization, Real(0));
-  } else {
-    set_report_physical_residuals(result, normalization, physical_residual);
-  }
+  // Preserve the provider's measured values until the common SolveReport authority sees the final
+  // status. `mark_failed(kInvalidEvaluation)` alone canonicalizes unavailable evidence; every other
+  // status retains its exact measurements so the publication boundary still rejects malformed
+  // provider reports.
+  set_report_physical_residuals(result, normalization, physical_residual);
   if (status == SolveStatus::kSolved)
     result.mark_solved();
   else

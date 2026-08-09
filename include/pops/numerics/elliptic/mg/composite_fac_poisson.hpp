@@ -305,17 +305,17 @@ class CompositeFacPoisson {
     compute_composite_residual_();
     const Real reference = composite_residual_norm_();
     SolveReport report;
-    report.reference_residual_norm = reference;
-    report.residual_norm = reference;
-    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
     report.evaluations = 1;
-    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
     if (!std::isfinite(static_cast<double>(reference))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "composite_fac_non_finite_initial_residual");
       last_report_ = report;
       return last_report_;
     }
+    report.reference_residual_norm = reference;
+    report.residual_norm = reference;
+    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
     if (reference <= stop) {
       fill_all_ghosts_();
       report.mark_solved("composite_fac_initial_residual");
