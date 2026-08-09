@@ -402,16 +402,27 @@ def _point_mask(cell_mask: Any) -> Any:
 
 
 def _cell_corner_offsets(dimension: int) -> tuple[tuple[int, ...], ...]:
-    if dimension == 1:
-        return ((0,), (1,))
-    if dimension == 2:
-        return ((0, 0), (0, 1), (1, 1), (1, 0))
-    if dimension == 3:
-        return (
-            (0, 0, 0), (0, 0, 1), (0, 1, 1), (0, 1, 0),
-            (1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0),
+    if dimension not in _VTK_CELL:
+        raise ValueError("VTK cells require spatial rank 1, 2, or 3")
+
+    # VTK orders a line directly, a quadrilateral by a binary-reflected Gray
+    # cycle, and a hexahedron as two equally oriented quadrilateral faces.
+    # Express that tensor-product rule once instead of maintaining one topology
+    # algorithm per spatial rank.
+    face_rank = min(dimension, 2)
+    prefix_rank = dimension - face_rank
+    face = tuple(
+        tuple(
+            ((ordinal ^ (ordinal >> 1)) >> (face_rank - axis - 1)) & 1
+            for axis in range(face_rank)
         )
-    raise ValueError("VTK cells require spatial rank 1, 2, or 3")
+        for ordinal in range(1 << face_rank)
+    )
+    return tuple(
+        prefix + corner
+        for prefix in product((0, 1), repeat=prefix_rank)
+        for corner in face
+    )
 
 
 def _base64_size(byte_count: int) -> int:
