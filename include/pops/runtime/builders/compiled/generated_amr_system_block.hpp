@@ -4,7 +4,9 @@
 #pragma once
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
+#include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/prepared_amr_ghost_fill.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -50,9 +52,11 @@ struct GeneratedAmrLevelContext {
   PreparedRootAmrGhostFill<Dim, MemorySpace> root_state_ghost_fill;
   PreparedRootAmrGhostFill<Dim, MemorySpace> root_auxiliary_ghost_fill;
   std::shared_ptr<const PreparedHyperbolicBoundary<Dim>> physical_boundary;
+  std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>> embedded_boundary;
   std::string state_identity;
   std::string auxiliary_identity;
   std::string boundary_identity;
+  std::string embedded_boundary_provider_identity;
 };
 
 /// A transactionally materialized AMR residual and its integrated face fluxes.
@@ -121,6 +125,32 @@ void append_geometry_contract(ExactContractBuilder& contract, const Geometry<Dim
   }
 }
 
+template <int Dim>
+struct GeneratedAmrCutCellCapability {
+  static std::string provider_identity(std::string_view) { return {}; }
+
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
+                      std::string_view provider) {
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell || !provider.empty())
+      throw std::invalid_argument(
+          "generated AMR cut-cell transport has no exact provider for this spatial rank");
+  }
+};
+
+template <>
+struct GeneratedAmrCutCellCapability<2> {
+  static std::string provider_identity(std::string_view block_provider) {
+    return "pops.generated.amr.cut-cell.2d/" + std::string(block_provider);
+  }
+
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
+                      std::string_view provider) {
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell && provider.empty())
+      throw std::invalid_argument(
+          "generated AMR cut-cell transport requires its authenticated rank-two provider");
+  }
+};
+
 inline void append_variable_set_contract(ExactContractBuilder& contract,
                                          const VariableSet& variables) {
   contract.scalar(static_cast<std::int32_t>(variables.kind))
@@ -139,7 +169,9 @@ template <int Dim, class MemorySpace>
 void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& runtime,
                            const GeneratedAmrLevelContext<Dim, MemorySpace>& context,
                            int state_components, int auxiliary_components,
-                           const Extent<Dim>& required_ghosts) {
+                           const Extent<Dim>& required_ghosts,
+                           std::string_view staircase_provider_identity,
+                           std::string_view cut_cell_provider_identity) {
   if (context.level >= runtime.hierarchy().num_levels())
     throw std::out_of_range("generated AMR block level lies outside the live hierarchy");
   if (context.state_identity.empty() || context.auxiliary_identity.empty())
@@ -165,6 +197,37 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
     throw std::invalid_argument(
         "generated AMR block requires an authenticated physical-boundary provider");
 
+  if (context.embedded_boundary) {
+    const auto mode = context.embedded_boundary->mode();
+    const std::string_view expected_provider =
+        mode == runtime::system::PreparedEmbeddedBoundaryMode::staircase
+            ? staircase_provider_identity
+        : mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell
+            ? cut_cell_provider_identity
+            : std::string_view{};
+    GeneratedAmrCutCellCapability<Dim>::require(mode, cut_cell_provider_identity);
+    if (mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
+        (expected_provider.empty() ||
+         context.embedded_boundary_provider_identity != expected_provider))
+      throw std::invalid_argument(
+          "generated AMR embedded boundary lacks its authenticated numerical provider");
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
+        !context.embedded_boundary_provider_identity.empty())
+      throw std::invalid_argument(
+          "inactive generated AMR embedded geometry cannot select a transport provider");
+    if (mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
+        context.physical_boundary)
+      throw std::invalid_argument(
+          "generated AMR embedded transport requires an EB-qualified physical-boundary provider");
+    const auto& embedded = *context.embedded_boundary;
+    if (embedded.geometry().domain() != context.geometry.domain() ||
+        embedded.topology() != context.topology)
+      throw std::invalid_argument(
+          "generated AMR embedded geometry differs from its exact level topology");
+  } else if (!context.embedded_boundary_provider_identity.empty()) {
+    throw std::invalid_argument("generated AMR embedded provider has no prepared level geometry");
+  }
+
   const auto& state = runtime.hierarchy().state(context.level);
   const auto& auxiliary = *context.auxiliary;
   if (state.ncomp() != state_components || auxiliary.ncomp() < auxiliary_components ||
@@ -177,6 +240,21 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
         auxiliary.ghosts()[axis] < required_ghosts[axis])
       throw std::invalid_argument(
           "generated AMR level storage is narrower than its reconstruction stencil");
+    if (context.embedded_boundary) {
+      const auto require_embedded_field = [&](const MultiFab<Dim, MemorySpace>& field,
+                                              int components, const char* label) {
+        if (field.ncomp() != components || field.layout() != state.layout() ||
+            field.distribution() != state.distribution() ||
+            field.local_rank() != state.local_rank() || field.local_size() != state.local_size())
+          throw std::invalid_argument(std::string("generated AMR embedded ") + label +
+                                      " differs from its exact level ownership");
+      };
+      require_embedded_field(context.embedded_boundary->phi(), 1, "level set");
+      require_embedded_field(context.embedded_boundary->active_mask(), 1, "active mask");
+      require_embedded_field(context.embedded_boundary->volume_fraction(), 1, "volume fraction");
+      require_embedded_field(context.embedded_boundary->inverse_volume_fraction(), 1,
+                             "inverse volume fraction");
+    }
   }
 }
 
@@ -193,6 +271,7 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
       .text(context.state_identity)
       .text(context.auxiliary_identity)
       .text(context.boundary_identity)
+      .text(context.embedded_boundary_provider_identity)
       .bytes(runtime.spatial_contract())
       .scalar(runtime.topology_epoch())
       .scalar(runtime.materialization_generation())
@@ -200,6 +279,14 @@ std::string level_contract(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
       .optional_collective_contract(context.auxiliary_ghost_fill)
       .optional_collective_contract(context.root_state_ghost_fill)
       .optional_collective_contract(context.root_auxiliary_ghost_fill);
+  contract.presence(static_cast<bool>(context.embedded_boundary));
+  if (context.embedded_boundary)
+    contract
+        .text(runtime::system::prepared_embedded_boundary_mode_name(
+            context.embedded_boundary->mode()))
+        .text(context.embedded_boundary->semantic_digest())
+        .text(context.embedded_boundary->digest())
+        .scalar(context.embedded_boundary->generation());
   append_geometry_contract(contract, context.geometry, context.topology);
   return std::move(contract).release();
 }
@@ -257,6 +344,25 @@ MultiFab<Dim> materialize_source(const Model& model, const MultiFab<Dim>& state,
   if (all_reduce_max(local_status) != Real(0))
     throw std::runtime_error("generated AMR source produced a non-finite component");
   return std::move(*candidate);
+}
+
+template <int Dim, class Model>
+MultiFab<Dim> materialize_masked_source(
+    const Model& model, const MultiFab<Dim>& state, const MultiFab<Dim>& auxiliary,
+    const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded) {
+  MultiFab<Dim> candidate = materialize_source<Dim>(model, state, auxiliary);
+  const MultiFab<Dim>& active = embedded.active_mask();
+  collective_phase(
+      [&] {
+        generated_system_detail::require_same_layout(state, active, 1, "generated AMR active mask");
+        for (std::size_t local = 0; local < candidate.local_size(); ++local)
+          for_each_cell(candidate.box(local),
+                        generated_system_detail::ApplyActiveMask<Dim>{
+                            candidate.fab(local).view(), active.fab(local).view(), Model::n_vars});
+        device_fence();
+      },
+      "generated AMR source masking failed collectively");
+  return candidate;
 }
 
 template <int Dim, class Model>
@@ -559,6 +665,8 @@ struct PreparedAmrSystemBlock {
 
   std::string name;
   std::string provider_identity;
+  std::string staircase_provider_identity;
+  std::string cut_cell_provider_identity;
   std::string collective_contract;
   int ncomp = 0;
   int aux_components = 0;
@@ -583,6 +691,71 @@ struct PreparedAmrSystemBlock {
 
 namespace generated_amr_detail {
 
+template <int Dim, nd::ReconstructionVariables Variables, class Model, class Metric,
+          class Reconstruction, class Numerical, class MemorySpace>
+void materialize_masked_patch(const Model& model, const Metric& metric,
+                              const Reconstruction& reconstruction, const Numerical& numerical,
+                              Real positivity_floor, const Fab<Dim, MemorySpace>& state,
+                              const Fab<Dim, MemorySpace>& auxiliary,
+                              const Fab<Dim, MemorySpace>& active,
+                              nd::FaceField<Dim, MemorySpace>& faces,
+                              Fab<Dim, MemorySpace>& residual) {
+  const int positivity_component =
+      nd::cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor);
+  nd::FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
+  nd::masked_operator_detail::materialize_axes<0, Variables>(
+      model, metric, reconstruction, numerical, positivity_floor, positivity_component, state,
+      active, auxiliary.view(), faces, face_statuses, {});
+  const Real face_failure = nd::cartesian_operator_detail::maximum_face_status<0>(face_statuses);
+  if (face_failure != static_cast<Real>(nd::FiniteVolumeStatus::Success))
+    throw std::runtime_error("generated AMR embedded face evaluation refused publication");
+
+  Fab<Dim, MemorySpace> candidate(state.box(), Model::n_vars);
+  Fab<Dim, MemorySpace> cell_statuses(state.box(), 1);
+  for_each_cell(state.box(),
+                nd::masked_operator_detail::MaterializeMaskedResidual<Dim, Metric, Model::n_vars>{
+                    metric, static_cast<const nd::FaceField<Dim, MemorySpace>&>(faces).view(),
+                    active.view(), candidate.view(), cell_statuses.view()});
+  const Real cell_failure = for_each_cell_reduce_max(
+      state.box(), nd::cartesian_operator_detail::FieldStatusMaximum<Dim>{
+                       static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
+  if (cell_failure != static_cast<Real>(nd::FiniteVolumeStatus::Success))
+    throw std::runtime_error("generated AMR embedded residual refused publication");
+  for_each_cell(state.box(), nd::cartesian_operator_detail::CopyCellField<Dim>{
+                                 static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
+                                 residual.view(), Model::n_vars});
+}
+
+template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
+          class Reconstruction, class Numerical, class MemorySpace>
+  requires(Dim != 2)
+void materialize_cut_cell_patch(const Model&, const Spatial&, const Reconstruction&,
+                                const Numerical&, Real, const Fab<Dim, MemorySpace>&,
+                                const Fab<Dim, MemorySpace>&,
+                                const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>&,
+                                std::size_t, nd::FaceField<Dim, MemorySpace>&,
+                                Fab<Dim, MemorySpace>&) {
+  throw std::invalid_argument(
+      "generated AMR cut-cell transport has no exact provider for this spatial rank");
+}
+
+template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
+          class Reconstruction, class Numerical, class MemorySpace>
+  requires(Dim == 2)
+void materialize_cut_cell_patch(
+    const Model& model, const Spatial& spatial, const Reconstruction& reconstruction,
+    const Numerical& numerical, Real positivity_floor, const Fab<Dim, MemorySpace>& state,
+    const Fab<Dim, MemorySpace>& auxiliary,
+    const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded, std::size_t local,
+    nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual) {
+  const auto metric =
+      nd::PreparedEmbeddedBoundaryMetric2D<std::remove_cvref_t<decltype(spatial.metric())>>::
+          prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
+  materialize_masked_patch<Dim, Variables>(model, metric, reconstruction, numerical,
+                                           positivity_floor, state, auxiliary,
+                                           embedded.active_mask().fab(local), faces, residual);
+}
+
 template <int Dim, class Model, class Reconstruction, class Numerical,
           nd::ReconstructionVariables Variables, class Request>
 PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction reconstruction,
@@ -605,10 +778,16 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   const std::string provider_identity =
       "pops.generated.amr.cartesian.nd/" + std::to_string(Dim) + "/" + request.routes.limiter +
       "/" + request.routes.riemann + "/" + request.routes.reconstruction;
+  const std::string staircase_provider_identity =
+      "pops.generated.amr.staircase.nd/" + std::to_string(Dim) + "/" + provider_identity;
+  const std::string cut_cell_provider_identity =
+      GeneratedAmrCutCellCapability<Dim>::provider_identity(provider_identity);
 
   PreparedAmrSystemBlock<Dim> result;
   result.name = name;
   result.provider_identity = provider_identity;
+  result.staircase_provider_identity = staircase_provider_identity;
+  result.cut_cell_provider_identity = cut_cell_provider_identity;
   result.ncomp = Model::n_vars;
   result.aux_components = aux_comps_for<Model, Dim>();
   result.conservative_variables = Model::conservative_vars();
@@ -621,10 +800,12 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-system-block")
-      .scalar(std::uint32_t{2})
+      .scalar(std::uint32_t{3})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
+      .text(staircase_provider_identity)
+      .text(cut_cell_provider_identity)
       .scalar(std::int32_t{Model::n_vars})
       .scalar(std::int32_t{aux_comps_for<Model, Dim>()})
       .scalar(request.gamma)
@@ -640,11 +821,13 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     package_contract.scalar(std::int64_t{required_ghosts[axis]});
   result.collective_contract = std::move(package_contract).release();
 
-  result.materialize_level = [model, spatial_factory, required_ghosts, provider_identity](
-                                 runtime::amr::AmrRuntime<Dim>& runtime,
-                                 GeneratedAmrLevelContext<Dim> context) {
+  result.materialize_level = [model, spatial_factory, reconstruction, numerical,
+                              positivity_floor = request.routes.positivity_floor, required_ghosts,
+                              provider_identity, staircase_provider_identity,
+                              cut_cell_provider_identity](runtime::amr::AmrRuntime<Dim>& runtime,
+                                                          GeneratedAmrLevelContext<Dim> context) {
     require_level_context(runtime, context, Model::n_vars, aux_comps_for<Model, Dim>(),
-                          required_ghosts);
+                          required_ghosts, staircase_provider_identity, cut_cell_provider_identity);
     const auto spatial = spatial_factory(context.geometry);
     MultiFab<Dim>* const auxiliary = context.auxiliary;
     const auto state_ghost_fill = context.state_ghost_fill;
@@ -652,6 +835,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     const auto root_state_ghost_fill = context.root_state_ghost_fill;
     const auto root_auxiliary_ghost_fill = context.root_auxiliary_ghost_fill;
     const auto physical_boundary = context.physical_boundary;
+    const auto embedded_boundary = context.embedded_boundary;
     const Geometry<Dim> geometry = context.geometry;
     const std::size_t level = context.level;
 
@@ -675,9 +859,10 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           "generated AMR ghost/boundary phase failed collectively");
     };
 
-    auto evaluator = [model, spatial, auxiliary, prepare_state, physical_boundary, geometry](
-                         const runtime::multiblock::BoundaryEvaluationPoint& point,
-                         MultiFab<Dim>& state) {
+    auto evaluator = [model, spatial, reconstruction, numerical, positivity_floor, auxiliary,
+                      prepare_state, physical_boundary, embedded_boundary,
+                      geometry](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                MultiFab<Dim>& state) {
       prepare_state(point, state);
       MultiFab<Dim>& aux = *auxiliary;
       std::optional<std::vector<nd::FaceField<Dim>>> faces;
@@ -691,16 +876,38 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
           "generated AMR residual workspace allocation failed collectively");
       collective_phase(
           [&] {
-            for (std::size_t local = 0; local < state.local_size(); ++local) {
-              spatial.materialize_face_fluxes(state.fab(local), aux.fab(local), (*faces)[local]);
-              if (physical_boundary)
-                physical_boundary->apply_physical_flux_conditions((*faces)[local],
-                                                                  geometry.domain());
+            if (embedded_boundary && embedded_boundary->mode() !=
+                                         runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+              for (std::size_t local = 0; local < state.local_size(); ++local) {
+                if (embedded_boundary->mode() ==
+                    runtime::system::PreparedEmbeddedBoundaryMode::staircase) {
+                  materialize_masked_patch<Dim, Variables>(
+                      model, spatial.metric(), reconstruction, numerical, positivity_floor,
+                      state.fab(local), aux.fab(local), embedded_boundary->active_mask().fab(local),
+                      (*faces)[local], residual->fab(local));
+                } else {
+                  materialize_cut_cell_patch<Dim, Variables>(
+                      model, spatial, reconstruction, numerical, positivity_floor, state.fab(local),
+                      aux.fab(local), *embedded_boundary, local, (*faces)[local],
+                      residual->fab(local));
+                }
+              }
+            } else {
+              for (std::size_t local = 0; local < state.local_size(); ++local) {
+                spatial.materialize_face_fluxes(state.fab(local), aux.fab(local), (*faces)[local]);
+                if (physical_boundary)
+                  physical_boundary->apply_physical_flux_conditions((*faces)[local],
+                                                                    geometry.domain());
+              }
+              spatial.assemble_residual_from_face_fluxes(*faces, *residual);
             }
-            spatial.assemble_residual_from_face_fluxes(*faces, *residual);
           },
           "generated AMR flux/residual materialization failed collectively");
-      MultiFab<Dim> source = materialize_source<Dim>(model, state, aux);
+      MultiFab<Dim> source =
+          embedded_boundary && embedded_boundary->mode() !=
+                                   runtime::system::PreparedEmbeddedBoundaryMode::inactive
+              ? materialize_masked_source<Dim>(model, state, aux, *embedded_boundary)
+              : materialize_source<Dim>(model, state, aux);
       saxpy(*residual, Real(1), source);
       return PreparedAmrLevelEvaluation<Dim>{.residual = std::move(*residual),
                                              .integrated_face_fluxes = std::move(*faces)};

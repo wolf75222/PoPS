@@ -20,7 +20,6 @@ from pops.runtime._lifecycle import (
     guard_assembling as _guard_assembling,
     _LifecycleMixin,
 )
-from pops.runtime._numeric import native_real
 from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
@@ -162,37 +161,24 @@ class AmrSystem(
         solver: Any = "geometric_mg",
         *,
         bc: Any = None,
-        wall: Any = None,
     ) -> Any:
-        """Configure AMR Poisson with typed boundary and wall selectors.
+        """Configure AMR Poisson with a typed physical-boundary selector.
 
         ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
-        ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
-        :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Native string tokens and the
-        separate wall radius remain confined to :meth:`_set_poisson_native`.
+        Embedded geometry is authored independently through :meth:`set_disc_domain` or the
+        exact-ranked analytic level-set route.
         """
-        from pops.runtime._system_install_lowering import _lower_bc, _lower_wall
+        from pops.runtime._system_install_lowering import _lower_bc
 
         bc_token = "auto" if bc is None else _lower_bc(bc)
-        wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
-        self._set_poisson_native(
-            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token, wall_radius=wall_radius
-        )
+        self._set_poisson_native(rhs=rhs, solver=solver, bc=bc_token)
 
-    def _set_poisson_native(
-        self, *, rhs: Any, solver: Any, bc: Any, wall: Any, wall_radius: Any = 0.0
-    ) -> Any:
+    def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any) -> Any:
         """Private token-level seam used by resolved AMR installation."""
         _guard_assembling(self, "set_poisson")
-        if not isinstance(bc, str) or not isinstance(wall, str):
-            raise TypeError("_set_poisson_native requires native bc and wall tokens")
-        self._s.set_poisson(
-            rhs=rhs,
-            solver=solver,
-            bc=bc,
-            wall=wall,
-            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"),
-        )
+        if not isinstance(bc, str):
+            raise TypeError("_set_poisson_native requires one native boundary token")
+        self._s.set_poisson(rhs=rhs, solver=solver, bc=bc)
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""

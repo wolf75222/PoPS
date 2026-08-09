@@ -5,6 +5,7 @@
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -17,6 +18,9 @@
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
+#include <pops/runtime/amr/composite_reduction.hpp>
+#include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
@@ -26,6 +30,7 @@
 #include <pops/runtime/system/system_boundary_registry.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
+#include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +42,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -91,6 +97,185 @@ mesh::RankSpace<Dim> process_rank_space() {
   Extent<Dim> shape = runtime_config_detail::filled_extent<Dim>(1);
   shape[0] = n_ranks();
   return mesh::RankSpace<Dim>(Index<Dim>{}, shape);
+}
+
+template <int Dim>
+struct AmrCutCellCapability {
+  static void validate_provider(const PreparedAmrSystemBlock<Dim>& block) {
+    if (!block.cut_cell_provider_identity.empty())
+      throw std::invalid_argument(
+          "prepared AMR block advertises cut-cell transport outside its exact provider rank");
+  }
+
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
+                      const PreparedAmrSystemBlock<Dim>&) {
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+      throw std::invalid_argument(
+          "AMR cut-cell transport has no exact provider for this spatial rank");
+  }
+};
+
+template <>
+struct AmrCutCellCapability<2> {
+  static void validate_provider(const PreparedAmrSystemBlock<2>& block) {
+    if (block.cut_cell_provider_identity.empty())
+      throw std::invalid_argument(
+          "prepared rank-two AMR block requires its exact cut-cell provider identity");
+  }
+
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
+                      const PreparedAmrSystemBlock<2>& block) {
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell &&
+        block.cut_cell_provider_identity.empty())
+      throw std::invalid_argument(
+          "AMR cut-cell transport requires an authenticated rank-two provider");
+  }
+};
+
+template <int Dim>
+struct AmrDiscLevelSetCapability {
+  static std::pair<std::vector<std::string>, std::vector<double>> make(double, double, double) {
+    throw std::invalid_argument("Disc is an exact rank-two AMR authoring capability");
+  }
+};
+
+template <>
+struct AmrDiscLevelSetCapability<2> {
+  static std::pair<std::vector<std::string>, std::vector<double>> make(double cx, double cy,
+                                                                       double radius) {
+    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(radius) || !(radius > 0.0))
+      throw std::invalid_argument("AMR disc center and positive radius must be finite");
+    return {{"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
+            {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}};
+  }
+};
+
+EbThresholds resolved_amr_eb_thresholds(double kappa_min, double face_open_eps,
+                                        double cut_theta_min) {
+  if (!std::isfinite(kappa_min) || kappa_min < 0.0 || !std::isfinite(face_open_eps) ||
+      face_open_eps < 0.0 || !std::isfinite(cut_theta_min) || cut_theta_min < 0.0)
+    throw std::invalid_argument(
+        "AMR embedded-boundary threshold overrides must be finite and non-negative");
+  EbThresholds result;
+  if (kappa_min > 0.0)
+    result.kappa_min = static_cast<Real>(kappa_min);
+  if (face_open_eps > 0.0)
+    result.face_open_eps = static_cast<Real>(face_open_eps);
+  if (cut_theta_min > 0.0)
+    result.cut_theta_min = static_cast<Real>(cut_theta_min);
+  return result;
+}
+
+std::uint64_t next_amr_eb_generation(std::uint64_t current) {
+  if (current == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("AmrSystem embedded-boundary generation overflow");
+  return current + 1;
+}
+
+std::string prefixed_sha256(std::string_view prefix, std::string_view contract) {
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(contract.size());
+  for (const char value : contract)
+    bytes.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(value)));
+  return std::string(prefix) + identity::sha256_hex(bytes);
+}
+
+std::vector<int> resolved_composite_levels(std::size_t count, const std::vector<int>& requested) {
+  std::vector<int> levels = requested;
+  if (levels.empty()) {
+    levels.reserve(count);
+    for (std::size_t level = 0; level < count; ++level)
+      levels.push_back(static_cast<int>(level));
+  }
+  int previous = -1;
+  for (const int level : levels) {
+    if (level < 0 || static_cast<std::size_t>(level) >= count || level <= previous)
+      throw std::invalid_argument(
+          "AMR composite levels must be strictly increasing live hierarchy indices");
+    previous = level;
+  }
+  return levels;
+}
+
+runtime::amr::CompositeReductionKind composite_reduction_kind(std::string_view kind) {
+  if (kind == "sum")
+    return runtime::amr::CompositeReductionKind::Sum;
+  if (kind == "abs_sum")
+    return runtime::amr::CompositeReductionKind::AbsoluteSum;
+  if (kind == "sum_sq")
+    return runtime::amr::CompositeReductionKind::SumSquares;
+  if (kind == "min")
+    return runtime::amr::CompositeReductionKind::Minimum;
+  if (kind == "max")
+    return runtime::amr::CompositeReductionKind::Maximum;
+  if (kind == "abs_max")
+    return runtime::amr::CompositeReductionKind::AbsoluteMaximum;
+  throw std::invalid_argument("AMR composite reduction kind is unknown: " + std::string(kind));
+}
+
+struct PreparedAmrEbAuthoring {
+  std::string configuration_contract;
+  std::string semantic_digest;
+};
+
+template <int Dim>
+PreparedAmrEbAuthoring prepare_amr_eb_authoring(const AmrSystemConfig<Dim>& config,
+                                                const PreparedAmrSystemBlock<Dim>& block,
+                                                const std::vector<std::string>& opcodes,
+                                                const std::vector<double>& literals,
+                                                runtime::system::PreparedEmbeddedBoundaryMode mode,
+                                                const EbThresholds& thresholds,
+                                                std::uint64_t generation) {
+  PreparedAmrEbAuthoring result;
+  AmrCutCellCapability<Dim>::require(mode, block);
+  if (mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
+      std::any_of(config.periodicity.begin(), config.periodicity.end(),
+                  [](bool periodic) { return !periodic; }))
+    throw std::invalid_argument(
+        "active AMR embedded transport has no EB-qualified physical-boundary provider");
+  if (!std::isfinite(thresholds.kappa_min) || !(thresholds.kappa_min > Real(0)) ||
+      thresholds.kappa_min > Real(1) || !std::isfinite(thresholds.face_open_eps) ||
+      thresholds.face_open_eps < Real(0) || thresholds.face_open_eps > Real(1) ||
+      !std::isfinite(thresholds.cut_theta_min) || !(thresholds.cut_theta_min > Real(0)) ||
+      thresholds.cut_theta_min > Real(1))
+    throw std::invalid_argument("AMR embedded-boundary thresholds are outside their unit ranges");
+  std::vector<analytic::AnalyticProgram> programs =
+      analytic::compile_component_programs({opcodes}, {literals});
+  if (programs.size() != 1)
+    throw std::logic_error("AMR embedded-boundary authoring did not compile one scalar program");
+  (void)analytic::make_analytic_level_set<Dim>(programs.front());
+
+  ExactContractBuilder semantic_builder;
+  semantic_builder.text("pops.amr.embedded-boundary-semantic")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .text(runtime::system::prepared_embedded_boundary_mode_name(mode))
+      .scalar(thresholds.kappa_min)
+      .scalar(thresholds.face_open_eps)
+      .scalar(thresholds.cut_theta_min)
+      .text(block.staircase_provider_identity)
+      .text(block.cut_cell_provider_identity)
+      .scalar(static_cast<std::uint64_t>(opcodes.size()));
+  for (const std::string& opcode : opcodes)
+    semantic_builder.text(opcode);
+  semantic_builder.scalar(static_cast<std::uint64_t>(literals.size()));
+  for (const double literal : literals)
+    semantic_builder.scalar(literal);
+  for (int axis = 0; axis < Dim; ++axis)
+    semantic_builder.scalar(config.index_domain().lo[axis])
+        .scalar(config.index_domain().hi[axis])
+        .scalar(config.lower[axis])
+        .scalar(config.upper[axis])
+        .scalar(config.periodicity[axis]);
+  std::string semantic = std::move(semantic_builder).release();
+  result.semantic_digest = prefixed_sha256("pops.prepared-eb-semantic.v1:sha256:", semantic);
+  ExactContractBuilder configuration;
+  configuration.text("pops.amr.embedded-boundary-configuration")
+      .scalar(std::uint32_t{1})
+      .bytes(semantic)
+      .scalar(generation);
+  result.configuration_contract = std::move(configuration).release();
+  return result;
 }
 
 template <int Dim>
@@ -700,9 +885,12 @@ void validate_variable_set(const VariableSet& variables, VariableKind expected, 
 
 template <int Dim>
 void validate_prepared_amr_block(const PreparedAmrSystemBlock<Dim>& block) {
-  if (block.name.empty() || block.provider_identity.empty() || block.collective_contract.empty())
+  if (block.name.empty() || block.provider_identity.empty() ||
+      block.staircase_provider_identity.empty() || block.collective_contract.empty())
     throw std::invalid_argument(
-        "prepared AMR block requires non-empty block, provider, and collective identities");
+        "prepared AMR block requires non-empty block, Cartesian, staircase, and collective "
+        "identities");
+  AmrCutCellCapability<Dim>::validate_provider(block);
   if (block.ncomp < 1 || block.aux_components < 1)
     throw std::invalid_argument(
         "prepared AMR block requires positive state and auxiliary component counts");
@@ -781,6 +969,9 @@ struct AmrSystem<Dim>::Impl {
   using exact_field_solver_type = runtime::amr::ExactAmrFieldSolver<Dim>;
   using exact_field_provider_type = runtime::amr::ExactAmrFieldSolverProvider<Dim>;
   using exact_field_registry_type = runtime::amr::ExactAmrFieldSolverRegistry<Dim>;
+  using hierarchy_tensor_provider_type = runtime::program::HierarchyTensorSolverProvider<Dim>;
+  using hierarchy_tensor_registry_type =
+      runtime::program::HierarchyTensorSolverProviderRegistry<Dim>;
 
   struct BlockSpec {
     std::string name;
@@ -916,6 +1107,9 @@ struct AmrSystem<Dim>::Impl {
     // The lane is declared first so every provider that pins it is destroyed before MPI_Comm_free.
     std::optional<ExecutionLane> lane;
     std::vector<std::unique_ptr<field_type>> auxiliary;
+    std::vector<std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>>
+        embedded_boundary;
+    std::vector<std::shared_ptr<const field_type>> active_coverage;
     std::vector<level_block_type> levels;
     std::vector<std::optional<evaluation_type>> evaluations;
     std::vector<std::vector<const Real*>> state_storage;
@@ -925,15 +1119,22 @@ struct AmrSystem<Dim>::Impl {
     std::string spatial_contract;
     std::string package_contract;
     std::string collective_contract;
+    std::string embedded_boundary_configuration_contract;
+    std::string embedded_boundary_materialization_digest;
     std::uint64_t topology_epoch = 0;
     std::uint64_t materialization_generation = 0;
 
-    bool matches(const engine_type& live, std::string_view expected_package) const noexcept {
+    bool matches(const engine_type& live, std::string_view expected_package,
+                 std::string_view expected_embedded) const noexcept {
       try {
         if (!lane || spatial_contract != live.spatial_contract() ||
-            package_contract != expected_package || topology_epoch != live.topology_epoch() ||
+            package_contract != expected_package ||
+            embedded_boundary_configuration_contract != expected_embedded ||
+            topology_epoch != live.topology_epoch() ||
             materialization_generation != live.materialization_generation() ||
             levels.size() != live.hierarchy().num_levels() ||
+            embedded_boundary.size() != live.hierarchy().num_levels() ||
+            active_coverage.size() != live.hierarchy().num_levels() ||
             state_storage.size() != live.hierarchy().num_levels() ||
             auxiliary_storage.size() != auxiliary.size())
           return false;
@@ -957,6 +1158,7 @@ struct AmrSystem<Dim>::Impl {
   boundary_registry_type boundary_registry;
   std::shared_ptr<exact_field_registry_type> field_solver_providers;
   std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers;
+  std::shared_ptr<hierarchy_tensor_registry_type> hierarchy_tensor_solver_providers;
   mutable std::map<std::string, FieldPlan> field_plans;
   std::string default_field_slot;
   std::string default_nullspace_provider_identity;
@@ -966,6 +1168,14 @@ struct AmrSystem<Dim>::Impl {
   runtime::system::SystemLifecycle lifecycle;
   mutable std::unique_ptr<engine_type> engine;
   std::optional<prepared_block_type> prepared_block;
+  std::vector<std::string> embedded_boundary_opcodes;
+  std::vector<double> embedded_boundary_literals;
+  runtime::system::PreparedEmbeddedBoundaryMode embedded_boundary_mode =
+      runtime::system::PreparedEmbeddedBoundaryMode::inactive;
+  EbThresholds embedded_boundary_thresholds{};
+  std::uint64_t embedded_boundary_generation = 0;
+  std::string embedded_boundary_configuration_contract;
+  std::string embedded_boundary_semantic_digest;
   mutable std::unique_ptr<PreparedHierarchy> prepared_hierarchy;
   mutable std::shared_ptr<const auxiliary_snapshot_type> pending_auxiliary_restore;
   std::vector<GlobalDtBound> dt_bounds;
@@ -1053,7 +1263,9 @@ struct AmrSystem<Dim>::Impl {
             prepare_load_balance_authority<Dim>(cfg.load_balance_route, cfg.load_balance_identity,
                                                 cfg.load_balance_options))),
         field_solver_providers(std::make_shared<exact_field_registry_type>()),
-        field_nullspace_providers(make_default_field_nullspace_provider_registry<Dim>()) {
+        field_nullspace_providers(make_default_field_nullspace_provider_registry<Dim>()),
+        hierarchy_tensor_solver_providers(
+            runtime::program::make_default_hierarchy_tensor_solver_provider_registry<Dim>()) {
     field_solver_providers->add(runtime::amr::make_builtin_exact_amr_field_solver_provider<Dim>());
     const FieldNullspaceProviderSelection selection = operator_topology_zero_mean_nullspace();
     default_nullspace_provider_identity = selection.provider_identity;
@@ -1236,25 +1448,39 @@ struct AmrSystem<Dim>::Impl {
     return PhysicalBoundaryConditions<Dim>(exact_topology, faces, spacing);
   }
 
-  std::vector<std::shared_ptr<const field_type>> prepare_active_coverage() const {
-    if (!engine)
-      throw std::logic_error("AMR field coverage requires a materialized hierarchy");
-    const auto& hierarchy = engine->hierarchy();
+  static std::vector<std::shared_ptr<const field_type>> prepare_active_coverage(
+      const engine_type& source, std::span<const int> selected_levels) {
+    const auto& hierarchy = source.hierarchy();
+    if (selected_levels.empty())
+      throw std::invalid_argument("AMR composite coverage requires at least one selected level");
+    int previous = -1;
+    for (const int level : selected_levels) {
+      if (level < 0 || static_cast<std::size_t>(level) >= hierarchy.num_levels() ||
+          level <= previous)
+        throw std::invalid_argument(
+            "AMR composite coverage requires strictly increasing live hierarchy levels");
+      previous = level;
+    }
+
     std::vector<std::shared_ptr<field_type>> writable;
-    writable.reserve(hierarchy.num_levels());
-    for (std::size_t level = 0; level < hierarchy.num_levels(); ++level) {
-      const field_type& state = hierarchy.state(level);
+    writable.reserve(selected_levels.size());
+    for (const int level : selected_levels) {
+      const field_type& state = hierarchy.state(static_cast<std::size_t>(level));
       auto mask = std::make_shared<field_type>(state.layout(), state.distribution(),
                                                state.local_rank(), 1, Extent<Dim>{});
       mask->set_val(Real(1));
       writable.push_back(std::move(mask));
     }
-    for (std::size_t fine_level = 1; fine_level < hierarchy.num_levels(); ++fine_level) {
-      field_type& parent = *writable[fine_level - 1];
-      const auto& fine_layout = hierarchy.layout(fine_level);
+    for (std::size_t position = 1; position < selected_levels.size(); ++position) {
+      const int coarse_level = selected_levels[position - 1];
+      const int fine_level = selected_levels[position];
+      field_type& parent = *writable[position - 1];
+      const auto& fine_layout = hierarchy.layout(static_cast<std::size_t>(fine_level));
       for (const Box<Dim>& fine_patch : fine_layout.patches().boxes()) {
-        const Box<Dim> footprint =
-            amr::hierarchy::coarsen_box(fine_patch, fine_layout.ratio_from_parent());
+        Box<Dim> footprint = fine_patch;
+        for (int current = fine_level; current > coarse_level; --current)
+          footprint = amr::hierarchy::coarsen_box(
+              footprint, hierarchy.layout(static_cast<std::size_t>(current)).ratio_from_parent());
         for (std::size_t local = 0; local < parent.local_size(); ++local) {
           const Box<Dim> overlap = parent.box(local).intersect(footprint);
           if (overlap.empty())
@@ -1271,6 +1497,22 @@ struct AmrSystem<Dim>::Impl {
     for (auto& mask : writable)
       result.push_back(std::move(mask));
     return result;
+  }
+
+  static std::vector<std::shared_ptr<const field_type>> prepare_active_coverage(
+      const engine_type& source) {
+    std::vector<int> levels;
+    levels.reserve(source.hierarchy().num_levels());
+    for (std::size_t level = 0; level < source.hierarchy().num_levels(); ++level)
+      levels.push_back(static_cast<int>(level));
+    return prepare_active_coverage(source, levels);
+  }
+
+  const std::vector<std::shared_ptr<const field_type>>& active_coverage() const {
+    if (!prepared_hierarchy ||
+        prepared_hierarchy->active_coverage.size() != engine->hierarchy().num_levels())
+      throw std::logic_error("AMR composite coverage is not prepared for the live hierarchy");
+    return prepared_hierarchy->active_coverage;
   }
 
   static void copy_scalar_component(const field_type& source, int source_component,
@@ -1384,6 +1626,10 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void materialize_field(const std::string& slot) {
+    if (!embedded_boundary_configuration_contract.empty() &&
+        embedded_boundary_mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+      throw std::runtime_error(
+          "AMR Cartesian field solvers have no authenticated embedded-boundary operator");
     ensure_engine();
     auto found = field_plans.find(slot);
     if (found == field_plans.end())
@@ -1502,7 +1748,7 @@ struct AmrSystem<Dim>::Impl {
           prepared_solver->level_count() != static_cast<int>(engine->hierarchy().num_levels()))
         throw std::runtime_error("exact AMR field solver published an invalid prepared contract");
 
-      coverage = prepare_active_coverage();
+      coverage = active_coverage();
       nullspace_request.emplace(
           make_field_nullspace_request(slot, plan, *prepared_solver, coverage, distributions));
     } catch (...) {
@@ -1836,9 +2082,12 @@ struct AmrSystem<Dim>::Impl {
       candidate = std::make_unique<PreparedHierarchy>();
       candidate->spatial_contract.assign(candidate_engine.spatial_contract());
       candidate->package_contract = prepared_block->collective_contract;
+      candidate->embedded_boundary_configuration_contract =
+          embedded_boundary_configuration_contract;
       candidate->topology_epoch = candidate_engine.topology_epoch();
       candidate->materialization_generation = candidate_engine.materialization_generation();
       candidate->auxiliary.reserve(level_count);
+      candidate->embedded_boundary.resize(level_count);
       candidate->levels.reserve(level_count);
       candidate->evaluations.resize(level_count);
       candidate->state_storage.reserve(level_count);
@@ -1882,6 +2131,7 @@ struct AmrSystem<Dim>::Impl {
             prepared_block->provider_identity + "/auxiliary/level/" + std::to_string(level));
         candidate->auxiliary.push_back(std::move(auxiliary));
       }
+      candidate->active_coverage = prepare_active_coverage(candidate_engine);
     } catch (...) {
       allocation_failure = 1;
       allocation_error = std::current_exception();
@@ -1895,6 +2145,28 @@ struct AmrSystem<Dim>::Impl {
 
     candidate->lane.emplace(ExecutionLane::duplicate_world_collectively(lane_identity));
     const BoundaryTopology<Dim> exact_topology = topology();
+
+    if (!embedded_boundary_configuration_contract.empty()) {
+      ExactContractBuilder materializations;
+      materializations.text("pops.amr.embedded-boundary-levels")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(embedded_boundary_configuration_contract)
+          .scalar(static_cast<std::uint64_t>(level_count));
+      for (std::size_t level = 0; level < level_count; ++level) {
+        const Box<Dim>& level_domain = candidate_engine.hierarchy().layout(level).domain();
+        const Geometry<Dim> geometry =
+            Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper);
+        candidate->embedded_boundary[level] =
+            runtime::system::prepare_embedded_boundary_geometry_collectively(
+                embedded_boundary_opcodes, embedded_boundary_literals, geometry, exact_topology,
+                candidate_engine.hierarchy().state(level), embedded_boundary_mode,
+                embedded_boundary_thresholds, embedded_boundary_generation, *candidate->lane);
+        materializations.text(candidate->embedded_boundary[level]->digest());
+      }
+      candidate->embedded_boundary_materialization_digest = prefixed_sha256(
+          "pops.prepared-eb-geometry.v1:sha256:", std::move(materializations).release());
+    }
 
     for (std::size_t level = 0; level < level_count; ++level) {
       std::optional<level_block_type> prepared_level;
@@ -1960,9 +2232,18 @@ struct AmrSystem<Dim>::Impl {
             .root_state_ghost_fill = std::move(root_state_ghost_fill),
             .root_auxiliary_ghost_fill = std::move(root_auxiliary_ghost_fill),
             .physical_boundary = boundary,
+            .embedded_boundary = candidate->embedded_boundary[level],
             .state_identity = candidate->state_field_identities[level],
             .auxiliary_identity = candidate->auxiliary_field_identities[level],
             .boundary_identity = boundary_identity,
+            .embedded_boundary_provider_identity =
+                !candidate->embedded_boundary[level] ||
+                        embedded_boundary_mode ==
+                            runtime::system::PreparedEmbeddedBoundaryMode::inactive
+                    ? std::string{}
+                : embedded_boundary_mode == runtime::system::PreparedEmbeddedBoundaryMode::staircase
+                    ? prepared_block->staircase_provider_identity
+                    : prepared_block->cut_cell_provider_identity,
         };
         prepared_level.emplace(prepared_block->prepare_level(candidate_engine, std::move(context)));
       } catch (...) {
@@ -1986,6 +2267,8 @@ struct AmrSystem<Dim>::Impl {
           .scalar(std::int32_t{Dim})
           .bytes(candidate->spatial_contract)
           .bytes(candidate->package_contract)
+          .bytes(candidate->embedded_boundary_configuration_contract)
+          .text(candidate->embedded_boundary_materialization_digest)
           .text(candidate->lane->identity())
           .scalar(candidate->topology_epoch)
           .scalar(candidate->materialization_generation)
@@ -2017,7 +2300,8 @@ struct AmrSystem<Dim>::Impl {
     if (all_reduce_min(has_graph) != all_reduce_max(has_graph))
       throw std::runtime_error("prepared AMR graph publication differs between MPI ranks");
     const long stale = prepared_hierarchy && prepared_hierarchy->matches(
-                                                 *engine, prepared_block->collective_contract)
+                                                 *engine, prepared_block->collective_contract,
+                                                 embedded_boundary_configuration_contract)
                            ? 0L
                            : 1L;
     if (all_reduce_max(stale) == 0)
@@ -2252,6 +2536,131 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
   if (has_boundary)
     p_->boundary_registry.boundary(p_->blocks.front().name).authority =
         std::move(converted_boundary);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes,
+                                            const std::vector<double>& literals,
+                                            const std::string& mode, double kappa_min,
+                                            double face_open_eps, double cut_theta_min) {
+  runtime::system::PreparedEmbeddedBoundaryMode prepared_mode =
+      runtime::system::PreparedEmbeddedBoundaryMode::inactive;
+  EbThresholds thresholds{};
+  std::uint64_t generation = 0;
+  std::vector<std::string> staged_opcodes;
+  std::vector<double> staged_literals;
+  PreparedAmrEbAuthoring authored;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    require_amr_assembling(p_->lifecycle, "set_analytic_level_set");
+    if (!p_->prepared_block)
+      throw std::logic_error(
+          "AmrSystem embedded geometry requires an installed exact generated block provider");
+    if (p_->engine || p_->prepared_hierarchy)
+      throw std::logic_error(
+          "AmrSystem embedded geometry must be authored before hierarchy materialization");
+    prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
+    thresholds = resolved_amr_eb_thresholds(kappa_min, face_open_eps, cut_theta_min);
+    generation = next_amr_eb_generation(p_->embedded_boundary_generation);
+    staged_opcodes = opcodes;
+    staged_literals = literals;
+    authored = prepare_amr_eb_authoring(p_->cfg, *p_->prepared_block, staged_opcodes,
+                                        staged_literals, prepared_mode, thresholds, generation);
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR embedded-boundary authoring failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-eb-configuration", authored.configuration_contract},
+           {"amr-eb-semantic", authored.semantic_digest}}))
+    throw std::invalid_argument(
+        "AMR embedded-boundary authoring contracts differ between MPI ranks");
+
+  p_->embedded_boundary_opcodes = std::move(staged_opcodes);
+  p_->embedded_boundary_literals = std::move(staged_literals);
+  p_->embedded_boundary_mode = prepared_mode;
+  p_->embedded_boundary_thresholds = thresholds;
+  p_->embedded_boundary_generation = generation;
+  p_->embedded_boundary_configuration_contract = std::move(authored.configuration_contract);
+  p_->embedded_boundary_semantic_digest = std::move(authored.semantic_digest);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_disc_domain(double cx, double cy, double radius, const std::string& mode,
+                                     double kappa_min, double face_open_eps, double cut_theta_min) {
+  std::pair<std::vector<std::string>, std::vector<double>> staged;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    staged = AmrDiscLevelSetCapability<Dim>::make(cx, cy, radius);
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR disc authoring failed collectively");
+  }
+  set_analytic_level_set(staged.first, staged.second, mode, kappa_min, face_open_eps,
+                         cut_theta_min);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_geometry_mode(const std::string& mode) {
+  runtime::system::PreparedEmbeddedBoundaryMode prepared_mode =
+      runtime::system::PreparedEmbeddedBoundaryMode::inactive;
+  std::uint64_t generation = 0;
+  PreparedAmrEbAuthoring authored;
+  bool unchanged_inactive = false;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    require_amr_assembling(p_->lifecycle, "set_geometry_mode");
+    prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
+    if (p_->embedded_boundary_configuration_contract.empty()) {
+      if (prepared_mode == runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+        unchanged_inactive = true;
+      } else {
+        throw std::logic_error("AmrSystem geometry mode requires an analytic level set");
+      }
+    } else {
+      if (!p_->prepared_block || p_->engine || p_->prepared_hierarchy)
+        throw std::logic_error(
+            "AmrSystem geometry mode must be selected on an assembled exact block before build");
+      generation = next_amr_eb_generation(p_->embedded_boundary_generation);
+      authored =
+          prepare_amr_eb_authoring(p_->cfg, *p_->prepared_block, p_->embedded_boundary_opcodes,
+                                   p_->embedded_boundary_literals, prepared_mode,
+                                   p_->embedded_boundary_thresholds, generation);
+    }
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR embedded-boundary mode selection failed collectively");
+  }
+  if (all_reduce_min(unchanged_inactive ? 1L : 0L) != all_reduce_max(unchanged_inactive ? 1L : 0L))
+    throw std::invalid_argument("AMR embedded-boundary mode state differs between MPI ranks");
+  if (unchanged_inactive)
+    return;
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"amr-eb-configuration", authored.configuration_contract},
+           {"amr-eb-semantic", authored.semantic_digest}}))
+    throw std::invalid_argument("AMR embedded-boundary mode contracts differ between MPI ranks");
+  p_->embedded_boundary_mode = prepared_mode;
+  p_->embedded_boundary_generation = generation;
+  p_->embedded_boundary_configuration_contract = std::move(authored.configuration_contract);
+  p_->embedded_boundary_semantic_digest = std::move(authored.semantic_digest);
 }
 
 template <int Dim>
@@ -2539,8 +2948,33 @@ void AmrSystem<Dim>::set_default_field_nullspace(const std::string& nullspace_pr
 }
 
 template <int Dim>
+void AmrSystem<Dim>::register_hierarchy_tensor_solver_provider(
+    std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<Dim>> provider) {
+  require_amr_assembling(p_->lifecycle, "register_hierarchy_tensor_solver_provider");
+  if (!p_->hierarchy_tensor_solver_providers)
+    throw std::logic_error("AmrSystem hierarchy tensor-solver registry is absent");
+  p_->hierarchy_tensor_solver_providers->add(std::move(provider));
+}
+
+template <int Dim>
+void AmrSystem<Dim>::register_program_hierarchy_tensor_solver_provider(
+    std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<Dim>> provider) {
+  if (!p_->hierarchy_tensor_solver_providers)
+    throw std::logic_error("AmrSystem hierarchy tensor-solver registry is absent");
+  p_->hierarchy_tensor_solver_providers->add_collectively(std::move(provider));
+}
+
+template <int Dim>
+std::shared_ptr<const runtime::program::HierarchyTensorSolverProviderRegistry<Dim>>
+AmrSystem<Dim>::hierarchy_tensor_solver_provider_registry() const {
+  if (!p_->hierarchy_tensor_solver_providers)
+    throw std::logic_error("AmrSystem hierarchy tensor-solver registry is absent");
+  return p_->hierarchy_tensor_solver_providers;
+}
+
+template <int Dim>
 void AmrSystem<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
-                                 const std::string& bc, const std::string& wall, double wall_radius,
+                                 const std::string& bc,
                                  const AmrFieldSolverOptions& solver_options) {
   require_amr_assembling(p_->lifecycle, "set_poisson");
   if (rhs != "charge_density" && rhs != "composite")
@@ -2550,9 +2984,6 @@ void AmrSystem<Dim>::set_poisson(const std::string& rhs, const std::string& solv
     throw std::invalid_argument("AMR exact Poisson requires the geometric_mg provider");
   if (bc != "auto" && bc != "periodic" && bc != "dirichlet" && bc != "neumann")
     throw std::invalid_argument("AMR exact Poisson boundary mode is unknown");
-  if (wall != "none" || wall_radius != 0.0)
-    throw std::invalid_argument(
-        "AMR exact-ranked Cartesian Poisson has no prepared embedded-wall provider");
   if (!p_->default_field_slot.empty())
     throw std::logic_error("AMR default field is already configured");
   if (bc == "periodic" && std::any_of(p_->cfg.periodicity.begin(), p_->cfg.periodicity.end(),
@@ -3744,6 +4175,8 @@ std::vector<std::string> AmrSystem<Dim>::block_names() const {
 
 template <int Dim>
 EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
+  if (!p_->embedded_boundary_configuration_contract.empty())
+    p_->ensure_engine();
   EffectiveOptionsReport report;
   report.runtime = "amr_system";
   report.has_amr = true;
@@ -3753,6 +4186,18 @@ EffectiveOptionsReport AmrSystem<Dim>::effective_options_report() const {
     report.topology.periodicity.push_back(p_->cfg.periodicity[axis]);
   report.poisson.solver = "geometric_mg";
   report.poisson.solver_option_schema = "pops.amr.field-solver-options.geometric-mg@1";
+  if (!p_->embedded_boundary_configuration_contract.empty()) {
+    report.eb.enabled = true;
+    report.eb.geometry_mode = std::string(
+        runtime::system::prepared_embedded_boundary_mode_name(p_->embedded_boundary_mode));
+    report.eb.kappa_min = static_cast<double>(p_->embedded_boundary_thresholds.kappa_min);
+    report.eb.face_open_eps = static_cast<double>(p_->embedded_boundary_thresholds.face_open_eps);
+    report.eb.cut_theta_min = static_cast<double>(p_->embedded_boundary_thresholds.cut_theta_min);
+    report.eb.semantic_digest = p_->embedded_boundary_semantic_digest;
+    report.eb.materialization_digest =
+        p_->prepared_hierarchy->embedded_boundary_materialization_digest;
+    report.eb.generation = p_->embedded_boundary_generation;
+  }
   report.blocks.reserve(p_->blocks.size());
   for (const typename Impl::BlockSpec& block : p_->blocks) {
     EffectiveBlockOptions row;
@@ -3894,12 +4339,149 @@ std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_state_local_pieces(const st
 }
 
 template <int Dim>
+std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_embedded_boundary_local_pieces(
+    const std::string& name, int level) {
+  p_->ensure_engine();
+  if (level < 0 ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->embedded_boundary.size())
+    throw std::out_of_range("AmrSystem embedded-boundary output level is out of range");
+  const auto& embedded = p_->prepared_hierarchy->embedded_boundary[static_cast<std::size_t>(level)];
+  if (!embedded)
+    throw std::logic_error("AmrSystem has no prepared embedded-boundary geometry");
+  const MultiFab<Dim>* field = nullptr;
+  if (name == "pops_active")
+    field = &embedded->active_mask();
+  else if (name == "pops_phi")
+    field = &embedded->phi();
+  else if (name == "pops_kappa")
+    field = &embedded->volume_fraction();
+  else
+    throw std::invalid_argument("unknown AMR embedded-boundary sidecar: " + name);
+  return output_local_pieces(*field, level, field->distribution().replicated());
+}
+
+template <int Dim>
 std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_state_root_pieces(const ObserverMpiLane& lane,
                                                                        const std::string& name,
                                                                        int level) {
   return output_pieces_to_root(
       lane, detail::output_collective_identity("amr_system", "state", name, level),
       [&] { return output_state_local_pieces(name, level); });
+}
+
+template <int Dim>
+std::vector<OutputPiece<Dim>> AmrSystem<Dim>::output_embedded_boundary_root_pieces(
+    const ObserverMpiLane& lane, const std::string& name, int level) {
+  if (lane.size() == 1)
+    return output_embedded_boundary_local_pieces(name, level);
+  return output_pieces_to_root(
+      lane, detail::output_collective_identity("amr_system", "embedded-boundary", name, level),
+      [&] { return output_embedded_boundary_local_pieces(name, level); });
+}
+
+template <int Dim>
+double AmrSystem<Dim>::composite_reduce(const std::string& name, const std::string& kind,
+                                        int component,
+                                        const std::vector<int>& requested_levels) const {
+  const typename Impl::BlockSpec& block = p_->block(name);
+  p_->ensure_engine();
+  if (kind == "sum_all" || kind == "abs_sum_all" || kind == "sum_sq_all" || kind == "abs_max_all") {
+    const std::string base = kind == "sum_all"       ? "sum"
+                             : kind == "abs_sum_all" ? "abs_sum"
+                             : kind == "sum_sq_all"  ? "sum_sq"
+                                                     : "abs_max";
+    double result = 0.0;
+    for (int current = 0; current < block.ncomp; ++current) {
+      const double value = composite_reduce(name, base, current, requested_levels);
+      result = kind == "abs_max_all" ? std::max(result, value) : result + value;
+    }
+    return result;
+  }
+  if (component < 0 || component >= block.ncomp)
+    throw std::out_of_range("AMR composite reduction component is outside the block state");
+  const auto levels =
+      resolved_composite_levels(p_->engine->hierarchy().num_levels(), requested_levels);
+  std::vector<std::shared_ptr<const MultiFab<Dim>>> selected_coverage;
+  const std::vector<std::shared_ptr<const MultiFab<Dim>>>* coverage =
+      &p_->prepared_hierarchy->active_coverage;
+  if (!requested_levels.empty()) {
+    selected_coverage = Impl::prepare_active_coverage(*p_->engine, levels);
+    coverage = &selected_coverage;
+  }
+  std::vector<runtime::amr::CompositeLevelView<Dim, memory_space>> views;
+  views.reserve(levels.size());
+  for (std::size_t position = 0; position < levels.size(); ++position) {
+    const int level = levels[position];
+    const std::size_t index = static_cast<std::size_t>(level);
+    const Box<Dim>& domain = p_->engine->hierarchy().layout(index).domain();
+    const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
+    std::array<Real, Dim> extent{};
+    for (int axis = 0; axis < Dim; ++axis)
+      extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+    const MultiFab<Dim>* relative = nullptr;
+    const auto& embedded = p_->prepared_hierarchy->embedded_boundary[index];
+    if (embedded && embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::staircase)
+      relative = &embedded->active_mask();
+    else if (embedded &&
+             embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+      relative = &embedded->volume_fraction();
+    const std::size_t coverage_index = requested_levels.empty() ? index : position;
+    views.push_back({&p_->engine->hierarchy().state(index), (*coverage)[coverage_index].get(),
+                     extent, relative});
+  }
+  return static_cast<double>(
+      runtime::amr::composite_reduce<Dim, memory_space>(
+          views, component, composite_reduction_kind(kind), *p_->prepared_hierarchy->lane)
+          .value);
+}
+
+template <int Dim>
+double AmrSystem<Dim>::composite_reduce_field(const std::string& provider_slot,
+                                              const std::string& kind, int component,
+                                              const std::vector<int>& requested_levels) {
+  const std::string slot = p_->resolve_field_slot(provider_slot);
+  p_->materialize_field(slot);
+  const typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
+  const auto levels = resolved_composite_levels(plan.accepted_potential.size(), requested_levels);
+  std::vector<std::shared_ptr<const MultiFab<Dim>>> selected_coverage;
+  const std::vector<std::shared_ptr<const MultiFab<Dim>>>* coverage = &plan.active_coverage;
+  if (!requested_levels.empty()) {
+    selected_coverage = Impl::prepare_active_coverage(*p_->engine, levels);
+    coverage = &selected_coverage;
+  }
+  const int ncomp = plan.accepted_potential.empty() ? 0 : plan.accepted_potential.front()->ncomp();
+  if (component < 0 || component >= ncomp)
+    throw std::out_of_range("AMR composite field component is outside the prepared field");
+  if (kind == "sum_all" || kind == "abs_sum_all" || kind == "sum_sq_all" || kind == "abs_max_all") {
+    const std::string base = kind == "sum_all"       ? "sum"
+                             : kind == "abs_sum_all" ? "abs_sum"
+                             : kind == "sum_sq_all"  ? "sum_sq"
+                                                     : "abs_max";
+    double result = 0.0;
+    for (int current = 0; current < ncomp; ++current) {
+      const double value = composite_reduce_field(slot, base, current, requested_levels);
+      result = kind == "abs_max_all" ? std::max(result, value) : result + value;
+    }
+    return result;
+  }
+  std::vector<runtime::amr::CompositeLevelView<Dim, memory_space>> views;
+  views.reserve(levels.size());
+  for (std::size_t position = 0; position < levels.size(); ++position) {
+    const int level = levels[position];
+    const std::size_t index = static_cast<std::size_t>(level);
+    const Box<Dim>& domain = p_->engine->hierarchy().layout(index).domain();
+    const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, p_->cfg.lower, p_->cfg.upper);
+    std::array<Real, Dim> extent{};
+    for (int axis = 0; axis < Dim; ++axis)
+      extent[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+    const std::size_t coverage_index = requested_levels.empty() ? index : position;
+    views.push_back(
+        {plan.accepted_potential[index].get(), (*coverage)[coverage_index].get(), extent, nullptr});
+  }
+  return static_cast<double>(
+      runtime::amr::composite_reduce<Dim, memory_space>(
+          views, component, composite_reduction_kind(kind), *p_->prepared_hierarchy->lane)
+          .value);
 }
 
 template <int Dim>
@@ -3927,12 +4509,7 @@ double AmrSystem<Dim>::mass() {
 
 template <int Dim>
 double AmrSystem<Dim>::mass(const std::string& name) {
-  (void)p_->block(name);
-  p_->ensure_engine();
-  if (p_->engine->hierarchy().num_levels() != 1)
-    throw std::runtime_error("AmrSystem mass requires a prepared composite coverage provider");
-  return static_cast<double>(reduce_sum(p_->engine->hierarchy().state(0), 0)) *
-         cell_measure(p_->cfg, p_->cfg.index_domain());
+  return composite_reduce(name, "sum", 0);
 }
 
 template <int Dim>
@@ -4027,6 +4604,14 @@ template void AmrSystem<kNativeDimension>::set_compiled_block(
     double, double, bool);
 template void AmrSystem<kNativeDimension>::install_prepared_amr_block(
     PreparedAmrSystemBlock<kNativeDimension>);
+template void AmrSystem<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>&,
+                                                                  const std::vector<double>&,
+                                                                  const std::string&, double,
+                                                                  double, double);
+template void AmrSystem<kNativeDimension>::set_disc_domain(double, double, double,
+                                                           const std::string&, double, double,
+                                                           double);
+template void AmrSystem<kNativeDimension>::set_geometry_mode(const std::string&);
 template void AmrSystem<kNativeDimension>::refresh_prepared_amr_levels();
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::evaluate_prepared_amr_level(
@@ -4055,6 +4640,13 @@ template void AmrSystem<kNativeDimension>::install_field_storage_route(const std
                                                                        const std::string&);
 template void AmrSystem<kNativeDimension>::register_field_nullspace_provider(
     std::shared_ptr<const FieldNullspaceProvider<kNativeDimension>>);
+template void AmrSystem<kNativeDimension>::register_hierarchy_tensor_solver_provider(
+    std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<kNativeDimension>>);
+template void AmrSystem<kNativeDimension>::register_program_hierarchy_tensor_solver_provider(
+    std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<kNativeDimension>>);
+template std::shared_ptr<
+    const runtime::program::HierarchyTensorSolverProviderRegistry<kNativeDimension>>
+AmrSystem<kNativeDimension>::hierarchy_tensor_solver_provider_registry() const;
 template void AmrSystem<kNativeDimension>::register_field_solver_provider(
     std::shared_ptr<const runtime::amr::ExactAmrFieldSolverProvider<kNativeDimension>>);
 template std::string AmrSystem<kNativeDimension>::register_field_solver_provider(
@@ -4063,8 +4655,8 @@ template std::string AmrSystem<kNativeDimension>::register_field_solver_provider
 template void AmrSystem<kNativeDimension>::set_default_field_nullspace(
     const std::string&, const PreparedProviderOptions&);
 template void AmrSystem<kNativeDimension>::set_poisson(const std::string&, const std::string&,
-                                                       const std::string&, const std::string&,
-                                                       double, const AmrFieldSolverOptions&);
+                                                       const std::string&,
+                                                       const AmrFieldSolverOptions&);
 template void AmrSystem<kNativeDimension>::set_field_solver_plan(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::vector<std::string>&,
@@ -4232,6 +4824,17 @@ AmrSystem<kNativeDimension>::output_state_local_pieces(const std::string&, int);
 template std::vector<OutputPiece<kNativeDimension>>
 AmrSystem<kNativeDimension>::output_state_root_pieces(const ObserverMpiLane&, const std::string&,
                                                       int);
+template std::vector<OutputPiece<kNativeDimension>>
+AmrSystem<kNativeDimension>::output_embedded_boundary_local_pieces(const std::string&, int);
+template std::vector<OutputPiece<kNativeDimension>>
+AmrSystem<kNativeDimension>::output_embedded_boundary_root_pieces(const ObserverMpiLane&,
+                                                                  const std::string&, int);
+template double AmrSystem<kNativeDimension>::composite_reduce(const std::string&,
+                                                              const std::string&, int,
+                                                              const std::vector<int>&) const;
+template double AmrSystem<kNativeDimension>::composite_reduce_field(const std::string&,
+                                                                    const std::string&, int,
+                                                                    const std::vector<int>&);
 template std::vector<int> AmrSystem<kNativeDimension>::level_owner_ranks(int);
 template double AmrSystem<kNativeDimension>::mass();
 template double AmrSystem<kNativeDimension>::mass(const std::string&);

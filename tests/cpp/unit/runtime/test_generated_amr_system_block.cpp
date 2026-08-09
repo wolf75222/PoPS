@@ -4,12 +4,14 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
 
-#include <cstdint>
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -321,6 +323,11 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_TRUE(static_cast<bool>(prepared.materialize_level));
   EXPECT_FALSE(prepared.collective_contract.empty());
   EXPECT_NE(prepared.provider_identity.find(".nd/" + std::to_string(Dim) + "/"), std::string::npos);
+  EXPECT_FALSE(prepared.staircase_provider_identity.empty());
+  if constexpr (Dim == 2)
+    EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
+  else
+    EXPECT_TRUE(prepared.cut_cell_provider_identity.empty());
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(prepared.ghosts[axis], 2);
 }
@@ -463,6 +470,176 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
   const pops::AmrSystem<Dim>& const_system = system;
   EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(1), fine_auxiliary);
+}
+
+TEST(GeneratedAmrSystemBlock,
+     EmbeddedBoundaryRematerializesPerLevelAndWeightsCompositeMassAndSidecars) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  EXPECT_THROW(
+      system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", -1.0),
+      std::invalid_argument);
+  system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase");
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+
+  const auto initial_report = system.effective_options_report();
+  EXPECT_TRUE(initial_report.eb.enabled);
+  EXPECT_EQ(initial_report.eb.geometry_mode, "staircase");
+  EXPECT_FALSE(initial_report.eb.semantic_digest.empty());
+  EXPECT_FALSE(initial_report.eb.materialization_digest.empty());
+  const double initial_mass = system.mass("tracer");
+  EXPECT_GT(initial_mass, 0.0);
+  EXPECT_LT(initial_mass, 1.0);
+  const auto active = system.output_embedded_boundary_local_pieces("pops_active", 0);
+  const auto phi = system.output_embedded_boundary_local_pieces("pops_phi", 0);
+  const auto kappa = system.output_embedded_boundary_local_pieces("pops_kappa", 0);
+  ASSERT_EQ(active.size(), phi.size());
+  ASSERT_EQ(active.size(), kappa.size());
+  ASSERT_FALSE(active.empty());
+  EXPECT_EQ(active.front().box, phi.front().box);
+  EXPECT_EQ(active.front().box, kappa.front().box);
+  EXPECT_EQ(active.front().owner_rank, phi.front().owner_rank);
+  auto observer = pops::ObserverMpiLane::duplicate_world_collectively(
+      "test/generated-amr-system-block/embedded-boundary-output");
+  const auto gathered = system.output_embedded_boundary_root_pieces(observer, "pops_kappa", 0);
+  if (observer.rank() == 0)
+    EXPECT_FALSE(gathered.empty());
+  else
+    EXPECT_TRUE(gathered.empty());
+  observer.close_collectively();
+
+  const auto& root_evaluation = system.evaluate_prepared_amr_level(point<Dim>(0));
+  const pops::Real residual_magnitude =
+      std::max(Kokkos::abs(pops::reduce_min_local(root_evaluation.residual, 0)),
+               Kokkos::abs(pops::reduce_max_local(root_evaluation.residual, 0)));
+  EXPECT_GT(static_cast<double>(residual_magnitude), 0.0);
+  EXPECT_NEAR(static_cast<double>(pops::reduce_sum_local(root_evaluation.residual, 0)), 0.0,
+              1.0e-12);
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+
+  ASSERT_EQ(system.n_levels(), 2);
+  const auto fine_active = system.output_embedded_boundary_local_pieces("pops_active", 1);
+  ASSERT_FALSE(fine_active.empty());
+  const auto rematerialized_report = system.effective_options_report();
+  EXPECT_EQ(rematerialized_report.eb.semantic_digest, initial_report.eb.semantic_digest);
+  EXPECT_NE(rematerialized_report.eb.materialization_digest,
+            initial_report.eb.materialization_digest);
+  EXPECT_NEAR(system.mass("tracer"), initial_mass, 1.0e-12);
+  EXPECT_NEAR(system.composite_reduce("tracer", "sum", 0, {0}), initial_mass, 1.0e-12);
+  EXPECT_NEAR(system.composite_reduce("tracer", "sum", 0, {0, 1}), initial_mass, 1.0e-12);
+}
+
+TEST(GeneratedAmrSystemBlock, CutCellCapabilityIsExactRankedAndFailsBeforeMutation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  if constexpr (Dim == 2) {
+    EXPECT_NO_THROW(
+        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"));
+    system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "cutcell");
+    EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
+  } else {
+    EXPECT_THROW(
+        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"),
+        std::invalid_argument);
+    EXPECT_NO_THROW(
+        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase"));
+    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "staircase");
+  }
+}
+
+TEST(GeneratedAmrSystemBlock, EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation) {
+  if (pops::n_ranks() == 1)
+    return;
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+
+  const std::string divergent_mode = pops::my_rank() == 0 ? "staircase" : "invalid-on-rank";
+  EXPECT_ANY_THROW(
+      system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, divergent_mode));
+  EXPECT_NO_THROW(
+      system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase"));
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "staircase");
+}
+
+TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0});
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  const auto slots = pops::runtime::program::tensor_elliptic_detail::assembly_slots<Dim>();
+  const auto options = pops::runtime::program::tensor_elliptic_detail::default_options();
+  const auto configure = [&] {
+    context->configure_hierarchy_tensor_solver(
+        0, 1, std::string(pops::runtime::program::tensor_elliptic_detail::kCompositeTensorProvider),
+        "test.generated-amr.tensor-plan",
+        std::string(
+            pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticRank2Contract),
+        slots, "pops.tensor-elliptic.solution", options);
+  };
+
+  if constexpr (Dim == 2) {
+    ASSERT_NO_THROW(configure());
+    EXPECT_FALSE(context->uses_prepared_krylov_fallback());
+    pops::MultiFab<Dim>* first_solution = &context->hierarchy_solution();
+    ASSERT_NO_THROW(configure());
+    EXPECT_EQ(&context->hierarchy_solution(), first_solution);
+
+    context->for_each_program_resource_level([&](int) {
+      pops::MultiFab<Dim> fallback = context->rhs_scratch_like(context->state(0));
+      for (int row = 0; row < Dim; ++row)
+        for (int column = 0; column < Dim; ++column)
+          context
+              ->assembly_target(
+                  fallback,
+                  pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column))
+              .set_val(row == column ? pops::Real(1) : pops::Real(0));
+      context->assembly_target(fallback, "pops.tensor-elliptic.rhs").set_val(pops::Real(0));
+      context->assembly_target(fallback, "pops.tensor-elliptic.flux").set_val(pops::Real(0));
+      context->stage_linear_initial_guess();
+      EXPECT_EQ(&context->assembly_source(fallback, "pops.tensor-elliptic.solution"),
+                &context->hierarchy_solution());
+      EXPECT_THROW((void)context->assembly_target(fallback, "undeclared"), std::invalid_argument);
+    });
+
+    pops::SolveOutcome outcome =
+        context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
+    ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+    EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
+  } else {
+    EXPECT_ANY_THROW(configure());
+    EXPECT_THROW((void)context->uses_prepared_krylov_fallback(), std::logic_error);
+  }
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {

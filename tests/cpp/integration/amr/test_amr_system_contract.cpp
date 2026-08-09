@@ -240,7 +240,7 @@ TEST(test_amr_system_contract, Runs) {
     s.set_poisson("composite", "geometric_mg");
   }) << "set_poisson accepte rhs='composite'";
 
-  // --- set_poisson : bc/wall valides au build (poisson_bc/wall_active), donc au 1er mass() ---
+  // --- set_poisson : boundary validation stays independent from embedded geometry authoring ---
   EXPECT_THROW(
       {
         AmrSystem s(cfg);
@@ -250,16 +250,6 @@ TEST(test_amr_system_contract, Runs) {
       },
       std::runtime_error)
       << "bc inconnu refuse au build";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-        s.set_poisson("charge_density", "geometric_mg", "auto", "mur_bidon");
-        (void)s.mass();  // declenche ensure_built -> wall_active()
-      },
-      std::runtime_error)
-      << "wall inconnu refuse au build";
-
   // --- add_block : schemas cables ACCEPTES, valeur inconnue REFUSEE ---------------------------
   // Chaque identifiant public doit atteindre son chemin natif : ``explicit`` canonique (SSPRK2),
   // Forward Euler, SSPRK3 et source raide IMEX. Ce verrou complete les tests numeriques qui

@@ -28,6 +28,10 @@ struct CompositeLevelView {
   const MultiFab<Dim, MemorySpace>* values = nullptr;
   const MultiFab<Dim, MemorySpace>* active = nullptr;
   std::array<Real, Dim> cell_extent{};
+  /// Optional exact relative cell measure.  Staircase EB supplies its binary active mask and
+  /// cut-cell EB supplies kappa.  Hierarchy coverage remains the independent binary `active`
+  /// authority, so refinement shadowing and physical volume cannot overwrite each other.
+  const MultiFab<Dim, MemorySpace>* relative_measure = nullptr;
 };
 
 enum class CompositeReductionKind : unsigned char {
@@ -60,10 +64,12 @@ template <int Dim>
 struct InvalidSelectedValue {
   FieldView<const Real, Dim> values{};
   FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
   int component = 0;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    if (active(index) == Real(0))
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
       return Real(0);
     const Real value = values(index, component);
     return value <= std::numeric_limits<Real>::max() && value >= std::numeric_limits<Real>::lowest()
@@ -73,11 +79,23 @@ struct InvalidSelectedValue {
 };
 
 template <int Dim>
-struct ActiveCell {
-  FieldView<const Real, Dim> active{};
+struct InvalidRelativeMeasure {
+  FieldView<const Real, Dim> relative{};
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    return active(index) == Real(1) ? Real(1) : Real(0);
+    const Real value = relative(index);
+    return value >= Real(0) && value <= Real(1) && Kokkos::isfinite(value) ? Real(0) : Real(1);
+  }
+};
+
+template <int Dim>
+struct ActiveCell {
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return active(index) == Real(1) ? (has_relative ? relative(index) : Real(1)) : Real(0);
   }
 };
 
@@ -85,18 +103,21 @@ template <int Dim>
 struct SumValue {
   FieldView<const Real, Dim> values{};
   FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
   int component = 0;
   CompositeReductionKind kind = CompositeReductionKind::Sum;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    if (active(index) == Real(0))
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
       return Real(0);
     const Real value = values(index, component);
+    const Real weight = has_relative ? relative(index) : Real(1);
     if (kind == CompositeReductionKind::AbsoluteSum)
-      return value < Real(0) ? -value : value;
+      return (value < Real(0) ? -value : value) * weight;
     if (kind == CompositeReductionKind::SumSquares)
-      return value * value;
-    return value;
+      return value * value * weight;
+    return value * weight;
   }
 };
 
@@ -104,12 +125,14 @@ template <int Dim>
 struct ExtremumValue {
   FieldView<const Real, Dim> values{};
   FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
   int component = 0;
   bool absolute = false;
   bool negate = false;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
-    if (active(index) == Real(0))
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
       return std::numeric_limits<Real>::lowest();
     Real value = values(index, component);
     if (absolute && value < Real(0))
@@ -131,6 +154,15 @@ void require_level_shape(const CompositeLevelView<Dim, MemorySpace>& level, int 
       values.local_rank() != active.local_rank() || values.local_size() != active.local_size())
     throw std::invalid_argument(
         "composite reduction mask does not authenticate the field layout and ownership");
+  if (level.relative_measure != nullptr) {
+    const auto& relative = *level.relative_measure;
+    if (relative.ncomp() != 1 || values.layout() != relative.layout() ||
+        values.distribution() != relative.distribution() ||
+        values.local_rank() != relative.local_rank() ||
+        values.local_size() != relative.local_size())
+      throw std::invalid_argument(
+          "composite reduction relative measure does not authenticate the field ownership");
+  }
   for (int axis = 0; axis < Dim; ++axis)
     if (!(level.cell_extent[static_cast<std::size_t>(axis)] > Real(0)) ||
         !std::isfinite(level.cell_extent[static_cast<std::size_t>(axis)]))
@@ -143,11 +175,11 @@ bool contributes_on_this_rank(const MultiFab<Dim, MemorySpace>& values) {
          values.local_rank() == values.rank_space().coordinate(0);
 }
 
-template <int Dim>
+template <std::size_t Dim>
 Real cell_measure(const std::array<Real, Dim>& extent) {
   Real measure = Real(1);
-  for (int axis = 0; axis < Dim; ++axis)
-    measure *= extent[static_cast<std::size_t>(axis)];
+  for (std::size_t axis = 0; axis < Dim; ++axis)
+    measure *= extent[axis];
   return measure;
 }
 
@@ -188,26 +220,37 @@ CompositeReductionResult composite_reduce(
       const Box<Dim>& cells = values.box(local);
       const auto value_view = values.fab(local).view();
       const auto active_view = active.fab(local).view();
+      const bool has_relative = level.relative_measure != nullptr;
+      const auto relative_view =
+          has_relative ? level.relative_measure->fab(local).view() : FieldView<const Real, Dim>{};
       local_invalid = std::max(
           local_invalid,
           for_each_cell_reduce_max(cells, composite_detail::InvalidMaskValue<Dim>{active_view}));
-      local_invalid =
-          std::max(local_invalid,
-                   for_each_cell_reduce_max(cells, composite_detail::InvalidSelectedValue<Dim>{
-                                                       value_view, active_view, component}));
-      level_active +=
-          for_each_cell_reduce_sum(cells, composite_detail::ActiveCell<Dim>{active_view});
+      local_invalid = std::max(
+          local_invalid,
+          for_each_cell_reduce_max(
+              cells, composite_detail::InvalidSelectedValue<Dim>{
+                         value_view, active_view, relative_view, has_relative, component}));
+      if (has_relative)
+        local_invalid =
+            std::max(local_invalid,
+                     for_each_cell_reduce_max(
+                         cells, composite_detail::InvalidRelativeMeasure<Dim>{relative_view}));
+      level_active += for_each_cell_reduce_sum(
+          cells, composite_detail::ActiveCell<Dim>{active_view, relative_view, has_relative});
 
       if (composite_detail::is_sum_kind(kind)) {
         level_selected += for_each_cell_reduce_sum(
-            cells, composite_detail::SumValue<Dim>{value_view, active_view, component, kind});
+            cells, composite_detail::SumValue<Dim>{value_view, active_view, relative_view,
+                                                   has_relative, component, kind});
       } else {
         const bool absolute = kind == CompositeReductionKind::AbsoluteMaximum;
         const bool negate = kind == CompositeReductionKind::Minimum;
         level_selected = std::max(
-            level_selected, for_each_cell_reduce_max(
-                                cells, composite_detail::ExtremumValue<Dim>{
-                                           value_view, active_view, component, absolute, negate}));
+            level_selected,
+            for_each_cell_reduce_max(cells, composite_detail::ExtremumValue<Dim>{
+                                                value_view, active_view, relative_view,
+                                                has_relative, component, absolute, negate}));
       }
     }
 

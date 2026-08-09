@@ -40,14 +40,12 @@ def test_set_poisson_rejects_string_bc():
 
 @requires_engine
 def test_amr_set_poisson_uses_the_same_typed_contract():
-    from pops.mesh.geometry import Disc
-
     system = AmrSystem(n=8, L=1.0, periodicity=(False, False), regrid_every=0)
     with pytest.raises(TypeError, match="string selectors"):
         system.set_poisson(bc="dirichlet")
-    with pytest.raises(TypeError, match="string selectors"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'wall'"):
         system.set_poisson(wall="circle")
-    system.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
+    system.set_poisson(bc=Dirichlet())
 
 
 @requires_engine

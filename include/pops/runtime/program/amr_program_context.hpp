@@ -25,12 +25,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -73,6 +75,10 @@ class AmrProgramContext {
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
   using subcycle_plan_type = ::pops::numerics::time::amr::PreparedAmrSubcyclePlan<Dim, MemorySpace>;
+  using hierarchy_tensor_provider_type = HierarchyTensorSolverProvider<Dim, MemorySpace>;
+  using hierarchy_tensor_registry_type = HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>;
+  using hierarchy_tensor_solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
+  using hierarchy_tensor_request_type = HierarchyTensorSolverBuildRequest<Dim>;
 
   struct ProgramResourceTopology {
     int levels = 0;
@@ -104,6 +110,18 @@ class AmrProgramContext {
   struct CouplingStateOverride {
     int program_block = -1;
     field_type* state = nullptr;
+  };
+
+  struct HierarchyTensorSelection {
+    int program_block = -1;
+    int components = 0;
+    std::string provider_identity;
+    std::string plan_identity;
+    std::string operator_contract_identity;
+    std::vector<std::string> assembly_field_slots;
+    std::string solution_field_slot;
+    PreparedProviderOptions options;
+    std::string exact_contract;
   };
 
   class LogicalEvaluationScope {
@@ -139,6 +157,7 @@ class AmrProgramContext {
   explicit AmrProgramContext(facade_type* facade)
       : facade_(require_facade_(facade)), runtime_(require_runtime_(*facade_)) {
     facade_->refresh_prepared_amr_levels();
+    hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
     scalar_boundary_lane_.emplace(ExecutionLane::duplicate_world_collectively(
         "pops.program.amr.scalar-boundary.nd" + std::to_string(Dim)));
     synchronize_resource_generation_();
@@ -149,6 +168,7 @@ class AmrProgramContext {
     if (facade_->engine() != runtime_)
       throw std::invalid_argument("AMR Program facade and runtime do not share one hierarchy");
     facade_->refresh_prepared_amr_levels();
+    hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
     scalar_boundary_lane_.emplace(ExecutionLane::duplicate_world_collectively(
         "pops.program.amr.scalar-boundary.nd" + std::to_string(Dim)));
     synchronize_resource_generation_();
@@ -314,7 +334,10 @@ class AmrProgramContext {
     unavailable_("cell-local AMR temporal provider");
   }
 
-  bool uses_prepared_krylov_fallback() const noexcept { return true; }
+  bool uses_prepared_krylov_fallback() const {
+    return configured_hierarchy_tensor_solver_().execution_path() ==
+           HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
+  }
   int nlev() const { return static_cast<int>(runtime_->hierarchy().num_levels()); }
   int level() const noexcept { return active_level_; }
 
@@ -598,13 +621,29 @@ class AmrProgramContext {
   field_type& assembly_target(field_type& field, std::string_view identity) const {
     if (identity.empty())
       throw std::invalid_argument("AMR Program assembly target requires an identity");
-    return field;
+    if (!hierarchy_tensor_selection_)
+      return field;
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+      return field;
+    if (std::find(hierarchy_tensor_selection_->assembly_field_slots.begin(),
+                  hierarchy_tensor_selection_->assembly_field_slots.end(),
+                  identity) == hierarchy_tensor_selection_->assembly_field_slots.end())
+      throw std::invalid_argument("AMR hierarchy assembly used an undeclared provider field slot");
+    return solver.assembly_target(identity, active_level_);
   }
 
   field_type& assembly_source(field_type& field, std::string_view identity) const {
     if (identity.empty())
       throw std::invalid_argument("AMR Program assembly source requires an identity");
-    return field;
+    if (!hierarchy_tensor_selection_)
+      return field;
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+      return field;
+    if (identity != hierarchy_tensor_selection_->solution_field_slot)
+      throw std::invalid_argument("AMR hierarchy read used an undeclared provider solution slot");
+    return solver.solution(active_level_);
   }
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
@@ -1028,18 +1067,127 @@ class AmrProgramContext {
     return result == -std::numeric_limits<Real>::infinity() ? Real(0) : result;
   }
 
-  [[noreturn]] field_type& hierarchy_solution() const {
-    unavailable_("direct hierarchy linear-solution provider");
+  void register_hierarchy_tensor_solver_provider(
+      std::shared_ptr<const hierarchy_tensor_provider_type> provider) const {
+    require_facade_execution_();
+    if (!hierarchy_tensor_solver_registry_)
+      throw std::logic_error("AMR hierarchy tensor-solver registry is unavailable");
+    facade_->register_program_hierarchy_tensor_solver_provider(std::move(provider));
+  }
+
+  void configure_hierarchy_tensor_solver(int program_block, int components,
+                                         const std::string& provider_identity,
+                                         const std::string& plan_identity,
+                                         const std::string& operator_contract_identity,
+                                         const std::vector<std::string>& assembly_field_slots,
+                                         const std::string& solution_field_slot,
+                                         const PreparedProviderOptions& options) const {
+    require_facade_execution_();
+    if (!hierarchy_tensor_solver_registry_)
+      throw std::logic_error("AMR hierarchy tensor-solver registry is unavailable");
+
+    std::optional<HierarchyTensorSelection> staged;
+    std::exception_ptr local_error;
+    long local_failure = 0;
+    try {
+      (void)sys_block(program_block);
+      if (components < 1 || provider_identity.empty() || plan_identity.empty() ||
+          operator_contract_identity.empty() || assembly_field_slots.empty() ||
+          solution_field_slot.empty() ||
+          std::any_of(
+              assembly_field_slots.begin(), assembly_field_slots.end(),
+              [](const std::string& slot) { return slot.empty(); }) ||
+          std::set<std::string>(assembly_field_slots.begin(), assembly_field_slots.end()).size() !=
+              assembly_field_slots.size())
+        throw std::invalid_argument(
+            "AMR hierarchy tensor solver requires a complete exact field-slot envelope");
+      ExactContractBuilder contract;
+      contract.text("pops.hierarchy.tensor-solver-selection")
+          .scalar(std::uint32_t{2})
+          .scalar(std::int32_t{Dim})
+          .scalar(std::int32_t{program_block})
+          .scalar(std::int32_t{components})
+          .text(provider_identity)
+          .text(plan_identity)
+          .text(operator_contract_identity)
+          .sequence(assembly_field_slots,
+                    [](ExactContractBuilder& item, const std::string& slot) { item.text(slot); })
+          .text(solution_field_slot)
+          .bytes(options.exact_contract());
+      staged.emplace(HierarchyTensorSelection{
+          program_block, components, provider_identity, plan_identity, operator_contract_identity,
+          assembly_field_slots, solution_field_slot, options, std::move(contract).release()});
+      if (hierarchy_tensor_selection_ &&
+          hierarchy_tensor_selection_->exact_contract != staged->exact_contract)
+        throw std::logic_error("AMR hierarchy tensor solver is already configured differently");
+    } catch (...) {
+      local_failure = 1;
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_failure) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("AMR hierarchy tensor selection failed on another MPI rank");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-hierarchy-tensor-selection", staged->exact_contract}}))
+      throw std::invalid_argument("AMR hierarchy tensor selection differs between MPI ranks");
+
+    if (hierarchy_tensor_selection_ &&
+        hierarchy_tensor_selection_->exact_contract == staged->exact_contract) {
+      (void)configured_hierarchy_tensor_solver_();
+      return;
+    }
+
+    std::unique_ptr<hierarchy_tensor_solver_type> prepared =
+        prepare_hierarchy_tensor_solver_(*staged);
+    hierarchy_tensor_selection_ = std::move(staged);
+    hierarchy_tensor_solver_ = std::move(prepared);
+    hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
+    hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
+  }
+
+  SolveOutcome solve_hierarchy_tensor(int program_block, int components, Real relative_tolerance,
+                                      Real absolute_tolerance, int maximum_iterations) const {
+    require_hierarchy_tensor_binding_(program_block, components);
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+      return SolveOutcome::collective_world(std::move(report));
+    }
+    return solve_prepared_hierarchy_tensor_collectively(
+        solver,
+        HierarchyTensorSolveControls{relative_tolerance, absolute_tolerance, maximum_iterations});
+  }
+
+  field_type& hierarchy_solution() const {
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error(
+          "provider-owned hierarchy solution requested on a prepared Krylov fallback path");
+    return solver.solution(active_level_);
   }
   field_type& linear_solution(field_type& fallback) const {
     require_same_layout_(fallback, state(0), "AMR Program linear solution");
-    return fallback;
+    if (!hierarchy_tensor_selection_)
+      return fallback;
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    return solver.execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider
+               ? solver.solution(active_level_)
+               : fallback;
   }
-  [[noreturn]] void stage_linear_initial_guess() const {
-    unavailable_("direct hierarchy initial-guess provider");
+  void stage_linear_initial_guess() const {
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error("hierarchy initial guess requires direct provider execution");
+    solver.stage_initial_guess(active_level_, nullptr);
   }
-  [[noreturn]] void stage_linear_initial_guess(const field_type&) const {
-    unavailable_("direct hierarchy initial-guess provider");
+  void stage_linear_initial_guess(const field_type& guess) const {
+    hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+    if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
+      throw std::logic_error("hierarchy initial guess requires direct provider execution");
+    solver.stage_initial_guess(active_level_, &guess);
   }
 
   ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
@@ -1286,6 +1434,90 @@ class AmrProgramContext {
   }
   [[noreturn]] static void unavailable_(std::string_view provider) {
     throw std::runtime_error("AmrProgramContext has no prepared " + std::string(provider));
+  }
+
+  PhysicalBoundaryConditions<Dim> hierarchy_tensor_boundary_(const Geometry<Dim>& geometry) const {
+    const BoundaryTopology<Dim> topology = facade_->prepared_amr_boundary_topology();
+    std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+    RealVector<Dim> spacing{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      spacing[axis] = geometry.spacing(axis);
+      for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
+        if (topology.is_physical(face))
+          faces[static_cast<std::size_t>(face.ordinal())] = {PhysicalBoundaryKind::dirichlet,
+                                                             Real(0), Real(1), Real(0)};
+      }
+    }
+    return PhysicalBoundaryConditions<Dim>{topology, faces, spacing};
+  }
+
+  std::unique_ptr<hierarchy_tensor_solver_type> prepare_hierarchy_tensor_solver_(
+      const HierarchyTensorSelection& selection) const {
+    hierarchy_tensor_request_type request;
+    std::exception_ptr local_error;
+    long local_failure = 0;
+    try {
+      const int runtime_block = sys_block(selection.program_block);
+      if (runtime_block < 0)
+        throw std::invalid_argument("AMR hierarchy tensor solver has an invalid runtime block");
+      request.block = static_cast<std::size_t>(runtime_block);
+      request.components = selection.components;
+      request.plan_identity = selection.plan_identity;
+      request.operator_contract_identity = selection.operator_contract_identity;
+      request.assembly_field_slots = selection.assembly_field_slots;
+      request.solution_field_slot = selection.solution_field_slot;
+      request.options = selection.options;
+      request.levels.reserve(runtime_->hierarchy().num_levels());
+      if (runtime_->hierarchy().num_levels() > 1)
+        request.ratios.reserve(runtime_->hierarchy().num_levels() - 1);
+      for (std::size_t level = 0; level < runtime_->hierarchy().num_levels(); ++level) {
+        const field_type& level_state = runtime_->hierarchy().state(level);
+        const Geometry<Dim> level_geometry =
+            facade_->prepared_amr_level_geometry(static_cast<int>(level));
+        request.levels.push_back({level_geometry, hierarchy_tensor_boundary_(level_geometry),
+                                  level_state.layout(), level_state.distribution(),
+                                  level_state.local_rank()});
+        if (level != 0)
+          request.ratios.push_back(runtime_->hierarchy().layout(level).ratio_from_parent());
+      }
+    } catch (...) {
+      local_failure = 1;
+      local_error = std::current_exception();
+    }
+    if (all_reduce_max(local_failure) != 0) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error(
+          "AMR hierarchy tensor request construction failed on another MPI rank");
+    }
+    return prepare_hierarchy_tensor_solver_collectively(
+        *hierarchy_tensor_solver_registry_, selection.provider_identity, std::move(request));
+  }
+
+  hierarchy_tensor_solver_type& configured_hierarchy_tensor_solver_() const {
+    if (!hierarchy_tensor_selection_)
+      throw std::logic_error(
+          "AMR hierarchy tensor solver must be configured before hierarchy access");
+    refresh_resources_();
+    if (!hierarchy_tensor_solver_ ||
+        hierarchy_tensor_topology_epoch_ != runtime_->topology_epoch() ||
+        hierarchy_tensor_materialization_generation_ != runtime_->materialization_generation()) {
+      std::unique_ptr<hierarchy_tensor_solver_type> prepared =
+          prepare_hierarchy_tensor_solver_(*hierarchy_tensor_selection_);
+      hierarchy_tensor_solver_ = std::move(prepared);
+      hierarchy_tensor_topology_epoch_ = runtime_->topology_epoch();
+      hierarchy_tensor_materialization_generation_ = runtime_->materialization_generation();
+    }
+    return *hierarchy_tensor_solver_;
+  }
+
+  void require_hierarchy_tensor_binding_(int program_block, int components) const {
+    if (!hierarchy_tensor_selection_ ||
+        hierarchy_tensor_selection_->program_block != program_block ||
+        hierarchy_tensor_selection_->components != components)
+      throw std::logic_error(
+          "AMR hierarchy tensor block/component binding differs from its prepared solver");
   }
 
   void synchronize_resource_generation_() const {
@@ -1581,6 +1813,13 @@ class AmrProgramContext {
   mutable std::map<std::string, int> history_levels_;
   mutable std::map<ScratchKey, field_type> scratches_;
   mutable std::map<std::int64_t, GeneratedFieldRoute> generated_field_routes_;
+  std::shared_ptr<const hierarchy_tensor_registry_type> hierarchy_tensor_solver_registry_;
+  mutable std::optional<HierarchyTensorSelection> hierarchy_tensor_selection_;
+  mutable std::unique_ptr<hierarchy_tensor_solver_type> hierarchy_tensor_solver_;
+  mutable std::uint64_t hierarchy_tensor_topology_epoch_ =
+      std::numeric_limits<std::uint64_t>::max();
+  mutable std::uint64_t hierarchy_tensor_materialization_generation_ =
+      std::numeric_limits<std::uint64_t>::max();
   mutable PreparedVectorDistribution<Dim> vector_distribution_ =
       PreparedVectorDistribution<Dim>::distributed();
 };

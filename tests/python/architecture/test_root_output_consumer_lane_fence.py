@@ -37,6 +37,23 @@ def test_python_root_output_bridge_rejects_the_process_world_type():
     assert "lane: _NativeObserverMpiLane" in stub
 
 
+def test_amr_embedded_boundary_authoring_and_sidecars_are_bound_exactly():
+    amr = AMR_BINDING.read_text(encoding="utf-8")
+    stub = STUB.read_text(encoding="utf-8")
+
+    for method in (
+        "_set_analytic_level_set",
+        "set_disc_domain",
+        "set_geometry_mode",
+        "output_embedded_boundary_local_pieces",
+        "output_embedded_boundary_root_pieces",
+    ):
+        assert '"%s"' % method in amr
+        assert "def %s(" % method in stub
+    assert "const ObserverMpiLane& lane" in amr
+    assert "py::gil_scoped_release release" in amr
+
+
 def test_runtime_materializes_and_closes_one_root_output_lane_per_run():
     runtime = RUNTIME.read_text(encoding="utf-8")
 

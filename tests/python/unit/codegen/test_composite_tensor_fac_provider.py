@@ -190,9 +190,10 @@ def test_external_use_policy_accepts_any_ncomp_and_future_fact_without_core_bran
         extensions={"tests.future.tensor_rank": 4},
     )
     future_operator = object()
-    assert policy.validate(
-        facts, operator=future_operator, where="external provider"
-    ) is facts
+    assert (
+        policy.validate(facts, operator=future_operator, where="external provider")
+        is facts
+    )
     assert policy.authority() == {
         "policy_id": "tests.use-policy.any-component-future-facts",
         "interface_version": 1,
@@ -286,14 +287,18 @@ def test_krylov_descriptor_rejects_hierarchy_scope_before_codegen():
     rhs = program.scalar_field("rhs")
     problem = LinearProblem(operator, rhs, scope=Hierarchy(), nullspace=None)
 
-    with pytest.raises(TypeError, match="prepared hierarchy-solver provider.*Krylov descriptors"):
+    with pytest.raises(
+        TypeError, match="prepared hierarchy-solver provider.*Krylov descriptors"
+    ):
         program.solve(problem, solver=CG(max_iter=11, rel_tol=1.0e-6))
 
 
 def test_composite_provider_refuses_constant_nullspace_until_multilevel_gauge_is_wired():
     from test_hierarchy_scoped_solve_emit import _build
 
-    with pytest.raises(NotImplementedError, match="does not support a singular nullspace"):
+    with pytest.raises(
+        NotImplementedError, match="does not support a singular nullspace"
+    ):
         _build(
             CompositeTensorFAC(),
             nullspace=ConstantNullspace(),
@@ -308,7 +313,9 @@ def test_hierarchy_operator_is_provider_neutral_until_solver_selection():
     program = Program("direct-hierarchy-contract")
     with pytest.raises(TypeError, match="unexpected keyword argument 'provider'"):
         program.matrix_free_operator(
-            "legacy", scope=Hierarchy(), provider=CompositeTensorFAC()  # type: ignore[call-arg]
+            "legacy",
+            scope=Hierarchy(),
+            provider=CompositeTensorFAC(),  # type: ignore[call-arg]
         )
     vector = program.matrix_free_operator(
         "vector", domain="vector", range_="vector", ncomp=2, scope=Hierarchy()
@@ -606,17 +613,13 @@ def _public_amr_hierarchy_case(
             * cos(wave_number * y_coordinate)
         )
         density_profile = _HIERARCHY_DENSITY + 0.0 * x_coordinate
-        momentum_factor = (
-            1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
-        )
+        momentum_factor = 1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
         plasma_initial = Analytic(
             frame=frame,
             components=(
                 density_profile,
-                momentum_factor * potential_x
-                - _HIERARCHY_ROTATION_RATE * potential_y,
-                _HIERARCHY_ROTATION_RATE * potential_x
-                + momentum_factor * potential_y,
+                momentum_factor * potential_x - _HIERARCHY_ROTATION_RATE * potential_y,
+                _HIERARCHY_ROTATION_RATE * potential_x + momentum_factor * potential_y,
             ),
         )
     case.initials.add(
@@ -646,7 +649,9 @@ def _public_amr_hierarchy_case(
     transfer.state(state_instance, StateTransfer())
     transfer.state(marker_instance, StateTransfer())
     if len(temporal_ratios) != max_levels - 1:
-        raise ValueError("one independent temporal ratio is required per AMR transition")
+        raise ValueError(
+            "one independent temporal ratio is required per AMR transition"
+        )
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
@@ -722,9 +727,7 @@ def _nonuniform_plasma_initial():
         np.arange(_HIERARCHY_BASE_CELLS, dtype=np.float64) + 0.5
     ) / _HIERARCHY_BASE_CELLS
     x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
-    density = 1.0 + 0.20 * np.exp(
-        -80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2)
-    )
+    density = 1.0 + 0.20 * np.exp(-80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2))
     east = density * (0.25 + 0.08 * np.sin(2.0 * np.pi * y))
     north = density * (-0.15 + 0.06 * np.cos(2.0 * np.pi * x))
     return np.ascontiguousarray(np.stack((density, east, north)))
@@ -770,17 +773,9 @@ def _manufactured_plasma_initial(cells):
                 * np.cos(wave_number * y)
             )
     density = np.full((cells, cells), _HIERARCHY_DENSITY)
-    momentum_factor = (
-        1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
-    )
-    east = (
-        momentum_factor * potential_x
-        - _HIERARCHY_ROTATION_RATE * potential_y
-    )
-    north = (
-        _HIERARCHY_ROTATION_RATE * potential_x
-        + momentum_factor * potential_y
-    )
+    momentum_factor = 1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
+    east = momentum_factor * potential_x - _HIERARCHY_ROTATION_RATE * potential_y
+    north = _HIERARCHY_ROTATION_RATE * potential_x + momentum_factor * potential_y
     return np.stack((density, east, north))
 
 
@@ -795,26 +790,28 @@ def _periodic_condensed_fourier_oracle(initial, *, dt, rotation_rate):
     spacing = 1.0 / cells
 
     def centered_difference(values, *, axis):
-        return (
-            np.roll(values, -1, axis=axis) - np.roll(values, 1, axis=axis)
-        ) / (2.0 * spacing)
+        return (np.roll(values, -1, axis=axis) - np.roll(values, 1, axis=axis)) / (
+            2.0 * spacing
+        )
 
     rotation = dt * rotation_rate
     denominator = 1.0 + rotation * rotation
     flux_east = (east + rotation * north) / denominator
     flux_north = (-rotation * east + north) / denominator
     rhs = -dt * (
-        centered_difference(flux_east, axis=1)
-        + centered_difference(flux_north, axis=0)
+        centered_difference(flux_east, axis=1) + centered_difference(flux_north, axis=0)
     )
     assert np.max(np.abs(rhs)) > 1.0e-2
 
     coefficient = 1.0 + dt * dt * float(density[0, 0]) / denominator
     modes = np.fft.fftfreq(cells) * cells
     kx, ky = np.meshgrid(modes, modes, indexing="xy")
-    eigenvalue = coefficient * 4.0 * cells * cells * (
-        np.sin(np.pi * kx / cells) ** 2
-        + np.sin(np.pi * ky / cells) ** 2
+    eigenvalue = (
+        coefficient
+        * 4.0
+        * cells
+        * cells
+        * (np.sin(np.pi * kx / cells) ** 2 + np.sin(np.pi * ky / cells) ** 2)
     )
     rhs_hat = np.fft.fft2(rhs)
     phi_hat = np.zeros_like(rhs_hat)
@@ -826,12 +823,10 @@ def _periodic_condensed_fourier_oracle(initial, *, dt, rotation_rate):
     gradient_north = centered_difference(potential, axis=0)
     velocity_east = east / density - dt * gradient_east
     velocity_north = north / density - dt * gradient_north
-    expected_east = density * (
-        velocity_east + rotation * velocity_north
-    ) / denominator
-    expected_north = density * (
-        -rotation * velocity_east + velocity_north
-    ) / denominator
+    expected_east = density * (velocity_east + rotation * velocity_north) / denominator
+    expected_north = (
+        density * (-rotation * velocity_east + velocity_north) / denominator
+    )
     return (
         np.stack((density, expected_east, expected_north)),
         potential,
@@ -864,7 +859,10 @@ def _patch_interior(mask, *, guard_cells=1):
 
 
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
-    tmp_path, isolated_native_cache, native_cxx, kokkos_root,
+    tmp_path,
+    isolated_native_cache,
+    native_cxx,
+    kokkos_root,
 ):
     del isolated_native_cache, kokkos_root
     from test_hierarchy_scoped_solve_emit import _build
@@ -874,6 +872,7 @@ def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_ident
     header = source_root / "tests_hierarchy_provider.hpp"
     header.write_text(
         """#pragma once
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
 #include <pops/runtime/export.hpp>
@@ -881,6 +880,13 @@ def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_ident
 #include <atomic>
 namespace pops_test_hierarchy {
 namespace {
+inline constexpr int kDim = pops::kNativeDimension;
+using Context = pops::runtime::program::AmrProgramContext<kDim>;
+using Field = pops::MultiFab<kDim>;
+using TensorRequest = pops::runtime::program::HierarchyTensorSolverBuildRequest<kDim>;
+using PreparedTensorSolver = pops::runtime::program::PreparedHierarchyTensorSolver<kDim>;
+using TensorProvider = pops::runtime::program::HierarchyTensorSolverProvider<kDim>;
+using BuiltinTensorProvider = pops::runtime::program::CompositeTensorHierarchyProvider<kDim>;
 // Keep the complete instrumented provider local to this generated Program DSO. A future test may
 // load another artifact containing this header in the same process; no inline counter, provider
 // method or vtable may then be coalesced into process-global lifecycle evidence.
@@ -895,13 +901,12 @@ std::atomic<std::uint64_t> second_guess_calls{0};
 double first_solution_norm_sum = 0.0;
 double second_guess_norm_sum = 0.0;
 
-class DelegatingPrepared final
-    : public pops::runtime::program::PreparedHierarchyTensorSolver {
+class DelegatingPrepared final : public PreparedTensorSolver {
  public:
   DelegatingPrepared(
       std::string contract,
       std::vector<bool> level_populated,
-      std::unique_ptr<pops::runtime::program::PreparedHierarchyTensorSolver> delegate)
+      std::unique_ptr<PreparedTensorSolver> delegate)
       : contract_(std::move(contract)),
         level_populated_(std::move(level_populated)),
         delegate_(std::move(delegate)) {
@@ -921,13 +926,13 @@ class DelegatingPrepared final
   int level_count() const noexcept override {
     return delegate_->level_count();
   }
-  pops::MultiFab& assembly_target(std::string_view slot, int level) override {
+  Field& assembly_target(std::string_view slot, int level) override {
     return delegate_->assembly_target(slot, level);
   }
-  pops::MultiFab& solution(int level) override {
+  Field& solution(int level) override {
     return delegate_->solution(level);
   }
-  void stage_initial_guess(int level, const pops::MultiFab* guess) override {
+  void stage_initial_guess(int level, const Field* guess) override {
     if (solve_calls.load(std::memory_order_relaxed) == 1 && guess != nullptr) {
       second_guess_norm_sum += static_cast<double>(pops::norm_inf(*guess));
       second_guess_calls.fetch_add(1, std::memory_order_relaxed);
@@ -958,14 +963,12 @@ class DelegatingPrepared final
  private:
   std::string contract_;
   std::vector<bool> level_populated_;
-  std::unique_ptr<pops::runtime::program::PreparedHierarchyTensorSolver> delegate_;
+  std::unique_ptr<PreparedTensorSolver> delegate_;
 };
 
-class Provider final
-    : public pops::runtime::program::HierarchyTensorSolverProvider {
+class Provider final : public TensorProvider {
  private:
-  static pops::runtime::program::HierarchyTensorSolverBuildRequest delegate_request(
-      const pops::runtime::program::HierarchyTensorSolverBuildRequest& request) {
+  static TensorRequest delegate_request(const TensorRequest& request) {
     auto converted = request;
     converted.options = {
         "pops.hierarchy.composite-tensor-fac.options@2", request.options.values};
@@ -993,12 +996,11 @@ class Provider final
                : pops::PreparedProviderSupport::reject(1, "header-only options are invalid");
   }
   pops::PreparedProviderSupport supports(
-      const pops::runtime::program::HierarchyTensorSolverBuildRequest& request)
-      const noexcept override {
+      const TensorRequest& request) const noexcept override {
     if (!accepts_options(request.options).accepted())
       return pops::PreparedProviderSupport::reject(2, "header-only request is invalid");
     try {
-      const pops::runtime::program::detail::CompositeTensorFacHierarchyProvider delegate;
+      const BuiltinTensorProvider delegate;
       return delegate.supports(delegate_request(request));
     } catch (...) {
       return pops::PreparedProviderSupport::reject(
@@ -1006,61 +1008,49 @@ class Provider final
     }
   }
   pops::PreparedProviderSupport accepts_execution(
-      const pops::runtime::program::HierarchyTensorSolverBuildRequest& request,
+      const TensorRequest& request,
       pops::runtime::program::HierarchyTensorSolverExecutionPath execution)
       const noexcept override {
     if (!supports(request).accepted())
       return pops::PreparedProviderSupport::reject(3, "header-only request is invalid");
     try {
-      const pops::runtime::program::detail::CompositeTensorFacHierarchyProvider delegate;
+      const BuiltinTensorProvider delegate;
       return delegate.accepts_execution(delegate_request(request), execution);
     } catch (...) {
       return pops::PreparedProviderSupport::reject(
           3, "header-only execution is invalid");
     }
   }
-  std::string expected_prepared_contract(
-      const pops::runtime::program::HierarchyTensorSolverBuildRequest& request) const override {
+  std::string expected_prepared_contract(const TensorRequest& request) const override {
     pops::ExactContractBuilder contract;
     contract.text("tests.hierarchy.header-only.prepared")
         .scalar(std::uint32_t{1})
-        .text(request.plan_identity)
-        .text(request.operator_contract_identity)
-        .sequence(request.assembly_field_slots,
-                  [](pops::ExactContractBuilder& item, const std::string& slot) {
-                    item.text(slot);
-                  })
-        .text(request.solution_field_slot)
-        .sequence(request.level_populated,
-                  [](pops::ExactContractBuilder& item, bool populated) {
-                    item.scalar(populated);
-                  })
-        .sequence(request.level_distributions,
-                  [](pops::ExactContractBuilder& item,
-                     pops::FieldDistribution distribution) { item.scalar(distribution); })
-        .bytes(request.options.exact_contract());
+        .scalar(std::int32_t{kDim})
+        .bytes(pops::runtime::program::hierarchy_tensor_detail::request_contract(request));
     return std::move(contract).release();
   }
-  std::unique_ptr<pops::runtime::program::PreparedHierarchyTensorSolver> prepare(
-      const pops::runtime::program::HierarchyTensorSolverBuildRequest& request) const override {
+  std::unique_ptr<PreparedTensorSolver> prepare(const TensorRequest& request) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
-    const pops::runtime::program::detail::CompositeTensorFacHierarchyProvider delegate;
+    const BuiltinTensorProvider delegate;
     auto prepared_delegate = delegate.prepare(delegate_request(request));
+    std::vector<bool> level_populated;
+    level_populated.reserve(request.levels.size());
+    for (const auto& level : request.levels)
+      level_populated.push_back(!level.layout.empty());
     prepare_calls.fetch_add(1, std::memory_order_relaxed);
     return std::make_unique<DelegatingPrepared>(
-        expected_prepared_contract(request), request.level_populated,
-        std::move(prepared_delegate));
+        expected_prepared_contract(request), std::move(level_populated), std::move(prepared_delegate));
   }
 };
 
-void register_provider(pops::runtime::program::AmrProgramContext& ctx) {
+void register_provider(Context& ctx) {
   register_calls.fetch_add(1, std::memory_order_relaxed);
   ctx.register_hierarchy_tensor_solver_provider(std::make_shared<Provider>());
 }
 
 pops::SolveOutcome solve(
-    pops::runtime::program::AmrProgramContext& ctx, int block, int components,
+    Context& ctx, int block, int components,
     pops::Real relative_tolerance, pops::Real absolute_tolerance, int max_iterations) {
   return ctx.solve_hierarchy_tensor(
       block, components, relative_tolerance, absolute_tolerance, max_iterations);
@@ -1161,7 +1151,9 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     publish = amr.index(".publish(hierarchy_dt)", solve_once)
     assert gather < solve_once < publish
     solve = next(value for value in program._values if value.op == "solve_linear")
-    assert solve.attrs["hierarchy_solver_provider"]["provider_id"] == external.provider_id
+    assert (
+        solve.attrs["hierarchy_solver_provider"]["provider_id"] == external.provider_id
+    )
     staged = tmp_path / "staged"
     assert component.stage_verified(staged) == str(staged)
     assert (staged / header.name).read_text(encoding="utf-8") == header.read_text(
@@ -1226,9 +1218,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         simulation = pops.bind(
             compiled,
             initial_values=(
-                {plasma_state: _nonuniform_plasma_initial()}
-                if bound_plasma
-                else None
+                {plasma_state: _nonuniform_plasma_initial()} if bound_plasma else None
             ),
             resources={"execution_context": artifact_execution_context(compiled)},
         )
@@ -1245,9 +1235,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         if manufactured_plasma:
             finest_cells = base_cells * 2 ** (max_levels - 1)
             finest_initial = np.asarray(
-                simulation.block_level_state_global(
-                    "plasma", max_levels - 1
-                ),
+                simulation.block_level_state_global("plasma", max_levels - 1),
                 dtype=np.float64,
             ).reshape(3, finest_cells, finest_cells)
             active = finest_initial[0] > 0.0
@@ -1265,12 +1253,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 rotation_rate=_HIERARCHY_ROTATION_RATE,
             )
 
-        initial_marker_mass = simulation.integral(
-            "marker", component=0, levels=(0,)
-        )
-        report = pops.run(
-            simulation, t_end=_HIERARCHY_DT * steps, max_steps=steps
-        )
+        initial_marker_mass = simulation.integral("marker", component=0, levels=(0,))
+        report = pops.run(simulation, t_end=_HIERARCHY_DT * steps, max_steps=steps)
         run_register, run_prepare, run_execution, run_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
@@ -1283,12 +1267,12 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         # Each level owns a distinct qualified clock, while the authored temporal ratios remain
         # independent from the spatial ratio two (and from each other in the three-level tower).
         program_report = simulation.program_report()
-        level_clocks = [
-            row for row in program_report.clocks if row["kind"] == "level"
-        ]
+        level_clocks = [row for row in program_report.clocks if row["kind"] == "level"]
         assert {row["level"] for row in level_clocks} == set(range(max_levels))
         assert all(row["macro_step"] == steps for row in level_clocks)
-        assert all(row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks)
+        assert all(
+            row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks
+        )
         assert all(
             row["physical_time"] == pytest.approx(_HIERARCHY_DT * steps)
             for row in level_clocks
@@ -1319,9 +1303,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
             # sibling plasma block executes its hierarchy solve.  The accepted marker mass remains
             # conservative after both refluxed macro-steps.
-            final_marker_mass = simulation.integral(
-                "marker", component=0, levels=(0,)
-            )
+            final_marker_mass = simulation.integral("marker", component=0, levels=(0,))
             assert abs(final_marker_mass - initial_marker_mass) < 1.0e-8
 
             # ADC-427 composition: after solve 1 the nonzero hierarchy potential is stored in the
@@ -1336,9 +1318,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             assert second_guess_norm == pytest.approx(
                 first_solution_norm, rel=5.0e-15, abs=5.0e-15
             )
-            histories = {
-                row["name"]: row for row in program_report.histories
-            }
+            histories = {row["name"]: row for row in program_report.histories}
             assert histories["plasma.tensor-potential"] == {
                 "name": "plasma.tensor-potential",
                 "depth": 2,
@@ -1444,8 +1424,6 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     ) / np.log(2.0)
     assert observed_order >= 1.5, {
         "coarse_8_relative_l2": manufactured_errors[_HIERARCHY_BASE_CELLS],
-        "coarse_16_relative_l2": manufactured_errors[
-            2 * _HIERARCHY_BASE_CELLS
-        ],
+        "coarse_16_relative_l2": manufactured_errors[2 * _HIERARCHY_BASE_CELLS],
         "observed_order": observed_order,
     }

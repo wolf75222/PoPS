@@ -285,6 +285,26 @@ class AmrSystem:
     def __init__(self, config: AmrSystemConfig) -> None: ...
     def n_levels(self) -> int: ...
     def configured_n_levels(self) -> int: ...
+    def _set_analytic_level_set(
+        self,
+        opcodes: list[str],
+        literals: list[float],
+        mode: str = "none",
+        kappa_min: float = 0.0,
+        face_open_eps: float = 0.0,
+        cut_theta_min: float = 0.0,
+    ) -> None: ...
+    def set_disc_domain(
+        self,
+        cx: float,
+        cy: float,
+        R: float,
+        mode: str = "none",
+        kappa_min: float = 0.0,
+        face_open_eps: float = 0.0,
+        cut_theta_min: float = 0.0,
+    ) -> None: ...
+    def set_geometry_mode(self, mode: str) -> None: ...
     def _consume_step_projections(self) -> list[str]: ...
     def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
     def _selected_accepted_balance_terms(
@@ -310,6 +330,12 @@ class AmrSystem:
     ) -> tuple[dict[str, object], ...]: ...
     def output_state_root_pieces(
         self, lane: _NativeObserverMpiLane, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_embedded_boundary_local_pieces(
+        self, name: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_embedded_boundary_root_pieces(
+        self, lane: _NativeObserverMpiLane, name: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_field_root_pieces(
         self, lane: _NativeObserverMpiLane, provider_slot: str, level: int

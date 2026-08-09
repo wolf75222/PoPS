@@ -422,13 +422,12 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,
-             const std::string& bc, const std::string& wall,
-             double wall_radius) { system.set_poisson(rhs, solver, bc, wall, wall_radius); },
+             const std::string& bc) { system.set_poisson(rhs, solver, bc); },
           "Configures the default AMR field through the registered native provider. The Python "
           "shortcut selects provider defaults; resolved provider-specific options are installed by "
           "the compiled field-plan pipeline.",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
+          py::arg("bc") = "auto")
       .def(
           "set_field_solver_plan",
           [](AmrSystem& system, const std::string& provider_slot, const std::string& plan_identity,
@@ -542,6 +541,16 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
+      // Runtime-private lowering seam for the normalized analytic LevelSet.  The exact-ranked AMR
+      // hierarchy owns compilation, collective validation, and per-level rematerialization; no
+      // Python callback reaches a cell kernel.
+      .def("_set_analytic_level_set", &AmrSystem::set_analytic_level_set, py::arg("opcodes"),
+           py::arg("literals"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
+           py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
+      .def("set_disc_domain", &AmrSystem::set_disc_domain, py::arg("cx"), py::arg("cy"),
+           py::arg("R"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
+           py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
+      .def("set_geometry_mode", &AmrSystem::set_geometry_mode, py::arg("mode"))
       .def(
           "set_field_nullspace",
           [](AmrSystem& system, const std::string& provider_slot,
@@ -793,9 +802,7 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
 
 // Clock + compiled-Program install/introspection + runtime freeze lifecycle.
 void bind_amr_program(py::class_<AmrSystem>& cls) {
-  cls.def("nx", &AmrSystem::nx)
-      .def("ny", &AmrSystem::ny)
-      .def("time", &AmrSystem::time)
+  cls.def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->
       // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.
       .def("macro_step", &AmrSystem::macro_step)
@@ -925,8 +932,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           "Structured effective numerical/solver/physical options for this AmrSystem.")
       .def("n_patches", &AmrSystem::n_patches)
-      // Index-space footprints of the fine patches: list of tuples (level, ilo, jlo, ihi, jhi), INCLUSIVE
-      // corners, in the axis-resolved index space of the level (ratio 2). SAME
+      // Exact-ranked index-space footprints of the fine patches. Each item carries the level and
+      // inclusive lower/upper Index<Dim> corners in that level's native axis order. SAME
       // source as n_patches() (the GLOBAL fine BoxArray) -> rank-independent, MPI-safe. Query between
       // steps, zero cost on the hot path. The Python wrapper converts with the exact x/y bounds;
       // cf. AmrSystem.patch_rectangles() on the facade side.
@@ -954,13 +961,14 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             return to_ranked_field(s.density(name), s.spatial_shape());
           },
           py::arg("name"))
-      // phi of the coarse (base) level, (ny, nx). SAME observable as System.potential(): level 0
+      // phi of the coarse (base) level in its exact ranked shape. SAME observable as
+      // System.potential(): level 0
       // covers the whole domain -> enough to sample a median circle (azimuthal FFT). In
       // multi-block, phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located), shared by all.
       .def("potential",
            [](AmrSystem& s) { return to_ranked_field(s.potential(), s.spatial_shape()); })
       // ADC-428: solved potential of a NAMED elliptic field (m.elliptic_field) on the coarse level,
-      // (ny, nx). Read-back counterpart of potential() for a second elliptic field; the Python
+      // exact-ranked shape. Read-back counterpart of potential() for a second elliptic field; the Python
       // AmrSystem.field(name) resolves the field name to this. Solves the hierarchy if needed.
       .def(
           "named_field_values",
@@ -972,8 +980,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // (warm-start) + imposition of the saved fine hierarchy. SERIAL MONO-BLOCK (multi-block: C++
       // rejection; np>1: facade rejection -- per-level gather = future). level_state / level_potential return
       // FLAT fields (c*nf*nf + j*nf + i / nf*nf, nf = nx << k); the facade reshapes. set_*
-      // flatten any C-contiguous array (flat). set_hierarchy: list of tuples
-      // (level, ilo, jlo, ihi, jhi) like patch_boxes() (the coupler filters level 1).
+      // flatten any C-contiguous array (flat). set_hierarchy consumes the exact-ranked patch
+      // records returned by patch_boxes() (the coupler filters level 1).
       .def("n_levels", &AmrSystem::n_levels)
       .def("max_levels", &AmrSystem::max_levels)
       .def("configured_n_levels", &AmrSystem::configured_n_levels)
@@ -1094,6 +1102,26 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
+          "output_embedded_boundary_local_pieces",
+          [](AmrSystem& s, const std::string& name, int level) {
+            return output_pieces_to_python(s.output_embedded_boundary_local_pieces(name, level));
+          },
+          py::arg("name"), py::arg("level"),
+          "Exact-ranked prepared AMR embedded-boundary sidecar pieces owned by this rank.")
+      .def(
+          "output_embedded_boundary_root_pieces",
+          [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& name, int level) {
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_embedded_boundary_root_pieces(lane, name, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("lane"), py::arg("name"), py::arg("level"),
+          "Collectively gather exact-ranked AMR embedded-boundary sidecars; complete only on MPI "
+          "rank zero.")
+      .def(
           "set_block_level_state",
           [](AmrSystem& s, const std::string& name, int k,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -1121,7 +1149,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           },
           py::arg("k"), py::arg("aux"))
       // ADC-542: impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint. @p boxes are the
-      // level-tagged patch signatures (level, ilo, jlo, ihi, jhi); @p owner_ranks is the per-box owner
+      // level-tagged exact-ranked patch signatures; @p owner_ranks is the per-box owner
       // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).
       .def(
           "rebuild_hierarchy",

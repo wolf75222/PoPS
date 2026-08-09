@@ -5,7 +5,6 @@
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
 #include <pops/numerics/nonlinear/newton_options.hpp>
-#include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: exact package seams resolved by native loaders
 #include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
@@ -19,6 +18,7 @@
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
+#include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
@@ -73,8 +73,6 @@ class ObserverMpiLane;
 namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
-class HierarchyTensorSolverProvider;
-class HierarchyTensorSolverProviderRegistry;
 }  // namespace runtime::program
 
 namespace runtime::amr {
@@ -503,13 +501,11 @@ class AmrSystem {
   /// @param rhs    "charge_density" | "composite" (same composed right-hand side as System)
   /// @param solver exact registered provider identity
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
-  /// @param wall   "none" | "circle" (circular conductive wall, requires wall_radius > 0)
   /// @param solver_options provider-owned typed options. An empty carrier requests the provider's
   ///        exact defaults; the AMR facade never interprets option keys.
-  /// @throws std::runtime_error if rhs, provider, options, bc or wall violates the provider contract.
+  /// @throws std::runtime_error if rhs, provider, options, or bc violates the provider contract.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
-                   const std::string& wall = "none", double wall_radius = 0.0,
                    const AmrFieldSolverOptions& solver_options = {});
 
   /// Install one fully resolved AMR field route. The registry key is the digest of its
@@ -551,15 +547,15 @@ class AmrSystem {
   /// opaque provider identity through this per-system registry; builtins and extensions use the
   /// same preparation protocol.
   void register_hierarchy_tensor_solver_provider(
-      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider> provider);
+      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<Dim>> provider);
   /// Collective generated-Program extension seam. Unlike the pre-build authoring registration
   /// above, this may run after materialization: it mutates only the provider registry, authenticates
   /// the exact declaration on every rank, and is idempotent for the same component declaration.
   POPS_EXPORT void register_program_hierarchy_tensor_solver_provider(
-      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider> provider);
+      std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<Dim>> provider);
   /// Internal generated-Program seam. The returned immutable registry outlives every installed
   /// Program context because it is owned by this facade.
-  POPS_EXPORT std::shared_ptr<const runtime::program::HierarchyTensorSolverProviderRegistry>
+  POPS_EXPORT std::shared_ptr<const runtime::program::HierarchyTensorSolverProviderRegistry<Dim>>
   hierarchy_tensor_solver_provider_registry() const;
   /// Exact read-only backend configuration retained by one resolved field plan.
   AmrFieldSolverConfiguration field_solver_configuration(const std::string& provider_slot) const;
@@ -589,6 +585,21 @@ class AmrSystem {
   void set_field_newton_plan(const std::string& provider_slot, double tolerance, int max_iterations,
                              double linear_tolerance, int linear_max_iterations, int restart,
                              double armijo, double minimum_step);
+
+  /// Install one immutable analytic embedded-boundary definition.  The expression is sampled
+  /// independently on every live AMR level whenever the hierarchy is materialized or regridded.
+  /// Staircase transport is exact-ranked in dimensions 1, 2, and 3.  Cut-cell transport is an
+  /// explicit rank-two capability and dimensions 1/3 reject it before facade mutation.
+  void set_analytic_level_set(const std::vector<std::string>& opcodes,
+                              const std::vector<double>& literals, const std::string& mode = "none",
+                              double kappa_min = 0.0, double face_open_eps = 0.0,
+                              double cut_theta_min = 0.0);
+  /// Rank-two convenience authoring for hypot(x-cx,y-cy)-R.  Other ranks reject before mutation.
+  void set_disc_domain(double cx, double cy, double radius, const std::string& mode = "none",
+                       double kappa_min = 0.0, double face_open_eps = 0.0,
+                       double cut_theta_min = 0.0);
+  /// Change only the numerical EB mode while retaining the accepted analytic definition.
+  void set_geometry_mode(const std::string& mode);
   void set_field_nullspace(const std::string& provider_slot,
                            const std::string& nullspace_provider_identity,
                            const PreparedProviderOptions& options);
@@ -1089,9 +1100,15 @@ class AmrSystem {
   /// exactly named block through the shared runtime and returns compact native valid-cell pieces
   /// without allocating a global level buffer.
   std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int k);
+  /// Exact per-level EB sidecars: pops_active, pops_phi, or pops_kappa.
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(const std::string& name,
+                                                                      int k);
   std::vector<AmrPatch<Dim>> output_geometry_boxes();
   std::vector<OutputPiece<Dim>> output_state_root_pieces(const ObserverMpiLane& lane,
                                                          const std::string& name, int k);
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_root_pieces(const ObserverMpiLane& lane,
+                                                                     const std::string& name,
+                                                                     int k);
   /// Owner rank per box of level @p k (the shared ranked ownership plan), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order.
