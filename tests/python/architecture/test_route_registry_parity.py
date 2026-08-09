@@ -104,7 +104,7 @@ def test_one_catalog_row_generates_both_language_surfaces():
     generator = _load(GENERATOR, "_component_catalog_generator_contract")
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     modified = copy.deepcopy(catalog)
-    family = next(item for item in modified["route_families"] if item["name"] == "wall")
+    family = next(item for item in modified["route_families"] if item["name"] == "poisson_rhs")
     family["routes"].append({
         "token": "contract_probe",
         "wire_id": len(family["routes"]),

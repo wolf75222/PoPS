@@ -34,7 +34,7 @@ from pops.runtime.routes import (
     resolve as _resolve_route,
 )
 
-# Typed Poisson wall / bc lowerers are split out for the 500-line cap (ADC-550).
+# Typed Poisson boundary and numerical lowerers are split out for the 500-line cap (ADC-550).
 from pops.runtime._system_install_lowering import (  # noqa: F401
     _cartesian_cg_kwargs,
     _lower_bc,

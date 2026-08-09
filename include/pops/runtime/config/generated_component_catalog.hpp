@@ -62,7 +62,6 @@ enum class RouteFamily : std::uint8_t {
   kSource = 8,
   kElliptic = 9,
   kPoissonRhs = 10,
-  kWall = 11,
 };
 
 constexpr const char* route_family_name(RouteFamily family) {
@@ -78,7 +77,6 @@ constexpr const char* route_family_name(RouteFamily family) {
     case RouteFamily::kSource: return "source";
     case RouteFamily::kElliptic: return "elliptic";
     case RouteFamily::kPoissonRhs: return "poisson_rhs";
-    case RouteFamily::kWall: return "wall";
   }
   return "unknown";
 }
@@ -231,16 +229,6 @@ inline constexpr RouteInfo kPoissonRhsRoutes[] = {
 };
 inline constexpr const char* kPoissonRhsRouteTokensCsv = "charge_density|composite";
 
-enum class WallRouteId : int {
-  kNone = 0,
-  kCircle = 1,
-};
-inline constexpr RouteInfo kWallRoutes[] = {
-  {0, "none", "no wall (fully periodic/physical domain)", "", ""},
-  {1, "circle", "pops::make_wall_predicate(circle)", "wall_radius > 0", ""},
-};
-inline constexpr const char* kWallRouteTokensCsv = "none|circle";
-
 struct LimiterTag { const char* name; int n_ghost; };
 inline constexpr LimiterTag kLimiters[] = {
   {"none", 1},
@@ -310,9 +298,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "21d3882acc689c62b3b9f438d9483d0de0e184e9dcad473fa64966d82247a854";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df";
-inline constexpr const char* kRouteRegistrySignature = "v4:067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df";
+inline constexpr const char* kComponentCatalogSha256 = "ea2944d16d8d8c95404d6183911da8bf4f4a43f147e5dc8ba7dd02f4a8fcffeb";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "4a3e39059618297ccda7e789edcc6a8afede5a99d580b6e90bc5f6f19638f590";
+inline constexpr const char* kRouteRegistrySignature = "v4:4a3e39059618297ccda7e789edcc6a8afede5a99d580b6e90bc5f6f19638f590";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 4
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '21d3882acc689c62b3b9f438d9483d0de0e184e9dcad473fa64966d82247a854'
+COMPONENT_CATALOG_SHA256 = 'ea2944d16d8d8c95404d6183911da8bf4f4a43f147e5dc8ba7dd02f4a8fcffeb'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '4a3e39059618297ccda7e789edcc6a8afede5a99d580b6e90bc5f6f19638f590'
 
-ROUTE_REGISTRY_SIGNATURE = 'v4:067c924b0baf2adc0631c6a0956bbc5a6beb235c7f0f36c70f039e0bc6dd48df'
+ROUTE_REGISTRY_SIGNATURE = 'v4:4a3e39059618297ccda7e789edcc6a8afede5a99d580b6e90bc5f6f19638f590'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -123,9 +123,7 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                   (),
                   ('alias of composite when every block carries a charge density '
                    '(bit-identical)',)),
-                 ('composite', 'per-block elliptic bricks summed', (), ())),
- 'wall': (('none', 'no wall (fully periodic/physical domain)', (), ()),
-          ('circle', 'pops::make_wall_predicate(circle)', ('wall_radius > 0',), ()))}
+                 ('composite', 'per-block elliptic bricks summed', (), ()))}
 
 ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
                          'needs_hllc_struct': False,
@@ -187,8 +185,7 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
                              'summary': 'alpha (rho - n0) : neutralizing background'},
               'gravity': {'parameters': ['sign', 'four_pi_G', 'rho0'],
                           'summary': 'sign * 4 pi G (rho - rho0) : gravitational coupling'}},
- 'poisson_rhs': {'charge_density': {}, 'composite': {}},
- 'wall': {'none': {}, 'circle': {}}}
+ 'poisson_rhs': {'charge_density': {}, 'composite': {}}}
 
 ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
              'table': 'kRiemannRoutes',
@@ -222,8 +219,7 @@ ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
               'ids': ('kCharge', 'kBackground', 'kGravity')},
  'poisson_rhs': {'enum': 'PoissonRhsRouteId',
                  'table': 'kPoissonRhsRoutes',
-                 'ids': ('kChargeDensity', 'kComposite')},
- 'wall': {'enum': 'WallRouteId', 'table': 'kWallRoutes', 'ids': ('kNone', 'kCircle')}}
+                 'ids': ('kChargeDensity', 'kComposite')}}
 
 ROUTE_COMPONENT_DEFAULTS = {'version': {'major': 1, 'minor': 0, 'patch': 0},
  'facets': [],
@@ -294,11 +290,7 @@ ROUTE_FAMILY_INTERFACES = {'riemann': [{'name': 'requirement', 'mode': 'value', 
  'poisson_rhs': [{'name': 'requirement', 'mode': 'value', 'binding': 'requirements'},
                  {'name': 'provider', 'mode': 'entry_point', 'binding': 'native'},
                  {'name': 'lowering', 'mode': 'entry_point', 'binding': 'native'},
-                 {'name': 'report', 'mode': 'method', 'binding': 'manifest'}],
- 'wall': [{'name': 'requirement', 'mode': 'value', 'binding': 'requirements'},
-          {'name': 'stencil', 'mode': 'entry_point', 'binding': 'native'},
-          {'name': 'lowering', 'mode': 'entry_point', 'binding': 'native'},
-          {'name': 'report', 'mode': 'method', 'binding': 'manifest'}]}
+                 {'name': 'report', 'mode': 'method', 'binding': 'manifest'}]}
 
 COMPONENT_INTERFACE_SPECS = ({'name': 'requirement', 'method': 'requirements', 'required_args': 0},
  {'name': 'lowering', 'method': 'lower', 'required_args': 1},
@@ -321,8 +313,7 @@ ROUTE_FAMILY_NATIVE_INTERFACES = {'riemann': 'numerical_flux',
  'transport': None,
  'source': None,
  'elliptic': 'field_solver',
- 'poisson_rhs': None,
- 'wall': 'ghost_boundary'}
+ 'poisson_rhs': None}
 
 BRICK_CATALOG_ROWS = ({'category': 'transport',
   'id': 'exb',

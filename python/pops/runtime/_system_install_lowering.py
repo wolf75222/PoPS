@@ -1,9 +1,8 @@
-"""Typed Poisson wall and boundary-condition lowerers.
+"""Typed boundary-condition and numerical-option lowerers.
 
 Split out of :mod:`pops.runtime._system_install` for the 500-line cap (ADC-550): the two
-module-level lowerers ``_lower_wall`` / ``_lower_bc`` that turn a typed
-:mod:`pops.mesh.geometry` wall or a native boundary brick into the native ``(token, radius)`` /
-``bc`` pair ``set_poisson`` passes to the private native seam.
+The boundary lowerer turns a typed native boundary brick into the ``bc`` token passed to the
+private native seam. Embedded geometry follows the separate exact level-set authority.
 
 Pure lowering: no ``_pops`` import, no numeric work.
 """
@@ -13,32 +12,6 @@ from __future__ import annotations
 from typing import Any
 
 from pops.runtime._numeric import native_real
-
-
-def _lower_wall(wall: Any) -> Any:
-    """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
-
-    A typed :mod:`pops.mesh.geometry` wall lowers to its native pair. Strings are always rejected:
-    native tokens belong exclusively to :meth:`_SystemInstall._set_poisson_native`.
-    """
-    if isinstance(wall, str):
-        raise TypeError(
-            "set_poisson: wall must be a typed pops.mesh.geometry.NoWall or Disc descriptor; "
-            "string selectors are not accepted"
-        )
-    lower_wall = getattr(wall, "lower_wall", None)
-    if lower_wall is None:
-        raise TypeError(
-            "set_poisson: wall must be a typed pops.mesh.geometry wall (NoWall / Disc), got %s"
-            % type(wall).__name__
-        )
-    lowered = lower_wall()
-    if not isinstance(lowered, tuple) or len(lowered) != 2 or not isinstance(lowered[0], str):
-        raise TypeError(
-            "%s.lower_wall() must return the private native (token, radius) pair"
-            % type(wall).__name__
-        )
-    return lowered
 
 
 def _lower_bc(bc: Any) -> Any:
@@ -61,7 +34,7 @@ def _lower_bc(bc: Any) -> Any:
     )
 
 
-__all__ = ["_cartesian_cg_kwargs", "_lower_wall", "_lower_bc", "_weno_kwargs"]
+__all__ = ["_cartesian_cg_kwargs", "_lower_bc", "_weno_kwargs"]
 
 
 def _weno_kwargs(spatial):

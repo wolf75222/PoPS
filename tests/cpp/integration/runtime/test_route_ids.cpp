@@ -101,9 +101,6 @@ TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
   EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(kPoissonRhsRoutes, [](const std::string& t) {
     return parse_poisson_rhs_route(t);
   })) << "poisson_rhs round-trip";
-  EXPECT_TRUE(table_round_trip<WallRouteId>(kWallRoutes, [](const std::string& t) {
-    return parse_wall_route(t);
-  })) << "wall round-trip";
 }
 
 TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {

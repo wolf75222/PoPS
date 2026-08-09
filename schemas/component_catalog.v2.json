@@ -250,8 +250,7 @@
     "transport": null,
     "source": null,
     "elliptic": "field_solver",
-    "poisson_rhs": null,
-    "wall": "ghost_boundary"
+    "poisson_rhs": null
   },
   "route_family_interfaces": {
     "riemann": [
@@ -326,12 +325,6 @@
     "poisson_rhs": [
       {"name": "requirement", "mode": "value", "binding": "requirements"},
       {"name": "provider", "mode": "entry_point", "binding": "native"},
-      {"name": "lowering", "mode": "entry_point", "binding": "native"},
-      {"name": "report", "mode": "method", "binding": "manifest"}
-    ],
-    "wall": [
-      {"name": "requirement", "mode": "value", "binding": "requirements"},
-      {"name": "stencil", "mode": "entry_point", "binding": "native"},
       {"name": "lowering", "mode": "entry_point", "binding": "native"},
       {"name": "report", "mode": "method", "binding": "manifest"}
     ]
@@ -1127,35 +1120,6 @@
           "cpp_id": "kComposite",
           "native_entry": "per-block elliptic bricks summed",
           "requirements": [],
-          "limitations": [],
-          "aliases": [],
-          "metadata": {}
-        }
-      ]
-    },
-    {
-      "name": "wall",
-      "cpp_enum": "WallRouteId",
-      "cpp_table": "kWallRoutes",
-      "routes": [
-        {
-          "token": "none",
-          "wire_id": 0,
-          "cpp_id": "kNone",
-          "native_entry": "no wall (fully periodic/physical domain)",
-          "requirements": [],
-          "limitations": [],
-          "aliases": [],
-          "metadata": {}
-        },
-        {
-          "token": "circle",
-          "wire_id": 1,
-          "cpp_id": "kCircle",
-          "native_entry": "pops::make_wall_predicate(circle)",
-          "requirements": [
-            "wall_radius > 0"
-          ],
           "limitations": [],
           "aliases": [],
           "metadata": {}

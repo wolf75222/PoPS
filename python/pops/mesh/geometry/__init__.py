@@ -1,9 +1,8 @@
-"""Typed embedded-geometry and wall descriptors.
+"""Typed embedded-geometry descriptors.
 
 Every embedded transport boundary lowers through the same :class:`LevelSet` contract and a typed
-:class:`~pops.mesh.masks.TransportMask`. :class:`Disc` and :class:`NoWall` also remain the typed
-selectors consumed by the current elliptic wall seam. Native tokens are lowering details and are
-never accepted as public authoring input.
+:class:`~pops.mesh.masks.TransportMask`. Field and transport geometry share that one implicit-surface
+authority; no separate wall-token route exists.
 """
 from __future__ import annotations
 
@@ -173,42 +172,22 @@ class Geometry(_GeometryPreviewSurface, MeshDescriptor):
             "pops.mesh.geometry.LevelSet" % self.name
         )
 
-    def lower_wall(self) -> Any:
-        """Lower this geometry to the native Poisson wall tokens ``(wall, wall_radius)``.
-
-        Only a disc and a no-wall are wired to the native conducting-wall predicate; the base
-        geometry is NOT a Poisson wall. Raising keeps a clear message rather than silently
-        emitting an inert wall; subclasses that ARE a wall override this.
-        """
-        raise TypeError(
-            "%s cannot be used as a Poisson wall; wall= requires "
-            "pops.mesh.geometry.Disc or NoWall"
-            % self.name)
-
-
 class NoWall(Geometry):
     """No conducting wall: the elliptic solve sees the full Cartesian domain."""
 
     def capabilities(self) -> Any:
-        return CapabilitySet({"provides": "level_set", "wall": False})
+        return CapabilitySet({"provides": "level_set"})
 
     def level_set(self, frame: Any) -> LevelSet:
         """Return the all-active level set after authenticating the Cartesian frame."""
         _cartesian_coordinates(frame)
         return LevelSet(constant(-1.0))
 
-    def lower_wall(self) -> Any:
-        """Lower to the private native no-wall representation."""
-        return ("none", 0.0)
-
-
 class Disc(Geometry):
-    """A disc geometry and the centered circular-wall selector.
+    """A disc embedded geometry.
 
-    ``center=None`` means the center of the owning domain and is the only form supported by the
-    current elliptic wall provider. An explicit center remains valid embedded-geometry metadata but
-    :meth:`lower_wall` rejects it instead of silently discarding it. Transport uses this same
-    geometry through ``EmbeddedBoundary(Disc(...), transport, boundary_flux)``.
+    ``center=None`` means the center of the owning Cartesian domain. The same level-set authority
+    drives transport masks and field geometry; there is no separate Poisson-wall token route.
     """
 
     def __init__(self, center: Any = None, radius: Any = 0.5) -> None:
@@ -228,14 +207,6 @@ class Disc(Geometry):
         margin = 1.25 * self.radius
         return ((center[0] - margin, center[1] - margin),
                 (center[0] + margin, center[1] + margin))
-
-    def lower_wall(self) -> Any:
-        """Lower to the native conducting-wall tokens ``("circle", radius)``."""
-        if self.center is not None:
-            raise ValueError(
-                "Disc used as a Poisson wall must use center=None (the owning domain center); "
-                "an explicit center is not supported by the native wall provider")
-        return ("circle", self.radius)
 
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this disc to ``frame`` with the convention ``phi < 0`` inside."""

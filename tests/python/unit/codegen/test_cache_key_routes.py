@@ -36,14 +36,14 @@ from pops.codegen._inspect_compiled_report import _route_registry_components  # 
 from pops.physics._facade import Model  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 
-# The 12 route families in registry order with their acceptance-locked cardinalities (mirror of
+# The 11 route families in registry order with their acceptance-locked cardinalities (mirror of
 # route_ids.hpp; the sibling C++ test locks the two). A new route is an additive change, but the
 # per-family COUNT is the shape the compact signature advertises to a stale artifact.
 _FAMILY_COUNTS = (
     # ADC-752 keeps one route per public Riemann provider.
-    ("riemann", 4), ("limiter", 4), ("recon", 2), ("time", 5),
+    ("riemann", 5), ("limiter", 6), ("recon", 2), ("time", 5),
     ("field_solver", 4), ("poisson_bc", 4), ("layout", 2), ("transport", 3), ("source", 5),
-    ("elliptic", 3), ("poisson_rhs", 2), ("wall", 2),
+    ("elliptic", 3), ("poisson_rhs", 2),
 )
 
 
