@@ -24,6 +24,54 @@ from ._identity import strict_field_data
 from ._references import reference_label, resolve_handle
 
 
+class AuxiliaryBoundary:
+    """Owner-qualified ghost/boundary policy for one auxiliary component.
+
+    ``inherit`` delegates periodic faces to the mesh topology and non-periodic
+    faces to the owning physical boundary provider.  ``foextrap`` and
+    ``dirichlet`` are explicit component-local physical policies.  The width
+    is a scalar radius applied on every native axis, so the declaration stays
+    rank-generic; the native route expands it after the selected dimension is
+    known.
+    """
+
+    __slots__ = ("width", "kind", "value")
+    __pops_ir_immutable__ = True
+
+    def __init__(self, *, width: Any = 0, kind: Any = "inherit", value: Any = None) -> None:
+        if isinstance(width, bool) or not isinstance(width, int) or width < 0:
+            raise ValueError("AuxiliaryBoundary width must be a non-negative int")
+        if kind not in {"inherit", "foextrap", "dirichlet"}:
+            raise ValueError("AuxiliaryBoundary kind must be inherit, foextrap, or dirichlet")
+        if kind == "dirichlet" and value is None:
+            raise ValueError("AuxiliaryBoundary dirichlet policy requires a value")
+        if kind != "dirichlet" and value is not None:
+            raise ValueError("AuxiliaryBoundary value is valid only for dirichlet")
+        if kind == "dirichlet":
+            from pops.identity.scalar import scalar_cpp
+            try:
+                scalar_cpp(value)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("AuxiliaryBoundary dirichlet value must be a finite scalar") from exc
+        object.__setattr__(self, "width", width)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "value", value)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("AuxiliaryBoundary is immutable")
+
+    def to_data(self) -> dict[str, Any]:
+        return {"width": self.width, "kind": self.kind, "value": self.value}
+
+
+def _aux_boundary(value: Any) -> AuxiliaryBoundary:
+    if value is None:
+        return AuxiliaryBoundary()
+    if type(value) is not AuxiliaryBoundary:
+        raise TypeError("auxiliary boundary must be an AuxiliaryBoundary")
+    return value
+
+
 def _aux_target(value: Any) -> Handle:
     if not isinstance(value, Handle) or value.kind != "aux":
         raise TypeError(
@@ -42,8 +90,9 @@ class _AuxProducer(Descriptor):
     restart_policy = ""
     regrid_policy = ""
 
-    def __init__(self, target: Any) -> None:
+    def __init__(self, target: Any, *, boundary: Any = None) -> None:
         object.__setattr__(self, "_target", _aux_target(target))
+        object.__setattr__(self, "boundary", _aux_boundary(boundary))
 
     @property
     def name(self) -> str:
@@ -60,6 +109,7 @@ class _AuxProducer(Descriptor):
             "freshness": "dependency_generation",
             "restart": self.restart_policy,
             "regrid": self.regrid_policy,
+            "boundary": self.boundary.to_data(),
         }
 
     def capabilities(self) -> CapabilitySet:
@@ -93,6 +143,9 @@ class InputAux(_AuxProducer):
     restart_policy = "persist"
     regrid_policy = "transfer"
 
+    def __init__(self, target: Any, *, boundary: Any = None) -> None:
+        super().__init__(target, boundary=boundary)
+
     def options(self) -> dict[str, Any]:
         return self._base_options()
 
@@ -105,7 +158,10 @@ class InputAux(_AuxProducer):
         return (self._target,)
 
     def resolve_references(self, resolver: Any) -> InputAux:
-        return InputAux(resolve_handle(self._target, resolver, where="auxiliary input target"))
+        return InputAux(
+            resolve_handle(self._target, resolver, where="auxiliary input target"),
+            boundary=self.boundary,
+        )
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -122,10 +178,10 @@ class DerivedAux(_AuxProducer):
     restart_policy = "recompute"
     regrid_policy = "recompute"
 
-    def __init__(self, target: Any, expression: Any) -> None:
+    def __init__(self, target: Any, expression: Any, *, boundary: Any = None) -> None:
         if not isinstance(expression, Expr):
             raise TypeError("DerivedAux expression must be a pops Expr")
-        super().__init__(target)
+        super().__init__(target, boundary=boundary)
         object.__setattr__(self, "expression", expression)
 
     def options(self) -> dict[str, Any]:
@@ -157,6 +213,7 @@ class DerivedAux(_AuxProducer):
         return DerivedAux(
             resolve_handle(self._target, resolver, where="derived auxiliary target"),
             self.expression.resolve_references(resolver),
+            boundary=self.boundary,
         )
 
     def to_data(self) -> dict[str, Any]:
@@ -168,4 +225,4 @@ class DerivedAux(_AuxProducer):
         }
 
 
-__all__ = ["DerivedAux", "InputAux"]
+__all__ = ["AuxiliaryBoundary", "DerivedAux", "InputAux"]

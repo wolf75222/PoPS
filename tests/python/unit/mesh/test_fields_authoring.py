@@ -123,6 +123,7 @@ def test_aux_inputs_and_derived_values_are_owner_qualified():
         "freshness": "dependency_generation",
         "restart": "persist",
         "regrid": "transfer",
+        "boundary": {"width": 0, "kind": "inherit", "value": None},
     }
     assert derived.options()["producer"] == "derived"
     assert derived.options()["freshness"] == "dependency_generation"

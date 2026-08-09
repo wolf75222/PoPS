@@ -387,12 +387,25 @@ def build_provider_pack(module: Any) -> ProviderPack:
                     ProviderEntry(producer, producer is not None,
                                   slot if producer is not None else None),
                 ))
+    aux_producers = module.aux_providers()
     for slot, aux in enumerate(module.aux().values()):
+        declared = aux_producers.get(aux.name)
+        if declared is None:
+            producer = "runtime_input"
+        elif declared.producer_kind == "input":
+            producer = "runtime_input"
+        elif declared.producer_kind == "derived":
+            producer = "derived:%s" % aux.name
+        else:
+            raise TypeError(
+                "auxiliary component %r has unsupported producer descriptor %s"
+                % (aux.name, type(declared).__name__)
+            )
         rows.append((
             ComponentKey(owner_qid, "aux", aux.name, aux.name),
             ComponentContract(
                 aux.representation, aux.centering, aux.unit, aux.centering, aux.kind),
-            ProviderEntry("runtime_input", True, slot),
+            ProviderEntry(producer, True, slot),
         ))
     return ProviderPack(rows)
 

@@ -38,6 +38,11 @@ class Module(ModuleFreezable):
         self._state_spaces = {}
         self._field_spaces = {}
         self._aux = {}
+        # Exact producer descriptors keyed by their registry-issued AuxSpace
+        # handle.  Declaration and production are deliberately separate: a
+        # bare aux declaration is an external input, while a derived route is
+        # explicit and can be validated as a dependency graph before codegen.
+        self._aux_producers = {}
         self._state_handles = {}
         self._field_handles = {}
         self._aux_handles = {}
@@ -146,6 +151,34 @@ class Module(ModuleFreezable):
     def aux_fields(self, **kinds: Any) -> Any:
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
         return {k: self.aux_field(k, v) for k, v in kinds.items()}
+
+    def aux_provider(self, producer: Any) -> Handle:
+        """Register the one typed producer of one declared auxiliary component.
+
+        ``producer`` is :class:`pops.fields.InputAux` or
+        :class:`pops.fields.DerivedAux`.  It carries a registry-issued target
+        handle, never a name or a slot; ProviderPack later resolves the exact
+        owner-qualified component and native storage address.
+        """
+        from pops.fields.aux import DerivedAux, InputAux
+
+        if not isinstance(producer, (InputAux, DerivedAux)):
+            raise TypeError("Module.aux_provider requires InputAux or DerivedAux")
+        self._guard_mutable("register an auxiliary provider")
+        target = self.aux_handle(producer.target)
+        if target != producer.target:
+            raise ValueError(
+                "auxiliary producer target %s is not the registry-issued Module handle"
+                % producer.target.qualified_id
+            )
+        previous = self._aux_producers.get(target.local_id)
+        if previous is not None:
+            raise ValueError(
+                "auxiliary component %r already has producer %s; a component has one producer"
+                % (target.local_id, type(previous).__name__)
+            )
+        self._aux_producers[target.local_id] = producer
+        return target
 
     # --- operators ---
     def operator(self, name: Any = None, signature: Any = None, kind: Any = None,
@@ -591,6 +624,15 @@ class Module(ModuleFreezable):
 
     def aux(self) -> Any:
         return dict(self._aux)
+
+    def aux_providers(self) -> Any:
+        """Return the explicitly registered typed auxiliary producers by local target.
+
+        The returned mapping is detached; it does not expose the Module's
+        mutable registry.  Omitted components mean the standard explicit
+        external-input route at ProviderPack resolution.
+        """
+        return dict(self._aux_producers)
 
     def list_state_spaces(self) -> Any:
         """Names of the declared state spaces."""

@@ -56,14 +56,33 @@ def test_provider_pack_is_the_only_auxiliary_slot_authority() -> None:
     assert [row["key"]["component"] for row in plan] == ["potential", "temperature"]
 
 
-def test_provider_pack_refuses_duplicate_unqualified_auxiliary_component_routes() -> None:
+def test_consumer_plan_excludes_state_and_parameter_carriers() -> None:
     owner = "model/demo"
-    duplicate = ProviderPack((
-        (ComponentKey(owner, "field", "a", "temperature"), _contract(),
-         ProviderEntry("runtime_input", True, 0)),
-        (ComponentKey(owner, "aux", "b", "temperature"), _contract(),
-         ProviderEntry("runtime_input", True, 1)),
+    state = ComponentKey(owner, "state", "U", "density")
+    parameter = ComponentKey(owner, "param", "material", "gamma")
+    auxiliary = ComponentKey(owner, "aux", "material", "collision_rate")
+    complete = ProviderPack((
+        (state, _contract(), ProviderEntry("initial_state", True, 0)),
+        (parameter, _contract(), ProviderEntry("runtime_parameter", True, 0)),
+        (auxiliary, _contract(), ProviderEntry("runtime_input", True, 0)),
     ))
 
-    with pytest.raises(ValueError, match="one owner-qualified storage route"):
-        compact_auxiliary_provider_pack(duplicate)
+    plan = consumer_provider_plan(complete)
+    assert [row["key"]["space_kind"] for row in plan] == ["aux"]
+    assert [row["consumer_slot"] for row in plan] == [0]
+
+
+def test_provider_pack_keeps_homonymous_owner_qualified_components_distinct() -> None:
+    electron = "model/electron"
+    ion = "model/ion"
+    homonymous = ProviderPack((
+        (ComponentKey(electron, "aux", "material", "temperature"), _contract(),
+         ProviderEntry("runtime_input", True, 0)),
+        (ComponentKey(ion, "field", "thermodynamic", "temperature"), _contract(),
+         ProviderEntry("field_solver", True, 0)),
+    ))
+
+    compact = compact_auxiliary_provider_pack(homonymous)
+    assert len(compact) == 2
+    assert auxiliary_component_slot(compact, owner_qid=electron, name="temperature") == 0
+    assert auxiliary_component_slot(compact, owner_qid=ion, name="temperature") == 1

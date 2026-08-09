@@ -8,6 +8,54 @@ from typing import Any
 from .hash_data import body_identity, canonical_hash_data
 
 
+def _aux_expr_hash_data(expression: Any) -> Any:
+    """Project a derived-aux expression without recursing through Module ownership.
+
+    Module hashing establishes that ownership fingerprint, so the normal
+    ``qualified_id`` route of ``ValueExpr`` would be circular here.  Aux
+    producers are module-local declarations; their typed ``kind/local_id`` is
+    the correct pre-fingerprint identity and is re-qualified at ProviderPack
+    resolution.
+    """
+    from pops._ir.expr import Const, Expr, _Bin
+    from pops._ir.handle_expr import ValueExpr
+
+    if isinstance(expression, Const):
+        return {"const": expression.literal.to_data()}
+    if isinstance(expression, ValueExpr):
+        handle = expression.handle
+        return {"value": {"kind": handle.kind, "local_id": handle.local_id}}
+    if isinstance(expression, _Bin):
+        result = {
+            "node": type(expression).__name__,
+            "a": _aux_expr_hash_data(expression.a),
+            "b": _aux_expr_hash_data(expression.b),
+        }
+        comparison = getattr(expression, "comparison", None)
+        if comparison is not None:
+            result["comparison"] = comparison
+        return result
+    if isinstance(expression, Expr) and hasattr(expression, "a"):
+        return {"node": type(expression).__name__, "a": _aux_expr_hash_data(expression.a)}
+    raise TypeError(
+        "Module auxiliary producer expression %s has no deterministic native hash projection"
+        % type(expression).__name__
+    )
+
+
+def _aux_producer_hash_data(producer: Any) -> Any:
+    result = {
+        "type": type(producer).__name__,
+        "target": {"kind": producer.target.kind, "local_id": producer.target.local_id},
+        "producer": producer.producer_kind,
+        "boundary": producer.boundary.to_data(),
+    }
+    expression = getattr(producer, "expression", None)
+    if expression is not None:
+        result["expression"] = _aux_expr_hash_data(expression)
+    return result
+
+
 def module_content_hash(module: Any) -> str:
     """Hash declarations, aliases and typed operator bindings in canonical order."""
     payload = {
@@ -24,6 +72,10 @@ def module_content_hash(module: Any) -> str:
             for _, declaration in sorted(module._param_registry.items())
         ],
         "aux": [module._aux[name].to_data() for name in sorted(module._aux)],
+        "aux_producers": [
+            _aux_producer_hash_data(module._aux_producers[name])
+            for name in sorted(module._aux_producers)
+        ],
         "eigenvalues": None if module._eigenvalues is None else {
             direction: [canonical_hash_data(value)
                         for value in module._eigenvalues[direction]]

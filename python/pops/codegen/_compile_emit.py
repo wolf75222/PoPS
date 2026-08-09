@@ -281,6 +281,20 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
         raise ValueError("native auxiliary route emission requires resolved ProviderPack metadata")
     if not isinstance(pack, Mapping) or not isinstance(pack.get("entries"), list):
         raise TypeError("auxiliary ProviderPack metadata has an invalid schema")
+    routes = getattr(model, "_auxiliary_provider_routes", None)
+    if routes is None:
+        raise ValueError("native auxiliary route emission requires resolved typed producer routes")
+
+    def route_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
+        value = row["key"]
+        return tuple(value[name] for name in (
+            "owner_qid", "space_kind", "space_name", "component",
+        ))
+
+    typed_routes = {
+        (key.owner_qid, key.space_kind, key.space_name, key.component): value
+        for key, value in routes.items()
+    }
 
     def literal(value: Any) -> str:
         return json.dumps(value)
@@ -304,7 +318,154 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
             optional(value["unit"]), literal(value["layout"]), optional(value["value_kind"]),
         )
 
-    shape = "Shape{pops::kNativeDimension, 1, {}}"
+    def shape_for(route: Mapping[str, Any] | None) -> str:
+        boundary = None if route is None else route.get("boundary")
+        width = 0 if boundary is None else boundary.width
+        return (
+            "Shape{pops::kNativeDimension, 1, [] { pops::Index<pops::kNativeDimension> halo{}; "
+            "for (int axis = 0; axis < pops::kNativeDimension; ++axis) halo[axis] = %d; return halo; }()}"
+            % width
+        )
+
+    def boundary_for(route: Mapping[str, Any] | None) -> str:
+        from pops.identity.scalar import scalar_cpp
+
+        boundary = None if route is None else route.get("boundary")
+        if boundary is None:
+            return "Boundary{BoundaryKind::inherit_topology, std::nullopt}"
+        kinds = {
+            "inherit": "BoundaryKind::inherit_topology",
+            "foextrap": "BoundaryKind::first_order_extrapolation",
+            "dirichlet": "BoundaryKind::dirichlet",
+        }
+        try:
+            kind = kinds[boundary.kind]
+        except KeyError:
+            raise ValueError("unsupported AuxiliaryBoundary kind %r" % boundary.kind) from None
+        value = (
+            "std::optional<pops::Real>{%s}" % scalar_cpp(boundary.value)
+            if boundary.kind == "dirichlet" else "std::nullopt"
+        )
+        return "Boundary{%s, %s}" % (kind, value)
+
+    def derived_expression_cpp(expression: Any, bindings: Mapping[str, str]) -> str:
+        """Lower the compact scalar Expr subset accepted by native aux kernels.
+
+        ``ValueExpr`` has intentionally no context-free C++ spelling.  Here it
+        is bound only through the exact dependency vector of the derived route;
+        free-name ``Var`` and state/parameter reads are rejected rather than
+        becoming a hidden carrier lookup.
+        """
+        from pops._ir.expr import Abs, Const, Div, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
+        from pops._ir.handle_expr import ValueExpr
+
+        if isinstance(expression, Const):
+            return expression.to_cpp()
+        if isinstance(expression, ValueExpr):
+            try:
+                return bindings[expression.handle.qualified_id]
+            except KeyError:
+                raise ValueError(
+                    "DerivedAux expression reads undeclared dependency %s"
+                    % expression.handle.qualified_id
+                ) from None
+        binary = (Add, Sub, Mul, Div)
+        if isinstance(expression, binary):
+            return "(%s %s %s)" % (
+                derived_expression_cpp(expression.a, bindings), expression.op,
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Pow):
+            return "std::pow(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Minimum):
+            return "Kokkos::fmin(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Maximum):
+            return "Kokkos::fmax(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Neg):
+            return "(-%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, Sqrt):
+            return "std::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, Abs):
+            return "std::fabs(%s)" % derived_expression_cpp(expression.a, bindings)
+        raise TypeError(
+            "DerivedAux native lowering supports scalar constants, ValueExpr, and standard "
+            "pointwise arithmetic; got %s" % type(expression).__name__
+        )
+
+    def derived_launcher(identity: str, route: Mapping[str, Any]) -> str:
+        dependencies = route["dependencies"]
+        producer = route["producer"]
+        bindings = {
+            reference.qualified_id: "aux_dependency_%d" % index
+            for index, reference in enumerate(producer.expression.declaration_references())
+        }
+        expression = derived_expression_cpp(producer.expression, bindings)
+        dependency_rows = []
+        for key_value, contract_value in zip(dependencies, route["contracts"], strict=True):
+            dependency_rows.append(
+                "Dependency{%s, Contract{%s, %s, %s, %s, %s}, %s}" % (
+                    "Key{%s, %s, %s, %s}" % tuple(
+                        literal(value) for value in (
+                            key_value.owner_qid, key_value.space_kind,
+                            key_value.space_name, key_value.component,
+                        )
+                    ),
+                    literal(contract_value.representation), literal(contract_value.centering),
+                    optional(contract_value.unit), literal(contract_value.layout),
+                    optional(contract_value.value_kind),
+                    shape_for(typed_routes.get((
+                        key_value.owner_qid, key_value.space_kind,
+                        key_value.space_name, key_value.component,
+                    ))),
+                )
+            )
+        lines = [
+            "      std::vector<Dependency>{%s}," % ", ".join(dependency_rows),
+            "      Provider::launcher_type::trusted_extension(",
+            "          pops::PreparedProviderIdentity{%s, 1}, %s," % (
+                literal("pops.derived-aux." + identity), literal(identity),
+            ),
+            "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<"
+            "pops::kNativeDimension>& context) {",
+            "            if (context.outputs.size() != 1) throw std::logic_error(\"derived auxiliary route requires one output\");",
+            "            if (context.dependencies.size() != %d) throw std::logic_error(\"derived auxiliary route dependency mismatch\");" % len(dependencies),
+            "            auto* const candidate = context.storage.candidate;",
+            "            if (candidate == nullptr) throw std::logic_error(\"derived auxiliary route has no candidate carrier\");",
+            "            const auto output_slot = context.outputs[0].slot;",
+        ]
+        for index in range(len(dependencies)):
+            lines.append("            const auto dependency_slot_%d = context.dependencies[%d].slot;" % (index, index))
+        lines.extend((
+            "            for (std::size_t local_fab = 0; local_fab < candidate->local_size(); ++local_fab) {",
+            "              const auto carrier = candidate->fab(local_fab).view();",
+            "              std::size_t cells = 1;",
+            "              for (int axis = 0; axis < pops::kNativeDimension; ++axis) cells *= static_cast<std::size_t>(carrier.extents[axis]);",
+            "              Kokkos::parallel_for(\"pops_derived_aux\", Kokkos::RangePolicy<>(0, cells), KOKKOS_LAMBDA(const std::size_t linear) {",
+            "                std::size_t remainder = linear;",
+            "                pops::Index<pops::kNativeDimension> index{};",
+            "                for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
+            "                  index[axis] = carrier.origin[axis] + static_cast<int>(remainder % static_cast<std::size_t>(carrier.extents[axis]));",
+            "                  remainder /= static_cast<std::size_t>(carrier.extents[axis]);",
+            "                }",
+        ))
+        for index in range(len(dependencies)):
+            lines.append("                const pops::Real aux_dependency_%d = carrier(index, dependency_slot_%d);" % (index, index))
+        lines.extend((
+            "                carrier(index, output_slot) = %s;" % expression,
+            "              });",
+            "            }",
+            "          }))",
+        ))
+        return "\n".join(lines)
     lines = [
         "POPS_LOADER_API void pops_register_auxiliary_routes("
         "pops::System<pops::kNativeDimension>* sys) {",
@@ -313,19 +474,29 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
         "  using Key = AuxiliaryComponentKey;",
         "  using Contract = AuxiliaryComponentContract;",
         "  using Shape = AuxiliaryStorageShape<pops::kNativeDimension>;",
+        "  using Boundary = AuxiliaryBoundaryPolicy;",
+        "  using BoundaryKind = AuxiliaryBoundaryPolicy::Kind;",
         "  using Output = AuxiliaryOutput<pops::kNativeDimension>;",
         "  using Dependency = AuxiliaryDependency<pops::kNativeDimension>;",
         "  using Provider = PreparedAuxiliaryProvider<pops::kNativeDimension>;",
         "  using ConsumerValue = AuxiliaryConsumerValue<pops::kNativeDimension>;",
         "  using ConsumerPlan = AuxiliaryConsumerProviderPlan<pops::kNativeDimension>;",
     ]
+    owned_provider_qid = str(model.owner_path.canonical())
     for row in pack["entries"]:
+        if row["key"]["owner_qid"] != owned_provider_qid:
+            # A package may consume a foreign owner-qualified component.  Its
+            # consumer plan below records that dependency, but only the owning
+            # DSO may publish the provider output into the global registry.
+            continue
         value = row["provider"]
         if value["slot"] is None or not value["availability"] or value["producer"] is None:
             raise ValueError(
                 "auxiliary ProviderPack has an unavailable component; bind an exact producer before codegen"
             )
         producer = value["producer"]
+        route = typed_routes.get(route_key(row))
+        shape = shape_for(route)
         if producer == "runtime_input":
             kind = "AuxiliaryProviderKind::input"
         elif row["key"]["space_kind"] == "field" and (
@@ -334,11 +505,12 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
         ):
             kind = "AuxiliaryProviderKind::field_output"
         elif producer == "derived" or producer.startswith("derived:"):
-            raise ValueError(
-                "derived auxiliary provider %r has no lowered native launcher; "
-                "refuse codegen rather than misclassifying it as field output"
-                % row["key"]["component"]
-            )
+            if route is None or route.get("kind") != "derived":
+                raise ValueError(
+                    "derived auxiliary provider %r has no exact typed lowering route"
+                    % row["key"]["component"]
+                )
+            kind = "AuxiliaryProviderKind::derived"
         else:
             raise ValueError(
                 "auxiliary provider %r has unsupported producer %r; "
@@ -350,31 +522,34 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
             value["producer"], row["key"]["owner_qid"], row["key"]["space_name"],
             row["key"]["component"],
         )
+        policy = (
+            "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::before_residual, "
+            "AuxiliaryFreshness::evaluation}"
+            if kind == "AuxiliaryProviderKind::derived"
+            else "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
+            "AuxiliaryFreshness::once}"
+        )
         lines.extend((
             "  sys->install_prepared_auxiliary_provider(Provider{",
             "      %s, %s," % (literal(identity), kind),
-            "      AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
-            "AuxiliaryFreshness::once},",
-            "      std::vector<Output>{{%s, %s, %s, %d}}," % (
-                key(row), contract(row), shape, value["slot"]),
-            "      std::vector<Dependency>{}});",
+            "      %s," % policy,
+            "      std::vector<Output>{{%s, %s, %s, %s}}," % (
+                key(row), contract(row), shape, boundary_for(route)),
         ))
+        if kind == "AuxiliaryProviderKind::derived":
+            lines.append(derived_launcher(identity, route) + ");")
+        else:
+            lines.append("      std::vector<Dependency>{}});")
 
-    owner_qid = None
-    for row in pack["entries"]:
-        candidate = row["key"]["owner_qid"]
-        if owner_qid is None:
-            owner_qid = candidate
-        elif owner_qid != candidate:
-            raise ValueError("auxiliary ProviderPack crosses multiple owners")
-    owner_qid = owner_qid or str(model.owner_path.canonical())
+    owner_qid = owned_provider_qid
 
     def emit_plan(identity: str, plan: Any) -> None:
         lines.append("  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, std::vector<ConsumerValue>{"
                      % literal(identity))
         for value in plan:
             lines.append("      ConsumerValue{Dependency{%s, %s, %s}, %d}," % (
-                key(value), contract(value), shape, value["consumer_slot"]))
+                key(value), contract(value),
+                shape_for(typed_routes.get(route_key(value))), value["consumer_slot"]))
         lines.append("  }});")
 
     emit_plan(owner_qid + "/physical_flux", flux_plan)
