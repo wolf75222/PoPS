@@ -16,38 +16,6 @@
 namespace pops {
 namespace {
 
-template <int Dim>
-struct CutCellSystemCapability {
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
-      throw std::invalid_argument(
-          "cut-cell transport has no exact native provider for this spatial rank");
-  }
-};
-
-template <>
-struct CutCellSystemCapability<2> {
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode) noexcept {}
-};
-
-template <int Dim>
-struct DiscLevelSetCapability {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double, double, double) {
-    throw std::invalid_argument("Disc is an exact rank-two authoring capability");
-  }
-};
-
-template <>
-struct DiscLevelSetCapability<2> {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double cx, double cy,
-                                                                       double radius) {
-    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(radius) || !(radius > 0.0))
-      throw std::invalid_argument("disc center and positive radius must be finite");
-    return {{"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
-            {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}};
-  }
-};
-
 EbThresholds resolved_eb_thresholds(double kappa_min, double face_open_eps, double cut_theta_min) {
   EbThresholds result;
   if (kappa_min > 0.0)
@@ -74,7 +42,6 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
                                          double face_open_eps, double cut_theta_min) {
   require_assembling(p_->lifecycle_, "set_analytic_level_set");
   const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
-  CutCellSystemCapability<Dim>::require(prepared_mode);
   const EbThresholds thresholds = resolved_eb_thresholds(kappa_min, face_open_eps, cut_theta_min);
   const std::uint64_t generation =
       next_embedded_boundary_generation(p_->embedded_boundary_generation_);
@@ -98,17 +65,9 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
 }
 
 template <int Dim>
-void System<Dim>::set_disc_domain(double cx, double cy, double radius, const std::string& mode,
-                                  double kappa_min, double face_open_eps, double cut_theta_min) {
-  auto [opcodes, literals] = DiscLevelSetCapability<Dim>::make(cx, cy, radius);
-  set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
-}
-
-template <int Dim>
 void System<Dim>::set_geometry_mode(const std::string& mode) {
   require_assembling(p_->lifecycle_, "set_geometry_mode");
   const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
-  CutCellSystemCapability<Dim>::require(prepared_mode);
   if (!p_->embedded_boundary_) {
     if (prepared_mode == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
       return;
@@ -127,7 +86,7 @@ void System<Dim>::set_geometry_mode(const std::string& mode) {
 }
 
 template <int Dim>
-std::vector<double> System<Dim>::disc_mask() const {
+std::vector<double> System<Dim>::embedded_boundary_mask() const {
   if (p_->embedded_boundary_)
     return p_->blocks_.copy_comp0(p_->embedded_boundary_->active_mask());
   MultiFab<Dim> active(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
@@ -139,9 +98,7 @@ template void System<kNativeDimension>::set_analytic_level_set(const std::vector
                                                                const std::vector<double>&,
                                                                const std::string&, double, double,
                                                                double);
-template void System<kNativeDimension>::set_disc_domain(double, double, double, const std::string&,
-                                                        double, double, double);
 template void System<kNativeDimension>::set_geometry_mode(const std::string&);
-template std::vector<double> System<kNativeDimension>::disc_mask() const;
+template std::vector<double> System<kNativeDimension>::embedded_boundary_mask() const;
 
 }  // namespace pops

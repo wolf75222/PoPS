@@ -135,32 +135,6 @@ void append_geometry_contract(ExactContractBuilder& contract, const Geometry<Dim
   }
 }
 
-template <int Dim>
-struct GeneratedAmrCutCellCapability {
-  static std::string provider_identity(std::string_view) { return {}; }
-
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
-                      std::string_view provider) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell || !provider.empty())
-      throw std::invalid_argument(
-          "generated AMR cut-cell transport has no exact provider for this spatial rank");
-  }
-};
-
-template <>
-struct GeneratedAmrCutCellCapability<2> {
-  static std::string provider_identity(std::string_view block_provider) {
-    return "pops.generated.amr.cut-cell.2d/" + std::string(block_provider);
-  }
-
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
-                      std::string_view provider) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell && provider.empty())
-      throw std::invalid_argument(
-          "generated AMR cut-cell transport requires its authenticated rank-two provider");
-  }
-};
-
 inline void append_variable_set_contract(ExactContractBuilder& contract,
                                          const VariableSet& variables) {
   contract.scalar(static_cast<std::int32_t>(variables.kind))
@@ -232,7 +206,6 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
         : mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell
             ? cut_cell_provider_identity
             : std::string_view{};
-    GeneratedAmrCutCellCapability<Dim>::require(mode, cut_cell_provider_identity);
     if (mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
         (expected_provider.empty() ||
          context.embedded_boundary_provider_identity != expected_provider))
@@ -673,29 +646,15 @@ void materialize_masked_patch(const Model& model, const Metric& metric,
 
 template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
           class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
-  requires(Dim != 2)
-void materialize_cut_cell_patch(const Model&, const Spatial&, const Reconstruction&,
-                                const Numerical&, Real, const Fab<Dim, MemorySpace>&,
-                                const ProviderStorageView<Dim, ProviderCount>&,
-                                const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>&,
-                                std::size_t, nd::FaceField<Dim, MemorySpace>&,
-                                Fab<Dim, MemorySpace>&) {
-  throw std::invalid_argument(
-      "generated AMR cut-cell transport has no exact provider for this spatial rank");
-}
-
-template <int Dim, nd::ReconstructionVariables Variables, class Model, class Spatial,
-          class Reconstruction, class Numerical, class MemorySpace, int ProviderCount>
-  requires(Dim == 2)
 void materialize_cut_cell_patch(
     const Model& model, const Spatial& spatial, const Reconstruction& reconstruction,
     const Numerical& numerical, Real positivity_floor, const Fab<Dim, MemorySpace>& state,
     const ProviderStorageView<Dim, ProviderCount>& providers,
     const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>& embedded, std::size_t local,
     nd::FaceField<Dim, MemorySpace>& faces, Fab<Dim, MemorySpace>& residual) {
-  const auto metric =
-      nd::PreparedEmbeddedBoundaryMetric2D<std::remove_cvref_t<decltype(spatial.metric())>>::
-          prepare(spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
+  const auto metric = nd::PreparedEmbeddedBoundaryMetric<
+      Dim, std::remove_cvref_t<decltype(spatial.metric())>>::prepare(
+      spatial.metric(), embedded.inverse_volume_fraction().fab(local), state.box());
   materialize_masked_patch<Dim, Variables>(model, metric, reconstruction, numerical,
                                            positivity_floor, state, providers,
                                            embedded.active_mask().fab(local), faces, residual);
@@ -730,7 +689,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   const std::string staircase_provider_identity =
       "pops.generated.amr.staircase.nd/" + std::to_string(Dim) + "/" + provider_identity;
   const std::string cut_cell_provider_identity =
-      GeneratedAmrCutCellCapability<Dim>::provider_identity(provider_identity);
+      "pops.generated.amr.cut-cell.nd/" + std::to_string(Dim) + "/" + provider_identity;
 
   PreparedAmrSystemBlock<Dim> result;
   result.name = name;

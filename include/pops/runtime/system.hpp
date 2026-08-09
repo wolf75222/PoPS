@@ -569,35 +569,8 @@ class System {
                               double kappa_min = 0.0, double face_open_eps = 0.0,
                               double cut_theta_min = 0.0);
 
-  /// Sets the TRANSPORT DOMAIN as a DISC centered at (@p cx, @p cy) with radius @p R
-  /// (T2 work, CONTRACT inert by default). Materializes a 0/1 cell-centered mask (cell
-  /// active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
-  /// as the conducting wall of the Poisson). It is the FV counterpart of the elliptic wall: it lets the
-  /// FV transport act on the true disc instead of the full cartesian square (otherwise the circle lives
-  /// only in the Poisson wall -- the "cartesian ring edges" lock, cf. docs/HOFFART_FIDELITY.md). The
-  /// mask makes possible a CONSERVATIVE mask-aware transport (zero normal flux at active/inactive faces).
-  ///
-  /// DISC TRANSPORT MODE (T5-PR3 work, @p mode): dispatches the transport advance of step() to
-  /// the corresponding disc operator. Default "none" -> full cartesian path (assemble_rhs), BIT-
-  /// IDENTICAL to history even after set_disc_domain (the mask is materialized but transport
-  /// ignores it while the mode is "none"). "staircase" -> conservative masked transport (assemble_rhs_
-  /// masked, 0/1 face gate, jagged boundary). "cutcell" -> the current embedded-boundary transport
-  /// (binary open faces between active centres and a clamped approximate volume fraction prepared
-  /// from signed samples). Both EB policies currently require an explicitly capable first-order
-  /// reconstruction and reject diffusion, native boundary components and shared interfaces.
-  /// The mode is honored by the native transport step. A mode != "none" without a transportable
-  /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
-  /// -> error. R > 0 required.
-  ///
-  /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (binary face-open
-  /// threshold) and @p cut_theta_min (signed-sample fraction clamp) tune the transport metrics. Each
-  /// <= 0 keeps the kEb* default. This API does not claim an elliptic cut-cell consumer.
-  void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none",
-                       double kappa_min = 0.0, double face_open_eps = 0.0,
-                       double cut_theta_min = 0.0);
-
   /// Sets ONLY the level-set transport mode: "none" | "staircase" | "cutcell". Useful to toggle
-  /// the mode after installing either a generic analytic level set or a disc, or to reset it to "none"
+  /// the mode after installing a generic analytic level set, or to reset it to "none"
   /// (back to the full cartesian path, bit-identical). Requesting a mode != "none" without a prepared
   /// signed level set raises an explicit error (the mode alone has no geometry to apply).
   void set_geometry_mode(const std::string& mode);
@@ -605,7 +578,7 @@ class System {
   /// @return the 0/1 cell-centered domain mask over the exact-ranked flattened layout. Without
   /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
-  std::vector<double> disc_mask() const;
+  std::vector<double> embedded_boundary_mask() const;
 
   /// Guarantees that the SHARED aux channel has at least @p ncomp components. Called by
   /// add_compiled_model (cf. dsl_block.hpp) with aux_comps<Model> when adding a block that reads extra
@@ -1152,7 +1125,7 @@ class System {
   /// until mark_bound() runs, so the historical setters keep working.
   /// @{
   /// Mark the composition as bound (frozen): every structural setter (add_block / set_poisson /
-  /// install_program / set_disc_domain / ...) then rejects with a precise error.
+  /// install_program / set_analytic_level_set / ...) then rejects with a precise error.
   /// The runtime-data setters (set_state / set_density / set_program_params /
   /// set_magnetic_field / set_aux_field_component / set_clock / set_potential) stay allowed. A second
   /// mark_bound() throws (a composition binds exactly once).

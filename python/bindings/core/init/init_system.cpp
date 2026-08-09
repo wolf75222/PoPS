@@ -671,16 +671,11 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("_set_analytic_level_set", &System::set_analytic_level_set, py::arg("opcodes"),
            py::arg("literals"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
            py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
-      // Disc convenience constructor: lowers to the same generic analytic program and EB path.
-      .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
-           py::arg("mode") = "none", py::arg("kappa_min") = 0.0, py::arg("face_open_eps") = 0.0,
-           py::arg("cut_theta_min") = 0.0)
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      // Ranked domain 0/1 mask. Historical name retained for compatibility; it reports
-      // the mask of any analytic level set and is all 1.0 when none is installed.
-      .def("disc_mask",
-           [](const System& s) { return to_ranked_field(s.disc_mask(), s.spatial_shape()); })
+      .def("embedded_boundary_mask", [](const System& s) {
+        return to_ranked_field(s.embedded_boundary_mask(), s.spatial_shape());
+      })
       // Auxiliary values are addressed by their complete owner-qualified key.  Python supplies
       // only data; native generated packages install the immutable producer graph and kernels.
       .def(

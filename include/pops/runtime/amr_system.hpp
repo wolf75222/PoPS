@@ -586,16 +586,11 @@ class AmrSystem {
 
   /// Install one immutable analytic embedded-boundary definition.  The expression is sampled
   /// independently on every live AMR level whenever the hierarchy is materialized or regridded.
-  /// Staircase transport is exact-ranked in dimensions 1, 2, and 3.  Cut-cell transport is an
-  /// explicit rank-two capability and dimensions 1/3 reject it before facade mutation.
+  /// Staircase and cut-cell transport use the same exact-ranked provider in dimensions 1, 2, and 3.
   void set_analytic_level_set(const std::vector<std::string>& opcodes,
                               const std::vector<double>& literals, const std::string& mode = "none",
                               double kappa_min = 0.0, double face_open_eps = 0.0,
                               double cut_theta_min = 0.0);
-  /// Rank-two convenience authoring for hypot(x-cx,y-cy)-R.  Other ranks reject before mutation.
-  void set_disc_domain(double cx, double cy, double radius, const std::string& mode = "none",
-                       double kappa_min = 0.0, double face_open_eps = 0.0,
-                       double cut_theta_min = 0.0);
   /// Change only the numerical EB mode while retaining the accepted analytic definition.
   void set_geometry_mode(const std::string& mode);
   void set_field_nullspace(const std::string& provider_slot,

@@ -566,9 +566,6 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_set_analytic_level_set", &AmrSystem::set_analytic_level_set, py::arg("opcodes"),
            py::arg("literals"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
            py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
-      .def("set_disc_domain", &AmrSystem::set_disc_domain, py::arg("cx"), py::arg("cy"),
-           py::arg("R"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
-           py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
       .def("set_geometry_mode", &AmrSystem::set_geometry_mode, py::arg("mode"))
       .def(
           "set_field_nullspace",

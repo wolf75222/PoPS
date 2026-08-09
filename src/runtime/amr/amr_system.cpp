@@ -109,57 +109,6 @@ mesh::RankSpace<Dim> process_rank_space(const ExecutionLane& lane) {
   return mesh::RankSpace<Dim>(Index<Dim>{}, shape);
 }
 
-template <int Dim>
-struct AmrCutCellCapability {
-  static void validate_provider(const PreparedAmrSystemBlock<Dim>& block) {
-    if (!block.cut_cell_provider_identity.empty())
-      throw std::invalid_argument(
-          "prepared AMR block advertises cut-cell transport outside its exact provider rank");
-  }
-
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
-                      const PreparedAmrSystemBlock<Dim>&) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
-      throw std::invalid_argument(
-          "AMR cut-cell transport has no exact provider for this spatial rank");
-  }
-};
-
-template <>
-struct AmrCutCellCapability<2> {
-  static void validate_provider(const PreparedAmrSystemBlock<2>& block) {
-    if (block.cut_cell_provider_identity.empty())
-      throw std::invalid_argument(
-          "prepared rank-two AMR block requires its exact cut-cell provider identity");
-  }
-
-  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode,
-                      const PreparedAmrSystemBlock<2>& block) {
-    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell &&
-        block.cut_cell_provider_identity.empty())
-      throw std::invalid_argument(
-          "AMR cut-cell transport requires an authenticated rank-two provider");
-  }
-};
-
-template <int Dim>
-struct AmrDiscLevelSetCapability {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double, double, double) {
-    throw std::invalid_argument("Disc is an exact rank-two AMR authoring capability");
-  }
-};
-
-template <>
-struct AmrDiscLevelSetCapability<2> {
-  static std::pair<std::vector<std::string>, std::vector<double>> make(double cx, double cy,
-                                                                       double radius) {
-    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(radius) || !(radius > 0.0))
-      throw std::invalid_argument("AMR disc center and positive radius must be finite");
-    return {{"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
-            {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}};
-  }
-};
-
 EbThresholds resolved_amr_eb_thresholds(double kappa_min, double face_open_eps,
                                         double cut_theta_min) {
   if (!std::isfinite(kappa_min) || kappa_min < 0.0 || !std::isfinite(face_open_eps) ||
@@ -237,7 +186,9 @@ PreparedAmrEbAuthoring prepare_amr_eb_authoring(const AmrSystemConfig<Dim>& conf
                                                 const EbThresholds& thresholds,
                                                 std::uint64_t generation) {
   PreparedAmrEbAuthoring result;
-  AmrCutCellCapability<Dim>::require(mode, block);
+  if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell &&
+      block.cut_cell_provider_identity.empty())
+    throw std::invalid_argument("AMR cut-cell transport requires an authenticated provider");
   if (mode != runtime::system::PreparedEmbeddedBoundaryMode::inactive &&
       std::any_of(config.periodicity.begin(), config.periodicity.end(),
                   [](bool periodic) { return !periodic; }))
@@ -1372,7 +1323,8 @@ void validate_prepared_amr_block(const PreparedAmrSystemBlock<Dim>& block) {
     throw std::invalid_argument(
         "prepared AMR block requires non-empty block, Cartesian, staircase, and collective "
         "identities");
-  AmrCutCellCapability<Dim>::validate_provider(block);
+  if (block.cut_cell_provider_identity.empty())
+    throw std::invalid_argument("prepared AMR block requires a cut-cell provider identity");
   if (block.ncomp < 1 || block.provider_components < 0)
     throw std::invalid_argument(
         "prepared AMR block requires positive state and a non-negative provider-value count");
@@ -4284,27 +4236,6 @@ void AmrSystem<Dim>::set_analytic_level_set(const std::vector<std::string>& opco
 }
 
 template <int Dim>
-void AmrSystem<Dim>::set_disc_domain(double cx, double cy, double radius, const std::string& mode,
-                                     double kappa_min, double face_open_eps, double cut_theta_min) {
-  std::pair<std::vector<std::string>, std::vector<double>> staged;
-  std::exception_ptr local_error;
-  long local_failure = 0;
-  try {
-    staged = AmrDiscLevelSetCapability<Dim>::make(cx, cy, radius);
-  } catch (...) {
-    local_failure = 1;
-    local_error = std::current_exception();
-  }
-  if (all_reduce_max(local_failure) != 0) {
-    if (local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error("AMR disc authoring failed collectively");
-  }
-  set_analytic_level_set(staged.first, staged.second, mode, kappa_min, face_open_eps,
-                         cut_theta_min);
-}
-
-template <int Dim>
 void AmrSystem<Dim>::set_geometry_mode(const std::string& mode) {
   runtime::system::PreparedEmbeddedBoundaryMode prepared_mode =
       runtime::system::PreparedEmbeddedBoundaryMode::inactive;
@@ -6570,9 +6501,6 @@ template void AmrSystem<kNativeDimension>::set_analytic_level_set(const std::vec
                                                                   const std::vector<double>&,
                                                                   const std::string&, double,
                                                                   double, double);
-template void AmrSystem<kNativeDimension>::set_disc_domain(double, double, double,
-                                                           const std::string&, double, double,
-                                                           double);
 template void AmrSystem<kNativeDimension>::set_geometry_mode(const std::string&);
 template void AmrSystem<kNativeDimension>::refresh_prepared_amr_levels();
 template const PreparedAmrLevelEvaluation<kNativeDimension>&

@@ -163,8 +163,7 @@ class AmrSystem(
         """Configure AMR Poisson with a typed physical-boundary selector.
 
         ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
-        Embedded geometry is authored independently through :meth:`set_disc_domain` or the
-        exact-ranked analytic level-set route.
+        Embedded geometry is authored independently through the exact-ranked analytic level-set route.
         """
         from pops.runtime._system_install_lowering import _lower_bc
 
