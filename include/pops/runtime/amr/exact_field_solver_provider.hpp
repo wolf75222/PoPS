@@ -7,6 +7,8 @@
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 #include <pops/runtime/export.hpp>
@@ -41,14 +43,13 @@ struct ExactAmrFieldSolverBuildRequest {
 
 template <int Dim>
 std::string make_exact_amr_field_solver_contract(
-    std::string_view provider_identity,
-    const ExactAmrFieldSolverBuildRequest<Dim>& request) {
+    std::string_view provider_identity, const ExactAmrFieldSolverBuildRequest<Dim>& request) {
   if (provider_identity.empty() || request.use_contract.empty() || request.spatial_contract.empty())
     throw std::invalid_argument(
         "exact AMR field solver contract requires provider, use, and spatial identities");
   ExactContractBuilder contract;
   contract.text("pops.amr.exact-field-solver")
-      .scalar(std::uint32_t{2})
+      .scalar(std::uint32_t{3})
       .scalar(std::int32_t{Dim})
       .text(provider_identity)
       .scalar(request.mode)
@@ -76,6 +77,9 @@ class ExactAmrFieldSolver {
   virtual field_type& rhs_level(int level) = 0;
   virtual field_type& candidate_level(int level) = 0;
   virtual const field_type& candidate_level(int level) const = 0;
+  virtual void install_newton(FieldNewtonOptions options) = 0;
+  virtual void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) = 0;
+  virtual void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) = 0;
   virtual void install_nullspace(
       PreparedFieldNullspace<Dim> prepared,
       std::vector<PreparedVectorDistribution<Dim>> level_distributions) = 0;
@@ -91,7 +95,7 @@ class ExactAmrFieldSolverProvider {
 
   virtual ~ExactAmrFieldSolverProvider() = default;
   virtual std::string_view identity() const noexcept = 0;
-  virtual std::uint64_t interface_version() const noexcept { return 2; }
+  virtual std::uint64_t interface_version() const noexcept { return 3; }
   virtual std::string_view collective_contract() const noexcept = 0;
   virtual PreparedProviderSupport supports(const request_type& request) const noexcept = 0;
   virtual std::string expected_prepared_contract(const request_type& request) const = 0;
@@ -104,7 +108,8 @@ class ExactAmrFieldSolverRegistry {
   using provider_type = ExactAmrFieldSolverProvider<Dim, MemorySpace>;
 
   void add(std::shared_ptr<const provider_type> provider) {
-    if (!provider || provider->identity().empty() || provider->collective_contract().empty())
+    if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
+        provider->collective_contract().empty())
       throw std::invalid_argument("exact AMR field solver registry requires a complete provider");
     for (const auto& existing : providers_)
       if (existing->identity() == provider->identity())

@@ -2,6 +2,7 @@
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -43,20 +44,16 @@ BuiltinOptions decode_options(const PreparedProviderOptions& options) {
       static_cast<int>(option<std::int64_t>(options, "mg.min_coarse"));
   result.mg.pre_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.pre_smooth"));
   result.mg.post_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.post_smooth"));
-  result.mg.bottom_sweeps =
-      static_cast<int>(option<std::int64_t>(options, "mg.bottom_sweeps"));
+  result.mg.bottom_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.bottom_sweeps"));
   result.mg.coarse_cell_threshold =
       static_cast<int>(option<std::int64_t>(options, "mg.coarse_threshold"));
   result.fac.max_iters = static_cast<int>(option<std::int64_t>(options, "fac.max_iters"));
   result.fac.fine_sweeps = static_cast<int>(option<std::int64_t>(options, "fac.fine_sweeps"));
   result.fac.rel_tol = static_cast<Real>(option<double>(options, "fac.rel_tol"));
   result.fac.abs_tol = static_cast<Real>(option<double>(options, "fac.abs_tol"));
-  result.fac.coarse_rel_tol =
-      static_cast<Real>(option<double>(options, "fac.coarse_rel_tol"));
-  result.fac.coarse_abs_tol =
-      static_cast<Real>(option<double>(options, "fac.coarse_abs_tol"));
-  result.fac.coarse_cycles =
-      static_cast<int>(option<std::int64_t>(options, "fac.coarse_cycles"));
+  result.fac.coarse_rel_tol = static_cast<Real>(option<double>(options, "fac.coarse_rel_tol"));
+  result.fac.coarse_abs_tol = static_cast<Real>(option<double>(options, "fac.coarse_abs_tol"));
+  result.fac.coarse_cycles = static_cast<int>(option<std::int64_t>(options, "fac.coarse_cycles"));
   result.fac.verbose = option<bool>(options, "fac.verbose");
   elliptic::mg::detail::validate_options<Dim>(result.mg);
   elliptic::mg::detail::validate_fac_options(result.fac);
@@ -89,9 +86,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
 
   std::string_view provider_identity() const noexcept override { return "geometric_mg"; }
   std::string_view exact_prepared_contract() const noexcept override { return contract_; }
-  bool couples_hierarchy_levels() const noexcept override {
-    return static_cast<bool>(composite_);
-  }
+  bool couples_hierarchy_levels() const noexcept override { return static_cast<bool>(composite_); }
   int level_count() const noexcept override {
     return composite_ ? composite_->n_levels() : static_cast<int>(local_.size());
   }
@@ -107,6 +102,33 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     return composite_ ? composite_->phi_level(level)
                       : local_.at(static_cast<std::size_t>(level))->phi();
   }
+  void install_newton(FieldNewtonOptions options) override {
+    if (composite_) {
+      composite_->install_newton(options);
+      return;
+    }
+    for (auto& solver : local_)
+      solver->install_newton(options);
+  }
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) override {
+    if (composite_) {
+      composite_->install_boundary_kernel(std::move(kernel));
+      return;
+    }
+    for (auto& solver : local_)
+      solver->install_boundary_kernel(kernel);
+  }
+  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) override {
+    if (contexts.size() != static_cast<std::size_t>(level_count()))
+      throw std::invalid_argument(
+          "exact AMR field solver requires one boundary context per live level");
+    if (composite_) {
+      composite_->set_boundary_contexts(std::move(contexts));
+      return;
+    }
+    for (std::size_t level = 0; level < local_.size(); ++level)
+      local_[level]->set_boundary_context(contexts[level]);
+  }
   void install_nullspace(
       PreparedFieldNullspace<Dim> prepared,
       std::vector<PreparedVectorDistribution<Dim>> level_distributions) override {
@@ -121,8 +143,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
           "exact AMR field nullspace authority requires one distribution per level");
 
     if (composite_) {
-      composite_->install_nullspace(std::move(prepared.plan),
-                                    std::move(level_distributions));
+      composite_->install_nullspace(std::move(prepared.plan), std::move(level_distributions));
     } else {
       std::vector<FieldNullspacePlan<Dim>> plans;
       plans.reserve(local_.size());
@@ -135,7 +156,12 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     nullspace_contract_ = std::move(prepared.exact_prepared_contract);
   }
   int maximum_iterations() const noexcept override {
-    return composite_ ? options_.fac.max_iters : options_.mg.maximum_cycles;
+    if (composite_)
+      return composite_->maximum_iterations();
+    int result = 0;
+    for (const auto& solver : local_)
+      result = std::max(result, solver->maximum_iterations());
+    return result;
   }
   SolveReport solve() override {
     if (nullspace_contract_.empty())
@@ -153,8 +179,8 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
   }
 
  private:
-  static FieldNullspacePlan<Dim> level_local_plan_(
-      const FieldNullspacePlan<Dim>& hierarchy_plan, std::size_t level) {
+  static FieldNullspacePlan<Dim> level_local_plan_(const FieldNullspacePlan<Dim>& hierarchy_plan,
+                                                   std::size_t level) {
     if (hierarchy_plan.empty())
       return {};
     FieldNullspacePlan<Dim> result;
@@ -167,8 +193,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       FieldNullspaceBasis<Dim> basis;
       basis.identity = source.identity;
       basis.provenance = source.provenance;
-      basis.recipe_identity =
-          source.recipe_identity + ":level-local:" + std::to_string(level);
+      basis.recipe_identity = source.recipe_identity + ":level-local:" + std::to_string(level);
       basis.field_component = source.field_component;
       if (!source.masks.empty()) {
         if (level >= source.masks.size() || !source.masks[level])
@@ -199,7 +224,7 @@ class BuiltinExactAmrFieldSolverProvider final
 
   std::string_view identity() const noexcept override { return "geometric_mg"; }
   std::string_view collective_contract() const noexcept override {
-    return "pops.amr.field-solver.geometric-mg.exact-ranked@2";
+    return "pops.amr.field-solver.geometric-mg.exact-ranked@3";
   }
   PreparedProviderSupport supports(const request_type& request) const noexcept override {
     try {
@@ -236,7 +261,8 @@ class BuiltinExactAmrFieldSolverProvider final
     if (!decision.accepted())
       throw std::invalid_argument(std::string(decision.reason));
     return std::make_unique<BuiltinExactAmrFieldSolver<Dim, MemorySpace>>(
-        request, expected_prepared_contract(request), decode_options<Dim>(request.provider_options));
+        request, expected_prepared_contract(request),
+        decode_options<Dim>(request.provider_options));
   }
 };
 
@@ -248,9 +274,8 @@ make_builtin_exact_amr_field_solver_provider() {
   return std::make_shared<BuiltinExactAmrFieldSolverProvider<Dim, MemorySpace>>();
 }
 
-template POPS_EXPORT std::shared_ptr<
-    const ExactAmrFieldSolverProvider<kNativeDimension,
-                                     typename Kokkos::DefaultExecutionSpace::memory_space>>
+template POPS_EXPORT std::shared_ptr<const ExactAmrFieldSolverProvider<
+    kNativeDimension, typename Kokkos::DefaultExecutionSpace::memory_space>>
 make_builtin_exact_amr_field_solver_provider<
     kNativeDimension, typename Kokkos::DefaultExecutionSpace::memory_space>();
 

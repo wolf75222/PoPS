@@ -195,6 +195,112 @@ pops::runtime::multiblock::BoundaryEvaluationPoint point(int level) {
           .physical_time = 0.0};
 }
 
+template <int Dim>
+struct RuntimeFieldBoundaryProbe {
+  inline static int prepare_residual_calls = 0;
+  inline static int prepare_jvp_calls = 0;
+  inline static int residual_calls = 0;
+  inline static int jvp_calls = 0;
+  inline static std::array<bool, 3> levels{};
+  inline static int stage = -1;
+  inline static pops::Real time = pops::Real(-1);
+  inline static std::array<pops::Real, 3> state_min_by_level{};
+  inline static bool force_failure = false;
+
+  static void reset() {
+    prepare_residual_calls = 0;
+    prepare_jvp_calls = 0;
+    residual_calls = 0;
+    jvp_calls = 0;
+    levels.fill(false);
+    stage = -1;
+    time = pops::Real(-1);
+    state_min_by_level.fill(pops::Real(-1));
+    force_failure = false;
+  }
+
+  static void observe(int face, const pops::FieldBoundaryExecutionContext<Dim>& context) {
+    if (face < 0 || face >= 2 * Dim || context.failure == nullptr || context.state_count != 1 ||
+        context.states == nullptr || context.state_identities == nullptr ||
+        context.state_identities[0].empty() || context.state_distributions == nullptr ||
+        context.parameters == nullptr || context.parameter_count != 1) {
+      if (context.failure != nullptr) {
+        context.failure->code = 902;
+        context.failure->face = face;
+      }
+      return;
+    }
+    if (context.point.level >= 0 &&
+        context.point.level < static_cast<int>(state_min_by_level.size())) {
+      levels[static_cast<std::size_t>(context.point.level)] = true;
+      state_min_by_level[static_cast<std::size_t>(context.point.level)] =
+          pops::reduce_min_local(*context.states[0]);
+    }
+    stage = context.point.stage_slot;
+    time = context.point.time;
+    if (force_failure) {
+      context.failure->code = 903;
+      context.failure->face = face;
+    }
+  }
+
+  static void prepare_residual(int face, const pops::MultiFab<Dim>& iterate,
+                               pops::MultiFab<Dim>& operator_view,
+                               const pops::Geometry<Dim>& geometry,
+                               const pops::FieldBoundaryExecutionContext<Dim>& context) {
+    (void)iterate;
+    (void)operator_view;
+    (void)geometry;
+    ++prepare_residual_calls;
+    observe(face, context);
+  }
+
+  static void prepare_jvp(int face, const pops::MultiFab<Dim>& iterate,
+                          const pops::MultiFab<Dim>& direction, pops::MultiFab<Dim>& direction_view,
+                          const pops::Geometry<Dim>& geometry,
+                          const pops::FieldBoundaryExecutionContext<Dim>& context) {
+    (void)iterate;
+    (void)direction;
+    (void)direction_view;
+    (void)geometry;
+    ++prepare_jvp_calls;
+    observe(face, context);
+  }
+
+  static void add_residual(int face, const pops::MultiFab<Dim>& iterate,
+                           pops::MultiFab<Dim>& output, const pops::Geometry<Dim>& geometry,
+                           const pops::FieldBoundaryExecutionContext<Dim>& context) {
+    (void)iterate;
+    (void)output;
+    (void)geometry;
+    ++residual_calls;
+    observe(face, context);
+  }
+
+  static void apply_jvp(int face, const pops::MultiFab<Dim>& iterate,
+                        const pops::MultiFab<Dim>& direction, pops::MultiFab<Dim>& output,
+                        const pops::Geometry<Dim>& geometry,
+                        const pops::FieldBoundaryExecutionContext<Dim>& context) {
+    (void)iterate;
+    (void)direction;
+    (void)output;
+    (void)geometry;
+    ++jvp_calls;
+    observe(face, context);
+  }
+
+  static pops::CompiledFieldBoundaryKernel<Dim> kernel() {
+    return {"test.runtime-amr-boundary",
+            "test.runtime-amr-boundary.residual",
+            "test.runtime-amr-boundary.jvp",
+            &prepare_residual,
+            &prepare_jvp,
+            &add_residual,
+            &apply_jvp,
+            true};
+  }
+};
+
 static_assert(pops::PreparedAmrSystemBlock<1>::dimension == 1);
 static_assert(pops::PreparedAmrSystemBlock<2>::dimension == 2);
 static_assert(pops::PreparedAmrSystemBlock<3>::dimension == 3);
@@ -474,6 +580,77 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   (void)outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
+}
+
+TEST(GeneratedAmrSystemBlock,
+     DynamicFieldBoundaryConsumesExactStageAndPublishesOnlyAfterNewtonAcceptance) {
+  constexpr int Dim = pops::kNativeDimension;
+  RuntimeFieldBoundaryProbe<Dim>::reset();
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
+      "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
+  system.set_field_solver_plan("field/tracer", "test.dynamic-field-plan", "test.dynamic-field",
+                               "test.aux-owner", "tracer", "phi", {"test.rhs"}, {"tracer"},
+                               {"charge"}, {1.0}, "geometric_mg", hierarchy,
+                               pops::geometric_mg_amr_field_solver_options(
+                                   pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
+  system.set_field_reaction("field/tracer", 50.0);
+  system.set_field_boundary_dependencies("field/tracer", {"tracer"}, {0}, {}, {}, {});
+  system.set_field_boundary_parameters("field/tracer", {0.25});
+  system.set_field_boundary_kernel("field/tracer", RuntimeFieldBoundaryProbe<Dim>::kernel());
+  system.set_field_newton_plan("field/tracer", 1.0e-9, 4, 1.0e-10, 80, 20, 1.0e-4, 1.0 / 1024.0);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.register_elliptic_field("tracer", "phi", {0}, 1);
+  system.set_block_elliptic_field(
+      "tracer", "phi",
+      [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  publish_centered_fine_level(system);
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0});
+  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(7));
+  system.prepared_amr_level_auxiliary(1).set_val(pops::Real(7));
+
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("test-clock");
+  context->begin_step(0.01);
+  pops::MultiFab<Dim> stage_state = context->scratch_state_like(context->state(0));
+  stage_state.set_val(pops::Real(3));
+  auto evaluation = point<Dim>(0);
+  evaluation.stage = 4;
+  evaluation.physical_time = 0.125;
+  RuntimeFieldBoundaryProbe<Dim>::force_failure = true;
+  EXPECT_THROW(
+      (void)context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state),
+      std::runtime_error);
+  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
+
+  RuntimeFieldBoundaryProbe<Dim>::force_failure = false;
+  pops::SolveOutcome outcome =
+      context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state);
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
+  EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_residual_calls, 0);
+  EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_jvp_calls, 0);
+  EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::residual_calls, 0);
+  EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::jvp_calls, 0);
+  EXPECT_TRUE(RuntimeFieldBoundaryProbe<Dim>::levels[0]);
+  EXPECT_TRUE(RuntimeFieldBoundaryProbe<Dim>::levels[1]);
+  EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::stage, 4);
+  EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::time, pops::Real(0.125));
+  EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::state_min_by_level[0], pops::Real(3));
+  EXPECT_EQ(RuntimeFieldBoundaryProbe<Dim>::state_min_by_level[1], pops::Real(1));
+
+  const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
+  EXPECT_TRUE(accepted.solved());
+  EXPECT_NE(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  EXPECT_NE(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
 }
 
 TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel) {

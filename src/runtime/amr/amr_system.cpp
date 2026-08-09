@@ -814,6 +814,38 @@ struct AmrSystem<Dim>::Impl {
     Real coefficient = Real(1);
   };
 
+  struct PreparedBoundaryContext {
+    std::vector<const field_type*> states;
+    std::vector<FieldDistribution> state_distributions;
+    std::vector<std::string> state_identities;
+    std::vector<const field_type*> fields;
+    std::vector<FieldDistribution> field_distributions;
+    std::vector<std::string> field_identities;
+    const std::vector<Real>* parameters = nullptr;
+    FieldLogicalTimePoint point{};
+    FieldBoundaryFailure<Dim> failure{};
+
+    FieldBoundaryExecutionContext<Dim> view() {
+      if (states.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+          fields.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+          (parameters != nullptr &&
+           parameters->size() > static_cast<std::size_t>(std::numeric_limits<int>::max())))
+        throw std::overflow_error("AMR field boundary dependency pack exceeds native int");
+      return {point,
+              states.empty() ? nullptr : states.data(),
+              state_distributions.empty() ? nullptr : state_distributions.data(),
+              state_identities.empty() ? nullptr : state_identities.data(),
+              static_cast<int>(states.size()),
+              fields.empty() ? nullptr : fields.data(),
+              field_distributions.empty() ? nullptr : field_distributions.data(),
+              field_identities.empty() ? nullptr : field_identities.data(),
+              static_cast<int>(fields.size()),
+              parameters,
+              parameters == nullptr ? 0 : static_cast<int>(parameters->size()),
+              &failure};
+    }
+  };
+
   struct FieldPlan {
     std::string plan_identity;
     std::string provider_identity;
@@ -853,6 +885,7 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::unique_ptr<field_type>> candidate_auxiliary;
     std::vector<std::unique_ptr<field_type>> contribution_scratch;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
+    std::vector<PreparedBoundaryContext> boundary_context_storage;
     std::string prepared_contract;
     std::string prepared_nullspace_contract;
     std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
@@ -870,6 +903,7 @@ struct AmrSystem<Dim>::Impl {
       candidate_auxiliary.clear();
       contribution_scratch.clear();
       active_coverage.clear();
+      boundary_context_storage.clear();
       prepared_contract.clear();
       prepared_nullspace_contract.clear();
       topology_epoch = std::numeric_limits<std::uint64_t>::max();
@@ -1057,7 +1091,7 @@ struct AmrSystem<Dim>::Impl {
   static std::string exact_field_plan_contract(std::string_view slot, const FieldPlan& plan) {
     ExactContractBuilder contract;
     contract.text("pops.amr.exact-ranked-field-plan")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
         .text(slot)
         .text(plan.plan_identity)
@@ -1090,6 +1124,15 @@ struct AmrSystem<Dim>::Impl {
         .sequence(plan.boundary_alpha)
         .sequence(plan.boundary_beta)
         .sequence(plan.boundary_value)
+        .sequence(plan.boundary_state_blocks,
+                  [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+        .sequence(plan.boundary_state_components)
+        .sequence(plan.boundary_field_blocks,
+                  [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+        .sequence(plan.boundary_field_keys,
+                  [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+        .sequence(plan.boundary_field_components)
+        .sequence(plan.boundary_parameters)
         .presence(plan.output.has_value());
     if (plan.output) {
       contract.scalar(plan.output->gradient_sign())
@@ -1097,9 +1140,21 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t component = 0; component < plan.output->component_count(); ++component)
         contract.scalar(plan.output->components()[component]);
     }
-    contract.presence(plan.use_prepared_level_rhs)
-        .presence(plan.boundary_kernel.has_value())
-        .presence(plan.newton.has_value());
+    contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
+    if (plan.boundary_kernel)
+      contract.text(plan.boundary_kernel->identity)
+          .text(plan.boundary_kernel->residual_identity)
+          .text(plan.boundary_kernel->jvp_identity)
+          .presence(plan.boundary_kernel->observes_iteration);
+    contract.presence(plan.newton.has_value());
+    if (plan.newton)
+      contract.scalar(plan.newton->tolerance)
+          .scalar(plan.newton->max_iterations)
+          .scalar(plan.newton->linear_tolerance)
+          .scalar(plan.newton->linear_max_iterations)
+          .scalar(plan.newton->restart)
+          .scalar(plan.newton->armijo)
+          .scalar(plan.newton->minimum_step);
     return std::move(contract).release();
   }
 
@@ -1363,10 +1418,8 @@ struct AmrSystem<Dim>::Impl {
     try {
       if (!plan.output)
         throw std::logic_error("AMR exact field plan has no registered output carrier");
-      if (plan.boundary_kernel || plan.newton)
-        throw std::logic_error(
-            "AMR dynamic-boundary/Newton field plans require the prepared residual/JVP route");
-      if (!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty())
+      if ((!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty()) &&
+          !plan.boundary_kernel)
         throw std::logic_error(
             "AMR field boundary dependencies require a compiled dynamic boundary kernel");
       if (!field_solver_providers || !field_nullspace_providers)
@@ -1418,7 +1471,13 @@ struct AmrSystem<Dim>::Impl {
       if (!support.accepted())
         throw std::runtime_error("exact AMR field solver rejected the hierarchy: " +
                                  std::string(support.reason));
-      provider_contract.assign(provider->collective_contract());
+      ExactContractBuilder provider_declaration;
+      provider_declaration.text("pops.amr.exact-field-provider-declaration")
+          .scalar(std::uint32_t{1})
+          .text(provider->identity())
+          .scalar(provider->interface_version())
+          .text(provider->collective_contract());
+      provider_contract = std::move(provider_declaration).release();
       expected_contract = provider->expected_prepared_contract(request);
       if (expected_contract.empty())
         throw std::runtime_error(
@@ -1464,6 +1523,10 @@ struct AmrSystem<Dim>::Impl {
     local_error = {};
     try {
       prepared_solver->install_nullspace(std::move(prepared_nullspace), std::move(distributions));
+      if (plan.newton)
+        prepared_solver->install_newton(*plan.newton);
+      if (plan.boundary_kernel)
+        prepared_solver->install_boundary_kernel(*plan.boundary_kernel);
 
       accepted_potential.reserve(engine->hierarchy().num_levels());
       candidate_auxiliary.reserve(engine->hierarchy().num_levels());
@@ -1511,8 +1574,113 @@ struct AmrSystem<Dim>::Impl {
     plan.candidate_ready = false;
   }
 
-  SolveReport solve_field_candidate(const std::string& slot, int active_level,
-                                    const std::vector<const field_type*>& stage_overrides) {
+  static FieldDistribution field_distribution(const field_type& field) noexcept {
+    return field.distribution().replicated() ? FieldDistribution::Replicated
+                                             : FieldDistribution::Distributed;
+  }
+
+  void prepare_field_boundary_contexts(
+      const std::string& slot, FieldPlan& plan, int active_level,
+      const std::vector<const field_type*>& stage_overrides,
+      const runtime::multiblock::BoundaryEvaluationPoint* evaluation_point) {
+    plan.boundary_context_storage.clear();
+    if (!plan.boundary_kernel)
+      return;
+    if (evaluation_point == nullptr && !plan.boundary_point)
+      throw std::logic_error("AMR dynamic field boundary has no exact logical evaluation point");
+    if (evaluation_point != nullptr &&
+        (evaluation_point->tick < 0 || evaluation_point->tick > std::numeric_limits<int>::max()))
+      throw std::overflow_error("AMR dynamic field boundary tick exceeds native int");
+
+    const std::size_t level_count = engine->hierarchy().num_levels();
+    plan.boundary_context_storage.reserve(level_count);
+    for (std::size_t level = 0; level < level_count; ++level) {
+      PreparedBoundaryContext context;
+      context.parameters = &plan.boundary_parameters;
+      if (plan.boundary_point)
+        context.point = *plan.boundary_point;
+      if (evaluation_point != nullptr) {
+        context.point.time = static_cast<Real>(evaluation_point->physical_time);
+        context.point.dt = static_cast<Real>(evaluation_point->dt);
+        context.point.stage_slot = evaluation_point->stage;
+        context.point.step = static_cast<int>(evaluation_point->tick);
+        context.point.substep = evaluation_point->substep;
+      }
+      context.point.level = static_cast<int>(level);
+      context.point.iteration = 0;
+
+      context.states.reserve(plan.boundary_state_blocks.size());
+      context.state_distributions.reserve(plan.boundary_state_blocks.size());
+      context.state_identities.reserve(plan.boundary_state_blocks.size());
+      for (std::size_t dependency = 0; dependency < plan.boundary_state_blocks.size();
+           ++dependency) {
+        const auto block =
+            std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& candidate) {
+              return candidate.name == plan.boundary_state_blocks[dependency];
+            });
+        if (block == blocks.end())
+          throw std::runtime_error("AMR dynamic boundary names an unknown state dependency block");
+        const std::size_t block_index =
+            static_cast<std::size_t>(std::distance(blocks.begin(), block));
+        const field_type* state = &engine->hierarchy().state(level);
+        if (static_cast<int>(level) == active_level && !stage_overrides.empty() &&
+            stage_overrides[block_index] != nullptr)
+          state = stage_overrides[block_index];
+        const int component = plan.boundary_state_components[dependency];
+        if (!same_field_contract(*state, engine->hierarchy().state(level)) || component < 0 ||
+            component >= state->ncomp())
+          throw std::invalid_argument(
+              "AMR dynamic boundary state dependency is not materialized exactly");
+        context.states.push_back(state);
+        context.state_distributions.push_back(field_distribution(*state));
+        context.state_identities.push_back(block->name + "/" +
+                                           prepared_hierarchy->state_field_identities[level]);
+      }
+
+      context.fields.reserve(plan.boundary_field_blocks.size());
+      context.field_distributions.reserve(plan.boundary_field_blocks.size());
+      context.field_identities.reserve(plan.boundary_field_blocks.size());
+      for (std::size_t dependency = 0; dependency < plan.boundary_field_blocks.size();
+           ++dependency) {
+        if (plan.boundary_field_components[dependency] != 0)
+          throw std::invalid_argument(
+              "AMR scalar field boundary dependency must select component zero");
+        const auto dependency_plan =
+            std::find_if(field_plans.begin(), field_plans.end(), [&](const auto& candidate) {
+              return candidate.second.output_block == plan.boundary_field_blocks[dependency] &&
+                     candidate.second.output_key == plan.boundary_field_keys[dependency];
+            });
+        if (dependency_plan == field_plans.end())
+          throw std::runtime_error(
+              "AMR dynamic boundary names an unknown owner-qualified field dependency");
+        if (dependency_plan->first == slot)
+          throw std::logic_error(
+              "AMR dynamic boundary cannot name its iterate as an external field dependency");
+        const FieldPlan& dependency_field = dependency_plan->second;
+        if (!dependency_field.materialized_for(*engine) ||
+            dependency_field.accepted_potential.size() != level_count)
+          throw std::logic_error(
+              "AMR dynamic boundary field dependency must be solved and materialized first");
+        const field_type& values = *dependency_field.accepted_potential[level];
+        context.fields.push_back(&values);
+        context.field_distributions.push_back(field_distribution(values));
+        context.field_identities.push_back(dependency_plan->first + "/" +
+                                           dependency_field.provider_identity);
+      }
+      plan.boundary_context_storage.push_back(std::move(context));
+    }
+
+    std::vector<FieldBoundaryExecutionContext<Dim>> views;
+    views.reserve(plan.boundary_context_storage.size());
+    for (PreparedBoundaryContext& context : plan.boundary_context_storage)
+      views.push_back(context.view());
+    plan.prepared_solver->set_boundary_contexts(std::move(views));
+  }
+
+  SolveReport solve_field_candidate(
+      const std::string& slot, int active_level,
+      const std::vector<const field_type*>& stage_overrides,
+      const runtime::multiblock::BoundaryEvaluationPoint* evaluation_point = nullptr) {
     materialize_field(slot);
     FieldPlan& plan = field_plans.at(slot);
     if (!active_field_slot.empty())
@@ -1526,6 +1694,7 @@ struct AmrSystem<Dim>::Impl {
           "AMR exact field stage vector must cover the runtime block registry");
 
     bool has_rhs = false;
+    prepare_field_boundary_contexts(slot, plan, active_level, stage_overrides, evaluation_point);
     active_field_slot = slot;
     plan.candidate_ready = false;
     try {
@@ -2765,7 +2934,7 @@ SolveOutcome AmrSystem<Dim>::solve_program_field_at(
   SolveReport report;
   std::exception_ptr local_error;
   try {
-    report = p_->solve_field_candidate(slot, active_level, stages);
+    report = p_->solve_field_candidate(slot, active_level, stages, &point);
   } catch (...) {
     local_error = std::current_exception();
   }

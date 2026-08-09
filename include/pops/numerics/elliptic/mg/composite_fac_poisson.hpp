@@ -12,6 +12,8 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/composite_fac_nlevel.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
@@ -27,6 +29,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -139,12 +142,13 @@ Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class CompositeFacPoisson {
  public:
-  static_assert(Dim >= 1 && Dim <= 3,
-                "CompositeFacPoisson only supports dimensions 1, 2, and 3");
+  static_assert(Dim >= 1 && Dim <= 3, "CompositeFacPoisson only supports dimensions 1, 2, and 3");
 
   static constexpr int dimension = Dim;
   using field_type = MultiFab<Dim, MemorySpace>;
   using request_type = CompositeFacBuildRequest<Dim>;
+  using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
+  using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
   CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
                       Real reaction = Real(0))
@@ -190,7 +194,13 @@ class CompositeFacPoisson {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_prepared_contract_; }
   int n_levels() const noexcept { return static_cast<int>(levels_.size()); }
-  int maximum_iterations() const noexcept { return options_.max_iters; }
+  int maximum_iterations() const noexcept {
+    if (newton_workspace_)
+      return newton_workspace_->options().max_iterations;
+    if (linear_boundary_workspace_)
+      return linear_boundary_workspace_->options().max_iterations;
+    return options_.max_iters;
+  }
   field_type& rhs_level(int level) { return levels_.at(static_cast<std::size_t>(level))->rhs; }
   const field_type& rhs_level(int level) const {
     return levels_.at(static_cast<std::size_t>(level))->rhs;
@@ -200,6 +210,47 @@ class CompositeFacPoisson {
     return levels_.at(static_cast<std::size_t>(level))->phi;
   }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
+
+  void install_newton(FieldNewtonOptions options) {
+    if (newton_workspace_)
+      throw std::logic_error("composite FAC Newton authority is already installed");
+    validate_field_newton_options(options);
+    const auto layouts = newton_layouts_();
+    const auto masks = active_masks_();
+    const auto measures = level_cell_measures_();
+    newton_workspace_.emplace(layouts, masks, measures, options);
+    linear_boundary_workspace_.reset();
+    prepare_dynamic_views_();
+  }
+
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    if (boundary_kernel_)
+      throw std::logic_error("composite FAC boundary kernel is already installed");
+    kernel.validate();
+    boundary_kernel_ = std::move(kernel);
+    boundary_contexts_.clear();
+    if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
+      const FieldNewtonOptions options = linear_boundary_newton_options_();
+      const auto layouts = newton_layouts_();
+      const auto masks = active_masks_();
+      const auto measures = level_cell_measures_();
+      linear_boundary_workspace_.emplace(layouts, masks, measures, options);
+    }
+    prepare_dynamic_views_();
+  }
+
+  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) {
+    if (!boundary_kernel_)
+      throw std::logic_error("composite FAC has no compiled dynamic boundary kernel");
+    if (contexts.size() != levels_.size())
+      throw std::invalid_argument(
+          "composite FAC requires one dynamic boundary context per live AMR level");
+    for (const FieldBoundaryExecutionContext<Dim>& context : contexts)
+      if (context.failure == nullptr)
+        throw std::invalid_argument(
+            "composite FAC dynamic boundary requires fallible execution channels");
+    boundary_contexts_ = std::move(contexts);
+  }
 
   void install_nullspace(FieldNullspacePlan<Dim> plan,
                          std::vector<PreparedVectorDistribution<Dim>> distributions) {
@@ -220,8 +271,8 @@ class CompositeFacPoisson {
       rhs_layouts.push_back(&level->rhs);
       candidates.push_back(&level->phi);
     }
-    auto workspace = std::make_unique<FieldNullspaceWorkspace<Dim>>(
-        plan, rhs_layouts, distributions);
+    auto workspace =
+        std::make_unique<FieldNullspaceWorkspace<Dim>>(plan, rhs_layouts, distributions);
     FieldNullspacePlan<Dim> coarse_plan = coarse_correction_plan_(plan);
     coarse_solver_->install_nullspace(std::move(coarse_plan), distributions.front());
 
@@ -247,6 +298,9 @@ class CompositeFacPoisson {
       return last_report_;
     }
     nullspace_workspace_->apply_gauge(nullspace_candidates_);
+
+    if (newton_workspace_ || boundary_kernel_)
+      return solve_dynamic_();
 
     compute_composite_residual_();
     const Real reference = composite_residual_norm_();
@@ -334,9 +388,13 @@ class CompositeFacPoisson {
     field_type residual;
     field_type scratch;
     field_type correction;
+    field_type residual_operator_view;
+    field_type direction_operator_view;
     field_type covered;
+    field_type active;
     HaloSchedule<Dim> halo_schedule;
     PreparedPhysicalBoundary<Dim> physical_boundary;
+    PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
 
     Level(const EllipticBuildRequest<Dim>& request, bool full_domain)
         : geometry(request.geometry),
@@ -348,14 +406,23 @@ class CompositeFacPoisson {
           scratch(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
           correction(request.boxes, request.distribution, request.local_rank, 1,
                      detail::unit_ghosts<Dim>()),
+          residual_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                 detail::unit_ghosts<Dim>()),
+          direction_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                  detail::unit_ghosts<Dim>()),
           covered(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          active(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
           halo_schedule(prepare_halo_schedule(
               phi, geometry.domain(), boundary.topology(),
               full_domain ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level,
               detail::exact_halo_budget(request.boxes, geometry.domain()))),
-          physical_boundary(prepare_physical_boundary(
-              geometry.domain(), detail::unit_ghosts<Dim>(), boundary,
-              detail::exact_boundary_budget<Dim>())) {
+          physical_boundary(prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
+                                                      boundary,
+                                                      detail::exact_boundary_budget<Dim>())),
+          homogeneous_physical_boundary(
+              prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
+                                        detail::boundary_for_geometry(boundary, geometry, true),
+                                        detail::exact_boundary_budget<Dim>())) {
       if (halo_schedule.has_remote_jobs())
         throw std::invalid_argument(
             "composite FAC distributed halo transport is not a registered capability");
@@ -364,15 +431,21 @@ class CompositeFacPoisson {
       residual.set_val(Real(0));
       scratch.set_val(Real(0));
       correction.set_val(Real(0));
+      residual_operator_view.set_val(Real(0));
+      direction_operator_view.set_val(Real(0));
       covered.set_val(Real(0));
+      active.set_val(Real(1));
     }
   };
 
   struct Connection {
     ::pops::amr::RefinementRatio<Dim> ratio;
     std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_phi;
+    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_residual_view;
+    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_direction_view;
     std::vector<fac_detail::CellTransfer<Dim>> residual_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> solution_restriction;
+    std::vector<fac_detail::CellTransfer<Dim>> direction_restriction;
     std::vector<fac_detail::CellTransfer<Dim>> correction_prolongation;
   };
 
@@ -423,8 +496,7 @@ class CompositeFacPoisson {
           !current.boxes.tiles_exactly(current.geometry.domain(), current.layout_budget))
         throw std::invalid_argument("composite FAC coarse level must tile its complete domain");
       if (n_ranks() > 1 && !current.distribution.replicated())
-        throw std::invalid_argument(
-            "composite FAC currently requires replicated levels under MPI");
+        throw std::invalid_argument("composite FAC currently requires replicated levels under MPI");
       for (int axis = 0; axis < Dim; ++axis)
         if (current.rhs_ghosts[axis] != 0 || current.phi_ghosts[axis] < 1)
           throw std::invalid_argument(
@@ -456,7 +528,7 @@ class CompositeFacPoisson {
     for (std::size_t parent_index = 0; parent_index < ratios.size(); ++parent_index) {
       Level& parent = *levels_[parent_index];
       Level& child = *levels_[parent_index + 1];
-      Connection connection{ratios[parent_index], {}, {}, {}, {}};
+      Connection connection{ratios[parent_index], {}, {}, {}, {}, {}, {}, {}};
       mark_coverage_(parent, child, connection.ratio);
       prepare_connection_(parent, child, connection);
       connections_.push_back(std::move(connection));
@@ -469,17 +541,20 @@ class CompositeFacPoisson {
       const Box<Dim> footprint = coarsen(fine_patch, detail::ratio_extent(ratio));
       for (std::size_t local = 0; local < parent.covered.local_size(); ++local) {
         const Box<Dim> region = parent.covered.box(local).intersect(footprint);
-        if (!region.empty())
-          for_each_cell(region, fac_detail::SetScalarKernel<Dim>{
-                                    parent.covered.fab(local).view(), Real(1)});
+        if (!region.empty()) {
+          for_each_cell(
+              region, fac_detail::SetScalarKernel<Dim>{parent.covered.fab(local).view(), Real(1)});
+          for_each_cell(region,
+                        fac_detail::SetScalarKernel<Dim>{parent.active.fab(local).view(), Real(0)});
+        }
       }
     }
     Kokkos::fence();
   }
 
   void prepare_connection_(Level& parent, Level& child, Connection& connection) {
-    using Provider = ::pops::amr::transfer::TransferProvider<
-        Dim, ::pops::amr::transfer::Centering::Cell>;
+    using Provider =
+        ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>;
     const Provider restriction = Provider::conservative_restriction();
     const Provider prolongation = Provider::linear_prolongation();
 
@@ -498,11 +573,14 @@ class CompositeFacPoisson {
             static_cast<const field_type&>(child.residual).fab(child_local).view();
         const auto child_phi_view =
             static_cast<const field_type&>(child.phi).fab(child_local).view();
-        connection.residual_restriction.push_back(restriction.prepare(
-            child_residual_view, parent.residual.fab(parent_local).view(), region,
-            connection.ratio));
+        connection.residual_restriction.push_back(
+            restriction.prepare(child_residual_view, parent.residual.fab(parent_local).view(),
+                                region, connection.ratio));
         connection.solution_restriction.push_back(restriction.prepare(
             child_phi_view, parent.phi.fab(parent_local).view(), region, connection.ratio));
+        connection.direction_restriction.push_back(restriction.prepare(
+            static_cast<const field_type&>(child.correction).fab(child_local).view(),
+            parent.correction.fab(parent_local).view(), region, connection.ratio));
       }
       if (restricted_cells != footprint.numPts())
         throw std::invalid_argument(
@@ -518,9 +596,9 @@ class CompositeFacPoisson {
         prolonged_cells += region.numPts();
         const auto parent_correction_view =
             static_cast<const field_type&>(parent.correction).fab(parent_local).view();
-        connection.correction_prolongation.push_back(prolongation.prepare(
-            parent_correction_view, child.correction.fab(child_local).view(), region,
-            connection.ratio));
+        connection.correction_prolongation.push_back(
+            prolongation.prepare(parent_correction_view, child.correction.fab(child_local).view(),
+                                 region, connection.ratio));
       }
       if (prolonged_cells != fine_valid.numPts())
         throw std::invalid_argument(
@@ -534,16 +612,34 @@ class CompositeFacPoisson {
           fac_detail::subtract_from_regions(pending, halo.destination_region);
 
       for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
-        const Box<Dim> parent_reach =
-            refine(parent.phi.fab(parent_local).grown_box(), ratio_value);
+        const Box<Dim> parent_reach = refine(parent.phi.fab(parent_local).grown_box(), ratio_value);
         std::vector<Box<Dim>> next;
         for (const Box<Dim>& region : pending) {
           const Box<Dim> destination = region.intersect(parent_reach);
           if (!destination.empty()) {
-            const auto source =
-                static_cast<const field_type&>(parent.phi).fab(parent_local).view();
+            const auto source = static_cast<const field_type&>(parent.phi).fab(parent_local).view();
             connection.coarse_fine_phi.push_back(fac_detail::InjectionTransfer<Dim>{
                 source, child.phi.fab(child_local).view(), destination, connection.ratio, {}});
+            const auto residual_source =
+                static_cast<const field_type&>(parent.residual_operator_view)
+                    .fab(parent_local)
+                    .view();
+            connection.coarse_fine_residual_view.push_back(fac_detail::InjectionTransfer<Dim>{
+                residual_source,
+                child.residual_operator_view.fab(child_local).view(),
+                destination,
+                connection.ratio,
+                {}});
+            const auto direction_source =
+                static_cast<const field_type&>(parent.direction_operator_view)
+                    .fab(parent_local)
+                    .view();
+            connection.coarse_fine_direction_view.push_back(fac_detail::InjectionTransfer<Dim>{
+                direction_source,
+                child.direction_operator_view.fab(child_local).view(),
+                destination,
+                connection.ratio,
+                {}});
           }
           std::vector<Box<Dim>> remainder = fac_detail::subtract_box(region, destination);
           next.insert(next.end(), remainder.begin(), remainder.end());
@@ -569,8 +665,7 @@ class CompositeFacPoisson {
         std::make_unique<GeometricMG<Dim, MemorySpace>>(std::move(correction_request), controls);
   }
 
-  void fill_level_ghosts_(std::size_t level_index, field_type& field,
-                          bool interpolate_parent) {
+  void fill_level_ghosts_(std::size_t level_index, field_type& field, bool interpolate_parent) {
     Level& level = *levels_.at(level_index);
     fill_boundary(field, level.halo_schedule);
     if (interpolate_parent && level_index > 0)
@@ -597,11 +692,15 @@ class CompositeFacPoisson {
       for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
         const auto phi_view = static_cast<const field_type&>(level.phi).fab(local).view();
         const auto rhs_view = static_cast<const field_type&>(level.rhs).fab(local).view();
-        const auto covered_view =
-            static_cast<const field_type&>(level.covered).fab(local).view();
-        fac_detail::MaskedJacobiKernel<Dim> kernel{
-            level.scratch.fab(local).view(), phi_view, rhs_view, covered_view, {},
-            Real(1) / diagonal, Real(2) / Real(3), reaction_};
+        const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+        fac_detail::MaskedJacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
+                                                   phi_view,
+                                                   rhs_view,
+                                                   covered_view,
+                                                   {},
+                                                   Real(1) / diagonal,
+                                                   Real(2) / Real(3),
+                                                   reaction_};
         for (int axis = 0; axis < Dim; ++axis)
           kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
         for_each_cell(level.phi.box(local), kernel);
@@ -616,8 +715,7 @@ class CompositeFacPoisson {
     fill_level_ghosts_(level_index, level.phi, true);
     poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual, reaction_);
     for (std::size_t local = 0; local < level.residual.local_size(); ++local) {
-      const auto covered_view =
-          static_cast<const field_type&>(level.covered).fab(local).view();
+      const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
       for_each_cell(level.residual.box(local), fac_detail::MaskResidualKernel<Dim>{
                                                    level.residual.fab(local).view(), covered_view});
     }
@@ -652,14 +750,249 @@ class CompositeFacPoisson {
 
   void add_uncovered_(Level& level, const field_type& correction) {
     for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
-      const auto covered_view =
-          static_cast<const field_type&>(level.covered).fab(local).view();
-      for_each_cell(level.phi.box(local), fac_detail::MaskedAddKernel<Dim>{
-                                                level.phi.fab(local).view(),
-                                                correction.fab(local).view(),
-                                                covered_view});
+      const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+      for_each_cell(level.phi.box(local),
+                    fac_detail::MaskedAddKernel<Dim>{level.phi.fab(local).view(),
+                                                     correction.fab(local).view(), covered_view});
     }
     Kokkos::fence();
+  }
+
+  std::vector<const field_type*> newton_layouts_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->phi);
+    return result;
+  }
+
+  std::vector<const field_type*> active_masks_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->active);
+    return result;
+  }
+
+  std::vector<Real> level_cell_measures_() const {
+    std::vector<Real> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= level->geometry.spacing(axis);
+      result.push_back(measure);
+    }
+    return result;
+  }
+
+  void prepare_dynamic_views_() {
+    candidate_view_.resize(levels_.size());
+    dynamic_const_view_.resize(levels_.size());
+    dynamic_mutable_view_.resize(levels_.size());
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      candidate_view_[level] = &levels_[level]->phi;
+  }
+
+  static void copy_valid_(const field_type& source, field_type& destination) {
+    copy_scalar_valid(source, destination);
+  }
+
+  static void copy_grown_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() ||
+        source.distribution() != destination.distribution() ||
+        source.local_rank() != destination.local_rank() || source.ncomp() != 1 ||
+        destination.ncomp() != 1 || source.ghosts() != destination.ghosts())
+      throw std::invalid_argument("composite FAC dynamic operator views differ from candidates");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto values = source.fab(local).view();
+      const auto published = destination.fab(local).view();
+      for_each_cell(source.fab(local).grown_box(),
+                    [=] POPS_HD(const Index<Dim>& cell) { published(cell, 0) = values(cell, 0); });
+    }
+    Kokkos::fence();
+  }
+
+  void stage_iterate_(const nonlinear_hierarchy_type& iterate) {
+    if (iterate.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear iterate has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(iterate[level], levels_[level]->phi);
+    average_solution_down_();
+  }
+
+  void stage_direction_(const nonlinear_hierarchy_type& direction) {
+    if (direction.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear direction has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(direction[level], levels_[level]->correction);
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      fac_detail::execute_transfers(connections_.at(child - 1).direction_restriction);
+  }
+
+  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(std::size_t level, int iteration) {
+    if (boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("composite FAC dynamic boundary contexts are absent");
+    boundary_contexts_[level].point.iteration = iteration;
+    return boundary_contexts_[level];
+  }
+
+  static void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
+                                            const char* message) {
+    Kokkos::fence();
+    if (context.failure->synchronize_across_ranks())
+      throw std::runtime_error(message);
+  }
+
+  void fill_dynamic_residual_ghosts_(std::size_t level_index, int iteration) {
+    Level& level = *levels_.at(level_index);
+    copy_valid_(level.phi, level.residual_operator_view);
+    fill_boundary(level.residual_operator_view, level.halo_schedule);
+    if (level_index > 0)
+      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_residual_view);
+    fill_physical_boundary(level.residual_operator_view, level.physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_residual_view(face, level.phi, level.residual_operator_view,
+                                                level.geometry, context);
+      synchronize_boundary_failure_(context,
+                                    "composite FAC dynamic boundary residual failed collectively");
+    }
+  }
+
+  void fill_dynamic_jvp_ghosts_(std::size_t level_index, int iteration) {
+    Level& level = *levels_.at(level_index);
+    copy_valid_(level.correction, level.direction_operator_view);
+    fill_boundary(level.direction_operator_view, level.halo_schedule);
+    if (level_index > 0)
+      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_direction_view);
+    fill_physical_boundary(level.direction_operator_view, level.homogeneous_physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_jvp_view(face, level.phi, level.correction,
+                                           level.direction_operator_view, level.geometry, context);
+      synchronize_boundary_failure_(context,
+                                    "composite FAC dynamic boundary JVP failed collectively");
+    }
+  }
+
+  static void mask_covered_(Level& level, field_type& values) {
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      const auto covered = static_cast<const field_type&>(level.covered).fab(local).view();
+      for_each_cell(values.box(local),
+                    fac_detail::MaskResidualKernel<Dim>{values.fab(local).view(), covered});
+    }
+    Kokkos::fence();
+  }
+
+  void evaluate_dynamic_residual_(const nonlinear_hierarchy_type& iterate,
+                                  nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear residual has the wrong level count");
+    stage_iterate_(iterate);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_residual_ghosts_(level_index, iteration);
+      poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+                             level.residual, reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        context.failure->reset();
+        for (int face = 0; face < 2 * Dim; ++face)
+          boundary_kernel_->add_residual(face, level.phi, level.residual, level.geometry, context);
+        synchronize_boundary_failure_(context,
+                                      "composite FAC dynamic residual closure failed collectively");
+      }
+      mask_covered_(level, level.residual);
+      copy_valid_(level.residual, output[level_index]);
+      dynamic_const_view_[level_index] = &output[level_index];
+    }
+    nullspace_workspace_->require_compatible(dynamic_const_view_);
+  }
+
+  void apply_dynamic_linearized_(const nonlinear_hierarchy_type& iterate,
+                                 const nonlinear_hierarchy_type& direction,
+                                 nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear JVP has the wrong level count");
+    stage_iterate_(iterate);
+    stage_direction_(direction);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_jvp_ghosts_(level_index, iteration);
+      apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
+                                   reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        context.failure->reset();
+        for (int face = 0; face < 2 * Dim; ++face)
+          boundary_kernel_->apply_jvp(face, level.phi, level.correction, level.scratch,
+                                      level.geometry, context);
+        synchronize_boundary_failure_(context,
+                                      "composite FAC dynamic JVP closure failed collectively");
+      }
+      mask_covered_(level, level.scratch);
+      copy_valid_(level.scratch, output[level_index]);
+    }
+  }
+
+  void apply_dynamic_gauge_(nonlinear_hierarchy_type& values) {
+    if (values.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear gauge has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      dynamic_mutable_view_[level] = &values[level];
+    nullspace_workspace_->apply_gauge(dynamic_mutable_view_);
+  }
+
+  SolveReport solve_dynamic_() {
+    if (boundary_kernel_ && boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("composite FAC dynamic boundary has no level-qualified contexts");
+    if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
+      throw std::logic_error(
+          "iterate-dependent composite FAC boundary requires a prepared Newton authority");
+    auto* workspace = newton_workspace_ ? &*newton_workspace_ : &*linear_boundary_workspace_;
+    SolveReport report;
+    try {
+      report = workspace->solve(
+          candidate_view_,
+          [this](const nonlinear_hierarchy_type& iterate, nonlinear_hierarchy_type& residual,
+                 int iteration) { evaluate_dynamic_residual_(iterate, residual, iteration); },
+          [this](const nonlinear_hierarchy_type& iterate, const nonlinear_hierarchy_type& direction,
+                 nonlinear_hierarchy_type& output, int iteration) {
+            apply_dynamic_linearized_(iterate, direction, output, iteration);
+          },
+          [this](nonlinear_hierarchy_type& values) { apply_dynamic_gauge_(values); });
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+    }
+    if (report.solved_value_available()) {
+      average_solution_down_();
+      nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      for (std::size_t level = 0; level < levels_.size(); ++level) {
+        fill_dynamic_residual_ghosts_(level, report.iters);
+        copy_grown_(levels_[level]->residual_operator_view, levels_[level]->phi);
+      }
+    }
+    last_report_ = report;
+    return last_report_;
+  }
+
+  FieldNewtonOptions linear_boundary_newton_options_() const {
+    FieldNewtonOptions options;
+    options.tolerance = std::max(options_.rel_tol,
+                                 options_.abs_tol > Real(0) ? options_.abs_tol : options_.rel_tol);
+    options.max_iterations = 1;
+    options.linear_tolerance = options_.rel_tol;
+    options.linear_max_iterations = std::max(1, options_.max_iters);
+    options.restart = std::min(30, options.linear_max_iterations);
+    validate_field_newton_options(options);
+    return options;
   }
 
   Real global_norm_inf_(const field_type& field) const {
@@ -685,6 +1018,13 @@ class CompositeFacPoisson {
   std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
   std::vector<MultiFab<Dim>*> nullspace_candidates_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
+  std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
+  std::vector<FieldBoundaryExecutionContext<Dim>> boundary_contexts_{};
+  std::optional<nonlinear_workspace_type> newton_workspace_{};
+  std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};
+  std::vector<field_type*> candidate_view_{};
+  std::vector<const field_type*> dynamic_const_view_{};
+  std::vector<field_type*> dynamic_mutable_view_{};
   std::string exact_prepared_contract_{};
   SolveReport last_report_{};
 };
