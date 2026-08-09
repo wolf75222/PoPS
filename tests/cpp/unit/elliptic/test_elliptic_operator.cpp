@@ -4,6 +4,8 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+#include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>
+#include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>
 
 #include <array>
 #include <cmath>
@@ -113,4 +115,23 @@ TEST(test_elliptic_operator, fft_and_multigrid_invert_the_same_exact_ranked_oper
   pops::MultiFab<kDim> difference(layout, distribution, local_rank, 1, pops::Extent<kDim>{0, 0});
   pops::lincomb(difference, pops::Real(1), fft.phi(), pops::Real(-1), mg.phi());
   EXPECT_LT(pops::reduce_norm_inf(difference), pops::Real(1e-9));
+}
+
+TEST(test_elliptic_operator, polar_providers_expose_only_their_exact_physical_rank) {
+  static_assert(!pops::PolarGeometryCapabilities<1>::available);
+  static_assert(pops::PolarGeometryCapabilities<2>::available);
+  static_assert(!pops::PolarGeometryCapabilities<3>::available);
+  static_assert(!pops::PolarPoissonProvider<1>::available);
+  static_assert(pops::PolarPoissonProvider<2>::available);
+  static_assert(!pops::PolarPoissonProvider<3>::available);
+  static_assert(!pops::PolarTensorProvider<1>::available);
+  static_assert(pops::PolarTensorProvider<2>::available);
+  static_assert(!pops::PolarTensorProvider<3>::available);
+
+  EXPECT_FALSE(pops::PolarPoissonProvider<1>::rejection_reason().empty());
+  EXPECT_TRUE(pops::PolarPoissonProvider<2>::rejection_reason().empty());
+  EXPECT_FALSE(pops::PolarPoissonProvider<3>::rejection_reason().empty());
+  EXPECT_FALSE(pops::PolarTensorProvider<1>::rejection_reason().empty());
+  EXPECT_TRUE(pops::PolarTensorProvider<2>::rejection_reason().empty());
+  EXPECT_FALSE(pops::PolarTensorProvider<3>::rejection_reason().empty());
 }
