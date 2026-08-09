@@ -355,6 +355,36 @@ class ExactAuxiliaryRegistry final {
     require_sealed_();
     return accepted_points_[provider_index_(provider_identity)];
   }
+  /// Immutable accepted publication provenance in canonical provider order.  Checkpoint owners
+  /// persist these exact integer points together with @ref accepted_generation rather than trying
+  /// to infer freshness from physical time or a carrier component number.
+  [[nodiscard]] const std::vector<std::optional<AuxiliaryEvaluationPoint>>& accepted_points() const {
+    require_sealed_();
+    return accepted_points_;
+  }
+
+  /// Replace the accepted publication provenance after a checkpoint owner has restored its
+  /// carrier groups.  This is deliberately unavailable while a candidate exists: a failed
+  /// restart must leave the prior accepted generation and every provider point untouched.
+  void restore_accepted_publication(
+      std::uint64_t generation,
+      std::vector<std::optional<AuxiliaryEvaluationPoint>> accepted_points) {
+    require_sealed_();
+    if (candidate_open_)
+      throw std::logic_error(
+          "cannot restore auxiliary accepted publication during a candidate generation");
+    if (accepted_points.size() != providers_.size())
+      throw std::invalid_argument(
+          "auxiliary checkpoint accepted-point count differs from the sealed provider graph");
+    for (const auto& point : accepted_points)
+      if (point)
+        point->validate();
+
+    // Validate before either assignment: callers can pair this with their storage transaction and
+    // retain an exact rollback image if any rank rejects a checkpoint preflight.
+    accepted_points_ = std::move(accepted_points);
+    accepted_generation_ = generation;
+  }
   [[nodiscard]] const ResolvedAuxiliaryConsumerPlan<Dim>& consumer_plan(
       std::string_view consumer_qid) const {
     require_sealed_();

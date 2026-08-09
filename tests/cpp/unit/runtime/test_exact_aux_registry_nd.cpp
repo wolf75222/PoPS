@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <cstdint>
@@ -474,6 +475,127 @@ TEST(ExactAuxiliaryRegistryNd,
   verifies_external_field_publication_defers_and_then_refreshes_dependents<1>();
   verifies_external_field_publication_defers_and_then_refreshes_dependents<2>();
   verifies_external_field_publication_defers_and_then_refreshes_dependents<3>();
+}
+
+template <int Dim>
+ExactAuxiliaryRegistry<Dim> accepted_registry_for_checkpoint(
+    std::shared_ptr<std::vector<std::string>> launches) {
+  auto input_output = output<Dim>("checkpoint/input-owner", "input", "density", 0);
+  auto field_output = output<Dim>("checkpoint/field-owner", "field", "potential", 1);
+  field_output.contract = contract("field-layout");
+  const auto derived_output = output<Dim>("checkpoint/derived-owner", "derived", "force", 2);
+
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("checkpoint/input", input_output));
+  registry.add(PreparedAuxiliaryProvider<Dim>{
+      "checkpoint/field", AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once}, {field_output}, {}});
+  registry.add(derived<Dim>("checkpoint/derived", derived_output, {dependency(input_output)},
+                            std::move(launches)));
+  registry.seal();
+
+  const auto initialization = point("checkpoint-clock", 0, AuxiliaryEvaluationEvent::initialization);
+  auto initial_publication = registry.begin_publication(initialization);
+  initial_publication.stage_external("checkpoint/input");
+  initial_publication.stage_external("checkpoint/field");
+  initial_publication.launch_ready_native();
+  initial_publication.accept();
+
+  const auto residual = point("checkpoint-clock", 1, AuxiliaryEvaluationEvent::before_residual);
+  auto residual_publication = registry.begin_publication(residual);
+  residual_publication.launch_ready_native();
+  residual_publication.accept();
+  return registry;
+}
+
+template <int Dim>
+pops::runtime::system::AuxiliaryStorageGroups<Dim> storage_for_checkpoint(
+    const pops::runtime::system::AuxiliaryCheckpointAcceptedState<Dim>& state) {
+  using pops::Box;
+  using pops::Extent;
+  using pops::Index;
+  using pops::MultiFab;
+  using pops::mesh::BoxArray;
+  using pops::mesh::Distribution;
+  using pops::mesh::RankSpace;
+  using pops::runtime::system::AuxiliaryStorageGroups;
+
+  Index<Dim> lower{};
+  Index<Dim> upper{};
+  Extent<Dim> one_rank{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 2;
+    one_rank[axis] = 1;
+  }
+  const BoxArray<Dim> layout(std::vector<Box<Dim>>{{lower, upper}});
+  const auto distribution = Distribution<Dim>::replicated(
+      layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
+  AuxiliaryStorageGroups<Dim> storage;
+  for (const auto& group : state.groups) {
+    Extent<Dim> ghosts{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = group.shape.halo[axis];
+    storage.groups.emplace(group.identity,
+                           MultiFab<Dim>(layout, distribution, Index<Dim>{},
+                                         static_cast<int>(group.component_count), ghosts));
+  }
+  return storage;
+}
+
+template <int Dim>
+void verifies_auxiliary_checkpoint_is_exact_and_restart_atomic() {
+  using pops::runtime::system::capture_auxiliary_checkpoint_state;
+  using pops::runtime::system::deserialize_auxiliary_checkpoint_state;
+  using pops::runtime::system::require_auxiliary_checkpoint_storage;
+  using pops::runtime::system::restore_auxiliary_checkpoint_state;
+  using pops::runtime::system::serialize_auxiliary_checkpoint_state;
+
+  auto launches = std::make_shared<std::vector<std::string>>();
+  const auto accepted = accepted_registry_for_checkpoint<Dim>(launches);
+  ASSERT_EQ(accepted.accepted_generation(), 2U);
+  const auto image = capture_auxiliary_checkpoint_state(accepted);
+  ASSERT_EQ(image.groups.size(), 2U);
+  ASSERT_EQ(image.components.size(), 3U);
+  ASSERT_EQ(image.providers.size(), 3U);
+  EXPECT_EQ(deserialize_auxiliary_checkpoint_state<Dim>(
+                serialize_auxiliary_checkpoint_state(image)),
+            image);
+
+  auto storage = storage_for_checkpoint<Dim>(image);
+  EXPECT_NO_THROW(require_auxiliary_checkpoint_storage(image, storage));
+  storage.groups.erase(image.groups.front().identity);
+  EXPECT_THROW(require_auxiliary_checkpoint_storage(image, storage), std::invalid_argument);
+
+  auto restarted_launches = std::make_shared<std::vector<std::string>>();
+  // A fresh sealed registry has no accepted history; restore must publish the image atomically.
+  ExactAuxiliaryRegistry<Dim> empty_history;
+  const auto input_output = output<Dim>("checkpoint/input-owner", "input", "density", 0);
+  auto field_output = output<Dim>("checkpoint/field-owner", "field", "potential", 1);
+  field_output.contract = contract("field-layout");
+  const auto derived_output = output<Dim>("checkpoint/derived-owner", "derived", "force", 2);
+  empty_history.add(input<Dim>("checkpoint/input", input_output));
+  empty_history.add(PreparedAuxiliaryProvider<Dim>{
+      "checkpoint/field", AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once}, {field_output}, {}});
+  empty_history.add(derived<Dim>("checkpoint/derived", derived_output, {dependency(input_output)},
+                                 restarted_launches));
+  empty_history.seal();
+  restore_auxiliary_checkpoint_state(image, empty_history);
+  EXPECT_EQ(empty_history.accepted_generation(), image.accepted_generation);
+  for (std::size_t provider = 0; provider < image.providers.size(); ++provider)
+    EXPECT_EQ(empty_history.last_accepted_point(image.providers[provider].identity),
+              image.providers[provider].accepted_point);
+
+  auto wrong_key = image;
+  wrong_key.components.front().key.component = "wrong";
+  EXPECT_THROW(restore_auxiliary_checkpoint_state(wrong_key, empty_history), std::invalid_argument);
+  EXPECT_EQ(empty_history.accepted_generation(), image.accepted_generation);
+}
+
+TEST(ExactAuxiliaryRegistryNd, CheckpointPersistsExactGroupsKeysShapesAndAcceptedGeneration) {
+  verifies_auxiliary_checkpoint_is_exact_and_restart_atomic<1>();
+  verifies_auxiliary_checkpoint_is_exact_and_restart_atomic<2>();
+  verifies_auxiliary_checkpoint_is_exact_and_restart_atomic<3>();
 }
 
 }  // namespace
