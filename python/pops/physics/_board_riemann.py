@@ -27,7 +27,7 @@ class _RiemannAuthoringMixin(_BoardModel):
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
         hyp = self._dsl._m
         with atomic_attrs(
-                (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_hllc"), (hyp, "_roe"),
+                (hyp, "aux_names"), (hyp, "_hllc"), (hyp, "_roe"),
                 (hyp, "_riemann_hook_forms"), (self, "_riemann")):
             enabler = _GENERIC_CAPABILITY_ENABLERS.get(kind)
             if enabler is not None:

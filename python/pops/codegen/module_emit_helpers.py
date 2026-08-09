@@ -7,7 +7,7 @@ module never imports pops.dsl or pops.physics at module level.
 
 Contents
 --------
-_aux_layout, _aux_component_index                  -- exact-ranked aux authority
+_aux_component_index                               -- exact ProviderPack authority
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
 _ranked_axes, _axis_values                          -- exact Cartesian-rank helpers
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops._aux_layout import aux_layout as _make_aux_layout
 from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
@@ -61,14 +60,9 @@ def _ranked_axes(model: Any) -> tuple[str, ...]:
     return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
 
 
-def _aux_layout(model: Any) -> Any:
-    """Return the auxiliary layout attached to the emitted physical rank."""
-    return _make_aux_layout(len(_ranked_axes(model)))
-
-
 def _aux_component_index(model: Any, name: Any) -> int:
-    """Resolve a canonical or model-named provider in that exact layout."""
-    return _aux_layout(model).component_index(name, model.aux_extra_names)
+    """Resolve one auxiliary slot from the emitter's exact ProviderPack."""
+    return model._aux_component_index(name)
 
 
 def _axis_values(model: Any, values: Any, *, where: str) -> list:

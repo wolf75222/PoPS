@@ -53,7 +53,7 @@ class _FluxMixin(_HyperbolicModel):
     def flux_term(self, name: str, **directions: Any) -> None:
         """Declare a NAMED physical flux F_name(U, primitives, aux, params): exactly n_cons
         expressions per direction (x= the x-flux, y= the y-flux), free to depend on cons / primitives /
-        aux / aux_field / params / constants -- the same dependency surface as set_flux. A named flux is
+        aux / params / constants -- the same dependency surface as set_flux. A named flux is
         OPT-IN: it is emitted only when a compiled time Program selects it (ctx.rhs(..., fluxes=[name,
         ...])) and is NEVER folded into the historical -div F (rhs_into). name == "default" is the
         backward-compatible alias of m.flux(...) (stored in self._flux, hash unchanged): so

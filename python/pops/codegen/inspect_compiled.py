@@ -194,7 +194,7 @@ def build_arguments(compiled: Any) -> Arguments:
         each is required and carries the model's conservative state space + component count;
       - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
-      - aux: the model's named external aux inputs (``model.aux_extra_names`` minus the exact,
+      - aux: the model's generic external auxiliary inputs (``model.aux_names`` minus the exact,
         owner-scoped components produced by resolved field plans), each required;
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
       - layout_runtime: every exact compiled layout partition, its target, MPI optionality and

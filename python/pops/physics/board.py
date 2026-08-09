@@ -556,12 +556,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return self._dsl.value(parameter)
 
     def aux(self, name: Any) -> Any:
-        """Declare an auxiliary field read by the model (e.g. an imposed ``B_z``)."""
+        """Declare one ordinary auxiliary field read by the model."""
         name = require_name(name, "aux field name")
-        canonical = {"phi", "grad_x", "grad_y", "B_z", "T_e"}
-        if name in canonical:
-            return self._dsl.aux(name)
-        return self._dsl.aux_field(name)
+        return self._dsl.aux(name)
 
     def field(self, name: Any, *, components: Any = None) -> Any:
         """Declare a solved scalar or a multi-component field space.
@@ -648,7 +645,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if set(components) != set(frame.axes):
             raise ValueError("vector components must name every typed frame axis exactly once")
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (self, "_fields")):
+        with atomic_attrs((hyp, "aux_names"), (self, "_fields")):
             h = VectorHandle(
                 name,
                 frame=frame,
@@ -754,7 +751,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 return h
 
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
+        with atomic_attrs((hyp, "aux_names"), (hyp, "_flux"),
                           (hyp, "_eig"), (self, "_fluxes")):
             expressions = {
                 axis: [_wrap(self._to_expr(value)) for value in values]
@@ -963,7 +960,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._invalidate_authoring_views()
             return h
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"),
+        with atomic_attrs((hyp, "aux_names"),
                           (hyp, "_source_terms"), (hyp, "_source"), (self, "_sources")):
             self._dsl.source_term(
                 reg, [_wrap(self._to_expr(expression)) for expression in values])
@@ -1022,7 +1019,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 require_name(input_name, "operator input")
             hyp = self._dsl._m
             with atomic_attrs(
-                    (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_linear_sources"),
+                    (hyp, "aux_names"), (hyp, "_linear_sources"),
                     (self, "_operators"), (self, "_operator_inputs")):
                 self._dsl.linear_source(
                     reg, [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix])
@@ -1235,7 +1232,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return node  # already a dsl Expr / Var / number
 
     def _gradient_aux(self, field_name: Any, axis: Any) -> Any:
-        """Canonical gradient aux name of ``field_name`` along one ranked axis."""
+        """Return the ordinary, field-qualified output name along one ranked axis.
+
+        No unknown has a privileged spelling: ``potential`` and ``phi`` use
+        the same ``<field>_grad_<axis>`` rule as every other field.
+        """
         field_name = require_name(field_name, "gradient field name")
         axes = self._ranked_frame_axes(where="gradient")
         if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(len(axes)):
@@ -1243,8 +1244,6 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 "gradient axis must belong to the model's ranked frame; got %r" % (axis,)
             )
         axis_name = axes[axis]
-        if field_name == "phi":
-            return "grad_" + axis_name
         return "%s_grad_%s" % (field_name, axis_name)
 
     def _require_state_handle(self, handle: Any, where: str, *, optional: bool = False) -> Any:

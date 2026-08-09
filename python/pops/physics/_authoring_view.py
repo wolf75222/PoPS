@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._cartesian_axes import flattened_axis_values
 from ._modelpkg import model as _model
-from .aux import AUX_CANONICAL_NAMES, roles_for
+from .aux import roles_for
 from pops._ir.visitors import _dependencies
 
 if TYPE_CHECKING:
@@ -26,8 +26,8 @@ class _OperatorViewMixin(_HyperbolicModel):
     """Typed StateSpace / FieldSpace / OperatorRegistry view of the model."""
 
     def _aux_name_set(self) -> Any:
-        """Names that denote an auxiliary field read by a formula (canonical + named)."""
-        return set(AUX_CANONICAL_NAMES) | set(self.aux_extra_names)
+        """Names that denote an explicitly declared auxiliary field."""
+        return set(self.aux_names)
 
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
@@ -71,24 +71,12 @@ class _OperatorViewMixin(_HyperbolicModel):
         )
 
     def field_space(self, name: str = "fields") -> Any:
-        """Typed :class:`pops.model.FieldSpace` view of the auxiliary surface the model
-        reads (canonical aux in ABI order, then named fields in declaration order).
+        """Typed field surface read by the model, in authoring declaration order.
 
-        Formula authoring order cannot determine storage identity: a source may read gradients
-        before a later Poisson declaration materializes the potential.  Canonical components
-        therefore retain the single ``AUX_CANONICAL`` order shared with the native ABI.
+        Field names stay semantic only.  The provider pack assigns their native
+        storage slots after the complete module has been resolved.
         """
-        read = set(self.aux_names)
-        # A purely scalar field model may be authored before any flux or frame fixes the native
-        # rank.  Component names are semantic here; their dimension-qualified integer positions
-        # are assigned only after the resolved mesh is known.  The maximal canonical sequence is
-        # an ordering rule, not a 3-D layout choice.
-        canonical_order = ("phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e")
-        comps = [nm for nm in canonical_order if nm in read]
-        for nm in self.aux_extra_names:
-            if nm not in comps:
-                comps.append(nm)
-        return _model.FieldSpace(name=name, components=tuple(comps), layout="cell")
+        return _model.FieldSpace(name=name, components=tuple(self.aux_names), layout="cell")
 
     def operator_registry(self, state_name: str = "U") -> Any:
         """Typed :class:`pops.model.OperatorRegistry` derived from this model.
@@ -272,7 +260,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                     "fields_from_state",
                     "field_operator",
                     # FieldSpace types the complete context AVAILABLE to downstream operators after the
-                    # solve, including imposed aux such as B_z.  FieldContext.outputs separately records
+                    # solve, including externally staged auxiliary components. FieldContext.outputs separately records
                     # the triple physically produced by this Poisson solve, so availability is never
                     # confused with ownership/production.
                     _model.Signature([state], fields),

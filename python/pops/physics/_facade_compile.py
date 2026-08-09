@@ -69,6 +69,11 @@ class _FacadeCompileMixin(_FacadeModel):
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
         and to trace the run. Delegates to the shared computation HyperbolicModel._model_hash, passing it
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
         return self._m._model_hash(params=self.params)
 
     def compile(self, so_path: Any = None, include: Any = None, backend: Any = "production",
@@ -128,7 +133,14 @@ class _FacadeCompileMixin(_FacadeModel):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
 
         m = self._m
-        model_dimension = m._aux_layout().dimension
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
+        model_dimension = len(m._flux)
+        if model_dimension not in (1, 2, 3):
+            raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")
         native_dimension = loader_native_dimension()
         if native_dimension != model_dimension:
             raise ValueError(
@@ -214,7 +226,7 @@ class _FacadeCompileMixin(_FacadeModel):
             roe_entropy_policy=riemann_evidence.roe_entropy_policy,
             roe_entropy_delta=riemann_evidence.roe_entropy_delta,
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
-            aux_extra_names=m.aux_extra_names,
+            aux_names=m.aux_names,
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(
                 None if wave_speed_provider is None else wave_speed_provider.kind

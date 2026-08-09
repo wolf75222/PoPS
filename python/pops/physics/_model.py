@@ -43,7 +43,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
     them and owns ``__init__`` (the full instance-attribute layout the mixins operate on)."""
 
     _physics_mutators = frozenset({
-        "cons", "conservative_vars", "primitive", "aux", "aux_field",
+        "cons", "conservative_vars", "primitive", "aux",
         "recovery_admissibility",
         "set_primitive_state", "set_conservative_from", "set_flux", "set_eigenvalues",
         "flux_term", "set_wave_speeds", "set_wave_speeds_from_jacobian", "set_gamma",
@@ -82,13 +82,13 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
             wave_speed_provider = "pressure_derived"
         return {
             "schema_version": 3,
-            "native_dimension": self._aux_layout().dimension,
+            "native_dimension": len(self._flux),
             "state_spaces": ("U",),
             "cons_names": tuple(self.cons_names),
             "cons_roles": tuple(roles_for(self.cons_names, self.cons_roles)),
             "n_vars": self.n_vars,
             "params": params,
-            "aux_names": tuple(self.aux_extra_names),
+            "aux_names": tuple(self.aux_names),
             "n_aux": self._total_n_aux(),
             "capabilities": {},
             "wave_speed_provider": wave_speed_provider,
@@ -116,8 +116,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self._recovery_admissibility = {}  # primitive component -> symbolic Boolean predicate
-        self.aux_names = []      # CANONICAL aux fields read (phi/grad/B_z/T_e), cf. AUX_CANONICAL
-        self.aux_extra_names = []  # NAMED aux fields (aux_field): order = index AUX_NAMED_BASE + k
+        self.aux_names = []      # Ordered generic auxiliary declarations.
         self._flux = {}         # "x" / "y" -> list of Expr (one per conservative component)
         self._flux_terms = {}   # NAMED physical fluxes (flux_term, ADC-419): name -> {"x": [Expr],
                                 # "y": [Expr]} (n_cons each). The implicit "default" flux lives in

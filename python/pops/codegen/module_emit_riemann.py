@@ -20,7 +20,6 @@ from typing import Any
 from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
-    _aux_component_index,
     _codegen_exprs,
     _live_prims,
     _prim_block,
@@ -321,7 +320,15 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         raise ValueError(
             "provided Roe rows must cover the exact emitted axis set %s" % (axes,)
         )
-    has_aux = bool(model.aux_names)  # Aux parameters named aL/aR only if some aux exist
+    from pops._ir.visitors import _dependencies
+
+    aux_dependencies = _dependencies(
+        expression
+        for axis in axes
+        for expression in model._roe_rows[axis]
+    )
+    aux_names = tuple(name for name in model.aux_names if name in aux_dependencies)
+    has_aux = bool(aux_names)  # names are bound only when this consumer actually reads them
     aL = "const auto& aL" if has_aux else "const auto&"
     aR = "const auto& aR" if has_aux else "const auto&"
     out.append("  // CAPABILITY ROE FOURNIE (m.roe_dissipation) : dissipation d ecrite par")
@@ -338,8 +345,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
                 for p, e in model.prim_defs.items()]
         if has_aux:
             out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
-                    % (side, n, av, _aux_component_index(model, n))
-                    for n in model.aux_names]
+                    % (side, n, av, model._aux_flux_provider_index(n))
+                    for n in aux_names]
     out.append("    State d{};")
     for ordinal, axis in enumerate(axes):
         out.append(_axis_branch(ordinal))

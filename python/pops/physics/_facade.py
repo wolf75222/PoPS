@@ -30,7 +30,6 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             "primitive_vars",
             "recovery_admissibility",
             "aux",
-            "aux_field",
             "conservative_from",
             "flux",
             "flux_term",
@@ -144,15 +143,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.recovery_admissibility(**constraints)
 
     def aux(self, name: Any) -> Any:
-        """Canonical auxiliary field valid for the model's inferred Cartesian rank."""
+        """Declare one ordinary auxiliary input/output field."""
         return self._m.aux(name)
-
-    def aux_field(self, name: Any) -> Any:
-        """NAMED auxiliary field (ADC-70 phase 1) provided by a block via System.set_aux_field(block, name,
-        array). name is ARBITRARY (identifier); the k-th call reserves the k-th model-named slot
-        after the exact-ranked canonical prefix. At most AUX_NAMED_MAX per model.
-        Returns a Var usable in flux / source / eigenvalues. Delegates to HyperbolicModel.aux_field."""
-        return self._m.aux_field(name)
 
     def conservative_from(self, exprs: Any) -> None:
         """Inverse prim -> cons (the DSL cannot invert symbolically)."""
@@ -465,10 +457,13 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         gradient_sign: int = 1,
         dimension: int | None = None,
     ) -> None:
-        """NAMED elliptic field: an elliptic solve operator(field) = rhs(U) populating the named @p aux
-        fields (default ['phi', 'grad_x', 'grad_y']); delegates to HyperbolicModel.elliptic_field. The
-        IR, validation and hash feed the case-owned callable field route. Solver and boundary choices
-        remain in ``FieldDiscretization`` rather than this physics declaration."""
+        """Named elliptic field with explicit ordinary output names in ``aux``.
+
+        The solve is ``operator(field) = rhs(U)``; the first output is the
+        solved scalar and optional remaining outputs are its ranked gradient.
+        No potential or gradient spelling is reserved.  Solver and boundary
+        choices remain in ``FieldDiscretization`` rather than this declaration.
+        """
         self._m.elliptic_field(
             name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign, dimension=dimension
         )

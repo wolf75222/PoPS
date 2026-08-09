@@ -197,8 +197,7 @@ class _EvalMixin(_HyperbolicModel):
     def check(self) -> bool:
         """Checks that every referenced variable (primitives, flux, eigenvalues, source) is
         properly declared (cons / prim / aux). Raises ValueError otherwise (dependency check)."""
-        known = (set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
-                 | set(self.aux_extra_names))  # named aux fields (aux_field): ADC-70
+        known = set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
         used = set()
         groups = [*self._flux.values(), *self._eig.values(), self._source or [],
                   [e for e in (self._stab_speed, self._stab_dt, self._src_freq)
@@ -311,7 +310,7 @@ class _EvalMixin(_HyperbolicModel):
             U = np.asarray(samples, dtype=float)
             if U.ndim != 2 or U.shape[0] != nv:
                 raise ValueError("check_model: samples must be (n_vars=%d, N)" % nv)
-        a = {n: np.zeros(U.shape[1]) for n in (self.aux_names + self.aux_extra_names)}
+        a = {n: np.zeros(U.shape[1]) for n in self.aux_names}
         if aux:
             for k, v in aux.items():
                 a[k] = np.broadcast_to(np.asarray(v, dtype=float), (U.shape[1],)).copy()

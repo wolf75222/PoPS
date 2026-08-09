@@ -17,7 +17,6 @@ from pops.codegen.cpp_writer import (
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
-    _aux_layout,
     _axis_values,
     _codegen_exprs,
     _exact_brick_contract,
@@ -271,7 +270,11 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "    static constexpr int nvars = n_vars;",
         "  };",
     ]
-    provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
+    provider_rows = getattr(model, "_component_flux_consumer_plan", None)
+    if provider_rows is None:
+        raise ValueError(
+            "generated physics brick requires the physical-flux consumer ProviderPack plan"
+        )
     S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
     S.append(
         "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
@@ -287,7 +290,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         availability = "true" if provider["availability"] else "false"
         S.append("    {%s, %s, %d}," %
                  (", ".join(json.dumps(value) for value in values),
-                  availability, provider["slot"]))
+                  availability, row["consumer_slot"]))
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
@@ -301,10 +304,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant
     # M[k][k] + real_eig_minmax, declarees une fois par couple (field, k). Device-clean (ADC-289).
     S += _eig_witness_helpers(eig_pairs)
-    # n_aux if a formula (flux / eigenvalues) reads an extra aux field : canonical
-    # (B_z...) OR named (aux_field -> kAuxNamedBase + k). Without an extra field -> no n_aux emitted,
-    # brick strictly bit-identical to history.
-    if model._total_n_aux() > _aux_layout(model).base_components:
+    # Compact auxiliary width comes exclusively from the resolved ProviderPack.
+    if model._total_n_aux():
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     S += [
         "",

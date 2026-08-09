@@ -1,101 +1,80 @@
-"""Test du chantier Aux extensible cote DSL (increment 6).
+"""Auxiliary codegen consumes only ProviderPack metadata."""
+from __future__ import annotations
 
-Quand une formule du modele symbolique lit un champ aux SUPPLEMENTAIRE (aux('B_z')), la brique
-generee declare `static constexpr int n_aux = 4` : CompositeModel le propage (cf. test_aux_composite)
-et le runtime System dimensionne/peuple le canal aux partage (cf. test_aux_runtime_bz). Un modele qui
-ne lit que phi/grad_x/grad_y reste a la largeur de base (pas de n_aux emis -> bit-identique). On
-verifie : (1) le helper aux_total_n_aux ; (2) l'emission conditionnelle de n_aux ;
-(3) la retro-compat ;
-(4) la validation des noms ; (5) si un compilateur est present, que la brique B_z compile et lit B_z.
-"""
-from tests.python.support.requirements import require_native_or_skip
-import os
-import shutil
-import subprocess
-import tempfile
+import pytest
 
-from pops.physics.aux import aux_total_n_aux
-from pops.physics._model import HyperbolicModel
-
-from tests.python.support.requirements import repo_include
-INCLUDE = repo_include()
+from pops.codegen.component_provider_packs import resolve_component_provider_packs
+from pops.physics._facade import Model
 
 
-def main():
-    # (1) The channel width belongs to the exact native rank.
-    assert aux_total_n_aux([], [], dimension=2) == 3
-    assert aux_total_n_aux(["grad_x", "grad_y"], [], dimension=2) == 3
-    assert aux_total_n_aux(["B_z"], [], dimension=2) == 4
-    assert aux_total_n_aux(["grad_x", "B_z"], [], dimension=2) == 4
-    print("OK  aux_total_n_aux(2D) : base=3, B_z=4")
-
-    # (2) une source qui lit B_z -> brique avec n_aux = 4.
-    m = HyperbolicModel("mag")
-    (nn,) = m.conservative_vars("n")
-    zero = 0.0 * nn
-    m.set_flux(x=[zero], y=[zero])
-    bz = m.aux("B_z")
-    m.set_source([bz * nn])  # S = B_z * n
-    src = m.emit_cpp_source(name="GenBzSrc")
-    assert "static constexpr int n_aux = 4;" in src, "n_aux=4 absent de la source B_z"
-    assert "const pops::Real B_z = a.template flux_provider<3>();" in src
-    print("OK  emit_cpp_source(B_z) declare n_aux = 4")
-
-    # (3) retro-compat : une source qui ne lit que grad n'emet PAS de n_aux.
-    m2 = HyperbolicModel("plain")
-    (n2,) = m2.conservative_vars("n")
-    zero2 = 0.0 * n2
-    m2.set_flux(x=[zero2], y=[zero2])
-    gx = m2.aux("grad_x")
-    m2.set_source([gx * n2])
-    src2 = m2.emit_cpp_source(name="GenPlainSrc")
-    assert "n_aux" not in src2, "n_aux ne doit pas etre emis pour un modele de base"
-    print("OK  emit_cpp_source(base) sans n_aux (bit-identique)")
-
-    # (4) validation : un nom aux inconnu est rejete (doit etre une composante de pops::Aux).
-    try:
-        aux_total_n_aux(["n_e"], [], dimension=2)
-        raise AssertionError("aux_total_n_aux aurait du lever ValueError sur un nom inconnu")
-    except ValueError:
-        pass
-    print("OK  aux_total_n_aux rejette un nom aux inconnu")
-
-    # (5) compile-check : la brique B_z compile et lit bien B_z (sur les vrais en-tetes pops).
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> compile-check sautee (%s)' % INCLUDE)
-        print("test_dsl_aux_naux : OK (forme seulement)")
-        return
-
-    harness = (
-        "#include <pops/core/state/state.hpp>\n"
-        "#include <pops/core/foundation/types.hpp>\n"
-        + src
-        + "#include <cstdio>\n"
-        "static_assert(pops_generated::GenBzSrc::n_aux == 4, \"n_aux propage\");\n"
-        "int main() {\n"
-        "  pops_generated::GenBzSrc g; pops::StateVec<1> u{}; u[0] = 2.0;\n"
-        "  pops::Aux a{}; a.B_z = 0.5;\n"
-        "  auto s = g.apply(u, a);\n"
-        "  printf(\"%.17g\\n\", s[0]);\n"
-        "  return 0;\n"
-        "}\n"
-    )
-    with tempfile.TemporaryDirectory() as tmp:
-        cpp = os.path.join(tmp, "bz.cpp")
-        exe = os.path.join(tmp, "bz")
-        with open(cpp, "w") as f:
-            f.write(harness)
-        subprocess.run([
-            cxx, "-std=c++20", "-O2", "-DPOPS_NATIVE_DIM=2",
-            "-I", INCLUDE, cpp, "-o", exe,
-        ], check=True)
-        out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
-    val = float(out.strip())
-    assert abs(val - 1.0) < 1e-12, "GenBzSrc::apply ne lit pas B_z (S=%g, attendu 1.0)" % val
-    print("OK  GenBzSrc compile et lit B_z (S = B_z * n = %.3g)" % val)
-    print("test_dsl_aux_naux : tout est vert")
+def _model() -> Model:
+    model = Model("generic_aux")
+    (density,) = model.conservative_vars("density")
+    zero = 0.0 * density
+    model.flux(x=[zero])
+    model.eigenvalues(x=[zero])
+    model.primitive_vars(density=density)
+    model.conservative_from([density])
+    coefficient = model.aux("collision_rate")
+    model.source([-(coefficient * density)])
+    return model
 
 
-if __name__ == "__main__":
-    main()
+def test_emit_rejects_an_unbound_auxiliary_provider_pack() -> None:
+    model = _model()
+    with pytest.raises(ValueError, match="ProviderPack is absent"):
+        model._m.emit_cpp_source(name="GenericAuxSource")
+
+
+def test_standalone_flux_refuses_an_unbound_provider_consumer() -> None:
+    model = Model("standalone_aux_flux")
+    (density,) = model.conservative_vars("density")
+    coefficient = model.aux("collision_rate")
+    model.flux(x=[coefficient * density])
+    model.eigenvalues(x=[density])
+
+    with pytest.raises(ValueError, match="canonical Module"):
+        model._m.emit_cpp()
+
+
+def test_provider_pack_assigns_compact_slots_and_emits_consumer_local_reads() -> None:
+    model = _model()
+    packs = resolve_component_provider_packs(model.module)
+    model.__pops_bind_component_provider_packs__(packs)
+
+    assert packs.auxiliary.capacity == 1
+    assert model._m._total_n_aux() == 1
+    source = model._m.emit_cpp_source(name="GenericAuxSource")
+
+    assert "static constexpr int n_aux = 1;" in source
+    assert "flux_provider<0>()" in source
+    assert "B_z" not in source
+    assert "T_e" not in source
+    assert "AUX_NAMED_BASE" not in source
+
+
+def test_native_package_registers_routes_without_sealing_the_global_registry() -> None:
+    model = _model()
+    source = model.__pops_native_loader_source__(name="GenericAux", target="system")
+
+    assert "pops_register_auxiliary_routes" in source
+    assert "install_prepared_auxiliary_provider" in source
+    assert "install_auxiliary_consumer_plan" in source
+    assert "seal_auxiliary_providers" not in source
+    assert "pops_compiled_aux_provider_pack" in source
+    assert "pops_compiled_aux_consumer_plans" in source
+
+
+def test_native_package_accepts_an_empty_provider_pack() -> None:
+    model = Model("no_aux")
+    (density,) = model.conservative_vars("density")
+    model.flux(x=[density])
+    model.eigenvalues(x=[density])
+    model.primitive_vars(density=density)
+    model.conservative_from([density])
+
+    source = model.__pops_native_loader_source__(name="NoAux", target="system")
+
+    assert "static constexpr int n_aux" not in source
+    assert "pops_register_auxiliary_routes" in source
+    assert "install_auxiliary_consumer_plan" in source

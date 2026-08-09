@@ -27,6 +27,8 @@ _emit_bricks, _elliptic_field_registrations, _emit_metadata
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
@@ -37,7 +39,6 @@ from pops.codegen.cpp_writer import _cpp_identifier
 from pops.codegen.module_emit_helpers import (  # noqa: F401
     _CANONICAL_ROLES,
     _aux_component_index,
-    _aux_layout,
     _codegen_exprs,
     _exact_brick_contract,
     _jac_entries,
@@ -77,6 +78,19 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
             "emit_cpp : flux expected with %d components on every ranked axis; got %r"
             % (model.n_vars, wrong_flux_arity)
         )
+    from pops._ir.visitors import _dependencies
+
+    aux_reads = _dependencies(
+        expression
+        for axis in axes
+        for expression in model._flux[axis]
+    ) & set(model.aux_names)
+    if aux_reads:
+        raise ValueError(
+            "emit_cpp standalone flux cannot bind ProviderPack consumers %s; "
+            "compile the canonical Module instead"
+            % sorted(aux_reads)
+        )
     nc = model.n_vars
     out = [
         "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % model.name,
@@ -115,10 +129,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     bricks written by hand (NoSource, PotentialForce in pops/model/bricks.hpp) and can therefore
     enter as the Source parameter of a CompositeModel.
 
-    CONVENTION: the auxiliary names (set via aux(...)) must be FIELDS of pops::Aux,
-    because they are read directly as a.<name> (e.g. aux('grad_x') -> a.grad_x, aux('grad_y') ->
-    a.grad_y). This convention is the same as that of the manual bricks, where the source reads
-    the outer state only through the pops::Aux channel (potential and its gradient).
+    Every ``aux(name)`` resolves through the exact ``ProviderPack`` to the
+    local slot of the source consumer.  There is no member or prefix chosen
+    from the spelling of an auxiliary quantity.
 
     Style identical to emit_cpp_brick (inlined constants, cons -> locals, primitives -> locals;
     plus, aux -> locals); cse=True factors the common sub-expressions. Raises ValueError if
@@ -140,16 +153,16 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
+        return model._aux_locals_lines()  # source-default consumer slots from ProviderPack
 
-    na = model._total_n_aux()  # required aux width (B_z / T_e / named fields -> > 3)
+    na = model._total_n_aux()
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     S = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
         "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SOURCE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_source)."
         % model.name,
-        "// apply(U, a) -> terme source S(U, aux) ; noms aux = champs de pops::Aux (grad_x, grad_y).",
+        "// apply(U, a) -> terme source S(U, aux) ; aux via le ProviderPack exact.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
         S.append("#include <pops/runtime/config/runtime_params.hpp>")
@@ -161,10 +174,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     ]
     if rt_member:  # pops::RuntimeParams params{count, {defaults}} member (P7-b)
         S.append(rt_member.rstrip("\n"))
-    # If a formula reads an EXTRA aux field (B_z...), declare n_aux: CompositeModel
-    # propagates it (max over the bricks) and the system sizes/populates the shared aux channel.
-    # Without an extra field -> no n_aux emitted -> brick strictly identical to the historical one.
-    if na > _aux_layout(model).base_components:
+    # The exact ProviderPack owns the compact channel width.  Zero is valid and
+    # deliberately emits no auxiliary storage declaration.
+    if na:
         S.append("  static constexpr int n_aux = %d;" % na)
     S += _exact_brick_contract(
         model,
@@ -287,17 +299,17 @@ def _elliptic_field_registrations(model: Any, nm: Any) -> list:
         except ValueError as error:
             raise ValueError(
                 "elliptic_field: aux output '%s' is not a declared aux field; declare it with "
-                "m.aux_field('%s') (so it gets an aux-channel slot a source can read)"
+                "m.aux('%s') (so it gets an exact ProviderPack slot a source can read)"
                 % (name, name)
             ) from error
     regs = []
-    layout = _aux_layout(model)
+    dimension = len(_ranked_axes(model))
     for fld in sorted(model._elliptic_fields):
         aux = model._elliptic_fields[fld]["aux"]
-        if len(aux) not in (1, 1 + layout.dimension):
+        if len(aux) not in (1, 1 + dimension):
             raise ValueError(
                 "elliptic_field('%s'): aux outputs must have length 1 or %d; got %d"
-                % (fld, 1 + layout.dimension, len(aux)))
+                % (fld, 1 + dimension, len(aux)))
         components = tuple(comp(name) for name in aux)
         regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), components))
     return regs
@@ -319,16 +331,42 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
     out = "\nPOPS_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
     if model.gamma is not None:
         out += "POPS_EXPORT_BLOCK_GAMMA(%s)\n" % scalar_cpp(model.gamma)
-    # Table of NAMED aux names (aux_field, ADC-70), ordered CSV (order = AUX_NAMED_BASE +
-    # k index). OPTIONAL symbol, names/roles pattern: makes the .so SELF-DESCRIBING (a C++ loader
-    # could resolve name -> component; on the Python side the table already lives in CompiledModel).
-    # Emitted ONLY if the model declares named fields -> backward-compatible (.so without a named
-    # field unchanged, symbol absent).
-    if model.aux_extra_names:
-        # Names = valid C++ identifiers (validated in aux_field) -> CSV without quotes, safe C
-        # literal (only [A-Za-z0-9_,]).
-        out += ('extern "C" const char* pops_compiled_aux_extra_names() { return "%s"; }\n'
-                % ",".join(model.aux_extra_names))
+    provider_metadata = getattr(model, "_auxiliary_provider_metadata", None)
+    if provider_metadata is None:
+        raise ValueError(
+            "generated metadata requires the exact auxiliary ProviderPack; compile through Module"
+        )
+    def plain(value: Any) -> Any:
+        """Turn immutable compiler evidence into JSON-only reporting metadata.
+
+        The metadata symbols are deliberately diagnostics: native installation
+        consumes the typed route hook instead.  ``MappingProxyType`` is used to
+        keep the compiler plan immutable, so it must be projected explicitly
+        rather than leaking an implementation detail into ``json.dumps``.
+        """
+        if isinstance(value, Mapping):
+            return {str(key): plain(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return [plain(item) for item in value]
+        return value
+
+    out += (
+        'extern "C" const char* pops_compiled_aux_provider_pack() { return %s; }\n'
+        % json.dumps(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
+    )
+    consumer_plans = getattr(model, "_component_operator_consumer_plans", None)
+    flux_plan = getattr(model, "_component_flux_consumer_plan", None)
+    if consumer_plans is None or flux_plan is None:
+        raise ValueError(
+            "generated metadata requires exact auxiliary consumer ProviderPack plans"
+        )
+    out += (
+        'extern "C" const char* pops_compiled_aux_consumer_plans() { return %s; }\n'
+        % json.dumps(json.dumps(
+            plain({"by_operator": consumer_plans, "physical_flux": flux_plan}),
+            sort_keys=True, separators=(",", ":"),
+        ))
+    )
     return out
 
 

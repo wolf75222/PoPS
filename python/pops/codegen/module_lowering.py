@@ -68,10 +68,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
 
     Imported lazily by compile_problem to avoid a top-level physics import.
     """
-    # Import the model facade + aux constants lazily here (called only at
-    # compile_problem time, not at import time).
+    # Import the model facade lazily here (called only at compile_problem
+    # time, not at import time).
     from pops.physics._facade import Model  # noqa: PLC0415
-    from pops.physics.aux import AUX_CANONICAL_NAMES  # noqa: PLC0415
     from pops.model.operators import OPERATOR_KINDS  # noqa: PLC0415
     coverage_rows = [LoweringCoverageRow(
         "module:%s:metadata" % module.name, "documentary")]
@@ -171,10 +170,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         if previous is not None:
             return
         declared[nm] = key
-        if nm in AUX_CANONICAL_NAMES:
-            m.aux(nm)
-        else:
-            m.aux_field(nm)
+        m.aux(nm)
 
     for fs in module.field_spaces().values():
         targets = ["dsl:field_space:%s" % fs.name]
@@ -282,10 +278,10 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             raise ValueError(
                 "compile_problem: field_operator %r must declare at least one output" % op.name)
         for output in outputs:
-            # FieldSpace lowering above has already installed every output.  Canonical auxiliary
-            # names use their dedicated slots and must never be redeclared as named extras.
-            if output not in AUX_CANONICAL_NAMES and output not in m._m.aux_extra_names:
-                m.aux_field(output)
+            # Every output must be an ordinary auxiliary component in the
+            # module provider pack; it carries no reserved field-name route.
+            if output not in m._m.aux_names:
+                m.aux(output)
         gradient_sign = op.lowering.get("gradient_sign", 1)
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(

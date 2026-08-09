@@ -34,7 +34,6 @@ class _HyperbolicModel:
     prim_state: Any
     _recovery_admissibility: Any
     aux_names: Any
-    aux_extra_names: Any
     gamma: Any
     _flux: Any
     _flux_terms: Any
@@ -65,6 +64,10 @@ class _HyperbolicModel:
     _to_expr: Any
     _state_space_metadata: Any
     _operator_registry_cache: Any
+    _auxiliary_provider_pack: Any
+    _auxiliary_provider_metadata: Any
+    _component_flux_consumer_plan: Any
+    _component_operator_consumer_plans: Any
     params: Any
     module: Any
 

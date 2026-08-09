@@ -1,21 +1,14 @@
-"""Aux-channel layout, physical roles, and runtime-param bound.
+"""Generic auxiliary declaration helpers, physical roles, and runtime parameters.
 
-The dimension-qualified layout itself lives in :mod:`pops._aux_layout`, below
-both authoring and code generation. This module re-exports that authority with
-the physical-role and runtime-parameter helpers used by model authoring.
+The exact owner/space/component/slot authority is ``ProviderPack``.  The
+small detached ``AuxLayout`` helper is only an ordered name view for Python
+diagnostics; it has no dimension or physical-name convention.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from pops._aux_layout import (
-    AUX_CANONICAL_NAMES,
-    AUX_NAMED_MAX,
-    AuxLayout,
-    aux_component_index,
-    aux_layout,
-    aux_total_n_aux,
-)
+from pops._aux_layout import AuxLayout, aux_component_index, aux_layout, aux_total_n_aux
 
 # Bound on the number of RUNTIME parameters per block (P7-b). MIRROR of kMaxRuntimeParams
 # (include/pops/runtime/config/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this
@@ -24,8 +17,6 @@ from pops._aux_layout import (
 from pops._native_facts import NATIVE_MAX_RUNTIME_PARAMS
 
 __all__ = [
-    "AUX_CANONICAL_NAMES",
-    "AUX_NAMED_MAX",
     "AuxLayout",
     "aux_component_index",
     "aux_layout",

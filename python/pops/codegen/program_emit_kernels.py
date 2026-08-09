@@ -314,14 +314,12 @@ def _named_fluxes(v: Any) -> Any:
 
 
 def _aux_comp(impl: Any, name: Any) -> int:
-    """Component index of an aux field @p name in the System aux channel: canonical (dsl.AUX_CANONICAL)
-    or a model NAMED aux field (dsl.AUX_NAMED_BASE + position in aux_extra_names). @p impl is the
-    HyperbolicModel."""
+    """Resolved carrier/storage component of one exact ProviderPack field."""
     try:
         return impl._aux_component_index(name)
     except ValueError as error:
         raise NotImplementedError(
-            "emit_cpp_program: aux field '%s' is absent from the model's exact-ranked aux layout"
+            "emit_cpp_program: aux field '%s' is absent from the model's exact ProviderPack"
             % name
         ) from error
 
@@ -376,7 +374,7 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
         for p, expr in impl.prim_defs.items():  # declaration order (a prim may use an earlier prim)
             if p in live:
                 lines.append("const pops::Real %s = %s;" % (p, expr.to_cpp()))
-    aux_deps = set(impl.aux_names) | set(getattr(impl, "aux_extra_names", []) or [])
+    aux_deps = set(impl.aux_names)
     for name in sorted(deps & aux_deps):
         lines.append("const pops::Real %s = auxA(index, %d);" % (name, _aux_comp(impl, name)))
     return lines

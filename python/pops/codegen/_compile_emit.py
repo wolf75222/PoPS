@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -54,16 +55,6 @@ def model_hash(model: Any, params: Any = None) -> str:
         if not mapping:
             return ()
         return tuple(canonical_axis_mapping(mapping, where=where))
-
-    # --- lazy helpers: resolve at call time, not at import time ---
-    def _aux_total_n_aux(
-        aux_names: Any, aux_extra_names: Any, *, dimension: int
-    ) -> int:
-        from pops._aux_layout import aux_total_n_aux
-
-        return aux_total_n_aux(
-            aux_names, aux_extra_names, dimension=dimension
-        )
 
     def _role_of(name: Any) -> str:
         _CANONICAL_ROLES = {
@@ -219,14 +210,13 @@ def model_hash(model: Any, params: Any = None) -> str:
             parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
         if ws.get("im_tol") is not None:
             parts.append("ws_jac_im_tol=%s" % _scalar_token(ws["im_tol"]))
-    parts.append(
-        "n_aux=%d"
-        % _aux_total_n_aux(
-            m.aux_names, m.aux_extra_names, dimension=len(flux_axes)
+    provider_metadata = getattr(m, "_auxiliary_provider_metadata", None)
+    if provider_metadata is None:
+        raise ValueError(
+            "model_hash requires the exact auxiliary ProviderPack; compile through Module"
         )
-    )
-    if m.aux_extra_names:
-        parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
+    parts.append("aux_provider_pack=%s" % json.dumps(
+        provider_metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     parts.append("gamma=%s" % ("None" if m.gamma is None else _scalar_token(m.gamma)))
     params = params or {}
     param_rows = []
@@ -277,6 +267,123 @@ def _emit_route_manifest(symbol_name: Any) -> str:
             % (symbol_name, route_registry_signature()))
 
 
+def _emit_auxiliary_route_registration(model: Any) -> str:
+    """Emit one DSO hook that registers, but never seals, auxiliary routes.
+
+    The host calls this hook for *every* package, then seals the one global
+    registry and only afterwards installs prepared blocks.  That ordering is
+    essential for dependencies and consumer plans spanning multiple blocks.
+    """
+    pack = getattr(model, "_auxiliary_provider_metadata", None)
+    plans = getattr(model, "_component_operator_consumer_plans", None)
+    flux_plan = getattr(model, "_component_flux_consumer_plan", None)
+    if pack is None or plans is None or flux_plan is None:
+        raise ValueError("native auxiliary route emission requires resolved ProviderPack metadata")
+    if not isinstance(pack, Mapping) or not isinstance(pack.get("entries"), list):
+        raise TypeError("auxiliary ProviderPack metadata has an invalid schema")
+
+    def literal(value: Any) -> str:
+        return json.dumps(value)
+
+    def optional(value: Any) -> str:
+        if value is None:
+            return "std::nullopt"
+        return "std::optional<std::string>{%s}" % literal(value)
+
+    def key(row: Mapping[str, Any]) -> str:
+        value = row["key"]
+        return "Key{%s, %s, %s, %s}" % tuple(
+            literal(value[name])
+            for name in ("owner_qid", "space_kind", "space_name", "component")
+        )
+
+    def contract(row: Mapping[str, Any]) -> str:
+        value = row["contract"]
+        return "Contract{%s, %s, %s, %s, %s}" % (
+            literal(value["representation"]), literal(value["centering"]),
+            optional(value["unit"]), literal(value["layout"]), optional(value["value_kind"]),
+        )
+
+    shape = "Shape{pops::kNativeDimension, 1, {}}"
+    lines = [
+        "POPS_LOADER_API void pops_register_auxiliary_routes("
+        "pops::System<pops::kNativeDimension>* sys) {",
+        "  if (sys == nullptr) throw std::invalid_argument(\"auxiliary route installer received null System\");",
+        "  using namespace pops::runtime::system;",
+        "  using Key = AuxiliaryComponentKey;",
+        "  using Contract = AuxiliaryComponentContract;",
+        "  using Shape = AuxiliaryStorageShape<pops::kNativeDimension>;",
+        "  using Output = AuxiliaryOutput<pops::kNativeDimension>;",
+        "  using Dependency = AuxiliaryDependency<pops::kNativeDimension>;",
+        "  using Provider = PreparedAuxiliaryProvider<pops::kNativeDimension>;",
+        "  using ConsumerValue = AuxiliaryConsumerValue<pops::kNativeDimension>;",
+        "  using ConsumerPlan = AuxiliaryConsumerProviderPlan<pops::kNativeDimension>;",
+    ]
+    for row in pack["entries"]:
+        value = row["provider"]
+        if value["slot"] is None or not value["availability"] or value["producer"] is None:
+            raise ValueError(
+                "auxiliary ProviderPack has an unavailable component; bind an exact producer before codegen"
+            )
+        producer = value["producer"]
+        if producer == "runtime_input":
+            kind = "AuxiliaryProviderKind::input"
+        elif row["key"]["space_kind"] == "field" and (
+            producer.startswith("field_provider_set:[")
+            or "/" in producer
+        ):
+            kind = "AuxiliaryProviderKind::field_output"
+        elif producer == "derived" or producer.startswith("derived:"):
+            raise ValueError(
+                "derived auxiliary provider %r has no lowered native launcher; "
+                "refuse codegen rather than misclassifying it as field output"
+                % row["key"]["component"]
+            )
+        else:
+            raise ValueError(
+                "auxiliary provider %r has unsupported producer %r; "
+                "expected runtime_input, a FieldOperator/field-solve output, or a "
+                "lowered derived launcher"
+                % (row["key"]["component"], producer)
+            )
+        identity = "provider:%s:%s/%s/%s" % (
+            value["producer"], row["key"]["owner_qid"], row["key"]["space_name"],
+            row["key"]["component"],
+        )
+        lines.extend((
+            "  sys->install_prepared_auxiliary_provider(Provider{",
+            "      %s, %s," % (literal(identity), kind),
+            "      AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
+            "AuxiliaryFreshness::once},",
+            "      std::vector<Output>{{%s, %s, %s, %d}}," % (
+                key(row), contract(row), shape, value["slot"]),
+            "      std::vector<Dependency>{}});",
+        ))
+
+    owner_qid = None
+    for row in pack["entries"]:
+        candidate = row["key"]["owner_qid"]
+        if owner_qid is None:
+            owner_qid = candidate
+        elif owner_qid != candidate:
+            raise ValueError("auxiliary ProviderPack crosses multiple owners")
+    owner_qid = owner_qid or str(model.owner_path.canonical())
+
+    def emit_plan(identity: str, plan: Any) -> None:
+        lines.append("  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, std::vector<ConsumerValue>{"
+                     % literal(identity))
+        for value in plan:
+            lines.append("      ConsumerValue{Dependency{%s, %s, %s}, %d}," % (
+                key(value), contract(value), shape, value["consumer_slot"]))
+        lines.append("  }});")
+
+    emit_plan(owner_qid + "/physical_flux", flux_plan)
+    for operator, plan in plans.items():
+        emit_plan(owner_qid + "/operator/" + operator, plan)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Native source emitter
 # ---------------------------------------------------------------------------
@@ -306,6 +413,8 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '#include <vector>\n'
             '#include <array>\n'
             '#include <cstddef>\n'
+            '#include <optional>\n'
+            '#include <stdexcept>\n'
             '#include <string>\n'
             '#include <utility>\n'
             '#include <pops/runtime/dynamic/abi_key.hpp>\n'
@@ -426,11 +535,13 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '}\n'
             '}  // namespace pops_generated\n'
         )
+    auxiliary_routes = _emit_auxiliary_route_registration(m) if target == "system" else ""
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
             + package_preparer
             + key
             + install
+            + auxiliary_routes
             + _emit_metadata(m, "pops_generated::ProdModel")
             + _emit_route_manifest("pops_compiled_route_manifest"))

@@ -127,7 +127,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         aux dependency is also a missing capability there."""
         known = set(self.cons_names) | set(self.prim_defs)
         if allow_aux:
-            known |= set(self.aux_names) | set(self.aux_extra_names)
+            known |= set(self.aux_names)
         missing = sorted(form.deps() - known)
         if missing:
             raise ValueError(

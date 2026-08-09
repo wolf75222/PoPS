@@ -1,95 +1,69 @@
-"""The Python auxiliary channel mirrors the exact native 1D/2D/3D rank."""
+"""Generic compact auxiliary-provider layout tests."""
 from __future__ import annotations
 
 import pytest
 
-from pops.physics.aux import (
-    AUX_CANONICAL_NAMES,
-    AUX_NAMED_MAX,
-    AuxLayout,
-    aux_component_index,
-    aux_layout,
-    aux_total_n_aux,
+from pops._aux_layout import AuxLayout, aux_component_index, aux_layout, aux_total_n_aux
+from pops.codegen.component_provider_packs import (
+    auxiliary_component_slot,
+    compact_auxiliary_provider_pack,
+    consumer_provider_plan,
 )
+from pops.model.provider_pack import ComponentContract, ComponentKey, ProviderEntry, ProviderPack
 
 
-@pytest.mark.parametrize(
-    ("dimension", "axes", "canonical", "base", "named_base"),
-    (
-        (1, ("x",), {"phi": 0, "grad_x": 1, "B_z": 2, "T_e": 3}, 2, 4),
-        (
-            2,
-            ("x", "y"),
-            {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4},
-            3,
-            5,
-        ),
-        (
-            3,
-            ("x", "y", "z"),
-            {
-                "phi": 0,
-                "grad_x": 1,
-                "grad_y": 2,
-                "grad_z": 3,
-                "B_z": 4,
-                "T_e": 5,
-            },
-            4,
-            6,
-        ),
-    ),
-)
-def test_aux_layout_is_exactly_ranked(
-    dimension, axes, canonical, base, named_base
-):
-    layout = aux_layout(dimension)
+def _contract() -> ComponentContract:
+    return ComponentContract("auxiliary", "cell", None, "cell", "cell_scalar")
+
+
+def test_aux_layout_is_declaration_ordered_and_compact() -> None:
+    layout = aux_layout(("potential", "electric_x", "temperature"))
 
     assert isinstance(layout, AuxLayout)
-    assert layout.dimension == dimension
-    assert layout.axes == axes
-    assert dict(layout.canonical) == canonical
-    assert layout.base_components == base
-    assert layout.named_base == named_base
-    assert layout.max_components == named_base + AUX_NAMED_MAX
-    assert set(layout.canonical).issubset(AUX_CANONICAL_NAMES)
+    assert dict(layout.components) == {
+        "potential": 0,
+        "electric_x": 1,
+        "temperature": 2,
+    }
+    assert aux_component_index("temperature", layout.names) == 2
+    assert aux_total_n_aux(layout.names) == 3
 
 
-@pytest.mark.parametrize(
-    ("dimension", "canonical_names", "named", "expected"),
-    (
-        (1, (), (), 2),
-        (1, ("B_z",), (), 3),
-        (1, (), ("kappa",), 5),
-        (2, (), (), 3),
-        (2, ("B_z",), ("kappa",), 6),
-        (3, (), (), 4),
-        (3, ("grad_z",), ("kappa",), 7),
-    ),
-)
-def test_aux_width_uses_the_ranked_named_base(
-    dimension, canonical_names, named, expected
-):
-    assert aux_total_n_aux(
-        canonical_names, named, dimension=dimension
-    ) == expected
+def test_aux_layout_accepts_zero_components_and_rejects_invalid_or_duplicate_names() -> None:
+    assert aux_layout(()).n_components == 0
+    with pytest.raises(ValueError, match="valid identifier"):
+        aux_layout(("not-valid",))
+    with pytest.raises(ValueError, match="unique"):
+        aux_layout(("coefficient", "coefficient"))
 
 
-@pytest.mark.parametrize(
-    ("dimension", "name"),
-    ((1, "grad_y"), (1, "grad_z"), (2, "grad_z")),
-)
-def test_gradient_components_outside_the_rank_are_rejected(dimension, name):
-    with pytest.raises(ValueError, match="outside the .*D canonical layout"):
-        aux_component_index(name, dimension=dimension)
+def test_provider_pack_is_the_only_auxiliary_slot_authority() -> None:
+    owner = "model/demo"
+    field = ComponentKey(owner, "field", "electrostatic", "potential")
+    aux = ComponentKey(owner, "aux", "material", "temperature")
+    complete = ProviderPack((
+        (field, _contract(), ProviderEntry("field_solver", True, 17)),
+        (aux, _contract(), ProviderEntry("runtime_input", True, 9)),
+    ))
 
-    with pytest.raises(ValueError, match="outside the .*D canonical layout"):
-        aux_total_n_aux((name,), (), dimension=dimension)
+    compact = compact_auxiliary_provider_pack(complete)
+    assert auxiliary_component_slot(compact, owner_qid=owner, name="potential") == 0
+    assert auxiliary_component_slot(compact, owner_qid=owner, name="temperature") == 1
+
+    plan = consumer_provider_plan(complete)
+    assert [row["consumer_slot"] for row in plan] == [0, 1]
+    assert [row["provider"]["slot"] for row in plan] == [17, 9]
+    assert [row["key"]["component"] for row in plan] == ["potential", "temperature"]
 
 
-@pytest.mark.parametrize("dimension", (True, 0, 4, 2.0, "2"))
-def test_aux_layout_refuses_an_ambiguous_or_unsupported_rank(dimension):
-    error = TypeError if dimension in (True, 2.0, "2") else ValueError
-    with pytest.raises(error):
-        aux_layout(dimension)
+def test_provider_pack_refuses_duplicate_unqualified_auxiliary_component_routes() -> None:
+    owner = "model/demo"
+    duplicate = ProviderPack((
+        (ComponentKey(owner, "field", "a", "temperature"), _contract(),
+         ProviderEntry("runtime_input", True, 0)),
+        (ComponentKey(owner, "aux", "b", "temperature"), _contract(),
+         ProviderEntry("runtime_input", True, 1)),
+    ))
 
+    with pytest.raises(ValueError, match="one owner-qualified storage route"):
+        compact_auxiliary_provider_pack(duplicate)

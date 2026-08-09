@@ -16,7 +16,6 @@ from pops._ir import _wrap
 from pops._ir.visitors import _expr_uses_cons_or_prim
 from pops.model import OperatorHandle
 
-from .aux import AUX_CANONICAL_NAMES, aux_layout
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -84,31 +83,32 @@ class _SourceMixin(_HyperbolicModel):
                 raise ValueError(
                     "elliptic_field('%s'): dimension must be exactly 1, 2, or 3" % name
                 )
-            layout = aux_layout(dimension)
-            if self._flux and self._aux_layout().dimension != dimension:
+            if self._flux and len(self._flux) != dimension:
                 raise ValueError(
                     "elliptic_field('%s'): typed frame rank differs from the physical flux rank"
                     % name
                 )
-        else:
-            layout = None
         if aux is None:
-            if layout is None:
-                layout = self._aux_layout()
-            aux = ["phi", *("grad_" + axis for axis in layout.axes)]
-        else:
-            aux = list(aux)
+            raise ValueError(
+                "elliptic_field('%s'): declare explicit generic aux output names; "
+                "there is no reserved potential/gradient prefix" % name
+            )
+        aux = list(aux)
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
         # A scalar field is rank-independent and may be authored before a mesh/frame exists.  A
         # gradient route is rank-bearing, so it must consume the model's typed frame immediately;
         # the resolved mesh remains the sole authority checked again during lowering.
-        if len(aux) != 1 and layout is None:
-            layout = self._aux_layout()
-        if layout is not None and len(aux) != 1 + layout.dimension:
+        output_dimension = dimension if dimension is not None else len(self._flux)
+        if len(aux) != 1 and output_dimension not in (1, 2, 3):
+            raise ValueError(
+                "elliptic_field('%s'): gradient outputs require an exact 1D/2D/3D frame"
+                % name
+            )
+        if len(aux) != 1 and len(aux) != 1 + output_dimension:
             raise ValueError(
                 "elliptic_field('%s'): aux must contain one scalar or that scalar plus exactly "
-                "%d ranked gradient components; got %d outputs" % (name, layout.dimension, len(aux))
+                "%d ranked gradient components; got %d outputs" % (name, output_dimension, len(aux))
             )
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError("elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
@@ -128,11 +128,7 @@ class _SourceMixin(_HyperbolicModel):
         # field would compile to an undefined local -> reject it loud (the default set_elliptic_rhs has
         # the same surface). A source/flux READING the named field's solved aux is the supported pattern;
         # it is the named-elliptic RHS itself that must be a function of U only.
-        rhs_aux = rhs.deps() & (
-            set(AUX_CANONICAL_NAMES)
-            | set(self.aux_extra_names)
-            | {"phi", "grad_x", "grad_y", "grad_z", "B_z", "T_e"}
-        )
+        rhs_aux = rhs.deps() & set(self.aux_names)
         if rhs_aux:
             raise ValueError(
                 "elliptic_field('%s'): rhs may not read aux fields %s; the elliptic "
@@ -140,6 +136,8 @@ class _SourceMixin(_HyperbolicModel):
                 "surface as m.elliptic_rhs). Read the SOLVED field's aux in a source/flux."
                 % (name, sorted(rhs_aux))
             )
+        for output in aux:
+            self.aux(output)
         self._elliptic_fields[name] = {
             "rhs": rhs,
             "operator": operator,
@@ -149,7 +147,7 @@ class _SourceMixin(_HyperbolicModel):
 
     def source_term(self, name: Any, exprs: Any) -> Any:
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons
-        expressions, free to depend on cons / primitives / aux / aux_field / params / constants. A
+        expressions, free to depend on cons / primitives / aux / params / constants. A
         named source is OPT-IN -- it is emitted only when a compiled time Program asks for it
         (ctx.rhs(..., sources=[name]) / ctx.source(name)) and is NEVER summed implicitly into the
         legacy total source. name == "default" is the backward-compatible alias of m.source([...])
@@ -194,7 +192,7 @@ class _SourceMixin(_HyperbolicModel):
 
     def linear_source(self, name: Any, matrix: Any) -> Any:
         """Declare a NAMED local linear operator L_name(aux, params): an n_cons x n_cons matrix whose
-        coefficients may depend on constants / params / aux / aux_field ONLY -- NOT on conservative or
+        coefficients may depend on constants / params / aux ONLY -- NOT on conservative or
         primitive variables (otherwise S(U) = L U is not linear in U and could not be treated as a
         local linear source by solve_local_linear). The operator is OPT-IN: never folded into m.source
         or ctx.rhs; a Program uses it explicitly via ctx.linear_source(name) / ctx.apply /

@@ -28,7 +28,7 @@ class CompiledModel:
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, native_dimension: Any,
                  target: Any = "system",
-                 hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
+                 hllc: Any = False, roe: Any = False, aux_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
                  state_spaces: Any = ("U",), wave_speed_provider: Any = None,
@@ -94,10 +94,10 @@ class CompiledModel:
         self.n_vars = int(n_vars)
         self.gamma = gamma           # None = historical default 1.4 on the System side
         self.n_aux = int(n_aux)
-        # Names of the NAMED aux fields (aux_field, ADC-70), ORDERED: component index = position
-        # AUX_NAMED_BASE + k. The System.add_equation facade builds the name -> component table per
-        # block from it, consumed by System.set_aux_field / aux_field. Empty for a model without a named field.
-        self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
+        # Ordered generic auxiliary component names. Exact provider identity,
+        # contracts and compact slots are emitted separately in ProviderPack
+        # metadata; names are detached inspection data only.
+        self.aux_names = list(aux_names) if aux_names else []
         # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
         # second-or-further elliptic solve the native loader wires via register_elliptic_field +
         # set_block_elliptic_field after the block is installed. The names remain detached compiled
@@ -174,7 +174,7 @@ class CompiledModel:
             "cons_roles": tuple(self.cons_roles),
             "n_vars": self.n_vars,
             "params": dict(self.params),
-            "aux_names": tuple(self.aux_extra_names),
+            "aux_names": tuple(self.aux_names),
             "n_aux": self.n_aux,
             "native_dimension": self.native_dimension,
             "capabilities": dict(self.caps),
@@ -263,7 +263,7 @@ class CompiledModel:
         Uniform route lives HERE too, built from the SAME :func:`~pops.codegen.inspect_compiled.
         build_arguments` via the model-as-handle path (the handle IS its own physical model). It lists
         -- WITHOUT any bind or runtime read -- the block instance (state space / components /
-        required), the model's declared params (type / kind / required), its named aux (layout /
+        required), the model's declared generic auxiliary components (layout /
         required) and the runtime layout the artifact targets (``layout='amr'`` for this handle). It
         allocates and reads nothing."""
         from pops.codegen.inspect_compiled import build_component_arguments

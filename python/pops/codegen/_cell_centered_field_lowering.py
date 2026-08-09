@@ -652,15 +652,9 @@ def _prepare_output(
     model = models.get(block)
     if model is None:
         raise ValueError("field output route names unknown block %r" % block)
-    from pops.physics.aux import aux_component_index
-
-    declared = tuple(getattr(model, "aux_extra_names", ()) or ())
     components = tuple(route["components"])
     try:
-        indices = [
-            aux_component_index(component, declared, dimension=route["dimension"])
-            for component in components
-        ]
+        indices = [model._aux_component_index(component) for component in components]
     except ValueError as error:
         raise ValueError(
             "field output route %r is absent from block %r native aux layout: %s"

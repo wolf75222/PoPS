@@ -373,7 +373,12 @@ def build_provider_pack(module: Any) -> ProviderPack:
                 # FieldProviderPack's authority and are never guessed here.
                 producer = "field_provider_set:[%s]" % ",".join(resolved_producers)
             else:
-                producer = "initial_state" if space_kind == "state" else None
+                # An unproduced FieldSpace is an explicit runtime input, not a
+                # missing numerical value.  The case/bind plan supplies or
+                # rejects it later; retaining that provider identity lets the
+                # compiler allocate its exact auxiliary slot without a name
+                # based fallback.
+                producer = "initial_state" if space_kind == "state" else "runtime_input"
             for slot, component in enumerate(space.components):
                 rows.append((
                     ComponentKey(owner_qid, space_kind, space.name, component),
@@ -405,17 +410,28 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
     for input_space in operator.signature.inputs:
         if getattr(input_space, "kind", None) == "field":
             spaces.append(("field", input_space.name))
-    if not spaces:
-        return ProviderPack(capacity=full.capacity)
     owner_qid = str(module.owner_path.canonical())
     requirements = getattr(operator, "requirements", {})
     required_components = requirements.get("aux", ())
     if required_components:
-        return full.select_components(
-            owner_qid=owner_qid,
-            spaces=spaces,
-            components=required_components,
-        )
+        selected = []
+        for component in required_components:
+            matches = [
+                key for key in full
+                if key.owner_qid == owner_qid
+                and key.space_kind in {"aux", "field"}
+                and key.component == component
+            ]
+            if len(matches) != 1:
+                detail = "missing" if not matches else "ambiguous"
+                raise MissingInputProvider(
+                    "%s auxiliary component %r for operator %r; declare one exact "
+                    "AuxSpace or FieldSpace route" % (detail, component, operator.name)
+                )
+            selected.append(matches[0])
+        return full.select(selected)
+    if not spaces:
+        return ProviderPack(capacity=full.capacity)
     return full.select_spaces(owner_qid=owner_qid, spaces=spaces)
 
 
