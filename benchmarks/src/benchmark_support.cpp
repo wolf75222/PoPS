@@ -97,7 +97,9 @@ std::string utc_now() {
   return out.str();
 }
 
-std::string json_bool(bool value) { return value ? "true" : "false"; }
+std::string json_bool(bool value) {
+  return value ? "true" : "false";
+}
 
 }  // namespace
 
@@ -131,51 +133,50 @@ BenchmarkConfig parse_config(int argc, char** argv) {
       config.arith_tile = parse_int(value, option);
     else if (option == "--arith-components")
       config.arith_components = parse_int(value, option);
-    else if (option == "--krylov-n")
-      config.krylov_n = parse_int(value, option);
-    else if (option == "--krylov-tile")
-      config.krylov_tile = parse_int(value, option);
-    else if (option == "--krylov-max-iters")
-      config.krylov_max_iters = parse_int(value, option);
-    else if (option == "--krylov-rel-tol")
-      config.krylov_rel_tol = parse_double(value, option);
-    else if (option == "--krylov-abs-tol")
-      config.krylov_abs_tol = parse_double(value, option);
+    else if (option == "--mg-n")
+      config.mg_n = parse_int(value, option);
+    else if (option == "--mg-tile")
+      config.mg_tile = parse_int(value, option);
+    else if (option == "--mg-max-cycles")
+      config.mg_max_cycles = parse_int(value, option);
+    else if (option == "--mg-rel-tol")
+      config.mg_rel_tol = parse_double(value, option);
+    else if (option == "--mg-abs-tol")
+      config.mg_abs_tol = parse_double(value, option);
     else
       throw std::invalid_argument("unknown option: " + std::string(option));
   }
 
-  if (config.case_id != "all" && config.case_id != "arith_halo" &&
-      config.case_id != "tensor_krylov")
-    throw std::invalid_argument("--case must be all, arith_halo, or tensor_krylov");
+  if (config.case_id != "all" && config.case_id != "arith_halo" && config.case_id != "scalar_mg")
+    throw std::invalid_argument("--case must be all, arith_halo, or scalar_mg");
   if (config.warmups < 0)
     throw std::invalid_argument("--warmups must be nonnegative");
   if (config.repetitions < 3)
     throw std::invalid_argument("--repetitions must be at least 3 for robust statistics");
   if (config.arith_n < 1 || config.arith_tile < 1 || config.arith_components < 1)
     throw std::invalid_argument("arith dimensions, tile, and component count must be positive");
-  if (config.krylov_n < 4 || config.krylov_tile < 1 || config.krylov_max_iters < 1)
-    throw std::invalid_argument("Krylov n>=4, tile>=1, and max-iters>=1 are required");
-  if (!(config.krylov_rel_tol > 0.0) || !std::isfinite(config.krylov_rel_tol))
-    throw std::invalid_argument("--krylov-rel-tol must be positive and finite");
-  if (config.krylov_abs_tol < 0.0 || !std::isfinite(config.krylov_abs_tol))
-    throw std::invalid_argument("--krylov-abs-tol must be nonnegative and finite");
+  if (config.mg_n < 4 || config.mg_tile < 1 || config.mg_max_cycles < 1)
+    throw std::invalid_argument("MG n>=4, tile>=1, and max-cycles>=1 are required");
+  if (!(config.mg_rel_tol > 0.0) || !std::isfinite(config.mg_rel_tol))
+    throw std::invalid_argument("--mg-rel-tol must be positive and finite");
+  if (config.mg_abs_tol < 0.0 || !std::isfinite(config.mg_abs_tol))
+    throw std::invalid_argument("--mg-abs-tol must be nonnegative and finite");
   return config;
 }
 
 void print_help(std::ostream& out) {
   out << "PoPS benchmark harness\n"
-      << "  --case all|arith_halo|tensor_krylov\n"
+      << "  --case all|arith_halo|scalar_mg\n"
       << "  --warmups N                 discarded warmups (ABBA blocks for arith_halo)\n"
       << "  --repetitions N              samples (ABBA blocks for arith_halo), N >= 3\n"
-      << "  --arith-n N                  square arithmetic/halo domain\n"
-      << "  --arith-tile N               maximum box edge for arithmetic/halo\n"
+      << "  --arith-n N                  uniform extent per arithmetic/halo axis\n"
+      << "  --arith-tile N               maximum patch extent per arithmetic/halo axis\n"
       << "  --arith-components N         MultiFab component count\n"
-      << "  --krylov-n N                 square manufactured Krylov problem\n"
-      << "  --krylov-tile N              maximum box edge for Krylov\n"
-      << "  --krylov-max-iters N         BiCGStab iteration cap\n"
-      << "  --krylov-rel-tol X           relative residual tolerance\n"
-      << "  --krylov-abs-tol X           absolute residual tolerance\n"
+      << "  --mg-n N                     uniform manufactured multigrid extent per axis\n"
+      << "  --mg-tile N                  maximum multigrid patch extent per axis\n"
+      << "  --mg-max-cycles N            geometric multigrid cycle cap\n"
+      << "  --mg-rel-tol X               relative residual tolerance\n"
+      << "  --mg-abs-tol X               absolute residual tolerance\n"
       << "  --output PATH                write rank-0 JSONL (stdout always receives it)\n";
 }
 
@@ -207,8 +208,8 @@ RobustStats summarize(const std::vector<double>& samples) {
   const std::size_t trim = sorted.size() >= 5 ? std::max<std::size_t>(1, sorted.size() / 10) : 0;
   const auto first = sorted.begin() + static_cast<std::ptrdiff_t>(trim);
   const auto last = sorted.end() - static_cast<std::ptrdiff_t>(trim);
-  stats.trimmed_mean = std::accumulate(first, last, 0.0) /
-                       static_cast<double>(std::distance(first, last));
+  stats.trimmed_mean =
+      std::accumulate(first, last, 0.0) / static_cast<double>(std::distance(first, last));
   return stats;
 }
 
@@ -233,17 +234,31 @@ std::string json_escape(std::string_view value) {
   out << '"';
   for (const unsigned char ch : value) {
     switch (ch) {
-      case '"': out << "\\\""; break;
-      case '\\': out << "\\\\"; break;
-      case '\b': out << "\\b"; break;
-      case '\f': out << "\\f"; break;
-      case '\n': out << "\\n"; break;
-      case '\r': out << "\\r"; break;
-      case '\t': out << "\\t"; break;
+      case '"':
+        out << "\\\"";
+        break;
+      case '\\':
+        out << "\\\\";
+        break;
+      case '\b':
+        out << "\\b";
+        break;
+      case '\f':
+        out << "\\f";
+        break;
+      case '\n':
+        out << "\\n";
+        break;
+      case '\r':
+        out << "\\r";
+        break;
+      case '\t':
+        out << "\\t";
+        break;
       default:
         if (ch < 0x20)
-          out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-              << static_cast<int>(ch) << std::dec << std::setfill(' ');
+          out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(ch)
+              << std::dec << std::setfill(' ');
         else
           out << static_cast<char>(ch);
     }
@@ -288,10 +303,8 @@ std::string stats_json(const std::vector<double>& samples) {
   const RobustStats stats = summarize(samples);
   std::ostringstream out;
   out << "{\"count\":" << stats.count << ",\"min\":" << json_number(stats.minimum)
-      << ",\"p10\":" << json_number(stats.p10)
-      << ",\"median\":" << json_number(stats.median)
-      << ",\"p90\":" << json_number(stats.p90)
-      << ",\"max\":" << json_number(stats.maximum)
+      << ",\"p10\":" << json_number(stats.p10) << ",\"median\":" << json_number(stats.median)
+      << ",\"p90\":" << json_number(stats.p90) << ",\"max\":" << json_number(stats.maximum)
       << ",\"mad\":" << json_number(stats.mad)
       << ",\"trimmed_mean\":" << json_number(stats.trimmed_mean)
       << ",\"samples\":" << json_number_array(samples) << '}';
@@ -319,8 +332,7 @@ std::string record_prefix(const RuntimeMetadata& metadata, std::string_view case
   out << "{\"schema\":\"pops.benchmark.v1\",\"timestamp_utc\":"
       << json_escape(metadata.timestamp_utc) << ",\"record_type\":" << json_escape(record_type)
       << ",\"case\":" << json_escape(case_id) << ",\"variant\":" << json_escape(variant)
-      << ",\"protocol\":" << json_escape(protocol)
-      << ",\"metadata\":" << metadata_json(metadata);
+      << ",\"protocol\":" << json_escape(protocol) << ",\"metadata\":" << metadata_json(metadata);
   return out.str();
 }
 
@@ -346,7 +358,9 @@ JsonlWriter::JsonlWriter(std::string path, bool enabled)
   }
 }
 
-JsonlWriter::~JsonlWriter() { delete impl_; }
+JsonlWriter::~JsonlWriter() {
+  delete impl_;
+}
 
 void JsonlWriter::write(const std::string& record) {
   long local_failure = 0;

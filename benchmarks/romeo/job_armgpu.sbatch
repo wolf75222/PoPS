@@ -48,9 +48,9 @@ srun --kill-on-bad-exit=1 --ntasks="${SLURM_NTASKS}" --gpus-per-task=1 \
   --arith-n=2048 \
   --arith-tile=128 \
   --arith-components=4 \
-  --krylov-n=256 \
-  --krylov-tile=64 \
-  --krylov-max-iters=400 \
-  --krylov-rel-tol=1e-9 \
-  --krylov-abs-tol=0 \
+  --mg-n=256 \
+  --mg-tile=64 \
+  --mg-max-cycles=400 \
+  --mg-rel-tol=1e-9 \
+  --mg-abs-tol=0 \
   --output="${RESULT_FILE}"

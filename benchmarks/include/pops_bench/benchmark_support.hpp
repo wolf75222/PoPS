@@ -21,14 +21,14 @@ struct BenchmarkConfig {
   std::string output_path;
   int warmups = 2;
   int repetitions = 7;
-  int arith_n = 1024;
+  int arith_n = 128;
   int arith_tile = 128;
   int arith_components = 4;
-  int krylov_n = 128;
-  int krylov_tile = 64;
-  int krylov_max_iters = 300;
-  double krylov_rel_tol = 1e-9;
-  double krylov_abs_tol = 0.0;
+  int mg_n = 64;
+  int mg_tile = 32;
+  int mg_max_cycles = 100;
+  double mg_rel_tol = 1e-9;
+  double mg_abs_tol = 0.0;
   bool help = false;
 };
 

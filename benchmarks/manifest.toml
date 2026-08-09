@@ -23,21 +23,21 @@ comparison = "paired ABBA: saxpy_then_fill_boundary over lincomb_then_fill_bound
 records = ["saxpy_then_fill_boundary", "lincomb_then_fill_boundary", "saxpy_over_lincomb"]
 
 [case.defaults]
-n = 1024
+n = 128
 tile = 128
 components = 4
 ghost_width = 1
 
 [[case]]
-id = "tensor_krylov"
-implementation = "real PoPS prepared generic BiCGStab with a persistent GeometricMG preconditioner"
+id = "scalar_mg"
+implementation = "real exact-ranked PoPS GeometricMG with a manufactured Dirichlet solution"
 comparison = "none"
-records = ["bicgstab_geometric_mg"]
+records = ["geometric_multigrid"]
 
 [case.defaults]
-n = 128
-tile = 64
-max_iters = 300
+n = 64
+tile = 32
+max_cycles = 100
 rel_tol = 1e-9
 abs_tol = 0.0
 
