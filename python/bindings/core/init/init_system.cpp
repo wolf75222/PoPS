@@ -249,12 +249,13 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("values"))
       // Private package-install seam. The resolved parameter vector is injected before native
       // closures are built; no mutable per-block parameter side channel exists.
-      .def("_install_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
+      .def("_register_native_package", &System::register_native_package, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
+      .def("_finalize_native_packages", &System::finalize_native_packages)
       .def("_install_external_riemann_block", &System::add_external_riemann_block, py::arg("name"),
            py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"), py::arg("limiter"),
            py::arg("recon"), py::arg("time"), py::arg("gamma"), py::arg("substeps"),
@@ -645,36 +646,37 @@ void bind_system_physics(py::class_<System>& cls) {
       // the mask of any analytic level set and is all 1.0 when none is installed.
       .def("disc_mask",
            [](const System& s) { return to_ranked_field(s.disc_mask(), s.spatial_shape()); })
+      // Auxiliary values are addressed by their complete owner-qualified key.  Python supplies
+      // only data; native generated packages install the immutable producer graph and kernels.
       .def(
-          "set_magnetic_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_magnetic_field(flat(arr));
-          },
-          py::arg("bz"))
-      // NAMED aux fields (ADC-70 phase 1): by canonical COMPONENT (>= 5). The name -> comp
-      // resolution lives in the private Python System facade, which calls these two methods.
-      .def(
-          "set_aux_field_component",
-          [](System& s, int comp,
+          "stage_auxiliary_input",
+          [](System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_aux_field_component(comp, flat(arr));
+            s.stage_auxiliary_input({owner_qid, space_kind, space_name, component}, flat(arr));
           },
-          py::arg("comp"), py::arg("field"))
-      // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2). The Python
-      // facade (System.set_aux_field(..., halo=pops.mesh.AuxHalo(...))) resolves name -> comp and calls this.
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"), py::arg("values"))
       .def(
-          "set_aux_field_halo_component",
-          [](System& s, int comp, int bc_type, double value) {
-            s.set_aux_field_halo_component(comp, bc_type, value);
+          "auxiliary_component",
+          [](const System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            return to_ranked_field(
+                s.auxiliary_component({owner_qid, space_kind, space_name, component}),
+                s.spatial_shape());
           },
-          py::arg("comp"), py::arg("bc_type"), py::arg("value"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"))
       .def(
-          "aux_field_component",
-          [](const System& s, int comp) {
-            return to_ranked_field(s.aux_field_component(comp), s.spatial_shape());
+          "auxiliary_address",
+          [](const System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            const auto address = s.auxiliary_address({owner_qid, space_kind, space_name, component});
+            return py::make_tuple(address.group, address.component);
           },
-          py::arg("comp"))
-      .def("set_electron_temperature_from", &System::set_electron_temperature_from, py::arg("name"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"))
+      .def("auxiliary_registry_contract", &System::auxiliary_registry_contract)
       .def(
           "set_density",
           [](System& s, const std::string& name,

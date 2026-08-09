@@ -102,7 +102,9 @@ struct PreparedSystemBlock {
   std::string name;
   std::string provider_identity;
   int ncomp = 0;
-  int aux_components = 0;
+  /// Number of values in this block's local compact provider pack.  It is zero for a model with no
+  /// providers; it is never a width request for a shared physical ``aux`` field.
+  int provider_components = 0;
   VariableSet conservative_variables{};
   VariableSet primitive_variables{};
   double gamma = 1.0;

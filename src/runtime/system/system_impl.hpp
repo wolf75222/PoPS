@@ -9,6 +9,7 @@
 #include <pops/runtime/system/system_boundary_registry.hpp>
 #include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
+#include <pops/runtime/system/exact_aux_registry.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
@@ -56,6 +57,29 @@ struct System<Dim>::Impl {
   std::array<bool, Dim>& periodicity = domain_.periodicity;
   field_type& aux = domain_.aux;
   int& aux_ncomp_ = domain_.aux_ncomp;
+
+  using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
+  using auxiliary_key_type = runtime::system::AuxiliaryComponentKey;
+  auxiliary_registry_type auxiliary_registry_;
+  // The provider carrier is deliberately distinct from the historical field/aux workspace while
+  // the latter is being removed.  It has exactly registry.slot_count() components when non-empty;
+  // no allocation exists for an empty provider graph.
+  std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier_;
+  // The raw uploaded values are not carrier storage.  They remain host-side staging evidence until
+  // one exact evaluation transaction publishes them into the runtime-owned compact provider carrier.
+  std::map<std::string, std::vector<double>> staged_auxiliary_inputs_;
+  std::vector<std::string> dirty_auxiliary_providers_;
+  bool auxiliary_registry_consensus_verified_ = false;
+
+  /// One validated but not yet materialized native package.  It owns the local DSO handle through
+  /// ``lifetime`` and therefore must outlive blocks (this member intentionally precedes blocks_).
+  struct PendingNativePackage {
+    std::string identity;
+    std::function<void()> install;
+    std::shared_ptr<void> lifetime;
+  };
+  std::vector<PendingNativePackage> pending_native_packages_;
+  std::vector<PendingNativePackage> installed_native_packages_;
 
   block_store_type blocks_;
   std::vector<Species>& sp = blocks_.blocks;
@@ -140,6 +164,114 @@ struct System<Dim>::Impl {
   bool field_plan_consensus_verified_ = false;
   std::string default_nullspace_provider_identity_;
   PreparedProviderOptions default_nullspace_options_;
+
+  /// Full assembly rollback image for the two-phase native package finalizer.  DSO route
+  /// registration is intentionally outside this transaction; it only populates the auxiliary
+  /// registry before seal.  Block installers can otherwise mutate every structural registry, so a
+  /// partial install must never leak into a retry on any MPI rank.
+  struct NativePackageFinalizeSnapshot {
+    field_type aux;
+    int aux_ncomp = 0;
+    auxiliary_registry_type auxiliary_registry;
+    std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier;
+    std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
+    std::vector<std::string> dirty_auxiliary_providers;
+    bool auxiliary_registry_consensus_verified = false;
+    block_store_type blocks;
+    boundary_registry_type boundary_registry;
+    runtime::system::SystemCouplingRegistry<Dim> coupling;
+    runtime::program::ProgramRuntimeState<Dim> program;
+    std::shared_ptr<const embedded_boundary_type> embedded_boundary;
+    std::vector<std::string> embedded_boundary_opcodes;
+    std::vector<double> embedded_boundary_literals;
+    EbThresholds embedded_boundary_thresholds{};
+    std::uint64_t embedded_boundary_generation = 0;
+    std::shared_ptr<exact_field_type> default_field;
+    std::map<std::string, std::shared_ptr<exact_field_type>> named_fields;
+    std::shared_ptr<exact_field_type> active_field;
+    std::map<std::string, FieldPlan> field_plans;
+    std::map<std::string, ConfiguredFieldSolverProvider> configured_field_solver_providers;
+    std::map<std::string, std::shared_ptr<component_field_solver_type>>
+        component_field_solver_providers;
+    std::shared_ptr<FieldNullspaceProviderRegistry<Dim>> field_nullspace_providers;
+    bool field_plan_consensus_verified = false;
+    std::string default_nullspace_provider_identity;
+    PreparedProviderOptions default_nullspace_options;
+    std::map<std::string, field_type> named_field_potentials;
+
+    explicit NativePackageFinalizeSnapshot(const Impl& owner)
+        : aux(owner.aux),
+          aux_ncomp(owner.aux_ncomp_),
+          auxiliary_registry(owner.auxiliary_registry_),
+          provider_carrier(owner.provider_carrier_),
+          staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
+          dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
+          auxiliary_registry_consensus_verified(owner.auxiliary_registry_consensus_verified_),
+          blocks(owner.blocks_),
+          boundary_registry(owner.boundary_registry_),
+          coupling(owner.coupling_),
+          program(owner.program_),
+          embedded_boundary(owner.embedded_boundary_),
+          embedded_boundary_opcodes(owner.embedded_boundary_opcodes_),
+          embedded_boundary_literals(owner.embedded_boundary_literals_),
+          embedded_boundary_thresholds(owner.embedded_boundary_thresholds_),
+          embedded_boundary_generation(owner.embedded_boundary_generation_),
+          default_field(owner.default_field_),
+          named_fields(owner.named_fields_),
+          active_field(owner.active_field_),
+          field_plans(owner.field_plans_),
+          configured_field_solver_providers(owner.configured_field_solver_providers_),
+          component_field_solver_providers(owner.component_field_solver_providers_),
+          field_nullspace_providers(owner.field_nullspace_providers_),
+          field_plan_consensus_verified(owner.field_plan_consensus_verified_),
+          default_nullspace_provider_identity(owner.default_nullspace_provider_identity_),
+          default_nullspace_options(owner.default_nullspace_options_) {
+      if (owner.active_field_)
+        throw std::logic_error(
+            "System native package finalization cannot snapshot an active field candidate");
+      for (const auto& [slot, field] : owner.named_fields_) {
+        if (!field)
+          throw std::logic_error("System native package finalization found a null named field");
+        named_field_potentials.emplace(slot, field->accepted_potential());
+      }
+    }
+
+    void restore(Impl& owner) const {
+      owner.aux = aux;
+      owner.aux_ncomp_ = aux_ncomp;
+      owner.auxiliary_registry_ = auxiliary_registry;
+      owner.provider_carrier_ = provider_carrier;
+      owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
+      owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
+      owner.auxiliary_registry_consensus_verified_ = auxiliary_registry_consensus_verified;
+      owner.blocks_ = blocks;
+      owner.boundary_registry_ = boundary_registry;
+      owner.coupling_ = coupling;
+      owner.program_ = program;
+      owner.embedded_boundary_ = embedded_boundary;
+      owner.embedded_boundary_opcodes_ = embedded_boundary_opcodes;
+      owner.embedded_boundary_literals_ = embedded_boundary_literals;
+      owner.embedded_boundary_thresholds_ = embedded_boundary_thresholds;
+      owner.embedded_boundary_generation_ = embedded_boundary_generation;
+      owner.default_field_ = default_field;
+      owner.named_fields_ = named_fields;
+      owner.active_field_ = active_field;
+      owner.field_plans_ = field_plans;
+      owner.configured_field_solver_providers_ = configured_field_solver_providers;
+      owner.component_field_solver_providers_ = component_field_solver_providers;
+      owner.field_nullspace_providers_ = field_nullspace_providers;
+      owner.field_plan_consensus_verified_ = field_plan_consensus_verified;
+      owner.default_nullspace_provider_identity_ = default_nullspace_provider_identity;
+      owner.default_nullspace_options_ = default_nullspace_options;
+      for (const auto& [slot, potential] : named_field_potentials) {
+        const auto field = owner.named_fields_.find(slot);
+        if (field == owner.named_fields_.end() || !field->second)
+          throw std::logic_error(
+              "System native package rollback lost a pre-existing named field");
+        field->second->accepted_potential_for_restore() = potential;
+      }
+    }
+  };
 
   static std::string exact_field_plan_contract(const FieldPlan& plan) {
     ExactContractBuilder contract;
@@ -265,13 +397,34 @@ struct System<Dim>::Impl {
 
   struct AcceptedSnapshot {
     std::vector<field_type> states;
+    auxiliary_registry_type auxiliary_registry;
+    std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier;
+    std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
+    std::vector<std::string> dirty_auxiliary_providers;
+    runtime::program::ProgramRuntimeState<Dim> program;
+    std::map<std::string, field_type> named_field_potentials;
     double time = 0.0;
     int macro_step = 0;
 
-    explicit AcceptedSnapshot(const Impl& owner) : time(owner.t), macro_step(owner.macro_step_) {
+    explicit AcceptedSnapshot(const Impl& owner)
+        : auxiliary_registry(owner.auxiliary_registry_),
+          provider_carrier(owner.provider_carrier_),
+          staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
+          dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
+          program(owner.program_),
+          time(owner.t),
+          macro_step(owner.macro_step_) {
+      if (owner.active_field_)
+        throw std::logic_error(
+            "System cannot snapshot an unconsumed exact field publication candidate");
       states.reserve(owner.sp.size());
       for (const Species& block : owner.sp)
         states.push_back(block.U);
+      for (const auto& [slot, field] : owner.named_fields_) {
+        if (!field)
+          throw std::logic_error("System materialized named field is null");
+        named_field_potentials.emplace(slot, field->accepted_potential());
+      }
     }
 
     void restore(Impl& owner) const {
@@ -279,6 +432,19 @@ struct System<Dim>::Impl {
         throw std::logic_error("System transaction snapshot composition changed");
       for (std::size_t block = 0; block < states.size(); ++block)
         owner.sp[block].U = states[block];
+      owner.auxiliary_registry_ = auxiliary_registry;
+      owner.provider_carrier_ = provider_carrier;
+      owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
+      owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
+      owner.program_ = program;
+      if (named_field_potentials.size() != owner.named_fields_.size())
+        throw std::logic_error("System transaction snapshot named-field composition changed");
+      for (const auto& [slot, values] : named_field_potentials) {
+        const auto field = owner.named_fields_.find(slot);
+        if (field == owner.named_fields_.end() || !field->second)
+          throw std::logic_error("System transaction snapshot field ownership changed");
+        field->second->accepted_potential_for_restore() = values;
+      }
       owner.t = time;
       owner.macro_step_ = macro_step;
     }

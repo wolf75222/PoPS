@@ -1,0 +1,384 @@
+/// @file
+/// @brief Exact owner-qualified auxiliary-provider registry and carrier publication for System.
+
+#include "system_impl.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace pops {
+namespace {
+
+using runtime::system::AuxiliaryComponentKey;
+using runtime::system::AuxiliaryEvaluationPoint;
+using runtime::system::AuxiliaryProviderKind;
+using runtime::system::AuxiliaryStorageShape;
+
+template <int Dim>
+std::size_t domain_cells(const Box<Dim>& domain) {
+  const std::int64_t count = domain.numPts();
+  if (count < 0 || static_cast<std::uint64_t>(count) >
+                       static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+    throw std::overflow_error("System auxiliary carrier domain exceeds size_t");
+  return static_cast<std::size_t>(count);
+}
+
+template <int Dim>
+Extent<Dim> maximum_auxiliary_halo(const runtime::system::ExactAuxiliaryRegistry<Dim>& registry) {
+  Extent<Dim> result{};
+  for (std::size_t provider = 0; provider < registry.provider_count(); ++provider)
+    for (const auto& output : registry.provider(provider).outputs())
+      for (int axis = 0; axis < Dim; ++axis)
+        result[axis] = std::max(result[axis], output.shape.halo[axis]);
+  return result;
+}
+
+template <int Dim>
+const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type* find_auxiliary_output(
+    const runtime::system::ExactAuxiliaryRegistry<Dim>& registry, const AuxiliaryComponentKey& key) {
+  const std::string exact_key = key.exact_key();
+  const auto* result =
+      static_cast<const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type*>(nullptr);
+  for (std::size_t provider = 0; provider < registry.provider_count(); ++provider) {
+    const auto& candidate = registry.provider(provider);
+    for (const auto& output : candidate.outputs()) {
+      if (output.key.exact_key() != exact_key)
+        continue;
+      if (result != nullptr)
+        throw std::logic_error("sealed auxiliary registry has duplicate output ownership");
+      result = &candidate;
+    }
+  }
+  return result;
+}
+
+template <int Dim>
+void write_auxiliary_component(MultiFab<Dim>& carrier, const Box<Dim>& domain, std::size_t component,
+                               const std::vector<double>& values) {
+  using namespace runtime::system::marshaling;
+  if (component >= static_cast<std::size_t>(carrier.ncomp()) || values.size() != domain_cells(domain))
+    throw std::invalid_argument("System auxiliary input does not match its compact carrier slot");
+  require_exact_domain_decomposition(carrier, domain);
+  for (std::size_t local = 0; local < carrier.local_size(); ++local) {
+    Fab<Dim>& fab = carrier.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+      host(storage_ordinal(fab, index, static_cast<int>(component))) =
+          static_cast<Real>(values[domain_ordinal(domain, index)]);
+    });
+    fab.copy_from_host(host);
+  }
+}
+
+template <int Dim>
+std::vector<double> read_auxiliary_component(const MultiFab<Dim>& carrier, const Box<Dim>& domain,
+                                              std::size_t component) {
+  using namespace runtime::system::marshaling;
+  if (component >= static_cast<std::size_t>(carrier.ncomp()))
+    throw std::out_of_range("System auxiliary component is outside the compact carrier");
+  require_exact_domain_decomposition(carrier, domain);
+  std::vector<double> result(domain_cells(domain), 0.0);
+  long local_failure = 0;
+  try {
+    for (std::size_t local = 0; local < carrier.local_size(); ++local) {
+      const Fab<Dim>& fab = carrier.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+        result[domain_ordinal(domain, index)] =
+            static_cast<double>(host(storage_ordinal(fab, index, static_cast<int>(component))));
+      });
+    }
+  } catch (...) {
+    local_failure = 1;
+  }
+  if (all_reduce_max(local_failure) != 0)
+    throw std::runtime_error("System auxiliary component gather failed collectively");
+  all_reduce_sum_inplace(result.data(), result.size());
+  return result;
+}
+
+template <int Dim>
+void require_finite_auxiliary_candidate(const MultiFab<Dim>& candidate) {
+  using namespace runtime::system::marshaling;
+  long nonfinite = 0;
+  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+    const Fab<Dim>& fab = candidate.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
+      for (int component = 0; component < candidate.ncomp(); ++component)
+        if (!std::isfinite(
+                static_cast<double>(host(storage_ordinal(fab, index, component)))))
+          ++nonfinite;
+    });
+  }
+  if (all_reduce_sum(nonfinite) != 0)
+    throw std::runtime_error(
+        "System auxiliary publication rejected: native provider candidate contains non-finite values");
+}
+
+template <int Dim>
+void require_collective_auxiliary_point(const AuxiliaryEvaluationPoint& point) {
+  ExactContractBuilder exact;
+  point.serialize_exact(exact);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-auxiliary-evaluation-point", std::move(exact).release()}}))
+    throw std::invalid_argument("System auxiliary evaluation point differs across MPI ranks");
+}
+
+}  // namespace
+
+template <int Dim>
+void System<Dim>::install_prepared_auxiliary_provider(
+    runtime::system::PreparedAuxiliaryProvider<Dim> provider) {
+  require_assembling(p_->lifecycle_, "install_prepared_auxiliary_provider");
+  for (const auto& output : provider.outputs())
+    if (output.shape.value_components != 1)
+      throw std::invalid_argument(
+          "System compact provider carrier requires one ComponentKey per scalar value");
+  p_->auxiliary_registry_.add(std::move(provider));
+  p_->auxiliary_registry_consensus_verified_ = false;
+}
+
+template <int Dim>
+void System<Dim>::install_auxiliary_consumer_plan(
+    runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
+  require_assembling(p_->lifecycle_, "install_auxiliary_consumer_plan");
+  if (p_->auxiliary_registry_.sealed()) {
+    // A Program package may be installed after providers sealed.  It contributes only a resolved
+    // local gather plan, never a new global output or carrier component; publish the new exact
+    // plan image atomically after an MPI byte witness.
+    auto candidate = p_->auxiliary_registry_;
+    candidate.add_consumer_plan(std::move(plan));
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-auxiliary-consumer-plan", candidate.collective_contract()}}))
+      throw std::runtime_error("System auxiliary consumer plan differs across MPI ranks");
+    p_->auxiliary_registry_ = std::move(candidate);
+    p_->auxiliary_registry_consensus_verified_ = true;
+    return;
+  }
+  p_->auxiliary_registry_.add_consumer_plan(std::move(plan));
+  p_->auxiliary_registry_consensus_verified_ = false;
+}
+
+template <int Dim>
+void System<Dim>::seal_auxiliary_providers() {
+  if (p_->auxiliary_registry_.sealed()) {
+    if (!p_->auxiliary_registry_consensus_verified_ &&
+        !all_ranks_agree_exact_ordered_byte_pairs(
+            {{"system-auxiliary-registry", p_->auxiliary_registry_.collective_contract()}}))
+      throw std::runtime_error("System auxiliary registry differs across MPI ranks");
+    p_->auxiliary_registry_consensus_verified_ = true;
+    return;
+  }
+
+  auto candidate_registry = p_->auxiliary_registry_;
+  std::exception_ptr local_error;
+  try {
+    candidate_registry.seal();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System auxiliary registry preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-auxiliary-registry", candidate_registry.collective_contract()}}))
+    throw std::runtime_error("System auxiliary registry differs across MPI ranks");
+
+  const std::size_t slots = candidate_registry.slot_count();
+  std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> candidate_carrier;
+  if (slots != 0) {
+    candidate_carrier.emplace();
+    for (const auto& group : candidate_registry.storage_groups()) {
+      if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::overflow_error("System auxiliary storage-group width exceeds int");
+      Extent<Dim> ghosts{};
+      for (int axis = 0; axis < Dim; ++axis)
+        ghosts[axis] = group.shape.halo[axis];
+      candidate_carrier->groups.emplace(
+          group.identity,
+          MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
+                        static_cast<int>(group.component_count), ghosts));
+    }
+  }
+  p_->auxiliary_registry_ = std::move(candidate_registry);
+  p_->provider_carrier_ = std::move(candidate_carrier);
+  p_->auxiliary_registry_consensus_verified_ = true;
+}
+
+template <int Dim>
+void System<Dim>::stage_auxiliary_input(const AuxiliaryComponentKey& key,
+                                        const std::vector<double>& values) {
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System auxiliary inputs require a sealed provider registry");
+  const auto* provider = find_auxiliary_output<Dim>(p_->auxiliary_registry_, key);
+  if (provider == nullptr)
+    throw std::out_of_range("System auxiliary input key is not produced by this registry");
+  if (provider->kind() != AuxiliaryProviderKind::input)
+    throw std::invalid_argument(
+        "System auxiliary input key belongs to a derived or field-output provider");
+  if (values.size() != domain_cells(p_->dom))
+    throw std::invalid_argument("System auxiliary input has the wrong exact-ranked global shape");
+  if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(double))
+    throw std::length_error("System auxiliary input byte count exceeds size_t");
+  const std::string identity = key.exact_key();
+  const std::string_view payload(reinterpret_cast<const char*>(values.data()),
+                                 values.size() * sizeof(double));
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-auxiliary-input-key", identity}, {"system-auxiliary-input-values", payload}}))
+    throw std::invalid_argument("System auxiliary input differs across MPI ranks");
+  p_->staged_auxiliary_inputs_[identity] = values;
+  if (std::find(p_->dirty_auxiliary_providers_.begin(), p_->dirty_auxiliary_providers_.end(),
+                provider->identity()) == p_->dirty_auxiliary_providers_.end())
+    p_->dirty_auxiliary_providers_.push_back(provider->identity());
+}
+
+template <int Dim>
+void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System auxiliary refresh requires a sealed provider registry");
+  require_collective_auxiliary_point<Dim>(point);
+  if (p_->auxiliary_registry_.slot_count() == 0) {
+    auto transaction = p_->auxiliary_registry_.begin_publication(
+        point, p_->dirty_auxiliary_providers_);
+    transaction.accept();
+    p_->dirty_auxiliary_providers_.clear();
+    return;
+  }
+  if (!p_->provider_carrier_)
+    throw std::logic_error("System sealed auxiliary registry has no compact carrier allocation");
+
+  runtime::system::AuxiliaryStorageGroups<Dim> candidate = *p_->provider_carrier_;
+  auto transaction = p_->auxiliary_registry_.begin_publication(
+      point, p_->dirty_auxiliary_providers_);
+  try {
+    for (const std::size_t index : p_->auxiliary_registry_.topological_order()) {
+      const auto& provider = p_->auxiliary_registry_.provider(index);
+      if (provider.kind() != AuxiliaryProviderKind::input ||
+          !provider.policy().requires_evaluation(
+              p_->auxiliary_registry_.last_accepted_point(provider.identity()), point))
+        continue;
+      for (const auto& output : provider.outputs()) {
+        const auto staged = p_->staged_auxiliary_inputs_.find(output.key.exact_key());
+        if (staged == p_->staged_auxiliary_inputs_.end())
+          throw std::runtime_error(
+              "System auxiliary input provider is due but one output was never staged");
+        const auto address = p_->auxiliary_registry_.address_of(output.key);
+        auto* group = candidate.find(address.group);
+        if (group == nullptr)
+          throw std::logic_error("System auxiliary candidate lacks the resolved storage group");
+        write_auxiliary_component(*group, p_->dom, address.component, staged->second);
+      }
+      transaction.stage_external(provider.identity());
+    }
+    transaction.launch_ready_native(
+        {&*p_->provider_carrier_, &candidate});
+    Kokkos::fence();
+    for (const auto& [_, group] : candidate.groups)
+      require_finite_auxiliary_candidate(group);
+    transaction.accept();
+    p_->provider_carrier_ = std::move(candidate);
+    p_->dirty_auxiliary_providers_.clear();
+  } catch (...) {
+    transaction.reject();
+    throw;
+  }
+}
+
+template <int Dim>
+runtime::system::AuxiliaryStorageAddress<Dim> System<Dim>::auxiliary_address(
+    const AuxiliaryComponentKey& key) const {
+  return p_->auxiliary_registry_.address_of(key);
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::auxiliary_component(const AuxiliaryComponentKey& key) const {
+  const auto address = auxiliary_address(key);
+  if (!p_->provider_carrier_)
+    throw std::out_of_range("System auxiliary component belongs to an empty carrier");
+  const auto* group = p_->provider_carrier_->find(address.group);
+  if (group == nullptr)
+    throw std::logic_error("System auxiliary carrier lacks the resolved storage group");
+  return read_auxiliary_component(*group, p_->dom, address.component);
+}
+
+template <int Dim>
+std::string System<Dim>::auxiliary_registry_contract() const {
+  return std::string(p_->auxiliary_registry_.collective_contract());
+}
+
+template <int Dim>
+const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+System<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const {
+  return p_->auxiliary_registry_.consumer_plan(consumer_qid);
+}
+
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::prepared_block_auxiliary_storage() const {
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System auxiliary storage is unavailable before registry seal");
+  if (!p_->provider_carrier_)
+    return nullptr;
+  if (p_->provider_carrier_->groups.size() != 1)
+    throw std::logic_error("mixed provider storage groups require plan-qualified access");
+  return &p_->provider_carrier_->groups.begin()->second;
+}
+
+template <int Dim>
+const runtime::system::AuxiliaryStorageGroups<Dim>*
+System<Dim>::prepared_block_provider_storage_groups() const {
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System provider storage groups are unavailable before registry seal");
+  return p_->provider_carrier_ ? &*p_->provider_carrier_ : nullptr;
+}
+
+template <int Dim>
+runtime::system::AuxiliaryStorageGroups<Dim>* System<Dim>::prepared_amr_provider_storage_groups() {
+  require_assembling(p_->lifecycle_, "prepared_amr_provider_storage_groups");
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error("System AMR provider storage groups require a sealed registry");
+  return p_->provider_carrier_ ? &*p_->provider_carrier_ : nullptr;
+}
+
+template void System<kNativeDimension>::install_prepared_auxiliary_provider(
+    runtime::system::PreparedAuxiliaryProvider<kNativeDimension>);
+template void System<kNativeDimension>::install_auxiliary_consumer_plan(
+    runtime::system::AuxiliaryConsumerProviderPlan<kNativeDimension>);
+template void System<kNativeDimension>::seal_auxiliary_providers();
+template void System<kNativeDimension>::stage_auxiliary_input(
+    const AuxiliaryComponentKey&, const std::vector<double>&);
+template void System<kNativeDimension>::refresh_auxiliary(const AuxiliaryEvaluationPoint&);
+template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
+System<kNativeDimension>::auxiliary_address(const AuxiliaryComponentKey&) const;
+template std::vector<double> System<kNativeDimension>::auxiliary_component(
+    const AuxiliaryComponentKey&) const;
+template std::string System<kNativeDimension>::auxiliary_registry_contract() const;
+template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
+System<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
+template const MultiFab<kNativeDimension>*
+System<kNativeDimension>::prepared_block_auxiliary_storage() const;
+template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
+System<kNativeDimension>::prepared_block_provider_storage_groups() const;
+template runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
+System<kNativeDimension>::prepared_amr_provider_storage_groups();
+
+}  // namespace pops

@@ -10,11 +10,14 @@
 
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/index/index.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,6 +33,36 @@ enum class AuxiliaryProviderKind : std::uint8_t {
   input = 0,
   derived = 1,
   field_output = 2,
+};
+
+struct AuxiliaryBoundaryPolicy {
+  enum class Kind : std::uint8_t {
+    inherit_topology = 0,
+    first_order_extrapolation = 1,
+    dirichlet = 2,
+  };
+
+  Kind kind = Kind::inherit_topology;
+  std::optional<Real> value;
+
+  void validate() const {
+    if (kind != Kind::inherit_topology && kind != Kind::first_order_extrapolation &&
+        kind != Kind::dirichlet)
+      throw std::invalid_argument("auxiliary boundary policy kind is invalid");
+    if (kind == Kind::dirichlet) {
+      if (!value || !std::isfinite(static_cast<double>(*value)))
+        throw std::invalid_argument("Dirichlet auxiliary boundary requires a finite value");
+    } else if (value) {
+      throw std::invalid_argument("only Dirichlet auxiliary boundary carries a value");
+    }
+  }
+  void serialize_exact(ExactContractBuilder& exact) const {
+    validate();
+    exact.text("pops.auxiliary-boundary-policy").scalar(std::uint32_t{1}).scalar(kind);
+    exact.presence(value.has_value());
+    if (value)
+      exact.scalar(*value);
+  }
 };
 
 /// Scheduler event at which a provider is permitted to publish a candidate.
@@ -135,8 +168,9 @@ struct AuxiliaryStorageShape {
   void validate() const {
     if (spatial_rank != Dim)
       throw std::invalid_argument("auxiliary storage shape rank differs from native dimension");
-    if (value_components < 1)
-      throw std::invalid_argument("auxiliary storage shape requires positive component width");
+    if (value_components != 1)
+      throw std::invalid_argument(
+          "one AuxiliaryComponentKey denotes exactly one scalar provider value");
     for (int axis = 0; axis < Dim; ++axis)
       if (halo[axis] < 0)
         throw std::invalid_argument("auxiliary storage shape halo extent must be non-negative");
@@ -153,19 +187,21 @@ struct AuxiliaryStorageShape {
   }
 };
 
-/// One explicitly requested compact output slot.  Slots are validated collectively by the
-/// registry: every slot in [0, N) must occur exactly once, with no inferred/reserved offsets.
+/// One provider-local output declaration.  It deliberately has no global storage index: multiple
+/// independently compiled packages may each declare their first output.  The sealed registry
+/// assigns globally compact storage components from the canonical ComponentKey order.
 template <int Dim>
 struct AuxiliaryOutput {
   AuxiliaryComponentKey key;
   AuxiliaryComponentContract contract;
   AuxiliaryStorageShape<Dim> shape;
-  std::size_t slot = 0;
+  AuxiliaryBoundaryPolicy boundary{};
 
   void validate() const {
     key.validate();
     contract.validate();
     shape.validate();
+    boundary.validate();
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
@@ -173,7 +209,7 @@ struct AuxiliaryOutput {
     exact.bytes(key.exact_key());
     contract.serialize_exact(exact);
     shape.serialize_exact(exact);
-    exact.scalar(static_cast<std::uint64_t>(slot));
+    boundary.serialize_exact(exact);
   }
 };
 
@@ -200,6 +236,49 @@ struct AuxiliaryDependency {
   }
 };
 
+/// One value consumed by a native block/operator.  ``consumer_slot`` is local to that consumer and
+/// deliberately independent from the globally compact carrier slot: two consumers can pack the
+/// same producer value at different device-friendly positions without aliasing global storage.
+template <int Dim>
+struct AuxiliaryConsumerValue {
+  AuxiliaryDependency<Dim> dependency;
+  std::size_t consumer_slot = 0;
+
+  void validate() const { dependency.validate(); }
+
+  void serialize_exact(ExactContractBuilder& exact) const {
+    dependency.serialize_exact(exact);
+    exact.scalar(static_cast<std::uint64_t>(consumer_slot));
+  }
+};
+
+/// Canonical provider-value image consumed by one native component.  It contains no model formula
+/// and no storage pointer.  The registry resolves each dependency to a global storage component at
+/// seal; the generated kernel then gathers the listed values into ``ProviderValues<N>``.
+template <int Dim>
+struct AuxiliaryConsumerProviderPlan {
+  std::string consumer_qid;
+  std::vector<AuxiliaryConsumerValue<Dim>> values;
+
+  void validate() const {
+    if (consumer_qid.empty())
+      throw std::invalid_argument("auxiliary consumer plan requires a non-empty consumer identity");
+    for (const auto& value : values)
+      value.validate();
+  }
+
+  void serialize_exact(ExactContractBuilder& exact) const {
+    validate();
+    exact.text("pops.auxiliary-consumer-provider-plan")
+        .scalar(std::uint32_t{1})
+        .text(consumer_qid);
+    exact.sequence(values, [](ExactContractBuilder& item,
+                              const AuxiliaryConsumerValue<Dim>& value) {
+      value.serialize_exact(item);
+    });
+  }
+};
+
 /// Integer-identical point supplied by Program/AMR.  Physical time is intentionally absent: the
 /// time authority owns it, while auxiliary freshness needs an unambiguous accepted-step/stage
 /// identity that survives checkpoint/restart and MPI rank ordering.
@@ -210,40 +289,68 @@ struct AuxiliaryEvaluationPoint {
   int level = 0;
   int substep = 0;
   int stage = 0;
+  int nonlinear_iteration = 0;
   AuxiliaryEvaluationEvent event = AuxiliaryEvaluationEvent::initialization;
 
   friend bool operator==(const AuxiliaryEvaluationPoint&,
                          const AuxiliaryEvaluationPoint&) = default;
 
   void validate() const {
-    if (clock.empty() || level < 0 || substep < 0 || stage < 0)
+    if (clock.empty() || level < 0 || substep < 0 || stage < 0 || nonlinear_iteration < 0)
       throw std::invalid_argument(
-          "auxiliary evaluation point requires a clock and non-negative level/substep/stage");
+          "auxiliary evaluation point requires a clock and non-negative level/substep/stage/iteration");
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.text("pops.auxiliary-evaluation-point")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(clock)
         .scalar(accepted_step)
         .scalar(layout_generation)
         .scalar(level)
         .scalar(substep)
         .scalar(stage)
+        .scalar(nonlinear_iteration)
         .scalar(event);
   }
 };
 
 /// Exact event and freshness selection for one provider.
 struct AuxiliaryEvaluationPolicy {
-  AuxiliaryEvaluationEvent event = AuxiliaryEvaluationEvent::initialization;
+  std::vector<AuxiliaryEvaluationEvent> allowed_events{AuxiliaryEvaluationEvent::initialization};
   AuxiliaryFreshness freshness = AuxiliaryFreshness::once;
+
+  AuxiliaryEvaluationPolicy() = default;
+  AuxiliaryEvaluationPolicy(AuxiliaryEvaluationEvent event, AuxiliaryFreshness freshness_value)
+      : allowed_events{event}, freshness(freshness_value) {}
+  AuxiliaryEvaluationPolicy(std::vector<AuxiliaryEvaluationEvent> events,
+                            AuxiliaryFreshness freshness_value)
+      : allowed_events(std::move(events)), freshness(freshness_value) {
+    validate();
+  }
+
+  void validate() const {
+    if (allowed_events.empty())
+      throw std::invalid_argument("auxiliary evaluation policy requires an allowed event");
+    for (const auto event : allowed_events)
+      if (event != AuxiliaryEvaluationEvent::initialization &&
+          event != AuxiliaryEvaluationEvent::before_residual &&
+          event != AuxiliaryEvaluationEvent::before_field_solve &&
+          event != AuxiliaryEvaluationEvent::nonlinear_iteration &&
+          event != AuxiliaryEvaluationEvent::after_regrid && event != AuxiliaryEvaluationEvent::output)
+        throw std::invalid_argument("auxiliary evaluation policy has an invalid event");
+  }
+
+  [[nodiscard]] bool allows(AuxiliaryEvaluationEvent event) const {
+    validate();
+    return std::find(allowed_events.begin(), allowed_events.end(), event) != allowed_events.end();
+  }
 
   [[nodiscard]] bool requires_evaluation(const std::optional<AuxiliaryEvaluationPoint>& accepted,
                                          const AuxiliaryEvaluationPoint& requested) const {
     requested.validate();
-    if (requested.event != event)
+    if (!allows(requested.event))
       return false;
     if (!accepted)
       return true;
@@ -261,21 +368,121 @@ struct AuxiliaryEvaluationPolicy {
   }
 
   void serialize_exact(ExactContractBuilder& exact) const {
-    exact.text("pops.auxiliary-evaluation-policy")
-        .scalar(std::uint32_t{1})
-        .scalar(event)
-        .scalar(freshness);
+    validate();
+    std::vector<AuxiliaryEvaluationEvent> canonical = allowed_events;
+    std::sort(canonical.begin(), canonical.end(), [](const auto left, const auto right) {
+      return static_cast<std::uint8_t>(left) < static_cast<std::uint8_t>(right);
+    });
+    if (std::adjacent_find(canonical.begin(), canonical.end()) != canonical.end())
+      throw std::invalid_argument("auxiliary evaluation policy duplicates an allowed event");
+    exact.text("pops.auxiliary-evaluation-policy").scalar(std::uint32_t{2});
+    exact.sequence(canonical);
+    exact.scalar(freshness);
   }
 };
 
-/// Compact resolved slot passed to native launchers.  The slot has already been checked for
-/// density, uniqueness, rank, contract, halo and dependency ownership by ExactAuxiliaryRegistry.
+/// Exact storage class shared only by components with a compatible physical layout.  A registry
+/// assigns dense component indices *inside* this group; no process-wide scalar component exists.
+template <int Dim>
+struct AuxiliaryStorageGroupKey {
+  std::string representation;
+  std::string centering;
+  std::string layout;
+  AuxiliaryStorageShape<Dim> shape;
+
+  void validate() const {
+    if (representation.empty() || centering.empty() || layout.empty())
+      throw std::invalid_argument("auxiliary storage group requires storage representation/centering/layout");
+    shape.validate();
+  }
+  [[nodiscard]] std::string exact_key() const {
+    ExactContractBuilder exact;
+    exact.text("pops.auxiliary-storage-group").scalar(std::uint32_t{1});
+    exact.text(representation).text(centering).text(layout);
+    shape.serialize_exact(exact);
+    return std::move(exact).release();
+  }
+};
+
+template <int Dim>
+struct AuxiliaryStorageAddress {
+  std::string group;
+  std::size_t component = 0;
+};
+
+template <int Dim>
+struct ResolvedAuxiliaryStorageGroup {
+  std::string identity;
+  AuxiliaryComponentContract contract;
+  AuxiliaryStorageShape<Dim> shape;
+  std::size_t component_count = 0;
+};
+
+/// Compact resolved address passed to native launchers.  The address has already been checked for
+/// ownership, representation, centering, layout, rank and halo by ExactAuxiliaryRegistry.
 template <int Dim>
 struct AuxiliaryResolvedSlot {
-  std::size_t slot = 0;
+  AuxiliaryStorageAddress<Dim> address;
   AuxiliaryComponentKey key;
   AuxiliaryComponentContract contract;
   AuxiliaryStorageShape<Dim> shape;
+};
+
+/// Registry-resolved row supplied to a prepared consumer.  ``storage_group/component`` locates the
+/// provider value without assuming a common centering; ``consumer_slot`` is a dense local index.
+template <int Dim>
+struct ResolvedAuxiliaryConsumerValue {
+  AuxiliaryComponentKey key;
+  AuxiliaryComponentContract contract;
+  AuxiliaryStorageShape<Dim> shape;
+  AuxiliaryStorageAddress<Dim> address;
+  std::size_t consumer_slot = 0;
+};
+
+template <int Dim>
+struct ResolvedAuxiliaryConsumerPlan {
+  std::string consumer_qid;
+  std::vector<ResolvedAuxiliaryConsumerValue<Dim>> values;
+
+  [[nodiscard]] std::size_t value_count() const noexcept { return values.size(); }
+};
+
+/// Runtime-owned storage exposed to a prepared native provider for one publication transaction.
+/// ``accepted`` is the last globally accepted carrier; ``candidate`` starts as an exact copy of it
+/// and is the only mutable destination.  A provider may read already-staged dependencies from the
+/// candidate, including dependencies produced earlier in the same topological transaction.  The
+/// registry never owns either allocation and a provider never receives a Python callback or a raw
+/// cell pointer.
+template <int Dim>
+struct AuxiliaryStorageGroups {
+  std::map<std::string, MultiFab<Dim>> groups;
+
+  [[nodiscard]] const MultiFab<Dim>* find(std::string_view group) const {
+    const auto found = groups.find(std::string(group));
+    return found == groups.end() ? nullptr : &found->second;
+  }
+  [[nodiscard]] MultiFab<Dim>* find(std::string_view group) {
+    const auto found = groups.find(std::string(group));
+    return found == groups.end() ? nullptr : &found->second;
+  }
+};
+
+template <int Dim>
+struct AuxiliaryCarrierStorage {
+  const AuxiliaryStorageGroups<Dim>* accepted = nullptr;
+  AuxiliaryStorageGroups<Dim>* candidate = nullptr;
+
+  void validate() const {
+    if (accepted == nullptr || candidate == nullptr)
+      throw std::invalid_argument(
+          "auxiliary native launch requires accepted and candidate carrier storage");
+    if (accepted->layout() != candidate->layout() ||
+        accepted->distribution() != candidate->distribution() ||
+        accepted->local_rank() != candidate->local_rank() ||
+        accepted->ncomp() != candidate->ncomp() || accepted->ghosts() != candidate->ghosts())
+      throw std::invalid_argument(
+          "auxiliary accepted and candidate carriers must share one exact ranked layout");
+  }
 };
 
 /// Host launch description for a generated/native provider.  It deliberately carries no Python
@@ -287,6 +494,7 @@ struct AuxiliaryKernelLaunchContext {
   std::uint64_t candidate_generation = 0;
   const std::vector<AuxiliaryResolvedSlot<Dim>>& outputs;
   const std::vector<AuxiliaryResolvedSlot<Dim>>& dependencies;
+  AuxiliaryCarrierStorage<Dim> storage{};
 };
 
 /// Immutable provider package.  A derived route must own a typed PreparedProvider launcher;

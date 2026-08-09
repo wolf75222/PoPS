@@ -187,9 +187,9 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
     return implementation.default_field_;
   std::vector<int> outputs;
   outputs.reserve(static_cast<std::size_t>(Dim + 1));
-  outputs.push_back(AuxComponentLayout<Dim>::phi);
+  outputs.push_back(0);
   for (int axis = 0; axis < Dim; ++axis)
-    outputs.push_back(AuxComponentLayout<Dim>::gradient_begin + axis);
+    outputs.push_back(axis + 1);
   runtime::field::NamedFieldOutput<Dim> output(outputs, 1);
   const BoundaryTopology<Dim> topology =
       BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);

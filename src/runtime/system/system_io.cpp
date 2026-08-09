@@ -49,14 +49,6 @@ void require_collective_exact_layout(const MultiFab<Dim>& value, const mesh::Box
     throw std::invalid_argument(operation + ": value does not match the exact System layout");
 }
 
-bool provides_install_aux(const std::string& name) {
-  // B_z and T_e are application-provided authorities. Derived fields are resolved later by the
-  // exact provider graph and cannot block Program install.
-  if (name == "B_z" || name == "T_e")
-    return false;
-  return true;
-}
-
 }  // namespace
 
 template <int Dim>
@@ -574,16 +566,9 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       return false;
     };
     for (const auto& op : meta.operators) {
-      // (a) AUX FIELD requirements (ADC-446): the user-supplied application fields B_z / T_e. Only
-      // these are hard requirements (provides_aux); the derived fields phi/grad cannot block.
-      for (const auto& aux : pops::runtime::program::required_aux(op.requirements)) {
-        if (!provides_install_aux(aux)) {
-          throw std::runtime_error(
-              "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
-              "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
-              "set_electron_temperature_from, before install_program)");
-        }
-      }
+      // (a) Auxiliary requirements are no longer inferred from a physical string.  Every consumer
+      // carries complete owner-qualified ComponentKeys and the sealed provider DAG rejects a missing
+      // producer or a contract mismatch before allocation/publication.
       // (b) BLOCK-INSTANCE requirements (ADC-466, Spec criterion 24): an operator that reads another
       // species (e.g. collisions) names the block instance it needs; reject if it was not added. The
       // verbatim spec message names the operator and the missing instance.

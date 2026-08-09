@@ -15,6 +15,8 @@ namespace {
 using pops::ExactContractBuilder;
 using pops::PreparedProviderIdentity;
 using pops::runtime::system::AuxiliaryComponentContract;
+using pops::runtime::system::AuxiliaryConsumerProviderPlan;
+using pops::runtime::system::AuxiliaryConsumerValue;
 using pops::runtime::system::AuxiliaryComponentKey;
 using pops::runtime::system::AuxiliaryDependency;
 using pops::runtime::system::AuxiliaryEvaluationEvent;
@@ -54,9 +56,9 @@ inline AuxiliaryComponentKey key(std::string owner_qid, std::string space_kind,
 
 template <int Dim>
 AuxiliaryOutput<Dim> output(std::string owner_qid, std::string space_name, std::string component,
-                            std::size_t slot) {
+                            std::size_t /*package_local_order*/) {
   return {key(std::move(owner_qid), "auxiliary", std::move(space_name), std::move(component)),
-          contract(), shape<Dim>(), slot};
+          contract(), shape<Dim>()};
 }
 
 template <int Dim>
@@ -109,7 +111,7 @@ PreparedAuxiliaryProvider<Dim> derived(std::string identity, AuxiliaryOutput<Dim
 AuxiliaryEvaluationPoint point(std::string clock, std::uint64_t accepted_step,
                                AuxiliaryEvaluationEvent event, std::uint64_t layout_generation = 0,
                                int level = 0, int substep = 0, int stage = 0) {
-  return {std::move(clock), accepted_step, layout_generation, level, substep, stage, event};
+  return {std::move(clock), accepted_step, layout_generation, level, substep, stage, 0, event};
 }
 
 template <int Dim>
@@ -126,7 +128,7 @@ void verifies_empty_and_compact_registry() {
   registry.seal();
   EXPECT_EQ(registry.provider_count(), 2U);
   EXPECT_EQ(registry.slot_count(), 2U);
-  EXPECT_EQ(registry.slot_of(key("owner-b", "auxiliary", "space-b", "3")), 1U);
+  EXPECT_EQ(registry.address_of(key("owner-b", "auxiliary", "space-b", "3")).component, 1U);
   EXPECT_THROW(registry.add(input<Dim>("late", output<Dim>("late", "space", "0", 2))),
                std::logic_error);
 }
@@ -142,12 +144,16 @@ void verifies_structural_rejections() {
   const auto first = output<Dim>("owner", "space", "0", 0);
   ExactAuxiliaryRegistry<Dim> duplicate;
   duplicate.add(input<Dim>("first", first));
-  duplicate.add(input<Dim>("second", {first.key, first.contract, first.shape, 1}));
+  duplicate.add(input<Dim>("second", {first.key, first.contract, first.shape}));
   EXPECT_THROW(duplicate.seal(), std::invalid_argument);
 
-  ExactAuxiliaryRegistry<Dim> sparse;
-  sparse.add(input<Dim>("sparse", output<Dim>("owner", "sparse", "0", 1)));
-  EXPECT_THROW(sparse.seal(), std::invalid_argument);
+  ExactAuxiliaryRegistry<Dim> independent_packages;
+  // Both independently generated packages naturally start their local declaration order at zero.
+  // The global registry must assign compact storage from ComponentKeys rather than reject that.
+  independent_packages.add(input<Dim>("package-a", output<Dim>("owner-a", "space", "0", 0)));
+  independent_packages.add(input<Dim>("package-b", output<Dim>("owner-b", "space", "0", 0)));
+  EXPECT_NO_THROW(independent_packages.seal());
+  EXPECT_EQ(independent_packages.slot_count(), 2U);
 
   auto calls = std::make_shared<std::vector<std::string>>();
   const auto left = output<Dim>("owner", "cycle", "0", 0);
@@ -178,7 +184,7 @@ void verifies_structural_rejections() {
                    "invalid-rank",
                    AuxiliaryProviderKind::input,
                    {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-                   {{key("owner", "auxiliary", "bad-rank", "0"), contract(), invalid_rank, 0}},
+                   {{key("owner", "auxiliary", "bad-rank", "0"), contract(), invalid_rank}},
                    {}}),
                std::invalid_argument);
 }
@@ -198,7 +204,9 @@ void verifies_topology_and_transaction() {
   registry.add(input<Dim>("seed", seed));
   registry.add(derived<Dim>("derive", result, {dependency(seed)}, calls));
   registry.seal();
-  ASSERT_EQ(registry.topological_order(), (std::vector<std::size_t>{0, 1}));
+  ASSERT_EQ(registry.topological_order().size(), 2U);
+  EXPECT_EQ(registry.provider(registry.topological_order()[0]).identity(), "seed");
+  EXPECT_EQ(registry.provider(registry.topological_order()[1]).identity(), "derive");
 
   {
     auto candidate = registry.begin_publication(
@@ -206,7 +214,7 @@ void verifies_topology_and_transaction() {
     EXPECT_EQ(candidate.candidate_generation(), 1U);
     candidate.stage_external("seed");
     candidate.launch_ready_native();
-    EXPECT_TRUE(calls->empty());
+    EXPECT_EQ(calls->size(), 1U);
     candidate.reject();
   }
   EXPECT_EQ(registry.accepted_generation(), 0U);
@@ -216,6 +224,7 @@ void verifies_topology_and_transaction() {
     auto candidate = registry.begin_publication(
         point("macro", 0, AuxiliaryEvaluationEvent::initialization, 4, 2, 3, 5));
     candidate.stage_external("seed");
+    candidate.launch_ready_native();
     candidate.accept();
   }
   EXPECT_EQ(registry.accepted_generation(), 1U);
@@ -228,8 +237,8 @@ void verifies_topology_and_transaction() {
   {
     auto candidate = registry.begin_publication(residual_point);
     candidate.launch_ready_native();
-    ASSERT_EQ(calls->size(), 1U);
-    EXPECT_EQ((*calls)[0], "macro:2");
+    ASSERT_EQ(calls->size(), 3U);
+    EXPECT_EQ((*calls)[2], "macro:2");
     candidate.accept();
   }
   EXPECT_EQ(registry.accepted_generation(), 2U);
@@ -270,7 +279,7 @@ TEST(ExactAuxiliaryRegistryNd, RejectsInvalidProviderClassAndHaloBeforePublicati
                    "negative-halo",
                    AuxiliaryProviderKind::input,
                    {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
-                   {{key("owner", "auxiliary", "halo", "0"), contract(), bad_halo, 0}},
+                   {{key("owner", "auxiliary", "halo", "0"), contract(), bad_halo}},
                    {}}),
                std::invalid_argument);
 }
@@ -287,6 +296,45 @@ TEST(ExactAuxiliaryRegistryNd, MirrorsOptionalProviderPackContractFields) {
   auto empty_value_kind = absent_optional_fields;
   empty_value_kind.value_kind = "";
   EXPECT_THROW(empty_value_kind.validate(), std::invalid_argument);
+}
+
+template <int Dim>
+void verifies_consumer_local_slots_resolve_independently_of_storage_slots() {
+  const auto first = output<Dim>("owner", "provider", "first", 0);
+  const auto second = output<Dim>("owner", "provider", "second", 1);
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("first-input", first));
+  registry.add(input<Dim>("second-input", second));
+  registry.add_consumer_plan({"consumer-a",
+                              {{dependency(second), 0}, {dependency(first), 1}}});
+  registry.seal();
+
+  const auto& plan = registry.consumer_plan("consumer-a");
+  ASSERT_EQ(plan.value_count(), 2U);
+  EXPECT_EQ(plan.values[0].consumer_slot, 0U);
+  EXPECT_EQ(plan.values[0].address.component, 1U);
+  EXPECT_EQ(plan.values[1].consumer_slot, 1U);
+  EXPECT_EQ(plan.values[1].address.component, 0U);
+}
+
+TEST(ExactAuxiliaryRegistryNd, ResolvesConsumerSlotsWithoutPhysicalOrGlobalAlias) {
+  verifies_consumer_local_slots_resolve_independently_of_storage_slots<1>();
+  verifies_consumer_local_slots_resolve_independently_of_storage_slots<2>();
+  verifies_consumer_local_slots_resolve_independently_of_storage_slots<3>();
+}
+
+TEST(ExactAuxiliaryRegistryNd, RejectsDuplicateOrSparseConsumerSlots) {
+  const auto input_output = output<2>("owner", "provider", "input", 0);
+  ExactAuxiliaryRegistry<2> duplicate;
+  duplicate.add(input<2>("input", input_output));
+  duplicate.add_consumer_plan(
+      {"consumer", {{dependency(input_output), 0}, {dependency(input_output), 0}}});
+  EXPECT_THROW(duplicate.seal(), std::invalid_argument);
+
+  ExactAuxiliaryRegistry<2> sparse;
+  sparse.add(input<2>("input", input_output));
+  sparse.add_consumer_plan({"consumer", {{dependency(input_output), 1}}});
+  EXPECT_THROW(sparse.seal(), std::invalid_argument);
 }
 
 }  // namespace

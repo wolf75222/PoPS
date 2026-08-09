@@ -118,9 +118,9 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
   if (block.name.empty() || block.provider_identity.empty())
     throw std::invalid_argument(
         "prepared System block requires non-empty block and provider identities");
-  if (block.ncomp < 1 || block.aux_components < 1)
+  if (block.ncomp < 1 || block.provider_components < 0)
     throw std::invalid_argument(
-        "prepared System block requires positive state and auxiliary component counts");
+        "prepared System block requires a positive state and non-negative provider value count");
   if (!std::isfinite(block.gamma) || !(block.gamma > 0.0) || block.substeps < 1 || block.stride < 1)
     throw std::invalid_argument("prepared System block gamma, substeps, and stride are invalid");
   for (int axis = 0; axis < Dim; ++axis)
@@ -143,18 +143,6 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !block.batch_conservative_to_primitive)
     throw std::invalid_argument(
         "prepared System block does not implement the complete exact-ranked execution contract");
-}
-
-template <int Dim, class Implementation>
-std::optional<MultiFab<Dim>> widened_aux_candidate(Implementation& implementation,
-                                                   int requested_components) {
-  if (requested_components <= implementation.aux_ncomp_)
-    return std::nullopt;
-  MultiFab<Dim> candidate(implementation.ba, implementation.dm, implementation.local_rank,
-                          requested_components, implementation.aux.ghosts());
-  copy_valid_components(implementation.aux, candidate, implementation.aux_ncomp_,
-                        "System auxiliary widening");
-  return candidate;
 }
 
 }  // namespace
@@ -291,8 +279,15 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
             prepared.primitive_to_conservative));
   }
 
-  std::optional<MultiFab<Dim>> aux_candidate =
-      widened_aux_candidate<Dim>(*p_, prepared.aux_components);
+  if (p_->auxiliary_registry_.sealed()) {
+    const auto& plan = p_->auxiliary_registry_.consumer_plan(prepared.name);
+    if (plan.value_count() != static_cast<std::size_t>(prepared.provider_components))
+      throw std::invalid_argument(
+          "prepared System block provider count differs from its resolved consumer plan");
+  } else if (prepared.provider_components != 0) {
+    throw std::logic_error(
+        "prepared System block with provider values requires the sealed global provider registry");
+  }
 
   typename Impl::Species candidate;
   candidate.name = prepared.name;
@@ -346,24 +341,8 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
 
   // Every operation above is preparatory. These moves are noexcept after the one vector growth.
   p_->sp.push_back(std::move(candidate));
-  if (aux_candidate) {
-    p_->aux = std::move(*aux_candidate);
-    p_->aux_ncomp_ = prepared.aux_components;
-  }
   if (installed_boundary != nullptr)
     p_->boundary_registry_.boundary(prepared.name).authority = std::move(boundary);
-}
-
-template <int Dim>
-void System<Dim>::ensure_aux_width(int ncomp) {
-  require_assembling(p_->lifecycle_, "ensure_aux_width");
-  if (ncomp < 1)
-    throw std::invalid_argument("System auxiliary width must be positive");
-  std::optional<MultiFab<Dim>> candidate = widened_aux_candidate<Dim>(*p_, ncomp);
-  if (!candidate)
-    return;
-  p_->aux = std::move(*candidate);
-  p_->aux_ncomp_ = ncomp;
 }
 
 template <int Dim>
@@ -546,14 +525,103 @@ std::string System<Dim>::last_dt_bound() const {
 }
 
 template <int Dim>
-void System<Dim>::add_native_block(const std::string& name, const std::string& so_path,
-                                   const std::string& limiter, const std::string& riemann,
-                                   const std::string& recon, const std::string& time, double gamma,
-                                   int substeps, bool evolve, int stride,
-                                   const std::vector<double>& params, double positivity_floor) {
-  require_assembling(p_->lifecycle_, "add_native_block");
-  native_loader::add_native_block<Dim>(this, name, so_path, limiter, riemann, recon, time, gamma,
-                                       substeps, evolve, stride, params, positivity_floor);
+void System<Dim>::register_native_package(const std::string& name, const std::string& so_path,
+                                          const std::string& limiter, const std::string& riemann,
+                                          const std::string& recon, const std::string& time,
+                                          double gamma, int substeps, bool evolve, int stride,
+                                          const std::vector<double>& params,
+                                          double positivity_floor) {
+  require_assembling(p_->lifecycle_, "register_native_package");
+  native_loader::register_native_package<Dim>(this, name, so_path, limiter, riemann, recon, time,
+                                               gamma, substeps, evolve, stride, params,
+                                               positivity_floor);
+}
+
+template <int Dim>
+void System<Dim>::stage_prepared_native_package(std::string identity,
+                                                std::function<void()> installer,
+                                                std::shared_ptr<void> package_lifetime) {
+  require_assembling(p_->lifecycle_, "stage_prepared_native_package");
+  if (identity.empty() || !installer || !package_lifetime)
+    throw std::invalid_argument(
+        "System native package staging requires an identity, installer, and DSO lifetime");
+  for (const auto& package : p_->pending_native_packages_)
+    if (package.identity == identity)
+      throw std::invalid_argument("System native package identity is registered more than once");
+  for (const auto& package : p_->installed_native_packages_)
+    if (package.identity == identity)
+      throw std::invalid_argument("System native package identity was already finalized");
+  p_->pending_native_packages_.push_back(
+      {std::move(identity), std::move(installer), std::move(package_lifetime)});
+}
+
+template <int Dim>
+void System<Dim>::finalize_native_packages() {
+  require_assembling(p_->lifecycle_, "finalize_native_packages");
+  if (p_->pending_native_packages_.empty())
+    throw std::logic_error("System native package finalization requires at least one staged package");
+
+  std::vector<typename Impl::PendingNativePackage> packages = std::move(p_->pending_native_packages_);
+  p_->pending_native_packages_.clear();
+  std::sort(packages.begin(), packages.end(),
+            [](const auto& left, const auto& right) { return left.identity < right.identity; });
+
+  std::vector<ExactOrderedBytePair> exact_packages;
+  exact_packages.reserve(packages.size());
+  for (const auto& package : packages)
+    exact_packages.emplace_back("system-native-package", package.identity);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages))
+    throw std::runtime_error("System staged native packages differ across MPI ranks");
+
+  std::optional<typename Impl::NativePackageFinalizeSnapshot> snapshot;
+  std::exception_ptr snapshot_error;
+  try {
+    snapshot.emplace(*p_);
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && snapshot_error)
+      std::rethrow_exception(snapshot_error);
+    throw std::runtime_error("System native package rollback snapshot failed collectively");
+  }
+
+  std::exception_ptr failure;
+  try {
+    // The sole global seal happens after every typed route registration and before any block
+    // constructor captures a provider pointer or local consumer-plan image.
+    seal_auxiliary_providers();
+    for (const auto& package : packages) {
+      std::exception_ptr local_error;
+      try {
+        package.install();
+      } catch (...) {
+        local_error = std::current_exception();
+      }
+      if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+        if (n_ranks() == 1 && local_error)
+          std::rethrow_exception(local_error);
+        throw std::runtime_error("System native package installer failed collectively: " +
+                                 package.identity);
+      }
+    }
+  } catch (...) {
+    failure = std::current_exception();
+  }
+
+  const long failed = failure ? 1L : 0L;
+  if (all_reduce_max(failed) != 0) {
+    // Every rank restores the same pre-finalization image.  ``packages`` then drops its DSO owners,
+    // so no failed package code can remain reachable from the restored System.
+    snapshot->restore(*p_);
+    if (n_ranks() == 1 && failure)
+      std::rethrow_exception(failure);
+    throw std::runtime_error("System native package finalization rolled back collectively");
+  }
+
+  p_->installed_native_packages_.insert(p_->installed_native_packages_.end(),
+                                        std::make_move_iterator(packages.begin()),
+                                        std::make_move_iterator(packages.end()));
 }
 
 template <int Dim>
@@ -631,7 +699,6 @@ template std::array<bool, kNativeDimension> System<kNativeDimension>::prepared_b
     const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
-template void System<kNativeDimension>::ensure_aux_width(int);
 template void System<kNativeDimension>::register_elliptic_field(const std::string&,
                                                                 const std::string&,
                                                                 const std::vector<int>&, int);
@@ -640,11 +707,13 @@ template void System<kNativeDimension>::set_block_elliptic_field(
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
 template void System<kNativeDimension>::add_dt_bound(const std::string&, std::function<double()>);
 template std::string System<kNativeDimension>::last_dt_bound() const;
-template void System<kNativeDimension>::add_native_block(const std::string&, const std::string&,
-                                                         const std::string&, const std::string&,
-                                                         const std::string&, const std::string&,
-                                                         double, int, bool, int,
-                                                         const std::vector<double>&, double);
+template void System<kNativeDimension>::register_native_package(
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, const std::string&, double, int, bool, int, const std::vector<double>&,
+    double);
+template void System<kNativeDimension>::stage_prepared_native_package(
+    std::string, std::function<void()>, std::shared_ptr<void>);
+template void System<kNativeDimension>::finalize_native_packages();
 template void System<kNativeDimension>::add_coupled_source(const CoupledSourceProgram&, double,
                                                            const std::string&);
 template void System<kNativeDimension>::add_coupling_operator(const CouplingOperator&);

@@ -256,6 +256,11 @@ int System<Dim>::macro_step() const {
 
 template <int Dim>
 void System<Dim>::mark_bound() {
+  // The provider graph is the only authority for the compact auxiliary carrier.  Seal it before
+  // freezing composition so every rank either agrees on one graph or remains fully mutable after a
+  // failed collective preflight.
+  seal_auxiliary_providers();
+
   if (p_->lifecycle_.frozen())
     p_->lifecycle_.to_bound();
 

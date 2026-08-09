@@ -52,11 +52,6 @@ runtime::program::ProgramRuntimeState<Dim>& System<Dim>::program_runtime_state_(
 }
 
 template <int Dim>
-MultiFab<Dim>& System<Dim>::prepared_block_auxiliary() {
-  return p_->aux;
-}
-
-template <int Dim>
 void System<Dim>::install_program_step(std::function<void(double)> step) {
   p_->program_.install_unverified_step(std::move(step));
 }
@@ -482,7 +477,6 @@ RuntimeParams System<Dim>::program_params(int program_block) const {
 
 template runtime::program::ProgramRuntimeState<kNativeDimension>&
 System<kNativeDimension>::program_runtime_state_();
-template MultiFab<kNativeDimension>& System<kNativeDimension>::prepared_block_auxiliary();
 template void System<kNativeDimension>::install_program_step(std::function<void(double)>);
 template void System<kNativeDimension>::set_program_cadence(int, int);
 template int System<kNativeDimension>::program_substeps() const;

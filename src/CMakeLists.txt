@@ -10,6 +10,7 @@ set(POPS_RUNTIME_CORE_SOURCES
 
 set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system.cpp
+    runtime/system/system_aux.cpp
     runtime/system/system_install.cpp
     runtime/system/system_fields.cpp
     runtime/system/system_embedded_boundary.cpp

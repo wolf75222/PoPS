@@ -52,6 +52,7 @@ class ProgramContext {
   static constexpr int dimension = Dim;
   using runtime_type = System<Dim>;
   using field_type = MultiFab<Dim>;
+  using auxiliary_plan_type = runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>;
   using runtime_state_type = ProgramRuntimeState<Dim>;
   using scalar_boundary_session_type = PreparedScalarBoundarySession<Dim>;
 
@@ -219,7 +220,17 @@ class ProgramContext {
   field_type& state(int program_block) const {
     return system_->block_state(sys_block(program_block));
   }
-  field_type& aux() const { return system_->prepared_block_auxiliary(); }
+  /// The compact provider carrier is nullable only for a provider-free program.  Generated code
+  /// resolves its own qid below and gathers plan.storage_component into dense ProviderValues<N>;
+  /// no independent DSO is allowed to bake a global component number.
+  [[nodiscard]] const field_type* auxiliary_storage() const {
+    return system_->prepared_block_auxiliary_storage();
+  }
+
+  [[nodiscard]] const auxiliary_plan_type& auxiliary_consumer_plan(
+      std::string_view consumer_qid) const {
+    return system_->prepared_auxiliary_consumer_plan(std::string(consumer_qid));
+  }
 
   field_type rhs_scratch_like(const field_type& prototype) const {
     return make_scratch_(prototype, prototype.ncomp(), prototype.ghosts());

@@ -19,6 +19,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 
 #include <array>
@@ -263,14 +264,30 @@ class System {
   /// @param gamma   adiabatic index of the block (set_density / inter-species couplings)
   /// @param params complete resolved runtime-parameter vector in declaration order
   /// @param stride block cadence (1 = every step, default; cf. add_block)
-  void add_native_block(const std::string& name, const std::string& so_path,
-                        const std::string& limiter = "minmod",
-                        const std::string& riemann = "rusanov",
-                        const std::string& recon = "conservative",
-                        const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        bool evolve = true, int stride = 1, const std::vector<double>& params = {},
-                        double positivity_floor = 0.0);
+  /// Stage one compiled package.  Staging validates the DSO and registers its typed auxiliary
+  /// routes, but deliberately does not build its blocks: all packages must first contribute to the
+  /// one global provider graph.  Call ``finalize_native_packages`` exactly once afterwards.
+  void register_native_package(const std::string& name, const std::string& so_path,
+                               const std::string& limiter = "minmod",
+                               const std::string& riemann = "rusanov",
+                               const std::string& recon = "conservative",
+                               const std::string& time = "explicit",
+                               double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                               int substeps = 1, bool evolve = true, int stride = 1,
+                               const std::vector<double>& params = {},
+                               double positivity_floor = 0.0);
+
+  /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
+  /// staged native block in canonical package order.  Any installer failure restores the complete
+  /// pre-finalization System image and unloads the staged packages.
+  void finalize_native_packages();
+
+  /// Native-loader-only hand-off after ABI/manifest validation.  The package lifetime keeps its
+  /// local DSO resident until all closures it installed have been destroyed.  This is intentionally
+  /// a typed C++ seam, not a metadata/JSON parser.
+  POPS_EXPORT void stage_prepared_native_package(std::string identity,
+                                                 std::function<void()> installer,
+                                                 std::shared_ptr<void> package_lifetime);
 
   /// Installs an authenticated external Riemann policy against its compiled Model on the real
   /// System storage. The loaded library remains alive until every installed closure is destroyed.
@@ -335,9 +352,61 @@ class System {
   /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
   /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
   POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
-  /// Stable shared auxiliary-field owner captured by prepared block kernels. The field object keeps
-  /// its address when its component storage is widened before block commit.
-  POPS_EXPORT MultiFab<Dim>& prepared_block_auxiliary();
+  /// Immutable-address compact provider carrier captured by prepared block kernels.  It is null
+  /// exactly when the sealed graph has no provider values; callers with ``ProviderValues<0>`` must
+  /// not dereference it.  A non-null carrier has exactly ``registry.slot_count()`` components.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_block_auxiliary_storage() const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  prepared_block_provider_storage_groups() const;
+  /// AMR preparation owns the collective halo-fill phase and therefore receives the accepted group
+  /// set through this narrowly scoped mutable seam.  It may fill ghost regions only; publication
+  /// values remain owned by the System auxiliary transaction.
+  POPS_EXPORT runtime::system::AuxiliaryStorageGroups<Dim>*
+  prepared_amr_provider_storage_groups();
+
+  /// Register one immutable, owner-qualified auxiliary producer.  A producer is either an external
+  /// input, a generated native derivation, or a field-output route.  The System does not attach any
+  /// physical meaning to an output: every carrier component is identified solely by
+  /// ``AuxiliaryComponentKey`` and receives a compact slot when the registry is sealed.
+  ///
+  /// This is an assembly/program-install operation.  The complete graph is collectively sealed
+  /// before its carrier is allocated; no producer can be added afterwards.
+  POPS_EXPORT void install_prepared_auxiliary_provider(
+      runtime::system::PreparedAuxiliaryProvider<Dim> provider);
+
+  /// Register the immutable value image required by one compiled native consumer.  Its local slots
+  /// are resolved to global compact storage at seal and never inferred from physical names.
+  POPS_EXPORT void install_auxiliary_consumer_plan(
+      runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan);
+
+  /// Commit the complete auxiliary provider graph.  Validates its dependency DAG and exact contract
+  /// locally, verifies the exact bytes collectively, then sizes the auxiliary carrier to its compact
+  /// slot count.  It is called by ``mark_bound``; generated package installers may call it earlier
+  /// when they need to stage initialization inputs.
+  POPS_EXPORT void seal_auxiliary_providers();
+
+  /// Stage one owner-qualified external input over the complete exact-ranked domain.  The value is
+  /// retained as a candidate only; it becomes visible to native consumers at the next matching
+  /// ``refresh_auxiliary`` transaction.  A component with a derived/field-output producer cannot be
+  /// uploaded through this path.
+  POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
+                                         const std::vector<double>& values);
+
+  /// Run one exact auxiliary evaluation transaction.  Due external inputs are staged, due native
+  /// providers launch in dependency order, every produced component is checked collectively for
+  /// finiteness, then the complete candidate carrier and registry generation are published together.
+  /// Any failure leaves the accepted carrier and accepted provider points unchanged.
+  POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+
+  /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
+  /// rather than a legacy physical label or a raw component number, is the public authority.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
+      const runtime::system::AuxiliaryComponentKey& key) const;
+  [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
+      const runtime::system::AuxiliaryComponentKey& key) const;
+  [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
   /// @}
 
   /// Configures the shared Poisson.
@@ -482,50 +551,11 @@ class System {
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> disc_mask() const;
 
-  /// Sets a B_z field over the exact-ranked flattened layout, shared by all blocks. Populates the
-  /// canonical B_z aux component read by models that declare it;
-  /// inert if no block reads B_z (aux channel stays at base width). B_z is static
-  /// (external to the elliptic): derive_aux does not touch it. Call after having added the block
-  /// (or before: the value is kept and applied when the aux channel widens).
-  void set_magnetic_field(const std::vector<double>& bz);
-
-  /// Designates an exact-ranked COMPRESSIBLE fluid block (Dim+2 variables) as the source of T_e:
-  /// the T_e aux channel (next canonical component) is filled with T = p/rho of this block, RECOMPUTED
-  /// at each solve_fields. Has effect only if a block declares the T_e component; otherwise stored
-  /// and inert. It is the second EXTRA aux field (after B_z), populated by DERIVATION from a
-  /// block (and not supplied by the user as B_z is).
-  void set_electron_temperature_from(const std::string& name);
-
   /// Guarantees that the SHARED aux channel has at least @p ncomp components. Called by
   /// add_compiled_model (cf. dsl_block.hpp) with aux_comps<Model> when adding a block that reads extra
   /// auxiliary fields. Reallocating preserves the ADDRESS of the System's aux (the already-installed
   /// block closures point to &aux), and re-applies B_z if it was supplied.
   /// POPS_EXPORT: called by add_compiled_model (header) -> must be exported for the loader .so.
-  POPS_EXPORT void ensure_aux_width(int ncomp);
-
-  /// Sets a NAMED aux field (ADC-70 phase 1) on a component @p comp >= kAuxNamedBase,
-  /// flattened over the exact-ranked cell layout. The System does NOT know the
-  /// names: the FACADE (pops.System.set_aux_field) resolves name -> comp via the block's table (from
-  /// CompiledModel.aux_extra_names) and calls this. PERSISTENT STATIC field: stored (re-applied
-  /// after a channel reallocation) and populated right away if the channel is wide enough. @throws if
-  /// comp < kAuxNamedBase (components reserved for phi/grad/B_z/T_e: dedicated paths), if the size does not
-  /// match the grid, or if no block declares a field at this index (channel too narrow).
-  void set_aux_field_component(int comp, const std::vector<double>& field);
-
-  /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
-  /// @p bc_type is pops::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value
-  /// (ignored for Foextrap). Applied by solve_fields AFTER the shared aux ghost fill, overriding only
-  /// this component's PHYSICAL-face ghosts (periodic faces keep their wrap). The FACADE
-  /// (pops.System.set_aux_field(..., halo=pops.AuxHalo(...))) resolves name -> comp and
-  /// calls this. No policy declared -> the shared aux BC, bit-identical. @throws on a reserved/too-narrow
-  /// component or an unsupported type.
-  void set_aux_field_halo_component(int comp, int bc_type, double value);
-
-  /// Reads a NAMED aux field (component @p comp >= kAuxNamedBase): valid cells of the aux channel,
-  /// flattened over the exact ranked cell layout. Counterpart of potential() for a named
-  /// component. Is 0 everywhere as long as no set_aux_field_component has written this component (the aux
-  /// channel is initialized to zero and solve_fields never touches components >= kAuxNamedBase).
-  std::vector<double> aux_field_component(int comp) const;
 
   /// Sets the density of a species (component 0), n*n row-major array. The other
   /// components (momentum, energy) are set to the at-rest equilibrium.
