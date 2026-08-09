@@ -149,8 +149,9 @@ class ProgramContext {
 
   explicit ProgramContext(runtime_type* system)
       : system_(require_system_(system)),
-        scalar_boundary_lane_(ExecutionLane::duplicate_world_collectively(
-            "pops.program.scalar-boundary.nd" + std::to_string(Dim))) {}
+        scalar_boundary_lane_(
+            std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
+                "pops.program.scalar-boundary.nd" + std::to_string(Dim)))) {}
 
   void install(std::function<void(double)> step) const {
     system_->install_program_step(std::move(step));
@@ -215,7 +216,9 @@ class ProgramContext {
     return runtime_block;
   }
 
-  field_type& state(int program_block) const { return system_->block_state(sys_block(program_block)); }
+  field_type& state(int program_block) const {
+    return system_->block_state(sys_block(program_block));
+  }
   field_type& aux() const { return system_->prepared_block_auxiliary(); }
 
   field_type rhs_scratch_like(const field_type& prototype) const {
@@ -226,21 +229,18 @@ class ProgramContext {
     return make_scratch_(prototype, prototype.ncomp(), prototype.ghosts());
   }
 
-  field_type& rhs_scratch(std::int64_t value_id, int subslot,
-                          const field_type& prototype) const {
-    return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype,
-                               prototype.ncomp(), prototype.ghosts());
+  field_type& rhs_scratch(std::int64_t value_id, int subslot, const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.ghosts());
   }
 
-  field_type& scratch_state(std::int64_t value_id, int subslot,
-                            const field_type& prototype) const {
-    return persistent_scratch_(ScratchKind::State, value_id, subslot, prototype,
-                               prototype.ncomp(), prototype.ghosts());
+  field_type& scratch_state(std::int64_t value_id, int subslot, const field_type& prototype) const {
+    return persistent_scratch_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.ghosts());
   }
 
-  field_type& scalar_scratch(std::int64_t value_id, int subslot,
-                             const field_type& prototype, int ncomp = 1,
-                             int ghost_depth = 1) const {
+  field_type& scalar_scratch(std::int64_t value_id, int subslot, const field_type& prototype,
+                             int ncomp = 1, int ghost_depth = 1) const {
     if (ncomp < 1 || ghost_depth < 0)
       throw std::invalid_argument(
           "ProgramContext scalar scratch requires positive components and non-negative ghosts");
@@ -254,8 +254,7 @@ class ProgramContext {
     return scalar_field_like_(state(0), ncomp, ghost_depth);
   }
 
-  void rhs_into(int program_block, field_type& state_value, field_type& rhs,
-                int rate_id) const {
+  void rhs_into(int program_block, field_type& state_value, field_type& rhs, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel_();
     system_->block_rhs_into_at(boundary_evaluation_point(rate_id), sys_block(program_block),
@@ -306,8 +305,7 @@ class ProgramContext {
                              flux_only);
   }
 
-  void require_cartesian_generated_operator(int program_block,
-                                             const std::string& operation) const {
+  void require_cartesian_generated_operator(int program_block, const std::string& operation) const {
     system_->require_cartesian_generated_operator(sys_block(program_block), operation);
   }
 
@@ -317,21 +315,20 @@ class ProgramContext {
   void prepare_generated_state(int program_block, field_type& state_value, int rate_id) const {
     require_rate_identity_(rate_id);
     system_->block_prepare_generated_state_at(boundary_evaluation_point(rate_id),
-                                               sys_block(program_block), state_value);
+                                              sys_block(program_block), state_value);
   }
 
   /// Assemble the centered negative divergence of one already-materialized named flux field per
   /// native axis.  Axis count and storage rank are the same compile-time constant, so 1D/2D/3D use
   /// one algorithm and no runtime dimension selector.
-  void neg_div_named_flux_into(field_type& rhs,
-                               const std::array<field_type*, Dim>& fluxes) const {
+  void neg_div_named_flux_into(field_type& rhs, const std::array<field_type*, Dim>& fluxes) const {
     const Geometry<Dim> geometry = system_->prepared_block_geometry();
     for (int axis = 0; axis < Dim; ++axis) {
       const field_type* flux = fluxes[static_cast<std::size_t>(axis)];
       if (flux == nullptr || flux->layout() != rhs.layout() ||
-          flux->distribution() != rhs.distribution() ||
-          flux->local_rank() != rhs.local_rank() || flux->ncomp() != rhs.ncomp() ||
-          flux->local_size() != rhs.local_size() || flux->ghosts()[axis] < 1)
+          flux->distribution() != rhs.distribution() || flux->local_rank() != rhs.local_rank() ||
+          flux->ncomp() != rhs.ncomp() || flux->local_size() != rhs.local_size() ||
+          flux->ghosts()[axis] < 1)
         throw std::invalid_argument(
             "ProgramContext named flux does not match the exact ranked residual layout");
     }
@@ -350,10 +347,9 @@ class ProgramContext {
             Index<Dim> upper = cell;
             --lower[axis];
             ++upper[axis];
-            divergence +=
-                (views[static_cast<std::size_t>(axis)](upper, component) -
-                 views[static_cast<std::size_t>(axis)](lower, component)) /
-                (Real(2) * geometry.spacing(axis));
+            divergence += (views[static_cast<std::size_t>(axis)](upper, component) -
+                           views[static_cast<std::size_t>(axis)](lower, component)) /
+                          (Real(2) * geometry.spacing(axis));
           }
           output(cell, component) = -divergence;
         }
@@ -386,21 +382,19 @@ class ProgramContext {
     axpy(destination, factor, source);
   }
 
-  void lincomb(field_type& destination, Real left_factor, const field_type& left,
-               Real right_factor, const field_type& right) const {
+  void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
+               const field_type& right) const {
     count_kernel_();
     pops::lincomb(destination, left_factor, left, right_factor, right);
   }
 
-  void lincomb(field_type& destination, Real left_factor, const field_type& left,
-               Real right_factor, const field_type& right, Real,
-               std::initializer_list<ExactCoefficientTerm>,
+  void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
+               const field_type& right, Real, std::initializer_list<ExactCoefficientTerm>,
                std::initializer_list<ExactCoefficientTerm>) const {
     lincomb(destination, left_factor, left, right_factor, right);
   }
 
-  void commit_many(
-      std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+  void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
     std::vector<field_type*> targets;
     std::vector<std::optional<field_type>> snapshots;
     targets.reserve(commits.size());
@@ -412,8 +406,7 @@ class ProgramContext {
         throw std::invalid_argument("ProgramContext commit contains a duplicate target");
       require_same_field_contract_(*target, *source, "ProgramContext commit");
       targets.push_back(target);
-      snapshots.emplace_back(target == source ? std::nullopt
-                                               : std::optional<field_type>(*source));
+      snapshots.emplace_back(target == source ? std::nullopt : std::optional<field_type>(*source));
     }
     std::size_t candidate = 0;
     for (const auto& [target, source] : commits) {
@@ -433,8 +426,8 @@ class ProgramContext {
     }
   }
 
-  void apply_coupling_operators(
-      Real dt, std::initializer_list<CouplingStateOverride> candidates) const {
+  void apply_coupling_operators(Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
     std::vector<field_type*> runtime_states(static_cast<std::size_t>(system_->n_blocks()), nullptr);
     for (const CouplingStateOverride& candidate : candidates) {
       const int block = sys_block(candidate.program_block);
@@ -456,12 +449,8 @@ class ProgramContext {
   Real min_component(const field_type& field, int component) const {
     return pops::reduce_min(field, component);
   }
-  Real norm2(int, const field_type& field) const {
-    return std::sqrt(pops::dot(field, field, 0));
-  }
-  Real norm_inf(int, const field_type& field) const {
-    return pops::reduce_norm_inf(field, 0);
-  }
+  Real norm2(int, const field_type& field) const { return std::sqrt(pops::dot(field, field, 0)); }
+  Real norm_inf(int, const field_type& field) const { return pops::reduce_norm_inf(field, 0); }
   Real dot(int, const field_type& left, const field_type& right) const {
     return pops::dot(left, right, 0);
   }
@@ -482,36 +471,34 @@ class ProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
-    return std::make_shared<scalar_boundary_session_type>(
-        geometry(), scalar_boundary_topology_(), prototype, lane,
-        next_scalar_boundary_generation_());
+    return std::make_shared<scalar_boundary_session_type>(geometry(), scalar_boundary_topology_(),
+                                                          prototype, lane,
+                                                          next_scalar_boundary_generation_());
   }
 
   std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const ExecutionLane& lane) const {
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
     (void)sys_block(program_block);
     require_boundary_point_(point, "Program block scalar boundary");
     return prepare_mesh_boundary_session(prototype, lane);
   }
 
   void fill_boundary(field_type& field) const {
-    scalar_boundary_session_type session(
-        geometry(), scalar_boundary_topology_(), field, scalar_boundary_lane_,
-        next_scalar_boundary_generation_());
+    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field,
+                                         *scalar_boundary_lane_,
+                                         next_scalar_boundary_generation_());
     session.fill(field);
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
-    scalar_boundary_session_type session(
-        geometry(), scalar_boundary_topology_(), field, lane,
-        next_scalar_boundary_generation_());
+    scalar_boundary_session_type session(geometry(), scalar_boundary_topology_(), field, lane,
+                                         next_scalar_boundary_generation_());
     session.fill(field);
   }
 
   void laplacian(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
     laplacian(output, input, *boundary);
   }
 
@@ -531,8 +518,8 @@ class ProgramContext {
           --lower[axis];
           ++upper[axis];
           const Real spacing = geom.spacing(axis);
-          image += (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) /
-                   (spacing * spacing);
+          image +=
+              (value(upper, 0) - Real(2) * value(cell, 0) + value(lower, 0)) / (spacing * spacing);
         }
         result(cell, 0) = image;
       });
@@ -548,7 +535,7 @@ class ProgramContext {
   }
 
   void gradient(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
     gradient(output, input, *boundary);
   }
 
@@ -566,31 +553,29 @@ class ProgramContext {
           Index<Dim> upper = cell;
           --lower[axis];
           ++upper[axis];
-          result(cell, axis) =
-              (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
+          result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geom.spacing(axis));
         }
       });
     }
     count_kernel_();
   }
 
-  void gradient(field_type& output, field_type& input,
-                const scalar_boundary_session_type& boundary,
+  void gradient(field_type& output, field_type& input, const scalar_boundary_session_type& boundary,
                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     require_boundary_point_(point, "Program gradient");
     gradient(output, input, boundary);
   }
 
   void divergence(field_type& output, field_type& flux) const {
-    auto boundary = prepare_mesh_boundary_session(flux, scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(flux, *scalar_boundary_lane_);
     divergence(output, flux, *boundary);
   }
 
   void divergence(field_type& output, field_type& flux,
                   const scalar_boundary_session_type& boundary) const {
-    if (output.ncomp() != 1 || flux.ncomp() != Dim ||
-        output.layout() != flux.layout() || output.distribution() != flux.distribution() ||
-        output.local_rank() != flux.local_rank() || output.local_size() != flux.local_size())
+    if (output.ncomp() != 1 || flux.ncomp() != Dim || output.layout() != flux.layout() ||
+        output.distribution() != flux.distribution() || output.local_rank() != flux.local_rank() ||
+        output.local_size() != flux.local_size())
       throw std::invalid_argument(
           "Program divergence requires one exact-ranked vector flux and scalar output");
     for (int axis = 0; axis < Dim; ++axis) {
@@ -610,8 +595,7 @@ class ProgramContext {
           Index<Dim> upper = cell;
           --lower[axis];
           ++upper[axis];
-          image += (value(upper, axis) - value(lower, axis)) /
-                   (Real(2) * geom.spacing(axis));
+          image += (value(upper, axis) - value(lower, axis)) / (Real(2) * geom.spacing(axis));
         }
         result(cell, 0) = image;
       });
@@ -626,11 +610,9 @@ class ProgramContext {
     divergence(output, flux, boundary);
   }
 
-  void pack_vector(field_type& output,
-                   const std::array<const field_type*, Dim>& components) const {
+  void pack_vector(field_type& output, const std::array<const field_type*, Dim>& components) const {
     if (output.ncomp() != Dim)
-      throw std::invalid_argument(
-          "Program vector output must carry one component per native axis");
+      throw std::invalid_argument("Program vector output must carry one component per native axis");
     for (int axis = 0; axis < Dim; ++axis) {
       const field_type* component = components[static_cast<std::size_t>(axis)];
       if (component == nullptr || component->ncomp() != 1 ||
@@ -664,8 +646,7 @@ class ProgramContext {
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-      const FieldView<const Real, Dim> coefficient =
-          std::as_const(tensor).fab(local).view();
+      const FieldView<const Real, Dim> coefficient = std::as_const(tensor).fab(local).view();
       for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
         Real image = Real(0);
         for (int row = 0; row < Dim; ++row) {
@@ -683,18 +664,14 @@ class ProgramContext {
               const Real upper_coefficient = coefficient(upper_row, component);
               const Real lower_sum = center_coefficient + lower_coefficient;
               const Real upper_sum = center_coefficient + upper_coefficient;
-              const Real lower_face = lower_sum != Real(0)
-                                          ? Real(2) * center_coefficient * lower_coefficient /
-                                                lower_sum
-                                          : Real(0);
-              const Real upper_face = upper_sum != Real(0)
-                                          ? Real(2) * center_coefficient * upper_coefficient /
-                                                upper_sum
-                                          : Real(0);
-              lower_flux += lower_face * (value(cell, 0) - value(lower_row, 0)) /
-                            geom.spacing(row);
-              upper_flux += upper_face * (value(upper_row, 0) - value(cell, 0)) /
-                            geom.spacing(row);
+              const Real lower_face = lower_sum != Real(0) ? Real(2) * center_coefficient *
+                                                                 lower_coefficient / lower_sum
+                                                           : Real(0);
+              const Real upper_face = upper_sum != Real(0) ? Real(2) * center_coefficient *
+                                                                 upper_coefficient / upper_sum
+                                                           : Real(0);
+              lower_flux += lower_face * (value(cell, 0) - value(lower_row, 0)) / geom.spacing(row);
+              upper_flux += upper_face * (value(upper_row, 0) - value(cell, 0)) / geom.spacing(row);
             } else {
               Index<Dim> lower_column = cell;
               Index<Dim> upper_column = cell;
@@ -708,22 +685,18 @@ class ProgramContext {
               ++lower_row_upper_column[column];
               --upper_row_lower_column[column];
               ++upper_row_upper_column[column];
-              const Real lower_face = Real(0.5) *
-                                      (coefficient(cell, component) +
-                                       coefficient(lower_row, component));
-              const Real upper_face = Real(0.5) *
-                                      (coefficient(cell, component) +
-                                       coefficient(upper_row, component));
+              const Real lower_face =
+                  Real(0.5) * (coefficient(cell, component) + coefficient(lower_row, component));
+              const Real upper_face =
+                  Real(0.5) * (coefficient(cell, component) + coefficient(upper_row, component));
               const Real tangent_scale = Real(4) * geom.spacing(column);
               const Real lower_tangent =
                   (value(upper_column, 0) - value(lower_column, 0) +
-                   value(lower_row_upper_column, 0) -
-                   value(lower_row_lower_column, 0)) /
+                   value(lower_row_upper_column, 0) - value(lower_row_lower_column, 0)) /
                   tangent_scale;
               const Real upper_tangent =
                   (value(upper_column, 0) - value(lower_column, 0) +
-                   value(upper_row_upper_column, 0) -
-                   value(upper_row_lower_column, 0)) /
+                   value(upper_row_upper_column, 0) - value(upper_row_lower_column, 0)) /
                   tangent_scale;
               lower_flux += lower_face * lower_tangent;
               upper_flux += upper_face * upper_tangent;
@@ -744,8 +717,8 @@ class ProgramContext {
     tensor_laplacian(output, input, tensor, boundary);
   }
 
-  void register_history(const std::string& name, int lag, int ncomp = -1,
-                        int program_owner = -1, const std::string& state_identity = {},
+  void register_history(const std::string& name, int lag, int ncomp = -1, int program_owner = -1,
+                        const std::string& state_identity = {},
                         const std::string& space_identity = {},
                         const std::string& clock_identity = {},
                         const std::string& interpolation_identity = {}) const {
@@ -847,9 +820,8 @@ class ProgramContext {
                               const std::string& stage_identity, int level) const {
     return schedule_coordinate_(kind, clock, stage_identity, level).has_value();
   }
-  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind,
-                       const std::string& clock, const std::string& stage_identity,
-                       int level) const {
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
+                       const std::string& stage_identity, int level) const {
     if (node_id < 0 || every_n <= 0)
       throw std::invalid_argument("ProgramContext schedule has an invalid node or period");
     const auto coordinate = schedule_coordinate_(kind, clock, stage_identity, level);
@@ -872,10 +844,9 @@ class ProgramContext {
   LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
     return LogicalEvaluationScope(*this, iteration, count);
   }
-  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
-                                   int step, Real offset) const {
-    clock_schedule_.synchronize_sample_and_hold(source, target, step,
-                                                static_cast<double>(offset));
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
+                                   Real offset) const {
+    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
   int macro_step() const { return system_->macro_step(); }
@@ -898,8 +869,7 @@ class ProgramContext {
     runtime_state().note_step_projection(name);
   }
 
-  void profile_record(const std::string& name,
-                      std::chrono::steady_clock::time_point start) const {
+  void profile_record(const std::string& name, std::chrono::steady_clock::time_point start) const {
     const auto elapsed = std::chrono::steady_clock::now() - start;
     runtime_state().profiler_.record(name, std::chrono::duration<double>(elapsed).count());
   }
@@ -930,25 +900,26 @@ class ProgramContext {
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 
-  OperatorEvaluationSnapshot operator_evaluation_snapshot(
-      OperatorFingerprint authority, const field_type& prototype,
-      OperatorFingerprint resources) const {
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
+                                                          const field_type& prototype,
+                                                          OperatorFingerprint resources) const {
     if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program operator snapshot revision exhausted uint64_t");
     const OperatorFingerprint topology = operator_topology_(prototype);
-    OperatorEvaluationSnapshot snapshot = current_operator_snapshot_(
-        authority, topology, resources, ++operator_snapshot_revision_);
+    OperatorEvaluationSnapshot snapshot =
+        current_operator_snapshot_(authority, topology, resources, ++operator_snapshot_revision_);
     if (!snapshot.valid())
       throw std::runtime_error("Program produced an invalid exact operator snapshot");
     active_operator_snapshot_ = snapshot;
     return snapshot;
   }
 
-  OperatorEvaluationSnapshot probe_operator_evaluation(
-      OperatorFingerprint authority, OperatorFingerprint topology,
-      OperatorFingerprint resources, std::uint64_t revision) const {
-    const bool active = active_operator_snapshot_ &&
-                        active_operator_snapshot_->revision == revision;
+  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                       OperatorFingerprint topology,
+                                                       OperatorFingerprint resources,
+                                                       std::uint64_t revision) const {
+    const bool active =
+        active_operator_snapshot_ && active_operator_snapshot_->revision == revision;
     OperatorEvaluationSnapshot probe =
         current_operator_snapshot_(authority, topology, resources, active ? revision : 0);
     if (!active || probe != *active_operator_snapshot_) {
@@ -1147,8 +1118,8 @@ class ProgramContext {
           "Program simultaneous field solve cannot alias one stage across blocks");
   }
 
-  static void require_boundary_point_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const char* operation) {
+  static void require_boundary_point_(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                      const char* operation) {
     if (point.clock.empty() || point.tick < 0 || point.level < 0 || point.substep < 0 ||
         point.stage < 0 || !std::isfinite(point.dt) || !(point.dt > 0.0) ||
         !std::isfinite(point.physical_time))
@@ -1200,8 +1171,7 @@ class ProgramContext {
     ::pops::detail::fingerprint_mix(fingerprint, "uniform-cartesian-topology");
     for (int axis = 0; axis < Dim; ++axis)
       ::pops::detail::fingerprint_mix(
-          fingerprint,
-          static_cast<std::uint64_t>(periodicity[static_cast<std::size_t>(axis)]));
+          fingerprint, static_cast<std::uint64_t>(periodicity[static_cast<std::size_t>(axis)]));
     return fingerprint;
   }
 
@@ -1232,8 +1202,7 @@ class ProgramContext {
     return result;
   }
 
-  static field_type scalar_field_like_(const field_type& prototype, int ncomp,
-                                       int ghost_depth) {
+  static field_type scalar_field_like_(const field_type& prototype, int ncomp, int ghost_depth) {
     if (ncomp < 1 || ghost_depth < 0)
       throw std::invalid_argument(
           "ProgramContext scalar field requires positive components and non-negative ghosts");
@@ -1278,9 +1247,10 @@ class ProgramContext {
       manager.slot_dt[name][0] = *dt;
   }
 
-  std::optional<ScheduleCoordinate> schedule_coordinate_(
-      ScheduleDomainKind kind, const std::string& clock, const std::string& stage_identity,
-      int level) const {
+  std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,
+                                                         const std::string& clock,
+                                                         const std::string& stage_identity,
+                                                         int level) const {
     return clock_schedule_.coordinate(kind, clock, stage_identity, level, 0,
                                       static_cast<std::int64_t>(macro_step()));
   }
@@ -1290,7 +1260,7 @@ class ProgramContext {
   }
 
   runtime_type* system_ = nullptr;
-  ExecutionLane scalar_boundary_lane_;
+  std::shared_ptr<ExecutionLane> scalar_boundary_lane_;
   mutable std::uint64_t scalar_boundary_generation_ = 0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
