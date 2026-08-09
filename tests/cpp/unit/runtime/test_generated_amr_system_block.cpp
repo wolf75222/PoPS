@@ -114,8 +114,9 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
-pops::runtime::system::AuxiliaryComponentKey install_field_output(
-    pops::AmrSystem<Dim>& system, const std::string& owner, const std::string& field) {
+pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system,
+                                                                  const std::string& owner,
+                                                                  const std::string& field) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -373,10 +374,7 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_FALSE(prepared.collective_contract.empty());
   EXPECT_NE(prepared.provider_identity.find(".nd/" + std::to_string(Dim) + "/"), std::string::npos);
   EXPECT_FALSE(prepared.staircase_provider_identity.empty());
-  if constexpr (Dim == 2)
-    EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
-  else
-    EXPECT_TRUE(prepared.cut_cell_provider_identity.empty());
+  EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(prepared.ghosts[axis], 2);
 }
@@ -576,7 +574,7 @@ TEST(GeneratedAmrSystemBlock,
   EXPECT_NEAR(system.composite_reduce("tracer", "sum", 0, {0, 1}), initial_mass, 1.0e-12);
 }
 
-TEST(GeneratedAmrSystemBlock, CutCellCapabilityIsExactRankedAndFailsBeforeMutation) {
+TEST(GeneratedAmrSystemBlock, CutCellCapabilityExecutesAtExactRank) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 1;
@@ -588,20 +586,11 @@ TEST(GeneratedAmrSystemBlock, CutCellCapabilityIsExactRankedAndFailsBeforeMutati
   pops::AmrSystem<Dim> system(config);
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  if constexpr (Dim == 2) {
-    EXPECT_NO_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"));
-    system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "cutcell");
-    EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
-  } else {
-    EXPECT_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"),
-        std::invalid_argument);
-    EXPECT_NO_THROW(
-        system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase"));
-    EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "staircase");
-  }
+  EXPECT_NO_THROW(
+      system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "cutcell"));
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  EXPECT_EQ(system.effective_options_report().eb.geometry_mode, "cutcell");
+  EXPECT_NO_THROW((void)system.evaluate_prepared_amr_level(point<Dim>(0)));
 }
 
 TEST(GeneratedAmrSystemBlock, EmbeddedBoundaryAuthoringRejectsDivergentMpiInputBeforeMutation) {
@@ -644,43 +633,37 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
     context->configure_hierarchy_tensor_solver(
         0, 1, std::string(pops::runtime::program::tensor_elliptic_detail::kCompositeTensorProvider),
         "test.generated-amr.tensor-plan",
-        std::string(
-            pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticRank2Contract),
+        std::string(pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticContract),
         slots, "pops.tensor-elliptic.solution", options);
   };
 
-  if constexpr (Dim == 2) {
-    ASSERT_NO_THROW(configure());
-    EXPECT_FALSE(context->uses_prepared_krylov_fallback());
-    pops::MultiFab<Dim>* first_solution = &context->hierarchy_solution();
-    ASSERT_NO_THROW(configure());
-    EXPECT_EQ(&context->hierarchy_solution(), first_solution);
+  ASSERT_NO_THROW(configure());
+  EXPECT_FALSE(context->uses_prepared_krylov_fallback());
+  pops::MultiFab<Dim>* first_solution = &context->hierarchy_solution();
+  ASSERT_NO_THROW(configure());
+  EXPECT_EQ(&context->hierarchy_solution(), first_solution);
 
-    context->for_each_program_resource_level([&](int) {
-      pops::MultiFab<Dim> fallback = context->rhs_scratch_like(context->state(0));
-      for (int row = 0; row < Dim; ++row)
-        for (int column = 0; column < Dim; ++column)
-          context
-              ->assembly_target(
-                  fallback,
-                  pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column))
-              .set_val(row == column ? pops::Real(1) : pops::Real(0));
-      context->assembly_target(fallback, "pops.tensor-elliptic.rhs").set_val(pops::Real(0));
-      context->assembly_target(fallback, "pops.tensor-elliptic.flux").set_val(pops::Real(0));
-      context->stage_linear_initial_guess();
-      EXPECT_EQ(&context->assembly_source(fallback, "pops.tensor-elliptic.solution"),
-                &context->hierarchy_solution());
-      EXPECT_THROW((void)context->assembly_target(fallback, "undeclared"), std::invalid_argument);
-    });
+  context->for_each_program_resource_level([&](int) {
+    pops::MultiFab<Dim> fallback = context->rhs_scratch_like(context->state(0));
+    for (int row = 0; row < Dim; ++row)
+      for (int column = 0; column < Dim; ++column)
+        context
+            ->assembly_target(
+                fallback,
+                pops::runtime::program::tensor_elliptic_detail::coefficient_slot(row, column))
+            .set_val(row == column ? pops::Real(1) : pops::Real(0));
+    context->assembly_target(fallback, "pops.tensor-elliptic.rhs").set_val(pops::Real(0));
+    context->assembly_target(fallback, "pops.tensor-elliptic.flux").set_val(pops::Real(0));
+    context->stage_linear_initial_guess();
+    EXPECT_EQ(&context->assembly_source(fallback, "pops.tensor-elliptic.solution"),
+              &context->hierarchy_solution());
+    EXPECT_THROW((void)context->assembly_target(fallback, "undeclared"), std::invalid_argument);
+  });
 
-    pops::SolveOutcome outcome =
-        context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
-    ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
-    EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
-  } else {
-    EXPECT_ANY_THROW(configure());
-    EXPECT_THROW((void)context->uses_prepared_krylov_fallback(), std::logic_error);
-  }
+  pops::SolveOutcome outcome =
+      context->solve_hierarchy_tensor(0, 1, pops::Real(1.0e-8), pops::Real(0), 8);
+  ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
+  EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
 }
 
 TEST(GeneratedAmrSystemBlock, ProgramContextEvaluatesExactStageStateWithoutPublishingIt) {
