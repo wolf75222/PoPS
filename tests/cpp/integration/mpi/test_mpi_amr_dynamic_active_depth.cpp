@@ -171,8 +171,8 @@ void prove_dynamic_active_depth(int n, int ranks, int rank) {
       inset(engine.hierarchy().layout(1).patches().boxes().front(), 2);
   publish_child(engine, 1, regrown_second_parent, "test.mpi-active-depth.regrow-2", pops::Real(5));
   ASSERT_EQ(engine.hierarchy().num_levels(), 3U);
-  EXPECT_EQ(pops::reduce_min_local(engine.hierarchy().state(2)), pops::Real(5));
-  EXPECT_EQ(pops::reduce_max_local(engine.hierarchy().state(2)), pops::Real(5));
+  EXPECT_EQ(pops::reduce_min(engine.hierarchy().state(2)), pops::Real(5));
+  EXPECT_EQ(pops::reduce_max(engine.hierarchy().state(2)), pops::Real(5));
 
   const double depth = static_cast<double>(engine.hierarchy().num_levels());
   const double epoch = static_cast<double>(engine.topology_epoch());
