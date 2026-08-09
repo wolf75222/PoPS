@@ -677,13 +677,15 @@ class AmrSystem {
   /// only when the selected native specialization owns a dimension-qualified hierarchy field-solver
   /// provider; the facade never stores an unused contract or falls back to the historical 2-D engine.
   /// @{
-  /// Registers named @p field's exact-ranked aux outputs. ``output_components`` contains either the
-  /// potential alone or the potential followed by one gradient component per native axis.
+  /// Registers named @p field's exact-ranked provider outputs. ``output_keys`` contains either the
+  /// potential alone or the potential followed by one gradient component per native axis. Every key
+  /// must be owned by a sealed ``field_output`` provider; no raw carrier component crosses this API.
   /// @throws if the system is already built, the output contract is malformed, or no exact-ranked
   /// hierarchy field-solver provider is installed. Provider-unavailable failure happens before mutation.
   POPS_EXPORT void register_elliptic_field(const std::string& block_name,
                                            const std::string& provider_key,
-                                           const std::vector<int>& output_components,
+                                           const std::vector<runtime::system::AuxiliaryComponentKey>&
+                                               output_keys,
                                            int gradient_sign);
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
   /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws before mutation if

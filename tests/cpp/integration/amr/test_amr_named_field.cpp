@@ -6,7 +6,27 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 
+#include <string>
+#include <utility>
 #include <vector>
+
+namespace pops {
+template <int Dim, class Model>
+void add_test_compiled_model(
+    AmrSystem<Dim>& system, const std::string& name, Model model,
+    const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
+    const std::string& reconstruction = "conservative", const std::string& time = "explicit",
+    double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1, int stride = 1,
+    const std::vector<std::string>& implicit_vars = {},
+    const std::vector<std::string>& implicit_roles = {}, double positivity_floor = 0.0,
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
+  add_compiled_model<Dim>(system, name, std::move(model), limiter, riemann, reconstruction, time,
+                          gamma, substeps, stride, implicit_vars, implicit_roles, positivity_floor,
+                          weno_epsilon, wave_speed_cache, "tests.tracer/physical_flux");
+}
+}  // namespace pops
+
+#define add_compiled_model add_test_compiled_model
 
 namespace {
 
@@ -16,10 +36,9 @@ struct AdvectionModel {
   using Schema = typename Law::Schema;
   using State = typename Law::State;
   using Primitive = typename Law::Primitive;
-  using Aux = pops::AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
+  static constexpr int n_providers = 0;
 
   Law law{};
 
@@ -57,7 +76,7 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -67,6 +86,25 @@ AdvectionModel<Dim> advection_model() {
   for (int axis = 0; axis < Dim; ++axis)
     velocity[axis] = pops::Real(axis + 1);
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+pops::runtime::system::AuxiliaryComponentKey install_field_output(
+    pops::AmrSystem<Dim>& system, const std::string& owner, const std::string& field) {
+  using namespace pops::runtime::system;
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 1;
+  AuxiliaryComponentKey key{owner, "field", field, "potential"};
+  AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "amr-field", "scalar"};
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "test.field-output/" + owner + "/" + field,
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
+      {{key, contract, shape}},
+      {}});
+  system.seal_auxiliary_providers();
+  return key;
 }
 
 template <int Dim>
@@ -112,19 +150,15 @@ TEST(test_amr_named_field, DefaultFieldPublishesOnlyWhenSolveOutcomeIsAccepted) 
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
-  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(7));
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("test-clock");
   context->begin_step(0.01);
   pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
   ASSERT_TRUE(outcome.report().solved_value_available());
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_NEAR(static_cast<double>(pops::reduce_max(system.prepared_amr_level_auxiliary(0), 0)), 0.0,
-              1.0e-8);
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
   EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
 }
@@ -142,7 +176,8 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  system.register_elliptic_field("tracer", "phi", {0}, 1);
+  const auto output_key = install_field_output(system, "test.aux-owner", "phi");
+  system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   pops::Real observed_stage = pops::Real(-1);
   system.set_block_elliptic_field(
       "tracer", "phi",
@@ -170,4 +205,5 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
   EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
   EXPECT_EQ(observed_stage, pops::Real(3));
+  EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));
 }

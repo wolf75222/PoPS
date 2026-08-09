@@ -21,6 +21,37 @@
 #include <utility>
 #include <vector>
 
+namespace pops {
+template <int Dim, class Model>
+void add_test_compiled_model(
+    AmrSystem<Dim>& system, const std::string& name, Model model,
+    const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
+    const std::string& reconstruction = "conservative", const std::string& time = "explicit",
+    double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1, int stride = 1,
+    const std::vector<std::string>& implicit_vars = {},
+    const std::vector<std::string>& implicit_roles = {}, double positivity_floor = 0.0,
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
+  add_compiled_model<Dim>(system, name, std::move(model), limiter, riemann, reconstruction, time,
+                          gamma, substeps, stride, implicit_vars, implicit_roles, positivity_floor,
+                          weno_epsilon, wave_speed_cache, "tests.tracer/physical_flux");
+}
+
+template <int Dim, class Model>
+PreparedAmrSystemBlock<Dim> prepare_test_compiled_amr_system_block(
+    const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
+    const std::string& reconstruction, const std::string& time, double gamma, int substeps,
+    int stride, double positivity_floor = 0.0,
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
+    const std::string& provider_consumer_qid = "tests.tracer/physical_flux") {
+  return prepare_compiled_amr_system_block<Dim>(
+      name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, stride,
+      positivity_floor, weno_epsilon, wave_speed_cache, provider_consumer_qid);
+}
+}  // namespace pops
+
+#define add_compiled_model add_test_compiled_model
+#define prepare_compiled_amr_system_block prepare_test_compiled_amr_system_block
+
 namespace {
 
 template <int Dim>
@@ -29,10 +60,9 @@ struct AdvectionModel {
   using Schema = typename Law::Schema;
   using State = typename Law::State;
   using Primitive = typename Law::Primitive;
-  using Aux = pops::AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
+  static constexpr int n_providers = 0;
 
   Law law{};
 
@@ -71,7 +101,7 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -81,6 +111,25 @@ AdvectionModel<Dim> advection_model() {
   for (int axis = 0; axis < Dim; ++axis)
     velocity[axis] = pops::Real(axis + 1);
   return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+pops::runtime::system::AuxiliaryComponentKey install_field_output(
+    pops::AmrSystem<Dim>& system, const std::string& owner, const std::string& field) {
+  using namespace pops::runtime::system;
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 1;
+  AuxiliaryComponentKey key{owner, "field", field, "potential"};
+  AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "amr-field", "scalar"};
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
+      "test.field-output/" + owner + "/" + field,
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
+      {{key, contract, shape}},
+      {}});
+  system.seal_auxiliary_providers();
+  return key;
 }
 
 template <int Dim>
@@ -311,12 +360,12 @@ static_assert(!std::is_same_v<pops::PreparedAmrSystemBlock<1>, pops::PreparedAmr
 TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   constexpr int Dim = pops::kNativeDimension;
   auto prepared = pops::prepare_compiled_amr_system_block<Dim>(
-      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 2, 3);
-  constexpr int expected_aux_components = pops::aux_comps_for<AdvectionModel<Dim>, Dim>();
+      "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit", 1.4, 2, 3,
+      0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
 
   EXPECT_EQ(prepared.name, "tracer");
   EXPECT_EQ(prepared.ncomp, 1);
-  EXPECT_EQ(prepared.aux_components, expected_aux_components);
+  EXPECT_EQ(prepared.provider_components, 0);
   EXPECT_EQ(prepared.substeps, 2);
   EXPECT_EQ(prepared.stride, 3);
   EXPECT_EQ(prepared.time_route, "explicit");
@@ -421,7 +470,6 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
 
   ASSERT_EQ(system.n_blocks(), 1);
   ASSERT_EQ(system.n_levels(), 1);
-  pops::MultiFab<Dim>* const auxiliary = &system.prepared_amr_level_auxiliary(0);
   const auto& state = system.engine()->hierarchy().state(0);
   pops::MultiFab<Dim> poisson_rhs(state.layout(), state.distribution(), state.local_rank(), 1,
                                   state.ghosts());
@@ -438,8 +486,6 @@ TEST(GeneratedAmrSystemBlock, FacadeRetainsAndExecutesPreparedRootLevel) {
   EXPECT_EQ(evaluation.integrated_face_fluxes.size(),
             system.engine()->hierarchy().state(0).local_size());
   EXPECT_EQ(&system.prepared_amr_level_evaluation(0), &evaluation);
-  const pops::AmrSystem<Dim>& const_system = system;
-  EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(0), auxiliary);
 }
 
 TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidatesLedger) {
@@ -451,16 +497,13 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(3));
   (void)system.evaluate_prepared_amr_level(point<Dim>(0));
 
   publish_centered_fine_level(system);
   system.refresh_prepared_amr_levels();
 
   ASSERT_EQ(system.n_levels(), 2);
-  EXPECT_EQ(pops::reduce_max_local(system.prepared_amr_level_auxiliary(0)), pops::Real(3));
   EXPECT_THROW((void)system.prepared_amr_level_evaluation(0), std::logic_error);
-  pops::MultiFab<Dim>* const fine_auxiliary = &system.prepared_amr_level_auxiliary(1);
   const auto& fine = system.evaluate_prepared_amr_level(point<Dim>(1));
   EXPECT_EQ(fine.point, point<Dim>(1));
   EXPECT_EQ(fine.spatial_contract, system.engine()->spatial_contract());
@@ -468,8 +511,6 @@ TEST(GeneratedAmrSystemBlock, RegridRebuildsExactFineGhostProvidersAndInvalidate
   EXPECT_EQ(fine.materialization_generation, system.engine()->materialization_generation());
   EXPECT_EQ(fine.residual.layout(), system.engine()->hierarchy().state(1).layout());
   EXPECT_EQ(fine.integrated_face_fluxes.size(), system.engine()->hierarchy().state(1).local_size());
-  const pops::AmrSystem<Dim>& const_system = system;
-  EXPECT_EQ(&const_system.prepared_amr_level_auxiliary(1), fine_auxiliary);
 }
 
 TEST(GeneratedAmrSystemBlock,
@@ -702,7 +743,6 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
   system.set_program_block_map({0});
-  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(7));
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("test-clock");
@@ -712,13 +752,9 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
     const pops::SolveReport rejected = outcome.consume(pops::SolveConsumption::kFailRun);
     FAIL() << rejected.reason;
   }
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_NEAR(
-      static_cast<double>(pops::reduce_max_local(system.prepared_amr_level_auxiliary(0), 0)), 0.0,
-      1.0e-8);
   EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
 }
@@ -742,7 +778,8 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
                                    pops::GeometricMgOptions{}, pops::CompositeFacOptions{}));
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  system.register_elliptic_field("tracer", "phi", {0}, 1);
+  const auto output_key = install_field_output(system, "test.aux-owner", "phi");
+  system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
       "tracer", "phi",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(0)); });
@@ -760,6 +797,7 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
   (void)outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
 }
 
@@ -785,7 +823,8 @@ TEST(GeneratedAmrSystemBlock,
   system.set_field_newton_plan("field/tracer", 1.0e-9, 4, 1.0e-10, 80, 20, 1.0e-4, 1.0 / 1024.0);
   system.install_block_state_route("tracer", "state/tracer");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  system.register_elliptic_field("tracer", "phi", {0}, 1);
+  const auto output_key = install_field_output(system, "test.aux-owner", "phi");
+  system.register_elliptic_field("tracer", "phi", {output_key}, 1);
   system.set_block_elliptic_field(
       "tracer", "phi",
       [](const pops::MultiFab<Dim>&, pops::MultiFab<Dim>& rhs) { rhs.set_val(pops::Real(1)); });
@@ -793,8 +832,6 @@ TEST(GeneratedAmrSystemBlock,
   publish_centered_fine_level(system);
   system.refresh_prepared_amr_levels();
   system.set_program_block_map({0});
-  system.prepared_amr_level_auxiliary(0).set_val(pops::Real(7));
-  system.prepared_amr_level_auxiliary(1).set_val(pops::Real(7));
 
   auto context = pops::runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("test-clock");
@@ -808,17 +845,11 @@ TEST(GeneratedAmrSystemBlock,
   EXPECT_THROW(
       (void)context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state),
       std::runtime_error);
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
-    EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
 
   RuntimeFieldBoundaryProbe<Dim>::force_failure = false;
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state);
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
-  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
-    EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_residual_calls, 0);
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_jvp_calls, 0);
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::residual_calls, 0);
@@ -832,9 +863,6 @@ TEST(GeneratedAmrSystemBlock,
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_NE(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
-    EXPECT_NE(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
 }
 
 TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel) {

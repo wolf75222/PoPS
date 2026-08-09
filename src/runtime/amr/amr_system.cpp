@@ -1456,6 +1456,7 @@ struct AmrSystem<Dim>::Impl {
       runtime::program::HierarchyTensorSolverProviderRegistry<Dim>;
   using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
   using auxiliary_groups_type = runtime::system::AuxiliaryStorageGroups<Dim>;
+  using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
 
   struct BlockSpec {
     std::string name;
@@ -1530,6 +1531,7 @@ struct AmrSystem<Dim>::Impl {
   struct ResolvedTaggingField {
     TaggingFieldKind kind = TaggingFieldKind::state;
     std::string qualified_identity;
+    std::string provider_group;
   };
 
   struct ResolvedTaggingProgram {
@@ -1580,6 +1582,7 @@ struct AmrSystem<Dim>::Impl {
     AmrFieldHierarchyPolicyAuthority hierarchy_policy;
     AmrFieldSolverOptions solver_options;
     std::optional<runtime::field::NamedFieldOutput<Dim>> output;
+    std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
     std::vector<std::vector<PreparedFieldRhs>> rhs_by_block;
     bool use_prepared_level_rhs = false;
     double reaction = 0.0;
@@ -1605,7 +1608,10 @@ struct AmrSystem<Dim>::Impl {
 
     std::unique_ptr<exact_field_solver_type> prepared_solver;
     std::vector<std::unique_ptr<field_type>> accepted_potential;
-    std::vector<std::unique_ptr<field_type>> candidate_auxiliary;
+    std::vector<std::unique_ptr<field_type>> candidate_outputs;
+    std::vector<auxiliary_groups_type> candidate_provider_storage;
+    std::vector<std::optional<auxiliary_publication_type>> candidate_provider_publications;
+    std::vector<std::string> stale_auxiliary_providers;
     std::vector<std::unique_ptr<field_type>> contribution_scratch;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
     std::vector<PreparedBoundaryContext> boundary_context_storage;
@@ -1623,7 +1629,13 @@ struct AmrSystem<Dim>::Impl {
     void discard_materialization() noexcept {
       prepared_solver.reset();
       accepted_potential.clear();
-      candidate_auxiliary.clear();
+      for (auto& publication : candidate_provider_publications)
+        if (publication)
+          publication->reject();
+      candidate_outputs.clear();
+      candidate_provider_storage.clear();
+      candidate_provider_publications.clear();
+      stale_auxiliary_providers.clear();
       contribution_scratch.clear();
       active_coverage.clear();
       boundary_context_storage.clear();
@@ -1642,9 +1654,6 @@ struct AmrSystem<Dim>::Impl {
     /// the sealed owner-qualified registry; there is no shared slab or canonical component order.
     std::vector<std::unique_ptr<auxiliary_groups_type>> provider_storage;
     std::vector<auxiliary_registry_type> auxiliary_registries;
-    // Transitional field-solver workspace.  It is never exposed to generated kernels; those use
-    // provider_storage exclusively through a resolved consumer plan.
-    std::vector<std::unique_ptr<field_type>> auxiliary;
     std::vector<std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>>
         embedded_boundary;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
@@ -1652,9 +1661,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::optional<evaluation_type>> evaluations;
     std::vector<std::vector<const Real*>> state_storage;
     std::vector<std::map<std::string, std::vector<const Real*>>> provider_storage_identity;
-    std::vector<std::vector<const Real*>> auxiliary_storage;
     std::vector<std::string> state_field_identities;
-    std::vector<std::string> auxiliary_field_identities;
+    std::vector<std::string> provider_storage_field_identities;
     std::string spatial_contract;
     std::string package_contract;
     std::string collective_contract;
@@ -1676,13 +1684,12 @@ struct AmrSystem<Dim>::Impl {
             active_coverage.size() != live.hierarchy().num_levels() ||
             state_storage.size() != live.hierarchy().num_levels() ||
             provider_storage_identity.size() != provider_storage.size() ||
-            auxiliary_registries.size() != provider_storage.size() ||
-            auxiliary_storage.size() != auxiliary.size())
+            provider_storage_field_identities.size() != provider_storage.size() ||
+            auxiliary_registries.size() != provider_storage.size())
           return false;
         for (std::size_t level = 0; level < state_storage.size(); ++level) {
           if (!field_storage_matches(live.hierarchy().state(level), state_storage[level]) ||
-              !provider_storage[level] || !auxiliary[level] ||
-              !field_storage_matches(*auxiliary[level], auxiliary_storage[level]))
+              !provider_storage[level])
             return false;
           for (const auto& [identity, storage] : provider_storage_identity[level]) {
             const auto* group = provider_storage[level]->find(identity);
@@ -1697,8 +1704,8 @@ struct AmrSystem<Dim>::Impl {
     }
   };
 
-  using auxiliary_snapshot_type = std::vector<field_type>;
   using provider_snapshot_type = std::vector<auxiliary_groups_type>;
+  using provider_registry_snapshot_type = std::vector<auxiliary_registry_type>;
   struct AcceptedSnapshot;
 
   AmrSystemConfig<Dim> cfg;
@@ -1728,8 +1735,8 @@ struct AmrSystem<Dim>::Impl {
   std::string embedded_boundary_configuration_contract;
   std::string embedded_boundary_semantic_digest;
   mutable std::unique_ptr<PreparedHierarchy> prepared_hierarchy;
-  mutable std::shared_ptr<const auxiliary_snapshot_type> pending_auxiliary_restore;
   mutable std::shared_ptr<const provider_snapshot_type> pending_provider_restore;
+  mutable std::shared_ptr<const provider_registry_snapshot_type> pending_provider_registry_restore;
   auxiliary_registry_type auxiliary_registry;
   std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
   std::vector<std::string> dirty_auxiliary_providers;
@@ -1751,8 +1758,8 @@ struct AmrSystem<Dim>::Impl {
 
   struct AcceptedSnapshot {
     std::optional<typename engine_type::Snapshot> engine;
-    std::shared_ptr<const auxiliary_snapshot_type> auxiliary;
     std::shared_ptr<const provider_snapshot_type> provider_storage;
+    std::shared_ptr<const provider_registry_snapshot_type> provider_registries;
     runtime::program::ProgramRuntimeState<Dim> program;
     double accepted_time = 0.0;
     int macro_step = 0;
@@ -1767,8 +1774,8 @@ struct AmrSystem<Dim>::Impl {
         : engine(owner.engine
                      ? std::optional<typename engine_type::Snapshot>(owner.engine->snapshot())
                      : std::nullopt),
-          auxiliary(owner.snapshot_auxiliary()),
           provider_storage(owner.snapshot_provider_storage()),
+          provider_registries(owner.snapshot_provider_registries()),
           program(owner.program),
           accepted_time(owner.accepted_time),
           macro_step(owner.macro_step),
@@ -1800,8 +1807,8 @@ struct AmrSystem<Dim>::Impl {
       owner.prepared_hierarchy.reset();
       if (engine) {
         owner.engine->restore(*engine);
-        owner.pending_auxiliary_restore = auxiliary;
         owner.pending_provider_restore = provider_storage;
+        owner.pending_provider_registry_restore = provider_registries;
       }
       owner.program = program;
       owner.accepted_time = accepted_time;
@@ -1859,19 +1866,6 @@ struct AmrSystem<Dim>::Impl {
     return const_cast<Impl*>(this)->block(name);
   }
 
-  std::shared_ptr<const auxiliary_snapshot_type> snapshot_auxiliary() const {
-    if (!prepared_hierarchy)
-      return {};
-    auto snapshot = std::make_shared<auxiliary_snapshot_type>();
-    snapshot->reserve(prepared_hierarchy->auxiliary.size());
-    for (const std::unique_ptr<field_type>& level : prepared_hierarchy->auxiliary) {
-      if (!level)
-        throw std::logic_error("prepared AMR hierarchy contains an empty auxiliary owner");
-      snapshot->push_back(*level);
-    }
-    return snapshot;
-  }
-
   std::shared_ptr<const provider_snapshot_type> snapshot_provider_storage() const {
     if (!prepared_hierarchy)
       return {};
@@ -1883,6 +1877,13 @@ struct AmrSystem<Dim>::Impl {
       snapshot->push_back(*level);
     }
     return snapshot;
+  }
+
+  std::shared_ptr<const provider_registry_snapshot_type> snapshot_provider_registries() const {
+    if (!prepared_hierarchy)
+      return {};
+    return std::make_shared<provider_registry_snapshot_type>(
+        prepared_hierarchy->auxiliary_registries);
   }
 
   BoundaryTopology<Dim> topology() const {
@@ -1937,9 +1938,12 @@ struct AmrSystem<Dim>::Impl {
         .presence(plan.output.has_value());
     if (plan.output) {
       contract.scalar(plan.output->gradient_sign())
-          .scalar(static_cast<std::uint64_t>(plan.output->component_count()));
-      for (std::size_t component = 0; component < plan.output->component_count(); ++component)
-        contract.scalar(plan.output->components()[component]);
+          .scalar(static_cast<std::uint64_t>(plan.output->component_count()))
+          .sequence(plan.output_keys,
+                    [](ExactContractBuilder& item,
+                       const runtime::system::AuxiliaryComponentKey& key) {
+                      key.serialize_exact(item);
+                    });
     }
     contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
     if (plan.boundary_kernel)
@@ -2229,7 +2233,7 @@ struct AmrSystem<Dim>::Impl {
 
     std::unique_ptr<exact_field_solver_type> prepared_solver;
     std::vector<std::unique_ptr<field_type>> accepted_potential;
-    std::vector<std::unique_ptr<field_type>> candidate_auxiliary;
+    std::vector<std::unique_ptr<field_type>> candidate_outputs;
     std::vector<std::unique_ptr<field_type>> contribution_scratch;
     std::vector<std::shared_ptr<const field_type>> coverage;
     runtime::amr::ExactAmrFieldSolverBuildRequest<Dim> request;
@@ -2251,8 +2255,9 @@ struct AmrSystem<Dim>::Impl {
 
     std::exception_ptr local_error;
     try {
-      if (!plan.output)
-        throw std::logic_error("AMR exact field plan has no registered output carrier");
+      if (plan.output && plan.output_keys.size() != plan.output->component_count())
+        throw std::logic_error(
+            "AMR exact field output keys do not cover its compact publication carrier");
       if ((!plan.boundary_state_blocks.empty() || !plan.boundary_field_blocks.empty()) &&
           !plan.boundary_kernel)
         throw std::logic_error(
@@ -2260,7 +2265,7 @@ struct AmrSystem<Dim>::Impl {
       if (!field_solver_providers || !field_nullspace_providers)
         throw std::logic_error("AMR exact field provider registries are absent");
       if (prepared_hierarchy->levels.size() != engine->hierarchy().num_levels() ||
-          prepared_hierarchy->auxiliary.size() != engine->hierarchy().num_levels())
+          prepared_hierarchy->provider_storage.size() != engine->hierarchy().num_levels())
         throw std::logic_error("AMR field materialization sees an incomplete prepared hierarchy");
 
       request.mode = plan.hierarchy_policy.policy_id == "pops.field-hierarchy.level-local"
@@ -2364,7 +2369,7 @@ struct AmrSystem<Dim>::Impl {
         prepared_solver->install_boundary_kernel(*plan.boundary_kernel);
 
       accepted_potential.reserve(engine->hierarchy().num_levels());
-      candidate_auxiliary.reserve(engine->hierarchy().num_levels());
+      candidate_outputs.reserve(engine->hierarchy().num_levels());
       contribution_scratch.reserve(engine->hierarchy().num_levels());
       for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
         field_type& candidate = prepared_solver->candidate_level(static_cast<int>(level));
@@ -2372,20 +2377,20 @@ struct AmrSystem<Dim>::Impl {
                                                      candidate.local_rank(), candidate.ncomp(),
                                                      candidate.ghosts());
         accepted->set_val(Real(0));
-        const field_type& live_auxiliary = *prepared_hierarchy->auxiliary[level];
-        plan.output->validate_width(live_auxiliary.ncomp(), "AMR exact field output");
-        copy_scalar_component(live_auxiliary, plan.output->potential_component(), *accepted, 0);
         copy_full_field_in_place(*accepted, candidate);
-        auto auxiliary = std::make_unique<field_type>(
-            live_auxiliary.layout(), live_auxiliary.distribution(), live_auxiliary.local_rank(),
-            live_auxiliary.ncomp(), live_auxiliary.ghosts());
-        copy_full_field_in_place(live_auxiliary, *auxiliary);
+        std::unique_ptr<field_type> output;
+        if (plan.output) {
+          output = std::make_unique<field_type>(
+              candidate.layout(), candidate.distribution(), candidate.local_rank(),
+              static_cast<int>(plan.output->component_count()), candidate.ghosts());
+          output->set_val(Real(0));
+        }
         field_type& rhs = prepared_solver->rhs_level(static_cast<int>(level));
         auto scratch = std::make_unique<field_type>(rhs.layout(), rhs.distribution(),
                                                     rhs.local_rank(), 1, rhs.ghosts());
         scratch->set_val(Real(0));
         accepted_potential.push_back(std::move(accepted));
-        candidate_auxiliary.push_back(std::move(auxiliary));
+        candidate_outputs.push_back(std::move(output));
         contribution_scratch.push_back(std::move(scratch));
       }
     } catch (...) {
@@ -2399,7 +2404,7 @@ struct AmrSystem<Dim>::Impl {
 
     plan.prepared_solver = std::move(prepared_solver);
     plan.accepted_potential = std::move(accepted_potential);
-    plan.candidate_auxiliary = std::move(candidate_auxiliary);
+    plan.candidate_outputs = std::move(candidate_outputs);
     plan.contribution_scratch = std::move(contribution_scratch);
     plan.active_coverage = std::move(coverage);
     plan.prepared_contract = std::move(expected_contract);
@@ -2412,6 +2417,53 @@ struct AmrSystem<Dim>::Impl {
   static FieldDistribution field_distribution(const field_type& field) noexcept {
     return field.distribution().replicated() ? FieldDistribution::Replicated
                                              : FieldDistribution::Distributed;
+  }
+
+  static void copy_field_outputs_to_provider_candidate(
+      const field_type& outputs,
+      const std::vector<runtime::system::AuxiliaryComponentKey>& keys,
+      const auxiliary_registry_type& registry, auxiliary_groups_type& candidate) {
+    if (keys.size() != static_cast<std::size_t>(outputs.ncomp()))
+      throw std::invalid_argument(
+          "AMR field-output key count differs from its compact candidate width");
+    for (std::size_t slot = 0; slot < keys.size(); ++slot) {
+      const auto address = registry.address_of(keys[slot]);
+      field_type* destination = candidate.find(address.group);
+      if (destination == nullptr || address.component >=
+                                        static_cast<std::size_t>(destination->ncomp()))
+        throw std::logic_error(
+            "AMR field-output candidate lacks its resolved provider storage address");
+      if (destination->layout() != outputs.layout() ||
+          destination->distribution() != outputs.distribution() ||
+          destination->local_rank() != outputs.local_rank())
+        throw std::invalid_argument(
+            "AMR field-output provider group differs from the solved field layout");
+      copy_scalar_component(outputs, static_cast<int>(slot), *destination,
+                            static_cast<int>(address.component));
+    }
+    Kokkos::fence();
+  }
+
+  runtime::system::AuxiliaryEvaluationPoint field_output_evaluation_point(
+      std::size_t level, const runtime::multiblock::BoundaryEvaluationPoint* evaluation) const {
+    if (macro_step < 0 || level > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      throw std::logic_error("AMR field-output publication has an invalid accepted coordinate");
+    runtime::system::AuxiliaryEvaluationPoint point;
+    point.clock = evaluation == nullptr ? "pops.amr.accepted" : evaluation->clock;
+    point.accepted_step = static_cast<std::uint64_t>(macro_step);
+    point.layout_generation = engine->materialization_generation();
+    point.level = static_cast<int>(level);
+    point.substep = evaluation == nullptr ? 0 : evaluation->substep;
+    point.stage = evaluation == nullptr ? 0 : evaluation->stage;
+    point.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
+    point.validate();
+    ExactContractBuilder exact;
+    point.serialize_exact(exact);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-field-output-evaluation-point", std::move(exact).release()}},
+            prepared_hierarchy->lane->communicator()))
+      throw std::runtime_error("AMR field-output evaluation point differs across MPI ranks");
+    return point;
   }
 
   void prepare_field_boundary_contexts(
@@ -2570,18 +2622,61 @@ struct AmrSystem<Dim>::Impl {
         active_field_slot.clear();
         return report;
       }
-      for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
-        field_type& candidate_auxiliary = *plan.candidate_auxiliary[level];
-        copy_full_field_in_place(*prepared_hierarchy->auxiliary[level], candidate_auxiliary);
-        const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
-            engine->hierarchy().layout(level).domain(), cfg.lower, cfg.upper);
-        runtime::field::publish_named_field(
-            plan.prepared_solver->candidate_level(static_cast<int>(level)), candidate_auxiliary,
-            geometry, *plan.output);
+      if (plan.output) {
+        plan.candidate_provider_storage.clear();
+        plan.candidate_provider_publications.clear();
+        plan.stale_auxiliary_providers.clear();
+        plan.candidate_provider_storage.reserve(engine->hierarchy().num_levels());
+        plan.candidate_provider_publications.reserve(engine->hierarchy().num_levels());
+        std::vector<std::string> provider_identities;
+        provider_identities.reserve(plan.output_keys.size());
+        for (const auto& key : plan.output_keys) {
+          const auto& provider = auxiliary_registry.provider_for_key(key);
+          if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
+            throw std::logic_error("AMR field output lost its field-output provider authority");
+          if (std::find(provider_identities.begin(), provider_identities.end(),
+                        provider.identity()) == provider_identities.end())
+            provider_identities.push_back(provider.identity());
+        }
+        for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
+          if (!plan.candidate_outputs[level] ||
+              !prepared_hierarchy->provider_storage[level])
+            throw std::logic_error("AMR field output carrier is not materialized exactly");
+          field_type& output = *plan.candidate_outputs[level];
+          const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
+              engine->hierarchy().layout(level).domain(), cfg.lower, cfg.upper);
+          runtime::field::publish_named_field(
+              plan.prepared_solver->candidate_level(static_cast<int>(level)), output, geometry,
+              *plan.output);
+          plan.candidate_provider_storage.push_back(*prepared_hierarchy->provider_storage[level]);
+          auto& registry = prepared_hierarchy->auxiliary_registries[level];
+          copy_field_outputs_to_provider_candidate(output, plan.output_keys, registry,
+                                                   plan.candidate_provider_storage.back());
+          plan.candidate_provider_publications.emplace_back(
+              registry.begin_external_publication(field_output_evaluation_point(level, evaluation_point),
+                                                  provider_identities));
+          auto& publication = *plan.candidate_provider_publications.back();
+          for (const std::string& identity : provider_identities)
+            publication.stage_external(identity);
+          publication.launch_ready_native({prepared_hierarchy->provider_storage[level].get(),
+                                           &plan.candidate_provider_storage.back()});
+          publication.validate_complete();
+          for (const std::string& identity : registry.dependent_provider_identities(provider_identities))
+            if (std::find(plan.stale_auxiliary_providers.begin(),
+                          plan.stale_auxiliary_providers.end(), identity) ==
+                plan.stale_auxiliary_providers.end())
+              plan.stale_auxiliary_providers.push_back(identity);
+        }
       }
       plan.candidate_ready = true;
       return report;
     } catch (...) {
+      for (auto& publication : plan.candidate_provider_publications)
+        if (publication)
+          publication->reject();
+      plan.candidate_provider_publications.clear();
+      plan.candidate_provider_storage.clear();
+      plan.stale_auxiliary_providers.clear();
       plan.candidate_ready = false;
       active_field_slot.clear();
       throw;
@@ -2592,14 +2687,22 @@ struct AmrSystem<Dim>::Impl {
     if (active_field_slot.empty())
       throw std::logic_error("AMR exact field publication candidate is absent");
     const FieldPlan& plan = field_plans.at(active_field_slot);
-    if (!engine || !prepared_hierarchy || !plan.materialized_for(*engine) ||
-        !plan.candidate_ready ||
-        plan.candidate_auxiliary.size() != prepared_hierarchy->auxiliary.size())
+    if (!engine || !prepared_hierarchy || !plan.materialized_for(*engine) || !plan.candidate_ready)
       throw std::logic_error("AMR exact field publication candidate is stale");
-    for (std::size_t level = 0; level < plan.candidate_auxiliary.size(); ++level)
-      if (!same_field_contract(*plan.candidate_auxiliary[level],
-                               *prepared_hierarchy->auxiliary[level]))
-        throw std::runtime_error("AMR exact field publication layout changed after solve");
+    if (!plan.output)
+      return;
+    if (plan.candidate_provider_storage.size() != prepared_hierarchy->provider_storage.size() ||
+        plan.candidate_provider_publications.size() != prepared_hierarchy->provider_storage.size())
+      throw std::logic_error("AMR field-output publication candidate is incomplete");
+    for (std::size_t level = 0; level < plan.candidate_provider_storage.size(); ++level) {
+      runtime::system::AuxiliaryCarrierStorage<Dim>{prepared_hierarchy->provider_storage[level].get(),
+                                                    const_cast<auxiliary_groups_type*>(
+                                                        &plan.candidate_provider_storage[level])}
+          .validate();
+      if (!plan.candidate_provider_publications[level])
+        throw std::logic_error("AMR field-output publication metadata is absent");
+      plan.candidate_provider_publications[level]->validate_complete();
+    }
   }
 
   void accept_field_candidate() noexcept {
@@ -2609,9 +2712,23 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t level = 0; level < plan.accepted_potential.size(); ++level) {
         copy_full_field_in_place(plan.prepared_solver->candidate_level(static_cast<int>(level)),
                                  *plan.accepted_potential[level]);
-        copy_full_field_in_place(*plan.candidate_auxiliary[level],
-                                 *prepared_hierarchy->auxiliary[level]);
+        if (plan.output) {
+          plan.candidate_provider_publications[level]->accept();
+          *prepared_hierarchy->provider_storage[level] =
+              std::move(plan.candidate_provider_storage[level]);
+          auto& identities = prepared_hierarchy->provider_storage_identity[level];
+          identities.clear();
+          for (const auto& [identity, group] : prepared_hierarchy->provider_storage[level]->groups)
+            identities.emplace(identity, field_storage_identity(group));
+        }
       }
+      for (const std::string& identity : plan.stale_auxiliary_providers)
+        if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), identity) ==
+            dirty_auxiliary_providers.end())
+          dirty_auxiliary_providers.push_back(identity);
+      plan.candidate_provider_publications.clear();
+      plan.candidate_provider_storage.clear();
+      plan.stale_auxiliary_providers.clear();
       plan.candidate_ready = false;
       active_field_slot.clear();
     } catch (...) {
@@ -2622,7 +2739,16 @@ struct AmrSystem<Dim>::Impl {
   void reject_field_candidate() noexcept {
     try {
       if (!active_field_slot.empty())
-        field_plans.at(active_field_slot).candidate_ready = false;
+        {
+          FieldPlan& plan = field_plans.at(active_field_slot);
+          for (auto& publication : plan.candidate_provider_publications)
+            if (publication)
+              publication->reject();
+          plan.candidate_provider_publications.clear();
+          plan.candidate_provider_storage.clear();
+          plan.stale_auxiliary_providers.clear();
+          plan.candidate_ready = false;
+        }
       active_field_slot.clear();
     } catch (...) {
       std::terminate();
@@ -2678,17 +2804,15 @@ struct AmrSystem<Dim>::Impl {
           embedded_boundary_configuration_contract;
       candidate->topology_epoch = candidate_engine.topology_epoch();
       candidate->materialization_generation = candidate_engine.materialization_generation();
-      candidate->auxiliary.reserve(level_count);
       candidate->provider_storage.reserve(level_count);
       candidate->auxiliary_registries.reserve(level_count);
       candidate->embedded_boundary.resize(level_count);
       candidate->levels.reserve(level_count);
       candidate->evaluations.resize(level_count);
       candidate->state_storage.reserve(level_count);
-      candidate->auxiliary_storage.reserve(level_count);
       candidate->provider_storage_identity.reserve(level_count);
       candidate->state_field_identities.reserve(level_count);
-      candidate->auxiliary_field_identities.reserve(level_count);
+      candidate->provider_storage_field_identities.reserve(level_count);
 
       const std::string& state_route = boundary_registry.state_route(prepared_block->name);
       const auto* installed_boundary = boundary_registry.find_boundary(prepared_block->name);
@@ -2698,12 +2822,13 @@ struct AmrSystem<Dim>::Impl {
       }
       lane_identity = "pops.generated-amr-levels/" + std::to_string(candidate->topology_epoch) +
                       "/" + std::to_string(candidate->materialization_generation);
-      if (pending_auxiliary_restore && pending_auxiliary_restore->size() != level_count)
-        throw std::invalid_argument(
-            "AMR rollback auxiliary image differs from the restored hierarchy depth");
       if (pending_provider_restore && pending_provider_restore->size() != level_count)
         throw std::invalid_argument(
             "AMR rollback provider image differs from the restored hierarchy depth");
+      if (pending_provider_registry_restore &&
+          pending_provider_registry_restore->size() != level_count)
+        throw std::invalid_argument(
+            "AMR rollback provider registry differs from the restored hierarchy depth");
       for (std::size_t level = 0; level < level_count; ++level) {
         field_type& state = candidate_engine.hierarchy().state(level);
         auto provider_storage = std::make_unique<auxiliary_groups_type>();
@@ -2736,35 +2861,21 @@ struct AmrSystem<Dim>::Impl {
         else if (previous != nullptr && level < previous->provider_storage.size() &&
                  previous->provider_storage[level])
           restore_provider_groups(*previous->provider_storage[level]);
-        auto auxiliary =
-            std::make_unique<field_type>(state.layout(), state.distribution(), state.local_rank(),
-                                         std::max(prepared_block->provider_components, 1),
-                                         prepared_block->ghosts);
-        auxiliary->set_val(Real(0));
-        if (pending_auxiliary_restore) {
-          const field_type& restored = (*pending_auxiliary_restore)[level];
-          if (!same_field_shape(restored, *auxiliary))
-            throw std::invalid_argument(
-                "AMR rollback auxiliary image differs from the restored level layout");
-          copy_valid_field(restored, *auxiliary);
-        } else if (previous != nullptr && level < previous->auxiliary.size() &&
-                   previous->auxiliary[level] &&
-                   same_field_shape(*previous->auxiliary[level], *auxiliary)) {
-          copy_valid_field(*previous->auxiliary[level], *auxiliary);
-        }
         candidate->state_storage.push_back(field_storage_identity(state));
-        candidate->auxiliary_storage.push_back(field_storage_identity(*auxiliary));
         std::map<std::string, std::vector<const Real*>> group_storage_identity;
         for (const auto& [identity, group] : provider_storage->groups)
           group_storage_identity.emplace(identity, field_storage_identity(group));
         candidate->provider_storage_identity.push_back(std::move(group_storage_identity));
         candidate->state_field_identities.push_back(state_route + "/level/" +
                                                     std::to_string(level));
-        candidate->auxiliary_field_identities.push_back(
-            prepared_block->provider_identity + "/auxiliary/level/" + std::to_string(level));
-        candidate->auxiliary.push_back(std::move(auxiliary));
+        candidate->provider_storage_field_identities.push_back(
+            prepared_block->provider_identity + "/provider-groups/level/" +
+            std::to_string(level));
         candidate->provider_storage.push_back(std::move(provider_storage));
-        if (previous != nullptr && level < previous->auxiliary_registries.size())
+        if (pending_provider_registry_restore)
+          candidate->auxiliary_registries.push_back(
+              (*pending_provider_registry_restore)[level]);
+        else if (previous != nullptr && level < previous->auxiliary_registries.size())
           candidate->auxiliary_registries.push_back(previous->auxiliary_registries[level]);
         else if (auxiliary_registry.sealed())
           candidate->auxiliary_registries.push_back(auxiliary_registry);
@@ -2824,10 +2935,10 @@ struct AmrSystem<Dim>::Impl {
           root_state_ghost_fill = prepare_root_ghost_fill(
               state, level_domain, exact_topology, candidate->state_field_identities[level],
               candidate->topology_epoch, candidate->materialization_generation, *candidate->lane);
-          if (!provider_storage.groups.empty())
+          if (prepared_block->provider_components != 0 && !provider_storage.groups.empty())
             root_provider_ghost_fill = prepare_provider_groups_root_ghost_fill(
                 provider_storage, level_domain, exact_topology,
-                candidate->auxiliary_field_identities[level], candidate->topology_epoch,
+                candidate->provider_storage_field_identities[level], candidate->topology_epoch,
                 candidate->materialization_generation, *candidate->lane);
         } else {
           const Box<Dim>& coarse_domain = candidate_engine.hierarchy().layout(level - 1).domain();
@@ -2848,10 +2959,11 @@ struct AmrSystem<Dim>::Impl {
                                              coarse_domain, level_domain, exact_topology),
               },
               *candidate->lane);
-          if (!provider_storage.groups.empty())
+          if (prepared_block->provider_components != 0 && !provider_storage.groups.empty())
             provider_ghost_fill = prepare_provider_groups_fine_ghost_fill(
                 *candidate->provider_storage[level - 1], provider_storage, coarse_domain,
-                level_domain, ratio, exact_topology, candidate->auxiliary_field_identities[level],
+                level_domain, ratio, exact_topology,
+                candidate->provider_storage_field_identities[level],
                 static_cast<int>(level), candidate->topology_epoch,
                 candidate->materialization_generation, *candidate->lane);
         }
@@ -2859,7 +2971,10 @@ struct AmrSystem<Dim>::Impl {
             .level = level,
             .geometry = Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper),
             .topology = exact_topology,
-            .provider_storage = provider_storage.groups.empty() ? nullptr : &provider_storage,
+            .provider_storage = prepared_block->provider_components == 0 ||
+                                        provider_storage.groups.empty()
+                                    ? nullptr
+                                    : &provider_storage,
             .provider_plan = prepared_block->provider_components == 0
                                  ? nullptr
                                  : &auxiliary_registry.consumer_plan(
@@ -2871,7 +2986,7 @@ struct AmrSystem<Dim>::Impl {
             .physical_boundary = boundary,
             .embedded_boundary = candidate->embedded_boundary[level],
             .state_identity = candidate->state_field_identities[level],
-            .provider_storage_identity = candidate->auxiliary_field_identities[level],
+            .provider_storage_identity = candidate->provider_storage_field_identities[level],
             .boundary_identity = boundary_identity,
             .embedded_boundary_provider_identity =
                 !candidate->embedded_boundary[level] ||
@@ -2946,7 +3061,7 @@ struct AmrSystem<Dim>::Impl {
     std::unique_ptr<PreparedHierarchy> candidate =
         prepare_hierarchy_graph(*engine, prepared_hierarchy.get());
     prepared_hierarchy.swap(candidate);
-    pending_auxiliary_restore.reset();
+    pending_provider_registry_restore.reset();
     for (auto& [slot, plan] : field_plans) {
       (void)slot;
       plan.discard_materialization();
@@ -2982,15 +3097,17 @@ struct AmrSystem<Dim>::Impl {
     candidate.program.provider_identity = tagging_spec->provider_identity;
     candidate.program.prepared = true;
 
-    const auto bind_field = [&](TaggingFieldKind kind, const std::string& identity) -> std::size_t {
+    const auto bind_field = [&](TaggingFieldKind kind, const std::string& identity,
+                                const std::string& provider_group = {}) -> std::size_t {
       for (std::size_t index = 0; index < candidate.fields.size(); ++index)
         if (candidate.fields[index].qualified_identity == identity) {
-          if (candidate.fields[index].kind != kind)
+          if (candidate.fields[index].kind != kind ||
+              candidate.fields[index].provider_group != provider_group)
             throw std::invalid_argument(
                 "AMR tagging qualified identity resolves to more than one storage authority");
           return index;
         }
-      candidate.fields.push_back({kind, identity});
+      candidate.fields.push_back({kind, identity, provider_group});
       return candidate.fields.size() - 1;
     };
 
@@ -3028,11 +3145,13 @@ struct AmrSystem<Dim>::Impl {
         if (plan == field_plans.end() || !plan->second.output)
           throw std::invalid_argument("AMR tagging field leaf has no exact published output");
         const int output_index = tagging_spec->leaf_field_component_indices[leaf_index];
-        if (output_index < 0 ||
-            static_cast<std::size_t>(output_index) >= plan->second.output->component_count())
+        if (output_index < 0 || static_cast<std::size_t>(output_index) >=
+                                    plan->second.output_keys.size())
           throw std::out_of_range("AMR tagging field output slot is outside its exact carrier");
-        component = plan->second.output->components()[static_cast<std::size_t>(output_index)];
-        field_index = bind_field(TaggingFieldKind::auxiliary, identity);
+        const auto address = auxiliary_registry.address_of(
+            plan->second.output_keys[static_cast<std::size_t>(output_index)]);
+        component = static_cast<int>(address.component);
+        field_index = bind_field(TaggingFieldKind::auxiliary, identity, address.group);
       } else {
         throw std::invalid_argument("AMR tagging leaf has an unknown subject kind");
       }
@@ -3154,7 +3273,7 @@ struct AmrSystem<Dim>::Impl {
       return;
     const ResolvedTaggingProgram& resolved = resolve_tagging_program();
     if (!prepared_hierarchy || !prepared_hierarchy->lane ||
-        prepared_hierarchy->auxiliary.size() != engine->hierarchy().num_levels())
+        prepared_hierarchy->provider_storage.size() != engine->hierarchy().num_levels())
       throw std::logic_error("AMR tagging requires the exact prepared hierarchy graph");
     using TaggingField =
         runtime::amr::PreparedTaggingField<Dim,
@@ -3168,11 +3287,15 @@ struct AmrSystem<Dim>::Impl {
     for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
       std::vector<TaggingField> fields;
       fields.reserve(resolved.fields.size());
-      for (const ResolvedTaggingField& field : resolved.fields)
-        fields.push_back(
-            {field.qualified_identity, field.kind == TaggingFieldKind::state
-                                           ? &engine->hierarchy().state(level)
-                                           : prepared_hierarchy->auxiliary[level].get()});
+      for (const ResolvedTaggingField& field : resolved.fields) {
+        const field_type* values = &engine->hierarchy().state(level);
+        if (field.kind == TaggingFieldKind::auxiliary) {
+          values = prepared_hierarchy->provider_storage[level]->find(field.provider_group);
+          if (values == nullptr)
+            throw std::logic_error("AMR tagging provider group is absent from the live hierarchy");
+        }
+        fields.push_back({field.qualified_identity, values});
+      }
       fields_by_level.push_back(std::move(fields));
       layouts.push_back(engine->hierarchy().layout(level));
       budgets.push_back(exact_tagging_budget(engine->hierarchy().layout(level),
@@ -3481,7 +3604,7 @@ struct AmrSystem<Dim>::Impl {
         prepare_hierarchy_graph(*engine_candidate, nullptr);
     engine = std::move(engine_candidate);
     prepared_hierarchy = std::move(hierarchy_candidate);
-    pending_auxiliary_restore.reset();
+    pending_provider_registry_restore.reset();
     automatic_bootstrap();
   }
 
@@ -4422,7 +4545,7 @@ void AmrSystem<Dim>::set_poisson(const std::string& rhs, const std::string& solv
   typename Impl::FieldPlan plan;
   plan.plan_identity = "pops.amr.default-field-plan";
   plan.provider_identity = "pops.amr.default-field";
-  plan.output_owner_identity = "pops.amr.shared-auxiliary";
+  plan.output_owner_identity = "pops.amr.default-field";
   plan.output_block = "amr";
   plan.output_key = "fields_from_state";
   plan.solver_route = solver;
@@ -4433,11 +4556,6 @@ void AmrSystem<Dim>::set_poisson(const std::string& rhs, const std::string& solv
           ? geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{})
           : solver_options;
   (void)plan.solver_options.exact_contract();
-  std::vector<int> outputs;
-  outputs.reserve(static_cast<std::size_t>(Dim + 1));
-  for (int component = 0; component <= Dim; ++component)
-    outputs.push_back(component);
-  plan.output.emplace(outputs, 1);
   plan.use_prepared_level_rhs = true;
   if (bc != "auto") {
     const std::size_t faces = static_cast<std::size_t>(2 * Dim);
@@ -4688,7 +4806,8 @@ void AmrSystem<Dim>::set_field_nullspace(const std::string& provider_slot,
 template <int Dim>
 void AmrSystem<Dim>::register_elliptic_field(const std::string& block_name,
                                              const std::string& provider_key,
-                                             const std::vector<int>& output_components,
+                                             const std::vector<
+                                                 runtime::system::AuxiliaryComponentKey>& output_keys,
                                              int gradient_sign) {
   require_amr_assembling(p_->lifecycle, "register_elliptic_field");
   if (p_->engine)
@@ -4697,7 +4816,24 @@ void AmrSystem<Dim>::register_elliptic_field(const std::string& block_name,
   if (provider_key.empty())
     throw std::invalid_argument("AmrSystem named elliptic field identity must be non-empty");
   (void)p_->block(block_name);
-  const runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
+  if (!p_->auxiliary_registry.sealed())
+    throw std::logic_error(
+        "AMR named elliptic outputs require a sealed auxiliary provider registry");
+  const runtime::field::NamedFieldOutput<Dim> output(output_keys.size(), gradient_sign);
+  std::vector<std::string> exact_output_keys;
+  exact_output_keys.reserve(output_keys.size());
+  for (const auto& key : output_keys) {
+    key.validate();
+    const std::string exact_key = key.exact_key();
+    if (std::find(exact_output_keys.begin(), exact_output_keys.end(), exact_key) !=
+        exact_output_keys.end())
+      throw std::invalid_argument("AMR named elliptic output keys must be unique");
+    exact_output_keys.push_back(exact_key);
+    if (p_->auxiliary_registry.provider_for_key(key).kind() !=
+        runtime::system::AuxiliaryProviderKind::field_output)
+      throw std::invalid_argument(
+          "AMR named elliptic output key is not owned by a field-output provider");
+  }
   const std::string slot = p_->resolve_field_slot(provider_key);
   typename Impl::FieldPlan& plan = p_->field_plans.at(slot);
   if (plan.output)
@@ -4706,6 +4842,7 @@ void AmrSystem<Dim>::register_elliptic_field(const std::string& block_name,
     throw std::invalid_argument(
         "AMR exact field output registration differs from its resolved plan");
   plan.output = output;
+  plan.output_keys = output_keys;
   plan.rhs_by_block.resize(p_->blocks.size());
 }
 
@@ -6407,7 +6544,9 @@ template void AmrSystem<kNativeDimension>::set_field_nullspace(const std::string
                                                                const PreparedProviderOptions&);
 template void AmrSystem<kNativeDimension>::register_elliptic_field(const std::string&,
                                                                    const std::string&,
-                                                                   const std::vector<int>&, int);
+                                                                   const std::vector<runtime::system::
+                                                                       AuxiliaryComponentKey>&,
+                                                                   int);
 template void AmrSystem<kNativeDimension>::set_block_elliptic_field(
     const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);

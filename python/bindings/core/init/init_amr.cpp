@@ -528,8 +528,23 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             return report;
           },
           py::arg("provider_slot"))
-      .def("register_elliptic_field", &AmrSystem::register_elliptic_field, py::arg("block"),
-           py::arg("field"), py::arg("output_components"), py::arg("gradient_sign"))
+      .def(
+          "register_elliptic_field",
+          [](AmrSystem& system, const std::string& block, const std::string& field,
+             const py::sequence& output_keys, int gradient_sign) {
+            std::vector<runtime::system::AuxiliaryComponentKey> keys;
+            keys.reserve(py::len(output_keys));
+            for (const py::handle row : output_keys) {
+              const py::dict key = py::cast<py::dict>(row);
+              keys.push_back({py::cast<std::string>(key["owner_qid"]),
+                              py::cast<std::string>(key["space_kind"]),
+                              py::cast<std::string>(key["space_name"]),
+                              py::cast<std::string>(key["component"])});
+            }
+            system.register_elliptic_field(block, field, keys, gradient_sign);
+          },
+          py::arg("block"), py::arg("field"), py::arg("output_keys"),
+          py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan, py::arg("provider_slot"),
            py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &AmrSystem::set_field_boundary_dependencies,
