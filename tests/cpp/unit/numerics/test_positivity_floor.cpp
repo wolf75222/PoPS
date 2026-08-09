@@ -22,7 +22,7 @@ struct DensityModel {
     return {VariableKind::Conservative,
             {"density", "momentum", "energy"},
             n_vars,
-            {VariableRole::Density, VariableRole::MomentumX, VariableRole::Energy}};
+            {VariableRole::Density, VariableRole::momentum(0), VariableRole::Energy}};
   }
 };
 

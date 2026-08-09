@@ -717,16 +717,21 @@ class SlipWall:
                 native_role_token(role) if isinstance(role, ComponentRole) else role)
             for component, role in roles.items()
         }
-        supported = {
-            "AxialX", "AxialY", "AxialZ", "Density", "MomentumX", "MomentumY",
-            "MomentumZ", "Energy", "VelocityX", "VelocityY", "VelocityZ", "Pressure",
-            "Temperature", "Scalar",
-        }
-        if any(not isinstance(token, str) or token not in supported for token in tokens.values()):
+        scalar = {"density", "energy", "pressure", "temperature", "scalar", "custom"}
+
+        def valid_semantic(token: Any) -> bool:
+            if not isinstance(token, str):
+                return False
+            family, separator, axis = token.partition(":")
+            return token in scalar or (
+                family in {"momentum", "velocity", "axial"}
+                and separator == ":" and axis.isdecimal())
+
+        if any(not valid_semantic(token) for token in tokens.values()):
             raise ValueError(
                 "SlipWall requires one explicit typed physical role for every state component")
-        normal_token = ("MomentumX", "MomentumY", "MomentumZ")[geometry.axis.index]
-        normal_velocity = ("VelocityX", "VelocityY", "VelocityZ")[geometry.axis.index]
+        normal_token = "momentum:%d" % geometry.axis.index
+        normal_velocity = "velocity:%d" % geometry.axis.index
         normal = [
             component
             for component, token in tokens.items()

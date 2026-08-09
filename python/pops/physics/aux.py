@@ -47,21 +47,21 @@ def max_runtime_params() -> int:
 # its roles explicitly (conservative_vars(..., roles=[...]) / set_primitive_state(..., roles=[...]))
 # for a non-standard layout. Key = EXACT variable name, value = member of pops::VariableRole.
 CANONICAL_ROLES = {
-    "rho": "Density", "n": "Density", "density": "Density",
-    "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-    "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-    "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-    "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-    "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-    "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-    "p": "Pressure", "pressure": "Pressure",
-    "T": "Temperature", "temperature": "Temperature",
+    "rho": "density", "n": "density", "density": "density",
+    "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
+    "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
+    "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
+    "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
+    "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
+    "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
+    "p": "pressure", "pressure": "pressure",
+    "T": "temperature", "temperature": "temperature",
 }
 
 
 def role_of(name: Any) -> Any:
     """CANONICAL physical role of name @p name (member of pops::VariableRole), 'Custom' if unknown."""
-    return CANONICAL_ROLES.get(name, "Custom")
+    return CANONICAL_ROLES.get(name, "custom")
 
 
 def roles_for(names: Any, override: Any = None) -> Any:

@@ -93,8 +93,7 @@ inline constexpr VariableSemantic VariableSemantic::Temperature = VariableSemant
 inline constexpr VariableSemantic VariableSemantic::Scalar = VariableSemantic::scalar();
 inline constexpr VariableSemantic VariableSemantic::Custom = VariableSemantic::custom();
 
-/// Compatibility spelling for existing generic consumers; this is a structured semantic, not an
-/// enum ABI.  New APIs should prefer VariableSemantic in signatures.
+/// Public role spelling used by generic consumers.  It is a structured semantic, not an enum ABI.
 using VariableRole = VariableSemantic;
 
 /// Forward declaration: VariableSet::index_of(const std::string&) resolves a canonical role NAME via
