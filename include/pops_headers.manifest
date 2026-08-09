@@ -33,7 +33,6 @@ api pops/core/identity/sha256.hpp
 api pops/core/model/coupled_system.hpp
 api pops/core/model/equation_block.hpp
 api pops/core/model/physical_model.hpp
-api pops/core/state/aux_names.hpp
 api pops/core/state/state.hpp
 api pops/core/state/variables.hpp
 api pops/coupling/amr/amr_coupler_mp.hpp
@@ -220,8 +219,6 @@ abi pops/runtime/config/route_ids.hpp
 sdk-root pops/runtime/config/runtime_params.hpp
 api pops/runtime/config/spatial_domain.hpp
 api pops/runtime/multiblock/evaluation_point.hpp
-sdk-support pops/runtime/context/aux_layout.hpp
-sdk-support pops/runtime/context/field_context.hpp
 abi pops/runtime/dynamic/abi_key.hpp
 sdk-support pops/runtime/dynamic/component_consumers.hpp
 sdk-support pops/runtime/dynamic/component_loader.hpp
@@ -261,10 +258,12 @@ api pops/runtime/runtime_environment.hpp
 sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
+sdk-support pops/runtime/system/auxiliary_checkpoint.hpp
 sdk-support pops/runtime/system/derived_aux_provider.hpp
 sdk-support pops/runtime/system/exact_aux_registry.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
+sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp

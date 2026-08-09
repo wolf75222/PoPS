@@ -349,20 +349,10 @@ production facade exposes it until `ProgramGraph` can lower that composition.
 The [`solve_fields` implementation](../src/runtime/system/system_fields.cpp) consumes the installed
 [`ExactFieldSolverBackend<Dim>`](../include/pops/runtime/system/exact_field_solver_backend.hpp): it
 solves the system Poisson whose right-hand side is the sum of the elliptic bricks of the blocks
-($f = \sum_b q_b\, n_b$), then derives the aux. The aux is the shared channel that carries $\phi$ and $\nabla\phi$
-(components 1 and 2), plus optionally $B_z$ and $T_e$.
-
-The mapping from a field-solve output (the handle `phi`, `grad_x`, `grad_y`, or a model-named field)
-to the real aux component it lands in is described by a typed `AuxLayout`
-([`include/pops/runtime/context/aux_layout.hpp`](../include/pops/runtime/context/aux_layout.hpp)): a
-host-only descriptor that WRAPS the fixed component truth of
-[`include/pops/core/state/state.hpp`](../include/pops/core/state/state.hpp) (it never redefines the
-`kAux*` constants) so a report or a validation step can name outputs instead of magic indices. One
-field solve carries a `FieldContext`
-([`include/pops/runtime/context/field_context.hpp`](../include/pops/runtime/context/field_context.hpp)),
-a validity token recording which field problem, block and stage produced the aux: a context solved for
-one stage cannot be silently read as another. These are descriptors around already-computed values;
-they add no numerics.
+($f = \sum_b q_b\, n_b$), then publishes its potential and gradients as owner-qualified field-output
+`AuxiliaryComponentKey`s. The sealed exact auxiliary registry resolves every key to one compatible
+storage group and validates its representation, centering, layout, rank and halo before publication;
+there is no shared raw auxiliary channel or fixed field component convention.
 
 Field solve legality is resolved from the owner-qualified Python `FieldSolvePlan` and its capability
 proof before native artifact creation.  The native runtime receives only authenticated prepared

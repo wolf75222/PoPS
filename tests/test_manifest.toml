@@ -430,11 +430,6 @@ sources = ["tests/cpp/integration/runtime/test_external_brick_isolation.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
-name = "test_field_context"
-sources = ["tests/cpp/unit/runtime/test_field_context.cpp"]
-labels = ["unit", "runtime", "small"]
-
-[[cpp.suite]]
 name = "test_program_context_contract"
 sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
 labels = ["unit", "runtime", "small"]

@@ -125,7 +125,6 @@
   "test_external_riemann_dispatch": 2.0,
   "test_facade_routing": 3.58,
   "test_fallback_diagnostics": 2.0,
-  "test_field_context": 2.0,
   "test_field_nullspace": 2.0,
   "test_fill_boundary": 2.0,
   "test_fill_boundary_cache": 2.0,

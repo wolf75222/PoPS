@@ -76,7 +76,6 @@ set(POPS_CPP_TEST_SOURCE_test_external_brick_json "tests/cpp/integration/runtime
 set(POPS_CPP_TEST_SOURCE_test_external_brick_isolation "tests/cpp/integration/runtime/test_external_brick_isolation.cpp")
 set(POPS_CPP_TEST_SOURCE_test_external_riemann_dispatch "tests/cpp/integration/native_loader/test_external_riemann_dispatch.cpp")
 set(POPS_CPP_TEST_SOURCE_test_facade_routing "tests/cpp/integration/runtime/test_facade_routing.cpp")
-set(POPS_CPP_TEST_SOURCE_test_field_context "tests/cpp/unit/runtime/test_field_context.cpp")
 set(POPS_CPP_TEST_SOURCE_test_field_nullspace "tests/cpp/unit/elliptic/test_field_nullspace.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fallback_diagnostics "tests/cpp/unit/numerics/test_fallback_diagnostics.cpp")
 set(POPS_CPP_TEST_SOURCE_test_copy_schedule_cache "tests/cpp/unit/mesh/test_copy_schedule_cache.cpp")

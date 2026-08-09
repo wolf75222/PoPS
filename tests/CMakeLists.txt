@@ -543,7 +543,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace
-  test_field_context
 )
 
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
