@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -37,7 +38,17 @@ class ExactAuxiliaryRegistry final {
    public:
     PublicationTransaction(const PublicationTransaction&) = delete;
     PublicationTransaction& operator=(const PublicationTransaction&) = delete;
-    PublicationTransaction(PublicationTransaction&&) = delete;
+    PublicationTransaction(PublicationTransaction&& other) noexcept
+        : registry_(other.registry_),
+          point_(std::move(other.point_)),
+          candidate_generation_(other.candidate_generation_),
+          due_(std::move(other.due_)),
+          staged_(std::move(other.staged_)),
+          candidate_points_(std::move(other.candidate_points_)),
+          active_(other.active_) {
+      other.registry_ = nullptr;
+      other.active_ = false;
+    }
     PublicationTransaction& operator=(PublicationTransaction&&) = delete;
 
     ~PublicationTransaction() {
@@ -88,13 +99,17 @@ class ExactAuxiliaryRegistry final {
     /// Atomically make the complete candidate generation visible in registry metadata.  The
     /// integrating owner must pair this with its own storage publication after this preflight; an
     /// incomplete graph, a stale point, or any earlier exception leaves accepted state unchanged.
-    void accept() {
+    void validate_complete() const {
       ensure_active_();
       for (std::size_t index = 0; index < due_.size(); ++index)
         if (due_[index] && !staged_[index])
           throw std::logic_error(
               "auxiliary candidate is incomplete: a due provider has not produced a candidate");
-      registry_->commit_candidate_(point_, candidate_generation_, due_);
+    }
+
+    void accept() {
+      validate_complete();
+      registry_->commit_candidate_(candidate_generation_, std::move(candidate_points_));
       active_ = false;
     }
 
@@ -115,7 +130,12 @@ class ExactAuxiliaryRegistry final {
           point_(std::move(point)),
           candidate_generation_(candidate_generation),
           due_(std::move(due)),
-          staged_(due_.size(), false) {}
+          staged_(due_.size(), false),
+          candidate_points_(registry.accepted_points_) {
+      for (std::size_t index = 0; index < due_.size(); ++index)
+        if (due_[index])
+          candidate_points_[index] = point_;
+    }
 
     void ensure_active_() const {
       if (!active_)
@@ -134,7 +154,8 @@ class ExactAuxiliaryRegistry final {
 
     [[nodiscard]] bool dependencies_ready_(std::size_t consumer) const {
       for (const std::size_t producer : registry_->dependency_providers_[consumer])
-        if (due_[producer] && !staged_[producer])
+        if ((due_[producer] && !staged_[producer]) ||
+            (!due_[producer] && !registry_->accepted_points_[producer]))
           return false;
       return true;
     }
@@ -144,6 +165,7 @@ class ExactAuxiliaryRegistry final {
     std::uint64_t candidate_generation_ = 0;
     std::vector<bool> due_;
     std::vector<bool> staged_;
+    std::vector<std::optional<AuxiliaryEvaluationPoint>> candidate_points_;
     bool active_ = true;
   };
 
@@ -191,14 +213,13 @@ class ExactAuxiliaryRegistry final {
     if (sealed_)
       throw std::logic_error("auxiliary registry is already sealed");
 
-    std::sort(providers_.begin(), providers_.end(), [](const provider_type& left,
-                                                        const provider_type& right) {
-      return left.identity() < right.identity();
-    });
-    std::sort(consumer_plans_.begin(), consumer_plans_.end(), [](const auto& left,
-                                                                  const auto& right) {
-      return left.consumer_qid < right.consumer_qid;
-    });
+    std::sort(providers_.begin(), providers_.end(),
+              [](const provider_type& left, const provider_type& right) {
+                return left.identity() < right.identity();
+              });
+    std::sort(
+        consumer_plans_.begin(), consumer_plans_.end(),
+        [](const auto& left, const auto& right) { return left.consumer_qid < right.consumer_qid; });
     std::unordered_map<std::string, std::size_t> identity_to_provider;
     std::unordered_map<std::string, OutputLocation> output_by_key;
     for (std::size_t provider_index = 0; provider_index < providers_.size(); ++provider_index) {
@@ -215,10 +236,9 @@ class ExactAuxiliaryRegistry final {
     }
     std::map<std::string, std::vector<std::string>> keys_by_group;
     for (const auto& [key, location] : output_by_key) {
-      const AuxiliaryStorageGroupKey<Dim> group{location.output.contract.representation,
-                                                location.output.contract.centering,
-                                                location.output.contract.layout,
-                                                location.output.shape};
+      const AuxiliaryStorageGroupKey<Dim> group{
+          location.output.contract.representation, location.output.contract.centering,
+          location.output.contract.layout, location.output.shape};
       keys_by_group[group.exact_key()].push_back(key);
     }
     resolved_storage_groups_.clear();
@@ -227,8 +247,7 @@ class ExactAuxiliaryRegistry final {
       for (std::size_t component = 0; component < keys.size(); ++component)
         output_by_key.at(keys[component]).address = {group, component};
       const auto& sample = output_by_key.at(keys.front()).output;
-      resolved_storage_groups_.push_back(
-          {group, sample.contract, sample.shape, keys.size()});
+      resolved_storage_groups_.push_back({group, sample.contract, sample.shape, keys.size()});
     }
 
     dependency_providers_.assign(providers_.size(), {});
@@ -238,8 +257,8 @@ class ExactAuxiliaryRegistry final {
       const provider_type& provider = providers_[provider_index];
       for (const AuxiliaryOutput<Dim>& output : provider.outputs())
         resolved_outputs_[provider_index].push_back(
-            {output_by_key.at(output.key.exact_key()).address, output.key,
-             output.contract, output.shape});
+            {output_by_key.at(output.key.exact_key()).address, output.key, output.contract,
+             output.shape});
       for (const AuxiliaryDependency<Dim>& dependency : provider.dependencies()) {
         dependency.validate();
         const auto producer = output_by_key.find(dependency.key.exact_key());
@@ -260,8 +279,7 @@ class ExactAuxiliaryRegistry final {
             throw std::invalid_argument(
                 "auxiliary provider declares the same component dependency more than once");
         resolved_dependencies_[provider_index].push_back(
-            {producer->second.address, dependency.key, dependency.contract,
-             dependency.shape});
+            {producer->second.address, dependency.key, dependency.contract, dependency.shape});
       }
     }
 
@@ -298,6 +316,30 @@ class ExactAuxiliaryRegistry final {
     if (index >= providers_.size())
       throw std::out_of_range("auxiliary provider index is outside the sealed registry");
     return providers_[index];
+  }
+  [[nodiscard]] const provider_type& provider_for_key(const AuxiliaryComponentKey& key) const {
+    require_sealed_();
+    return providers_[provider_for_key_(key)];
+  }
+  [[nodiscard]] std::vector<std::string> dependent_provider_identities(
+      const std::vector<std::string>& provider_ids) const {
+    require_sealed_();
+    std::vector<bool> selected(providers_.size(), false);
+    for (const std::string& identity : provider_ids)
+      selected[provider_index_(identity)] = true;
+    for (const std::size_t producer : topological_order_)
+      if (selected[producer])
+        for (std::size_t consumer = 0; consumer < dependency_providers_.size(); ++consumer)
+          if (std::find(dependency_providers_[consumer].begin(),
+                        dependency_providers_[consumer].end(),
+                        producer) != dependency_providers_[consumer].end())
+            selected[consumer] = true;
+    std::vector<std::string> result;
+    for (const std::size_t provider : topological_order_)
+      if (selected[provider] &&
+          !provider_ids_contain_(provider_ids, providers_[provider].identity()))
+        result.push_back(providers_[provider].identity());
+    return result;
   }
   [[nodiscard]] AuxiliaryStorageAddress<Dim> address_of(const AuxiliaryComponentKey& key) const {
     require_sealed_();
@@ -340,13 +382,19 @@ class ExactAuxiliaryRegistry final {
       throw std::logic_error("auxiliary registry already has an unconsumed candidate generation");
     std::vector<bool> required(providers_.size(), consumer_qids.empty());
     for (const std::string& qid : consumer_qids) {
-      const auto plan = std::find_if(resolved_consumer_plans_.begin(),
-                                     resolved_consumer_plans_.end(),
-                                     [&](const auto& row) { return row.consumer_qid == qid; });
+      const auto plan =
+          std::find_if(resolved_consumer_plans_.begin(), resolved_consumer_plans_.end(),
+                       [&](const auto& row) { return row.consumer_qid == qid; });
       if (plan == resolved_consumer_plans_.end())
         throw std::out_of_range("auxiliary consumer is not registered");
       for (const auto& value : plan->values)
         required[provider_for_key_(value.key)] = true;
+    }
+    std::vector<bool> forced(providers_.size(), false);
+    for (const std::string& identity : forced_provider_ids) {
+      const std::size_t provider = provider_index_(identity);
+      forced[provider] = true;
+      required[provider] = true;
     }
     for (std::size_t reverse = topological_order_.size(); reverse-- > 0;) {
       const std::size_t consumer = topological_order_[reverse];
@@ -354,15 +402,12 @@ class ExactAuxiliaryRegistry final {
         for (const std::size_t producer : dependency_providers_[consumer])
           required[producer] = true;
     }
-    std::vector<bool> forced(providers_.size(), false);
-    for (const std::string& identity : forced_provider_ids)
-      forced[provider_index_(identity)] = true;
     std::vector<bool> due;
     due.reserve(providers_.size());
     for (std::size_t index = 0; index < providers_.size(); ++index)
       due.push_back(required[index] &&
-                    (forced[index] ||
-                     providers_[index].policy().requires_evaluation(accepted_points_[index], point)));
+                    (forced[index] || providers_[index].policy().requires_evaluation(
+                                          accepted_points_[index], point)));
     for (const std::size_t consumer : topological_order_) {
       if (!required[consumer] || providers_[consumer].kind() == AuxiliaryProviderKind::input)
         continue;
@@ -372,9 +417,57 @@ class ExactAuxiliaryRegistry final {
           break;
         }
     }
+    PublicationTransaction transaction(*this, std::move(point), accepted_generation_ + 1,
+                                       std::move(due));
     candidate_open_ = true;
-    return PublicationTransaction(*this, std::move(point), accepted_generation_ + 1,
-                                  std::move(due));
+    return transaction;
+  }
+
+  /// Begin a publication rooted at one or more externally materialized providers.  Only those
+  /// roots and their prerequisites participate. Downstream providers are marked stale separately
+  /// by the integrating runtime and refresh only when an exact consumer requests them; this permits
+  /// several coupled fields to publish sequentially without exposing a partially recomputed DAG.
+  [[nodiscard]] PublicationTransaction begin_external_publication(
+      AuxiliaryEvaluationPoint point, const std::vector<std::string>& provider_ids) {
+    require_sealed_();
+    point.validate();
+    if (candidate_open_)
+      throw std::logic_error("auxiliary registry already has an unconsumed candidate generation");
+    if (provider_ids.empty())
+      throw std::invalid_argument("external auxiliary publication requires a provider identity");
+
+    std::vector<bool> forced(providers_.size(), false);
+    std::vector<bool> required(providers_.size(), false);
+    for (const std::string& identity : provider_ids) {
+      const std::size_t provider = provider_index_(identity);
+      forced[provider] = true;
+      required[provider] = true;
+    }
+    // Pull in prerequisites of the external roots.
+    for (std::size_t reverse = topological_order_.size(); reverse-- > 0;) {
+      const std::size_t consumer = topological_order_[reverse];
+      if (required[consumer])
+        for (const std::size_t producer : dependency_providers_[consumer])
+          required[producer] = true;
+    }
+
+    std::vector<bool> due(providers_.size(), false);
+    for (std::size_t index = 0; index < providers_.size(); ++index)
+      due[index] = required[index] &&
+                   (forced[index] ||
+                    providers_[index].policy().requires_evaluation(accepted_points_[index], point));
+    for (const std::size_t consumer : topological_order_)
+      if (required[consumer] && providers_[consumer].kind() != AuxiliaryProviderKind::input)
+        for (const std::size_t producer : dependency_providers_[consumer])
+          if (due[producer]) {
+            due[consumer] = true;
+            break;
+          }
+
+    PublicationTransaction transaction(*this, std::move(point), accepted_generation_ + 1,
+                                       std::move(due));
+    candidate_open_ = true;
+    return transaction;
   }
 
  private:
@@ -427,9 +520,14 @@ class ExactAuxiliaryRegistry final {
     throw std::logic_error("sealed auxiliary registry has no provider for component key");
   }
 
+  static bool provider_ids_contain_(const std::vector<std::string>& identities,
+                                    std::string_view candidate) {
+    return std::find(identities.begin(), identities.end(), candidate) != identities.end();
+  }
+
   [[nodiscard]] AuxiliaryKernelLaunchContext<Dim> launch_context_(
-      std::size_t index, const AuxiliaryEvaluationPoint& point,
-      std::uint64_t candidate_generation, AuxiliaryCarrierStorage<Dim> storage) const {
+      std::size_t index, const AuxiliaryEvaluationPoint& point, std::uint64_t candidate_generation,
+      AuxiliaryCarrierStorage<Dim> storage) const {
     return {point, candidate_generation, resolved_outputs_[index], resolved_dependencies_[index],
             storage};
   }
@@ -479,21 +577,20 @@ class ExactAuxiliaryRegistry final {
     exact.sequence(providers_, [](ExactContractBuilder& item, const provider_type& provider) {
       item.bytes(provider.collective_contract());
     });
-    exact.sequence(consumer_plans_, [](ExactContractBuilder& item,
-                                       const AuxiliaryConsumerProviderPlan<Dim>& plan) {
-      plan.serialize_exact(item);
-    });
+    exact.sequence(consumer_plans_,
+                   [](ExactContractBuilder& item, const AuxiliaryConsumerProviderPlan<Dim>& plan) {
+                     plan.serialize_exact(item);
+                   });
     exact.sequence(topological_order_);
     collective_contract_ = std::move(exact).release();
   }
 
-  void commit_candidate_(const AuxiliaryEvaluationPoint& point, std::uint64_t generation,
-                         const std::vector<bool>& due) {
+  void commit_candidate_(
+      std::uint64_t generation,
+      std::vector<std::optional<AuxiliaryEvaluationPoint>> candidate_points) noexcept {
     if (!candidate_open_ || generation != accepted_generation_ + 1)
-      throw std::logic_error("auxiliary registry candidate generation is stale");
-    for (std::size_t index = 0; index < due.size(); ++index)
-      if (due[index])
-        accepted_points_[index] = point;
+      std::terminate();
+    accepted_points_.swap(candidate_points);
     accepted_generation_ = generation;
     candidate_open_ = false;
   }

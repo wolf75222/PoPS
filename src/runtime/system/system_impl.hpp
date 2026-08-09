@@ -59,6 +59,7 @@ struct System<Dim>::Impl {
   int& aux_ncomp_ = domain_.aux_ncomp;
 
   using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
+  using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
   using auxiliary_key_type = runtime::system::AuxiliaryComponentKey;
   auxiliary_registry_type auxiliary_registry_;
   // The provider carrier is deliberately distinct from the historical field/aux workspace while
@@ -156,6 +157,9 @@ struct System<Dim>::Impl {
   std::shared_ptr<exact_field_type> default_field_;
   std::map<std::string, std::shared_ptr<exact_field_type>> named_fields_;
   std::shared_ptr<exact_field_type> active_field_;
+  std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> active_field_provider_candidate_;
+  std::optional<auxiliary_publication_type> active_field_auxiliary_publication_;
+  std::vector<std::string> active_field_stale_auxiliary_providers_;
   std::map<std::string, FieldPlan> field_plans_;
   std::map<std::string, ConfiguredFieldSolverProvider> configured_field_solver_providers_;
   std::map<std::string, std::shared_ptr<component_field_solver_type>>
@@ -197,7 +201,8 @@ struct System<Dim>::Impl {
     bool field_plan_consensus_verified = false;
     std::string default_nullspace_provider_identity;
     PreparedProviderOptions default_nullspace_options;
-    std::map<std::string, field_type> named_field_potentials;
+    std::optional<typename exact_field_type::AcceptedState> default_field_state;
+    std::map<std::string, typename exact_field_type::AcceptedState> named_field_states;
 
     explicit NativePackageFinalizeSnapshot(const Impl& owner)
         : aux(owner.aux),
@@ -226,13 +231,17 @@ struct System<Dim>::Impl {
           field_plan_consensus_verified(owner.field_plan_consensus_verified_),
           default_nullspace_provider_identity(owner.default_nullspace_provider_identity_),
           default_nullspace_options(owner.default_nullspace_options_) {
-      if (owner.active_field_)
+      if (owner.active_field_ || owner.active_field_provider_candidate_ ||
+          owner.active_field_auxiliary_publication_ ||
+          !owner.active_field_stale_auxiliary_providers_.empty())
         throw std::logic_error(
             "System native package finalization cannot snapshot an active field candidate");
+      if (owner.default_field_)
+        default_field_state = owner.default_field_->accepted_state();
       for (const auto& [slot, field] : owner.named_fields_) {
         if (!field)
           throw std::logic_error("System native package finalization found a null named field");
-        named_field_potentials.emplace(slot, field->accepted_potential());
+        named_field_states.emplace(slot, field->accepted_state());
       }
     }
 
@@ -241,6 +250,9 @@ struct System<Dim>::Impl {
       owner.aux_ncomp_ = aux_ncomp;
       owner.auxiliary_registry_ = auxiliary_registry;
       owner.provider_carrier_ = provider_carrier;
+      owner.active_field_provider_candidate_.reset();
+      owner.active_field_auxiliary_publication_.reset();
+      owner.active_field_stale_auxiliary_providers_.clear();
       owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
       owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
       owner.auxiliary_registry_consensus_verified_ = auxiliary_registry_consensus_verified;
@@ -263,12 +275,15 @@ struct System<Dim>::Impl {
       owner.field_plan_consensus_verified_ = field_plan_consensus_verified;
       owner.default_nullspace_provider_identity_ = default_nullspace_provider_identity;
       owner.default_nullspace_options_ = default_nullspace_options;
-      for (const auto& [slot, potential] : named_field_potentials) {
+      if (default_field_state.has_value() != static_cast<bool>(owner.default_field_))
+        throw std::logic_error("System native package rollback changed default field ownership");
+      if (default_field_state)
+        owner.default_field_->restore_accepted_state(*default_field_state);
+      for (const auto& [slot, state] : named_field_states) {
         const auto field = owner.named_fields_.find(slot);
         if (field == owner.named_fields_.end() || !field->second)
-          throw std::logic_error(
-              "System native package rollback lost a pre-existing named field");
-        field->second->accepted_potential_for_restore() = potential;
+          throw std::logic_error("System native package rollback lost a pre-existing named field");
+        field->second->restore_accepted_state(state);
       }
     }
   };
@@ -402,7 +417,8 @@ struct System<Dim>::Impl {
     std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
     std::vector<std::string> dirty_auxiliary_providers;
     runtime::program::ProgramRuntimeState<Dim> program;
-    std::map<std::string, field_type> named_field_potentials;
+    std::optional<typename exact_field_type::AcceptedState> default_field_state;
+    std::map<std::string, typename exact_field_type::AcceptedState> named_field_states;
     double time = 0.0;
     int macro_step = 0;
 
@@ -414,16 +430,20 @@ struct System<Dim>::Impl {
           program(owner.program_),
           time(owner.t),
           macro_step(owner.macro_step_) {
-      if (owner.active_field_)
+      if (owner.active_field_ || owner.active_field_provider_candidate_ ||
+          owner.active_field_auxiliary_publication_ ||
+          !owner.active_field_stale_auxiliary_providers_.empty())
         throw std::logic_error(
             "System cannot snapshot an unconsumed exact field publication candidate");
       states.reserve(owner.sp.size());
       for (const Species& block : owner.sp)
         states.push_back(block.U);
+      if (owner.default_field_)
+        default_field_state = owner.default_field_->accepted_state();
       for (const auto& [slot, field] : owner.named_fields_) {
         if (!field)
           throw std::logic_error("System materialized named field is null");
-        named_field_potentials.emplace(slot, field->accepted_potential());
+        named_field_states.emplace(slot, field->accepted_state());
       }
     }
 
@@ -434,16 +454,23 @@ struct System<Dim>::Impl {
         owner.sp[block].U = states[block];
       owner.auxiliary_registry_ = auxiliary_registry;
       owner.provider_carrier_ = provider_carrier;
+      owner.active_field_provider_candidate_.reset();
+      owner.active_field_auxiliary_publication_.reset();
+      owner.active_field_stale_auxiliary_providers_.clear();
       owner.staged_auxiliary_inputs_ = staged_auxiliary_inputs;
       owner.dirty_auxiliary_providers_ = dirty_auxiliary_providers;
       owner.program_ = program;
-      if (named_field_potentials.size() != owner.named_fields_.size())
+      if (default_field_state.has_value() != static_cast<bool>(owner.default_field_))
+        throw std::logic_error("System transaction snapshot default-field ownership changed");
+      if (default_field_state)
+        owner.default_field_->restore_accepted_state(*default_field_state);
+      if (named_field_states.size() != owner.named_fields_.size())
         throw std::logic_error("System transaction snapshot named-field composition changed");
-      for (const auto& [slot, values] : named_field_potentials) {
+      for (const auto& [slot, values] : named_field_states) {
         const auto field = owner.named_fields_.find(slot);
         if (field == owner.named_fields_.end() || !field->second)
           throw std::logic_error("System transaction snapshot field ownership changed");
-        field->second->accepted_potential_for_restore() = values;
+        field->second->restore_accepted_state(values);
       }
       owner.t = time;
       owner.macro_step_ = macro_step;

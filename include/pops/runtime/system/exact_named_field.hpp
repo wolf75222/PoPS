@@ -7,6 +7,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_field_solver_backend.hpp>
 
 #include <cmath>
@@ -27,6 +28,12 @@ class ExactNamedField final {
   using field_type = MultiFab<Dim>;
   using rhs_type = std::function<void(const field_type&, field_type&)>;
   using solver_type = ExactFieldSolverBackend<Dim>;
+  using output_key_type = AuxiliaryComponentKey;
+
+  struct AcceptedState {
+    field_type potential;
+    field_type outputs;
+  };
 
   struct PreparedRhs {
     rhs_type evaluate;
@@ -37,12 +44,18 @@ class ExactNamedField final {
                   runtime::field::NamedFieldOutput<Dim> output, const Geometry<Dim>& geometry,
                   const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                   Index<Dim> local_rank, BoundaryTopology<Dim> topology,
-                  elliptic::nd::CartesianPoissonOptions<Dim> options, std::size_t block_count)
+                  elliptic::nd::CartesianPoissonOptions<Dim> options, std::size_t block_count,
+                  std::vector<output_key_type> output_keys = {})
       : identity_(std::move(identity)),
         output_block_(std::move(output_block)),
         output_(output),
+        output_keys_(std::move(output_keys)),
         geometry_(geometry),
         accepted_(layout, distribution, local_rank, 1, unit_ghosts_()),
+        accepted_outputs_(layout, distribution, local_rank,
+                          static_cast<int>(output.component_count()), Extent<Dim>{}),
+        candidate_outputs_(layout, distribution, local_rank,
+                           static_cast<int>(output.component_count()), Extent<Dim>{}),
         solver_(std::make_unique<CartesianCgFieldSolverBackend<Dim>>(
             geometry, layout, distribution, local_rank, std::move(topology), std::move(options))),
         rhs_by_block_(block_count) {
@@ -53,12 +66,17 @@ class ExactNamedField final {
                   runtime::field::NamedFieldOutput<Dim> output, const Geometry<Dim>& geometry,
                   const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                   Index<Dim> local_rank, std::unique_ptr<solver_type> solver,
-                  std::size_t block_count)
+                  std::size_t block_count, std::vector<output_key_type> output_keys = {})
       : identity_(std::move(identity)),
         output_block_(std::move(output_block)),
         output_(output),
+        output_keys_(std::move(output_keys)),
         geometry_(geometry),
         accepted_(layout, distribution, local_rank, 1, unit_ghosts_()),
+        accepted_outputs_(layout, distribution, local_rank,
+                          static_cast<int>(output.component_count()), Extent<Dim>{}),
+        candidate_outputs_(layout, distribution, local_rank,
+                           static_cast<int>(output.component_count()), Extent<Dim>{}),
         solver_(std::move(solver)),
         rhs_by_block_(block_count) {
     validate_();
@@ -67,15 +85,27 @@ class ExactNamedField final {
   const std::string& identity() const noexcept { return identity_; }
   const std::string& output_block() const noexcept { return output_block_; }
   const runtime::field::NamedFieldOutput<Dim>& output() const noexcept { return output_; }
+  const std::vector<output_key_type>& output_keys() const noexcept { return output_keys_; }
   const field_type& accepted_potential() const noexcept { return accepted_; }
+  const field_type& accepted_outputs() const noexcept { return accepted_outputs_; }
+  const field_type& candidate_outputs() const {
+    if (!active_ || !candidate_ready_)
+      throw std::logic_error("named elliptic field has no prepared output candidate");
+    return candidate_outputs_;
+  }
   const field_type& dependency_potential() const noexcept {
     return active_ && candidate_ready_ ? solver_->candidate() : accepted_;
   }
-  field_type& accepted_potential_for_restore() {
+  AcceptedState accepted_state() const { return {accepted_, accepted_outputs_}; }
+  void restore_accepted_state(const AcceptedState& state) {
     if (active_)
       throw std::logic_error("cannot restore a named field while a solve is active");
-    return accepted_;
+    authenticate_layout_(state.potential, "restored potential", false);
+    authenticate_output_layout_(state.outputs, "restored outputs");
+    accepted_ = state.potential;
+    accepted_outputs_ = state.outputs;
   }
+  field_type& accepted_potential_for_restore() { return accepted_; }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
   std::string_view solver_provider_identity() const noexcept {
     return solver_->provider_identity();
@@ -139,24 +169,15 @@ class ExactNamedField final {
   }
 
   SolveReport solve_candidate(
-      const std::vector<const field_type*>& states, field_type& live_aux,
+      const std::vector<const field_type*>& states,
       const FieldBoundaryExecutionContext<Dim>* boundary_context = nullptr) {
-    std::optional<field_type> prepared_aux;
     std::exception_ptr preparation_error;
     try {
       if (active_)
         throw std::logic_error("named elliptic field already owns an unconsumed solve candidate");
       if (states.size() != rhs_by_block_.size())
         throw std::invalid_argument("named-field state vector does not cover the block registry");
-      output_.validate_width(live_aux.ncomp(), "exact named field");
-      authenticate_layout_(live_aux, "live auxiliary");
-
-      if (!candidate_aux_ || candidate_aux_->ncomp() != live_aux.ncomp() ||
-          candidate_aux_->layout() != live_aux.layout() ||
-          candidate_aux_->distribution() != live_aux.distribution() ||
-          candidate_aux_->local_rank() != live_aux.local_rank())
-        prepared_aux.emplace(live_aux.layout(), live_aux.distribution(), live_aux.local_rank(),
-                             live_aux.ncomp(), live_aux.ghosts());
+      authenticate_output_layout_(candidate_outputs_, "candidate outputs");
 
       bool has_rhs = false;
       for (std::size_t block = 0; block < states.size(); ++block) {
@@ -183,9 +204,6 @@ class ExactNamedField final {
     }
     collective_rethrow_(preparation_error, "named-field preparation failed collectively");
 
-    if (prepared_aux)
-      candidate_aux_ = std::move(prepared_aux);
-    live_aux_ = &live_aux;
     active_ = true;
     candidate_ready_ = false;
 
@@ -217,8 +235,7 @@ class ExactNamedField final {
       if (!report.solved_value_available())
         return report;
 
-      copy_all_valid_(live_aux, *candidate_aux_);
-      runtime::field::publish_named_field(solver_->candidate(), *candidate_aux_, geometry_,
+      runtime::field::publish_named_field(solver_->candidate(), candidate_outputs_, geometry_,
                                           output_);
       candidate_topology_report_ = solver_->topology_report();
       candidate_ready_ = true;
@@ -226,25 +243,21 @@ class ExactNamedField final {
     } catch (...) {
       active_ = false;
       candidate_ready_ = false;
-      live_aux_ = nullptr;
       throw;
     }
   }
 
   void validate_candidate() const {
-    if (!active_ || !candidate_ready_ || live_aux_ == nullptr || !candidate_aux_)
+    if (!active_ || !candidate_ready_)
       throw std::logic_error("named elliptic field has no publication candidate");
-    authenticate_layout_(*live_aux_, "publication destination");
-    if (candidate_aux_->ncomp() != live_aux_->ncomp() ||
-        candidate_aux_->ghosts() != live_aux_->ghosts())
-      throw std::runtime_error("named elliptic field publication layout changed after solve");
+    authenticate_output_layout_(candidate_outputs_, "candidate outputs");
   }
 
   void accept_candidate() noexcept {
     try {
       validate_candidate();
       copy_all_cells_(solver_->candidate(), accepted_);
-      copy_output_components_(*candidate_aux_, *live_aux_);
+      copy_all_cells_(candidate_outputs_, accepted_outputs_);
       accepted_topology_report_ = std::move(candidate_topology_report_);
       Kokkos::fence();
       clear_candidate_();
@@ -259,7 +272,14 @@ class ExactNamedField final {
   void validate_() {
     if (identity_.empty() || output_block_.empty() || !solver_)
       throw std::invalid_argument("exact named field identities must be non-empty");
+    if (!output_keys_.empty() && output_keys_.size() != output_.component_count())
+      throw std::invalid_argument(
+          "exact named field output keys do not cover its compact publication carrier");
+    for (const auto& key : output_keys_)
+      key.validate();
     accepted_.set_val(Real(0));
+    accepted_outputs_.set_val(Real(0));
+    candidate_outputs_.set_val(Real(0));
   }
 
   static void collective_rethrow_(const std::exception_ptr& error, const char* message) {
@@ -278,20 +298,22 @@ class ExactNamedField final {
   }
 
   void authenticate_layout_(const field_type& field, const char* role,
-                            bool require_aux_width = true) const {
+                            bool require_components = true) const {
     if (field.layout() != accepted_.layout() || field.distribution() != accepted_.distribution() ||
         field.local_rank() != accepted_.local_rank())
       throw std::invalid_argument(std::string("exact named field ") + role +
                                   " does not share its prepared ND layout");
-    if (require_aux_width && field.ncomp() < 1)
-      throw std::invalid_argument("exact named field auxiliary carrier has no components");
+    if (require_components && field.ncomp() < 1)
+      throw std::invalid_argument("exact named field input has no components");
   }
 
-  static void copy_all_valid_(const field_type& source, field_type& destination) {
-    if (source.ncomp() != destination.ncomp())
-      throw std::invalid_argument("exact named field copy width differs");
-    for (int component = 0; component < source.ncomp(); ++component)
-      elliptic::nd::detail::copy_component(source, component, destination, component);
+  void authenticate_output_layout_(const field_type& field, const char* role) const {
+    if (field.layout() != accepted_outputs_.layout() ||
+        field.distribution() != accepted_outputs_.distribution() ||
+        field.local_rank() != accepted_outputs_.local_rank() ||
+        field.ghosts() != accepted_outputs_.ghosts() || field.ncomp() != accepted_outputs_.ncomp())
+      throw std::invalid_argument(std::string("exact named field ") + role +
+                                  " does not share its compact output layout");
   }
 
   static void copy_all_cells_(const field_type& source, field_type& destination) {
@@ -308,37 +330,28 @@ class ExactNamedField final {
                 destination.fab(local).view(), source.fab(local).view(), component, component});
   }
 
-  void copy_output_components_(const field_type& source, field_type& destination) const {
-    elliptic::nd::detail::copy_component(source, output_.potential_component(), destination,
-                                         output_.potential_component());
-    if (output_.has_gradients())
-      for (int axis = 0; axis < Dim; ++axis)
-        elliptic::nd::detail::copy_component(source, output_.gradient_component(axis), destination,
-                                             output_.gradient_component(axis));
-  }
-
   void clear_candidate_() noexcept {
     active_ = false;
     candidate_ready_ = false;
-    live_aux_ = nullptr;
     candidate_topology_report_.clear();
   }
 
   std::string identity_;
   std::string output_block_;
   runtime::field::NamedFieldOutput<Dim> output_;
+  std::vector<output_key_type> output_keys_;
   Geometry<Dim> geometry_;
   field_type accepted_;
+  field_type accepted_outputs_;
+  field_type candidate_outputs_;
   std::unique_ptr<solver_type> solver_;
   std::vector<std::vector<PreparedRhs>> rhs_by_block_;
   bool has_boundary_kernel_ = false;
   bool has_newton_ = false;
   std::optional<PreparedFieldNullspace<Dim>> prepared_nullspace_;
   std::optional<field_type> contribution_scratch_;
-  std::optional<field_type> candidate_aux_;
   std::vector<runtime::field::FieldTopologyReportRow> accepted_topology_report_;
   std::vector<runtime::field::FieldTopologyReportRow> candidate_topology_report_;
-  field_type* live_aux_ = nullptr;
   bool active_ = false;
   bool candidate_ready_ = false;
 };

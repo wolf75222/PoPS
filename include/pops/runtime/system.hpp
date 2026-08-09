@@ -361,8 +361,7 @@ class System {
   /// AMR preparation owns the collective halo-fill phase and therefore receives the accepted group
   /// set through this narrowly scoped mutable seam.  It may fill ghost regions only; publication
   /// values remain owned by the System auxiliary transaction.
-  POPS_EXPORT runtime::system::AuxiliaryStorageGroups<Dim>*
-  prepared_amr_provider_storage_groups();
+  POPS_EXPORT runtime::system::AuxiliaryStorageGroups<Dim>* prepared_amr_provider_storage_groups();
 
   /// Register one immutable, owner-qualified auxiliary producer.  A producer is either an external
   /// input, a generated native derivation, or a field-output route.  The System does not attach any
@@ -717,13 +716,14 @@ class System {
   /// representative block.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_blocks(
       const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
-  /// Register named @p field's exact-ranked aux outputs. ``output_components`` contains either the
-  /// potential alone or the potential followed by one gradient component per native axis. The
-  /// dimension-specific loader calls this only after Python has selected its immutable native rank.
+  /// Register named @p field's exact-ranked provider outputs. ``output_keys`` contains either the
+  /// potential alone or the potential followed by one gradient component per native axis. Each key
+  /// must already be owned by a sealed ``field_output`` provider; no integer carrier slot crosses
+  /// the package boundary.
   /// @throws std::logic_error before mutation when no exact-ranked field-solver provider is installed.
-  POPS_EXPORT void register_elliptic_field(const std::string& block, const std::string& field,
-                                           const std::vector<int>& output_components,
-                                           int gradient_sign);
+  POPS_EXPORT void register_elliptic_field(
+      const std::string& block, const std::string& field,
+      const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
   /// the native loader (make_poisson_rhs of the per-field brick). @throws before mutation if the
   /// block is unknown or no exact-ranked field-solver provider is installed.

@@ -249,8 +249,8 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("values"))
       // Private package-install seam. The resolved parameter vector is injected before native
       // closures are built; no mutable per-block parameter side channel exists.
-      .def("_register_native_package", &System::register_native_package, py::arg("name"), py::arg("so_path"),
-           py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
+      .def("_register_native_package", &System::register_native_package, py::arg("name"),
+           py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
@@ -524,19 +524,18 @@ void bind_system_physics(py::class_<System>& cls) {
            "'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")
       .def("block_gamma", &System::block_gamma, py::arg("name"))
-      .def(
-          "set_poisson", &System::set_poisson,
-          "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
-          "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
-          "historical alias). solver: 'cartesian_cg', the exact-ranked uniform "
-          "constant-coefficient backend. GeometricMG belongs to AmrSystem MG/FAC. "
-          "bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. "
-          "abs_tol / rel_tol / max_iterations are the only CartesianCG solve controls.",
-          py::arg("rhs") = "charge_density", py::arg("solver") = "cartesian_cg",
-          py::arg("bc") = "auto",
-          py::arg("abs_tol") = static_cast<double>(kCartesianCGDefaultAbsTol),
-          py::arg("rel_tol") = static_cast<double>(kCartesianCGDefaultRelTol),
-          py::arg("max_iterations") = kCartesianCGDefaultMaxIterations)
+      .def("set_poisson", &System::set_poisson,
+           "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
+           "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
+           "historical alias). solver: 'cartesian_cg', the exact-ranked uniform "
+           "constant-coefficient backend. GeometricMG belongs to AmrSystem MG/FAC. "
+           "bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. "
+           "abs_tol / rel_tol / max_iterations are the only CartesianCG solve controls.",
+           py::arg("rhs") = "charge_density", py::arg("solver") = "cartesian_cg",
+           py::arg("bc") = "auto",
+           py::arg("abs_tol") = static_cast<double>(kCartesianCGDefaultAbsTol),
+           py::arg("rel_tol") = static_cast<double>(kCartesianCGDefaultRelTol),
+           py::arg("max_iterations") = kCartesianCGDefaultMaxIterations)
       .def(
           "register_configured_field_solver_provider",
           [](System& system, const std::string& family_route, const std::string& provider_route,
@@ -599,8 +598,25 @@ void bind_system_physics(py::class_<System>& cls) {
             return report;
           },
           py::arg("provider_slot"))
-      .def("register_elliptic_field", &System::register_elliptic_field, py::arg("block"),
-           py::arg("field"), py::arg("output_components"), py::arg("gradient_sign"))
+      .def(
+          "register_elliptic_field",
+          [](System& system, const std::string& block, const std::string& field,
+             const std::vector<py::dict>& rows, int gradient_sign) {
+            std::vector<pops::runtime::system::AuxiliaryComponentKey> keys;
+            keys.reserve(rows.size());
+            for (const py::dict& row : rows) {
+              if (row.size() != 4 || !row.contains("owner_qid") || !row.contains("space_kind") ||
+                  !row.contains("space_name") || !row.contains("component"))
+                throw std::invalid_argument(
+                    "elliptic field output requires an exact ComponentKey mapping");
+              keys.push_back({py::cast<std::string>(row["owner_qid"]),
+                              py::cast<std::string>(row["space_kind"]),
+                              py::cast<std::string>(row["space_name"]),
+                              py::cast<std::string>(row["component"])});
+            }
+            system.register_elliptic_field(block, field, keys, gradient_sign);
+          },
+          py::arg("block"), py::arg("field"), py::arg("output_keys"), py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &System::set_field_boundary_plan, py::arg("provider_slot"),
            py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &System::set_field_boundary_dependencies,
@@ -655,8 +671,8 @@ void bind_system_physics(py::class_<System>& cls) {
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             s.stage_auxiliary_input({owner_qid, space_kind, space_name, component}, flat(arr));
           },
-          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
-          py::arg("component"), py::arg("values"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"),
+          py::arg("values"))
       .def(
           "auxiliary_component",
           [](const System& s, const std::string& owner_qid, const std::string& space_kind,
@@ -665,17 +681,16 @@ void bind_system_physics(py::class_<System>& cls) {
                 s.auxiliary_component({owner_qid, space_kind, space_name, component}),
                 s.spatial_shape());
           },
-          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
-          py::arg("component"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"))
       .def(
           "auxiliary_address",
           [](const System& s, const std::string& owner_qid, const std::string& space_kind,
              const std::string& space_name, const std::string& component) {
-            const auto address = s.auxiliary_address({owner_qid, space_kind, space_name, component});
+            const auto address =
+                s.auxiliary_address({owner_qid, space_kind, space_name, component});
             return py::make_tuple(address.group, address.component);
           },
-          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
-          py::arg("component"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"))
       .def("auxiliary_registry_contract", &System::auxiliary_registry_contract)
       .def(
           "set_density",
@@ -874,8 +889,7 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "output_embedded_boundary_local_pieces",
           [](const System& s, const std::string& name, int level) {
-            return output_pieces_to_python(
-                s.output_embedded_boundary_local_pieces(name, level));
+            return output_pieces_to_python(s.output_embedded_boundary_local_pieces(name, level));
           },
           py::arg("name"), py::arg("level"),
           "Exact compact prepared embedded-boundary sidecar pieces owned by this rank.")

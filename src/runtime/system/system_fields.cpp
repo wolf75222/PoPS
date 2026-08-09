@@ -40,6 +40,70 @@ void copy_valid(const MultiFab<Dim>& source, MultiFab<Dim>& destination) {
   Kokkos::fence();
 }
 
+template <int Dim>
+void copy_field_outputs_to_provider_candidate(
+    const MultiFab<Dim>& outputs, const std::vector<runtime::system::AuxiliaryComponentKey>& keys,
+    const runtime::system::ExactAuxiliaryRegistry<Dim>& registry,
+    runtime::system::AuxiliaryStorageGroups<Dim>& candidate) {
+  if (keys.size() != static_cast<std::size_t>(outputs.ncomp()))
+    throw std::invalid_argument(
+        "System field-output key count differs from its compact candidate width");
+  for (std::size_t slot = 0; slot < keys.size(); ++slot) {
+    const auto address = registry.address_of(keys[slot]);
+    MultiFab<Dim>* destination = candidate.find(address.group);
+    if (destination == nullptr ||
+        address.component >= static_cast<std::size_t>(destination->ncomp()))
+      throw std::logic_error(
+          "System field-output candidate lacks its resolved provider storage address");
+    if (destination->layout() != outputs.layout() ||
+        destination->distribution() != outputs.distribution() ||
+        destination->local_rank() != outputs.local_rank())
+      throw std::invalid_argument(
+          "System field-output provider group differs from the solved field layout");
+    elliptic::nd::detail::copy_component(outputs, static_cast<int>(slot), *destination,
+                                         static_cast<int>(address.component));
+  }
+  Kokkos::fence();
+}
+
+template <int Dim>
+void require_finite_provider_groups(const runtime::system::AuxiliaryStorageGroups<Dim>& groups) {
+  long nonfinite = 0;
+  for (const auto& [_, carrier] : groups.groups)
+    for (std::size_t local = 0; local < carrier.local_size(); ++local) {
+      const Fab<Dim>& fab = carrier.fab(local);
+      auto host = fab.create_host_mirror();
+      fab.copy_to_host(host);
+      runtime::system::marshaling::for_each_host_index(
+          fab.box(), [&](const Index<Dim>& index, std::size_t) {
+            for (int component = 0; component < carrier.ncomp(); ++component)
+              if (!std::isfinite(static_cast<double>(
+                      host(runtime::system::marshaling::storage_ordinal(fab, index, component)))))
+                ++nonfinite;
+          });
+    }
+  if (all_reduce_sum(nonfinite) != 0)
+    throw std::runtime_error("System field-output publication contains non-finite provider values");
+}
+
+template <int Dim, class Implementation>
+runtime::system::AuxiliaryEvaluationPoint field_output_evaluation_point(
+    const Implementation& implementation) {
+  if (implementation.macro_step_ < 0)
+    throw std::logic_error("System field-output publication has a negative accepted step");
+  runtime::system::AuxiliaryEvaluationPoint point;
+  point.clock = "pops.system.accepted";
+  point.accepted_step = static_cast<std::uint64_t>(implementation.macro_step_);
+  point.layout_generation = implementation.embedded_boundary_generation_;
+  point.event = runtime::system::AuxiliaryEvaluationEvent::before_residual;
+  ExactContractBuilder exact;
+  point.serialize_exact(exact);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-field-output-evaluation-point", std::move(exact).release()}}))
+    throw std::runtime_error("System field-output evaluation point differs across MPI ranks");
+  return point;
+}
+
 using runtime::system::marshaling::checked_cell_count;
 using runtime::system::marshaling::domain_ordinal;
 using runtime::system::marshaling::for_each_host_index;
@@ -52,8 +116,7 @@ template <int Dim>
 RelativeCellMeasure<Dim> embedded_cell_measure(
     const std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>& embedded) {
   RelativeCellMeasure<Dim> measure;
-  if (!embedded ||
-      embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+  if (!embedded || embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
     return measure;
   measure.active_cells = &embedded->active_mask();
   if (embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
@@ -65,8 +128,7 @@ template <int Dim, class Implementation>
 const MultiFab<Dim>& embedded_boundary_output_field(const Implementation& implementation,
                                                     std::string_view name) {
   if (!implementation.embedded_boundary_)
-    throw std::runtime_error(
-        "System has no prepared embedded-boundary output sidecar");
+    throw std::runtime_error("System has no prepared embedded-boundary output sidecar");
   if (name == "pops_active")
     return implementation.embedded_boundary_->active_mask();
   if (name == "pops_phi")
@@ -185,12 +247,7 @@ std::shared_ptr<runtime::system::ExactNamedField<Dim>> prepare_default_field(
     Implementation& implementation) {
   if (implementation.default_field_)
     return implementation.default_field_;
-  std::vector<int> outputs;
-  outputs.reserve(static_cast<std::size_t>(Dim + 1));
-  outputs.push_back(0);
-  for (int axis = 0; axis < Dim; ++axis)
-    outputs.push_back(axis + 1);
-  runtime::field::NamedFieldOutput<Dim> output(outputs, 1);
+  runtime::field::NamedFieldOutput<Dim> output(static_cast<std::size_t>(Dim + 1), 1);
   const BoundaryTopology<Dim> topology =
       BoundaryTopology<Dim>::axis_periodic(implementation.periodicity);
   const auto operator_options =
@@ -335,7 +392,7 @@ SolveReport solve_field_candidate(
   std::optional<FieldBoundaryExecutionContext<Dim>> context;
   if (storage)
     context = storage->view();
-  return field->solve_candidate(states, implementation.aux, context ? &*context : nullptr);
+  return field->solve_candidate(states, context ? &*context : nullptr);
 }
 
 }  // namespace
@@ -545,7 +602,10 @@ SolveOutcome System<Dim>::run_field_publication_outcome_(
 
 template <int Dim>
 void System<Dim>::begin_field_publication_outcome_() {
-  if (all_reduce_max(p_->active_field_ ? 1L : 0L) != 0)
+  const bool active = p_->active_field_ || p_->active_field_provider_candidate_ ||
+                      p_->active_field_auxiliary_publication_ ||
+                      !p_->active_field_stale_auxiliary_providers_.empty();
+  if (all_reduce_max(active ? 1L : 0L) != 0)
     throw std::logic_error(
         "System field solves are sequential until their prior SolveOutcome is consumed");
 }
@@ -567,7 +627,12 @@ SolveOutcome System<Dim>::stage_field_publication_outcome_(SolveReport report) {
     rollback_field_publication_transaction();
     return SolveOutcome::collective_world(std::move(report));
   }
-  stage_field_publication_candidate();
+  try {
+    stage_field_publication_candidate();
+  } catch (...) {
+    rollback_field_publication_transaction();
+    throw;
+  }
   return SolveOutcome::collective_world(
       std::move(report),
       SolveOutcome::PublicationHooks{
@@ -652,7 +717,9 @@ SolveOutcome System<Dim>::solve_fields_from_blocks(
 
 template <int Dim>
 void System<Dim>::begin_field_publication_transaction() {
-  if (p_->active_field_)
+  if (p_->active_field_ || p_->active_field_provider_candidate_ ||
+      p_->active_field_auxiliary_publication_ ||
+      !p_->active_field_stale_auxiliary_providers_.empty())
     throw std::logic_error("System field publication transaction is already active");
 }
 
@@ -661,6 +728,50 @@ void System<Dim>::stage_field_publication_candidate() {
   if (!p_->active_field_)
     throw std::logic_error("System field solve did not stage an exact provider candidate");
   p_->active_field_->validate_candidate();
+  const auto& output_keys = p_->active_field_->output_keys();
+  if (output_keys.empty())
+    return;
+  if (!p_->auxiliary_registry_.sealed() || !p_->provider_carrier_)
+    throw std::logic_error("System named field output requires a sealed provider carrier");
+  if (p_->active_field_provider_candidate_ || p_->active_field_auxiliary_publication_)
+    throw std::logic_error("System field provider publication candidate is already active");
+
+  std::vector<std::string> provider_identities;
+  provider_identities.reserve(output_keys.size());
+  for (const auto& key : output_keys) {
+    const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
+    if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
+      throw std::logic_error("System field output lost its field-output provider authority");
+    if (std::find(provider_identities.begin(), provider_identities.end(), provider.identity()) ==
+        provider_identities.end())
+      provider_identities.push_back(provider.identity());
+  }
+
+  p_->active_field_provider_candidate_ = *p_->provider_carrier_;
+  try {
+    copy_field_outputs_to_provider_candidate(p_->active_field_->candidate_outputs(), output_keys,
+                                             p_->auxiliary_registry_,
+                                             *p_->active_field_provider_candidate_);
+    p_->active_field_auxiliary_publication_.emplace(
+        p_->auxiliary_registry_.begin_external_publication(field_output_evaluation_point<Dim>(*p_),
+                                                           provider_identities));
+    for (const std::string& identity : provider_identities)
+      p_->active_field_auxiliary_publication_->stage_external(identity);
+    p_->active_field_auxiliary_publication_->launch_ready_native(
+        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_});
+    Kokkos::fence();
+    require_finite_provider_groups(*p_->active_field_provider_candidate_);
+    p_->active_field_auxiliary_publication_->validate_complete();
+    p_->active_field_stale_auxiliary_providers_ =
+        p_->auxiliary_registry_.dependent_provider_identities(provider_identities);
+  } catch (...) {
+    if (p_->active_field_auxiliary_publication_)
+      p_->active_field_auxiliary_publication_->reject();
+    p_->active_field_auxiliary_publication_.reset();
+    p_->active_field_provider_candidate_.reset();
+    p_->active_field_stale_auxiliary_providers_.clear();
+    throw;
+  }
 }
 
 template <int Dim>
@@ -668,18 +779,47 @@ void System<Dim>::validate_field_publication_candidate() {
   if (!p_->active_field_)
     throw std::logic_error("System field publication candidate is absent");
   p_->active_field_->validate_candidate();
+  if (p_->active_field_auxiliary_publication_) {
+    if (!p_->active_field_provider_candidate_)
+      throw std::logic_error("System field provider candidate storage is absent");
+    p_->active_field_auxiliary_publication_->validate_complete();
+  } else if (p_->active_field_provider_candidate_) {
+    throw std::logic_error("System field provider metadata candidate is absent");
+  }
 }
 
 template <int Dim>
 void System<Dim>::accept_field_publication_candidate() noexcept {
   if (!p_->active_field_)
     std::terminate();
-  p_->active_field_->accept_candidate();
-  p_->active_field_.reset();
+  try {
+    p_->active_field_->accept_candidate();
+    if (p_->active_field_auxiliary_publication_) {
+      if (!p_->active_field_provider_candidate_ || !p_->provider_carrier_)
+        std::terminate();
+      p_->active_field_auxiliary_publication_->accept();
+      p_->provider_carrier_.swap(p_->active_field_provider_candidate_);
+      for (const std::string& identity : p_->active_field_stale_auxiliary_providers_)
+        if (std::find(p_->dirty_auxiliary_providers_.begin(), p_->dirty_auxiliary_providers_.end(),
+                      identity) == p_->dirty_auxiliary_providers_.end())
+          p_->dirty_auxiliary_providers_.push_back(identity);
+    }
+    p_->active_field_auxiliary_publication_.reset();
+    p_->active_field_provider_candidate_.reset();
+    p_->active_field_stale_auxiliary_providers_.clear();
+    p_->active_field_.reset();
+  } catch (...) {
+    std::terminate();
+  }
 }
 
 template <int Dim>
 void System<Dim>::rollback_field_publication_transaction() {
+  if (p_->active_field_auxiliary_publication_)
+    p_->active_field_auxiliary_publication_->reject();
+  p_->active_field_auxiliary_publication_.reset();
+  p_->active_field_provider_candidate_.reset();
+  p_->active_field_stale_auxiliary_providers_.clear();
   if (!p_->active_field_)
     return;
   p_->active_field_->reject_candidate();
@@ -688,7 +828,10 @@ void System<Dim>::rollback_field_publication_transaction() {
 
 template <int Dim>
 bool System<Dim>::field_publication_transaction_active_() const noexcept {
-  return static_cast<bool>(p_->active_field_);
+  return static_cast<bool>(p_->active_field_) ||
+         static_cast<bool>(p_->active_field_provider_candidate_) ||
+         static_cast<bool>(p_->active_field_auxiliary_publication_) ||
+         !p_->active_field_stale_auxiliary_providers_.empty();
 }
 
 template <int Dim>

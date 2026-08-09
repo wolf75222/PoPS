@@ -293,7 +293,7 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   const BoundaryTopology<2> topology = BoundaryTopology<2>::axis_periodic({true, true});
   auto options = CartesianPoissonOptions<2>::from_topology(topology);
   options.relative_tolerance = Real{1e-12};
-  runtime::field::NamedFieldOutput<2> output(std::array<int, 3>{0, 1, 2}, 1);
+  runtime::field::NamedFieldOutput<2> output(3, 1);
   runtime::system::ExactNamedField<2> provider("electric", "plasma", output, geometry, layout,
                                                distribution, Index<2>{}, topology, options, 1);
   PreparedFieldNullspace<2> prepared_nullspace;
@@ -317,24 +317,22 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
         elliptic::nd::detail::copy_component(source, 0, rhs, 0);
       },
       Real(1));
-  MultiFab<2> live_aux(layout, distribution, Index<2>{}, 3, Extent<2>{});
-  live_aux.set_val(Real{-7});
-
   const std::vector<const MultiFab<2>*> states{&state};
-  SolveReport report = provider.solve_candidate(states, live_aux);
+  SolveReport report = provider.solve_candidate(states);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
-  EXPECT_DOUBLE_EQ(reduce_max(live_aux, 0), Real{-7});
+  EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_outputs(), 0), Real{0});
   provider.validate_candidate();
   provider.reject_candidate();
   EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_potential(), 0), Real{0});
 
-  report = provider.solve_candidate(states, live_aux);
+  report = provider.solve_candidate(states);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   provider.validate_candidate();
   provider.accept_candidate();
-  EXPECT_LT(maximum_error(live_aux, geometry, CartesianBoundaryKind::periodic), Real{5e-11});
-  EXPECT_GT(reduce_max(live_aux, 1), Real{-7});
-  EXPECT_GT(reduce_max(live_aux, 2), Real{-7});
+  EXPECT_LT(maximum_error(provider.accepted_outputs(), geometry, CartesianBoundaryKind::periodic),
+            Real{5e-11});
+  EXPECT_GT(reduce_max(provider.accepted_outputs(), 1), Real{0});
+  EXPECT_GT(reduce_max(provider.accepted_outputs(), 2), Real{0});
 }
 
 TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_mutation) {

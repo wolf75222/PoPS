@@ -346,15 +346,31 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
 }
 
 template <int Dim>
-void System<Dim>::register_elliptic_field(const std::string& block, const std::string& field,
-                                          const std::vector<int>& output_components,
-                                          int gradient_sign) {
+void System<Dim>::register_elliptic_field(
+    const std::string& block, const std::string& field,
+    const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign) {
   require_assembling(p_->lifecycle_, "register_elliptic_field");
   if (field.empty())
     throw std::invalid_argument("System named elliptic field identity must be non-empty");
   (void)p_->find(block);
-  runtime::field::NamedFieldOutput<Dim> output(output_components, gradient_sign);
-  output.validate_width(p_->aux_ncomp_, "System");
+  runtime::field::NamedFieldOutput<Dim> output(output_keys.size(), gradient_sign);
+  if (!p_->auxiliary_registry_.sealed())
+    throw std::logic_error(
+        "System named elliptic outputs require a sealed auxiliary provider registry");
+  std::vector<std::string> exact_output_keys;
+  exact_output_keys.reserve(output_keys.size());
+  for (const auto& key : output_keys) {
+    key.validate();
+    const std::string exact_key = key.exact_key();
+    if (std::find(exact_output_keys.begin(), exact_output_keys.end(), exact_key) !=
+        exact_output_keys.end())
+      throw std::invalid_argument("System named elliptic output keys must be unique");
+    exact_output_keys.push_back(exact_key);
+    if (p_->auxiliary_registry_.provider_for_key(key).kind() !=
+        runtime::system::AuxiliaryProviderKind::field_output)
+      throw std::invalid_argument(
+          "System named elliptic output key is not owned by a field-output provider");
+  }
 
   auto selected = p_->field_plans_.end();
   for (auto plan = p_->field_plans_.begin(); plan != p_->field_plans_.end(); ++plan) {
@@ -448,7 +464,7 @@ void System<Dim>::register_elliptic_field(const std::string& block, const std::s
 
   auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
       provider_slot, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, std::move(backend),
-      p_->sp.size());
+      p_->sp.size(), output_keys);
   if (plan.boundary_kernel)
     prepared->install_boundary_kernel(*plan.boundary_kernel);
   if (plan.newton)
@@ -533,8 +549,8 @@ void System<Dim>::register_native_package(const std::string& name, const std::st
                                           double positivity_floor) {
   require_assembling(p_->lifecycle_, "register_native_package");
   native_loader::register_native_package<Dim>(this, name, so_path, limiter, riemann, recon, time,
-                                               gamma, substeps, evolve, stride, params,
-                                               positivity_floor);
+                                              gamma, substeps, evolve, stride, params,
+                                              positivity_floor);
 }
 
 template <int Dim>
@@ -559,9 +575,11 @@ template <int Dim>
 void System<Dim>::finalize_native_packages() {
   require_assembling(p_->lifecycle_, "finalize_native_packages");
   if (p_->pending_native_packages_.empty())
-    throw std::logic_error("System native package finalization requires at least one staged package");
+    throw std::logic_error(
+        "System native package finalization requires at least one staged package");
 
-  std::vector<typename Impl::PendingNativePackage> packages = std::move(p_->pending_native_packages_);
+  std::vector<typename Impl::PendingNativePackage> packages =
+      std::move(p_->pending_native_packages_);
   p_->pending_native_packages_.clear();
   std::sort(packages.begin(), packages.end(),
             [](const auto& left, const auto& right) { return left.identity < right.identity; });
@@ -699,9 +717,9 @@ template std::array<bool, kNativeDimension> System<kNativeDimension>::prepared_b
     const;
 template void System<kNativeDimension>::install_prepared_block(
     PreparedSystemBlock<kNativeDimension>);
-template void System<kNativeDimension>::register_elliptic_field(const std::string&,
-                                                                const std::string&,
-                                                                const std::vector<int>&, int);
+template void System<kNativeDimension>::register_elliptic_field(
+    const std::string&, const std::string&,
+    const std::vector<runtime::system::AuxiliaryComponentKey>&, int);
 template void System<kNativeDimension>::set_block_elliptic_field(
     const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);
@@ -711,8 +729,9 @@ template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, double, int, bool, int, const std::vector<double>&,
     double);
-template void System<kNativeDimension>::stage_prepared_native_package(
-    std::string, std::function<void()>, std::shared_ptr<void>);
+template void System<kNativeDimension>::stage_prepared_native_package(std::string,
+                                                                      std::function<void()>,
+                                                                      std::shared_ptr<void>);
 template void System<kNativeDimension>::finalize_native_packages();
 template void System<kNativeDimension>::add_coupled_source(const CoupledSourceProgram&, double,
                                                            const std::string&);

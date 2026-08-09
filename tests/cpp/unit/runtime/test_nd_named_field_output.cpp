@@ -47,7 +47,7 @@ void expect_ranked_publication() {
   const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
   pops::MultiFab<Dim> potential(layout, distribution, filled_index<Dim>(0), 1,
                                 filled_extent<Dim>(1));
-  pops::MultiFab<Dim> auxiliary(layout, distribution, filled_index<Dim>(0), Dim + 2,
+  pops::MultiFab<Dim> auxiliary(layout, distribution, filled_index<Dim>(0), Dim + 1,
                                 filled_extent<Dim>(0));
 
   const auto potential_view = potential.fab(0).view();
@@ -59,10 +59,6 @@ void expect_ranked_publication() {
         potential_view(index, 0) = value;
       });
 
-  std::array<int, Dim + 1> components{};
-  components[0] = 1;
-  for (int axis = 0; axis < Dim; ++axis)
-    components[static_cast<std::size_t>(axis + 1)] = axis + 2;
   pops::RealVector<Dim> lower{};
   pops::RealVector<Dim> upper{};
   for (int axis = 0; axis < Dim; ++axis)
@@ -70,16 +66,15 @@ void expect_ranked_publication() {
   const auto geometry = pops::Geometry<Dim>::from_bounds(domain, lower, upper);
   pops::runtime::field::publish_named_field(
       potential, auxiliary, geometry,
-      pops::runtime::field::NamedFieldOutput<Dim>(components, /*gradient_sign=*/-1));
+      pops::runtime::field::NamedFieldOutput<Dim>(Dim + 1, /*gradient_sign=*/-1));
 
   const auto& fab = auxiliary.fab(0);
   auto host = fab.create_host_mirror();
   fab.copy_to_host(host);
   const pops::Index<Dim> center = filled_index<Dim>(1);
-  EXPECT_DOUBLE_EQ(host_value(fab, host, center, 0), 0.0);
-  EXPECT_DOUBLE_EQ(host_value(fab, host, center, 1), static_cast<double>(Dim * (Dim + 1) / 2));
+  EXPECT_DOUBLE_EQ(host_value(fab, host, center, 0), static_cast<double>(Dim * (Dim + 1) / 2));
   for (int axis = 0; axis < Dim; ++axis)
-    EXPECT_DOUBLE_EQ(host_value(fab, host, center, axis + 2), -static_cast<double>(axis + 1));
+    EXPECT_DOUBLE_EQ(host_value(fab, host, center, axis + 1), -static_cast<double>(axis + 1));
 
   const pops::Box<Dim> smaller_domain{filled_index<Dim>(0), filled_index<Dim>(1)};
   pops::RealVector<Dim> smaller_upper{};
@@ -89,36 +84,34 @@ void expect_ranked_publication() {
       pops::Geometry<Dim>::from_bounds(smaller_domain, lower, smaller_upper);
   EXPECT_THROW(pops::runtime::field::publish_named_field(
                    potential, auxiliary, wrong_geometry,
-                   pops::runtime::field::NamedFieldOutput<Dim>(components, /*gradient_sign=*/-1)),
+                   pops::runtime::field::NamedFieldOutput<Dim>(Dim + 1,
+                                                               /*gradient_sign=*/-1)),
                std::invalid_argument);
 }
 
 }  // namespace
 
-TEST(NamedFieldOutput, ValidatesOneOrExactlyDimPlusOneDistinctComponents) {
-  EXPECT_NO_THROW((void)pops::runtime::field::NamedFieldOutput<1>(std::vector<int>{1, 2}, 1));
-  EXPECT_THROW((void)pops::runtime::field::NamedFieldOutput<1>(std::vector<int>{1, 2, 3}, 1),
-               std::invalid_argument);
-  EXPECT_NO_THROW((void)pops::runtime::field::NamedFieldOutput<2>(std::vector<int>{1, 2, 3}, -1));
-  EXPECT_THROW((void)pops::runtime::field::NamedFieldOutput<2>(std::vector<int>{1, 2, 3, 4}, 1),
-               std::invalid_argument);
+TEST(NamedFieldOutput, ValidatesOneOrExactlyDimPlusOneCompactComponents) {
+  EXPECT_NO_THROW((void)pops::runtime::field::NamedFieldOutput<1>(2, 1));
+  EXPECT_THROW((void)pops::runtime::field::NamedFieldOutput<1>(3, 1), std::invalid_argument);
+  EXPECT_NO_THROW((void)pops::runtime::field::NamedFieldOutput<2>(3, -1));
+  EXPECT_THROW((void)pops::runtime::field::NamedFieldOutput<2>(4, 1), std::invalid_argument);
 
   using Output = pops::runtime::field::NamedFieldOutput<3>;
-  const Output potential_only(std::vector<int>{7}, 1);
+  const Output potential_only(1, 1);
   EXPECT_FALSE(potential_only.has_gradients());
   EXPECT_EQ(potential_only.component_count(), 1U);
-  EXPECT_EQ(potential_only.potential_component(), 7);
+  EXPECT_EQ(potential_only.potential_component(), 0);
 
-  const Output complete(std::array<int, 4>{2, 3, 5, 8}, -1);
+  const Output complete(4, -1);
   EXPECT_TRUE(complete.has_gradients());
   EXPECT_EQ(complete.component_count(), 4U);
-  EXPECT_EQ(complete.gradient_component(2), 8);
+  EXPECT_EQ(complete.gradient_component(2), 3);
 
-  EXPECT_THROW((void)Output(std::vector<int>{1, 2}, 1), std::invalid_argument);
-  EXPECT_THROW((void)Output(std::vector<int>{1, 2, 3, 3}, 1), std::invalid_argument);
-  EXPECT_THROW((void)Output(std::vector<int>{1}, -1), std::invalid_argument);
-  EXPECT_THROW((void)Output(std::vector<int>{-1}, 1), std::invalid_argument);
-  EXPECT_THROW(complete.validate_width(8, "test"), std::out_of_range);
+  EXPECT_THROW((void)Output(2, 1), std::invalid_argument);
+  EXPECT_THROW((void)Output(1, -1), std::invalid_argument);
+  EXPECT_NO_THROW(complete.validate_width(4, "test"));
+  EXPECT_THROW(complete.validate_width(8, "test"), std::invalid_argument);
 }
 
 TEST(NamedFieldOutput, PublishesPotentialAndEveryAxisInOneRankedAlgorithm) {
