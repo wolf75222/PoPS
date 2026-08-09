@@ -30,22 +30,17 @@ from .lowering_coverage import (
 )
 
 _NATIVE_ROLE_ALIASES = {
-    "axial_x": "AxialX",
-    "axial_y": "AxialY",
-    "axial_z": "AxialZ",
-    "density": "Density",
-    "momentum_x": "MomentumX",
-    "momentum_y": "MomentumY",
-    "momentum_z": "MomentumZ",
-    "energy": "Energy",
-    "pressure": "Pressure",
-    "velocity_x": "VelocityX",
-    "velocity_y": "VelocityY",
-    "velocity_z": "VelocityZ",
-    "temperature": "Temperature",
-    "scalar": "Scalar",
+    "density": "density",
+    "energy": "energy",
+    "pressure": "pressure",
+    "temperature": "temperature",
+    "scalar": "scalar",
 }
-_NATIVE_ROLE_TOKENS = frozenset(_NATIVE_ROLE_ALIASES.values())
+
+
+def _is_axis_role(value: str) -> bool:
+    family, separator, axis = value.partition(":")
+    return family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal()
 
 
 def _lower_native_role(value: Any) -> str | None:
@@ -54,7 +49,7 @@ def _lower_native_role(value: Any) -> str | None:
     if isinstance(value, ComponentRole):
         return native_role_token(value)
     if isinstance(value, str):
-        if value in _NATIVE_ROLE_TOKENS:
+        if value in _NATIVE_ROLE_ALIASES or _is_axis_role(value):
             return value
         return _NATIVE_ROLE_ALIASES.get(value)
     return None
@@ -280,7 +275,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         for output in outputs:
             # Every output must be an ordinary auxiliary component in the
             # module provider pack; it carries no reserved field-name route.
-            if output not in m._m.aux_names:
+            if output not in m._m._provider_components:
                 m.aux(output)
         gradient_sign = op.lowering.get("gradient_sign", 1)
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):

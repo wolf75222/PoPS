@@ -429,26 +429,20 @@ struct IsothermalFluxND {
     return result;
   }
   static VariableSet conservative_vars() {
-    constexpr std::array momentum_names{"rho_u", "rho_v", "rho_w"};
-    constexpr std::array momentum_roles{VariableRole::MomentumX, VariableRole::MomentumY,
-                                        VariableRole::MomentumZ};
     std::vector<std::string> names{"rho"};
     std::vector<VariableRole> roles{VariableRole::Density};
     for (int axis = 0; axis < Dim; ++axis) {
-      names.emplace_back(momentum_names[axis]);
-      roles.push_back(momentum_roles[axis]);
+      names.emplace_back("momentum_" + std::to_string(axis));
+      roles.push_back(VariableRole::momentum(axis));
     }
     return {VariableKind::Conservative, std::move(names), n_vars, std::move(roles)};
   }
   static VariableSet primitive_vars() {
-    constexpr std::array velocity_names{"u", "v", "w"};
-    constexpr std::array velocity_roles{VariableRole::VelocityX, VariableRole::VelocityY,
-                                        VariableRole::VelocityZ};
     std::vector<std::string> names{"rho"};
     std::vector<VariableRole> roles{VariableRole::Density};
     for (int axis = 0; axis < Dim; ++axis) {
-      names.emplace_back(velocity_names[axis]);
-      roles.push_back(velocity_roles[axis]);
+      names.emplace_back("velocity_" + std::to_string(axis));
+      roles.push_back(VariableRole::velocity(axis));
     }
     return {VariableKind::Primitive, std::move(names), n_vars, std::move(roles)};
   }

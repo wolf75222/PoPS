@@ -58,17 +58,17 @@ def model_hash(model: Any, params: Any = None) -> str:
 
     def _role_of(name: Any) -> str:
         _CANONICAL_ROLES = {
-            "rho": "Density", "n": "Density", "density": "Density",
-            "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-            "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-            "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-            "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-            "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-            "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-            "p": "Pressure", "pressure": "Pressure",
-            "T": "Temperature", "temperature": "Temperature",
+            "rho": "density", "n": "density", "density": "density",
+            "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
+            "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
+            "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
+            "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
+            "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
+            "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
+            "p": "pressure", "pressure": "pressure",
+            "T": "temperature", "temperature": "temperature",
         }
-        return _CANONICAL_ROLES.get(name, "Custom")
+        return _CANONICAL_ROLES.get(name, "custom")
 
     def _roles_for(names: Any, override: Any = None) -> list:
         if override is None:
@@ -624,12 +624,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     # must exist before set_block_elliptic_field is called.
     ell_field_prepare_lines = ""
     ell_field_attach_lines = ""
-    for index, (fld, brick, components) in enumerate(ell_field_regs):
+    for index, (fld, brick, output_keys) in enumerate(ell_field_regs):
         gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % fld)
-        if len(components) == 1 and gradient_sign != 1:
+        if len(output_keys) == 1 and gradient_sign != 1:
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % fld)
         ell_field_prepare_lines += (
@@ -640,13 +640,22 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n'
             % (index, brick, index, index, index)
         )
+        key_values = ", ".join(
+            'pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}' % tuple(
+                json.dumps(value)
+                for value in (
+                    key.owner_qid, key.space_kind, key.space_name, key.component,
+                )
+            )
+            for key in output_keys
+        )
         ell_field_attach_lines += (
             '  s->register_elliptic_field(name, "%s", '
-            'std::vector<int>{%s}, %d);\n'
+            'std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d);\n'
             '  s->set_block_elliptic_field(name, "%s", std::move(named_elliptic_rhs_%d));\n'
             % (
                 fld,
-                ", ".join(str(component) for component in components),
+                key_values,
                 gradient_sign,
                 fld,
                 index,
@@ -699,7 +708,8 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
                    '                                                    /*implicit_roles=*/{}, pos_floor,\n'
-                   '                                                    weno_epsilon, wave_speed_cache);\n'
+                   '                                                    weno_epsilon, wave_speed_cache, %s);\n'
+                   % json.dumps(str(m.owner_path.canonical()) + "/physical_flux")
                    + ell_field_attach_lines +
                    '}\n')
     install += ('POPS_LOADER_API int pops_compiled_nparams() {\n'

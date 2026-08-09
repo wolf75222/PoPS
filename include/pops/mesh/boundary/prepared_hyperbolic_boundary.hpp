@@ -5,6 +5,7 @@
 
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/state/variables.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -267,24 +268,18 @@ struct ZeroBoundaryFaceFlux {
 };
 
 template <int Dim>
+HyperbolicComponentTransform<Dim> transform_from_semantic(VariableSemantic semantic) {
+  semantic.template validate_for_dimension<Dim>();
+  if (semantic.kind == VariableRoleKind::Momentum || semantic.kind == VariableRoleKind::Velocity)
+    return HyperbolicComponentTransform<Dim>::polar_vector(semantic.axis);
+  if (semantic.kind == VariableRoleKind::Axial)
+    return HyperbolicComponentTransform<Dim>::axial_vector(semantic.axis);
+  return HyperbolicComponentTransform<Dim>::scalar();
+}
+
+template <int Dim>
 HyperbolicComponentTransform<Dim> transform_from_role(std::string_view role) {
-  if (role == "MomentumX" || role == "VelocityX")
-    return HyperbolicComponentTransform<Dim>::polar_vector(0);
-  if (role == "MomentumY" || role == "VelocityY")
-    return HyperbolicComponentTransform<Dim>::polar_vector(1);
-  if (role == "MomentumZ" || role == "VelocityZ")
-    return HyperbolicComponentTransform<Dim>::polar_vector(2);
-  if (role == "AxialX")
-    return HyperbolicComponentTransform<Dim>::axial_vector(0);
-  if (role == "AxialY")
-    return HyperbolicComponentTransform<Dim>::axial_vector(1);
-  if (role == "AxialZ")
-    return HyperbolicComponentTransform<Dim>::axial_vector(2);
-  if (role == "Density" || role == "Energy" || role == "Pressure" || role == "Temperature" ||
-      role == "Scalar" || role == "Custom")
-    return HyperbolicComponentTransform<Dim>::scalar();
-  throw std::invalid_argument("unsupported hyperbolic boundary component role '" +
-                              std::string(role) + "'");
+  return transform_from_semantic<Dim>(role_from_name(std::string(role)));
 }
 
 inline HyperbolicBoundaryLaw law_from_token(std::string_view token) {

@@ -47,13 +47,14 @@ def _safe_name(name: Any) -> str:
     return s
 
 
-# Board role vocabulary -> dsl canonical role (pops::VariableRole). The dsl roles_for() uses an
-# explicit role override verbatim, so a board role must already be canonical for the native HLLC/Roe
-# role lookup (which indexes "Density"/"MomentumX"/"MomentumY"/"Energy") to find it.
+# Board role vocabulary -> structured native semantic ABI.  Axis-bearing roles use a numeric axis,
+# not a coordinate-name enum, so the same authored operator reaches every native specialization.
 _BOARD_ROLE = {
-    "density": "Density",
-    "momentum_x": "MomentumX", "momentum_y": "MomentumY", "momentum_z": "MomentumZ",
-    "energy": "Energy", "pressure": "Pressure", "temperature": "Temperature",
+    "density": "density",
+    "momentum:0": "momentum:0",
+    "momentum:1": "momentum:1",
+    "momentum:2": "momentum:2",
+    "energy": "energy", "pressure": "pressure", "temperature": "temperature",
 }
 
 

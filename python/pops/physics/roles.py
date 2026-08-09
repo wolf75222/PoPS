@@ -6,12 +6,9 @@ import re
 from typing import Any
 
 
-_ROLE_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_RESERVED_ROLE_TOKENS = frozenset({"Custom"})
+_ROLE_TOKEN = re.compile(r"^(?:[a-z]+|(?:momentum|velocity|axial):[0-9]+)$")
 _CANONICAL_ROLE_TOKENS = frozenset({
-    "AxialX", "AxialY", "AxialZ", "Density", "Energy", "MomentumX", "MomentumY",
-    "MomentumZ", "Pressure", "Scalar", "Temperature", "VelocityX", "VelocityY",
-    "VelocityZ",
+    "density", "energy", "pressure", "scalar", "temperature",
 })
 
 
@@ -24,10 +21,9 @@ def native_role_token(role: Any) -> str:
         raise TypeError("ComponentRole.native_name must be a non-empty string")
     if _ROLE_TOKEN.fullmatch(token) is None:
         raise ValueError(
-            "ComponentRole.native_name must be one canonical C++ role token; got %r" % token)
-    if token in _RESERVED_ROLE_TOKENS:
-        raise ValueError("ComponentRole.native_name %r is reserved by the native ABI" % token)
-    if token not in _CANONICAL_ROLE_TOKENS:
+            "ComponentRole.native_name must be a structured native semantic token; got %r" % token)
+    if token not in _CANONICAL_ROLE_TOKENS and not token.startswith(
+            ("momentum:", "velocity:", "axial:")):
         raise ValueError(
             "ComponentRole.native_name %r is not implemented by the installed native role ABI"
             % token)
@@ -48,7 +44,7 @@ class ComponentRole:
 class Density(ComponentRole):
     @property
     def native_name(self) -> str:
-        return "Density"
+        return "density"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,20 +52,20 @@ class Momentum(ComponentRole):
     axis: Any
 
     def __post_init__(self) -> None:
-        name = getattr(self.axis, "name", None)
-        if name not in ("x", "y", "z"):
-            raise TypeError("Momentum axis must be a typed Cartesian x/y/z axis")
+        index = getattr(self.axis, "index", None)
+        if not isinstance(index, int) or index < 0:
+            raise TypeError("Momentum axis must expose one non-negative axis index")
 
     @property
     def native_name(self) -> str:
-        return "Momentum" + str(self.axis.name).upper()
+        return "momentum:%d" % self.axis.index
 
 
 @dataclass(frozen=True, slots=True)
 class Energy(ComponentRole):
     @property
     def native_name(self) -> str:
-        return "Energy"
+        return "energy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,13 +73,13 @@ class Velocity(ComponentRole):
     axis: Any
 
     def __post_init__(self) -> None:
-        name = getattr(self.axis, "name", None)
-        if name not in ("x", "y", "z"):
-            raise TypeError("Velocity axis must be a typed Cartesian x/y/z axis")
+        index = getattr(self.axis, "index", None)
+        if not isinstance(index, int) or index < 0:
+            raise TypeError("Velocity axis must expose one non-negative axis index")
 
     @property
     def native_name(self) -> str:
-        return "Velocity" + str(self.axis.name).upper()
+        return "velocity:%d" % self.axis.index
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,34 +89,34 @@ class Axial(ComponentRole):
     axis: Any
 
     def __post_init__(self) -> None:
-        name = getattr(self.axis, "name", None)
-        if name not in ("x", "y", "z"):
-            raise TypeError("Axial axis must be a typed Cartesian x/y/z axis")
+        index = getattr(self.axis, "index", None)
+        if not isinstance(index, int) or index < 0:
+            raise TypeError("Axial axis must expose one non-negative axis index")
 
     @property
     def native_name(self) -> str:
-        return "Axial" + str(self.axis.name).upper()
+        return "axial:%d" % self.axis.index
 
 
 @dataclass(frozen=True, slots=True)
 class Pressure(ComponentRole):
     @property
     def native_name(self) -> str:
-        return "Pressure"
+        return "pressure"
 
 
 @dataclass(frozen=True, slots=True)
 class Temperature(ComponentRole):
     @property
     def native_name(self) -> str:
-        return "Temperature"
+        return "temperature"
 
 
 @dataclass(frozen=True, slots=True)
 class Scalar(ComponentRole):
     @property
     def native_name(self) -> str:
-        return "Scalar"
+        return "scalar"
 
 
 __all__ = [

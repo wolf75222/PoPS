@@ -168,8 +168,10 @@ inline void append_variable_set_contract(ExactContractBuilder& contract,
       .sequence(variables.names,
                 [](ExactContractBuilder& item, const std::string& name) { item.text(name); })
       .sequence(variables.roles,
-                [](ExactContractBuilder& item, VariableRole role) {
-                  item.scalar(static_cast<std::int32_t>(role));
+                [](ExactContractBuilder& item, VariableSemantic role) {
+                  item.scalar(static_cast<std::int32_t>(role.kind))
+                      .presence(role.has_axis())
+                      .scalar(std::int32_t{role.axis});
                 })
       .sequence(variables.user_roles,
                 [](ExactContractBuilder& item, const std::string& role) { item.text(role); });
@@ -607,6 +609,7 @@ struct PreparedAmrSystemBlock {
 
   std::string name;
   std::string provider_identity;
+  std::string provider_consumer_qid;
   std::string staircase_provider_identity;
   std::string cut_cell_provider_identity;
   std::string collective_contract;
@@ -703,6 +706,9 @@ template <int Dim, class Model, class Reconstruction, class Numerical,
 PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction reconstruction,
                                                Numerical numerical) {
   static_assert(Model::dimension == Dim);
+  if (request.provider_consumer_qid.empty())
+    throw std::invalid_argument(
+        "generated AMR block requires one explicit provider consumer qid");
   constexpr int provider_count = provider_count_for<Model, Dim>();
   const auto spatial_factory =
       [model = request.model, reconstruction, numerical,
@@ -729,6 +735,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   PreparedAmrSystemBlock<Dim> result;
   result.name = name;
   result.provider_identity = provider_identity;
+  result.provider_consumer_qid = request.provider_consumer_qid;
   result.staircase_provider_identity = staircase_provider_identity;
   result.cut_cell_provider_identity = cut_cell_provider_identity;
   result.ncomp = Model::n_vars;
@@ -747,6 +754,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
+      .text(request.provider_consumer_qid)
       .text(staircase_provider_identity)
       .text(cut_cell_provider_identity)
       .scalar(std::int32_t{Model::n_vars})
@@ -1019,6 +1027,7 @@ struct CompiledAmrSystemBlockPreparation {
   static constexpr int dimension = Dim;
 
   std::string name;
+  std::string provider_consumer_qid;
   Model model;
   CompiledAmrSystemBlockRoutes routes;
   double gamma = 1.0;
@@ -1058,7 +1067,8 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
     const std::string& reconstruction, const std::string& time, double gamma, int substeps,
     int stride, double positivity_floor = 0.0,
-    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
+    const std::string& provider_consumer_qid = {}) {
   static_assert(Dim >= 1 && Dim <= 3);
   static_assert(
       requires { Model::dimension; },
@@ -1073,6 +1083,9 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
 
   if (name.empty())
     throw std::invalid_argument("compiled AMR block name must be non-empty");
+  if (provider_consumer_qid.empty())
+    throw std::invalid_argument(
+        "compiled AMR block requires one explicit provider consumer qid");
   if (!std::isfinite(gamma) || !(gamma > 0.0))
     throw std::invalid_argument("compiled AMR block gamma must be finite and positive");
   if (substeps < 1 || stride < 1)
@@ -1089,7 +1102,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       wave_speed_cache};
   compiled_amr_detail::validate_routes(routes);
   return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
-      name, std::move(model), std::move(routes), gamma, substeps, stride});
+      name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride});
 }
 
 /// Publish one complete generated package through the facade's atomic exact-ranked seam.
@@ -1107,14 +1120,15 @@ void add_compiled_model(
     double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1, int stride = 1,
     const std::vector<std::string>& implicit_vars = {},
     const std::vector<std::string>& implicit_roles = {}, double positivity_floor = 0.0,
-    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false) {
+    double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false,
+    const std::string& provider_consumer_qid = {}) {
   if (!implicit_vars.empty() || !implicit_roles.empty())
     throw std::invalid_argument(
         "compiled AMR block has no prepared exact-ranked partial-implicit provider");
   install_prepared_amr_block(
       system, prepare_compiled_amr_system_block<Dim>(
                   name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps,
-                  stride, positivity_floor, weno_epsilon, wave_speed_cache));
+                  stride, positivity_floor, weno_epsilon, wave_speed_cache, provider_consumer_qid));
 }
 
 }  // namespace pops

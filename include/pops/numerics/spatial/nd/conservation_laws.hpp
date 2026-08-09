@@ -167,13 +167,10 @@ class IdealGasEuler {
   }
 
   static VariableSet conservative_vars() {
-    constexpr std::array<const char*, 3> names{"rho_u", "rho_v", "rho_w"};
-    constexpr std::array<VariableRole, 3> roles{VariableRole::MomentumX, VariableRole::MomentumY,
-                                                VariableRole::MomentumZ};
     VariableSet result{VariableKind::Conservative, {"rho"}, n_vars, {VariableRole::Density}};
     for (int axis = 0; axis < Dim; ++axis) {
-      result.names.emplace_back(names[static_cast<std::size_t>(axis)]);
-      result.roles.push_back(roles[static_cast<std::size_t>(axis)]);
+      result.names.emplace_back("momentum_" + std::to_string(axis));
+      result.roles.push_back(VariableRole::momentum(axis));
     }
     result.names.emplace_back("E");
     result.roles.push_back(VariableRole::Energy);
@@ -181,13 +178,10 @@ class IdealGasEuler {
   }
 
   static VariableSet primitive_vars() {
-    constexpr std::array<const char*, 3> names{"u", "v", "w"};
-    constexpr std::array<VariableRole, 3> roles{VariableRole::VelocityX, VariableRole::VelocityY,
-                                                VariableRole::VelocityZ};
     VariableSet result{VariableKind::Primitive, {"rho"}, n_vars, {VariableRole::Density}};
     for (int axis = 0; axis < Dim; ++axis) {
-      result.names.emplace_back(names[static_cast<std::size_t>(axis)]);
-      result.roles.push_back(roles[static_cast<std::size_t>(axis)]);
+      result.names.emplace_back("velocity_" + std::to_string(axis));
+      result.roles.push_back(VariableRole::velocity(axis));
     }
     result.names.emplace_back("p");
     result.roles.push_back(VariableRole::Pressure);

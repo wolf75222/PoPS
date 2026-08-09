@@ -7,7 +7,6 @@ module never imports pops.dsl or pops.physics at module level.
 
 Contents
 --------
-_aux_component_index                               -- exact ProviderPack authority
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
 _ranked_axes, _axis_values                          -- exact Cartesian-rank helpers
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
@@ -30,20 +29,20 @@ from pops._ir.visitors import _dependencies
 # Logic is identical to dsl.roles_for / dsl.role_of / dsl.CANONICAL_ROLES.
 # ---------------------------------------------------------------------------
 _CANONICAL_ROLES = {
-    "rho": "Density", "n": "Density", "density": "Density",
-    "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-    "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-    "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-    "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-    "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-    "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-    "p": "Pressure", "pressure": "Pressure",
-    "T": "Temperature", "temperature": "Temperature",
+    "rho": "density", "n": "density", "density": "density",
+    "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
+    "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
+    "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
+    "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
+    "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
+    "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
+    "p": "pressure", "pressure": "pressure",
+    "T": "temperature", "temperature": "temperature",
 }
 
 
 def _role_of(name: Any) -> str:
-    return _CANONICAL_ROLES.get(name, "Custom")
+    return _CANONICAL_ROLES.get(name, "custom")
 
 
 def _roles_for(names: Any, override: Any = None) -> list:
@@ -58,11 +57,6 @@ def _roles_for(names: Any, override: Any = None) -> list:
 def _ranked_axes(model: Any) -> tuple[str, ...]:
     """Return the model's one canonical x[/y[/z]] rank authority."""
     return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
-
-
-def _aux_component_index(model: Any, name: Any) -> int:
-    """Resolve one auxiliary slot from the emitter's exact ProviderPack."""
-    return model._aux_component_index(name)
 
 
 def _axis_values(model: Any, values: Any, *, where: str) -> list:

@@ -55,14 +55,6 @@ static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),
 static_assert(IsothermalFlux::n_vars == transport_n_vars_ct("isothermal"),
               "registry n_vars drift: isothermal");
 
-template <int Dim>
-constexpr VariableRole momentum_role_for_axis(int axis) {
-  static_assert(Dim >= 1 && Dim <= 3, "momentum roles support dimensions 1..3");
-  constexpr std::array roles{VariableRole::MomentumX, VariableRole::MomentumY,
-                             VariableRole::MomentumZ};
-  return roles[static_cast<std::size_t>(axis)];
-}
-
 struct MagneticSourceFactory {
   template <int Dim>
   static MagneticLorentzForceND<Dim> make(const ModelSpec& model) {
@@ -207,6 +199,9 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// when its ranked state carries it. Resolved AT CONSTRUCTION (host, std::string); never on device.
 template <class Brick>
 POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
+  if constexpr (requires { Brick::dimension; })
+    validate_variable_semantics<Brick::dimension>(cons, "bind_variable_roles",
+                                                  "model conservative state");
   if constexpr (requires { brk.c_rho; }) {
     brk.c_rho = require_role_index(cons, VariableRole::Density, "bind_variable_roles",
                                    "model conservative state");
@@ -220,7 +215,7 @@ POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
                   "source momentum-component rank must equal the source spatial dimension");
     for (int axis = 0; axis < Brick::dimension; ++axis)
       brk.momentum_components[axis] =
-          require_role_index(cons, momentum_role_for_axis<Brick::dimension>(axis),
+          require_role_index(cons, VariableRole::momentum(axis),
                              "bind_variable_roles", "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
@@ -256,6 +251,8 @@ POPS_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
     // Transport roles (host): used to resolve the indices of the source / elliptic bricks before
     // freezing the composite. Native transport -> canonical roles -> resolved indices == defaults.
     const VariableSet cons = TR::conservative_vars();
+    validate_variable_semantics<kNativeDimension>(cons, "dispatch_model",
+                                                   "model conservative state");
     dispatch_source<TR::n_vars>(m, [&](auto src) {
       dispatch_elliptic(m, [&](auto ell) {
         bind_variable_roles(src,
@@ -279,6 +276,8 @@ POPS_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
 template <class TR, class Visitor>
 POPS_COLD_FN void dispatch_model_for(const ModelSpec& m, TR tr, Visitor&& visitor) {
   const VariableSet cons = TR::conservative_vars();
+  validate_variable_semantics<kNativeDimension>(cons, "dispatch_model_for",
+                                                 "model conservative state");
   dispatch_source<TR::n_vars>(m, [&](auto src) {
     dispatch_elliptic(m, [&](auto ell) {
       bind_variable_roles(src, cons);
