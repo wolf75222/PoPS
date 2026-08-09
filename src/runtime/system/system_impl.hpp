@@ -55,16 +55,13 @@ struct System<Dim>::Impl {
   mesh::Distribution<Dim>& dm = domain_.dm;
   Index<Dim>& local_rank = domain_.local_rank;
   std::array<bool, Dim>& periodicity = domain_.periodicity;
-  field_type& aux = domain_.aux;
-  int& aux_ncomp_ = domain_.aux_ncomp;
 
   using auxiliary_registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
   using auxiliary_publication_type = typename auxiliary_registry_type::PublicationTransaction;
   using auxiliary_key_type = runtime::system::AuxiliaryComponentKey;
   auxiliary_registry_type auxiliary_registry_;
-  // The provider carrier is deliberately distinct from the historical field/aux workspace while
-  // the latter is being removed.  It has exactly registry.slot_count() components when non-empty;
-  // no allocation exists for an empty provider graph.
+  // No allocation exists for an empty provider graph. Every non-empty value belongs to one exact
+  // storage group resolved from owner-qualified ComponentKeys.
   std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier_;
   // The raw uploaded values are not carrier storage.  They remain host-side staging evidence until
   // one exact evaluation transaction publishes them into the runtime-owned compact provider carrier.
@@ -174,8 +171,6 @@ struct System<Dim>::Impl {
   /// registry before seal.  Block installers can otherwise mutate every structural registry, so a
   /// partial install must never leak into a retry on any MPI rank.
   struct NativePackageFinalizeSnapshot {
-    field_type aux;
-    int aux_ncomp = 0;
     auxiliary_registry_type auxiliary_registry;
     std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> provider_carrier;
     std::map<std::string, std::vector<double>> staged_auxiliary_inputs;
@@ -205,9 +200,7 @@ struct System<Dim>::Impl {
     std::map<std::string, typename exact_field_type::AcceptedState> named_field_states;
 
     explicit NativePackageFinalizeSnapshot(const Impl& owner)
-        : aux(owner.aux),
-          aux_ncomp(owner.aux_ncomp_),
-          auxiliary_registry(owner.auxiliary_registry_),
+        : auxiliary_registry(owner.auxiliary_registry_),
           provider_carrier(owner.provider_carrier_),
           staged_auxiliary_inputs(owner.staged_auxiliary_inputs_),
           dirty_auxiliary_providers(owner.dirty_auxiliary_providers_),
@@ -246,8 +239,6 @@ struct System<Dim>::Impl {
     }
 
     void restore(Impl& owner) const {
-      owner.aux = aux;
-      owner.aux_ncomp_ = aux_ncomp;
       owner.auxiliary_registry_ = auxiliary_registry;
       owner.provider_carrier_ = provider_carrier;
       owner.active_field_provider_candidate_.reset();

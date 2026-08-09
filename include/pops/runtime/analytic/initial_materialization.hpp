@@ -14,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -116,55 +117,56 @@ struct AnalyticInitialFiniteKernel {
   }
 };
 
-struct AnalyticInputBinding {
-  int source = 0;  // 0 = current state, 1 = auxiliary state.
+template <int Dim, class MemorySpace>
+struct AnalyticMappedInputField {
+  const MultiFab<Dim, MemorySpace>* field = nullptr;
   int component = 0;
 };
 
 template <int Dim>
+struct AnalyticMappedInputPatch {
+  static_assert(std::is_trivially_copyable_v<FieldView<const Real, Dim>>,
+                "mapped analytic input views must be device-copyable");
+
+  FieldView<const Real, Dim> fields[kAnalyticMaxStack]{};
+  int components[kAnalyticMaxStack]{};
+  int count = 0;
+
+  POPS_HD Real operator()(const Index<Dim>& index, int slot) const {
+    return fields[slot](index, components[slot]);
+  }
+};
+
+template <int Dim>
 struct AnalyticMappedInitialKernel {
-  FieldView<const Real, Dim> state;
-  FieldView<const Real, Dim> auxiliary;
+  AnalyticMappedInputPatch<Dim> inputs;
   FieldView<Real, Dim> values;
   int component;
   AnalyticProgramView program;
-  const AnalyticInputBinding* bindings;
-  int binding_count;
   Geometry<Dim> geometry;
 
   POPS_HD void operator()(const Index<Dim>& index) const {
     Real inputs[kAnalyticMaxStack];
-    for (int slot = 0; slot < binding_count; ++slot) {
-      const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] = binding.source == 0 ? state(index, binding.component)
-                                         : auxiliary(index, binding.component);
-    }
+    for (int slot = 0; slot < this->inputs.count; ++slot)
+      inputs[slot] = this->inputs(index, slot);
     const AnalyticEvaluation result = program.eval_checked(
-        index, geometry, inputs, static_cast<std::uint8_t>(binding_count));
-    values(index, component) =
-        result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
+        index, geometry, inputs, static_cast<std::uint8_t>(this->inputs.count));
+    values(index, component) = result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
   }
 };
 
 template <int Dim>
 struct AnalyticMappedInitialFiniteKernel {
-  FieldView<const Real, Dim> state;
-  FieldView<const Real, Dim> auxiliary;
+  AnalyticMappedInputPatch<Dim> inputs;
   AnalyticProgramView program;
-  const AnalyticInputBinding* bindings;
-  int binding_count;
   Geometry<Dim> geometry;
 
   POPS_HD Real operator()(const Index<Dim>& index) const {
     Real inputs[kAnalyticMaxStack];
-    for (int slot = 0; slot < binding_count; ++slot) {
-      const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] = binding.source == 0 ? state(index, binding.component)
-                                         : auxiliary(index, binding.component);
-    }
-    return program
-                   .eval_checked(index, geometry, inputs,
-                                 static_cast<std::uint8_t>(binding_count))
+    for (int slot = 0; slot < this->inputs.count; ++slot)
+      inputs[slot] = this->inputs(index, slot);
+    return program.eval_checked(index, geometry, inputs,
+                                static_cast<std::uint8_t>(this->inputs.count))
                    .valid
                ? Real(0)
                : Real(1);
@@ -186,8 +188,7 @@ struct GaussianCellAverage {
     for (int axis = 0; axis < Dim; ++axis) {
       const Real spacing = geometry.spacing(axis);
       const Real lower = root * (geometry.face_coordinate(axis, index[axis]) - center[axis]);
-      const Real upper =
-          root * (geometry.face_coordinate(axis, index[axis] + 1) - center[axis]);
+      const Real upper = root * (geometry.face_coordinate(axis, index[axis] + 1) - center[axis]);
       const Real scale = Kokkos::sqrt(pi) / (Real(2) * root * spacing);
       average *= scale * (Kokkos::erf(upper) - Kokkos::erf(lower));
     }
@@ -255,18 +256,20 @@ std::int64_t materialize_cell_average(MultiFab<Dim, MemorySpace>& values,
   for (std::size_t local = 0; local < values.local_size(); ++local)
     for (int component = 0; component < values.ncomp(); ++component)
       invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          values.box(local), detail::AnalyticInitialFiniteKernel<Dim>{
-                                 {programs[static_cast<std::size_t>(component)].view(), geometry}}));
+          values.box(local),
+          detail::AnalyticInitialFiniteKernel<Dim>{
+              {programs[static_cast<std::size_t>(component)].view(), geometry}}));
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
     throw std::runtime_error("analytic initial expression produced non-finite cell values (count=" +
                              std::to_string(invalid) + ")");
   for (std::size_t local = 0; local < values.local_size(); ++local)
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(values.box(local), detail::AnalyticInitialKernel<Dim>{
-                                               values.fab(local).view(), component,
-                                               {programs[static_cast<std::size_t>(component)].view(),
-                                                geometry}});
+      for_each_cell(values.box(local),
+                    detail::AnalyticInitialKernel<Dim>{
+                        values.fab(local).view(),
+                        component,
+                        {programs[static_cast<std::size_t>(component)].view(), geometry}});
   device_fence();
   return detail::checked_layout_cell_count(values.layout()) * values.ncomp();
 }
@@ -274,42 +277,34 @@ std::int64_t materialize_cell_average(MultiFab<Dim, MemorySpace>& values,
 /// Evaluate mapped analytic state at cell centers using ranked native field views.
 template <int Dim, class MemorySpace>
 std::int64_t materialize_discrete_mapped_state(
-    MultiFab<Dim, MemorySpace>& values, const MultiFab<Dim, MemorySpace>& seed,
-    const MultiFab<Dim, MemorySpace>& auxiliary, const Geometry<Dim>& geometry,
+    MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
     const std::vector<AnalyticProgram>& programs,
-    const std::vector<detail::AnalyticInputBinding>& bindings) {
+    const std::vector<detail::AnalyticMappedInputField<Dim, MemorySpace>>& inputs) {
   bool target_invalid = detail::invalid_materialization_target(values, geometry, programs) != 0;
-  target_invalid = target_invalid || bindings.empty() || bindings.size() > kAnalyticMaxStack ||
-                   values.layout() != seed.layout() || values.layout() != auxiliary.layout() ||
-                   values.distribution() != seed.distribution() ||
-                   values.distribution() != auxiliary.distribution() ||
-                   values.local_rank() != seed.local_rank() ||
-                   values.local_rank() != auxiliary.local_rank() ||
-                   seed.ncomp() != values.ncomp();
+  target_invalid = target_invalid || inputs.size() > kAnalyticMaxStack;
+  for (const auto& input : inputs)
+    target_invalid =
+        target_invalid || input.field == nullptr || input.component < 0 ||
+        (input.field != nullptr && input.component >= input.field->ncomp()) ||
+        (input.field != nullptr && input.field->layout() != values.layout()) ||
+        (input.field != nullptr && input.field->distribution() != values.distribution()) ||
+        (input.field != nullptr && input.field->local_rank() != values.local_rank()) ||
+        (input.field != nullptr && input.field->local_size() != values.local_size());
   if (all_reduce_sum(target_invalid ? 1L : 0L) != 0)
     throw std::invalid_argument("analytic mapped initial state target/profile mismatch");
-  for (const auto& binding : bindings) {
-    const bool invalid = (binding.source != 0 && binding.source != 1) || binding.component < 0 ||
-                         (binding.source == 0 && binding.component >= seed.ncomp()) ||
-                         (binding.source == 1 && binding.component >= auxiliary.ncomp());
-    if (all_reduce_sum(invalid ? 1L : 0L) != 0)
-      throw std::invalid_argument("analytic mapped initial state input binding is invalid");
-  }
-
-  using BindingStorage =
-      std::vector<detail::AnalyticInputBinding, fab_allocator<detail::AnalyticInputBinding>>;
-  BindingStorage device_bindings(bindings.begin(), bindings.end());
   long invalid_local = 0;
   for (std::size_t local = 0; local < values.local_size(); ++local) {
-    const auto state = seed.fab(local).view();
-    const auto aux = auxiliary.fab(local).view();
+    detail::AnalyticMappedInputPatch<Dim> patch_inputs{};
+    patch_inputs.count = static_cast<int>(inputs.size());
+    for (std::size_t slot = 0; slot < inputs.size(); ++slot) {
+      patch_inputs.fields[slot] = inputs[slot].field->fab(local).view();
+      patch_inputs.components[slot] = inputs[slot].component;
+    }
     for (int component = 0; component < values.ncomp(); ++component)
       invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          values.box(local), detail::AnalyticMappedInitialFiniteKernel<Dim>{
-                                 state, aux,
-                                 programs[static_cast<std::size_t>(component)].view(),
-                                 device_bindings.data(),
-                                 static_cast<int>(device_bindings.size()), geometry}));
+          values.box(local),
+          detail::AnalyticMappedInitialFiniteKernel<Dim>{
+              patch_inputs, programs[static_cast<std::size_t>(component)].view(), geometry}));
   }
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
@@ -317,15 +312,18 @@ std::int64_t materialize_discrete_mapped_state(
         "analytic mapped initial expression produced non-finite cell values (count=" +
         std::to_string(invalid) + ")");
   for (std::size_t local = 0; local < values.local_size(); ++local) {
-    const auto state = seed.fab(local).view();
-    const auto aux = auxiliary.fab(local).view();
+    detail::AnalyticMappedInputPatch<Dim> patch_inputs{};
+    patch_inputs.count = static_cast<int>(inputs.size());
+    for (std::size_t slot = 0; slot < inputs.size(); ++slot) {
+      patch_inputs.fields[slot] = inputs[slot].field->fab(local).view();
+      patch_inputs.components[slot] = inputs[slot].component;
+    }
     const auto output = values.fab(local).view();
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(values.box(local), detail::AnalyticMappedInitialKernel<Dim>{
-                                               state, aux, output, component,
-                                               programs[static_cast<std::size_t>(component)].view(),
-                                               device_bindings.data(),
-                                               static_cast<int>(device_bindings.size()), geometry});
+      for_each_cell(values.box(local),
+                    detail::AnalyticMappedInitialKernel<Dim>{
+                        patch_inputs, output, component,
+                        programs[static_cast<std::size_t>(component)].view(), geometry});
   }
   device_fence();
   return detail::checked_layout_cell_count(values.layout()) * values.ncomp();

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/named_field_publication.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -89,6 +90,55 @@ void expect_ranked_publication() {
                std::invalid_argument);
 }
 
+template <int Dim>
+void expect_ranked_mapped_inputs() {
+  const pops::Box<Dim> domain{filled_index<Dim>(0), filled_index<Dim>(1)};
+  const auto layout = pops::mesh::BoxArray<Dim>::from_domain(domain, filled_extent<Dim>(2));
+  const pops::mesh::RankSpace<Dim> ranks(filled_index<Dim>(0), filled_extent<Dim>(1));
+  const auto distribution = pops::mesh::Distribution<Dim>::replicated(layout, ranks);
+  pops::MultiFab<Dim> state(layout, distribution, filled_index<Dim>(0), 1, filled_extent<Dim>(0));
+  pops::MultiFab<Dim> provider(layout, distribution, filled_index<Dim>(0), 2,
+                               filled_extent<Dim>(0));
+  pops::MultiFab<Dim> values(layout, distribution, filled_index<Dim>(0), 1, filled_extent<Dim>(0));
+  state.set_val(pops::Real(2));
+  provider.set_val(pops::Real(0));
+  for (std::size_t local = 0; local < provider.local_size(); ++local) {
+    const auto view = provider.fab(local).view();
+    pops::for_each_cell(
+        provider.box(local),
+        KOKKOS_LAMBDA(const pops::Index<Dim>& index) { view(index, 1) = pops::Real(3); });
+  }
+
+  pops::RealVector<Dim> lower{};
+  pops::RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 2.0;
+  const auto geometry = pops::Geometry<Dim>::from_bounds(domain, lower, upper);
+  const auto programs =
+      pops::analytic::compile_component_programs({{"input", "input", "add"}}, {{0.0, 1.0, 0.0}});
+  using Input =
+      pops::analytic::detail::AnalyticMappedInputField<Dim,
+                                                       typename pops::MultiFab<Dim>::memory_space>;
+  const std::vector<Input> inputs{{&provider, 1}, {&state, 0}};
+  EXPECT_EQ(pops::analytic::materialize_discrete_mapped_state(values, geometry, programs, inputs),
+            domain.numPts());
+
+  const auto& fab = values.fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  EXPECT_DOUBLE_EQ(host_value(fab, host, filled_index<Dim>(0), 0), 5.0);
+
+  const auto constant_programs =
+      pops::analytic::compile_component_programs({{"constant"}}, {{7.0}});
+  const std::vector<Input> no_inputs;
+  EXPECT_EQ(pops::analytic::materialize_discrete_mapped_state(values, geometry, constant_programs,
+                                                              no_inputs),
+            domain.numPts());
+  auto constant_host = fab.create_host_mirror();
+  fab.copy_to_host(constant_host);
+  EXPECT_DOUBLE_EQ(host_value(fab, constant_host, filled_index<Dim>(0), 0), 7.0);
+}
+
 }  // namespace
 
 TEST(NamedFieldOutput, ValidatesOneOrExactlyDimPlusOneCompactComponents) {
@@ -118,4 +168,10 @@ TEST(NamedFieldOutput, PublishesPotentialAndEveryAxisInOneRankedAlgorithm) {
   expect_ranked_publication<1>();
   expect_ranked_publication<2>();
   expect_ranked_publication<3>();
+}
+
+TEST(NamedFieldOutput, MappedAnalyticInputsReadDistinctExactFieldsInEveryRank) {
+  expect_ranked_mapped_inputs<1>();
+  expect_ranked_mapped_inputs<2>();
+  expect_ranked_mapped_inputs<3>();
 }

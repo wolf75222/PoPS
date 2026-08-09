@@ -1039,35 +1039,133 @@ template <int Dim>
 std::int64_t System<Dim>::set_analytic_mapped_state(
     const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
     const std::vector<std::vector<double>>& literals,
-    const std::vector<std::string>& input_sources) {
+    const std::vector<runtime::system::AnalyticMappedInput>& inputs,
+    const std::string& consumer_qid) {
+  ExactContractBuilder input_contract;
+  input_contract.text("pops.system.analytic-mapped-inputs")
+      .scalar(std::uint32_t{1})
+      .text(consumer_qid)
+      .scalar(static_cast<std::uint64_t>(inputs.size()));
+  for (const auto& input : inputs) {
+    input_contract.scalar(static_cast<std::uint8_t>(input.kind))
+        .scalar(input.state_component)
+        .text(input.provider_key.owner_qid)
+        .text(input.provider_key.space_kind)
+        .text(input.provider_key.space_name)
+        .text(input.provider_key.component);
+  }
+  const std::string exact_inputs = std::move(input_contract).release();
   auto prepared = analytic::collectively_prepare_analytic_request(
-      "System::set_analytic_mapped_state", {{"name", name}}, {}, opcodes, literals, [&] {
+      "System::set_analytic_mapped_state",
+      {{"consumer_qid", consumer_qid}, {"inputs", exact_inputs}, {"name", name}}, {}, opcodes,
+      literals, [&] {
         require_assembling(p_->lifecycle_, "set_analytic_mapped_state");
         typename Impl::Species& block = p_->find(name);
         auto programs = analytic::compile_component_programs(opcodes, literals);
-        if (programs.size() != static_cast<std::size_t>(block.ncomp) || input_sources.empty() ||
-            input_sources.size() > analytic::kAnalyticMaxStack)
+        if (consumer_qid.empty() || programs.size() != static_cast<std::size_t>(block.ncomp) ||
+            inputs.size() > analytic::kAnalyticMaxStack)
           throw std::invalid_argument("System mapped analytic request shape is invalid");
-        std::vector<analytic::detail::AnalyticInputBinding> bindings;
-        bindings.reserve(input_sources.size());
-        for (const std::string& source : input_sources) {
-          const std::size_t separator = source.find(':');
-          if (separator == std::string::npos)
-            throw std::invalid_argument("System analytic input must be state:N or aux:N");
-          const int component = std::stoi(source.substr(separator + 1));
-          const std::string kind = source.substr(0, separator);
-          bindings.push_back({kind == "state" ? 0 : kind == "aux" ? 1 : -1, component});
+        runtime::system::AuxiliaryConsumerProviderPlan<Dim> expected_plan;
+        expected_plan.consumer_qid = consumer_qid;
+        std::vector<runtime::system::AuxiliaryComponentKey> provider_keys;
+        for (const auto& input : inputs) {
+          input.validate();
+          if (input.kind == runtime::system::AnalyticMappedInputKind::state_component &&
+              input.state_component >= block.ncomp)
+            throw std::out_of_range(
+                "System mapped analytic state input component is outside the target state");
+          if (input.kind != runtime::system::AnalyticMappedInputKind::provider_component)
+            continue;
+          if (!p_->auxiliary_registry_.sealed())
+            throw std::logic_error(
+                "System mapped analytic providers require a sealed auxiliary registry");
+          const auto& provider = p_->auxiliary_registry_.provider_for_key(input.provider_key);
+          const auto output = std::find_if(
+              provider.outputs().begin(), provider.outputs().end(),
+              [&](const auto& candidate) { return candidate.key == input.provider_key; });
+          if (output == provider.outputs().end())
+            throw std::logic_error(
+                "System sealed auxiliary provider lost its declared component output");
+          expected_plan.values.push_back(
+              {{output->key, output->contract, output->shape}, provider_keys.size()});
+          provider_keys.push_back(input.provider_key);
         }
         return std::tuple<typename Impl::Species*, std::vector<analytic::AnalyticProgram>,
-                          std::vector<analytic::detail::AnalyticInputBinding>>{
-            &block, std::move(programs), std::move(bindings)};
+                          runtime::system::AuxiliaryConsumerProviderPlan<Dim>,
+                          std::vector<runtime::system::AuxiliaryComponentKey>>{
+            &block, std::move(programs), std::move(expected_plan), std::move(provider_keys)};
       });
   typename Impl::Species* block = std::get<0>(prepared);
+  auto& programs = std::get<1>(prepared);
+  auto expected_plan = std::move(std::get<2>(prepared));
+  const auto& provider_keys = std::get<3>(prepared);
+
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* resolved_plan = nullptr;
+  if (!provider_keys.empty()) {
+    try {
+      resolved_plan = &p_->auxiliary_registry_.consumer_plan(consumer_qid);
+    } catch (const std::out_of_range&) {
+      install_auxiliary_consumer_plan(std::move(expected_plan));
+      resolved_plan = &p_->auxiliary_registry_.consumer_plan(consumer_qid);
+    }
+  }
   MultiFab<Dim> seed = block->U;
   MultiFab<Dim> candidate(block->U.layout(), block->U.distribution(), block->U.local_rank(),
                           block->U.ncomp(), block->U.ghosts());
-  const std::int64_t count = analytic::materialize_discrete_mapped_state(
-      candidate, seed, p_->aux, p_->geom, std::get<1>(prepared), std::get<2>(prepared));
+  std::vector<analytic::detail::AnalyticMappedInputField<Dim, typename MultiFab<Dim>::memory_space>>
+      resolved_inputs;
+  std::exception_ptr resolution_error;
+  try {
+    if (!provider_keys.empty() && resolved_plan == nullptr)
+      throw std::logic_error("System mapped analytic provider inputs have no resolved plan");
+    if (resolved_plan != nullptr && resolved_plan->value_count() != provider_keys.size())
+      throw std::invalid_argument(
+          "System mapped analytic consumer plan has a different provider count");
+    for (std::size_t slot = 0; slot < provider_keys.size(); ++slot)
+      if (resolved_plan->values[slot].consumer_slot != slot ||
+          resolved_plan->values[slot].key != provider_keys[slot])
+        throw std::invalid_argument(
+            "System mapped analytic consumer plan differs from its exact input order");
+    if (!provider_keys.empty() && !p_->provider_carrier_)
+      throw std::logic_error(
+          "System mapped analytic provider inputs have no accepted storage groups");
+    for (const auto& key : provider_keys) {
+      const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
+      if (!p_->auxiliary_registry_.last_accepted_point(provider.identity()))
+        throw std::logic_error(
+            "System mapped analytic provider input has never published an accepted generation");
+      if (std::find(p_->dirty_auxiliary_providers_.begin(), p_->dirty_auxiliary_providers_.end(),
+                    provider.identity()) != p_->dirty_auxiliary_providers_.end())
+        throw std::logic_error(
+            "System mapped analytic provider input is stale at the requested generation");
+    }
+    resolved_inputs.reserve(inputs.size());
+    std::size_t provider_slot = 0;
+    for (const auto& input : inputs) {
+      if (input.kind == runtime::system::AnalyticMappedInputKind::state_component) {
+        resolved_inputs.push_back({&seed, input.state_component});
+        continue;
+      }
+      const auto& value = resolved_plan->values[provider_slot++];
+      const MultiFab<Dim>* group = p_->provider_carrier_->find(value.address.group);
+      if (group == nullptr || value.address.component >= static_cast<std::size_t>(group->ncomp()))
+        throw std::logic_error(
+            "System mapped analytic provider input lacks its resolved storage address");
+      if (value.contract.centering != "cell" || value.shape.value_components != 1)
+        throw std::invalid_argument(
+            "System mapped analytic provider input requires a scalar cell-centred projection");
+      resolved_inputs.push_back({group, static_cast<int>(value.address.component)});
+    }
+  } catch (...) {
+    resolution_error = std::current_exception();
+  }
+  if (all_reduce_max(resolution_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && resolution_error)
+      std::rethrow_exception(resolution_error);
+    throw std::runtime_error("System mapped analytic input resolution failed collectively");
+  }
+  const std::int64_t count =
+      analytic::materialize_discrete_mapped_state(candidate, p_->geom, programs, resolved_inputs);
   publish_recovered_candidate<Dim>(*block, candidate, "System::set_analytic_mapped_state");
   return count;
 }
@@ -1319,7 +1417,8 @@ template std::int64_t System<kNativeDimension>::set_analytic_expression_state(
     const std::vector<std::vector<std::string>>&, const std::vector<std::vector<double>>&);
 template std::int64_t System<kNativeDimension>::set_analytic_mapped_state(
     const std::string&, const std::vector<std::vector<std::string>>&,
-    const std::vector<std::vector<double>>&, const std::vector<std::string>&);
+    const std::vector<std::vector<double>>&,
+    const std::vector<runtime::system::AnalyticMappedInput>&, const std::string&);
 template std::int64_t System<kNativeDimension>::set_analytic_gaussian_state(
     const std::string&, const RealVector<kNativeDimension>&, double, double, double);
 template int System<kNativeDimension>::n_vars(const std::string&) const;

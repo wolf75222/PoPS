@@ -49,10 +49,12 @@ Extent<Dim> maximum_auxiliary_halo(const runtime::system::ExactAuxiliaryRegistry
 
 template <int Dim>
 const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type* find_auxiliary_output(
-    const runtime::system::ExactAuxiliaryRegistry<Dim>& registry, const AuxiliaryComponentKey& key) {
+    const runtime::system::ExactAuxiliaryRegistry<Dim>& registry,
+    const AuxiliaryComponentKey& key) {
   const std::string exact_key = key.exact_key();
   const auto* result =
-      static_cast<const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type*>(nullptr);
+      static_cast<const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type*>(
+          nullptr);
   for (std::size_t provider = 0; provider < registry.provider_count(); ++provider) {
     const auto& candidate = registry.provider(provider);
     for (const auto& output : candidate.outputs()) {
@@ -67,10 +69,11 @@ const typename runtime::system::ExactAuxiliaryRegistry<Dim>::provider_type* find
 }
 
 template <int Dim>
-void write_auxiliary_component(MultiFab<Dim>& carrier, const Box<Dim>& domain, std::size_t component,
-                               const std::vector<double>& values) {
+void write_auxiliary_component(MultiFab<Dim>& carrier, const Box<Dim>& domain,
+                               std::size_t component, const std::vector<double>& values) {
   using namespace runtime::system::marshaling;
-  if (component >= static_cast<std::size_t>(carrier.ncomp()) || values.size() != domain_cells(domain))
+  if (component >= static_cast<std::size_t>(carrier.ncomp()) ||
+      values.size() != domain_cells(domain))
     throw std::invalid_argument("System auxiliary input does not match its compact carrier slot");
   require_exact_domain_decomposition(carrier, domain);
   for (std::size_t local = 0; local < carrier.local_size(); ++local) {
@@ -87,7 +90,7 @@ void write_auxiliary_component(MultiFab<Dim>& carrier, const Box<Dim>& domain, s
 
 template <int Dim>
 std::vector<double> read_auxiliary_component(const MultiFab<Dim>& carrier, const Box<Dim>& domain,
-                                              std::size_t component) {
+                                             std::size_t component) {
   using namespace runtime::system::marshaling;
   if (component >= static_cast<std::size_t>(carrier.ncomp()))
     throw std::out_of_range("System auxiliary component is outside the compact carrier");
@@ -123,14 +126,14 @@ void require_finite_auxiliary_candidate(const MultiFab<Dim>& candidate) {
     fab.copy_to_host(host);
     for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
       for (int component = 0; component < candidate.ncomp(); ++component)
-        if (!std::isfinite(
-                static_cast<double>(host(storage_ordinal(fab, index, component)))))
+        if (!std::isfinite(static_cast<double>(host(storage_ordinal(fab, index, component)))))
           ++nonfinite;
     });
   }
   if (all_reduce_sum(nonfinite) != 0)
     throw std::runtime_error(
-        "System auxiliary publication rejected: native provider candidate contains non-finite values");
+        "System auxiliary publication rejected: native provider candidate contains non-finite "
+        "values");
 }
 
 template <int Dim>
@@ -160,12 +163,23 @@ template <int Dim>
 void System<Dim>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan) {
   require_assembling(p_->lifecycle_, "install_auxiliary_consumer_plan");
-  if (p_->auxiliary_registry_.sealed()) {
-    // A Program package may be installed after providers sealed.  It contributes only a resolved
-    // local gather plan, never a new global output or carrier component; publish the new exact
-    // plan image atomically after an MPI byte witness.
-    auto candidate = p_->auxiliary_registry_;
+  // A Program or bind-time analytic consumer can arrive after providers sealed. It contributes
+  // only a resolved local gather plan, never a new global output or carrier component. Prepare the
+  // complete value image on every rank and turn rank-local validation failures into one collective
+  // rejection before any rank enters the exact-byte witness.
+  auto candidate = p_->auxiliary_registry_;
+  std::exception_ptr local_error;
+  try {
     candidate.add_consumer_plan(std::move(plan));
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System auxiliary consumer plan preparation failed collectively");
+  }
+  if (candidate.sealed()) {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"system-auxiliary-consumer-plan", candidate.collective_contract()}}))
       throw std::runtime_error("System auxiliary consumer plan differs across MPI ranks");
@@ -173,7 +187,7 @@ void System<Dim>::install_auxiliary_consumer_plan(
     p_->auxiliary_registry_consensus_verified_ = true;
     return;
   }
-  p_->auxiliary_registry_.add_consumer_plan(std::move(plan));
+  p_->auxiliary_registry_ = std::move(candidate);
   p_->auxiliary_registry_consensus_verified_ = false;
 }
 
@@ -215,9 +229,8 @@ void System<Dim>::seal_auxiliary_providers() {
       for (int axis = 0; axis < Dim; ++axis)
         ghosts[axis] = group.shape.halo[axis];
       candidate_carrier->groups.emplace(
-          group.identity,
-          MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
-                        static_cast<int>(group.component_count), ghosts));
+          group.identity, MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
+                                        static_cast<int>(group.component_count), ghosts));
     }
   }
   p_->auxiliary_registry_ = std::move(candidate_registry);
@@ -258,8 +271,8 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
     throw std::logic_error("System auxiliary refresh requires a sealed provider registry");
   require_collective_auxiliary_point<Dim>(point);
   if (p_->auxiliary_registry_.slot_count() == 0) {
-    auto transaction = p_->auxiliary_registry_.begin_publication(
-        point, p_->dirty_auxiliary_providers_);
+    auto transaction =
+        p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_);
     transaction.accept();
     p_->dirty_auxiliary_providers_.clear();
     return;
@@ -268,8 +281,8 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
     throw std::logic_error("System sealed auxiliary registry has no compact carrier allocation");
 
   runtime::system::AuxiliaryStorageGroups<Dim> candidate = *p_->provider_carrier_;
-  auto transaction = p_->auxiliary_registry_.begin_publication(
-      point, p_->dirty_auxiliary_providers_);
+  auto transaction =
+      p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_);
   try {
     for (const std::size_t index : p_->auxiliary_registry_.topological_order()) {
       const auto& provider = p_->auxiliary_registry_.provider(index);
@@ -290,8 +303,7 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
       }
       transaction.stage_external(provider.identity());
     }
-    transaction.launch_ready_native(
-        {&*p_->provider_carrier_, &candidate});
+    transaction.launch_ready_native({&*p_->provider_carrier_, &candidate});
     Kokkos::fence();
     for (const auto& [_, group] : candidate.groups)
       require_finite_auxiliary_candidate(group);
@@ -364,8 +376,8 @@ template void System<kNativeDimension>::install_prepared_auxiliary_provider(
 template void System<kNativeDimension>::install_auxiliary_consumer_plan(
     runtime::system::AuxiliaryConsumerProviderPlan<kNativeDimension>);
 template void System<kNativeDimension>::seal_auxiliary_providers();
-template void System<kNativeDimension>::stage_auxiliary_input(
-    const AuxiliaryComponentKey&, const std::vector<double>&);
+template void System<kNativeDimension>::stage_auxiliary_input(const AuxiliaryComponentKey&,
+                                                              const std::vector<double>&);
 template void System<kNativeDimension>::refresh_auxiliary(const AuxiliaryEvaluationPoint&);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
 System<kNativeDimension>::auxiliary_address(const AuxiliaryComponentKey&) const;

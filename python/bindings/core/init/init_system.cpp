@@ -810,8 +810,45 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_set_analytic_expression_state", &System::set_analytic_expression_state,
            py::arg("name"), py::arg("space"), py::arg("centering"), py::arg("projection"),
            py::arg("opcodes"), py::arg("literals"))
-      .def("_set_analytic_mapped_state", &System::set_analytic_mapped_state, py::arg("name"),
-           py::arg("opcodes"), py::arg("literals"), py::arg("input_sources"))
+      .def(
+          "_set_analytic_mapped_state",
+          [](System& system, const std::string& name,
+             const std::vector<std::vector<std::string>>& opcodes,
+             const std::vector<std::vector<double>>& literals, const std::vector<py::dict>& rows,
+             const std::string& consumer_qid) {
+            std::vector<pops::runtime::system::AnalyticMappedInput> inputs;
+            inputs.reserve(rows.size());
+            for (const py::dict& row : rows) {
+              if (!row.contains("source"))
+                throw std::invalid_argument(
+                    "mapped analytic input requires an exact source discriminator");
+              const std::string source = py::cast<std::string>(row["source"]);
+              if (source == "state") {
+                if (row.size() != 2 || !row.contains("component"))
+                  throw std::invalid_argument(
+                      "mapped analytic state input requires exactly source/component");
+                inputs.push_back(pops::runtime::system::AnalyticMappedInput::state(
+                    py::cast<int>(row["component"])));
+                continue;
+              }
+              if (source != "provider" || row.size() != 2 || !row.contains("key"))
+                throw std::invalid_argument(
+                    "mapped analytic provider input requires exactly source/key");
+              const py::dict key = py::cast<py::dict>(row["key"]);
+              if (key.size() != 4 || !key.contains("owner_qid") || !key.contains("space_kind") ||
+                  !key.contains("space_name") || !key.contains("component"))
+                throw std::invalid_argument(
+                    "mapped analytic provider input requires an exact ComponentKey");
+              inputs.push_back(pops::runtime::system::AnalyticMappedInput::provider(
+                  {py::cast<std::string>(key["owner_qid"]),
+                   py::cast<std::string>(key["space_kind"]),
+                   py::cast<std::string>(key["space_name"]),
+                   py::cast<std::string>(key["component"])}));
+            }
+            return system.set_analytic_mapped_state(name, opcodes, literals, inputs, consumer_qid);
+          },
+          py::arg("name"), py::arg("opcodes"), py::arg("literals"), py::arg("inputs"),
+          py::arg("consumer_qid"))
       .def(
           "_set_analytic_gaussian_state",
           [](System& system, const std::string& name, const py::handle& center, double background,

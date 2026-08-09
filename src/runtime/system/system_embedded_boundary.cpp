@@ -85,9 +85,10 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
     p_->embedded_boundary_lane_.emplace(
         ExecutionLane::duplicate_world_collectively("pops.system.embedded-boundary"));
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  const MultiFab<Dim> layout_prototype(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
   auto prepared = runtime::system::prepare_embedded_boundary_geometry_collectively(
-      staged_opcodes, staged_literals, p_->geom, topology, p_->aux, prepared_mode, thresholds,
-      generation, *p_->embedded_boundary_lane_);
+      staged_opcodes, staged_literals, p_->geom, topology, layout_prototype, prepared_mode,
+      thresholds, generation, *p_->embedded_boundary_lane_);
 
   p_->embedded_boundary_ = std::move(prepared);
   p_->embedded_boundary_opcodes_ = std::move(staged_opcodes);
@@ -116,9 +117,11 @@ void System<Dim>::set_geometry_mode(const std::string& mode) {
   const std::uint64_t generation =
       next_embedded_boundary_generation(p_->embedded_boundary_generation_);
   const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  const MultiFab<Dim> layout_prototype(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
   auto prepared = runtime::system::prepare_embedded_boundary_geometry_collectively(
-      p_->embedded_boundary_opcodes_, p_->embedded_boundary_literals_, p_->geom, topology, p_->aux,
-      prepared_mode, p_->embedded_boundary_thresholds_, generation, *p_->embedded_boundary_lane_);
+      p_->embedded_boundary_opcodes_, p_->embedded_boundary_literals_, p_->geom, topology,
+      layout_prototype, prepared_mode, p_->embedded_boundary_thresholds_, generation,
+      *p_->embedded_boundary_lane_);
   p_->embedded_boundary_ = std::move(prepared);
   p_->embedded_boundary_generation_ = generation;
 }

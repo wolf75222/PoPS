@@ -45,12 +45,6 @@ struct SystemDomain {
   distribution_type dm;
   Index<Dim> local_rank;
   std::array<bool, Dim> periodicity;
-  /// Legacy field/embedded-boundary workspace is intentionally unallocated.  Provider values are
-  /// owned by the exact auxiliary storage groups; a feature that still reaches this obsolete route
-  /// fails on its own typed migration rather than silently reserving a physical component.
-  field_type aux;
-  int aux_ncomp = 0;
-
   explicit SystemDomain(const SystemConfig<Dim>& config)
       : cfg(validated_config_(config)),
         dom(cfg.index_domain()),
@@ -68,13 +62,11 @@ struct SystemDomain {
     RealVector<Dim> upper{};
     std::array<bool, Dim> periodicity{};
     std::size_t boxes = 0;
-    int aux_components = 0;
     std::string coordinate_system;
   };
 
   LayoutReport layout_report() const {
-    return {
-        cfg.shape, cfg.lower, cfg.upper, periodicity, ba.size(), aux_ncomp, cfg.coordinate_system};
+    return {cfg.shape, cfg.lower, cfg.upper, periodicity, ba.size(), cfg.coordinate_system};
   }
 
  private:

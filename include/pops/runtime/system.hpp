@@ -28,7 +28,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 /// @file
@@ -60,6 +62,50 @@ class PreparedSystemLayoutTransfer;
 namespace component {
 class LoadedComponent;
 }
+
+namespace runtime::system {
+
+enum class AnalyticMappedInputKind : std::uint8_t { state_component = 0, provider_component = 1 };
+
+/// One exact input to a bind-time mapped analytic state expression.
+///
+/// State components are local to the target state carrier. Provider components are addressed only
+/// by their owner-qualified key and are resolved through a sealed consumer plan. No physical name
+/// or global storage component crosses this interface.
+struct AnalyticMappedInput {
+  AnalyticMappedInputKind kind = AnalyticMappedInputKind::state_component;
+  int state_component = -1;
+  AuxiliaryComponentKey provider_key;
+
+  static AnalyticMappedInput state(int component) {
+    return {AnalyticMappedInputKind::state_component, component, {}};
+  }
+  static AnalyticMappedInput provider(AuxiliaryComponentKey key) {
+    return {AnalyticMappedInputKind::provider_component, -1, std::move(key)};
+  }
+
+  void validate() const {
+    if (kind == AnalyticMappedInputKind::state_component) {
+      if (state_component < 0)
+        throw std::invalid_argument("mapped analytic state component must be non-negative");
+      return;
+    }
+    if (kind != AnalyticMappedInputKind::provider_component)
+      throw std::invalid_argument("mapped analytic input kind is invalid");
+    provider_key.validate();
+  }
+
+  void serialize_exact(ExactContractBuilder& contract) const {
+    validate();
+    contract.scalar(static_cast<std::uint8_t>(kind));
+    if (kind == AnalyticMappedInputKind::state_component)
+      contract.scalar(state_component);
+    else
+      provider_key.serialize_exact(contract);
+  }
+};
+
+}  // namespace runtime::system
 
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
 /// Ratios follow the native ranked axis order; the runtime validates them against the
@@ -786,10 +832,11 @@ class System {
                                              const std::string& projection,
                                              const std::vector<std::vector<std::string>>& opcodes,
                                              const std::vector<std::vector<double>>& literals);
-  std::int64_t set_analytic_mapped_state(const std::string& name,
-                                         const std::vector<std::vector<std::string>>& opcodes,
-                                         const std::vector<std::vector<double>>& literals,
-                                         const std::vector<std::string>& input_sources);
+  std::int64_t set_analytic_mapped_state(
+      const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
+      const std::vector<std::vector<double>>& literals,
+      const std::vector<runtime::system::AnalyticMappedInput>& inputs,
+      const std::string& consumer_qid);
   std::int64_t set_analytic_gaussian_state(const std::string& name, const RealVector<Dim>& center,
                                            double background, double amplitude,
                                            double inverse_width);
