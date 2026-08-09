@@ -608,6 +608,301 @@ double* values(PopsFieldViewV1& view) {
   return static_cast<double*>(view.data);
 }
 
+template <int Dim>
+PopsFieldPatchMetadataV1 material_patch_metadata(
+    const std::array<std::size_t, Dim>& interior_extents) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  PopsFieldPatchMetadataV1 metadata{sizeof(PopsFieldPatchMetadataV1),
+                                    0,
+                                    0,
+                                    0,
+                                    Dim,
+                                    {},
+                                    {},
+                                    {},
+                                    {},
+                                    POPS_FIELD_CENTERING_CELL_V1,
+                                    0,
+                                    "test::ranked-material-layout",
+                                    "test::ranked-material-patch"};
+  for (int axis = 0; axis < Dim; ++axis) {
+    metadata.upper[axis] = static_cast<std::int64_t>(interior_extents[axis] - 1);
+    metadata.physical_lower[axis] = -0.5 * static_cast<double>(axis + 1);
+    metadata.cell_spacing[axis] = 0.125 * static_cast<double>(axis + 1);
+  }
+  return metadata;
+}
+
+template <int Dim>
+PopsConstFieldViewV1 strided_fraction_view(const double* data,
+                                           const std::array<std::size_t, Dim>& interior_extents,
+                                           const std::array<std::size_t, Dim>& ghost_lower,
+                                           const std::array<std::size_t, Dim>& ghost_upper,
+                                           const std::array<std::ptrdiff_t, Dim>& axis_strides) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  PopsConstFieldViewV1 view{sizeof(PopsConstFieldViewV1),
+                            data,
+                            Dim,
+                            {1, 1, 1},
+                            {},
+                            1,
+                            1,
+                            POPS_FIELD_CENTERING_CELL_V1,
+                            0,
+                            {},
+                            {},
+                            POPS_SCALAR_FLOAT64_V1,
+                            POPS_MEMORY_SPACE_HOST_V1,
+                            "test::ranked-material-layout",
+                            "test::ranked-material-patch",
+                            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+  for (int axis = 0; axis < Dim; ++axis) {
+    view.extents[axis] = interior_extents[axis] + ghost_lower[axis] + ghost_upper[axis];
+    view.axis_strides[axis] = axis_strides[axis];
+    view.ghost_lower[axis] = ghost_lower[axis];
+    view.ghost_upper[axis] = ghost_upper[axis];
+  }
+  return view;
+}
+
+PopsFieldViewV1 mutable_view_like(double* data, const PopsConstFieldViewV1& source) {
+  PopsFieldViewV1 result{sizeof(PopsFieldViewV1),
+                         data,
+                         source.dimension,
+                         {},
+                         {},
+                         source.component_count,
+                         source.component_stride,
+                         source.centering,
+                         source.centering_axes,
+                         {},
+                         {},
+                         source.scalar_type,
+                         source.memory_space,
+                         source.layout_identity,
+                         source.patch_identity,
+                         source.ownership};
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    result.extents[axis] = source.extents[axis];
+    result.axis_strides[axis] = source.axis_strides[axis];
+    result.ghost_lower[axis] = source.ghost_lower[axis];
+    result.ghost_upper[axis] = source.ghost_upper[axis];
+  }
+  return result;
+}
+
+template <int Dim>
+void verify_ranked_material_fraction_mask(const std::array<std::size_t, Dim>& interior_extents,
+                                          const std::array<std::size_t, Dim>& ghost_lower,
+                                          const std::array<std::size_t, Dim>& ghost_upper,
+                                          const std::array<std::ptrdiff_t, Dim>& axis_strides) {
+  const auto metadata = material_patch_metadata<Dim>(interior_extents);
+  std::size_t point_count = 1;
+  std::size_t maximum_offset = 0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    point_count *= interior_extents[axis];
+    maximum_offset += (ghost_lower[axis] + interior_extents[axis] - 1) *
+                      static_cast<std::size_t>(axis_strides[axis]);
+  }
+  std::vector<double> storage(maximum_offset + 1, 0.0);
+  std::vector<std::uint8_t> expected(point_count, 0);
+  for (std::size_t point = 0; point < point_count; ++point) {
+    std::size_t remaining = point;
+    std::size_t offset = 0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t coordinate = remaining % interior_extents[axis];
+      remaining /= interior_extents[axis];
+      offset += (coordinate + ghost_lower[axis]) * static_cast<std::size_t>(axis_strides[axis]);
+    }
+    expected[point] = ((point * 7 + static_cast<std::size_t>(Dim)) % 5) != 0 ? 1u : 0u;
+    storage[offset] = expected[point] != 0 ? 0.625 : 0.0;
+  }
+  const auto view = strided_fraction_view<Dim>(storage.data(), interior_extents, ghost_lower,
+                                               ghost_upper, axis_strides);
+  const pops::component::FieldTopologyPatchInputV2 input{
+      0, POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1, {}, view, {}};
+  EXPECT_EQ(pops::component::expected_topology_material_mask(input, metadata), expected);
+}
+
+TEST(ComponentInterfaces, TopologyMaterialFractionsUseExactRankedStridesAndGhosts) {
+  verify_ranked_material_fraction_mask<1>({4}, {2}, {1}, {3});
+  verify_ranked_material_fraction_mask<2>({3, 2}, {1, 2}, {2, 1}, {2, 17});
+  verify_ranked_material_fraction_mask<3>({2, 3, 2}, {1, 1, 2}, {2, 1, 1}, {3, 19, 113});
+}
+
+TEST(ComponentInterfaces, TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow) {
+  const std::array<double, 1> storage{0.5};
+  auto metadata = material_patch_metadata<1>({2});
+  auto view = strided_fraction_view<1>(storage.data(), {2}, {2}, {1},
+                                       {std::numeric_limits<std::ptrdiff_t>::max()});
+  pops::component::FieldTopologyPatchInputV2 input{
+      0, POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1, {}, view, {}};
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, metadata),
+               std::invalid_argument);
+
+  auto invalid_rank = metadata;
+  invalid_rank.dimension = 4;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, invalid_rank),
+               std::invalid_argument);
+  invalid_rank.dimension = 0;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, invalid_rank),
+               std::invalid_argument);
+
+  auto hidden_metadata_axis = metadata;
+  hidden_metadata_axis.upper[1] = 1;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, hidden_metadata_axis),
+               std::invalid_argument);
+  auto hidden_view_axis = view;
+  hidden_view_axis.axis_strides[1] = 1;
+  input.cut_cell_volume_fraction = hidden_view_axis;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, metadata),
+               std::invalid_argument);
+}
+
+TEST(ComponentInterfaces, BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank) {
+  constexpr std::array<std::size_t, 3> extents{2, 2, 2};
+  constexpr std::array<std::size_t, 3> no_ghosts{};
+  constexpr std::array<std::ptrdiff_t, 3> flux_strides{2, 13, 41};
+  constexpr std::array<std::ptrdiff_t, 3> coordinate_strides{7, 29, 83};
+  constexpr std::array<std::ptrdiff_t, 3> normal_strides{5, 23, 67};
+  std::array<double, 57> base_flux{};
+  std::array<double, 57> transformed_flux{};
+  std::array<double, 124> coordinates{};
+  std::array<double, 100> normals{};
+  std::array<double, 8> face_measures{};
+  std::array<PopsComponentActionV1, 8> actions{};
+
+  auto base_view =
+      strided_fraction_view<3>(base_flux.data(), extents, no_ghosts, no_ghosts, flux_strides);
+  base_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_view.centering_axes = 1u << 2u;
+  auto coordinate_view = strided_fraction_view<3>(coordinates.data(), extents, no_ghosts, no_ghosts,
+                                                  coordinate_strides);
+  coordinate_view.component_count = 3;
+  coordinate_view.component_stride = 2;
+  auto normal_view =
+      strided_fraction_view<3>(normals.data(), extents, no_ghosts, no_ghosts, normal_strides);
+  normal_view.component_count = 3;
+  normal_view.component_stride = 2;
+
+  for (std::size_t point = 0; point < face_measures.size(); ++point) {
+    face_measures[point] = 0.25 + 0.01 * static_cast<double>(point);
+    std::size_t remaining = point;
+    std::array<std::size_t, 3> coordinate{};
+    for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+      coordinate[axis] = remaining % extents[axis];
+      remaining /= extents[axis];
+    }
+    for (std::size_t component = 0; component < coordinate.size(); ++component) {
+      std::size_t coordinate_offset = component * 2;
+      std::size_t normal_offset = component * 2;
+      for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+        coordinate_offset += coordinate[axis] * static_cast<std::size_t>(coordinate_strides[axis]);
+        normal_offset += coordinate[axis] * static_cast<std::size_t>(normal_strides[axis]);
+      }
+      coordinates[coordinate_offset] = static_cast<double>(10 * component + coordinate[component]);
+      normals[normal_offset] = component == 2 ? 1.0 : 0.0;
+    }
+  }
+
+  auto transformed_view = mutable_view_like(transformed_flux.data(), base_view);
+
+  const std::array<std::int32_t, 1> axes{2};
+  const std::array<std::int32_t, 1> sides{1};
+  const PopsBoundaryRegionV1 region{sizeof(PopsBoundaryRegionV1),
+                                    POPS_BOUNDARY_FACE_V1,
+                                    3,
+                                    1,
+                                    axes.size(),
+                                    axes.data(),
+                                    sides.data(),
+                                    "z-high"};
+  PopsBoundaryFluxApiV1 api{
+      abi_header(sizeof(PopsBoundaryFluxApiV1), POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1),
+      +[](void*, const PopsBoundaryFluxRequestV1* request, PopsBoundaryFluxResultV1* result) {
+        const std::size_t points =
+            pops::component::field_point_count(request->base_outward_normal_flux);
+        std::fill(result->actions, result->actions + points, POPS_COMPONENT_CONTINUE_V1);
+        result->status = ok_status();
+        return 0;
+      }};
+  PopsBoundaryFluxRequestV1 request{sizeof(PopsBoundaryFluxRequestV1),
+                                    "test::ranked-boundary-flux",
+                                    "test::ranked-state",
+                                    base_view,
+                                    coordinate_view,
+                                    normal_view,
+                                    face_measures.data(),
+                                    region,
+                                    0,
+                                    nullptr,
+                                    0,
+                                    nullptr,
+                                    abi::logical_time(),
+                                    abi::host_execution_context()};
+  PopsBoundaryFluxResultV1 result{
+      sizeof(PopsBoundaryFluxResultV1), transformed_view, actions.data(), {}};
+  EXPECT_EQ(pops::component::transform_boundary_flux(api, nullptr, request, result), 0);
+
+  const std::size_t last_point_axis_two_normal_offset =
+      static_cast<std::size_t>(normal_strides[0] + normal_strides[1] + normal_strides[2]) + 4;
+  normals[last_point_axis_two_normal_offset] = -1.0;
+  EXPECT_THROW(pops::component::transform_boundary_flux(api, nullptr, request, result),
+               std::invalid_argument)
+      << "the final z-slice must not escape ranked coordinate/normal validation";
+}
+
+TEST(ComponentInterfaces, RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank) {
+  constexpr std::array<std::size_t, 3> extents{2, 3, 1};
+  constexpr std::array<std::size_t, 3> no_ghosts{};
+  constexpr std::array<std::ptrdiff_t, 3> strides{1, 2, 6};
+  std::array<double, 6> coarse_values{};
+  std::array<double, 6> fine_values{};
+  std::array<double, 6> correction_values{};
+  auto coarse =
+      strided_fraction_view<3>(coarse_values.data(), extents, no_ghosts, no_ghosts, strides);
+  coarse.centering = POPS_FIELD_CENTERING_FACE_V1;
+  coarse.centering_axes = 1u << 2u;
+  coarse.layout_identity = "test::reflux-parent-layout";
+  coarse.patch_identity = "test::reflux-parent-patch";
+  auto fine = strided_fraction_view<3>(fine_values.data(), extents, no_ghosts, no_ghosts, strides);
+  fine.centering = POPS_FIELD_CENTERING_FACE_V1;
+  fine.centering_axes = 1u << 2u;
+  fine.layout_identity = "test::reflux-child-layout";
+  fine.patch_identity = "test::reflux-child-patch";
+  auto correction = mutable_view_like(correction_values.data(), coarse);
+  correction.centering = POPS_FIELD_CENTERING_CELL_V1;
+  correction.centering_axes = 0;
+
+  PopsRefluxFaceV1 face{sizeof(PopsRefluxFaceV1),
+                        "test::reflux-z-high",
+                        2,
+                        POPS_REFLUX_FACE_HIGH_V1,
+                        4.0,
+                        coarse,
+                        fine,
+                        correction};
+  PopsRefluxRequestV1 request{sizeof(PopsRefluxRequestV1),
+                              "test::reflux-transition",
+                              0,
+                              1,
+                              1,
+                              &face,
+                              abi::logical_time(),
+                              abi::noncollective_host_execution_context()};
+  PopsRefluxApiV1 api{abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+                      +[](void*, const PopsRefluxRequestV1*, PopsComponentStatusV1* status) {
+                        *status = ok_status();
+                        return 0;
+                      }};
+  auto status = ok_status();
+  EXPECT_EQ(pops::component::apply_reflux_interface_batch(api, nullptr, request, status), 0);
+
+  face.axis = 3;
+  EXPECT_THROW(pops::component::apply_reflux_interface_batch(api, nullptr, request, status),
+               std::invalid_argument);
+}
+
 TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   const PopsComponentStatusV1 malformed_component_action{sizeof(PopsComponentStatusV1), 0, 17,
                                                          "malformed component action"};

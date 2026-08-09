@@ -139,6 +139,47 @@ inline std::size_t field_point_count(const View& view) {
   return result;
 }
 
+template <class View, class AxisExtent, class AxisOrigin>
+inline std::ptrdiff_t ranked_field_value_offset(const View& view, std::size_t point,
+                                                std::size_t component, AxisExtent axis_extent,
+                                                AxisOrigin axis_origin, const char* where) {
+  if (view.dimension < 1 || view.dimension > 3 || component >= view.component_count ||
+      view.component_stride <= 0)
+    throw std::invalid_argument(std::string(where) + " has an invalid rank or component");
+
+  std::size_t point_count = 1;
+  for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+    const std::size_t extent = axis_extent(axis);
+    const std::size_t origin = axis_origin(axis);
+    if (extent == 0 || origin > view.extents[axis] || extent > view.extents[axis] - origin ||
+        extent > std::numeric_limits<std::size_t>::max() / point_count)
+      throw std::invalid_argument(std::string(where) + " has invalid ranked extents");
+    point_count *= extent;
+  }
+  if (point >= point_count)
+    throw std::invalid_argument(std::string(where) + " point lies outside its ranked domain");
+
+  const std::size_t maximum = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+  std::size_t remaining = point;
+  std::size_t offset = 0;
+  for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+    const std::size_t extent = axis_extent(axis);
+    const std::size_t coordinate = remaining % extent;
+    remaining /= extent;
+    const std::size_t storage_index = coordinate + axis_origin(axis);
+    const auto stride = static_cast<std::size_t>(view.axis_strides[axis]);
+    if (view.axis_strides[axis] <= 0 || storage_index > maximum / stride ||
+        storage_index * stride > maximum - offset)
+      throw std::invalid_argument(std::string(where) + " strides overflow");
+    offset += storage_index * stride;
+  }
+  const auto component_stride = static_cast<std::size_t>(view.component_stride);
+  if (component > maximum / component_stride || component * component_stride > maximum - offset)
+    throw std::invalid_argument(std::string(where) + " component stride overflows");
+  offset += component * component_stride;
+  return static_cast<std::ptrdiff_t>(offset);
+}
+
 template <class View>
 inline std::size_t field_interior_point_count(const View& view) {
   std::size_t result = 1;
@@ -478,26 +519,24 @@ inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state
   for (std::size_t point = 0; point < point_count; ++point)
     if (!std::isfinite(request.face_measures[point]) || request.face_measures[point] <= 0.0)
       throw std::invalid_argument("boundary flux face measure is not positive and finite");
-  for (std::size_t j = 0; j < request.coordinates.extents[1]; ++j)
-    for (std::size_t i = 0; i < request.coordinates.extents[0]; ++i)
-      for (std::size_t component = 0; component < request.coordinates.component_count;
-           ++component) {
-        const auto coordinate_offset =
-            static_cast<std::ptrdiff_t>(i) * request.coordinates.axis_strides[0] +
-            static_cast<std::ptrdiff_t>(j) * request.coordinates.axis_strides[1] +
-            static_cast<std::ptrdiff_t>(component) * request.coordinates.component_stride;
-        const auto normal_offset =
-            static_cast<std::ptrdiff_t>(i) * request.outward_normals.axis_strides[0] +
-            static_cast<std::ptrdiff_t>(j) * request.outward_normals.axis_strides[1] +
-            static_cast<std::ptrdiff_t>(component) * request.outward_normals.component_stride;
-        const double expected = component == static_cast<std::size_t>(request.region.axes[0])
-                                    ? static_cast<double>(request.region.sides[0])
-                                    : 0.0;
-        if (!std::isfinite(coordinates[coordinate_offset]) ||
-            !std::isfinite(normals[normal_offset]) || normals[normal_offset] != expected)
-          throw std::invalid_argument(
-              "boundary flux coordinates or outward normal disagree with the oriented face");
-      }
+  for (std::size_t point = 0; point < point_count; ++point)
+    for (std::size_t component = 0; component < request.coordinates.component_count; ++component) {
+      const auto coordinate_offset = ranked_field_value_offset(
+          request.coordinates, point, component,
+          [&](std::int32_t axis) { return request.coordinates.extents[axis]; },
+          [](std::int32_t) { return std::size_t{0}; }, "boundary flux coordinates");
+      const auto normal_offset = ranked_field_value_offset(
+          request.outward_normals, point, component,
+          [&](std::int32_t axis) { return request.outward_normals.extents[axis]; },
+          [](std::int32_t) { return std::size_t{0}; }, "boundary outward normals");
+      const double expected = component == static_cast<std::size_t>(request.region.axes[0])
+                                  ? static_cast<double>(request.region.sides[0])
+                                  : 0.0;
+      if (!std::isfinite(coordinates[coordinate_offset]) ||
+          !std::isfinite(normals[normal_offset]) || normals[normal_offset] != expected)
+        throw std::invalid_argument(
+            "boundary flux coordinates or outward normal disagree with the oriented face");
+    }
   validate_const_fields(request.dependencies, request.dependency_count,
                         "boundary flux dependencies");
   for (std::size_t index = 0; index < request.dependency_count; ++index) {
@@ -773,10 +812,11 @@ inline int apply_reflux_interface_batch(const PopsRefluxApiV1& api, void* state,
   validate_noncollective_execution_context(request.execution);
 
   std::unordered_set<std::string> identities;
+  std::int32_t batch_dimension = 0;
   for (std::size_t index = 0; index < request.face_count; ++index) {
     const auto& face = request.faces[index];
     if (face.struct_size < sizeof(PopsRefluxFaceV1) || !component_text(face.interface_identity) ||
-        !identities.insert(face.interface_identity).second || face.axis < 0 || face.axis >= 2 ||
+        !identities.insert(face.interface_identity).second || face.axis < 0 ||
         (face.side != POPS_REFLUX_FACE_LOW_V1 && face.side != POPS_REFLUX_FACE_HIGH_V1) ||
         !std::isfinite(face.inverse_coarse_cell_spacing) || face.inverse_coarse_cell_spacing <= 0.0)
       throw std::invalid_argument("reflux face descriptor is incomplete");
@@ -786,6 +826,10 @@ inline int apply_reflux_interface_batch(const PopsRefluxApiV1& api, void* state,
     validate_execution_field(request.execution, face.fine_integrated_flux,
                              "reflux fine integrated flux");
     validate_execution_field(request.execution, face.correction, "reflux correction");
+    const std::int32_t face_dimension = face.coarse_integrated_flux.dimension;
+    if (face.axis >= face_dimension || (batch_dimension != 0 && face_dimension != batch_dimension))
+      throw std::invalid_argument("reflux face axis or batch dimension is inconsistent");
+    batch_dimension = face_dimension;
     const auto centering_axis = 1u << static_cast<unsigned>(face.axis);
     if (face.coarse_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
         face.fine_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
@@ -1281,9 +1325,9 @@ inline void validate_field_view_matches_patch(const PopsFieldViewV1& view,
   validate_field_view_matches_patch(read_only, patch, what);
 }
 
-inline void validate_topology_material_input(const FieldTopologyPatchInputV2& input,
-                                             const PopsFieldPatchMetadataV1& metadata,
-                                             const PopsExecutionContextV1& execution) {
+inline bool validate_topology_material_shape(const FieldTopologyPatchInputV2& input,
+                                             const PopsFieldPatchMetadataV1& metadata) {
+  validate_field_patch_metadata(metadata, metadata.global_patch_index);
   const auto points = field_patch_point_count(metadata);
   const bool has_coverage =
       input.material_coverage.data != nullptr || input.material_coverage.size != 0;
@@ -1297,8 +1341,8 @@ inline void validate_topology_material_input(const FieldTopologyPatchInputV2& in
                   input.material_ids.data == nullptr || input.material_ids.size != points))
     throw std::invalid_argument("field topology material ids do not match patch bounds");
   if (has_fraction) {
-    validate_execution_field(execution, input.cut_cell_volume_fraction,
-                             "field topology cut-cell volume fraction");
+    validate_backend_field_view(input.cut_cell_volume_fraction,
+                                "field topology cut-cell volume fraction");
     validate_field_view_matches_patch(input.cut_cell_volume_fraction, metadata,
                                       "field topology cut-cell volume fraction");
     if (input.cut_cell_volume_fraction.component_count != 1)
@@ -1330,10 +1374,20 @@ inline void validate_topology_material_input(const FieldTopologyPatchInputV2& in
     default:
       throw std::invalid_argument("field topology material representation is unknown");
   }
+  return has_fraction;
+}
+
+inline void validate_topology_material_input(const FieldTopologyPatchInputV2& input,
+                                             const PopsFieldPatchMetadataV1& metadata,
+                                             const PopsExecutionContextV1& execution) {
+  if (validate_topology_material_shape(input, metadata))
+    validate_execution_field(execution, input.cut_cell_volume_fraction,
+                             "field topology cut-cell volume fraction");
 }
 
 inline std::vector<std::uint8_t> expected_topology_material_mask(
     const FieldTopologyPatchInputV2& input, const PopsFieldPatchMetadataV1& metadata) {
+  (void)validate_topology_material_shape(input, metadata);
   const std::size_t points = field_patch_point_count(metadata);
   std::vector<std::uint8_t> expected(points, 0);
   auto require_binary = [](std::uint8_t value, const char* what) {
@@ -1348,18 +1402,10 @@ inline std::vector<std::uint8_t> expected_topology_material_mask(
     return static_cast<const double*>(input.cut_cell_volume_fraction.data);
   };
   auto fraction_at = [&](const double* values, std::size_t point) {
-    const std::size_t nx = field_patch_axis_extent(metadata, 0);
-    const std::size_t i = point % nx;
-    const std::size_t j = point / nx;
     const auto& view = input.cut_cell_volume_fraction;
-    const std::size_t x = i + view.ghost_lower[0];
-    const std::size_t y = j + view.ghost_lower[1];
-    const auto maximum = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
-    const auto sx = static_cast<std::size_t>(view.axis_strides[0]);
-    const auto sy = static_cast<std::size_t>(view.axis_strides[1]);
-    if (x > maximum / sx || y > maximum / sy || x * sx > maximum - y * sy)
-      throw std::invalid_argument("cut-cell topology fraction strides overflow");
-    const std::ptrdiff_t offset = static_cast<std::ptrdiff_t>(x * sx + y * sy);
+    const std::ptrdiff_t offset = ranked_field_value_offset(
+        view, point, 0, [&](std::int32_t axis) { return field_patch_axis_extent(metadata, axis); },
+        [&](std::int32_t axis) { return view.ghost_lower[axis]; }, "cut-cell topology fraction");
     const double value = values[offset];
     if (!std::isfinite(value) || value < 0.0 || value > 1.0)
       throw std::invalid_argument("cut-cell topology fractions must be finite values in [0, 1]");
