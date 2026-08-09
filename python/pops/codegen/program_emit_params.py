@@ -47,7 +47,7 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
     runtime parameters it reads (ADC-510). Mirrors the kernel emitters' expr selection:
       - ``source`` / ``rhs`` named source -> impl._source_terms[name];
       - ``apply`` / ``solve_local_linear`` -> the linear_source matrix (flat);
-      - ``rhs`` named fluxes -> impl._flux_terms[name]['x'/'y'];
+      - ``rhs`` named fluxes -> every exact Cartesian axis in impl._flux_terms[name];
       - ``solve_local_nonlinear`` -> the residual sub-block's source / apply terms.
     Returns a flat Expr list (possibly empty). @p impl is the HyperbolicModel."""
     out = []
@@ -71,7 +71,8 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
                 out += list(src.get(s, []))
         for f in (v.attrs.get("fluxes") or []):
             if f != "default" and f in flux:
-                out += list(flux[f].get("x", [])) + list(flux[f].get("y", []))
+                for axis_terms in flux[f].values():
+                    out += list(axis_terms)
     elif v.op == "solve_local_nonlinear":
         for w in v.attrs.get("residual_block", []):
             if w.op == "source":

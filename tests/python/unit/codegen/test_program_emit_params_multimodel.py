@@ -44,6 +44,19 @@ class _SparseReadImpl(_Impl):
         return [self.unused, self.parameter]
 
 
+class _RankedFluxImpl(_Impl):
+    def __init__(self, owner):
+        super().__init__(owner, "z_speed", 4.0)
+        self._source_terms = {}
+        self._flux_terms = {
+            "transport": {
+                "x": [0.0],
+                "y": [0.0],
+                "z": [self.parameter],
+            }
+        }
+
+
 class _Program:
     def __init__(self, blocks, nodes):
         self._blocks = tuple(blocks)
@@ -69,6 +82,15 @@ def _graph(routes):
         source_modules_by_owner={owner: {"module": owner.name} for owner in models},
         owners_by_block={block_name: owner for block_name, owner, _impl in routes},
         authorities_by_owner={owner: owner for owner in models},
+    )
+
+
+def _flux_node(name, block):
+    return SimpleNamespace(
+        name=name,
+        block=block,
+        op="rhs",
+        attrs={"sources": (), "fluxes": ("transport",)},
     )
 
 
@@ -129,6 +151,18 @@ def test_sparse_parameter_read_materialises_the_complete_stable_abi_vector():
     assert program_param_entries(program, models) == [
         (0, "alpha", 0, 1.0),
         (0, "omega", 1, 3.0),
+    ]
+
+
+def test_ranked_named_flux_collects_runtime_parameters_from_the_third_axis():
+    owner = OwnerPath.model("ranked-flux")
+    impl = _RankedFluxImpl(owner)
+    block = _block("fluid", owner)
+    program = _Program((block,), (_flux_node("transport", block),))
+    models = _graph((("fluid", owner, impl),))
+
+    assert program_param_entries(program, models) == [
+        (0, "z_speed", 0, 4.0),
     ]
 
 
