@@ -1224,17 +1224,33 @@ def test_bounded_dispatcher_reports_exhausted_frame_as_skipped():
     assert session.calls == 2
 
 
-def test_serial_catalyst_rejects_unproved_centering_and_distributed_frame(tmp_path: Path):
+@pytest.mark.parametrize("cell_shape", ((3,), (2, 2), (2, 1, 3)))
+def test_serial_catalyst_rejects_unproved_centering_in_every_spatial_rank(
+    tmp_path: Path,
+    cell_shape: tuple[int, ...],
+):
     pipeline = tmp_path / "pipeline.py"
     pipeline.write_text("# injected Catalyst pipeline\n")
     provider = CatalystPythonProvider(
         catalyst_module=_CatalystModule(), conduit_module=_ConduitModule()
     )
     session = Catalyst(pipeline=str(pipeline), provider=provider).open_session(_serial_context())
-    frame = _frame(centering="node")
+    frame = _frame(centering="node", cell_shape=cell_shape)
     session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     with pytest.raises(NotImplementedError, match="cell-centered"):
         session.execute(frame)
+    session.finalize()
+
+
+def test_serial_catalyst_rejects_distributed_frame(tmp_path: Path):
+    pipeline = tmp_path / "pipeline.py"
+    pipeline.write_text("# injected Catalyst pipeline\n")
+    provider = CatalystPythonProvider(
+        catalyst_module=_CatalystModule(), conduit_module=_ConduitModule()
+    )
+    session = Catalyst(pipeline=str(pipeline), provider=provider).open_session(_serial_context())
+    frame = _frame()
+    session.initialize(ObserverRun(frame.snapshot.provenance.run_identity))
     with pytest.raises(ValueError, match="SERIAL Catalyst received a distributed frame"):
         session.execute(_frame(mode=ParallelMode.PER_RANK))
     session.finalize()

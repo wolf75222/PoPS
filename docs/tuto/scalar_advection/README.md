@@ -566,11 +566,13 @@ PVSM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pvsm' | sort | tail -n 1
 "$POPS_PARAVIEW_ROOT/Contents/MacOS/paraview" --state "$PVSM"
 ```
 
-Ce tutoriel et la capture native PoPS restent 2D et centres cellules. Le writer VTU sous-jacent sait
-aussi representer des snapshots cartesiens exacts 1D, 2D ou 3D. Il place les champs centres cellules
-dans `CellData` et les champs nodaux dans `PointData`/`PPointData` avec `state=None`; cela ne signifie
-pas encore que le solveur natif produit des etats 1D, 3D ou nodaux. Les champs centres faces sont
-refuses explicitement tant qu'une topologie de faces distincte n'est pas fournie. En MPI,
+Ce tutoriel reste 2D et centre cellules, mais ce n'est plus une limite de la capture native PoPS :
+l'artifact compile en 1D, 2D ou 3D et la capture, le snapshot immuable, le writer VTU et le Blueprint
+Catalyst conservent tous ce rang exact. La capture native et Catalyst acceptent actuellement les
+champs centres cellules; un centering natif different est refuse explicitement avant publication.
+Le writer VTU peut aussi placer un snapshot nodal fourni par un autre provider dans
+`PointData`/`PPointData` avec `state=None`. Les champs centres faces sont refuses tant qu'une
+topologie de faces distincte n'est pas fournie. En MPI,
 `ParaView(mode=ParallelMode.PER_RANK)` produit un `.pvtu`; le placement par defaut relaie les morceaux
 bornes par une lane MPI privee vers le rang zero, sans filesystem partage, tandis que
 `placement=SharedDirectory()` demande explicitement un repertoire visible par tous les rangs.
