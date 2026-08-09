@@ -101,14 +101,24 @@ TEST(test_model_registry, validate_transport_and_elliptic_reject_explicitly) {
 }
 
 TEST(test_model_registry, capability_columns_nvars_polar_ok_min_vars) {
-  EXPECT_TRUE(transport_n_vars("exb") == 1 && transport_n_vars("isothermal") == 3 &&
-              transport_n_vars("compressible") == 4)
-      << "transport_n_vars : exb=1, isothermal=3, compressible=4";
+  for (int dimension = 1; dimension <= 3; ++dimension) {
+    EXPECT_EQ(transport_n_vars("exb", dimension), 1);
+    EXPECT_EQ(transport_n_vars("isothermal", dimension), dimension + 1);
+    EXPECT_EQ(transport_n_vars("compressible", dimension), dimension + 2);
+  }
   EXPECT_EQ(transport_n_vars("bogus"), -1) << "transport_n_vars(inconnu) == -1";
+  EXPECT_EQ(transport_n_vars("compressible", 0), -1);
+  EXPECT_EQ(transport_n_vars("compressible", 4), -1);
   // variante compile-time (utilisee par les static_assert de non-derive de model_factory.hpp).
-  static_assert(transport_n_vars_ct("exb") == 1, "ct exb");
-  static_assert(transport_n_vars_ct("compressible") == 4, "ct compressible");
-  static_assert(transport_n_vars_ct("isothermal") == 3, "ct isothermal");
+  static_assert(transport_n_vars_ct("exb", 1) == 1 && transport_n_vars_ct("exb", 3) == 1, "ct exb");
+  static_assert(transport_n_vars_ct("compressible", 1) == 3 &&
+                    transport_n_vars_ct("compressible", 2) == 4 &&
+                    transport_n_vars_ct("compressible", 3) == 5,
+                "ct compressible");
+  static_assert(transport_n_vars_ct("isothermal", 1) == 2 &&
+                    transport_n_vars_ct("isothermal", 2) == 3 &&
+                    transport_n_vars_ct("isothermal", 3) == 4,
+                "ct isothermal");
   static_assert(transport_n_vars_ct("bogus") == -1, "ct inconnu == -1");
   // polar_ok : exactement {exb, isothermal} sont cables en polaire (compressible : phase ulterieure).
   int n_polar = 0;

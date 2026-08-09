@@ -83,7 +83,8 @@ TEST(BrickCatalog, JsonListsEveryIdWithExternalBrickGrammar) {
       contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":[]") &&
       contains(j, "\"limitations\":[") && contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
       contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") && contains(j, "\"route_index\":") &&
-      contains(j, "\"n_vars\":") && contains(j, "\"polar_ok\":true"))
+      contains(j, "\"n_vars_by_dimension\":[") && contains(j, "\"min_vars\":") &&
+      contains(j, "\"polar_ok\":true"))
       << "brick_catalog_json() exposes structured generated component facts";
 }
 
@@ -98,9 +99,10 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
         continue;
       const TransportTag& t = kTransports[i];
       const RouteInfo& r = kTransportRoutes[i];
-      ok = ok && std::string(e.id) == t.name && e.n_vars == t.n_vars && e.polar_ok == t.polar_ok &&
-           std::string(e.summary) == t.summary && e.route_index == r.index &&
-           std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
+      ok = ok && std::string(e.id) == t.name && e.n_vars_by_dimension == t.n_vars_by_dimension &&
+           e.min_vars == -1 && e.polar_ok == t.polar_ok && std::string(e.summary) == t.summary &&
+           e.route_index == r.index && std::string(e.id) == r.token &&
+           std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
            std::string(e.limitations) == r.limitations;
       ++i;
@@ -119,9 +121,10 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
       ASSERT_LT(i, std::size(kSourceRoutes));
       const SourceTag& s = kSources[i];
       const RouteInfo& r = kSourceRoutes[i];
-      ok = ok && std::string(e.id) == s.name && e.n_vars == s.min_vars &&
-           std::string(e.summary) == s.summary && e.route_index == r.index &&
-           std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
+      ok = ok && std::string(e.id) == s.name && e.n_vars_by_dimension == std::array{-1, -1, -1} &&
+           e.min_vars == s.min_vars && std::string(e.summary) == s.summary &&
+           e.route_index == r.index && std::string(e.id) == r.token &&
+           std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
            std::string(e.limitations) == r.limitations;
       ++i;
@@ -138,9 +141,10 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
         continue;
       const EllipticTag& el = kElliptics[i];
       const RouteInfo& r = kEllipticRoutes[i];
-      ok = ok && std::string(e.id) == el.name && e.n_vars == -1 && !e.polar_ok &&
-           std::string(e.summary) == el.summary && e.route_index == r.index &&
-           std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
+      ok = ok && std::string(e.id) == el.name && e.n_vars_by_dimension == std::array{-1, -1, -1} &&
+           e.min_vars == -1 && !e.polar_ok && std::string(e.summary) == el.summary &&
+           e.route_index == r.index && std::string(e.id) == r.token &&
+           std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
            std::string(e.limitations) == r.limitations;
       ++i;

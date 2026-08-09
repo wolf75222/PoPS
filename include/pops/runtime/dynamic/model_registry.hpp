@@ -112,13 +112,17 @@ inline bool is_elliptic(const std::string& tag) {
 /// -1 if unknown. @c _ct is the COMPILE-TIME variant used by the non-drift static_assert in
 /// model_factory.hpp (that TU sees both this table and the brick types). The char compare is inlined
 /// to keep this header self-contained (no shared ct_str_eq -> no ODR coupling with dispatch_tags.hpp).
-inline int transport_n_vars(const std::string& tag) {
+inline int transport_n_vars(const std::string& tag, int dimension = kNativeDimension) {
+  if (dimension < 1 || dimension > 3)
+    return -1;
   for (const TransportTag& t : kTransports)
     if (tag == t.name)
-      return t.n_vars;
+      return t.n_vars_by_dimension[static_cast<std::size_t>(dimension - 1)];
   return -1;
 }
-constexpr int transport_n_vars_ct(const char* name) {
+constexpr int transport_n_vars_ct(const char* name, int dimension = kNativeDimension) {
+  if (dimension < 1 || dimension > 3)
+    return -1;
   for (const TransportTag& t : kTransports) {
     const char* a = name;
     const char* b = t.name;
@@ -127,7 +131,7 @@ constexpr int transport_n_vars_ct(const char* name) {
       ++b;
     }
     if (*a == '\0' && *b == '\0')
-      return t.n_vars;
+      return t.n_vars_by_dimension[static_cast<std::size_t>(dimension - 1)];
   }
   return -1;
 }

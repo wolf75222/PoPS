@@ -6,9 +6,11 @@
 #include <pops/core/state/variables.hpp>
 #include <pops/physics/fluids/euler.hpp>  // Euler: reused as the CompressibleFlux hyperbolic brick
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 /// @file
 /// @brief Generic HYPERBOLIC bricks: Vars (cons U / prim P + conversions + descriptor) +
@@ -207,21 +209,23 @@ struct ExBVelocityPolar {
   }
 };
 
-/// Compressible 2D Euler flux (reuses Euler: gamma, pressure, signed wave speeds).
-/// Compat alias: CompressibleFlux == Euler; the complete hyperbolic brick.
+/// Compressible exact-ranked Euler flux. The build-specialized name is the native `EulerND<Dim>`.
 using CompressibleFlux = Euler;
 
-/// ISOTHERMAL Euler flux (p = cs2 rho), 3 variables (rho, rho u, rho v).
+/// Exact-ranked ISOTHERMAL Euler flux (p = cs2 rho), density plus one momentum per axis.
 ///
-/// 3-variable HYPERBOLIC brick (density + momenta). Satisfies
+/// Exact-ranked HYPERBOLIC brick with Dim+1 variables (density + one momentum per axis). Satisfies
 /// HyperbolicPhysicalModel. Isothermal closure law: p = cs2 * rho (no energy
 /// equation). CONTRACT: purely pointwise functions, device-callable (POPS_HD).
 /// No MultiFab, no allocation, no global access.
 /// Invariant: cs2 > 0 so that the wave speed sqrt(cs2) is real.
-struct IsothermalFlux {
-  static constexpr int n_vars = 3;
-  using State = StateVec<3>;  ///< conservative variables (rho, rho u, rho v)
-  using Prim = StateVec<3>;   ///< primitive variables (rho, u, v)
+template <int Dim>
+struct IsothermalFluxND {
+  static_assert(Dim >= 1 && Dim <= 3, "IsothermalFluxND supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Dim + 1;
+  using State = StateVec<n_vars>;
+  using Prim = StateVec<n_vars>;
   Real cs2 = 1;
   /// Quasi-vacuum density floor (ADC-77). When > 0, the velocity is computed as u = m / max(rho,
   /// vacuum_floor) so it stays bounded where the rollup evacuates the background (rho -> ~0); this
@@ -231,66 +235,68 @@ struct IsothermalFlux {
   /// 1/rho path is taken verbatim (bit-identical, including for rho <= 0).
   Real vacuum_floor = 0;
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.physics.hyperbolic.isothermal-flux", 1};
+    return {"pops.physics.hyperbolic.isothermal-flux-nd", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.scalar(cs2).scalar(vacuum_floor);
+    contract.scalar(std::int32_t{Dim}).scalar(cs2).scalar(vacuum_floor);
   }
+  POPS_HD static constexpr int momentum_component(int axis) { return 1 + axis; }
   /// rho clamped from below by vacuum_floor for the velocity division ONLY. Manual max (device-safe,
   /// no std:: in the kernel path). floor <= 0 -> returns rho unchanged (bit-identical).
   POPS_HD Real velocity_rho(Real rho) const {
     return (vacuum_floor > Real(0) && rho < vacuum_floor) ? vacuum_floor : rho;
   }
-  POPS_HD StateVec<3> flux(const StateVec<3>& u, const auto&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const Real rho = u[0];
-    const Real vn = (dir == 0 ? u[1] : u[2]) / velocity_rho(rho);
+    const int normal = momentum_component(dir);
+    const Real vn = u[normal] / velocity_rho(rho);
     const Real p = cs2 * rho;
-    StateVec<3> f{};
-    f[0] = (dir == 0 ? u[1] : u[2]);
-    f[1] = u[1] * vn + (dir == 0 ? p : Real(0));
-    f[2] = u[2] * vn + (dir == 1 ? p : Real(0));
+    State f{};
+    f[0] = u[normal];
+    for (int axis = 0; axis < Dim; ++axis)
+      f[momentum_component(axis)] = u[momentum_component(axis)] * vn + (axis == dir ? p : Real(0));
     return f;
   }
-  /// Conservative -> primitive: (rho, rho u, rho v) -> (rho, u, v). The velocity uses the quasi-vacuum
+  /// Conservative -> primitive. Each velocity uses the quasi-vacuum
   /// floored density (velocity_rho); rho itself (p[0]) stays the raw conserved value.
-  POPS_HD Prim to_primitive(const StateVec<3>& u) const {
+  POPS_HD Prim to_primitive(const State& u) const {
     Prim p{};
     p[0] = u[0];
     const Real rho_v = velocity_rho(u[0]);
-    p[1] = u[1] / rho_v;
-    p[2] = u[2] / rho_v;
+    for (int axis = 0; axis < Dim; ++axis)
+      p[momentum_component(axis)] = u[momentum_component(axis)] / rho_v;
     return p;
   }
-  /// Primitive -> conservative: (rho, u, v) -> (rho, rho u, rho v).
-  POPS_HD StateVec<3> to_conservative(const Prim& p) const {
-    StateVec<3> u{};
+  /// Primitive -> conservative for every native momentum component.
+  POPS_HD State to_conservative(const Prim& p) const {
+    State u{};
     u[0] = p[0];
-    u[1] = p[0] * p[1];
-    u[2] = p[0] * p[2];
+    for (int axis = 0; axis < Dim; ++axis)
+      u[momentum_component(axis)] = p[0] * p[momentum_component(axis)];
     return u;
   }
-  POPS_HD Real max_wave_speed(const StateVec<3>& u, const auto&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real a = vn < 0 ? -vn : vn;
     return a + std::sqrt(cs2);
   }
-  /// Full spectrum: (v_dir - c, v_dir, v_dir + c), c = sqrt(cs2).
-  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const auto&, int dir) const {
+  /// Full spectrum: two acoustic waves and Dim-1 shear waves, c = sqrt(cs2).
+  POPS_HD State eigenvalues(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real c = std::sqrt(cs2);
-    StateVec<3> e{};
+    State e{};
     e[0] = vn - c;
-    e[1] = vn;
-    e[2] = vn + c;
+    for (int component = 1; component < Dim; ++component)
+      e[component] = vn;
+    e[Dim] = vn + c;
     return e;
   }
   /// Signed speeds (HLL/HLLC): v_dir -+ c_s.
-  POPS_HD void wave_speeds(const StateVec<3>& u, const auto&, int dir, Real& smin,
-                           Real& smax) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& smin, Real& smax) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real c = std::sqrt(cs2);
     smin = vn - c;
     smax = vn + c;
@@ -308,7 +314,7 @@ struct IsothermalFlux {
   /// Contact-wave speed for the isothermal Euler closure.
   POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
                              Real pressure_right, Real lower, Real upper, int dir) const {
-    const int normal = dir == 0 ? 1 : 2;
+    const int normal = momentum_component(dir);
     const Real density_left = left[0];
     const Real density_right = right[0];
     const Real velocity_left = left[normal] / velocity_rho(density_left);
@@ -319,50 +325,56 @@ struct IsothermalFlux {
            (density_left * (lower - velocity_left) - density_right * (upper - velocity_right));
   }
 
-  /// HLLC star state for a barotropic state (rho, rho u, rho v).
+  /// HLLC star state for an exact-ranked barotropic state.
   POPS_HD State hllc_star_state(const State& value, Real, Real speed, Real contact, int dir) const {
-    const int normal = dir == 0 ? 1 : 2;
-    const int tangent = dir == 0 ? 2 : 1;
+    const int normal = momentum_component(dir);
     const Real density = value[0];
     const Real normal_velocity = value[normal] / velocity_rho(density);
     const Real star_density = density * (speed - normal_velocity) / (speed - contact);
     State result{};
     result[0] = star_density;
     result[normal] = star_density * contact;
-    result[tangent] = star_density * (value[tangent] / velocity_rho(density));
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int component = momentum_component(axis);
+      if (axis != dir)
+        result[component] = star_density * (value[component] / velocity_rho(density));
+    }
     return result;
   }
 
   /// Roe action |A_roe| dU for the isothermal Euler closure.
   POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
                                 int dir) const {
-    const int normal = dir == 0 ? 1 : 2;
-    const int tangent = dir == 0 ? 2 : 1;
+    const int normal = momentum_component(dir);
     const Real density_left = left[0];
     const Real density_right = right[0];
     const Real velocity_left = left[normal] / velocity_rho(density_left);
     const Real velocity_right = right[normal] / velocity_rho(density_right);
-    const Real tangent_left = left[tangent] / velocity_rho(density_left);
-    const Real tangent_right = right[tangent] / velocity_rho(density_right);
-
     const Real root_left = std::sqrt(density_left);
     const Real root_right = std::sqrt(density_right);
     const Real denominator = root_left + root_right;
     const Real normal_velocity =
         (root_left * velocity_left + root_right * velocity_right) / denominator;
-    const Real tangent_velocity =
-        (root_left * tangent_left + root_right * tangent_right) / denominator;
+    std::array<Real, Dim> velocity{};
+    std::array<Real, Dim> velocity_left_all{};
+    std::array<Real, Dim> velocity_right_all{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int component = momentum_component(axis);
+      velocity_left_all[axis] = left[component] / velocity_rho(density_left);
+      velocity_right_all[axis] = right[component] / velocity_rho(density_right);
+      velocity[axis] =
+          (root_left * velocity_left_all[axis] + root_right * velocity_right_all[axis]) /
+          denominator;
+    }
     const Real roe_density = root_left * root_right;
     const Real sound_speed = std::sqrt(cs2);
 
     const Real density_jump = density_right - density_left;
     const Real normal_jump = velocity_right - velocity_left;
-    const Real tangent_jump = tangent_right - tangent_left;
     const Real acoustic_minus =
         (cs2 * density_jump - roe_density * sound_speed * normal_jump) / (Real(2) * cs2);
     const Real acoustic_plus =
         (cs2 * density_jump + roe_density * sound_speed * normal_jump) / (Real(2) * cs2);
-    const Real shear = roe_density * tangent_jump;
 
     const HartenEntropyFix entropy_fix{Real(0.1)};
     const Real lambda_minus = entropy_fix(normal_velocity - sound_speed, sound_speed);
@@ -371,25 +383,44 @@ struct IsothermalFlux {
 
     State result{};
     result[0] = lambda_minus * acoustic_minus + lambda_plus * acoustic_plus;
-    result[normal] = lambda_minus * acoustic_minus * (normal_velocity - sound_speed) +
-                     lambda_plus * acoustic_plus * (normal_velocity + sound_speed);
-    result[tangent] = lambda_minus * acoustic_minus * tangent_velocity + lambda_shear * shear +
-                      lambda_plus * acoustic_plus * tangent_velocity;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real directional = axis == dir ? sound_speed : Real(0);
+      const Real shear = axis == dir
+                             ? Real(0)
+                             : roe_density * (velocity_right_all[axis] - velocity_left_all[axis]);
+      result[momentum_component(axis)] =
+          lambda_minus * acoustic_minus * (velocity[axis] - directional) + lambda_shear * shear +
+          lambda_plus * acoustic_plus * (velocity[axis] + directional);
+    }
     return result;
   }
   static VariableSet conservative_vars() {
-    return {VariableKind::Conservative,
-            {"rho", "rho_u", "rho_v"},
-            3,
-            {VariableRole::Density, VariableRole::MomentumX, VariableRole::MomentumY}};
+    constexpr std::array momentum_names{"rho_u", "rho_v", "rho_w"};
+    constexpr std::array momentum_roles{VariableRole::MomentumX, VariableRole::MomentumY,
+                                        VariableRole::MomentumZ};
+    std::vector<std::string> names{"rho"};
+    std::vector<VariableRole> roles{VariableRole::Density};
+    for (int axis = 0; axis < Dim; ++axis) {
+      names.emplace_back(momentum_names[axis]);
+      roles.push_back(momentum_roles[axis]);
+    }
+    return {VariableKind::Conservative, std::move(names), n_vars, std::move(roles)};
   }
   static VariableSet primitive_vars() {
-    return {VariableKind::Primitive,
-            {"rho", "u", "v"},
-            3,
-            {VariableRole::Density, VariableRole::VelocityX, VariableRole::VelocityY}};
+    constexpr std::array velocity_names{"u", "v", "w"};
+    constexpr std::array velocity_roles{VariableRole::VelocityX, VariableRole::VelocityY,
+                                        VariableRole::VelocityZ};
+    std::vector<std::string> names{"rho"};
+    std::vector<VariableRole> roles{VariableRole::Density};
+    for (int axis = 0; axis < Dim; ++axis) {
+      names.emplace_back(velocity_names[axis]);
+      roles.push_back(velocity_roles[axis]);
+    }
+    return {VariableKind::Primitive, std::move(names), n_vars, std::move(roles)};
   }
 };
+
+using IsothermalFlux = IsothermalFluxND<kNativeDimension>;
 
 /// ISOTHERMAL Euler flux in POLAR geometry (ring r, theta), 3 variables (rho, rho v_r,
 /// rho v_theta) -- "polar fluid grid" effort, Path A step 1. This is a brick SEPARATE
@@ -421,7 +452,7 @@ struct IsothermalFlux {
 ///
 /// CONTRACT: pointwise PHYSICAL brick, device-callable (POPS_HD), no box, no allocation.
 /// polar_geom_source takes ONLY the state and r (no aux): it is pure metric.
-struct IsothermalFluxPolar : IsothermalFlux {
+struct IsothermalFluxPolar : IsothermalFluxND<2> {
   static constexpr int dimension = 2;
   static constexpr bool planar_polar_capability = true;
   using Aux = AuxState<2>;

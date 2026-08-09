@@ -1,5 +1,5 @@
 {
-  "catalog_schema_version": 1,
+  "catalog_schema_version": 2,
   "component_manifest_schema_version": 2,
   "route_registry_version": 4,
   "capability_vocabulary_version": 4,
@@ -900,7 +900,11 @@
           ],
           "aliases": [],
           "metadata": {
-            "n_vars": 1,
+            "n_vars_by_dimension": [
+              1,
+              1,
+              1
+            ],
             "polar_ok": true,
             "parameters": [
               "B0"
@@ -919,12 +923,16 @@
           ],
           "aliases": [],
           "metadata": {
-            "n_vars": 4,
+            "n_vars_by_dimension": [
+              3,
+              4,
+              5
+            ],
             "polar_ok": false,
             "parameters": [
               "gamma"
             ],
-            "summary": "compressible Euler, 4 var (rho, rho u, rho v, E)"
+            "summary": "exact-ranked compressible Euler (density, one momentum per axis, energy)"
           }
         },
         {
@@ -936,13 +944,17 @@
           "limitations": [],
           "aliases": [],
           "metadata": {
-            "n_vars": 3,
+            "n_vars_by_dimension": [
+              2,
+              3,
+              4
+            ],
             "polar_ok": true,
             "parameters": [
               "cs2",
               "vacuum_floor"
             ],
-            "summary": "isothermal Euler, 3 var (rho, rho u, rho v)"
+            "summary": "exact-ranked isothermal Euler (density and one momentum per axis)"
           }
         }
       ]

@@ -18,14 +18,13 @@
 
 #include <cmath>
 
-using pops::Aux;
 using pops::Real;
 
 namespace {
 
-struct PlanarEuler : pops::Euler {
-  static constexpr int dimension = 2;
+using Aux2 = pops::AuxState<2>;
 
+struct PlanarEuler : pops::EulerND<2> {
   explicit PlanarEuler(Real gamma_value) { gamma = gamma_value; }
 };
 
@@ -33,7 +32,7 @@ struct PlanarEuler : pops::Euler {
 // HookedEuler : pops::Euler + capabilities HLLC/Roe reproduisant EXACTEMENT les formules du chemin
 // canonique (Toro 10.37 pour le contact, moyenne de Roe + Harten pour la dissipation).
 // ---------------------------------------------------------------------------------------------
-struct HookedEuler : pops::Euler {
+struct HookedEuler : pops::EulerND<2> {
   POPS_HD Real contact_speed(const State& UL, const State& UR, Real pL, Real pR, Real sL, Real sR,
                              int dir) const {
     const int in = (dir == 0) ? 1 : 2;
@@ -96,15 +95,16 @@ struct HookedEuler : pops::Euler {
 // this permutation: the provider alone maps its declared representation.
 struct PermutedEuler {
   using State = pops::StateVec<4>;
-  using Aux = pops::Aux;
+  using Aux = Aux2;
+  static constexpr int dimension = 2;
   static constexpr int n_vars = 4;
 
-  pops::Euler canonical{1.4};
+  pops::EulerND<2> canonical{1.4};
 
-  POPS_HD static pops::Euler::State unpack(const State& value) {
-    return pops::Euler::State{value[2], value[3], value[1], value[0]};
+  POPS_HD static pops::EulerND<2>::State unpack(const State& value) {
+    return pops::EulerND<2>::State{value[2], value[3], value[1], value[0]};
   }
-  POPS_HD static State pack(const pops::Euler::State& value) {
+  POPS_HD static State pack(const pops::EulerND<2>::State& value) {
     return State{value[3], value[2], value[0], value[1]};
   }
   POPS_HD Real pressure(const State& value) const { return canonical.pressure(unpack(value)); }
@@ -139,7 +139,8 @@ struct PermutedEuler {
 // ---------------------------------------------------------------------------------------------
 struct IsoHLLC {
   using State = pops::StateVec<5>;
-  using Aux = pops::Aux;
+  using Aux = Aux2;
+  static constexpr int dimension = 2;
   static constexpr int n_vars = 5;
   Real cs2 = 0.5;
 
@@ -291,8 +292,9 @@ typename Model::State face_density(
     const typename Model::State& right,
     const pops::AuxState<pops::physical_model_dimension<Model>>& right_providers, int axis) {
   pops::FluxProviderValues<Model> left_values{}, right_values{};
-  left_values[pops::AuxComponentLayout<pops::kNativeDimension>::phi] = left_providers.phi;
-  right_values[pops::AuxComponentLayout<pops::kNativeDimension>::phi] = right_providers.phi;
+  constexpr int dimension = pops::physical_model_dimension<Model>;
+  left_values[pops::AuxComponentLayout<dimension>::phi] = left_providers.phi;
+  right_values[pops::AuxComponentLayout<dimension>::phi] = right_providers.phi;
   return pops::evaluate_numerical_flux(
              policy, model, left, pops::bind_flux_providers<Model>(left_values), right,
              pops::bind_flux_providers<Model>(right_values), pops::FaceContext::axis_aligned(axis))
@@ -317,6 +319,18 @@ TEST(test_riemann_capabilities, compile_time_detection) {
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
   static_assert(pops::HasHLLCStructure<pops::IsothermalFlux>);
   static_assert(pops::HasRoeDissipation<pops::IsothermalFlux>);
+  static_assert(pops::HasHLLCStructure<pops::EulerND<1>>);
+  static_assert(pops::HasHLLCStructure<pops::EulerND<2>>);
+  static_assert(pops::HasHLLCStructure<pops::EulerND<3>>);
+  static_assert(pops::HasRoeDissipation<pops::EulerND<1>>);
+  static_assert(pops::HasRoeDissipation<pops::EulerND<2>>);
+  static_assert(pops::HasRoeDissipation<pops::EulerND<3>>);
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFluxND<1>>);
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFluxND<2>>);
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFluxND<3>>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFluxND<1>>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFluxND<2>>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFluxND<3>>);
   static_assert(pops::HasHLLCStructure<pops::IsothermalFluxPolar>);
   static_assert(pops::HasRoeDissipation<pops::IsothermalFluxPolar>);
   static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<1>>);
@@ -325,13 +339,13 @@ TEST(test_riemann_capabilities, compile_time_detection) {
 }
 
 TEST(test_riemann_capabilities, euler_preserves_provider_oracle_through_generic_pipeline) {
-  pops::Euler e;
+  pops::EulerND<2> e;
   e.gamma = 1.4;
   HookedEuler oracle;
   oracle.gamma = 1.4;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
-  Aux a{};
+  Aux2 a{};
 
   // The independent provider body is the accepted pre-cutover oracle. Both values travel through
   // the same layout-blind numerical policy; only their constitutive capability differs.
@@ -352,11 +366,11 @@ TEST(test_riemann_capabilities, euler_preserves_provider_oracle_through_generic_
 }
 
 TEST(test_riemann_capabilities, state_layout_permutation_is_provider_owned) {
-  pops::Euler canonical{1.4};
+  pops::EulerND<2> canonical{1.4};
   PermutedEuler permuted;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
-  Aux aux{};
+  Aux2 aux{};
   const State4 left = cons(1.2, 0.3, -0.1, 1.5, 1.4);
   const State4 right = cons(0.7, -0.2, 0.4, 0.9, 1.4);
   const PermutedEuler::State permuted_left = PermutedEuler::pack(left);
@@ -406,7 +420,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   // (3a) consistance : F*(U, U) == flux(U).
   IsoHLLC iso;
   pops::HLLCFlux hllc;
-  Aux a{};
+  Aux2 a{};
   StateIso U{};
   U[0] = 1.3;
   U[1] = 0.4;
@@ -419,36 +433,71 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   }
 }
 
-TEST(test_riemann_capabilities, native_isothermal_provider_serves_hllc_and_roe) {
-  pops::IsothermalFlux model;
-  model.cs2 = Real(0.5);
-  const Aux providers{};
-  const pops::IsothermalFlux::State value{Real(1.3), Real(0.4), Real(-0.7)};
+TEST(test_riemann_capabilities, exact_rank_euler_and_isothermal_serve_hllc_and_roe) {
+  const auto check = []<int Dimension>() {
+    pops::EulerND<Dimension> euler;
+    euler.gamma = Real(1.4);
+    typename pops::EulerND<Dimension>::Prim euler_primitive{};
+    euler_primitive[0] = Real(1.3);
+    for (int axis = 0; axis < Dimension; ++axis)
+      euler_primitive[pops::EulerND<Dimension>::momentum_component(axis)] =
+          Real(0.2) * Real(axis + 1);
+    euler_primitive[pops::EulerND<Dimension>::energy_component] = Real(0.9);
+    const auto euler_value = euler.to_conservative(euler_primitive);
 
-  for (int axis = 0; axis < 2; ++axis) {
-    const auto physical = model.flux(value, providers, axis);
-    const auto hllc =
-        face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
-    const auto roe = face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
-    EXPECT_LE(maxdiff(hllc, physical), 1e-13);
-    EXPECT_LE(maxdiff(roe, physical), 1e-13);
-  }
+    pops::IsothermalFluxND<Dimension> isothermal;
+    isothermal.cs2 = Real(0.5);
+    typename pops::IsothermalFluxND<Dimension>::Prim isothermal_primitive{};
+    isothermal_primitive[0] = Real(1.3);
+    for (int axis = 0; axis < Dimension; ++axis)
+      isothermal_primitive[pops::IsothermalFluxND<Dimension>::momentum_component(axis)] =
+          Real(-0.15) * Real(axis + 1);
+    const auto isothermal_value = isothermal.to_conservative(isothermal_primitive);
+    const pops::AuxState<Dimension> providers{};
+
+    const auto expect_consistency = [&]<class Model>(const Model& model,
+                                                     const typename Model::State& value) {
+      for (int axis = 0; axis < Dimension; ++axis) {
+        const auto physical = model.flux(value, providers, axis);
+        const auto hllc =
+            face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
+        const auto roe =
+            face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
+        EXPECT_LE(maxdiff(hllc, physical), 1e-13);
+        EXPECT_LE(maxdiff(roe, physical), 1e-13);
+      }
+    };
+    expect_consistency(euler, euler_value);
+    expect_consistency(isothermal, isothermal_value);
+  };
+
+  check.template operator()<1>();
+  check.template operator()<2>();
+  check.template operator()<3>();
 }
 
-TEST(test_riemann_capabilities, native_isothermal_contact_is_not_replaced_by_hll) {
-  pops::IsothermalFlux model;
-  model.cs2 = Real(0.5);
-  const Aux providers{};
-  pops::IsothermalFlux::State left{Real(1), Real(0), Real(2)};
-  pops::IsothermalFlux::State right{Real(1), Real(0), Real(-3)};
+TEST(test_riemann_capabilities, exact_rank_isothermal_contact_is_not_replaced_by_hll) {
+  const auto check = []<int Dimension>() {
+    static_assert(Dimension >= 2);
+    pops::IsothermalFluxND<Dimension> model;
+    model.cs2 = Real(0.5);
+    const pops::AuxState<Dimension> providers{};
+    typename pops::IsothermalFluxND<Dimension>::State left{}, right{};
+    left[0] = right[0] = Real(1);
+    left[1] = right[1] = Real(0);
+    left[2] = Real(2);
+    right[2] = Real(-3);
 
-  const auto hllc = face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
-  const auto roe = face_density(pops::RoeFlux{}, model, left, providers, right, providers, 0);
-  const auto hll = face_density(pops::HLLFlux{}, model, left, providers, right, providers, 0);
-  EXPECT_LE(std::fabs(hllc[2]), 1e-14);
-  EXPECT_LE(std::fabs(roe[2]), 1e-14);
-  EXPECT_GE(std::fabs(hll[2]), 1e-2)
-      << "a hidden HLL fallback would make the contact-resolving providers diffusive";
+    const auto hllc = face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
+    const auto roe = face_density(pops::RoeFlux{}, model, left, providers, right, providers, 0);
+    const auto hll = face_density(pops::HLLFlux{}, model, left, providers, right, providers, 0);
+    EXPECT_LE(std::fabs(hllc[2]), 1e-14);
+    EXPECT_LE(std::fabs(roe[2]), 1e-14);
+    EXPECT_GE(std::fabs(hll[2]), 1e-2)
+        << "a hidden HLL fallback would make the contact-resolving providers diffusive";
+  };
+  check.template operator()<2>();
+  check.template operator()<3>();
 }
 
 TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent) {
@@ -506,7 +555,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear)
   IsoHLLC iso;
   pops::HLLCFlux hllc;
   pops::HLLFlux hll;
-  Aux a{};
+  Aux2 a{};
   StateIso UL{}, UR{};
   UL[0] = 1.0;
   UL[1] = 0.0;
