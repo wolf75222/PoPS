@@ -185,6 +185,44 @@ std::string exact_patch_contract(const std::vector<pops::AmrPatch<Dim>>& patches
   return std::move(contract).release();
 }
 
+template <int Dim>
+bool parent_level_mismatch_is_collectively_refused() {
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 3;
+  config.transition_ratios.resize(2);
+  config.transition_buffers.resize(2);
+  config.transition_lookaheads.resize(2);
+  config.distribute_coarse = true;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.coarse_max_grid[axis] = 4;
+    for (std::size_t transition = 0; transition < 2; ++transition) {
+      config.transition_ratios[transition][axis] = 2;
+      config.transition_buffers[transition][axis] = 1;
+      config.transition_lookaheads[transition][axis] = 1;
+    }
+  }
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  system.set_conservative_state("tracer", gaussian(config.shape));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+  if (system.n_levels() != 3)
+    throw std::runtime_error("parent-level consensus fixture did not build three AMR levels");
+  const std::vector<pops::AmrPatch<Dim>> before = system.patch_boxes();
+  const double mass_before = system.mass("tracer");
+  bool refused = false;
+  try {
+    (void)system.execute_prepared_tagging(pops::my_rank() == 0 ? 0 : 1);
+  } catch (const std::invalid_argument& error) {
+    refused =
+        std::string_view(error.what()).find("differs between MPI ranks") != std::string_view::npos;
+  }
+  if (system.patch_boxes() != before || system.mass("tracer") != mass_before)
+    throw std::runtime_error("parent-level consensus refusal mutated accepted AMR state");
+  return refused;
+}
+
 double checksum(const std::vector<double>& values) {
   double result = 0.0;
   for (const double value : values)
@@ -202,6 +240,8 @@ int run_collective_parity(int argc, char** argv) {
       const RunResult distributed = run_mode<pops::kNativeDimension>(true);
       const RefinedRunResult<pops::kNativeDimension> refined =
           run_refined_distributed_mode<pops::kNativeDimension>();
+      const bool mismatched_parent_refused =
+          parent_level_mismatch_is_collectively_refused<pops::kNativeDimension>();
       const double replicated_checksum = checksum(replicated.state);
       const double distributed_checksum = checksum(distributed.state);
       const auto spread = [](double value) {
@@ -221,6 +261,8 @@ int run_collective_parity(int argc, char** argv) {
       EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
           {{std::string_view("prepared-tagging-layout"), std::string_view(patch_contract)}}));
       EXPECT_EQ(spread(refined.mass), 0.0);
+      EXPECT_TRUE(mismatched_parent_refused);
+      EXPECT_EQ(spread(mismatched_parent_refused ? 1.0 : 0.0), 0.0);
     } catch (const std::exception& error) {
       std::fprintf(stderr, "rank %d exact package parity failed: %s\n", pops::my_rank(),
                    error.what());

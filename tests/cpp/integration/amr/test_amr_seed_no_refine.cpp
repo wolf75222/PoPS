@@ -3,12 +3,17 @@
 #include "amr_tagging_test_authority.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/amr/hierarchy/amr_hierarchy.hpp>
+#include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/amr_patch.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -116,6 +121,33 @@ std::vector<double> corner_bump(const pops::Extent<Dim>& shape, bool upper) {
 }
 
 template <int Dim>
+std::vector<double> affine_state(const pops::Extent<Dim>& shape) {
+  std::vector<double> values(cell_count(shape), 0.0);
+  for (std::size_t linear = 0; linear < values.size(); ++linear) {
+    std::size_t remainder = linear;
+    double value = 10.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      value += static_cast<double>(remainder % width);
+      remainder /= width;
+    }
+    values[linear] = value;
+  }
+  return values;
+}
+
+template <int Dim>
+std::size_t flatten(const pops::Index<Dim>& index, const pops::Extent<Dim>& shape) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    result += static_cast<std::size_t>(index[axis]) * stride;
+    stride *= static_cast<std::size_t>(shape[axis]);
+  }
+  return result;
+}
+
+template <int Dim>
 struct PhysicalPatch {
   std::array<double, Dim> lower{};
   std::array<double, Dim> extent{};
@@ -164,6 +196,30 @@ TEST(test_amr_seed_no_refine, CoarseOnlyWithoutPreparedTaggingAuthority) {
   EXPECT_EQ(system.n_levels(), 1);
   EXPECT_EQ(system.n_patches(), 1);
   EXPECT_TRUE(system.patch_boxes().empty());
+}
+
+TEST(test_amr_seed_no_refine, TransitionNeighborhoodOverflowFailsBeforeHierarchyAllocation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.transition_buffers[0][0] = std::numeric_limits<std::int64_t>::max();
+  config.transition_lookaheads[0][0] = std::numeric_limits<std::int64_t>::max();
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
+}
+
+TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterialization) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  auto system = make_system(config, gaussian(config.shape));
+  EXPECT_THROW(system.set_bootstrap_tagging(
+                   {"field"}, {"field/potential"}, {""}, {"phi"}, {0}, {POPS_TAGGING_ABOVE_V1},
+                   {0.0}, {-1}, {}, {POPS_TAGGING_ABOVE_V1}, {0}, {}, {}, 0, "hold", "error",
+                   "test::tagging-clock", "test::automatic-field-tagging@1"),
+               std::invalid_argument);
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
+  EXPECT_EQ(system.n_levels(), 2)
+      << "a rejected automatic field graph must not consume the unique tagging authority";
 }
 
 TEST(test_amr_seed_no_refine, PreparedTaggingSeedsExactGeometryWithoutReadMutation) {
@@ -225,8 +281,8 @@ TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDu
   const std::vector<pops::AmrPatch<Dim>> moved = system.patch_boxes();
   ASSERT_FALSE(moved.empty());
   EXPECT_NE(moved, initial) << "the due accepted step must publish the newly tagged topology";
-  const bool contains_upper_patch = std::any_of(
-      moved.begin(), moved.end(), [&](const pops::AmrPatch<Dim>& patch) {
+  const bool contains_upper_patch =
+      std::any_of(moved.begin(), moved.end(), [&](const pops::AmrPatch<Dim>& patch) {
         if (patch.level == 0)
           return false;
         for (int axis = 0; axis < Dim; ++axis)
@@ -236,4 +292,136 @@ TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDu
       });
   EXPECT_TRUE(contains_upper_patch)
       << "the due accepted step must materialize refinement around the new upper-corner tags";
+}
+
+TEST(test_amr_seed_no_refine, RegridRetainsEvolvedFineCellsAndLinearlyProlongsNewCells) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 16;
+  config.regrid_every = 1;
+  auto system = make_system(config, affine_state(config.shape));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+
+  ASSERT_EQ(system.n_levels(), 2);
+  const pops::Extent<Dim> fine_shape = [&] {
+    pops::Extent<Dim> shape{};
+    for (int axis = 0; axis < Dim; ++axis)
+      shape[axis] = config.shape[axis] * 2;
+    return shape;
+  }();
+  const std::vector<double> prolonged = system.block_level_state_global("tracer", 1);
+  pops::Index<Dim> parent{};
+  pops::Index<Dim> first_child{};
+  pops::Index<Dim> second_child{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    parent[axis] = 4;
+    first_child[axis] = 8;
+    second_child[axis] = 8;
+  }
+  second_child[0] = 9;
+  EXPECT_NE(prolonged[flatten(first_child, fine_shape)],
+            prolonged[flatten(second_child, fine_shape)])
+      << "new fine cells must use prepared linear prolongation, not constant injection";
+
+  double child_average = 0.0;
+  const std::size_t child_count = std::size_t{1} << Dim;
+  for (std::size_t mask = 0; mask < child_count; ++mask) {
+    pops::Index<Dim> child{};
+    for (int axis = 0; axis < Dim; ++axis)
+      child[axis] = 2 * parent[axis] + static_cast<int>((mask >> axis) & 1u);
+    child_average += prolonged[flatten(child, fine_shape)];
+  }
+  child_average /= static_cast<double>(child_count);
+  EXPECT_NEAR(child_average, affine_state(config.shape)[flatten(parent, config.shape)], 1.0e-12)
+      << "prepared prolongation must preserve the parent average";
+
+  std::vector<double> evolved(prolonged.size(), 9.0);
+  system.set_block_level_state("tracer", 1, evolved);
+  const std::vector<double> accepted_before = system.block_level_state_global("tracer", 1);
+  ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
+  const std::vector<double> accepted_after = system.block_level_state_global("tracer", 1);
+  ASSERT_EQ(accepted_after.size(), accepted_before.size());
+  std::size_t retained = 0;
+  for (std::size_t cell = 0; cell < accepted_before.size(); ++cell)
+    if (accepted_before[cell] == 9.0) {
+      EXPECT_DOUBLE_EQ(accepted_after[cell], 9.0);
+      ++retained;
+    }
+  EXPECT_GT(retained, 0u);
+
+  auto injected = make_system(config, affine_state(config.shape));
+  pops::Extent<Dim> no_ghost{};
+  pops::Extent<Dim> ratio{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio[axis] = 2;
+  injected.register_bootstrap_transfer_route("test::explicit-injection-route", {"state/tracer"},
+                                             "test::explicit-injection-provider@1", "cell", "cell",
+                                             "conservative", "dense", "prolongation",
+                                             "conservative_injection", 1, no_ghost, ratio);
+  pops::test::install_prepared_threshold_union(injected, {{"tracer", "u", 0.0}});
+  ASSERT_EQ(injected.n_levels(), 2);
+  const std::vector<double> injected_fine = injected.block_level_state_global("tracer", 1);
+  EXPECT_DOUBLE_EQ(injected_fine[flatten(first_child, fine_shape)],
+                   injected_fine[flatten(second_child, fine_shape)])
+      << "constant injection must run only when its exact route is selected explicitly";
+}
+
+TEST(test_amr_seed_no_refine,
+     OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 3;
+  config.transition_ratios.resize(2);
+  config.transition_buffers.resize(2);
+  config.transition_lookaheads.resize(2);
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    for (std::size_t transition = 0; transition < 2; ++transition) {
+      config.transition_ratios[transition][axis] = 2;
+      config.transition_buffers[transition][axis] = 1;
+      config.transition_lookaheads[transition][axis] = 1;
+    }
+  }
+  auto system = make_system(config, affine_state(config.shape));
+  constexpr int minimum_cycles = 3;
+  const std::string provider = "test::persistent-hysteresis@1";
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}}, provider,
+                                               "test::tagging-clock", minimum_cycles);
+
+  ASSERT_EQ(system.n_levels(), 3);
+  const std::vector<std::uint8_t> accepted = system.program_accepted_state();
+  const auto decoded =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(accepted);
+  std::vector<pops::Box<Dim>> parent_domains;
+  parent_domains.push_back(config.index_domain());
+  std::array<int, Dim> first_ratio{};
+  for (int axis = 0; axis < Dim; ++axis)
+    first_ratio[static_cast<std::size_t>(axis)] =
+        static_cast<int>(config.transition_ratios[0][axis]);
+  parent_domains.push_back(pops::amr::hierarchy::refine_box(
+      parent_domains.back(), pops::amr::RefinementRatio<Dim>(first_ratio)));
+  const auto hysteresis = pops::runtime::amr::PersistentTaggingState<Dim>::decode(
+      decoded.tagging_hysteresis_state, minimum_cycles, provider, parent_domains);
+  EXPECT_EQ(hysteresis.cycle(), 1u)
+      << "all parent levels in one hierarchy sweep must share one hysteresis cycle";
+  EXPECT_GT(hysteresis.active_entry_count(), 0u);
+
+  auto restored = make_system(config, affine_state(config.shape));
+  pops::test::install_prepared_threshold_union(restored, {{"tracer", "u", 0.0}}, provider,
+                                               "test::tagging-clock", minimum_cycles);
+  ASSERT_EQ(restored.n_levels(), 3);
+  restored.restore_checkpoint_accepted_state(accepted);
+  EXPECT_EQ(restored.program_accepted_state(), accepted);
+
+  auto corrupted = decoded;
+  ASSERT_FALSE(corrupted.tagging_hysteresis_state.empty());
+  corrupted.tagging_hysteresis_state.back() ^= std::uint8_t{0xff};
+  const std::vector<std::uint8_t> invalid =
+      pops::runtime::program::serialize_amr_program_accepted_state(corrupted);
+  const auto before = restored.program_accepted_state();
+  const std::uint64_t revision_before = restored.program_accepted_state_revision();
+  EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid), std::invalid_argument);
+  EXPECT_EQ(restored.program_accepted_state(), before);
+  EXPECT_EQ(restored.program_accepted_state_revision(), revision_before);
 }

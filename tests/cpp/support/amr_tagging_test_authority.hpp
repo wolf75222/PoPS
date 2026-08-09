@@ -44,7 +44,7 @@ template <int Dim>
 inline void install_prepared_threshold_union(
     AmrSystem<Dim>& system, std::initializer_list<PreparedNamedThresholdTag> criteria,
     std::string provider_identity = "test::prepared-named-threshold-union@1",
-    std::string clock_identity = "test::prepared-tagging-clock") {
+    std::string clock_identity = "test::prepared-tagging-clock", int min_cycles = 0) {
   if (criteria.size() == 0)
     throw std::invalid_argument("test named threshold union requires a refine root");
   std::vector<std::string> subject_kinds, subject_identities, blocks, variables;
@@ -88,7 +88,7 @@ inline void install_prepared_threshold_union(
   }
   system.set_bootstrap_tagging(subject_kinds, subject_identities, blocks, variables,
                                field_component_indices, leaf_ops, thresholds, stencil_indices, {},
-                               refine_ops, refine_args, {}, {}, 0, "hold", "error",
+                               refine_ops, refine_args, {}, {}, min_cycles, "hold", "error",
                                std::move(clock_identity), std::move(provider_identity));
 }
 
