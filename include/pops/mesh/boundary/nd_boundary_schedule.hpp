@@ -48,11 +48,7 @@ struct BoundaryRegion {
       throw std::logic_error("pops::BoundaryRegion empty value has no boundary kind");
     if (count == 1)
       return BoundaryRegionKind::face;
-    if constexpr (Dim == 3) {
-      if (count == 2)
-        return BoundaryRegionKind::edge;
-    }
-    return BoundaryRegionKind::corner;
+    return count == Dim ? BoundaryRegionKind::corner : BoundaryRegionKind::edge;
   }
 
   /// Base-three identity, axis 0 fastest: interior=0, lower=1, upper=2.
