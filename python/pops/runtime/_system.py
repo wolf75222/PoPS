@@ -17,7 +17,11 @@ from pops._bootstrap import SystemConfig, _System  # noqa: F401  (SystemConfig r
 from pops._bootstrap import AmrSystemConfig  # noqa: F401  (re-exported via this module)
 from pops.runtime import _threading
 from pops.runtime._lifecycle import (
-    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error, _LifecycleMixin)
+    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL,
+    RETIRED_NATIVE_PASSTHROUGH as _RETIRED_NATIVE_PASSTHROUGH,
+    freeze_error as _freeze_error,
+    _LifecycleMixin,
+)
 from pops.runtime._amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
 from pops.runtime._system_aux_state import _SystemAuxState
 from pops.runtime._system_diagnostics import _SystemDiagnostics
@@ -76,11 +80,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
     Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
     ``pops.compile`` and wired by ``pops.bind`` -> ``pops.run(sim, ...)``; the per-step native methods
-    (and ``add_block`` / ``add_equation`` / ``set_poisson``)
+    (and ``add_equation`` / ``set_poisson``)
     are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
     door.
 
-    ``add_block`` takes a private native ``ModelSpec`` plus private spatial and time adapters.
+    ``add_equation`` dispatches a private native ``ModelSpec`` or a compiled production package.
     Public authoring uses ``pops.Model`` through ``pops.Case``; discretization and reusable
     integration Programs live in ``pops.numerics`` and ``pops.lib.time`` respectively.
     Everything else (set_poisson, set_density, step, step_cfl, diagnostics,
@@ -89,12 +93,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     native fallback. Adaptive multirate subcycling has no production facade until it is expressed
     by a typed ``ProgramGraph`` composition.
 
-    GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private
-    ``SystemConfig`` before this engine is constructed. ``mesh=`` is an advanced geometry seam;
-    currently :class:`pops.mesh.PolarMesh` implements its private config-lowering protocol. The
-    polar route is wired in ``System.step`` (polar ExB transport + polar Poisson + aux in the local
-    ``(e_r, e_theta)`` basis). Limits: scalar ExB transport, single-rank, no cartesian/polar
-    coupling."""
+    GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private exact-
+    ranked ``SystemConfig`` before this engine is constructed. The historical ``mesh=`` bypass and
+    its 2-D polar runtime were retired; non-Cartesian providers are refused during resolution rather
+    than entering a second native engine."""
 
     _execution_context: Any
 
@@ -103,26 +105,20 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             config = SystemConfig()
             for k, v in cfg_kw.items():
                 setattr(config, k, v)
-        # The optional advanced geometry descriptor lowers through one deliberately private small
-        # protocol. Ordinary CartesianGrid authoring has already become SystemConfig upstream.
         if mesh is not None:
-            lower = getattr(mesh, "_apply_system_config", None)
-            if not callable(lower):
-                raise TypeError(
-                    "System: advanced mesh must implement the private native-config lowering "
-                    "protocol (currently pops.mesh.PolarMesh); CartesianGrid belongs on a "
-                    "Uniform/AMR layout (got %r)" % type(mesh).__name__)
-            lower(config)
+            raise NotImplementedError(
+                "System(mesh=...) was retired with the legacy 2-D polar runtime; native "
+                "System<Dim> accepts only the exact Cartesian layout resolved before bind "
+                "(got %s)" % type(mesh).__name__
+            )
         # Mark the Kokkos init as imminent: _System(config) allocates Fabs -> Kokkos initializes
         # (lazy) here. Runtime thread environment must therefore be fixed before this allocation.
         _threading._first_system_built = True
-        self._s = _System(config)  # geometry == 'polar' builds a global ring (Phase 2b, cf. PolarMesh)
-        # Table of NAMED aux fields per block (ADC-70 phase 1): block -> {name: canonical component}.
-        # Filled by add_equation from CompiledModel.aux_extra_names (the component of the k-th name =
-        # dsl.AUX_NAMED_BASE + k). The FACADE holds the names: the C++ only manipulates component
-        # indices (set_aux_field_component / aux_field_component). Empty for a block without a
-        # named aux field. cf. set_aux_field / aux_field.
-        self._aux_field_index = {}
+        self._s = _System(config)
+        # Auxiliary storage is owned by the sealed global ProviderPack.  Python
+        # carries no block/name-to-component table: callers use ComponentKey and
+        # native code resolves its exact `{group, component}` address.
+        self._pending_native_packages = 0
         self._step_strategy = None
         self._step_transaction_plan = None
         self._step_controller = None
@@ -271,6 +267,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Case for a refined run "
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect(layout) for the "
                 "static authoring report.")
+        if attr in _RETIRED_NATIVE_PASSTHROUGH:
+            raise AttributeError(
+                "System.%s is not an authoring route; declare the block with pops.Case.block(...)"
+                % attr
+            )
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
         # passthrough (instance.install_program / ...) with the bind-vocabulary
         # RuntimeError -- NOT AttributeError -- so the bypass is closed even under a prebuilt .so whose

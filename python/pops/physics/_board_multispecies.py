@@ -300,7 +300,7 @@ class _MultiSpeciesMixin(_BoardModel):
         registry = self._multi_module.operator_registry()
         hyp = self._dsl._m
         with atomic_attrs((registry, "_by_name"), (registry, "_order"),
-                          (hyp, "aux_names"), (hyp, "aux_extra_names")):
+                          (hyp, "_provider_components")):
             rate_entries = {handle.name: handle.space for handle, _ in output_specs}
             expr = {
                 handle.name: [self._to_expr(value) for value in values]

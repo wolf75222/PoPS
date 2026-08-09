@@ -11,7 +11,7 @@ Sub-packages:
 
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
 * :mod:`pops.solvers.nonlinear` -- executable global ``Newton`` and cell-local ``LocalNewton``;
-* :mod:`pops.solvers.elliptic` -- executable GeometricMG and constrained FFT field solvers;
+* :mod:`pops.solvers.elliptic` -- exact-ranked CartesianCG, AMR GeometricMG and constrained FFT;
 * :mod:`pops.solvers.preconditioners` -- authenticated builtin and registered prepared providers;
 * :mod:`pops.solvers.options` / :mod:`pops.solvers.tolerances` -- the typed smoother / coarse /
   tolerance sub-descriptors the elliptic solver takes;
@@ -29,7 +29,7 @@ is NOT a public attribute of this package. The custom-solver registry hooks (``s
 from types import SimpleNamespace
 
 from . import elliptic, krylov, nonlinear, options, requirements, tolerances
-from .elliptic import FFT, GeometricMG
+from .elliptic import CartesianCG, FFT, GeometricMG
 from .krylov import CG, BiCGStab, GMRES, Richardson
 from .local import DenseLU
 from .nonlinear import LocalNewton, Newton
@@ -62,7 +62,7 @@ solvers = SimpleNamespace(
 __all__ = [
     "elliptic", "krylov", "nonlinear", "options", "tolerances",
     "preconditioners", "requirements",
-    "GeometricMG", "FFT",
+    "CartesianCG", "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
     "Newton", "LocalNewton", "DenseLU",
     "SolveScope", "Level", "Hierarchy", "CompositeTensorFAC",

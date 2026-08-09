@@ -602,7 +602,7 @@ def _hierarchy(
     native_hierarchy_provider = prepared_hierarchy_native_provider("shared_n_level")
     capabilities = HierarchyProviderCapabilities(
         provider("shared_n_level", "amr_hierarchy_provider"),
-        supported_dimensions=(2,),
+        supported_dimensions=(1, 2, 3),
         supports_anisotropic_ratio=False,
         max_materialized_level_count=2_147_483_647,
         supports_transactional_regrid=True,
@@ -630,6 +630,7 @@ def resolve_amr_authorities(
     load_balance: Any,
     tagger: Any,
     clustering: Any,
+    reflux: Any,
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
     """Resolve every adaptive-layout concern exactly once from its owning declaration."""
@@ -650,7 +651,7 @@ def resolve_amr_authorities(
                 raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
-    providers = (tagger, clustering)
+    providers = (tagger, clustering, reflux)
     for value in providers:
         for method in ("inspect", "resolve_references", "lower_amr_provider"):
             if not callable(getattr(value, method, None)):
@@ -691,10 +692,11 @@ def resolve_amr_authorities(
         if lowered.role in provider_bindings:
             raise ValueError("AMR provider roles must be unique")
         provider_bindings[lowered.role] = lowered.data
-    if set(provider_bindings) != {"clustering", "tagger"}:
-        raise ValueError("AMR resolution requires exact clustering and tagger provider roles")
+    if set(provider_bindings) != {"clustering", "tagger", "reflux"}:
+        raise ValueError(
+            "AMR resolution requires exact clustering, tagger and reflux provider roles")
     provider_bindings = {
-        role: provider_bindings[role] for role in ("clustering", "tagger")
+        role: provider_bindings[role] for role in ("clustering", "tagger", "reflux")
     }
     resolved_hierarchy = _hierarchy(
         hierarchy,

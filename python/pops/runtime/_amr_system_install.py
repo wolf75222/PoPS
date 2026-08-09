@@ -25,13 +25,16 @@ else:
 class _PreparedAmrFieldSolverInstall:
     """AMR native primitives consumed by provider-owned field-solver installers."""
 
-    def __init__(self, engine: Any, field_plan: Any) -> None:
+    def __init__(self, engine: Any, field_plan: Any, install_plan: Any) -> None:
         self.engine = engine
         self.field_plan = field_plan
+        self.install_plan = install_plan
         self.options = field_plan.native_install_data()
         self.slot = self.options["provider_slot"]
 
-    def install_configured(self, binding: Any) -> None:
+    def _install_common_plan(self, binding: Any, provider_route: str) -> None:
+        if type(provider_route) is not str or not provider_route:
+            raise TypeError("native AMR field solver provider route must be non-empty")
         contract = binding.resolution.to_data()["native_contract"]
         routes = self.options["provider_pack"]
         output = self.options["output_route"]
@@ -56,7 +59,7 @@ class _PreparedAmrFieldSolverInstall:
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],
             [route["coefficient"] for route in routes],
-            contract["factory_route"],
+            provider_route,
             hierarchy_policy["policy_id"],
             hierarchy_policy["interface_version"],
             hierarchy_policy["option_schema"],
@@ -72,10 +75,79 @@ class _PreparedAmrFieldSolverInstall:
             topology["topology_identity"],
         )
 
-    def install_component(self, _binding: Any) -> None:
-        raise RuntimeError(
-            "component field solver reached AMR after its provider policy rejected the use"
+    def install_configured(self, binding: Any) -> None:
+        contract = binding.resolution.to_data()["native_contract"]
+        self._install_common_plan(binding, contract["factory_route"])
+
+    def install_component(self, binding: Any) -> None:
+        if self.install_plan is None:
+            raise ValueError("component field providers require the authenticated InstallPlan")
+        component_bindings = binding.resolution.to_data()["component_bindings"]
+        if len(component_bindings) != 2:
+            raise ValueError("component field provider requires exact topology and solver bindings")
+        installed = []
+        from pops.fields._identity import field_identity, strict_field_data
+        from pops.identity import canonical_bytes
+
+        for authority in component_bindings:
+            component = self.install_plan.components.get(authority["component_id"])
+            if component is None:
+                raise ValueError(
+                    "field %r requires installed component %r"
+                    % (self.field_plan.name, authority["component_id"])
+                )
+            if component.component_manifest.token != authority["component_manifest_identity"]:
+                raise ValueError("field component manifest identity changed before install")
+            if canonical_bytes(strict_field_data(component.interface.to_data())) != canonical_bytes(
+                strict_field_data(authority["native_interface"])
+            ):
+                raise ValueError("field component native interface identity changed before install")
+            if component.native_handle is None:
+                raise ValueError("field components must be loaded before native installation")
+            installed.append(component.native_handle)
+
+        import json
+        from pops.runtime._component_execution_context import component_execution_data
+
+        nullspace = self.options["nullspace_provider"]
+        boundary = {
+            "identity": field_identity(
+                "field-boundary-contract",
+                {
+                    "field": self.field_plan.identity.token,
+                    "faces": self.options["boundary_faces"],
+                    "nullspace_provider": nullspace,
+                    "topology_identity": binding.facts.layout["topology_identity"],
+                },
+            ).token,
+            "faces": self.options["boundary_faces"],
+            "nullspace_provider": nullspace,
+            "topology_identity": binding.facts.layout["topology_identity"],
+        }
+        request = binding.resolution.native_contract["options"]
+        exact = self.engine.register_field_solver_provider(
+            self.slot,
+            installed[0],
+            installed[1],
+            component_bindings[0],
+            component_bindings[1],
+            json.dumps(component_bindings[0]["parameters"], sort_keys=True,
+                       separators=(",", ":"), allow_nan=False),
+            json.dumps(component_bindings[1]["parameters"], sort_keys=True,
+                       separators=(",", ":"), allow_nan=False),
+            self.install_plan.artifact.layout_plan.qualified_id,
+            binding.facts.layout["topology_identity"],
+            json.dumps(strict_field_data(boundary), sort_keys=True, separators=(",", ":")),
+            request["relative_tolerance"],
+            request["absolute_tolerance"],
+            request["max_iterations"],
+            component_execution_data(self.install_plan.execution_context),
         )
+        if type(exact) is not str or not exact:
+            raise RuntimeError("native AMR component field solver returned no exact identity")
+        if exact != self.slot:
+            raise RuntimeError("native AMR component field solver changed its provider route")
+        self._install_common_plan(binding, exact)
 
 
 class _PreparedAmrFieldNullspaceInstall:
@@ -162,6 +234,12 @@ class _AmrSystemInstall(_AmrSystem):
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(
             self, compiled, instances, params, aux, field_plans=field_plans)
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import (
+                _validate_shared_interface_implicit_execution_before_install,
+            )
+
+            _validate_shared_interface_implicit_execution_before_install(install_plan)
         if amr_transfer is not None:
             self._install_bootstrap_routes(amr_transfer)
 
@@ -180,7 +258,7 @@ class _AmrSystemInstall(_AmrSystem):
         # adding blocks and before install_program). Field identity, provider and hierarchy policy
         # were resolved at compile time; bind only materializes that immutable plan.
         for field, field_plan in field_plans.items():
-            self._install_field_plan(field, field_plan)
+            self._install_field_plan(field, field_plan, install_plan=install_plan)
 
         # (2) INSTANCES: resolve every package first, then project complete BindSchema vectors before
         # installing any block. The per-instance detached CompiledModel is mandatory.
@@ -245,6 +323,7 @@ class _AmrSystemInstall(_AmrSystem):
             if method == "analytic":
                 from pops.runtime._initial_source_lowering import (
                     native_binary64,
+                    ranked_gaussian_center,
                     validate_initial_source,
                 )
 
@@ -260,15 +339,13 @@ class _AmrSystemInstall(_AmrSystem):
                         subject_id, name or "", space, centering, components
                     )
                 elif route == "gaussian_field":
-                    center = source.get("center", {})
-                    if space != "cell" or set(center) != {"x", "y"}:
+                    if space != "cell":
                         raise ValueError(
-                            "pops.bind: gaussian_field requires one cell state and x/y center"
+                            "pops.bind: gaussian_field requires one cell state"
                         )
                     self._s._register_analytic_gaussian(
                         subject_id, name or "",
-                        native_binary64(center["x"], where="AMR Gaussian center.x"),
-                        native_binary64(center["y"], where="AMR Gaussian center.y"),
+                        ranked_gaussian_center(source, where="AMR Gaussian"),
                         native_binary64(
                             source["background"], where="AMR Gaussian background"),
                         native_binary64(
@@ -411,12 +488,20 @@ class _AmrSystemInstall(_AmrSystem):
             dimensions = {row.accuracy.dimension for row in entry.requirements}
             if len(dimensions) != 1:
                 raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
+            dimension = next(iter(dimensions))
             ratios = {
                 tuple(row.accuracy.refinement_ratio) for row in entry.requirements
             }
-            if len(ratios) != 1 or len(set(next(iter(ratios)))) != 1:
+            if len(ratios) != 1 or len(next(iter(ratios))) != dimension:
                 raise ValueError(
-                    "pops.bind: one native transfer route requires one isotropic ratio"
+                    "pops.bind: one native transfer route requires one exact-ranked ratio"
+                )
+            ghost_depth = tuple(ghost)
+            if len(ghost_depth) == 1:
+                ghost_depth *= dimension
+            if len(ghost_depth) != dimension:
+                raise ValueError(
+                    "pops.bind: one native transfer route requires exact-ranked ghost depth"
                 )
             self._s._register_bootstrap_transfer_route(
                 entry.identity.token,
@@ -429,14 +514,13 @@ class _AmrSystemInstall(_AmrSystem):
                 key["operation"]["name"],
                 options["native_route"],
                 order,
-                ghost,
-                next(iter(dimensions)),
-                next(iter(ratios))[0],
+                ghost_depth,
+                next(iter(ratios)),
             )
         for pair in sorted(face_vectors):
             self._s._register_bootstrap_face_vector(pair)
 
-    def _install_field_plan(self, field: Any, field_plan: Any) -> None:
+    def _install_field_plan(self, field: Any, field_plan: Any, *, install_plan: Any = None) -> None:
         """Install the complete resolved AMR field route before native block loaders run."""
         from pops.codegen.field_install import ResolvedFieldInstallPlan
         if not isinstance(field_plan, ResolvedFieldInstallPlan):
@@ -452,7 +536,9 @@ class _AmrSystemInstall(_AmrSystem):
 
         binding = prepared_field_solver_binding_from_data(options["solver_provider"])
         provider = prepared_field_solver_provider_from_identity(binding.provider)
-        provider.install(_PreparedAmrFieldSolverInstall(self._s, field_plan), binding)
+        provider.install(
+            _PreparedAmrFieldSolverInstall(self._s, field_plan, install_plan), binding
+        )
         slot = options["provider_slot"]
         faces = options["boundary_faces"]
         if faces is not None:

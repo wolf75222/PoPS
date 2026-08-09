@@ -17,10 +17,12 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
-#include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -32,6 +34,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -40,36 +43,73 @@
 
 using namespace pops;
 
-namespace {
+namespace pops {
 
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
-constexpr double kGamma = 1.4;
-
-void fill_ic(std::vector<double>& U, int n) {
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  const double pi = 3.14159265358979323846;
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double p = 3.0 + 0.5 * std::cos(2 * pi * x) * std::cos(2 * pi * y);
-      U[0 * nn + k] = 1.0;
-      U[1 * nn + k] = 0.0;
-      U[2 * nn + k] = 0.0;
-      U[3 * nn + k] = p / (kGamma - 1.0);
-    }
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
 }
 
-void add_gas(System& s) {
-  add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", kGamma);
-  s.set_poisson("charge_density", "geometric_mg");
+}  // namespace pops
+
+namespace {
+
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using GasLaw = nd::IdealGasEuler<kTestDimension>;
+using GasModel = CompositeModel<GasLaw, NoSource, NoElliptic>;
+constexpr double kGamma = 1.4;
+constexpr int kGasComponents = GasModel::n_vars;
+
+std::size_t cell_count(int n) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    count *= static_cast<std::size_t>(n);
+  return count;
+}
+
+NativeSystemConfig native_config(int n) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = n;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[static_cast<std::size_t>(axis)] = true;
+  }
+  config.boxes = {Box<kTestDimension>::from_extents(config.shape)};
+  return config;
+}
+
+void fill_ic(std::vector<double>& U, int n) {
+  const std::size_t nn = cell_count(n);
+  const double pi = 3.14159265358979323846;
+  for (std::size_t cell = 0; cell < nn; ++cell) {
+    std::size_t remaining = cell;
+    double mode = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis) {
+      const int index = static_cast<int>(remaining % static_cast<std::size_t>(n));
+      remaining /= static_cast<std::size_t>(n);
+      const double coordinate = (static_cast<double>(index) + 0.5) / n;
+      mode *= std::cos(2 * pi * coordinate);
+    }
+    const double pressure = 3.0 + 0.5 * mode;
+    U[cell] = 1.0;
+    for (int axis = 0; axis < kTestDimension; ++axis)
+      U[static_cast<std::size_t>(axis + 1) * nn + cell] = 0.0;
+    U[static_cast<std::size_t>(kTestDimension + 1) * nn + cell] = pressure / (kGamma - 1.0);
+  }
+}
+
+void add_gas(NativeSystem& system) {
+  GasModel model{};
+  model.hyp = GasLaw::prepare(static_cast<Real>(kGamma));
+  system.install_block_state_route("gas", "test:program-loader/gas/state");
+  add_compiled_model(system, "gas", std::move(model), "minmod", "rusanov", "conservative",
+                     "explicit", kGamma);
+  system.set_poisson("charge_density", "cartesian_cg");
 }
 
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
@@ -78,15 +118,17 @@ void add_gas(System& s) {
 std::string loader_source(bool include_block_identities = true, bool install_step = true,
                           bool incomplete_dt_bound = false,
                           const std::string& dynamic_boundary_slot = {},
-                          bool register_history = false) {
+                          bool register_history = false, bool boundary_install_throws = false) {
   // clang-format off
   std::string source = R"CPP(
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/route_ids.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <cstdint>
+#include <stdexcept>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
@@ -120,8 +162,8 @@ extern "C" bool pops_program_has_dt_bound() { return true; }
   }
   if (install_step) {
     source += R"CPP(
-extern "C" void pops_install_program(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
 )CPP";
     if (register_history) {
       source += R"CPP(
@@ -137,8 +179,8 @@ extern "C" void pops_install_program(pops::System* sys) {
     auto field_outcome = ctx.solve_fields();
     (void)field_outcome.consume(pops::SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
-      pops::MultiFab& U = ctx.state(b);
-      pops::MultiFab R = ctx.rhs_scratch_like(U);
+      pops::MultiFab<pops::kNativeDimension>& U = ctx.state(b);
+      pops::MultiFab<pops::kNativeDimension> R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, static_cast<pops::Real>(dt), R);
     }
@@ -147,8 +189,8 @@ extern "C" void pops_install_program(pops::System* sys) {
 )CPP";
   } else {
     source += R"CPP(
-extern "C" void pops_install_program(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
   ctx.register_history("poison", 1, 1, 0, "test:poison/state", "test:poison/space",
                        "clock.macro", "test:poison/interp");
 }
@@ -157,25 +199,46 @@ extern "C" void pops_install_program(pops::System* sys) {
   if (!dynamic_boundary_slot.empty()) {
     source += R"CPP(
 namespace {
-void prepare_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
-                               const pops::FieldBoundaryExecutionContext&) {}
-void add_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
-                           const pops::FieldBoundaryExecutionContext&) {}
+void prepare_boundary_residual(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void prepare_boundary_jvp(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void add_boundary_residual(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
+void add_boundary_jvp(
+    int, const pops::MultiFab<pops::kNativeDimension>&,
+    const pops::MultiFab<pops::kNativeDimension>&,
+    pops::MultiFab<pops::kNativeDimension>&, const pops::Geometry<pops::kNativeDimension>&,
+    const pops::FieldBoundaryExecutionContext<pops::kNativeDimension>&) {}
 }  // namespace
-extern "C" void pops_install_field_boundaries(pops::System* sys) {
-  pops::runtime::program::ProgramContext ctx(sys);
+extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimension>* sys) {
+  pops::runtime::program::ProgramContext<pops::kNativeDimension> ctx(sys);
   ctx.set_field_boundary_kernel(
 )CPP";
     source += "\"" + dynamic_boundary_slot + "\"";
     source += R"CPP(,
-      pops::CompiledFieldBoundaryKernel{"test:program-boundary",
-                                        "test:program-boundary-residual",
-                                        "",
-                                        prepare_boundary_residual,
-                                        nullptr,
-                                        add_boundary_residual,
-                                        nullptr,
-                                        false});
+      pops::CompiledFieldBoundaryKernel<pops::kNativeDimension>{
+          "test:program-boundary", "test:program-boundary-residual",
+          "test:program-boundary-jvp", prepare_boundary_residual,
+          prepare_boundary_jvp, add_boundary_residual, add_boundary_jvp, false});
+)CPP";
+    if (boundary_install_throws) {
+      source += "  ctx.set_field_logical_timepoint(\"" + dynamic_boundary_slot +
+                "\", pops::FieldLogicalTimePoint{0.375, 0.025, 2, 1, 3, 0, 7, 1, 4});\n";
+      source += "  ctx.set_field_boundary_parameters(\"" + dynamic_boundary_slot +
+                "\", std::vector<double>{0.125, 0.25});\n";
+      source += R"CPP(
+  throw std::runtime_error("injected boundary publication failure");
+)CPP";
+    }
+    source += R"CPP(
 }
 )CPP";
   }
@@ -191,22 +254,19 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   const int n = 16;
   const double dt = 1e-3;
-  const std::size_t nn = static_cast<std::size_t>(n) * n;
-  std::vector<double> U0(4 * nn);
+  const std::size_t nn = cell_count(n);
+  std::vector<double> U0(static_cast<std::size_t>(kGasComponents) * nn);
   fill_ic(U0, n);
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  const NativeSystemConfig cfg = native_config(n);
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
-  System ref(cfg);
+  NativeSystem ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
-  std::vector<double> Uref(4 * nn);
+  std::vector<double> Uref(static_cast<std::size_t>(kGasComponents) * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
     Uref[k] = U0[k] + dt * R0[k];
 
@@ -223,6 +283,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   const std::string incomplete_dt_so = tmp + "_incomplete_dt.so";
   const std::string dynamic_boundary_src = tmp + "_dynamic_boundary.cpp";
   const std::string dynamic_boundary_so = tmp + "_dynamic_boundary.so";
+  const std::string failing_boundary_src = tmp + "_failing_boundary.cpp";
+  const std::string failing_boundary_so = tmp + "_failing_boundary.so";
   {
     std::ofstream f(src);
     f << loader_source();
@@ -242,6 +304,10 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   {
     std::ofstream f(dynamic_boundary_src);
     f << loader_source(true, true, false, "program-boundary-field", true);
+  }
+  {
+    std::ofstream f(failing_boundary_src);
+    f << loader_source(true, true, false, "program-boundary-field", true, true);
   }
   const auto package = pops::test::native_dso::compile_shared(src, so);
   if (!package.ok) {
@@ -274,11 +340,18 @@ static int pops_run_test_program_loader(int argc, char** argv) {
                                                    dynamic_boundary_package);
     return 1;
   }
+  const auto failing_boundary_package =
+      pops::test::native_dso::compile_shared(failing_boundary_src, failing_boundary_so);
+  if (!failing_boundary_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader failing-boundary package",
+                                                   failing_boundary_package);
+    return 1;
+  }
 
   int fails = 0;
   // A pre-spec library with no explicit block identity table must never install by add-order. The
   // old positional fallback could silently bind the right equations to the wrong instances.
-  System missing_identity(cfg);
+  NativeSystem missing_identity(cfg);
   add_gas(missing_identity);
   try {
     missing_identity.install_program(legacy_so);
@@ -298,7 +371,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   // A prelude-only installer that registers a history but omits the Program step must not inherit its
   // candidate block map/history or replace an already usable direct step. The loader's generation
   // witness fails and restores the exact image.
-  System no_op(cfg);
+  NativeSystem no_op(cfg);
   add_gas(no_op);
   no_op.install_program_step([](double) {});
   no_op.program_cache().store(7, no_op.block_state(0), 0, "kept-cache");
@@ -336,7 +409,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // A declared-but-missing dt-bound entry is rejected before any candidate facade state is
   // installed. Falling back to the native CFL would silently change the authored numerics.
-  System incomplete_dt(cfg);
+  NativeSystem incomplete_dt(cfg);
   add_gas(incomplete_dt);
   incomplete_dt.install_program_step([](double) {});
   try {
@@ -358,27 +431,34 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // Program-owned field-boundary kernels are an artifact overlay, not durable System authoring.
   // Replacing artifact A (dynamic boundary export) with artifact B (no export) must therefore
-  // restore the static baseline. The FFT provider is a useful witness: it rejects A's dynamic
-  // boundary, but accepts the same periodic field plan once B has removed that overlay.
+  // restore the static baseline while retaining the exact configured backend route.
   {
-    System replacement(cfg);
+    NativeSystem replacement(cfg);
     add_gas(replacement);
     constexpr const char* slot = "program-boundary-field";
+    constexpr const char* backend = "program-boundary-cartesian-cg";
+    replacement.register_configured_field_solver_provider(
+        "cartesian_cg", backend,
+        PreparedProviderOptions{"pops.system.cartesian-cg-options@1",
+                                {{"abs_tol", 0.0},
+                                 {"max_iterations", std::int64_t{200}},
+                                 {"rel_tol", 1.0e-8}}});
     replacement.set_field_solver_plan(
         slot, "test:program-boundary-plan", "test:program-boundary-provider", "test:gas", "gas",
         "program-boundary-potential", {"test:gas/program-boundary-rhs"}, {"gas"},
-        {"program-boundary-potential"}, {1.0}, "fft");
+        {"program-boundary-potential"}, {1.0}, backend);
     replacement.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                              "test:periodic-cartesian",
                                              "test:periodic-cartesian:v1");
-    replacement.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
-                                        {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
-                                        {0.0, 0.0, 0.0, 0.0});
+    const std::vector<std::string> periodic_faces(static_cast<std::size_t>(2 * kTestDimension),
+                                                  "periodic");
+    const std::vector<double> zero_faces(static_cast<std::size_t>(2 * kTestDimension), 0.0);
+    replacement.set_field_boundary_plan(slot, periodic_faces, zero_faces, zero_faces, zero_faces);
     replacement.ensure_aux_width(kAuxNamedBase + 1);
-    replacement.register_elliptic_field("gas", "program-boundary-potential", kAuxNamedBase, -1, -1,
-                                        1);
+    replacement.register_elliptic_field("gas", "program-boundary-potential",
+                                        std::vector<int>{kAuxNamedBase}, 1);
     replacement.set_block_elliptic_field("gas", "program-boundary-potential",
-                                         [](const MultiFab&, MultiFab&) {});
+                                         [](const NativeField&, NativeField&) {});
     replacement.set_state("gas", U0);
 
     replacement.install_program(dynamic_boundary_so);
@@ -389,15 +469,48 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
     replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
     try {
-      (void)consume_solve_outcome(
+      const SolveReport report = consume_solve_outcome(
           replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
-      std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
-      ++fails;
-    } catch (const std::exception& e) {
-      if (std::string(e.what()).find("dynamic boundary") == std::string::npos) {
-        std::printf("FAIL unexpected dynamic-boundary rejection: %s\\n", e.what());
+      if (!report.solved()) {
+        std::printf("FAIL dynamic-boundary field solve returned %s\\n", report.status_name());
         ++fails;
       }
+    } catch (const std::exception& e) {
+      std::printf("FAIL dynamic-boundary artifact was not executable: %s\\n", e.what());
+      ++fails;
+    }
+
+    // A later artifact that stages a valid overlay and then throws must publish neither its
+    // boundary nor its Program/history/cache image. Artifact A remains the accepted owner and its
+    // function pointers remain backed by the still-live accepted DSO.
+    try {
+      replacement.install_program(failing_boundary_so);
+      std::printf("FAIL partially failing boundary artifact was accepted\\n");
+      ++fails;
+    } catch (const std::runtime_error& e) {
+      if (std::string(e.what()).find("injected boundary publication failure") ==
+          std::string::npos) {
+        std::printf("FAIL partial boundary rollback diagnostic: %s\\n", e.what());
+        ++fails;
+      }
+    }
+    if (replacement.history_names() != std::vector<std::string>{"artifact.history"} ||
+        replacement.program_cache_nodes() != std::vector<int>{11} ||
+        replacement.program_diagnostics() !=
+            std::map<std::string, Real>{{"artifact-A-diagnostic", Real(1)}}) {
+      std::printf("FAIL partial boundary artifact mutated accepted Program state\\n");
+      ++fails;
+    }
+    try {
+      const SolveReport report = consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
+      if (!report.solved()) {
+        std::printf("FAIL accepted boundary after rollback returned %s\\n", report.status_name());
+        ++fails;
+      }
+    } catch (const std::exception& e) {
+      std::printf("FAIL accepted boundary was lost after rollback: %s\\n", e.what());
+      ++fails;
     }
 
     replacement.install_program(so);
@@ -419,12 +532,12 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     }
   }
 
-  System sim(cfg);
+  NativeSystem sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
   const int step0 = sim.macro_step();
-  sim.step(dt);  // SystemProgramDriver dispatches to the installed Program
+  sim.step(dt);  // The exact-ranked System facade dispatches to the installed Program.
   const std::vector<double> Up = sim.get_state("gas");
 
   double err = 0, change = 0;

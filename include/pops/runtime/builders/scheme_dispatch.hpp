@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pops/core/foundation/cold.hpp>          // POPS_COLD_FN
-#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/numerics/fv/reconstruction.hpp>    // Prepared reconstruction policies
 #include <pops/runtime/config/dispatch_tags.hpp>  // throw_registry_dispatch_mismatch
 #include <pops/runtime/config/route_ids.hpp>      // LimiterRouteId, route_token, kLimiterRoutes
 
@@ -22,7 +22,7 @@
 ///   - a table of function pointers cannot carry a TYPE (build_block<Limiter, Flux> needs Limiter as a
 ///     template argument, resolved per TU per flux) without type-erasing the closure (defeats inlining,
 ///     adds a heap allocation on a device-adjacent path) or pre-enumerating the whole Limiter x Flux x
-///     Model product in one TU (the ~1700-leaf blow-up seam_combinations.cmake exists to avoid);
+///     Model product in one TU (the generated package instead pins one exact `Dim` specialization);
 ///   - a hand-written switch on LimiterRouteId gives exhaustiveness only via -Wswitch -- but this repo
 ///     compiles WITHOUT -Werror (cmake/PopsDevTooling.cmake: "Informatif d'abord : PAS de -Werror"), so a
 ///     missing arm is a silent warning, not a build failure;
@@ -40,7 +40,9 @@ namespace pops {
   X(kNone, NoSlope)              \
   X(kMinmod, Minmod)             \
   X(kVanLeer, VanLeer)           \
-  X(kWeno5, Weno5)
+  X(kWeno5, Weno5)               \
+  X(kMc, MC)                     \
+  X(kSuperbee, Superbee)
 
 namespace detail {
 constexpr int kLimiterXMacroCount = 0
@@ -55,9 +57,8 @@ static_assert(detail::kLimiterXMacroCount ==
 
 /// ONE spatial-reconstruction dispatch generator (ADC-640). Routes a typed LimiterRouteId to its
 /// compile-time Limiter policy and invokes @p leaf with std::type_identity<Limiter>{}. The leaf (a generic
-/// lambda) closes over the Flux type and every build argument, so the SAME generator serves System
-/// (build_block<L, Flux>), polar (build_block_polar<L, Flux>) and AMR
-/// (build_amr_block<Model, L, Flux>). Every arm instantiates the leaf, so the
+/// lambda) closes over the Flux type and every build argument, so the SAME generator serves the
+/// exact-ranked uniform and AMR materializers. Every arm instantiates the leaf, so the
 /// reachable build_block<Limiter, Flux, ...> set is IDENTICAL to the hand-written ladders. @p route is
 /// produced by parse_limiter_route at the boundary, AFTER validate_limiter, so the trailing throw is the
 /// historical defense-in-depth guard (unreachable in practice). Host cold-path only: the device kernels

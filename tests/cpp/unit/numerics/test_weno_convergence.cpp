@@ -8,8 +8,11 @@
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/primitives/face_flux.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <vector>
 
 using namespace pops;
 
@@ -53,18 +56,90 @@ struct AmbiguousPolicy {
 
 struct MissingPolicy {};
 
+/// Minimal conservative model used only to exercise the production face-state reconstruction
+/// protocol.  The qualification below never calls a limiter formula directly.
+struct ScalarReconstructionModel {
+  using State = StateVec<1>;
+  static constexpr int n_vars = 1;
+};
+
+struct PeriodicFaceStates {
+  std::vector<Real> left;
+  std::vector<Real> right;
+  bool publication_permitted = true;
+};
+
+double favg(double a, double b);
+
+int periodic_index(int index, int size) {
+  const int remainder = index % size;
+  return remainder < 0 ? remainder + size : remainder;
+}
+
+template <class Limiter>
+PeriodicFaceStates reconstruct_periodic_faces(const std::vector<Real>& cell_averages) {
+  const int size = static_cast<int>(cell_averages.size());
+  Fab2D values(Box2D::from_extents(size, 1), ScalarReconstructionModel::n_vars, Limiter::n_ghost);
+  for (int i = values.grown_box().lo[0]; i <= values.grown_box().hi[0]; ++i)
+    values(i, 0, 0) = cell_averages[periodic_index(i, size)];
+
+  const ScalarReconstructionModel model{};
+  const Limiter limiter{};
+  PeriodicFaceStates result{std::vector<Real>(size), std::vector<Real>(size), true};
+  for (int i = 0; i < size; ++i) {
+    const auto left =
+        reconstruct_recovered(model, values.const_array(), i, 0, 0, Real(-1), limiter, false);
+    const auto right =
+        reconstruct_recovered(model, values.const_array(), i, 0, 0, Real(1), limiter, false);
+    result.publication_permitted = result.publication_permitted && left.publication_permitted() &&
+                                   right.publication_permitted();
+    result.left[i] = left.value[0];
+    result.right[i] = right.value[0];
+  }
+  return result;
+}
+
+struct SmoothFaceError {
+  double l1 = 0;
+  bool publication_permitted = false;
+};
+
+template <class Limiter>
+SmoothFaceError smooth_periodic_face_error(int size) {
+  const double dx = 1.0 / static_cast<double>(size);
+  std::vector<Real> cell_averages(size);
+  for (int i = 0; i < size; ++i)
+    cell_averages[i] = Real(favg(i * dx, (i + 1) * dx));
+
+  const auto reconstructed = reconstruct_periodic_faces<Limiter>(cell_averages);
+  double error = 0;
+  for (int i = 0; i < size; ++i) {
+    const double exact = std::sin(Real(2) * kPi * (i + 1) * dx);
+    error += std::fabs(static_cast<double>(reconstructed.right[i]) - exact);
+  }
+  return {error / static_cast<double>(size), reconstructed.publication_permitted};
+}
+
+double interface_jump_budget(const PeriodicFaceStates& states) {
+  double result = 0;
+  const int size = static_cast<int>(states.left.size());
+  for (int i = 0; i < size; ++i)
+    result += std::fabs(static_cast<double>(states.left[(i + 1) % size] - states.right[i]));
+  return result;
+}
+
 /// A nonlinear conservative/primitive conversion makes the two reconstruction paths observably
 /// different while remaining exactly invertible for the positive test data.
 struct PrimitiveTestModel {
   using State = StateVec<2>;
   using Prim = StateVec<2>;
-  using Aux = pops::Aux;
+using Providers = pops::ProviderValues<0>;
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return state; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(1); }
-  POPS_HD State source(const State&, const Aux&) const { return State{}; }
+  POPS_HD State flux(const State& state, const auto&, int) const { return state; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(1); }
+POPS_HD State source(const State&, const Providers&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 
   POPS_HD Prim to_primitive(const State& state) const {
@@ -79,6 +154,10 @@ struct PrimitiveTestModel {
 };
 
 static_assert(SlopeReconstruction<WideSlopePolicy>);
+static_assert(ReconstructionPolicy<MC>);
+static_assert(ReconstructionPolicy<Superbee>);
+static_assert(MC::formal_order == 2 && MC::n_ghost == 2);
+static_assert(Superbee::formal_order == 2 && Superbee::n_ghost == 2);
 static_assert(!StencilReconstruction<WideSlopePolicy>);
 static_assert(StencilReconstruction<ExternalFourSamplePolicy>);
 static_assert(ReconstructionPolicy<ExternalFourSamplePolicy>);
@@ -102,6 +181,136 @@ TEST(test_weno_convergence, preserves_constants) {
 TEST(test_weno_convergence, reconstruction_protocol_is_independent_of_storage_radius) {
   const auto policy = configured_reconstruction<WideSlopePolicy>();
   EXPECT_EQ(policy.limited_slope(Real(2), Real(4)), Real(3));
+}
+
+TEST(test_muscl_limiters, mc_and_superbee_match_reference_formulas) {
+  const MC mc{};
+  const Superbee superbee{};
+
+  EXPECT_EQ(mc.limited_slope(Real(1), Real(3)), Real(2));
+  EXPECT_EQ(mc.limited_slope(Real(2), Real(4)), Real(3));
+  EXPECT_EQ(mc.limited_slope(Real(3), Real(1)), Real(2));
+  EXPECT_EQ(superbee.limited_slope(Real(1), Real(3)), Real(2));
+  EXPECT_EQ(superbee.limited_slope(Real(2), Real(4)), Real(4));
+  EXPECT_EQ(superbee.limited_slope(Real(3), Real(1)), Real(2));
+}
+
+TEST(test_muscl_limiters, zero_opposite_sign_symmetry_and_homogeneity) {
+  const MC mc{};
+  const Superbee superbee{};
+  for (const auto limiter : {0, 1}) {
+    const auto slope = [&](Real a, Real b) {
+      return limiter == 0 ? mc.limited_slope(a, b) : superbee.limited_slope(a, b);
+    };
+    EXPECT_EQ(slope(Real(0), Real(4)), Real(0));
+    EXPECT_EQ(slope(Real(4), Real(0)), Real(0));
+    EXPECT_EQ(slope(Real(-2), Real(3)), Real(0));
+    EXPECT_EQ(slope(Real(2), Real(-3)), Real(0));
+    EXPECT_EQ(slope(Real(-2), Real(-4)), -slope(Real(2), Real(4)));
+    EXPECT_EQ(slope(Real(6), Real(12)), Real(3) * slope(Real(2), Real(4)));
+  }
+}
+
+TEST(test_muscl_limiters, sweby_tvd_bounds_and_finite_extremes) {
+  const MC mc{};
+  const Superbee superbee{};
+  for (const Real backward : {Real(0.25), Real(1), Real(2), Real(8)}) {
+    for (const Real forward : {Real(0.5), Real(1), Real(4), Real(16)}) {
+      const Real tvd_bound = Real(2) * std::min(backward, forward);
+      for (const Real slope :
+           {mc.limited_slope(backward, forward), superbee.limited_slope(backward, forward)}) {
+        EXPECT_GE(slope, Real(0));
+        EXPECT_LE(slope, tvd_bound);
+      }
+    }
+  }
+
+  const Real maximum = std::numeric_limits<Real>::max();
+  EXPECT_TRUE(std::isfinite(mc.limited_slope(maximum, maximum)));
+  EXPECT_TRUE(std::isfinite(superbee.limited_slope(maximum, maximum)));
+  EXPECT_EQ(mc.limited_slope(maximum, maximum), maximum);
+  EXPECT_EQ(superbee.limited_slope(maximum, maximum), maximum);
+  EXPECT_EQ(mc.limited_slope(-maximum, -maximum), -maximum);
+  EXPECT_EQ(superbee.limited_slope(-maximum, -maximum), -maximum);
+}
+
+TEST(test_muscl_limiter_qualification,
+     mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages) {
+  const auto mc_128 = smooth_periodic_face_error<MC>(128);
+  const auto mc_256 = smooth_periodic_face_error<MC>(256);
+  const auto superbee_128 = smooth_periodic_face_error<Superbee>(128);
+  const auto superbee_256 = smooth_periodic_face_error<Superbee>(256);
+  const auto minmod_256 = smooth_periodic_face_error<Minmod>(256);
+  const auto vanleer_256 = smooth_periodic_face_error<VanLeer>(256);
+
+  EXPECT_TRUE(mc_128.publication_permitted && mc_256.publication_permitted);
+  EXPECT_TRUE(superbee_128.publication_permitted && superbee_256.publication_permitted);
+  EXPECT_TRUE(minmod_256.publication_permitted && vanleer_256.publication_permitted);
+
+  const double mc_order = std::log(mc_128.l1 / mc_256.l1) / std::log(2.0);
+  const double superbee_order = std::log(superbee_128.l1 / superbee_256.l1) / std::log(2.0);
+  EXPECT_GT(mc_order, 1.85);
+  EXPECT_LT(mc_order, 2.20);
+  EXPECT_GT(superbee_order, 1.85);
+  EXPECT_LT(superbee_order, 2.20);
+
+  // Fixed-resolution characterization, not a universal ranking: MC tracks the smoother Van Leer
+  // reconstruction on this wave, while Superbee remains more accurate than Minmod but less
+  // accurate than Van Leer around smooth extrema.
+  EXPECT_LT(mc_256.l1, minmod_256.l1);
+  EXPECT_LT(superbee_256.l1, minmod_256.l1);
+  EXPECT_LT(vanleer_256.l1, superbee_256.l1);
+}
+
+TEST(test_muscl_limiter_qualification,
+     discontinuities_create_no_extremum_and_expose_interface_dissipation_budget) {
+  const auto assert_locally_bounded = [](const std::vector<Real>& averages,
+                                         const PeriodicFaceStates& states) {
+    ASSERT_TRUE(states.publication_permitted);
+    const int size = static_cast<int>(averages.size());
+    const Real tolerance = Real(32) * std::numeric_limits<Real>::epsilon();
+    for (int i = 0; i < size; ++i) {
+      const Real left_min = std::min(averages[periodic_index(i - 1, size)], averages[i]);
+      const Real left_max = std::max(averages[periodic_index(i - 1, size)], averages[i]);
+      const Real right_min = std::min(averages[i], averages[(i + 1) % size]);
+      const Real right_max = std::max(averages[i], averages[(i + 1) % size]);
+      EXPECT_GE(states.left[i], left_min - tolerance);
+      EXPECT_LE(states.left[i], left_max + tolerance);
+      EXPECT_GE(states.right[i], right_min - tolerance);
+      EXPECT_LE(states.right[i], right_max + tolerance);
+    }
+  };
+
+  const std::vector<Real> discontinuity = {Real(0), Real(0), Real(0), Real(0),
+                                           Real(1), Real(1), Real(1), Real(1)};
+  assert_locally_bounded(discontinuity, reconstruct_periodic_faces<MC>(discontinuity));
+  assert_locally_bounded(discontinuity, reconstruct_periodic_faces<Superbee>(discontinuity));
+
+  // Binary fractions keep this steep periodic shoulder deterministic in float and double.  For a
+  // scalar Rusanov flux at fixed wave speed, sum |U_R-U_L| is proportional to the absolute
+  // dissipative interface penalty.  The ordering is deliberately fixture-specific and records the
+  // actual trade-off instead of claiming that one limiter is universally least dissipative.
+  const std::vector<Real> shoulder = {
+      Real(0),       Real(0),       Real(1) / 16, Real(3) / 16, Real(6) / 16,  Real(10) / 16,
+      Real(13) / 16, Real(15) / 16, Real(1),      Real(1),      Real(15) / 16, Real(13) / 16,
+      Real(10) / 16, Real(6) / 16,  Real(3) / 16, Real(1) / 16,
+  };
+  const auto minmod = reconstruct_periodic_faces<Minmod>(shoulder);
+  const auto vanleer = reconstruct_periodic_faces<VanLeer>(shoulder);
+  const auto mc = reconstruct_periodic_faces<MC>(shoulder);
+  const auto superbee = reconstruct_periodic_faces<Superbee>(shoulder);
+  assert_locally_bounded(shoulder, minmod);
+  assert_locally_bounded(shoulder, vanleer);
+  assert_locally_bounded(shoulder, mc);
+  assert_locally_bounded(shoulder, superbee);
+
+  const double minmod_jump = interface_jump_budget(minmod);
+  const double vanleer_jump = interface_jump_budget(vanleer);
+  const double mc_jump = interface_jump_budget(mc);
+  const double superbee_jump = interface_jump_budget(superbee);
+  EXPECT_LT(mc_jump, vanleer_jump);
+  EXPECT_LT(vanleer_jump, superbee_jump);
+  EXPECT_LT(superbee_jump, minmod_jump);
 }
 
 TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orientation) {

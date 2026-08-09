@@ -7,13 +7,14 @@
 /// Layer: `include/pops/numerics/elliptic/poisson`.
 /// Role: solve EXACTLY the discrete periodic Laplacian lap_h phi = rho with phi of zero mean,
 /// in ONE transform (no iteration, no tolerance). Works on slabs (flat per-rank vectors, NOT
-/// MultiFab): this is the brick wrapped by PoissonFFTSolver/DistributedFFTSolver
+/// MultiFab): this is the brick wrapped by the exact-rank-two PoissonFFTSolver<2>
 /// (poisson_fft_solver.hpp). 2D FFT = local FFT-x -> parallel transpose (MPI_Alltoall) -> local FFT-y
 /// -> division by the Laplacian eigenvalue -> inverse.
 /// Contract: each rank owns Ny/np rows (full x); solve(rho_local, phi_local) with rho_local and
-/// phi_local of size nyl_ x Nx_ (row-major). The ctor takes spectral (false = DISCRETE 5-point
-/// stencil eigenvalue, bit-identical default; true = CONTINUOUS symbol -(kx^2+ky^2), signed
-/// frequencies).
+/// phi_local of size nyl_ x Nx_ (row-major). The low-level ctor can select the discrete 5-point or
+/// continuous symbol. Only the discrete symbol is exposed by PoissonFFTSolver<2>: the continuous
+/// transform has no matching exact apply/residual provider and therefore cannot publish a solved
+/// EllipticSolver report.
 ///
 /// Invariants:
 /// - the slab transpose requires Nx and Ny divisible by np (n_ranks);

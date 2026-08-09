@@ -20,7 +20,7 @@
 ///
 /// This header is deliberately LIGHT (no numerical dependency): it carries only strings and
 /// integers, not the Limiter / Flux types. It thus stays included early and cost-free. The
-/// capability NEEDS of the fluxes (hll: signed waves; hllc/roe: 2D Euler structure or model
+/// capability NEEDS of the fluxes (hll: signed waves; hllc/roe: provider-owned contact/Roe
 /// capability) are DOCUMENTED in kRiemanns but the real guard stays an `if constexpr` PER MODEL at
 /// the call-site (capabilities depend on the Model type, unavailable here).
 
@@ -81,17 +81,16 @@ inline void validate_limiter(const std::string& lim, const char* ctx = "System")
   throw std::runtime_error(std::string(ctx) + ": unknown limiter '" + lim + "'");
 }
 
-/// Validates a Riemann FLUX tag against kRiemanns. @p polar: annular geometry (rusanov and hll are
-/// wired there). Throws if unknown (cartesian) or not wired in polar, naming the generated valid
+/// Validates a Riemann FLUX tag against kRiemanns. @p polar: annular geometry. Throws if unknown
+/// (Cartesian) or not wired in polar, naming the generated valid
 /// set. Does NOT validate the model
 /// capabilities (hll/hllc/roe on a transport without signed waves / without pressure): these guards
 /// stay `if constexpr` PER MODEL at the call-site, with their "requires ..." messages unchanged.
 inline void validate_riemann(const std::string& riem, bool polar = false,
                              const char* ctx = "System") {
   if (polar) {
-    // Polar: wired fluxes = those of kRiemanns with polar_ok (rusanov + hll since the audit
-    // settlement; hll keeps its model.wave_speeds capability gate at the call-site). HLLC/Roe and
-    // unknown tags -> single polar message.
+    // Polar: wired fluxes = those of kRiemanns with polar_ok. Model-dependent requirements remain
+    // at the call-site; registry validation never infers a model or silently changes the solver.
     for (const RiemannTag& t : kRiemanns)
       if (riem == t.name && t.polar_ok)
         return;

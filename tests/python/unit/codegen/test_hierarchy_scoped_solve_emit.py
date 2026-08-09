@@ -11,6 +11,7 @@ import pytest
 
 from pops.identity.scalar import scalar_cpp, scalar_data
 from pops.linalg import LinearProblem
+from pops.numerics.terms import Flux
 from pops.params import ConstParam
 from pops.solvers import CompositeTensorFAC, Hierarchy
 from pops.time import FailRun, Program
@@ -29,7 +30,7 @@ def _coupled_model(name):
     u = model.primitive("u", mx / rho)
     v = model.primitive("v", my / rho)
     pressure = model.primitive("p", cs2 * rho)
-    model.primitive_vars(rho=rho, u=u, v=v, p=pressure)
+    model.primitive_vars(rho=rho, u=u, v=v)
     model.conservative_from([rho, rho * u, rho * v])
     model.flux(
         x=[mx, mx * u + pressure, my * u],
@@ -69,6 +70,7 @@ def _build(
     properties=None,
     _return_model=False,
     _nested_hierarchy_solve=False,
+    _with_interface_pair=False,
 ):
     model = _coupled_model("hierarchy_tensor_model")
     program = Program("hierarchy_tensor_step")._bind_operators(model)
@@ -85,6 +87,44 @@ def _build(
     block, state = state_refs(program, "blk", model=model)
     temporal = program.state(block[state])
     current = temporal.n
+    if _with_interface_pair:
+        dummy_r0 = program.rhs(
+            "dummy_interface_r0", state=dummy_temporal.n, terms=(Flux(),)
+        )
+        block_r0 = program.rhs(
+            "block_interface_r0", state=current, terms=(Flux(),)
+        )
+        packed_width = (
+            len(dummy_temporal.n.space.components) + len(current.space.components)
+        )
+        interface_operator = program.matrix_free_operator(
+            "coupled_interface_jacobian",
+            domain="state",
+            range_="state",
+            ncomp=packed_width,
+        )
+
+        def apply_interface(builder, out, direction):
+            builder.rhs_jacvec(
+                out,
+                direction,
+                iterate=dummy_temporal.n,
+                r0=dummy_r0,
+                c_dt=1,
+                sources=(),
+                field_coupled=False,
+            )
+            return builder.rhs_jacvec(
+                out,
+                direction,
+                iterate=current,
+                r0=block_r0,
+                c_dt=1,
+                sources=(),
+                field_coupled=False,
+            )
+
+        program.set_apply(interface_operator, apply_interface)
     linear = _linear_handle(model)
 
     coefficients = program.condensed_coeffs(
@@ -151,7 +191,17 @@ def _build(
     )
     next_state = program.value("next", 1 * reconstructed, at=temporal.next.point)
     program.commit(temporal.next, next_state)
-    source = emit_cpp_program(program, model=model, target="amr_system")
+    if _with_interface_pair:
+        from pops.codegen.program_codegen import _emit_cpp_program_impl
+
+        source = _emit_cpp_program_impl(
+            program,
+            model=model,
+            target="amr_system",
+            has_shared_interface_implicit_jacvec=True,
+        )
+    else:
+        source = emit_cpp_program(program, model=model, target="amr_system")
     if _return_model:
         return program, source, model
     return program, source
@@ -198,7 +248,7 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
         if "ctx.configure_hierarchy_tensor_solver(" in line
     )
     assert 'ctx.configure_hierarchy_tensor_solver(1, 1, "pops.hierarchy.composite-tensor-fac"' in configuration_line
-    assert '"pops.hierarchy.composite-tensor-fac.options@1"' in configuration_line
+    assert '"pops.hierarchy.composite-tensor-fac.options@2"' in configuration_line
     assert '{"fac.fine_sweeps", std::int64_t{7}}' in configuration_line
     assert '{"fac.coarse_rel_tol", static_cast<double>(%s)}' % scalar_cpp(2.0e-7) in configuration_line
     assert '{"fac.coarse_abs_tol", static_cast<double>(%s)}' % scalar_cpp(5.0e-14) in configuration_line
@@ -235,6 +285,20 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     assert "hierarchy_solver" not in solve.attrs
 
 
+def test_resolved_interface_pair_proof_reaches_every_hierarchy_phase():
+    _, source = _build(
+        CompositeTensorFAC(),
+        _with_interface_pair=True,
+    )
+
+    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    gather = amr.index(".gather(hierarchy_dt)")
+    solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    publish = amr.index(".publish(hierarchy_dt)", solve)
+    assert gather < solve < publish
+
+
 def test_hierarchy_solve_nested_under_control_flow_is_rejected_before_lowering():
     with pytest.raises(
         NotImplementedError,
@@ -267,7 +331,7 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
         if "ctx.configure_hierarchy_tensor_solver(" in line
     )
     assert 'ctx.configure_hierarchy_tensor_solver(1, 1, "pops.hierarchy.composite-tensor-fac"' in configuration_line
-    assert '"pops.hierarchy.composite-tensor-fac.options@1", {}});' in configuration_line
+    assert '"pops.hierarchy.composite-tensor-fac.options@2", {}});' in configuration_line
     solve_line = next(
         line for line in source.splitlines()
         if "ctx.solve_hierarchy_tensor(" in line
@@ -277,7 +341,7 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
     assert solve_line.rstrip().endswith(", 13);")
 
 
-def test_refined_solution_publishes_atomically_before_reflux_then_average_down():
+def test_refined_solution_publishes_atomically_before_synchronized_advance():
     """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
     amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
@@ -291,14 +355,7 @@ def test_refined_solution_publishes_atomically_before_reflux_then_average_down()
 
     root = Path(__file__).resolve().parents[4]
     provider = (root / "include" / "pops" / "runtime" / "amr"
-                / "amr_tensor_elliptic.hpp").read_text(encoding="utf-8")
+                / "hierarchy_tensor_solver_provider.hpp").read_text(encoding="utf-8")
     solved = provider.index("if (!report.solved_value_available())")
-    publication = provider.index("copy0(levels_[", solved)
+    publication = provider.index("collective_capture_(candidate_publication_)", solved)
     assert solved < publication, "a failed hierarchy solve must not publish a partial iterate"
-
-    context = (root / "include" / "pops" / "runtime" / "program"
-               / "amr_program_context.hpp").read_text(encoding="utf-8")
-    coupling = context.index("void couple_levels() const")
-    reflux = context.index("route_reflux_program", coupling)
-    average_down = context.index("average_down_level", reflux)
-    assert reflux < average_down, "accepted synchronization is reflux then average-down"

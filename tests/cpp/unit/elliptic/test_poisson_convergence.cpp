@@ -1,107 +1,216 @@
-// Validation NUMERIQUE (pas seulement bit-identique) du Laplacien 5 points : ordre de
-// convergence quantitatif sur solutions manufacturees. On raffine n = 32 -> 64 -> 128 et
-// on mesure les erreurs L2 ET Linf vs la solution exacte ; l'ordre observe
-// log(e_n / e_2n)/log 2 doit tendre vers 2 (precision O(dx^2) du stencil). Couvre aussi le
-// NULLSPACE periodique : le second membre a moyenne nulle (solvabilite), la solution est
-// fixee a moyenne nulle (jauge) puis comparee.
-
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
-
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 namespace {
 
-// Resout lap(phi) = f, renvoie erreurs L2 et Linf (jauge moyenne-nulle si periodique) +
-// la moyenne du second membre (controle de solvabilite du nullspace).
-template <class PhiEx, class RhsF>
-void Solve(int n, const BCRec& bc, bool periodic, PhiEx phi_ex, RhsF rhs_f, double& eL2,
-           double& eInf, double& rhs_mean) {
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba = BoxArray::from_domain(dom, n);
+constexpr int kDim = pops::kNativeDimension;
+using Field = pops::MultiFab<kDim>;
+using Solver = pops::elliptic::mg::GeometricMG<kDim>;
 
-  GeometricMG mg(geom, ba, bc);
-  Array4 af = mg.rhs().fab(0).array();
-  for_each_cell(dom, [af, geom, rhs_f](int i, int j) {
-    af(i, j, 0) = rhs_f(geom.x_cell(i), geom.y_cell(j));
-  });
-  rhs_mean = sum(mg.rhs()) / static_cast<double>(dom.num_cells());
-  mg.phi().set_val(0.0);
+struct Errors {
+  double l2 = 0;
+  double linf = 0;
+  double rhs_mean = 0;
+};
 
-  const Real r0 = mg.current_residual();
-  Real rn = r0;
-  for (int c = 0; c < 60 && rn > 1e-11 * r0; ++c) {
-    mg.vcycle();
-    rn = mg.current_residual();
-  }
-
-  Fab2D& p = mg.phi().fab(0);
-  if (periodic) {  // solution definie a une constante pres : jauge moyenne nulle
-    const Real mean = sum(mg.phi()) / static_cast<Real>(dom.num_cells());
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        p(i, j, 0) -= mean;
-  }
-  double s2 = 0;
-  eInf = 0;
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-      const double e = p(i, j, 0) - phi_ex(geom.x_cell(i), geom.y_cell(j));
-      s2 += e * e;
-      eInf = std::max(eInf, std::fabs(e));
-    }
-  eL2 = std::sqrt(s2 / static_cast<double>(dom.num_cells()));
+template <class Ranked, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-double Order(double ec, double ef) {
-  return std::log(ec / ef) / std::log(2.0);
+pops::Index<kDim> index_from_ordinal(const pops::Box<kDim>& box, std::size_t ordinal) {
+  pops::Index<kDim> result{};
+  for (int axis = 0; axis < kDim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return result;
+}
+
+std::size_t storage_ordinal(const pops::Box<kDim>& storage, const pops::Index<kDim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < kDim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - storage.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(storage.length(axis));
+  }
+  return result;
+}
+
+pops::EllipticBuildRequest<kDim> make_request(int cells, bool periodic) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{}, filled<pops::Index<kDim>>(cells - 1)};
+  const pops::Geometry<kDim> geometry = pops::Geometry<kDim>::from_bounds(
+      domain, pops::RealVector<kDim>{}, filled<pops::RealVector<kDim>>(pops::Real(1)));
+  const pops::mesh::BoxArray<kDim> layout(std::vector<pops::Box<kDim>>{domain});
+  pops::Extent<kDim> rank_extent = filled<pops::Extent<kDim>>(std::int64_t{1});
+  rank_extent[0] = pops::n_ranks();
+  pops::Index<kDim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{}, rank_extent};
+  const pops::mesh::Distribution<kDim> distribution =
+      pops::mesh::Distribution<kDim>::replicated(layout, ranks);
+  std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  if (!periodic)
+    faces.fill({pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  std::array<bool, kDim> periodic_axes{};
+  periodic_axes.fill(periodic);
+  pops::RealVector<kDim> spacing{};
+  for (int axis = 0; axis < kDim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  const auto topology = periodic ? pops::BoundaryTopology<kDim>::axis_periodic(periodic_axes)
+                                 : pops::BoundaryTopology<kDim>::physical();
+  return {geometry,
+          layout,
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<kDim>{topology, faces, spacing},
+          pops::Extent<kDim>{},
+          filled<pops::Extent<kDim>>(std::int64_t{1}),
+          {layout.size(), 0}};
+}
+
+pops::Real manufactured_value(const pops::Geometry<kDim>& geometry, const pops::Index<kDim>& index,
+                              bool periodic) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real frequency = periodic ? pops::Real(2) : pops::Real(1);
+  pops::Real result = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    result *= std::sin(frequency * pi * geometry.cell_coordinate(axis, index[axis]));
+  return result;
+}
+
+void fill_manufactured_rhs(Field& rhs, const pops::Geometry<kDim>& geometry, bool periodic) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real frequency = periodic ? pops::Real(2) : pops::Real(1);
+  const pops::Real eigenvalue = static_cast<pops::Real>(kDim) * frequency * frequency * pi * pi;
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const auto& valid = fab.box();
+    const auto& storage = fab.grown_box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(valid, ordinal);
+      host(storage_ordinal(storage, index)) =
+          eigenvalue * manufactured_value(geometry, index, periodic);
+    }
+    fab.copy_from_host(host);
+  }
+
+  if (!periodic)
+    return;
+  const pops::Real mean =
+      pops::reduce_sum_local(rhs) / static_cast<pops::Real>(geometry.domain().numPts());
+  for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+    auto& fab = rhs.fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const auto& valid = fab.box();
+    const auto& storage = fab.grown_box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(valid, ordinal);
+      host(storage_ordinal(storage, index)) -= mean;
+    }
+    fab.copy_from_host(host);
+  }
+}
+
+void install_nullspace(Solver& solver, bool periodic) {
+  if (!periodic) {
+    solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                             pops::PreparedVectorDistribution<kDim>::replicated());
+    return;
+  }
+  pops::Real measure = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    measure *= solver.geom().spacing(axis);
+  solver.install_nullspace(
+      pops::constant_mean_zero_nullspace<kDim>("periodic-convergence", "unit-test", measure),
+      pops::PreparedVectorDistribution<kDim>::replicated());
+}
+
+Errors solve_case(int cells, bool periodic) {
+  auto request = make_request(cells, periodic);
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::Real(1e-11);
+  options.absolute_tolerance = pops::Real(1e-13);
+  options.maximum_cycles = 120;
+  options.bottom_sweeps = 60;
+  Solver solver(std::move(request), options);
+  install_nullspace(solver, periodic);
+  fill_manufactured_rhs(solver.rhs(), solver.geom(), periodic);
+  const double rhs_mean =
+      static_cast<double>(pops::reduce_sum_local(solver.rhs()) /
+                          static_cast<pops::Real>(solver.geom().domain().numPts()));
+  solver.phi().set_val(pops::Real(0));
+  const pops::SolveReport report = solver.solve();
+  EXPECT_TRUE(report.solved()) << report.reason;
+
+  double sum_squared = 0;
+  double maximum = 0;
+  std::size_t count = 0;
+  for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
+    const auto& fab = solver.phi().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    const auto& valid = fab.box();
+    const auto& storage = fab.grown_box();
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(valid.numPts()); ++ordinal) {
+      const auto index = index_from_ordinal(valid, ordinal);
+      const double error = static_cast<double>(host(storage_ordinal(storage, index)) -
+                                               manufactured_value(solver.geom(), index, periodic));
+      sum_squared += error * error;
+      maximum = std::max(maximum, std::abs(error));
+      ++count;
+    }
+  }
+  maximum = pops::all_reduce_max(maximum);
+  return {std::sqrt(sum_squared / static_cast<double>(count)), maximum, rhs_mean};
+}
+
+double order(double coarse, double fine) {
+  return std::log(coarse / fine) / std::log(2.0);
+}
+
+void expect_second_order(bool periodic) {
+  const Errors coarse = solve_case(8, periodic);
+  const Errors medium = solve_case(16, periodic);
+  const Errors fine = solve_case(32, periodic);
+  const double l2_order = order(medium.l2, fine.l2);
+  const double linf_order = order(medium.linf, fine.linf);
+  EXPECT_GT(coarse.l2, medium.l2);
+  EXPECT_GT(medium.l2, fine.l2);
+  EXPECT_GT(l2_order, 1.8);
+  EXPECT_LT(l2_order, 2.2);
+  EXPECT_GT(linf_order, 1.8);
+  EXPECT_LT(linf_order, 2.2);
+  if (periodic)
+    EXPECT_LT(std::abs(fine.rhs_mean), 1e-12);
 }
 
 }  // namespace
 
-TEST(test_poisson_convergence, dirichlet_order2) {
-  // phi = sin(pi x) sin(pi y), lap phi = -2 pi^2 phi
-  BCRec bc;
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-  auto pe = [](double x, double y) { return std::sin(kPi * x) * std::sin(kPi * y); };
-  auto fr = [&](double x, double y) { return -2 * kPi * kPi * pe(x, y); };
-  double l2_32, li_32, l2_64, li_64, l2_128, li_128, mm;
-  Solve(32, bc, false, pe, fr, l2_32, li_32, mm);
-  Solve(64, bc, false, pe, fr, l2_64, li_64, mm);
-  Solve(128, bc, false, pe, fr, l2_128, li_128, mm);
-  const double oL2 = Order(l2_64, l2_128), oInf = Order(li_64, li_128);
-  std::printf("Dirichlet : L2 ordre %.2f (%.2e->%.2e) | Linf ordre %.2f (%.2e->%.2e)\n", oL2, l2_64,
-              l2_128, oInf, li_64, li_128);
-  EXPECT_TRUE(oL2 > 1.85 && oL2 < 2.15) << "dirichlet_L2_ordre2";
-  EXPECT_TRUE(oInf > 1.85 && oInf < 2.15) << "dirichlet_Linf_ordre2";
+TEST(test_poisson_convergence, dirichlet_is_second_order_in_the_native_rank) {
+  expect_second_order(false);
 }
 
-TEST(test_poisson_convergence, periodic_order2_and_nullspace) {
-  // periodique : phi = sin(2 pi x) sin(2 pi y), lap phi = -8 pi^2 phi (nullspace)
-  BCRec bc;  // periodique par defaut
-  auto pe = [](double x, double y) { return std::sin(2 * kPi * x) * std::sin(2 * kPi * y); };
-  auto fr = [&](double x, double y) { return -8 * kPi * kPi * pe(x, y); };
-  double l2_32, li_32, l2_64, li_64, l2_128, li_128, mm32, mm64, mm128;
-  Solve(32, bc, true, pe, fr, l2_32, li_32, mm32);
-  Solve(64, bc, true, pe, fr, l2_64, li_64, mm64);
-  Solve(128, bc, true, pe, fr, l2_128, li_128, mm128);
-  const double oL2 = Order(l2_64, l2_128), oInf = Order(li_64, li_128);
-  std::printf("Periodique : L2 ordre %.2f (%.2e->%.2e) | Linf ordre %.2f | <f>=%.1e\n", oL2, l2_64,
-              l2_128, oInf, mm128);
-  EXPECT_TRUE(oL2 > 1.85 && oL2 < 2.15) << "periodique_L2_ordre2";
-  EXPECT_TRUE(oInf > 1.85 && oInf < 2.15) << "periodique_Linf_ordre2";
-  // nullspace : second membre a moyenne nulle (solvabilite periodique)
-  EXPECT_TRUE(std::fabs(mm128) < 1e-10) << "nullspace_rhs_moyenne_nulle";
+TEST(test_poisson_convergence, periodic_is_second_order_and_the_explicit_nullspace_is_compatible) {
+  expect_second_order(true);
 }

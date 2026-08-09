@@ -148,6 +148,44 @@ def build_requirements(compiled: Any) -> Any:
                 except ValueError:
                     provider = None
                 row["wave_speed_provider"] = provider
+            elif flag in ("has_hllc", "has_roe"):
+                from pops.numerics.riemann.providers import compiled_provider_evidence
+
+                evidence = [compiled_provider_evidence(candidate) for candidate in selected]
+                if flag == "has_hllc":
+                    kinds = {item.hllc_provider for item in evidence}
+                    if None in kinds:
+                        raise ValueError("HLLC inspection requires exact provider evidence")
+                    row["providers"] = [
+                        {"kind": kind}
+                        for kind in sorted(kinds, key=str)
+                    ]
+                else:
+                    records = {
+                        (
+                            item.roe_provider,
+                            item.roe_entropy_policy,
+                            item.roe_entropy_delta,
+                        )
+                        for item in evidence
+                    }
+                    if any(kind is None for kind, _, _ in records):
+                        raise ValueError("Roe inspection requires exact provider evidence")
+                    row["providers"] = [
+                        {
+                            "kind": kind,
+                            "entropy_policy": entropy_policy,
+                            **(
+                                {"entropy_delta": entropy_delta}
+                                if entropy_delta is not None
+                                else {}
+                            ),
+                        }
+                        for kind, entropy_policy, entropy_delta in sorted(
+                            records,
+                            key=lambda item: tuple(str(part) for part in item),
+                        )
+                    ]
             capabilities.append(row)
 
     constraints = {
@@ -159,8 +197,16 @@ def build_requirements(compiled: Any) -> Any:
     }
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
+    artifact = getattr(compiled, "artifact", compiled)
+    selected_dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(selected_dimension, bool) or not isinstance(selected_dimension, int):
+        raise TypeError("compiled requirements require one exact resolved_dimension")
+    runtime["dimension"] = selected_dimension
     constraints.update({
         "dimension": runtime["dimension"],
+        "supported_dimensions": list(
+            artifact.platform_manifest.capabilities["supported_dimensions"].require(
+                "compiled.platform.supported_dimensions")),
         "amr_refinement_ratio": runtime["amr_refinement_ratio"],
         "precision": runtime["precision"],
         "communicator": runtime["communicator"],

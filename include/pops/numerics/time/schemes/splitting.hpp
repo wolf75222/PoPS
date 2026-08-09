@@ -1,7 +1,6 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/storage/multifab.hpp>
 
 /// @file
 /// @brief Operator splitting: decomposes dU/dt = T(U) + S(U) into separate substeps.
@@ -11,8 +10,8 @@
 /// Layer: `include/pops/numerics/time`.
 /// Role: handle a stiff source (relaxation, collisions, ionization) with an integrator
 ///       DIFFERENT from the transport one, without mixing the two stiffnesses.
-/// Contract: T and S are callables (MultiFab&, Real)->void that advance their subsystem
-///           IN PLACE; the integrator is agnostic to the contents.
+/// Contract: T and S advance the same exact state type in place; the composition is agnostic to
+///           spatial rank and storage.
 ///
 /// Invariants:
 /// - Strang is 2nd order as soon as each sub-integrator is (commutation error [T,S] is
@@ -20,17 +19,17 @@
 
 namespace pops {
 
-template <class TransportStep, class SourceStep>
-void lie_step(MultiFab& U, Real dt, TransportStep T, SourceStep S) {
-  T(U, dt);
-  S(U, dt);
+template <class State, class TransportStep, class SourceStep>
+void lie_step(State& state, Real dt, TransportStep transport, SourceStep source) {
+  transport(state, dt);
+  source(state, dt);
 }
 
-template <class TransportStep, class SourceStep>
-void strang_step(MultiFab& U, Real dt, TransportStep T, SourceStep S) {
-  S(U, Real(0.5) * dt);
-  T(U, dt);
-  S(U, Real(0.5) * dt);
+template <class State, class TransportStep, class SourceStep>
+void strang_step(State& state, Real dt, TransportStep transport, SourceStep source) {
+  source(state, Real(0.5) * dt);
+  transport(state, dt);
+  source(state, Real(0.5) * dt);
 }
 
 }  // namespace pops

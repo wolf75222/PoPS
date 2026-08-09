@@ -29,16 +29,14 @@ from pops.math import Laplacian, elliptic_terms, laplacian
 from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.solvers.options import CompositeFAC
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
 
 _LAYOUT = Uniform(cartesian_grid(n=16, periodic=False))
-_ONE_LEVEL_AMR_LAYOUT = final_amr_layout(
-    cartesian_grid(n=16, periodic=False), max_levels=1)
-_MULTILEVEL_AMR_LAYOUT = final_amr_layout(
-    cartesian_grid(n=16, periodic=False), max_levels=2)
+_ONE_LEVEL_AMR_LAYOUT = final_amr_layout(cartesian_grid(n=16, periodic=False), max_levels=1)
+_MULTILEVEL_AMR_LAYOUT = final_amr_layout(cartesian_grid(n=16, periodic=False), max_levels=2)
 
 
 class ExternalFieldPlan(Descriptor):
@@ -115,11 +113,16 @@ def _field(model: Model, name: str, rhs: object):
     )
 
 
-def _disc(condition: object, *, singular: bool = False) -> FieldDiscretization:
+def _disc(
+    condition: object,
+    *,
+    singular: bool = False,
+    solver: object | None = None,
+) -> FieldDiscretization:
     return FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(), condition),),
-        solver=GeometricMG(),
+        solver=CartesianCG() if solver is None else solver,
         nullspace=ConstantNullspace() if singular else None,
         gauge=MeanValueGauge(0) if singular else None,
     )
@@ -129,17 +132,18 @@ def _case(*conditions: object):
     model = Model("field-model-%d" % len(conditions))
     state = model.state("U", components=["rho", "sigma"])
     operators = [
-        _field(model, "potential_%d" % index, state[index])
-        for index in range(len(conditions))
+        _field(model, "potential_%d" % index, state[index]) for index in range(len(conditions))
     ]
     problem = Case(name="field-case-%d" % len(conditions))
     problem.block("material", model)
     handles = []
     for operator, condition in zip(operators, conditions, strict=True):
-        handles.append(problem.field(
-            operator,
-            _disc(condition, singular=isinstance(condition, Neumann)),
-        ))
+        handles.append(
+            problem.field(
+                operator,
+                _disc(condition, singular=isinstance(condition, Neumann)),
+            )
+        )
     return problem, handles
 
 
@@ -149,20 +153,25 @@ def _one_level_amr_plan(*, hierarchy_policy, solver):
     operator = _field(model, "potential", rho)
     problem = Case(name="one-level-amr-field-case")
     problem.block("material", model)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),),
-        solver=solver,
-        hierarchy_policy=hierarchy_policy,
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),),
+            solver=solver,
+            hierarchy_policy=hierarchy_policy,
+        ),
+    )
     return capture_field_plans(
-        problem, lambda value: value, target="amr_system", layout=_ONE_LEVEL_AMR_LAYOUT,
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_ONE_LEVEL_AMR_LAYOUT,
     )["potential"]
 
 
 def test_one_level_amr_resolve_preserves_level_by_level_capability() -> None:
-    plan = _one_level_amr_plan(
-        hierarchy_policy=LevelByLevelSolve(), solver=GeometricMG())
+    plan = _one_level_amr_plan(hierarchy_policy=LevelByLevelSolve(), solver=GeometricMG())
 
     assert plan.native_options["hierarchy_policy"]["policy_id"] == (
         "pops.field-hierarchy.level-local"
@@ -183,12 +192,19 @@ def test_composite_fac_refuses_a_single_level_amr_backend() -> None:
 )
 def test_field_plan_lowers_complete_boundary_and_qualified_provider(condition: object) -> None:
     problem, _ = _case(condition)
-    plan = next(iter(capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT).values()))
+    plan = next(
+        iter(
+            capture_field_plans(
+                problem, lambda value: value, target="system", layout=_LAYOUT
+            ).values()
+        )
+    )
 
     options = plan.native_options
-    assert options["provider_identity"]["contributions"][0]["provider"]["block_ref"][
-        "local_id"] == "material"
+    assert (
+        options["provider_identity"]["contributions"][0]["provider"]["block_ref"]["local_id"]
+        == "material"
+    )
     assert options["provider_slot"]
     assert options["provider_identity_text"]
     assert options["provider_pack"][0]["owner_block"] == "material"
@@ -204,31 +220,31 @@ def test_field_plan_preserves_a_nonzero_mean_gauge_in_the_opaque_provider_contra
     operator = _field(model, "potential", rho)
     problem = Case(name="nonzero-field-gauge-case")
     problem.block("material", model)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
-        solver=GeometricMG(),
-        nullspace=ConstantNullspace(),
-        gauge=MeanValueGauge(3.25),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Neumann(0.0)),),
+            solver=CartesianCG(),
+            nullspace=ConstantNullspace(),
+            gauge=MeanValueGauge(3.25),
+        ),
+    )
 
-    plan = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT
-    )["potential"]
+    plan = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)[
+        "potential"
+    ]
     from pops.fields._prepared_field_nullspace_registry import (
         prepared_field_nullspace_binding_from_data,
     )
 
-    binding = prepared_field_nullspace_binding_from_data(
-        plan.native_options["nullspace_provider"]
-    )
+    binding = prepared_field_nullspace_binding_from_data(plan.native_options["nullspace_provider"])
     assert binding.resolution.native_contract["options"] == {"gauge.value": 3.25}
 
 
 def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() -> None:
     problem, _ = _case(Dirichlet(0.0), Mixed(1.0, 1.0, 0.0))
-    plans = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)
+    plans = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)
 
     assert set(plans) == {"potential_0", "potential_1"}
     assert len({plan.native_options["provider_slot"] for plan in plans.values()}) == 2
@@ -238,9 +254,10 @@ def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() ->
 @pytest.mark.parametrize("target", ("system", "amr_system"))
 @pytest.mark.parametrize("sign", (-1, 1))
 def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
-    target: str, sign: int,
+    target: str,
+    sign: int,
 ) -> None:
-    model = Model("signed-gradient-%s-%d" % (target, sign))
+    model = Model("signed-gradient-%s-%d" % (target, sign), frame=_LAYOUT.mesh.frame)
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
     operator = model.field_operator(
@@ -254,13 +271,43 @@ def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
     )
     problem = Case(name="signed-gradient-case-%s-%d" % (target, sign))
     problem.block("material", model)
-    problem.field(operator, _disc(Dirichlet(0.0)))
+    problem.field(
+        operator,
+        _disc(
+            Dirichlet(0.0),
+            solver=GeometricMG() if target == "amr_system" else CartesianCG(),
+        ),
+    )
 
-    plan = capture_field_plans(
-        problem, lambda value: value, target=target, layout=_LAYOUT)["potential"]
+    plan = capture_field_plans(problem, lambda value: value, target=target, layout=_LAYOUT)[
+        "potential"
+    ]
 
     assert plan.native_options["output_route"]["components"] == (
-        "potential", "electric_field_x", "electric_field_y")
+        "potential",
+        "electric_field_x",
+        "electric_field_y",
+    )
+    assert plan.native_options["output_route"]["component_keys"] == (
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "potential",
+        },
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "electric_field_x",
+        },
+        {
+            "owner_qid": plan.native_options["output_route"]["owner_identity"],
+            "space_kind": "field",
+            "space_name": "potential",
+            "component": "electric_field_y",
+        },
+    )
     assert plan.native_options["output_route"]["gradient_sign"] == sign
 
 
@@ -282,8 +329,9 @@ def test_non_unit_laplacian_scale_is_preserved_by_exact_rhs_normalization() -> N
     problem = Case(name="scaled-laplacian-case")
     problem.block("material", model)
     problem.field(operator, _disc(Dirichlet(0.0)))
-    plan = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)["potential"]
+    plan = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)[
+        "potential"
+    ]
 
     (laplacian_term,) = elliptic_terms(plan.operator.equation.lhs)
     assert laplacian_term.scale == -2.0
@@ -309,8 +357,7 @@ def test_native_lowering_rejects_a_mutated_same_owner_output_source() -> None:
     # values under a descriptor claiming they came from ``peer``.
     operator.outputs = (FieldOutput("potential", peer),)
     with pytest.raises(ValueError, match="FieldOutput source disagrees.*solved unknown"):
-        capture_field_plans(
-            problem, lambda value: value, target="system", layout=_LAYOUT)
+        capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)
 
 
 def test_external_field_plan_crosses_registration_resolution_and_lowering_structurally() -> None:
@@ -321,8 +368,9 @@ def test_external_field_plan_crosses_registration_resolution_and_lowering_struct
     problem.block("material", model)
     problem.field(operator, ExternalFieldPlan(_disc(Dirichlet(0.0))))
 
-    plan = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)["potential"]
+    plan = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)[
+        "potential"
+    ]
 
     assert plan.discretization.provider_id == ExternalFieldPlan.provider_id
     assert plan.to_data()["discretization"]["provider_id"] == ExternalFieldPlan.provider_id
@@ -333,37 +381,104 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="dynamic-field-case")
     problem.block("material", model)
     from pops.params import RuntimeParam
+
     boundary_value = RuntimeParam("wall_value")
     problem.param(boundary_value)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Dirichlet(problem.value(boundary_value))),),
-        solver=GeometricMG(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(), Dirichlet(problem.value(boundary_value))
+                ),
+            ),
+            solver=CartesianCG(),
+        ),
+    )
 
-    plans = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)
+    plans = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)
     plan = plans["potential"]
     assert plan.native_options["boundary_kernel_required"] is True
     assert plan.native_options["boundary_iterate_dependent"] is False
-    assert [
-        handle.local_id
-        for handle in plan.provider_parameter_handles("boundary-kernel")
-    ] == ["wall_value"]
+    assert [handle.local_id for handle in plan.provider_parameter_handles("boundary-kernel")] == [
+        "wall_value"
+    ]
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
     source = emit_field_boundaries(None, None, plans, "system")
-    assert 'extern "C" void pops_install_field_boundaries(pops::System* sys)' in source
+    assert (
+        'extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimension>* sys)'
+    ) in source
     assert "make_program_execution_provider(sys)" in source
     assert "prepare_field_boundary_residual_route_0" in source
+    assert "prepare_field_boundary_jvp_route_0" in source
+    assert ":boundary-jvp" in source
     assert "params[0]" in source
+    assert "static_assert(pops::kNativeDimension == 2)" in source
+    assert "Box2D" not in source
+    assert "Array4" not in source
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_dynamic_boundary_uses_one_exact_ranked_launcher(dimension: int) -> None:
+    from pops.domain import CartesianDomain
+    from pops.mesh import CartesianGrid
+    from pops.params import RuntimeParam
+
+    model = Model("dynamic-ranked-field-model-%d" % dimension)
+    (rho,) = model.state("U", components=["rho"])
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+    problem = Case(name="dynamic-ranked-field-case-%d" % dimension)
+    problem.block("material", model)
+    wall_value = RuntimeParam("wall_value")
+    problem.param(wall_value)
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(problem.value(wall_value))),
+            ),
+            solver=CartesianCG(),
+        ),
+    )
+    domain = CartesianDomain(
+        "dynamic-ranked-domain-%d" % dimension,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+    )
+    layout = Uniform(CartesianGrid(frame=domain.frame(), cells=(8,) * dimension, periodic=None))
+
+    plan = capture_field_plans(problem, lambda value: value, target="system", layout=layout)[
+        "potential"
+    ]
+    assert len(plan.native_options["boundary_faces"]) == 2 * dimension
+
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
+    source = emit_field_boundaries(None, None, {"potential": plan}, "system")
+    assert "static_assert(pops::kNativeDimension == %d)" % dimension in source
+    assert "geometry.spacing(%d)" % (dimension - 1) in source
+    assert "pops::CellIndex<pops::kNativeDimension>" in source
+    assert "pops::MultiFab<pops::kNativeDimension>" in source
+    assert "Box2D" not in source
+    assert "Array4" not in source
 
 
 def test_iterate_dependent_boundary_requires_newton_and_emits_exact_jvp() -> None:
@@ -374,27 +489,33 @@ def test_iterate_dependent_boundary_requires_newton_and_emits_exact_jvp() -> Non
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="nonlinear-boundary-case")
     problem.block("material", model)
     u = ValueExpr(unknown)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Mixed(alpha=1.0, beta=1.0, value=u * u)),),
-        solver=GeometricMG(),
-        nonlinear=Newton(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(AllPhysicalBoundaries(), Mixed(alpha=1.0, beta=1.0, value=u * u)),
+            ),
+            solver=CartesianCG(),
+            nonlinear=Newton(),
+        ),
+    )
 
-    plans = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)
+    plans = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)
     plan = plans["potential"]
     assert plan.native_options["boundary_iterate_dependent"] is True
     assert plan.native_options["nonlinear"]["target"] == "system"
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
     source = emit_field_boundaries(None, None, plans, "system")
     assert "prepare_field_boundary_jvp_route_0" in source
     assert ":boundary-jvp" in source
@@ -408,34 +529,43 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="prepared-boundary-case")
     block = problem.block("material", model)
     prepared_rho = boundary_value(block[state], "rho")
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Dirichlet(prepared_rho + logical_time("time"))),),
-        solver=GeometricMG(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(), Dirichlet(prepared_rho + logical_time("time"))
+                ),
+            ),
+            solver=CartesianCG(),
+        ),
+    )
 
-    plans = capture_field_plans(
-        problem, lambda value: value, target="system", layout=_LAYOUT)
+    plans = capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)
     plan = plans["potential"]
     dependencies = plan.native_options["boundary_dependencies"]
-    assert [(row["owner_block"], row["component"])
-            for row in dependencies["states"]] == [("material", 0)]
+    assert [(row["owner_block"], row["component"]) for row in dependencies["states"]] == [
+        ("material", 0)
+    ]
     assert dependencies["logical_time"] == ("time",)
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
     source = emit_field_boundaries(None, None, plans, "system")
     assert (
         "context.states[0]->fab(context.states[0]->local_index_of("
-        "iterate.global_index(li))).const_array()" in source
+        "iterate.global_index(li))).view()" in source
     )
-    assert "state0(i, j, 0)" in source
+    assert "state0(index, 0)" in source
     assert "context.point.time" in source
 
 
@@ -445,21 +575,28 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="amr-level-boundary-case")
     block = problem.block("material", model)
     prepared_rho = boundary_value(block[state], "rho")
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(),
-            Dirichlet(prepared_rho + logical_time("time") + logical_time("stage")),
-        ),),
-        solver=GeometricMG(),
-        hierarchy_policy=LevelByLevelSolve(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Dirichlet(prepared_rho + logical_time("time") + logical_time("stage")),
+                ),
+            ),
+            solver=GeometricMG(),
+            hierarchy_policy=LevelByLevelSolve(),
+        ),
+    )
 
     plan = capture_field_plans(
         problem,
@@ -472,8 +609,9 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
         "pops.field-hierarchy.level-local"
     )
     dependencies = plan.native_options["boundary_dependencies"]
-    assert [(row["owner_block"], row["component"])
-            for row in dependencies["states"]] == [("material", 0)]
+    assert [(row["owner_block"], row["component"]) for row in dependencies["states"]] == [
+        ("material", 0)
+    ]
     assert dependencies["logical_time"] == ("stage", "time")
     dependency_evidence = [
         output
@@ -481,20 +619,14 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
         if "boundary-dependency" in row.source
         for output in row.targets
     ]
-    assert dependency_evidence == [
-        "field-install:potential:boundary-buffer:states:level-qualified"
-    ]
+    assert dependency_evidence == ["field-install:potential:boundary-buffer:states:level-qualified"]
     from pops.fields._prepared_field_solver_registry import (
         prepared_field_solver_binding_from_data,
     )
 
-    solver_binding = prepared_field_solver_binding_from_data(
-        plan.native_options["solver_provider"]
-    )
+    solver_binding = prepared_field_solver_binding_from_data(plan.native_options["solver_provider"])
     assert solver_binding.facts.boundary["state_dependent"] is True
-    assert solver_binding.provider["use_policy"]["capabilities"][
-        "amr_boundary_dependencies"
-    ] == (
+    assert solver_binding.provider["use_policy"]["capabilities"]["amr_boundary_dependencies"] == (
         "level-qualified-state@1",
         "level-qualified-field@1",
         "logical-timepoint@1",
@@ -514,20 +646,27 @@ def test_multilevel_amr_composite_boundary_state_has_exact_level_route() -> None
     (rho,) = state
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="amr-composite-boundary-case")
     block = problem.block("material", model)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(),
-            Dirichlet(boundary_value(block[state], "rho")),
-        ),),
-        solver=GeometricMG(fac=CompositeFAC()),
-        hierarchy_policy=CompositeHierarchySolve(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Dirichlet(boundary_value(block[state], "rho")),
+                ),
+            ),
+            solver=GeometricMG(fac=CompositeFAC()),
+            hierarchy_policy=CompositeHierarchySolve(),
+        ),
+    )
 
     plan = capture_field_plans(
         problem,
@@ -540,17 +679,16 @@ def test_multilevel_amr_composite_boundary_state_has_exact_level_route() -> None
         "pops.field-hierarchy.composite"
     )
     dependencies = plan.native_options["boundary_dependencies"]
-    assert [(row["owner_block"], row["component"])
-            for row in dependencies["states"]] == [("material", 0)]
+    assert [(row["owner_block"], row["component"]) for row in dependencies["states"]] == [
+        ("material", 0)
+    ]
     dependency_evidence = [
         output
         for row in plan.coverage
         if "boundary-dependency" in row.source
         for output in row.targets
     ]
-    assert dependency_evidence == [
-        "field-install:potential:boundary-buffer:states:level-qualified"
-    ]
+    assert dependency_evidence == ["field-install:potential:boundary-buffer:states:level-qualified"]
 
 
 def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> None:
@@ -560,31 +698,47 @@ def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> No
     driver = model.field("driver")
     potential = model.field("potential")
     driver_operator = model.field_operator(
-        "driver", unknown=driver, equation=(-laplacian(driver) == rho),
+        "driver",
+        unknown=driver,
+        equation=(-laplacian(driver) == rho),
         outputs=(FieldOutput("driver", driver),),
     )
     potential_operator = model.field_operator(
-        "potential", unknown=potential, equation=(-laplacian(potential) == rho),
+        "potential",
+        unknown=potential,
+        equation=(-laplacian(potential) == rho),
         outputs=(FieldOutput("potential", potential),),
     )
     problem = Case(name="amr-field-boundary-case")
     problem.block("material", model)
-    problem.field(driver_operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Dirichlet(0.0),
-        ),),
-        solver=GeometricMG(),
-        hierarchy_policy=LevelByLevelSolve(),
-    ))
-    problem.field(potential_operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Dirichlet(boundary_value(driver)),
-        ),),
-        solver=GeometricMG(),
-        hierarchy_policy=LevelByLevelSolve(),
-    ))
+    problem.field(
+        driver_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Dirichlet(0.0),
+                ),
+            ),
+            solver=GeometricMG(),
+            hierarchy_policy=LevelByLevelSolve(),
+        ),
+    )
+    problem.field(
+        potential_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Dirichlet(boundary_value(driver)),
+                ),
+            ),
+            solver=GeometricMG(),
+            hierarchy_policy=LevelByLevelSolve(),
+        ),
+    )
 
     plan = capture_field_plans(
         problem,
@@ -595,8 +749,7 @@ def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> No
 
     dependencies = plan.native_options["boundary_dependencies"]
     assert [
-        (row["owner_block"], row["output_key"], row["component"])
-        for row in dependencies["fields"]
+        (row["owner_block"], row["output_key"], row["component"]) for row in dependencies["fields"]
     ] == [("material", "driver", 0)]
     dependency_evidence = [
         output
@@ -604,15 +757,13 @@ def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> No
         if "boundary-dependency" in row.source
         for output in row.targets
     ]
-    assert dependency_evidence == [
-        "field-install:potential:boundary-buffer:fields:level-qualified"
-    ]
+    assert dependency_evidence == ["field-install:potential:boundary-buffer:fields:level-qualified"]
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
     source = emit_field_boundaries(None, None, {"potential": plan}, "amr_system")
     assert "context.fields[0]->local_index_of(iterate.global_index(li))" in source
-    assert "field0(i, j, 0)" in source
+    assert "field0(index, 0)" in source
 
 
 def test_multilevel_amr_level_local_nonlinear_boundary_fails_closed() -> None:
@@ -623,21 +774,28 @@ def test_multilevel_amr_level_local_nonlinear_boundary_fails_closed() -> None:
     (rho,) = model.state("U", components=["rho"])
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="amr-level-nonlinear-boundary-case")
     problem.block("material", model)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(),
-            Mixed(alpha=1.0, beta=1.0, value=ValueExpr(unknown) ** 2),
-        ),),
-        solver=GeometricMG(),
-        nonlinear=Newton(),
-        hierarchy_policy=LevelByLevelSolve(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Mixed(alpha=1.0, beta=1.0, value=ValueExpr(unknown) ** 2),
+                ),
+            ),
+            solver=GeometricMG(),
+            nonlinear=Newton(),
+            hierarchy_policy=LevelByLevelSolve(),
+        ),
+    )
 
     with pytest.raises(
         LoweringRejection,
@@ -659,18 +817,23 @@ def test_boundary_state_value_requires_explicit_component_contract() -> None:
     rho, _ = state
     unknown = model.field("potential")
     operator = model.field_operator(
-        "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
     problem = Case(name="ambiguous-boundary-case")
     block = problem.block("material", model)
-    problem.field(operator, FieldDiscretization(
-        method=CellCenteredSecondOrder(),
-        boundaries=(BoundaryCondition(
-            AllPhysicalBoundaries(), Dirichlet(ValueExpr(block[state]))),),
-        solver=GeometricMG(),
-    ))
+    problem.field(
+        operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(
+                BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(ValueExpr(block[state]))),
+            ),
+            solver=CartesianCG(),
+        ),
+    )
 
     with pytest.raises(Exception, match="boundary_value"):
-        capture_field_plans(
-            problem, lambda value: value, target="system", layout=_LAYOUT)
+        capture_field_plans(problem, lambda value: value, target="system", layout=_LAYOUT)

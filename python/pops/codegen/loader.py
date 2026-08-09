@@ -48,7 +48,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
                  module_hash: Any = None, external_bricks: Any = None,
                  problem_snapshot: Any = None, bind_schema: Any = None,
                  program_param_routes: Any = None, generated_cpp: Any = None,
-                 lowering_coverage: Any = None, program_graph: Any = None) -> None:
+                 lowering_coverage: Any = None, program_graph: Any = None,
+                 native_dimension: Any = None) -> None:
         self.so_path = so_path
         # Code emission has completed before the loader is constructed.  Retain a clone-owned,
         # registry-free Program for inspection/runtime metadata, never the authoring Program graph.
@@ -112,6 +113,10 @@ class CompiledProblem(CompiledProblemDumpMixin):
             self.program_graph.graph_hash if self.program_graph is not None else None
         )
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
+        if native_dimension is not None \
+                and (type(native_dimension) is not int or native_dimension not in (1, 2, 3)):
+            raise ValueError("CompiledProblem native_dimension must be 1, 2, 3, or absent")
+        self.native_dimension = native_dimension
         self.cxx = cxx
         self.std = std
         # Validated brick libraries (Spec 3 section 21, ADC-464): the LibraryManifests read +

@@ -98,8 +98,9 @@ def _names(operator, jacvec):
 
 def _apply_source(source, operator):
     factory = source.index(
-        "pops::PreparedAffineOperatorSessionFactory make_apply_A%d_session" % operator.id)
-    start = source.index("pops::ApplyFn apply =", factory)
+        "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> "
+        "make_apply_A%d_session" % operator.id)
+    start = source.index("pops::ApplyFn<pops::kNativeDimension> apply =", factory)
     return source[start:source.index("\n  };", start) + len("\n  };")]
 
 
@@ -111,8 +112,10 @@ def test_apply_captures_point_and_only_conditionally_allocates_boundary_scratch(
     point_allocation = source.index(
         "std::make_shared<pops::runtime::multiblock::BoundaryEvaluationPoint>()")
     factory = source.index(
-        "pops::PreparedAffineOperatorSessionFactory make_apply_A%d_session" % operator.id)
-    apply_declaration = source.index("pops::ApplyFn apply =", factory)
+        "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> "
+        "make_apply_A%d_session" % operator.id)
+    apply_declaration = source.index(
+        "pops::ApplyFn<pops::kNativeDimension> apply =", factory)
     begin_step = source.index("ctx.begin_step(dt)")
     point_refresh = source.index("*%s = ctx.boundary_evaluation_point(" % names["point"])
     assert point_allocation < apply_declaration < begin_step < point_refresh
@@ -121,8 +124,13 @@ def test_apply_captures_point_and_only_conditionally_allocates_boundary_scratch(
 
     for scratch in (names["r0_core"], names["boundary_work"]):
         declaration = next(line for line in source.splitlines() if "auto %s =" % scratch in line)
-        assert "%s ? std::make_shared<pops::MultiFab>(" % names["has_boundary"] in declaration
-        assert "std::shared_ptr<pops::MultiFab>{}" in declaration
+        assert (
+            "%s ? std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            % names["has_boundary"] in declaration
+        )
+        assert (
+            "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>{}" in declaration
+        )
         assert apply_source.count(scratch) >= 1
     assert "std::make_shared" not in apply_source
 
@@ -163,8 +171,9 @@ def test_apply_uses_point_qualified_core_and_exact_boundary_jvp(sources, flux_on
            operator.id)
     ) in apply_source
     assert (
-        "ctx.boundary_jvp_into_at(*%s, 0, *jac_uk%d_%d, "
-        "const_cast<pops::MultiFab&>(in), *%s, *operator_boundary_session%d_0);"
+            "ctx.boundary_jvp_into_at(*%s, 0, *jac_uk%d_%d, "
+            "const_cast<pops::MultiFab<pops::kNativeDimension>&>(in), *%s, "
+            "*operator_boundary_session%d_0);"
         % (names["point"], operator.id, jacvec.id, names["boundary_work"], operator.id)
     ) in apply_source
     assert (
@@ -286,7 +295,8 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
     assert prepare.index(refresh_point) < prepare.index(boundary_prepare)
 
     private_fields = re.findall(
-        r"auto session_(\w+) = std::make_shared<pops::MultiFab>\(\*\1\);", source)
+        r"auto session_(\w+) = std::make_shared<"
+        r"pops::MultiFab<pops::kNativeDimension>>\(\*\1\);", source)
     private_scalars = re.findall(
         r"auto session_(\w+) = std::make_shared<pops::Real>\(\*\1\);", source)
     private_points = re.findall(
@@ -303,7 +313,8 @@ def test_reused_operator_session_refreshes_private_state_time_and_point_before_b
     for name in (*private_scalars, *private_points):
         assert f"*{name} = *template_{name};" in prepare
 
-    apply_start = source.index("pops::ApplyFn apply =", prepare_end)
+    apply_start = source.index(
+        "pops::ApplyFn<pops::kNativeDimension> apply =", prepare_end)
     apply_capture = source[apply_start:source.index("](", apply_start)]
     assert "template_" not in apply_capture
 

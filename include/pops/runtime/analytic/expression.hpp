@@ -10,6 +10,8 @@
 
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/index/real_vector.hpp>
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
@@ -62,6 +64,7 @@ enum class AnalyticOp : std::uint8_t {
   Select = 28,
   Between = 29,
   Input = 30,
+  Z = 31,
 };
 
 enum class AnalyticValueType : std::uint8_t { Scalar = 0, Predicate = 1 };
@@ -86,6 +89,7 @@ struct AnalyticNode {
   static AnalyticNode constant(Real value) { return AnalyticNode{AnalyticOp::Constant, value, {}}; }
   static AnalyticNode x() { return AnalyticNode{AnalyticOp::X, Real(0), {}}; }
   static AnalyticNode y() { return AnalyticNode{AnalyticOp::Y, Real(0), {}}; }
+  static AnalyticNode z() { return AnalyticNode{AnalyticOp::Z, Real(0), {}}; }
   static AnalyticNode apply(AnalyticOp operation, std::vector<AnalyticNode> arguments) {
     return AnalyticNode{operation, Real(0), std::move(arguments)};
   }
@@ -116,6 +120,8 @@ inline const char* op_name(AnalyticOp op) {
       return "x";
     case AnalyticOp::Y:
       return "y";
+    case AnalyticOp::Z:
+      return "z";
     case AnalyticOp::Add:
       return "add";
     case AnalyticOp::Sub:
@@ -177,7 +183,7 @@ inline const char* op_name(AnalyticOp op) {
 }
 
 /// Strict inverse for canonical schema operation names.  A coordinate node is resolved by the
-/// binding layer from its typed axis to X or Y before this function is called.
+/// binding layer from its typed axis to X, Y, or Z before this function is called.
 inline AnalyticOp analytic_op_from_name(std::string_view name) {
   if (name == "constant")
     return AnalyticOp::Constant;
@@ -185,6 +191,8 @@ inline AnalyticOp analytic_op_from_name(std::string_view name) {
     return AnalyticOp::X;
   if (name == "y")
     return AnalyticOp::Y;
+  if (name == "z")
+    return AnalyticOp::Z;
   if (name == "add")
     return AnalyticOp::Add;
   if (name == "sub")
@@ -245,7 +253,7 @@ inline AnalyticOp analytic_op_from_name(std::string_view name) {
 }
 
 inline bool is_known(AnalyticOp op) {
-  return static_cast<std::uint8_t>(op) <= static_cast<std::uint8_t>(AnalyticOp::Input);
+  return static_cast<std::uint8_t>(op) <= static_cast<std::uint8_t>(AnalyticOp::Z);
 }
 
 inline int arity(AnalyticOp op) {
@@ -253,6 +261,7 @@ inline int arity(AnalyticOp op) {
     case AnalyticOp::Constant:
     case AnalyticOp::X:
     case AnalyticOp::Y:
+    case AnalyticOp::Z:
     case AnalyticOp::Input:
       return 0;
     case AnalyticOp::Neg:
@@ -309,12 +318,18 @@ struct AnalyticProgramView {
   const Real* literals = nullptr;
   std::uint32_t instruction_count = 0;
   std::uint8_t required_stack = 0;
+  std::uint8_t required_dimension = 0;
   AnalyticValueType result_type = AnalyticValueType::Scalar;
 
-  /// Evaluate at Cartesian coordinates (x,y), preserving validity of every intermediate.
+  /// Evaluate at compile-time-ranked Cartesian coordinates, preserving validity of every
+  /// intermediate. A program that references an unavailable axis fails closed.
   /// The program structure has already passed host validation.
-  POPS_HD AnalyticEvaluation eval_checked(Real x, Real y, const Real* inputs = nullptr,
+  template <int Dim>
+  POPS_HD AnalyticEvaluation eval_checked(const RealVector<Dim>& coordinates,
+                                          const Real* inputs = nullptr,
                                           std::uint8_t input_count = 0) const {
+    if (required_dimension > Dim)
+      return {std::numeric_limits<Real>::quiet_NaN(), false};
     // Keep the per-thread VM stack compact on accelerators. AnalyticEvaluation is naturally padded
     // to 16 bytes (Real + bool), whereas these two uninitialized arrays need only 9 bytes per slot.
     // The validated postfix program writes every active slot before reading it.
@@ -330,15 +345,18 @@ struct AnalyticProgramView {
           validity[sp++] = std::uint8_t{1};
           break;
         case AnalyticOp::X:
-          assert(sp < kAnalyticMaxStack);
-          values[sp] = x;
-          validity[sp++] = Kokkos::isfinite(x) ? std::uint8_t{1} : std::uint8_t{0};
-          break;
         case AnalyticOp::Y:
+        case AnalyticOp::Z: {
           assert(sp < kAnalyticMaxStack);
-          values[sp] = y;
-          validity[sp++] = Kokkos::isfinite(y) ? std::uint8_t{1} : std::uint8_t{0};
-          break;
+          const int axis = instruction.op == AnalyticOp::X   ? 0
+                           : instruction.op == AnalyticOp::Y ? 1
+                                                             : 2;
+          const bool available = axis < Dim;
+          values[sp] = available ? coordinates[axis]
+                                 : std::numeric_limits<Real>::quiet_NaN();
+          validity[sp++] = available && Kokkos::isfinite(values[sp - 1]) ? std::uint8_t{1}
+                                                                          : std::uint8_t{0};
+        } break;
         case AnalyticOp::Input: {
           assert(sp < kAnalyticMaxStack);
           const std::uint32_t slot = instruction.operand;
@@ -516,17 +534,33 @@ struct AnalyticProgramView {
     return {values[0], validity[0] != std::uint8_t{0}};
   }
 
+  template <int Dim>
+  POPS_HD AnalyticEvaluation eval_checked(const Index<Dim>& index, const Geometry<Dim>& geometry,
+                                          const Real* inputs = nullptr,
+                                          std::uint8_t input_count = 0) const {
+    return eval_checked(geometry.cell_center(index), inputs, input_count);
+  }
+
   /// Scalar convenience seam. Invalid evaluation is represented by NaN so every existing finite
   /// preflight remains fail-closed even when an operation could otherwise mask the invalid payload.
-  POPS_HD Real eval(Real x, Real y, const Real* inputs = nullptr,
+  template <int Dim>
+  POPS_HD Real eval(const RealVector<Dim>& coordinates, const Real* inputs = nullptr,
                     std::uint8_t input_count = 0) const {
-    const AnalyticEvaluation result = eval_checked(x, y, inputs, input_count);
+    const AnalyticEvaluation result = eval_checked(coordinates, inputs, input_count);
     return result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
   }
 
-  POPS_HD bool eval_predicate(Real x, Real y) const {
+  template <int Dim>
+  POPS_HD Real eval(const Index<Dim>& index, const Geometry<Dim>& geometry,
+                    const Real* inputs = nullptr, std::uint8_t input_count = 0) const {
+    const AnalyticEvaluation result = eval_checked(index, geometry, inputs, input_count);
+    return result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
+  }
+
+  template <int Dim>
+  POPS_HD bool eval_predicate(const RealVector<Dim>& coordinates) const {
     assert(result_type == AnalyticValueType::Predicate);
-    const AnalyticEvaluation result = eval_checked(x, y);
+    const AnalyticEvaluation result = eval_checked(coordinates);
     assert(result.valid);
     return result.valid && result.value != Real(0);
   }
@@ -547,31 +581,41 @@ class AnalyticProgram {
   [[nodiscard]] std::size_t instruction_count() const noexcept { return instructions_.size(); }
   [[nodiscard]] std::size_t literal_count() const noexcept { return literals_.size(); }
   [[nodiscard]] std::size_t required_stack() const noexcept { return required_stack_; }
+  [[nodiscard]] int required_dimension() const noexcept { return required_dimension_; }
   [[nodiscard]] AnalyticValueType result_type() const noexcept { return result_type_; }
 
   [[nodiscard]] AnalyticProgramView view() const noexcept {
     return AnalyticProgramView{instructions_.data(), literals_.data(),
                                static_cast<std::uint32_t>(instructions_.size()),
-                               static_cast<std::uint8_t>(required_stack_), result_type_};
+                               static_cast<std::uint8_t>(required_stack_), required_dimension_,
+                               result_type_};
   }
 
-  [[nodiscard]] Real evaluate(Real x, Real y) const {
+  template <int Dim>
+  [[nodiscard]] Real evaluate(const RealVector<Dim>& coordinates) const {
     if (empty())
       throw std::logic_error("analytic expression: cannot evaluate an empty program");
-    return view().eval(x, y);
+    if (required_dimension_ > Dim)
+      throw std::invalid_argument("analytic expression requires spatial dimension " +
+                                  std::to_string(required_dimension_) +
+                                  " but the target rank is " + std::to_string(Dim));
+    return view().eval(coordinates);
   }
 
  private:
   AnalyticProgram(InstructionStorage instructions, LiteralStorage literals,
-                  std::size_t required_stack, AnalyticValueType result_type)
+                  std::size_t required_stack, std::uint8_t required_dimension,
+                  AnalyticValueType result_type)
       : instructions_(std::move(instructions)),
         literals_(std::move(literals)),
         required_stack_(required_stack),
+        required_dimension_(required_dimension),
         result_type_(result_type) {}
 
   InstructionStorage instructions_;
   LiteralStorage literals_;
   std::size_t required_stack_ = 0;
+  std::uint8_t required_dimension_ = 0;
   AnalyticValueType result_type_ = AnalyticValueType::Scalar;
 
   friend AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>&,
@@ -644,6 +688,7 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
   std::array<detail::TypedStackEntry, kAnalyticMaxStack> stack{};
   std::size_t sp = 0;
   std::size_t maximum_stack = 0;
+  std::uint8_t required_dimension = 0;
 
   AnalyticProgram::InstructionStorage instructions(tokens.size());
   std::size_t literal_count = 0;
@@ -658,6 +703,12 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
     if (!is_known(token.op))
       detail::reject("unknown opcode " + std::to_string(static_cast<unsigned>(token.op)) +
                      " at token " + std::to_string(index));
+    if (token.op == AnalyticOp::X)
+      required_dimension = std::max(required_dimension, std::uint8_t{1});
+    else if (token.op == AnalyticOp::Y)
+      required_dimension = std::max(required_dimension, std::uint8_t{2});
+    else if (token.op == AnalyticOp::Z)
+      required_dimension = std::max(required_dimension, std::uint8_t{3});
     if (token.op == AnalyticOp::Constant) {
       if (!std::isfinite(token.literal))
         detail::reject("constant at token " + std::to_string(index) + " must be finite");
@@ -757,7 +808,7 @@ inline AnalyticProgram compile_analytic_postfix(const std::vector<AnalyticToken>
     detail::reject("postfix program must leave exactly one result, got " + std::to_string(sp));
 
   return AnalyticProgram(std::move(instructions), std::move(literals), maximum_stack,
-                         stack[0].type);
+                         required_dimension, stack[0].type);
 }
 
 /// Validate and compile the canonical host tree.

@@ -76,6 +76,10 @@ try:
     from pops.projection import ConservativeCellAverage
     from pops.output._writers.hdf5 import _collective_temporary_owner
     from pops.time import FixedDt, StagePoint, TimePoint, every
+    from vtkmodules.vtkIOXML import (
+        vtkXMLPUnstructuredGridReader,
+        vtkXMLUnstructuredGridReader,
+    )
 except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
     require_mpi_or_skip("scientific-output MPI/HDF5 runtime import failed: %s" % exc)
 
@@ -128,6 +132,8 @@ def _shared_directory() -> Path:
 
 def _validate_native_binding_error_consensus(root: Path) -> None:
     """One malformed rank must fail before HDF5 while every peer receives the same cause."""
+    lane = COMM.duplicate_observer_lane(
+        "scientific-output-mpi-hdf5-binding-validation")
     values = (
         [[1.0, 2.0], [3.0, 4.0]]
         if RANK == 0
@@ -135,21 +141,24 @@ def _validate_native_binding_error_consensus(root: Path) -> None:
     )
     error = None
     try:
-        _pops._write_parallel_hdf5(
-            COMM,
-            str(root / "binding-must-not-enter-hdf5.h5"),
-            "{}",
-            {"geometry/0000/coverage": np.zeros((2, 2), dtype=np.bool_)},
-            ({
-                "dataset": "fields/0000/values",
-                "dtype": np.dtype(np.float64).str,
-                "shape": (2, 2),
-                "pieces": ({"lower": (0, 0), "upper": (2, 2), "values": values},),
-            },),
-        )
-    except RuntimeError as exc:
-        error = str(exc)
-    errors = allgather_value(COMM, error)
+        try:
+            _pops._write_parallel_hdf5(
+                lane,
+                str(root / "binding-must-not-enter-hdf5.h5"),
+                "{}",
+                {"geometry/0000/coverage": np.zeros((2, 2), dtype=np.bool_)},
+                ({
+                    "dataset": "fields/0000/values",
+                    "dtype": np.dtype(np.float64).str,
+                    "shape": (2, 2),
+                    "pieces": ({"lower": (0, 0), "upper": (2, 2), "values": values},),
+                },),
+            )
+        except RuntimeError as exc:
+            error = str(exc)
+        errors = allgather_value(lane, error)
+    finally:
+        lane.close_collectively()
     if not all(item is not None and "binding input validation" in item for item in errors):
         raise AssertionError("rank-local binding fault did not reach all ranks: %r" % (errors,))
     if len(set(errors)) != 1:
@@ -691,22 +700,80 @@ def _validate_paraview(
         if tuple(sorted(all_leaf_paths)) != leaves:
             raise AssertionError("PVTU catalogues do not cover every emitted VTU leaf exactly")
 
-        # The exact PoPS reopen above is mandatory and authenticates every component.  When the
-        # independently maintained VTK Python reader is installed in the MPI lane, also prove that
-        # the standard PVTU is directly consumable without any PoPS-specific adapter.
-        try:
-            from vtkmodules.vtkIOXML import vtkXMLPUnstructuredGridReader
-        except ImportError:
-            vtkXMLPUnstructuredGridReader = None
-        if vtkXMLPUnstructuredGridReader is not None:
-            for pvtu_path in parallel:
-                reader = vtkXMLPUnstructuredGridReader()
-                reader.SetFileName(str(pvtu_path))
-                reader.Update()
-                grid = reader.GetOutput()
-                if grid.GetNumberOfCells() < 1 \
-                        or grid.GetCellData().GetArray("U") is None:
-                    raise AssertionError("the native VTK reader could not consume the PVTU")
+        # Traverse from the standard PVD itself, then reopen every referenced PVTU and every
+        # rank-local VTU with the independently maintained VTK readers.  This is mandatory in the
+        # M4 lane: absence of VTK is a required-test failure, never an optional local success.
+        catalog_paths = tuple(
+            (collections[-1].parent / node.attrib["file"]).resolve()
+            for node in datasets
+        )
+        if catalog_paths != tuple(path.resolve() for path in parallel):
+            raise AssertionError("native PVD traversal differs from the exact temporal series")
+        native_leaf_paths = []
+        for macro_step, (dataset, pvtu_path) in enumerate(
+                zip(datasets, catalog_paths, strict=True), start=1):
+            expected_time = macro_step * DT
+            if float(dataset.attrib["timestep"]) != expected_time:
+                raise AssertionError("native PVD traversal lost the physical output time")
+
+            reopened_parallel = read_paraview_parallel(pvtu_path)
+            native_parallel = vtkXMLPUnstructuredGridReader()
+            native_parallel.SetFileName(str(pvtu_path))
+            native_parallel.Update()
+            if native_parallel.GetErrorCode() != 0:
+                raise AssertionError("the native VTK reader rejected the PVTU")
+            parallel_grid = native_parallel.GetOutput()
+
+            expected_cells = 0
+            for leaf_path in reopened_parallel.paths:
+                native_leaf_paths.append(leaf_path.resolve())
+                xml_piece = ET.parse(leaf_path).getroot().find(
+                    "./UnstructuredGrid/Piece")
+                if xml_piece is None:
+                    raise AssertionError("rank-local VTU has no UnstructuredGrid piece")
+                leaf_cells = int(xml_piece.attrib["NumberOfCells"])
+                leaf_points = int(xml_piece.attrib["NumberOfPoints"])
+                expected_cells += leaf_cells
+
+                native_leaf = vtkXMLUnstructuredGridReader()
+                native_leaf.SetFileName(str(leaf_path))
+                native_leaf.Update()
+                if native_leaf.GetErrorCode() != 0:
+                    raise AssertionError("the native VTK reader rejected a rank-local VTU")
+                leaf_grid = native_leaf.GetOutput()
+                if leaf_grid.GetNumberOfCells() != leaf_cells \
+                        or leaf_grid.GetNumberOfPoints() != leaf_points:
+                    raise AssertionError(
+                        "native VTU geometry differs from the rank-local XML piece")
+                for name in ("U", "pops_level", "vtkGhostType"):
+                    array = leaf_grid.GetCellData().GetArray(name)
+                    if array is None or array.GetNumberOfTuples() != leaf_cells:
+                        raise AssertionError(
+                            "native VTU reader lost rank-local cell array %s" % name)
+                time_value = leaf_grid.GetFieldData().GetArray("TimeValue")
+                if time_value is None \
+                        or time_value.GetNumberOfTuples() != 1 \
+                        or time_value.GetTuple1(0) != expected_time:
+                    raise AssertionError(
+                        "native VTU reader lost the rank-local physical output time")
+
+            if parallel_grid.GetNumberOfCells() != expected_cells:
+                raise AssertionError(
+                    "native PVTU reader did not assemble every rank-local VTU cell")
+            for name in ("U", "pops_level", "vtkGhostType"):
+                array = parallel_grid.GetCellData().GetArray(name)
+                if array is None or array.GetNumberOfTuples() != expected_cells:
+                    raise AssertionError(
+                        "native PVTU reader lost assembled cell array %s" % name)
+            public_field = parallel_grid.GetCellData().GetArray("U")
+            if public_field.GetNumberOfComponents() != 1 \
+                    or public_field.GetComponentName(0) != "rho":
+                raise AssertionError(
+                    "native PVTU reader lost the user-authored U/rho field name")
+
+        if tuple(sorted(native_leaf_paths)) != tuple(path.resolve() for path in leaves):
+            raise AssertionError(
+                "native PVD/PVTU traversal did not reopen every rank-local VTU exactly once")
 
         observed_ranks = set()
         observed_steps = set()

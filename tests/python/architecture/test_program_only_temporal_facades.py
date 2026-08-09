@@ -5,9 +5,9 @@ The ordinary explicit runtime tests may install the small Programs from
 typed Program primitives: forward Euler cannot stand in for backward Euler,
 partial IMEX, ARS(2,2,2), or nonlinear local solves.
 
-The blocker ledger is intentionally empty.  Coupled sources, polar transport,
-linear IMEX and nonlinear local IMEX now execute through ordinary Programs;
-none borrows a spatial-runtime time integrator.
+The blocker ledger is intentionally empty. Coupled sources, linear IMEX and nonlinear local IMEX
+execute through ordinary Programs. The former dimension-erased polar runtime builder is retired;
+polar algorithms remain standalone until an exact-ranked metric provider owns their topology.
 """
 
 from __future__ import annotations
@@ -21,8 +21,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
-STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
-REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
+RETIRED_REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
 LEGACY_PUBLIC_TIME_SCHEDULER = (
     ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
@@ -33,25 +32,27 @@ AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
-PROGRAM_EXECUTION_SERVICES = (
-    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
-)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
-AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
-SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
+RETIRED_SYSTEM_BLOCK_SEAM = (
+    ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
+)
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
 IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepper.hpp"
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
+PYTHON_SYSTEM_INSTALL = ROOT / "python/pops/runtime/_system_install.py"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
 PUBLIC_COUPLING_ROOT = ROOT / "include/pops/coupling"
+POLAR_POISSON = ROOT / "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp"
+POLAR_TENSOR = ROOT / "include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp"
+ALGORITHMS_DOC = ROOT / "docs/ALGORITHMS.md"
 
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
@@ -92,24 +93,27 @@ def _cpp_without_comments(source: str) -> str:
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     source = SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
-        "void System::step(double dt)",
-        "void System::advance(double dt, int nsteps)",
-        "double System::step_cfl(",
+        "void System<Dim>::step(double dt)",
+        "void System<Dim>::advance(double dt, int nsteps)",
+        "double System<Dim>::step_cfl(",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
         assert "SystemStepper" not in body
         assert "driver_->" not in body
 
-    assert "program_driver_.step(dt)" in _function_body(source, "void System::step(double dt)")
-    assert "program_driver_.step_cfl(" in _function_body(source, "double System::step_cfl(")
+    step = _function_body(source, "void System<Dim>::step(double dt)")
+    step_cfl = _function_body(source, "double System<Dim>::step_cfl(")
+    assert "dispatch_cadence_step(" in step
+    assert "dispatch_cadence_step(" in step_cfl
+    assert "program_driver_" not in source
     assert "step_adaptive" not in source
     assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
 
 
-def test_static_system_temporal_driver_is_test_only():
-    """The coupling header may assemble operators, never select a time scheme or cadence."""
+def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
+    """The exact-ranked System owns assembly; no static 2D coupling facade remains."""
     production_sources = (
         tuple((ROOT / "include/pops").rglob("*.hpp"))
         + tuple((ROOT / "src").rglob("*.cpp"))
@@ -123,27 +127,15 @@ def test_static_system_temporal_driver_is_test_only():
         if retired_identity.search(path.read_text(encoding="utf-8"))
     }
     assert violations == set()
+    assert not (
+        ROOT / "include/pops/coupling/system/system_coupler.hpp"
+    ).exists()
     assert (
-        "test-only pops/coupling/system/system_coupler.hpp"
-        in HEADERS_MANIFEST.read_text(encoding="utf-8")
+        "pops/coupling/system/system_coupler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
     )
 
-    assembler = STATIC_SYSTEM_ASSEMBLER.read_text(encoding="utf-8")
-    assert "class SystemAssembler" in assembler
-    assert "block_residual(" in assembler
-    for temporal_authority in (
-        "advance_subcycled(",
-        "step_adaptive(",
-        "step_cfl(",
-        "SSPRK2Step",
-        "ImplicitSourceStepper",
-    ):
-        assert temporal_authority not in assembler
-
-    reference = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
-    assert "class ReferenceSystemDriver" in reference
-    assert "Real step_adaptive(" in reference
-    assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+    assert not RETIRED_REFERENCE_SYSTEM_DRIVER.exists()
 
 
 def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
@@ -163,10 +155,8 @@ def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
     assert violations == set()
 
     reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
-    reference_driver = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
     assert "namespace pops::test_support" in reference_scheduler
     assert "void advance_subcycled(" in reference_scheduler
-    assert '#include "reference_time_scheduler.hpp"' in reference_driver
     assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
         "tests/cpp/support/"
     )
@@ -207,9 +197,12 @@ def test_public_coupling_headers_are_spatial_only():
         )
     assert violations == set()
 
-    single = (PUBLIC_COUPLING_ROOT / "single/coupler.hpp").read_text(encoding="utf-8")
-    assert "void solve_fields(const MultiFab& U)" in single
-    assert "void assemble_residual(MultiFab& state, MultiFab& residual)" in single
+    retired_single = PUBLIC_COUPLING_ROOT / "single/coupler.hpp"
+    assert not retired_single.exists()
+    assert (
+        "pops/coupling/single/coupler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
 
 
 def test_local_implicit_solve_has_one_typed_options_route():
@@ -222,9 +215,9 @@ def test_local_implicit_solve_has_one_typed_options_route():
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
     source = AMR_SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
-        "void AmrSystem::step(double dt)",
-        "void AmrSystem::advance(double dt, int nsteps)",
-        "double AmrSystem::step_cfl(",
+        "void AmrSystem<Dim>::step(double dt)",
+        "void AmrSystem<Dim>::advance(double dt, int nsteps)",
+        "double AmrSystem<Dim>::step_cfl(",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
@@ -232,51 +225,35 @@ def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
         assert "runtime->step(" not in body
         assert "runtime->advance(" not in body
 
-    assert "run_program_cadence_(dt)" in _function_body(source, "void AmrSystem::step(double dt)")
-    assert "run_program_cadence_(dt)" in _function_body(source, "double AmrSystem::step_cfl(")
+    step = _function_body(source, "void AmrSystem<Dim>::step(double dt)")
+    step_cfl = _function_body(source, "double AmrSystem<Dim>::step_cfl(")
+    assert "dispatch_cadence_step(" in step
+    assert "step(selected)" in step_cfl
 
 
-def test_amr_program_cfl_does_not_require_native_advance_closures():
-    source = AMR_RUNTIME.read_text(encoding="utf-8")
-    cfl = _function_body(source, "Real cfl_dt(")
-    assert "preflight_program_cfl_state_()" in cfl
-    assert "preflight_native_temporal_step_()" not in cfl
-    assert "preflight_native_temporal_step_" not in source
-    assert "void step(Real dt)" not in source
-    assert "Real step_cfl(Real cfl" not in source
-    assert "has_explicit_temporal_relations_" not in source
-    cfl_preflight = _function_body(source, "void preflight_program_cfl_state_(")
-    assert "temporal_relations_.size()" in cfl_preflight
-    assert "hierarchy_.refinement_ratios.size()" in cfl_preflight
-    assert "time-subcycling ratios" in cfl_preflight
-    temporal_product = _function_body(source, "Real temporal_refinement_product_(")
-    assert "temporal_relations_" in temporal_product
-    assert "hierarchy_.refinement_ratios" not in temporal_product
-    program_context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    refinement_preflight = _function_body(
-        program_context, "static void require_supported_program_refinement_ratios_("
-    )
-    assert "parent_child_temporal_relation(child)" in refinement_preflight
+def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
+    runtime = AMR_RUNTIME.read_text(encoding="utf-8")
+    system = AMR_SYSTEM_CPP.read_text(encoding="utf-8")
+    assert "cfl_dt(" not in runtime
+    assert "void step(" not in runtime
+    assert "step_cfl(" not in runtime
+    step_cfl = _function_body(system, "double AmrSystem<Dim>::step_cfl(")
+    assert "generated stability bound" in step_cfl
+    assert "program.dt_bound_(" in step_cfl
+    assert "step(selected);" in step_cfl
 
 
-def test_amr_regrid_cadence_is_decided_by_the_program_context():
+def test_amr_regrid_is_an_explicit_prepared_program_operation():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-
     assert "void regrid_if_due(" not in runtime
-    assert "int regrid_interval() const noexcept" in runtime
-    spatial_regrid = _function_body(runtime, "  void regrid()")
-    assert "macro_step" not in spatial_regrid
-    assert "regrid_every_" not in spatial_regrid
-
-    cadence = _function_body(context, "  void regrid_if_due_at_(")
-    assert "eng_->regrid_interval()" in cadence
-    assert "macro_step % interval" in cadence
-    assert "const bool regrid_due" in cadence
-    assert "interval <= 0" not in cadence
-    assert "eng_->regrid();" in cadence
-    assert "eng_->regrid_if_due(" not in cadence
-    assert cadence.count("materialize_capture_flux_scratch_();") == 1
+    assert "regrid_interval" not in runtime
+    assert "regrid_if_due" not in context
+    prepare = _function_body(context, "  ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(")
+    publish = _function_body(context, "  void publish_regrid(")
+    assert "runtime_->prepare_regrid(" in prepare
+    assert 'require_history_free_for_topology_change_("regrid")' in publish
+    assert "runtime_->publish_regrid(" in publish
 
 
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
@@ -296,40 +273,49 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
     assert "b.imex" not in runtime
     assert "bool imex" not in header
     assert "bimex" not in builder
-    assert "project_level_state" in runtime
-    assert "project_level_state" in builder
+    assert "project_level_state" not in runtime
+    assert "project_level_state" not in builder
+    assert "assemble_residual(" in builder
+    assert "spatial_operator_.assemble_residual(" in builder
 
 
 def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures():
-    for path in (BLOCK_BUILDER, POLAR_BLOCK_BUILDER):
-        source = path.read_text(encoding="utf-8")
-        for legacy_closure in (
-            "AdvanceExplicit",
-            "AdvanceImex",
-            "AdvanceImexRkArs222",
-            "AdvanceExplicitMasked",
-            "AdvanceExplicitEb",
-            "AdvanceImexMasked",
-            "AdvanceImexEb",
-            "PolarAdvanceExplicit",
-        ):
-            assert legacy_closure not in source
+    source = BLOCK_BUILDER.read_text(encoding="utf-8")
+    for legacy_closure in (
+        "AdvanceExplicit",
+        "AdvanceImex",
+        "AdvanceImexRkArs222",
+        "AdvanceExplicitMasked",
+        "AdvanceExplicitEb",
+        "AdvanceImexMasked",
+        "AdvanceImexEb",
+        "PolarAdvanceExplicit",
+    ):
+        assert legacy_closure not in source
 
-    closures = GRID_CONTEXT.read_text(encoding="utf-8")
     store = SYSTEM_BLOCK_STORE.read_text(encoding="utf-8")
-    seam = SYSTEM_BLOCK_SEAM.read_text(encoding="utf-8")
-    for source in (closures, store):
-        assert "advance_masked" not in source
-        assert "advance_eb" not in source
-        assert "std::function<void(MultiFab&, Real, int)> advance" not in source
-    assert "bool imex;" not in seam
-    assert "std::string method;" not in seam
+    assert "advance_masked" not in store
+    assert "advance_eb" not in store
+    assert "std::function<void(MultiFab&, Real, int)> advance" not in store
+    assert "rhs_into" in store
+    assert not RETIRED_SYSTEM_BLOCK_SEAM.exists()
     assert "bool imex = false;" not in NUMERICAL_DEFAULTS.read_text(encoding="utf-8")
     assert "out.imex" not in SYSTEM_IMPL.read_text(encoding="utf-8")
     assert "opt.imex" not in SYSTEM_INSTALL.read_text(encoding="utf-8")
     assert 'd["imex"]' not in BINDINGS_DETAIL.read_text(encoding="utf-8")
-    assert "rhs_into" in closures
-    assert "rhs_into" in store
+
+
+def test_polar_runtime_builder_is_retired_until_an_exact_ranked_metric_provider_exists():
+    assert not POLAR_BLOCK_BUILDER.exists()
+    assert not GRID_CONTEXT.exists()
+
+
+def test_standalone_polar_elliptic_algorithms_remain_explicit():
+    assert POLAR_POISSON.exists()
+    assert POLAR_TENSOR.exists()
+    documentation = ALGORITHMS_DOC.read_text(encoding="utf-8")
+    assert "no public runtime route claims" in documentation
+    assert "metric-aware `Dim`-ranked provider" in documentation
 
 
 def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
@@ -343,13 +329,27 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
     assert '"newton_report"' not in binding
     assert "s.newton_report(" not in binding
 
-    for path in (AMR_DSL_BLOCK, AMR_BLOCK_SEAM):
-        source = path.read_text(encoding="utf-8")
-        assert "implicit_components" not in source
-        assert "NewtonOptions" not in source
-        assert "NewtonReport" not in source
-        assert "resolve_implicit_components_amr" not in source
-        assert "resolve_implicit_components_compiled" not in source
+    source = AMR_DSL_BLOCK.read_text(encoding="utf-8")
+    assert "implicit_components" not in source
+    assert "NewtonOptions" not in source
+    assert "NewtonReport" not in source
+    assert "resolve_implicit_components_amr" not in source
+    assert "resolve_implicit_components_compiled" not in source
+
+
+def test_uniform_legacy_model_route_and_unpublished_newton_diagnostics_fail_before_allocation():
+    native = _function_body(
+        SYSTEM_INSTALL.read_text(encoding="utf-8"),
+        "void System<Dim>::add_block(",
+    )
+    python = PYTHON_SYSTEM_INSTALL.read_text(encoding="utf-8")
+    python_add_equation = _python_function_source(python, "add_equation")
+
+    assert "System::add_block(ModelSpec) was removed from the native core" in native
+    assert "PreparedSystemBlock<Dim>" in native
+    assert python_add_equation.index(
+        "_reject_unpublished_newton_diagnostics(time"
+    ) < python_add_equation.index("native_block_scalars(")
 
 
 def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():
@@ -358,7 +358,6 @@ def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():
         AMR_SYSTEM_CPP,
         AMR_RUNTIME,
         AMR_DSL_BLOCK,
-        AMR_BLOCK_SEAM,
     ):
         source = path.read_text(encoding="utf-8")
         assert "AmrTimeMethod" not in source
@@ -399,11 +398,14 @@ def test_production_has_no_second_amr_time_engine():
     assert violations == {}
 
 
-def test_prepared_amr_program_reflux_plan_is_spatial_only():
+def test_prepared_amr_subcycle_plan_is_the_only_spatial_reflux_route():
     source = AMR_SUBCYCLING.read_text(encoding="utf-8")
-    assert "class PreparedAmrProgramRefluxPlan" in source
-    assert "class PreparedAmrProgramRefluxTransition" in source
-    assert "synchronize_integrated(" in source
+    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    assert "class PreparedAmrSubcyclePlan" in source
+    assert "class PreparedAmrSubcycleTransition" in source
+    assert "PreparedAmrProgramReflux" not in source
+    assert "reconcile_reflux(" in source
+    assert "runtime_->reconcile_reflux(" in context
     for retired_attempt_state in (
         "begin_attempt(",
         "publish_attempt(",
@@ -436,31 +438,6 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
     assert "installed whole-system Program" in d2_guard
 
 
-def test_amr_pointwise_status_reduces_every_valid_level_cell():
-    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
-
-    pointwise = _function_body(
-        services,
-        "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
-    )
-    assert "active_mask_from_context_(" in pointwise
-    assert "program_execution_block_grid_context_(block)" in pointwise
-
-    active_mask = _function_body(
-        services,
-        "  static const MultiFab* active_mask_from_context_(",
-    )
-    assert "if (context.domain_mask == nullptr)" in active_mask
-    assert "return context.domain_mask;" in active_mask
-
-    status = _function_body(
-        services,
-        "  Real pointwise_status_max(int block, const MultiFab& status,",
-    )
-    assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
-    assert "pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr})" in status
-
-
 def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():
     """Keep the missing native seams visible instead of silently reaching old engines."""
     for path in (PROGRAM_CONTEXT, AMR_PROGRAM_CONTEXT):
@@ -473,23 +450,20 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
+def test_ranked_program_context_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
-    shared = (
+    retired = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
-    ).read_text(encoding="utf-8")
+    )
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    assert shared.count("struct CouplingStateOverride") == 1
-    assert shared.count("void apply_coupling_operators(") == 1
-    assert "complete candidate pack for every runtime block" in shared
-    assert "cannot alias accepted live states" in shared
-    for source in (uniform, amr):
-        assert "void apply_coupling_operators(" not in source
-        assert source.count("program_execution_apply_coupling_(") == 1
-    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
-    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
-    assert "apply_coupling_operators_at_level(" in runtime
+    assert not retired.exists()
+    assert uniform.count("struct CouplingStateOverride") == 1
+    assert uniform.count("void apply_coupling_operators(") == 1
+    assert "ProgramContext coupling requires every runtime block candidate" in uniform
+    assert "system_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "[[noreturn]] void apply_coupling_operators(" in amr
+    assert 'unavailable_("exact-ranked multi-block AMR coupling provider")' in amr
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
 
@@ -542,3 +516,31 @@ def test_gpu_amr_program_harness_retains_the_bz_device_probe():
         "gpu_amrsys_facade_validate.cpp",
     ):
         assert not (ROOT / "tests/gpu/romeo" / retired_harness).exists()
+
+
+def test_gpu_geometric_mg_harness_proves_only_the_exact_ranked_operator_family():
+    source = (ROOT / "tests/gpu/romeo/gpu_epm_validate.cpp").read_text(encoding="utf-8")
+    for required in (
+        "pops::kNativeDimension",
+        "GeometricMG<kDim>",
+        "options.reaction = kReaction",
+        "manufactured error decreases under refinement",
+    ):
+        assert required in source
+    for retired in (
+        "Box2D",
+        "Array4",
+        "BCRec",
+        "SpatialProvider2D",
+        "set_epsilon(",
+        "set_epsilon_anisotropic(",
+    ):
+        assert retired not in source
+
+
+def test_legacy_2d_elliptic_spatial_provider_headers_stay_retired():
+    for retired in (
+        "include/pops/numerics/elliptic/interface/spatial_provider.hpp",
+        "include/pops/runtime/context/wall_predicate.hpp",
+    ):
+        assert not (ROOT / retired).exists()

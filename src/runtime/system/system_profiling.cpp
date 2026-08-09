@@ -1,39 +1,59 @@
-// ADC-632: profiling seam of the System facade -- enable/disable/is/reset_profiling, profile_report
-// and solver_diagnostics. This small TU is a subdivision of system.cpp isolating the per-node/per-
-// brick timing surface (ADC-459 Profiler) from the hot install/fields paths.
-// Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+/// @file
+/// @brief Compile-time-ranked profiling and structured-diagnostic System facade.
+
+#include "system_impl.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
+
+#include <string>
+#include <vector>
 
 namespace pops {
 
-// --- profiling (ADC-459) -------------------------------------------------------------------------
-// enable_profiling / profile_report drive the System-owned Profiler. Today the System wraps its
-// coarse phases (step, field_solve); the per-Program-node / per-native-brick granularity is wired
-// through the compiled-program ProgramContext as a follow-up.
-void System::enable_profiling() {
+template <int Dim>
+void System<Dim>::enable_profiling() {
   p_->program_.profiler_.enable();
 }
-void System::disable_profiling() {
+
+template <int Dim>
+void System<Dim>::disable_profiling() {
   p_->program_.profiler_.disable();
 }
-bool System::is_profiling() const {
+
+template <int Dim>
+bool System<Dim>::is_profiling() const {
   return p_->program_.profiler_.enabled();
 }
-void System::reset_profiling() {
+
+template <int Dim>
+void System<Dim>::reset_profiling() {
   p_->program_.profiler_.reset();
 }
-std::string System::profile_report() const {
+
+template <int Dim>
+std::string System<Dim>::profile_report() const {
   return p_->program_.profiler_.report();
 }
-std::vector<RuntimeDiagnosticEvent> System::solver_diagnostics() const {
-  return p_->fields_.combined_diagnostics_report().events;
+
+template <int Dim>
+std::vector<RuntimeDiagnosticEvent> System<Dim>::solver_diagnostics() const {
+  // Exact-ranked Cartesian field solves return their typed SolveReport through SolveOutcome. They
+  // do not own a second persistent trace log, so this legacy inspection projection is empty until a
+  // provider explicitly publishes structured events.
+  return {};
 }
-// The System-owned Profiler reference (ADC-459): the compiled-program ProgramContext::profile_node
-// times each Program node into it, so per-node scopes accumulate in the SAME table as the coarse
-// step / field_solve phases. POPS_EXPORT: resolved by a generated problem.so across the dlopen boundary.
-POPS_EXPORT pops::runtime::program::Profiler& System::profiler() {
+
+template <int Dim>
+POPS_EXPORT pops::runtime::program::Profiler& System<Dim>::profiler() {
   return p_->program_.profiler_;
 }
 
+template void System<kNativeDimension>::enable_profiling();
+template void System<kNativeDimension>::disable_profiling();
+template bool System<kNativeDimension>::is_profiling() const;
+template void System<kNativeDimension>::reset_profiling();
+template std::string System<kNativeDimension>::profile_report() const;
+template std::vector<RuntimeDiagnosticEvent> System<kNativeDimension>::solver_diagnostics() const;
+template runtime::program::Profiler& System<kNativeDimension>::profiler();
 
 }  // namespace pops

@@ -98,10 +98,11 @@ class _AmrSystemEquation(_AmrSystem):
 
         Dispatch:
 
-        - a private ``ModelSpec`` -> add_block (native bricks composed on the hierarchy);
+        - a private ``ModelSpec`` -> the native ``AmrSystem::add_block`` ABI (bricks composed on
+          the hierarchy);
         - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
           inlines add_compiled_model(AmrSystem&), so the block runs
-          the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
+          the same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
 
         The ``time`` value carried by a block is immutable Program-authoring metadata, not an
         executable method in the AMR spatial runtime. The compiled ``pops.Program`` installed after
@@ -110,7 +111,7 @@ class _AmrSystemEquation(_AmrSystem):
         Newton controls, or diagnostics fails closed until a typed implicit Program primitive exists.
         It never reaches a private backward-Euler/Newton engine.
         ``recon="primitive"`` and fluxes ``roe`` / ``hllc`` use the same compiled spatial dispatch as
-        ``add_block``. The low-level dispatch also contains the WENO5-Z stencil and its three-cell
+        the native-brick branch. The low-level dispatch also contains the WENO5-Z stencil and its three-cell
         halo, but the resolved Case route accepts it only when the owner-qualified coarse/fine
         provider certifies order 5 and ghost depth 3. The native catalogue resolves that provider
         from the reconstruction requirements and never lowers the coarse/fine interface order
@@ -118,7 +119,7 @@ class _AmrSystemEquation(_AmrSystem):
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
-        - private ``ModelSpec`` path: FORWARDED to ``AmrSystem::add_block``. Cadence remains part of
+        - private ``ModelSpec`` path: forwarded to ``AmrSystem::add_block``. Cadence remains part of
           Program/CFL normalization; non-empty masks and non-default Newton requests fail closed
           until the AMR target exposes their typed Program primitive;
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
@@ -135,7 +136,7 @@ class _AmrSystemEquation(_AmrSystem):
         guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import AUX_NAMED_BASE
+        from pops.physics.aux import aux_layout
 
         spatial = self._lower_spatial(spatial)
         time = time if time is not None else Explicit()
@@ -150,7 +151,7 @@ class _AmrSystemEquation(_AmrSystem):
             where="AmrSystem.add_equation.substeps",
         )
 
-        # --- ModelSpec: native bricks composed -> add_block (existing path) ---
+        # --- ModelSpec: native bricks composed through the sole Python dispatch seam ---
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
@@ -362,15 +363,16 @@ class _AmrSystemEquation(_AmrSystem):
         # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])
         if extra:
-            self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
+            named_base = aux_layout(compiled.native_dimension).named_base
+            self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
 
     def _resolve_aux_field(self, block: Any, name: Any) -> Any:
         """Resolve (block, named aux field) -> aux channel component (ADC-291). Mirror of
         System._resolve_aux_field: a canonical name is redirected to its dedicated path; an unknown
         block or an undeclared field raises (no silent component-0 fallback)."""
-        from pops.physics.aux import AUX_CANONICAL
+        from pops.physics.aux import AUX_CANONICAL_NAMES
 
-        if name in AUX_CANONICAL:
+        if name in AUX_CANONICAL_NAMES:
             if name == "B_z":
                 raise ValueError(
                     "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "

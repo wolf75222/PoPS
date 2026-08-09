@@ -25,16 +25,22 @@ namespace pops {
 /// every reduction/replica buffer. Compatibility and gauge application then perform no host or
 /// communication-buffer allocation. The workspace is intentionally mutable and single-solve-at-a-
 /// time, like KrylovWorkspace; callers that execute concurrent solves own one workspace per solve.
+template <int Dim>
 class FieldNullspaceWorkspace {
  public:
-  FieldNullspaceWorkspace(FieldNullspacePlan plan, std::vector<const MultiFab*> layouts,
-                          std::vector<PreparedVectorDistribution> distributions,
+  static_assert(Dim >= 1 && Dim <= 3,
+                "FieldNullspaceWorkspace only supports dimensions 1, 2, and 3");
+
+  FieldNullspaceWorkspace(FieldNullspacePlan<Dim> plan, std::vector<const MultiFab<Dim>*> layouts,
+                          std::vector<PreparedVectorDistribution<Dim>> distributions,
                           int first_level = 0)
       : plan_(std::move(plan)),
         layouts_(std::move(layouts)),
         distributions_(std::move(distributions)),
         first_level_(first_level) {
-    validate_field_nullspace_basis(layouts_, plan_, distributions_, first_level_);
+    validate_field_nullspace_basis<Dim>(
+        layouts_, plan_, std::span<const PreparedVectorDistribution<Dim>>(distributions_),
+        first_level_);
     basis_count_ = plan_.bases.size();
     if (basis_count_ == 0)
       return;
@@ -46,13 +52,15 @@ class FieldNullspaceWorkspace {
 
     long allocation_failed = 0;
     try {
-      level_values_.assign(layouts_.size() * value_capacity_, 0.0);
+      const std::size_t level_value_count = detail::checked_field_nullspace_collective_product(
+          layouts_.size(), value_capacity_, "prepared field-nullspace level moments");
+      level_values_.assign(level_value_count, 0.0);
       reduced_values_.assign(value_capacity_, 0.0);
       gram_factor_.assign(gram_value_count_, 0.0);
       coefficients_.assign(basis_count_, 0.0);
       std::size_t validation_capacity = 0;
       std::size_t reduction_capacity = 0;
-      for (const PreparedVectorDistribution& distribution : distributions_) {
+      for (const PreparedVectorDistribution<Dim>& distribution : distributions_) {
         validation_capacity =
             std::max(validation_capacity, distribution.validation_scratch_byte_count());
         reduction_capacity = std::max(reduction_capacity,
@@ -76,7 +84,7 @@ class FieldNullspaceWorkspace {
   FieldNullspaceWorkspace(FieldNullspaceWorkspace&&) noexcept = default;
   FieldNullspaceWorkspace& operator=(FieldNullspaceWorkspace&&) noexcept = default;
 
-  [[nodiscard]] const FieldNullspacePlan& plan() const noexcept { return plan_; }
+  [[nodiscard]] const FieldNullspacePlan<Dim>& plan() const noexcept { return plan_; }
   [[nodiscard]] int first_level() const noexcept { return first_level_; }
   [[nodiscard]] std::size_t validation_scratch_byte_count() const noexcept {
     return validation_scratch_.size();
@@ -87,31 +95,31 @@ class FieldNullspaceWorkspace {
 
   /// Returns the persistent witness [dot(rhs,b_0), abs(rhs*b_0), ...]. The span remains valid until
   /// the next operation on this workspace.
-  std::span<const double> require_compatible(std::span<const MultiFab* const> rhs_levels) {
+  std::span<const double> require_compatible(std::span<const MultiFab<Dim>* const> rhs_levels) {
     if (basis_count_ == 0)
       return {};
     require_hot_fields_(rhs_levels, "field nullspace compatibility");
     clear_level_values_(compatibility_value_count_);
     for (std::size_t basis_index = 0; basis_index < basis_count_; ++basis_index) {
-      const FieldNullspaceBasis& basis = plan_.bases[basis_index];
+      const FieldNullspaceBasis<Dim>& basis = plan_.bases[basis_index];
       for (std::size_t level = 0; level < rhs_levels.size(); ++level) {
-        const MultiFab& rhs = *rhs_levels[level];
+        const MultiFab<Dim>& rhs = *rhs_levels[level];
         const int resolved_level = first_level_ + static_cast<int>(level);
-        const MultiFab* mask = basis.mask(resolved_level);
-        const MultiFab* coverage = basis.coverage_mask(resolved_level);
+        const MultiFab<Dim>* mask = basis.mask(resolved_level);
+        const MultiFab<Dim>* coverage = basis.coverage_mask(resolved_level);
         const Real measure = basis.measure(resolved_level);
-        for (int local = 0; local < rhs.local_size(); ++local) {
-          const ConstArray4 values = rhs.fab(local).const_array();
-          const ConstArray4 mask_values =
-              mask == nullptr ? ConstArray4{} : mask->fab(local).const_array();
-          const ConstArray4 coverage_values =
-              coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
-          level_value_(level, 2 * basis_index) += static_cast<double>(reduce_sum_cell(
-              rhs.box(local), detail::FieldBasisMomentKernel{values, mask_values, coverage_values,
-                                                             basis.field_component, mask != nullptr,
-                                                             coverage != nullptr, measure}));
-          level_value_(level, 2 * basis_index + 1) += static_cast<double>(reduce_sum_cell(
-              rhs.box(local), detail::FieldBasisAbsMomentKernel{
+        for (std::size_t local = 0; local < rhs.local_size(); ++local) {
+          const FieldView<const Real, Dim> values = rhs.fab(local).view();
+          const FieldView<const Real, Dim> mask_values =
+              mask == nullptr ? FieldView<const Real, Dim>{} : mask->fab(local).view();
+          const FieldView<const Real, Dim> coverage_values =
+              coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(local).view();
+          level_value_(level, 2 * basis_index) += static_cast<double>(for_each_cell_reduce_sum(
+              rhs.box(local), detail::FieldBasisMomentKernel<Dim>{
+                                  values, mask_values, coverage_values, basis.field_component,
+                                  mask != nullptr, coverage != nullptr, measure}));
+          level_value_(level, 2 * basis_index + 1) += static_cast<double>(for_each_cell_reduce_sum(
+              rhs.box(local), detail::FieldBasisAbsMomentKernel<Dim>{
                                   values, mask_values, coverage_values, basis.field_component,
                                   mask != nullptr, coverage != nullptr, measure}));
         }
@@ -134,34 +142,34 @@ class FieldNullspaceWorkspace {
     return std::span<const double>(reduced_values_.data(), compatibility_value_count_);
   }
 
-  std::span<const double> require_compatible(const MultiFab& rhs) {
-    const std::array<const MultiFab*, 1> levels{&rhs};
+  std::span<const double> require_compatible(const MultiFab<Dim>& rhs) {
+    const std::array<const MultiFab<Dim>*, 1> levels{&rhs};
     return require_compatible(levels);
   }
 
-  void apply_gauge(std::span<MultiFab* const> phi_levels) {
+  void apply_gauge(std::span<MultiFab<Dim>* const> phi_levels) {
     if (basis_count_ == 0 || plan_.gauges.empty())
       return;
     require_hot_fields_(phi_levels, "field nullspace gauge");
     clear_level_values_(basis_count_);
     for (std::size_t basis_index = 0; basis_index < basis_count_; ++basis_index) {
-      const FieldNullspaceBasis& basis = plan_.bases[basis_index];
+      const FieldNullspaceBasis<Dim>& basis = plan_.bases[basis_index];
       for (std::size_t level = 0; level < phi_levels.size(); ++level) {
-        MultiFab& phi = *phi_levels[level];
+        MultiFab<Dim>& phi = *phi_levels[level];
         const int resolved_level = first_level_ + static_cast<int>(level);
-        const MultiFab* mask = basis.mask(resolved_level);
-        const MultiFab* coverage = basis.coverage_mask(resolved_level);
-        for (int local = 0; local < phi.local_size(); ++local) {
-          const ConstArray4 values = phi.fab(local).const_array();
-          const ConstArray4 mask_values =
-              mask == nullptr ? ConstArray4{} : mask->fab(local).const_array();
-          const ConstArray4 coverage_values =
-              coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
-          level_value_(level, basis_index) += static_cast<double>(reduce_sum_cell(
+        const MultiFab<Dim>* mask = basis.mask(resolved_level);
+        const MultiFab<Dim>* coverage = basis.coverage_mask(resolved_level);
+        for (std::size_t local = 0; local < phi.local_size(); ++local) {
+          const FieldView<const Real, Dim> values = std::as_const(phi.fab(local)).view();
+          const FieldView<const Real, Dim> mask_values =
+              mask == nullptr ? FieldView<const Real, Dim>{} : mask->fab(local).view();
+          const FieldView<const Real, Dim> coverage_values =
+              coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(local).view();
+          level_value_(level, basis_index) += static_cast<double>(for_each_cell_reduce_sum(
               phi.box(local),
-              detail::FieldBasisMomentKernel{values, mask_values, coverage_values,
-                                             basis.field_component, mask != nullptr,
-                                             coverage != nullptr, basis.measure(resolved_level)}));
+              detail::FieldBasisMomentKernel<Dim>{
+                  values, mask_values, coverage_values, basis.field_component, mask != nullptr,
+                  coverage != nullptr, basis.measure(resolved_level)}));
         }
       }
     }
@@ -170,7 +178,7 @@ class FieldNullspaceWorkspace {
     detail::solve_field_nullspace_gram(gram_factor_, basis_count_, coefficients_);
 
     for (std::size_t basis_index = 0; basis_index < basis_count_; ++basis_index) {
-      const FieldNullspaceBasis& basis = plan_.bases[basis_index];
+      const FieldNullspaceBasis<Dim>& basis = plan_.bases[basis_index];
       const std::size_t gauge = detail::gauge_index(plan_, basis.identity);
       if (gauge == plan_.gauges.size())
         throw std::logic_error("prepared field-nullspace gauge does not cover every basis");
@@ -180,17 +188,17 @@ class FieldNullspaceWorkspace {
         throw FieldNullspaceInvalidEvaluation(
             "prepared field-nullspace gauge produced a non-finite coefficient");
       for (std::size_t level = 0; level < phi_levels.size(); ++level) {
-        MultiFab& phi = *phi_levels[level];
+        MultiFab<Dim>& phi = *phi_levels[level];
         const int resolved_level = first_level_ + static_cast<int>(level);
-        const MultiFab* mask = basis.mask(resolved_level);
-        const MultiFab* coverage = basis.coverage_mask(resolved_level);
-        for (int local = 0; local < phi.local_size(); ++local) {
-          const ConstArray4 mask_values =
-              mask == nullptr ? ConstArray4{} : mask->fab(local).const_array();
-          const ConstArray4 coverage_values =
-              coverage == nullptr ? ConstArray4{} : coverage->fab(local).const_array();
-          for_each_cell(phi.box(local), detail::ShiftFieldBasisKernel{
-                                            phi.fab(local).array(), mask_values, coverage_values,
+        const MultiFab<Dim>* mask = basis.mask(resolved_level);
+        const MultiFab<Dim>* coverage = basis.coverage_mask(resolved_level);
+        for (std::size_t local = 0; local < phi.local_size(); ++local) {
+          const FieldView<const Real, Dim> mask_values =
+              mask == nullptr ? FieldView<const Real, Dim>{} : mask->fab(local).view();
+          const FieldView<const Real, Dim> coverage_values =
+              coverage == nullptr ? FieldView<const Real, Dim>{} : coverage->fab(local).view();
+          for_each_cell(phi.box(local), detail::ShiftFieldBasisKernel<Dim>{
+                                            phi.fab(local).view(), mask_values, coverage_values,
                                             basis.field_component, mask != nullptr,
                                             coverage != nullptr, coefficient});
         }
@@ -198,8 +206,8 @@ class FieldNullspaceWorkspace {
     }
   }
 
-  void apply_gauge(MultiFab& phi) {
-    const std::array<MultiFab*, 1> levels{&phi};
+  void apply_gauge(MultiFab<Dim>& phi) {
+    const std::array<MultiFab<Dim>*, 1> levels{&phi};
     apply_gauge(levels);
   }
 
@@ -210,12 +218,11 @@ class FieldNullspaceWorkspace {
     try {
       const std::size_t count = std::min(fields.size(), layouts_.size());
       for (std::size_t level = 0; level < count; ++level) {
-        const MultiFab* field = fields[level];
-        const MultiFab* prepared = layouts_[level];
+        const MultiFab<Dim>* field = fields[level];
+        const MultiFab<Dim>* prepared = layouts_[level];
         const bool structural_match = field != nullptr && prepared != nullptr &&
                                       field->ncomp() == prepared->ncomp() &&
-                                      field->box_array().boxes() == prepared->box_array().boxes() &&
-                                      field->dmap().ranks() == prepared->dmap().ranks();
+                                      detail::field_nullspace_layouts_match(*field, *prepared);
         if (!structural_match || !distributions_[level].layout_matches(*field))
           invalid_local = 1;
       }
@@ -239,28 +246,31 @@ class FieldNullspaceWorkspace {
         if (plan_.bases[left].field_component != plan_.bases[right].field_component)
           continue;
         for (std::size_t level = 0; level < layouts_.size(); ++level) {
-          const MultiFab& layout = *layouts_[level];
+          const MultiFab<Dim>& layout = *layouts_[level];
           const int resolved_level = first_level_ + static_cast<int>(level);
-          const MultiFab* left_mask = plan_.bases[left].mask(resolved_level);
-          const MultiFab* right_mask = plan_.bases[right].mask(resolved_level);
-          const MultiFab* left_coverage = plan_.bases[left].coverage_mask(resolved_level);
-          const MultiFab* right_coverage = plan_.bases[right].coverage_mask(resolved_level);
-          for (int local = 0; local < layout.local_size(); ++local) {
-            const ConstArray4 left_values =
-                left_mask == nullptr ? ConstArray4{} : left_mask->fab(local).const_array();
-            const ConstArray4 right_values =
-                right_mask == nullptr ? ConstArray4{} : right_mask->fab(local).const_array();
-            const ConstArray4 left_coverage_values =
-                left_coverage == nullptr ? ConstArray4{} : left_coverage->fab(local).const_array();
-            const ConstArray4 right_coverage_values =
-                right_coverage == nullptr ? ConstArray4{}
-                                          : right_coverage->fab(local).const_array();
-            level_value_(level, left * basis_count_ + right) += static_cast<double>(reduce_sum_cell(
-                layout.box(local),
-                detail::FieldBasisGramKernel{
-                    left_values, right_values, left_coverage_values, right_coverage_values,
-                    left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
-                    right_coverage != nullptr, plan_.bases[left].measure(resolved_level)}));
+          const MultiFab<Dim>* left_mask = plan_.bases[left].mask(resolved_level);
+          const MultiFab<Dim>* right_mask = plan_.bases[right].mask(resolved_level);
+          const MultiFab<Dim>* left_coverage = plan_.bases[left].coverage_mask(resolved_level);
+          const MultiFab<Dim>* right_coverage = plan_.bases[right].coverage_mask(resolved_level);
+          for (std::size_t local = 0; local < layout.local_size(); ++local) {
+            const FieldView<const Real, Dim> left_values =
+                left_mask == nullptr ? FieldView<const Real, Dim>{} : left_mask->fab(local).view();
+            const FieldView<const Real, Dim> right_values = right_mask == nullptr
+                                                                ? FieldView<const Real, Dim>{}
+                                                                : right_mask->fab(local).view();
+            const FieldView<const Real, Dim> left_coverage_values =
+                left_coverage == nullptr ? FieldView<const Real, Dim>{}
+                                         : left_coverage->fab(local).view();
+            const FieldView<const Real, Dim> right_coverage_values =
+                right_coverage == nullptr ? FieldView<const Real, Dim>{}
+                                          : right_coverage->fab(local).view();
+            level_value_(level, left * basis_count_ + right) +=
+                static_cast<double>(for_each_cell_reduce_sum(
+                    layout.box(local),
+                    detail::FieldBasisGramKernel<Dim>{
+                        left_values, right_values, left_coverage_values, right_coverage_values,
+                        left_mask != nullptr, right_mask != nullptr, left_coverage != nullptr,
+                        right_coverage != nullptr, plan_.bases[left].measure(resolved_level)}));
           }
         }
         for (std::size_t level = 0; level < layouts_.size(); ++level)
@@ -304,9 +314,9 @@ class FieldNullspaceWorkspace {
     reduction_scratch_.clear();
   }
 
-  FieldNullspacePlan plan_;
-  std::vector<const MultiFab*> layouts_;
-  std::vector<PreparedVectorDistribution> distributions_;
+  FieldNullspacePlan<Dim> plan_;
+  std::vector<const MultiFab<Dim>*> layouts_;
+  std::vector<PreparedVectorDistribution<Dim>> distributions_;
   std::vector<double> level_values_;
   std::vector<double> reduced_values_;
   std::vector<double> gram_factor_;

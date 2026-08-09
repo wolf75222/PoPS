@@ -9,59 +9,67 @@
 // lookup.
 //
 // The flux of an external brick is a `NumericalFlux` policy (numerics/fv/numerical_flux.hpp) living
-// in a SEPARATE `.so`, so it can never be a compile-time template parameter of the host's pre-built
-// `make_block` (whose `if (riem == "hllc") build_block<..., HLLCFlux>` ladder is closed over the
-// native fluxes). Instead the `.so` ITSELF performs the static instantiation: the
-// `POPS_DEFINE_EXTERNAL_RIEMANN_BRICK` macro emits an `extern "C"` entry point that calls
-// `build_block<Limiter, UserFlux>(...)` -- the user flux is a compile-time template parameter inside
-// the `.so`, fully inlined, exactly like a native flux's `build_block` leaf. The host dlopens the
-// `.so`, resolves that entry-point function pointer ONCE at install time, and calls it; the per-cell
-// kernel then runs the statically-instantiated `UserFlux` functor with NO string comparison on the
-// hot path. The only string is the limiter (a 4-way `if` resolved once per install, mirroring the
-// built-in static-dispatch path).
+// in a SEPARATE `.so`. The `.so` performs the exact-rank static instantiation itself: the
+// `POPS_DEFINE_EXTERNAL_RIEMANN_BRICK` macro emits installers specialized for `kNativeDimension`
+// and the user's flux type. The host resolves those entry points once at install time; the per-cell
+// kernel then runs the statically-instantiated functor with no string comparison on the hot path.
+// The limiter route is selected once while preparing the installed operator.
 //
-// ABI v2 retains the flat residual adapter for diagnostics and adds native System/AMR installers.
+// ABI v3 retains a flat residual adapter for diagnostics and adds native System/AMR installers.
 // Those installers build directly on the runtime-owned MultiFab/hierarchy, so production execution
 // is zero-copy and keeps the ordinary Kokkos, MPI-halo and AMR-reflux paths.  The exact ABI identity,
-// exported symbol set and library digest are authenticated before any installer is called.
+// native rank, exported symbol set and library digest are authenticated before any installer is
+// called. Shape, spacing and periodicity are exact-ranked arrays; no 2D mesh object crosses the ABI.
 
 #include <pops/runtime/program/external_brick.hpp>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/identity/sha256.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/mesh/boundary/fill_boundary.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
-#include <pops/runtime/builders/compiled/flat_grid.hpp>
-#include <pops/runtime/builders/block/block_builder.hpp>  // build_block<Limiter, Flux>, block_n_ghost
-#include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
-#include <pops/runtime/config/dispatch_tags.hpp>  // validate_limiter
-#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
+#include <pops/runtime/builders/scheme_dispatch.hpp>
+#include <pops/runtime/config/dispatch_tags.hpp>
+#include <pops/numerics/fv/reconstruction.hpp>
 
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW (ADC-99)
 
 #include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdlib>
+#include <concepts>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace pops::runtime::program {
 
-inline constexpr int kExternalRiemannBrickAbiVersion = 2;
+#define POPS_EXTERNAL_RIEMANN_STRINGIFY_IMPL_(value) #value
+#define POPS_EXTERNAL_RIEMANN_STRINGIFY_(value) POPS_EXTERNAL_RIEMANN_STRINGIFY_IMPL_(value)
+
+inline constexpr int kExternalRiemannBrickAbiVersion = 3;
 inline constexpr const char* kExternalRiemannBrickAbiKey =
-    "pops.external-riemann/v2;scalar=f64;index=i32;periodicity=xy";
+    "pops.external-riemann/"
+    "v3;scalar=f64;index=i32;periodicity=nd;dim=" POPS_EXTERNAL_RIEMANN_STRINGIFY_(POPS_NATIVE_DIM);
 
 inline constexpr const char* kExternalRiemannBrickAbiVersionSymbol =
     "pops_external_riemann_abi_version";
 inline constexpr const char* kExternalRiemannBrickAbiKeySymbol = "pops_external_riemann_abi_key";
-inline constexpr const char* kExternalRiemannBrickResidualSymbol = "pops_brick_residual_v2";
+inline constexpr const char* kExternalRiemannBrickDimensionSymbol =
+    "pops_external_riemann_dimension";
+inline constexpr const char* kExternalRiemannBrickResidualSymbol = "pops_brick_residual_v3";
 inline constexpr const char* kExternalRiemannBrickInstallSystemSymbol =
-    "pops_brick_install_system_v2";
-inline constexpr const char* kExternalRiemannBrickInstallAmrSymbol = "pops_brick_install_amr_v2";
+    "pops_brick_install_system_v3";
+inline constexpr const char* kExternalRiemannBrickInstallAmrSymbol = "pops_brick_install_amr_v3";
 inline constexpr const char* kExternalRiemannBrickModelIdentitySymbol = "pops_brick_model_identity";
 inline constexpr const char* kExternalRiemannBrickKokkosBackendSymbol = "pops_brick_kokkos_backend";
 inline constexpr const char* kExternalRiemannBrickKokkosVersionSymbol = "pops_brick_kokkos_version";
@@ -84,146 +92,331 @@ inline constexpr int external_kokkos_version_identity() noexcept {
 #endif
 }
 
-// Builds the block closures for the external flux @p Flux at limiter @p lim. The flux is a
-// COMPILE-TIME template parameter of build_block (the same leaf the native string ladder routes to),
-// so it is fully inlined; the only runtime branch is the limiter (resolved ONCE here, not per cell).
-// Mirrors make_block's limiter ladder but with the flux fixed -- no riemann string comparison.
-template <class Model, class Flux>
-BlockClosures external_make_block(const Model& m, const std::string& lim, const GridContext& ctx,
-                                  bool recon_prim, Real pos_floor) {
-  validate_limiter(lim, "external riemann brick");
-  const char* kCtx = "external riemann brick";
-  return dispatch_limiter(parse_limiter_route(lim, kCtx), kCtx, [&](auto tag) {
-    using L = typename decltype(tag)::type;
-    return build_block<L, Flux>(m, ctx, recon_prim, pos_floor);
+template <int Dim>
+std::size_t flat_cell_count(const Extent<Dim>& shape) {
+  std::size_t count = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (shape[axis] <= 0)
+      throw std::invalid_argument("external riemann brick: every shape extent must be positive");
+    const auto extent = static_cast<std::size_t>(shape[axis]);
+    if (count > std::numeric_limits<std::size_t>::max() / extent)
+      throw std::length_error("external riemann brick: flat cell count overflows size_t");
+    count *= extent;
+  }
+  return count;
+}
+
+template <int Dim>
+std::size_t field_offset(const Box<Dim>& storage, const Index<Dim>& index, int component) {
+  std::size_t linear = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    linear += static_cast<std::size_t>(index[axis] - storage.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(storage.length(axis));
+  }
+  return static_cast<std::size_t>(component) * static_cast<std::size_t>(storage.numPts()) + linear;
+}
+
+template <int Dim, class Function>
+void for_each_flat_index(const Box<Dim>& box, Function&& function) {
+  for (std::int64_t linear = 0; linear < box.numPts(); ++linear) {
+    std::int64_t remaining = linear;
+    Index<Dim> index{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      index[axis] = box.lo[axis] + static_cast<int>(remaining % box.length(axis));
+      remaining /= box.length(axis);
+    }
+    function(index, static_cast<std::size_t>(linear));
+  }
+}
+
+template <int Dim, class MemorySpace>
+void import_component_major(Fab<Dim, MemorySpace>& destination, const double* source, int ncomp) {
+  if (source == nullptr)
+    return;
+  auto host = destination.create_host_mirror();
+  destination.copy_to_host(host);
+  const std::size_t cells = static_cast<std::size_t>(destination.box().numPts());
+  for_each_flat_index(destination.box(), [&](const Index<Dim>& index, std::size_t linear) {
+    for (int component = 0; component < ncomp; ++component)
+      host(field_offset(destination.grown_box(), index, component)) =
+          static_cast<Real>(source[static_cast<std::size_t>(component) * cells + linear]);
+  });
+  destination.copy_from_host(host);
+}
+
+template <int Dim, class MemorySpace>
+void export_component_major(const Fab<Dim, MemorySpace>& source, double* destination, int ncomp) {
+  auto host = source.create_host_mirror();
+  source.copy_to_host(host);
+  const std::size_t cells = static_cast<std::size_t>(source.box().numPts());
+  for_each_flat_index(source.box(), [&](const Index<Dim>& index, std::size_t linear) {
+    for (int component = 0; component < ncomp; ++component)
+      destination[static_cast<std::size_t>(component) * cells + linear] =
+          static_cast<double>(host(field_offset(source.grown_box(), index, component)));
   });
 }
 
-// One explicit residual R = -div F(U) + S evaluated with the external flux @p Flux on @p Model. Same
-// marshaling as compiled_block::residual (flat arrays, local single-grid mesh, aux from the host) --
-// only the flux is the user's, instantiated statically by build_block. Used by the macro's
-// extern "C" pops_brick_residual_v2 entry point.
-template <class Model, class Flux>
-void external_residual(const double* U, double* R, const double* aux_in, int n, double dx,
-                       double dy, Periodicity periodicity, const std::string& lim, bool recon_prim,
-                       double pos_floor) {
-  if (U == nullptr || R == nullptr)
-    throw std::invalid_argument("external riemann brick: U and R must be non-null");
-  if (n <= 0 || !std::isfinite(dx) || dx <= 0 || !std::isfinite(dy) || dy <= 0)
-    throw std::invalid_argument(
-        "external riemann brick: n and Cartesian spacings must be strictly positive");
-  flat_grid::LocalGrid lg =
-      flat_grid::make_grid(n, dx, dy, periodicity, aux_in, aux_comps<Model>());
-  MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)),
-      Rmf(lg.ba, lg.dm, Model::n_vars, 0);
-  flat_grid::fill_interior(Umf, U, n, Model::n_vars);
-  const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
-  Model model{};
-  BlockClosures clo =
-      external_make_block<Model, Flux>(model, lim, ctx, recon_prim, static_cast<Real>(pos_floor));
-  clo.rhs_into(Umf, Rmf);
-  flat_grid::extract(Rmf, R, n, Model::n_vars);
+template <int Dim>
+HaloScheduleBudget external_halo_budget(const Box<Dim>& domain, const Extent<Dim>& ghosts,
+                                        int ncomp) {
+  std::size_t periodic_images = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    periodic_images *= 3;
+  const std::size_t jobs = periodic_images * static_cast<std::size_t>(2 * Dim + 1);
+  Box<Dim> grown = domain;
+  for (int axis = 0; axis < Dim; ++axis)
+    grown = grown.grow(axis, ghosts[axis]);
+  const std::size_t elements =
+      static_cast<std::size_t>(grown.numPts()) * static_cast<std::size_t>(ncomp) * jobs;
+  return {{1, 0}, periodic_images, jobs, periodic_images, 1, elements, elements, elements};
 }
 
-template <class Model, class Flux>
-void external_install_system(System& sys, const std::string& name, const std::string& limiter,
-                             const std::string& recon, const std::string& time, double gamma,
-                             int substeps, bool evolve, int stride, double positivity_floor,
-                             double weno_epsilon) {
-  if (name.empty())
-    throw std::invalid_argument("external riemann brick: block name must be non-empty");
-  if (substeps < 1 || stride < 1)
-    throw std::invalid_argument("external riemann brick: substeps and stride must be >= 1");
-  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
-    throw std::invalid_argument("external riemann brick: positivity_floor must be finite and >= 0");
-  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
-    throw std::invalid_argument("external riemann brick: weno_epsilon must be finite and > 0");
-  if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
-    throw std::invalid_argument(
-        "external riemann brick: weno_epsilon applies to limiter='weno5' only");
+template <int Dim>
+PreparedHyperbolicBoundary<Dim> external_flat_boundary(const std::array<bool, Dim>& periodic,
+                                                       int ncomp,
+                                                       std::string_view identity_prefix) {
+  std::vector<std::string> laws;
+  std::vector<std::string> identities;
+  laws.reserve(static_cast<std::size_t>(2 * Dim));
+  identities.reserve(static_cast<std::size_t>(2 * Dim));
+  for (int axis = 0; axis < Dim; ++axis) {
+    for (int side = 0; side < 2; ++side) {
+      laws.push_back(periodic[static_cast<std::size_t>(axis)] ? "periodic" : "foextrap");
+      identities.push_back(std::string(identity_prefix) + "/axis=" + std::to_string(axis) +
+                           "/side=" + std::to_string(side));
+    }
+  }
+  return prepare_hyperbolic_boundary<Dim>(
+      laws, std::vector<double>(static_cast<std::size_t>(2 * Dim * ncomp), 0.0), identities,
+      std::vector<std::string>(static_cast<std::size_t>(ncomp), "Scalar"));
+}
 
-  const TimeRouteId time_route = parse_time_route(time, "external riemann brick");
-  if (time_route == TimeRouteId::kImexRkArs222)
-    throw std::runtime_error(
-        "external riemann brick: time route 'imexrk_ars222' is not wired on the compiled path");
-  const bool recon_prim =
-      parse_recon_route(recon, "external riemann brick") == ReconRouteId::kPrimitive;
+template <class Reconstruction>
+Reconstruction external_reconstruction(Real weno_epsilon) {
+  if constexpr (std::is_same_v<Reconstruction, Weno5>)
+    return configured_reconstruction<Weno5>(weno_epsilon);
+  else
+    return Reconstruction{};
+}
+
+template <class Model>
+Model external_model(Real gamma) {
+  if constexpr (requires {
+                  { Model::prepare(gamma) } -> std::same_as<Model>;
+                })
+    return Model::prepare(gamma);
+  else
+    return Model{};
+}
+
+template <nd::ReconstructionVariables Variables, int Dim, class Model, class Flux,
+          class Reconstruction>
+void external_residual_prepared(const double* state_values, double* residual_values,
+                                const double* provider_values, const Extent<Dim>& shape,
+                                const RealVector<Dim>& spacing,
+                                const std::array<bool, Dim>& periodic, Real positivity_floor,
+                                Real weno_epsilon) {
+  static_assert(Model::dimension == Dim);
+  const Box<Dim> domain = Box<Dim>::from_extents(shape);
+  RealVector<Dim> lower{};
+  RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = spacing[axis] * static_cast<Real>(shape[axis]);
+  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, lower, upper);
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  Extent<Dim> rank_extent{};
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    rank_extent[axis] = 1;
+    ghosts[axis] = Reconstruction::n_ghost;
+  }
+  const mesh::RankSpace<Dim> ranks{Index<Dim>{}, rank_extent};
+  const auto distribution = mesh::Distribution<Dim>::replicated(layout, ranks);
+  MultiFab<Dim> state(layout, distribution, Index<Dim>{}, Model::n_vars, ghosts);
+  MultiFab<Dim> residual(layout, distribution, Index<Dim>{}, Model::n_vars, ghosts);
+  state.set_val(Real(0));
+  residual.set_val(Real(0));
+  import_component_major(state.fab(0), state_values, Model::n_vars);
+  constexpr int provider_count = flux_provider_count<Model>;
+  std::optional<MultiFab<Dim>> provider_storage;
+  if constexpr (provider_count > 0) {
+    provider_storage.emplace(layout, distribution, Index<Dim>{}, provider_count, ghosts);
+    provider_storage->set_val(Real(0));
+    import_component_major(provider_storage->fab(0), provider_values, provider_count);
+  }
+
+  const BoundaryTopology<Dim> topology(periodic);
+  fill_boundary(state, domain, topology, external_halo_budget(domain, ghosts, state.ncomp()));
+  if constexpr (provider_count > 0)
+    fill_boundary(*provider_storage, domain, topology,
+                  external_halo_budget(domain, ghosts, provider_count));
+  external_flat_boundary<Dim>(periodic, state.ncomp(), "external-riemann/state")
+      .fill_physical(state, geometry);
+  if constexpr (provider_count > 0)
+    external_flat_boundary<Dim>(periodic, provider_count, "external-riemann/providers")
+        .fill_physical(*provider_storage, geometry);
+
+  Model model{};
+  const auto spatial = nd::prepare_cartesian_operator<Dim, Model, Reconstruction, Flux, Variables>(
+      geometry, model, external_reconstruction<Reconstruction>(weno_epsilon), Flux{},
+      positivity_floor);
+  if constexpr (flux_provider_count<Model> == 0)
+    spatial.assemble_residual(state, residual);
+  else
+    spatial.assemble_residual(state, *provider_storage, residual);
+  export_component_major(residual.fab(0), residual_values, Model::n_vars);
+}
+
+template <int Dim, class Model, class Flux>
+void external_residual(const double* state_values, double* residual_values,
+                       const double* provider_values, const int* shape_values,
+                       const double* spacing_values, const int* periodic_values,
+                       const std::string& limiter, bool reconstruct_primitive,
+                       double positivity_floor,
+                       double weno_epsilon = static_cast<double>(kWenoEpsilon)) {
+  static_assert(Model::dimension == Dim);
+  if (state_values == nullptr || residual_values == nullptr || shape_values == nullptr ||
+      spacing_values == nullptr || periodic_values == nullptr)
+    throw std::invalid_argument("external riemann brick: ranked residual arguments are null");
+  if constexpr (flux_provider_count<Model> > 0)
+    if (provider_values == nullptr)
+      throw std::invalid_argument("external riemann brick: model requires compact provider values");
+  if (!std::isfinite(positivity_floor) || positivity_floor < 0.0 || !std::isfinite(weno_epsilon) ||
+      weno_epsilon <= 0.0)
+    throw std::invalid_argument("external riemann brick: numerical parameters are invalid");
+  Extent<Dim> shape{};
+  RealVector<Dim> spacing{};
+  std::array<bool, Dim> periodic{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[axis] = shape_values[axis];
+    if (shape[axis] <= 0 || !std::isfinite(spacing_values[axis]) || spacing_values[axis] <= 0.0 ||
+        (periodic_values[axis] != 0 && periodic_values[axis] != 1))
+      throw std::invalid_argument("external riemann brick: invalid ranked mesh metadata");
+    spacing[axis] = static_cast<Real>(spacing_values[axis]);
+    periodic[static_cast<std::size_t>(axis)] = periodic_values[axis] != 0;
+  }
+  (void)flat_cell_count(shape);
   validate_limiter(limiter, "external riemann brick");
-
-  Model model{};
-  sys.ensure_aux_width(aux_comps<Model>());
-  const GridContext ctx = sys.grid_context(name);
-  BlockClosures closures =
-      dispatch_limiter(parse_limiter_route(limiter, "external riemann brick"),
-                       "external riemann brick", [&](auto tag) {
-                         using Limiter = typename decltype(tag)::type;
-                         return build_block<Limiter, Flux>(model, ctx, recon_prim,
-                                                           static_cast<Real>(positivity_floor),
-                                                           false, static_cast<Real>(weno_epsilon));
-                       });
-  auto max_speed = make_max_speed(model, ctx);
-  auto poisson_rhs = make_poisson_rhs(model);
-  sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(), gamma,
-                    std::move(closures), std::move(max_speed), std::move(poisson_rhs), substeps,
-                    evolve, stride);
-  auto conversion = make_cell_convert(model);
-  sys.set_block_conversion(name, std::move(conversion.first), std::move(conversion.second));
-  sys.set_block_dt_bounds(name, make_source_frequency(model, ctx), make_stability_dt(model, ctx));
-  sys.set_block_ghosts(name, block_n_ghost(limiter));
+  dispatch_limiter(
+      parse_limiter_route(limiter, "external riemann brick"), "external riemann brick",
+      [&](auto tag) {
+        using Reconstruction = typename decltype(tag)::type;
+        if (reconstruct_primitive)
+          external_residual_prepared<nd::ReconstructionVariables::Primitive, Dim, Model, Flux,
+                                     Reconstruction>(
+              state_values, residual_values, provider_values, shape, spacing, periodic,
+              static_cast<Real>(positivity_floor), static_cast<Real>(weno_epsilon));
+        else
+          external_residual_prepared<nd::ReconstructionVariables::Conservative, Dim, Model, Flux,
+                                     Reconstruction>(
+              state_values, residual_values, provider_values, shape, spacing, periodic,
+              static_cast<Real>(positivity_floor), static_cast<Real>(weno_epsilon));
+      });
 }
 
-template <class Model, class Flux>
-void external_install_amr(AmrSystem& sys, const std::string& name, const std::string& limiter,
-                          const std::string& recon, const std::string& time, double gamma,
+inline void validate_external_install(const std::string& name, const std::string& limiter,
+                                      const std::string& reconstruction, const std::string& time,
+                                      double gamma, int substeps, int stride,
+                                      double positivity_floor, double weno_epsilon) {
+  if (name.empty() || substeps < 1 || stride < 1 || !std::isfinite(gamma) || !(gamma > 0.0) ||
+      !std::isfinite(positivity_floor) || positivity_floor < 0.0 || !std::isfinite(weno_epsilon) ||
+      weno_epsilon <= 0.0)
+    throw std::invalid_argument("external riemann brick: invalid exact-ranked install request");
+  validate_limiter(limiter, "external riemann brick");
+  (void)parse_recon_route(reconstruction, "external riemann brick");
+  if (parse_time_route(time, "external riemann brick") == TimeRouteId::kImexRkArs222)
+    throw std::invalid_argument("external riemann brick: IMEX requires a prepared source provider");
+  if (limiter != "weno5" && weno_epsilon != static_cast<double>(kWenoEpsilon))
+    throw std::invalid_argument(
+        "external riemann brick: WENO epsilon is only meaningful for limiter='weno5'");
+}
+
+template <int Dim, class Model, class Flux, class Request>
+PreparedSystemBlock<Dim> prepare_external_system_block(Request request, Real weno_epsilon) {
+  return dispatch_limiter(
+      parse_limiter_route(request.routes.limiter, "external riemann brick"),
+      "external riemann brick", [&](auto tag) {
+        using Reconstruction = typename decltype(tag)::type;
+        const auto prepared = external_reconstruction<Reconstruction>(weno_epsilon);
+        if (request.routes.reconstruction == "primitive")
+          return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Flux,
+                                                            nd::ReconstructionVariables::Primitive>(
+              std::move(request), prepared, Flux{});
+        return generated_system_detail::materialize_block<
+            Dim, Model, Reconstruction, Flux, nd::ReconstructionVariables::Conservative>(
+            std::move(request), prepared, Flux{});
+      });
+}
+
+template <int Dim, class Model, class Flux, class Request>
+PreparedAmrSystemBlock<Dim> prepare_external_amr_block(Request request, Real weno_epsilon) {
+  return dispatch_limiter(
+      parse_limiter_route(request.routes.limiter, "external riemann brick"),
+      "external riemann brick", [&](auto tag) {
+        using Reconstruction = typename decltype(tag)::type;
+        const auto prepared = external_reconstruction<Reconstruction>(weno_epsilon);
+        if (request.routes.reconstruction == "primitive")
+          return generated_amr_detail::materialize_system<Dim, Model, Reconstruction, Flux,
+                                                          nd::ReconstructionVariables::Primitive>(
+              std::move(request), prepared, Flux{});
+        return generated_amr_detail::materialize_system<Dim, Model, Reconstruction, Flux,
+                                                        nd::ReconstructionVariables::Conservative>(
+            std::move(request), prepared, Flux{});
+      });
+}
+
+template <int Dim, class Model, class Flux>
+void external_install_system(System<Dim>& system, std::string_view flux_identity,
+                             const std::string& name, const std::string& limiter,
+                             const std::string& reconstruction, const std::string& time,
+                             double gamma, int substeps, bool evolve, int stride,
+                             double positivity_floor, double weno_epsilon) {
+  static_assert(Model::dimension == Dim);
+  validate_external_install(name, limiter, reconstruction, time, gamma, substeps, stride,
+                            positivity_floor, weno_epsilon);
+  CompiledSystemBlockRoutes routes{limiter, "external:" + std::string(flux_identity),
+                                   reconstruction, time, static_cast<Real>(positivity_floor)};
+  const auto* provider_storage = system.prepared_block_provider_storage_groups();
+  const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
+  if constexpr (provider_count_for<Model, Dim>() > 0)
+    provider_plan = &system.prepared_auxiliary_consumer_plan(name);
+  auto prepared = prepare_external_system_block<Dim, Model, Flux>(
+      CompiledSystemBlockPreparation<Dim, Model>{
+          name, external_model<Model>(static_cast<Real>(gamma)), std::move(routes),
+          system.prepared_block_geometry(),
+          BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()),
+          provider_storage, provider_plan},
+      static_cast<Real>(weno_epsilon));
+  prepared.name = name;
+  prepared.ncomp = Model::n_vars;
+  prepared.conservative_variables = Model::conservative_vars();
+  prepared.primitive_variables = Model::primitive_vars();
+  prepared.gamma = gamma;
+  prepared.substeps = substeps;
+  prepared.evolve = evolve;
+  prepared.stride = stride;
+  system.install_prepared_block(std::move(prepared));
+}
+
+template <int Dim, class Model, class Flux>
+void external_install_amr(AmrSystem<Dim>& system, std::string_view flux_identity,
+                          const std::string& name, const std::string& limiter,
+                          const std::string& reconstruction, const std::string& time, double gamma,
                           int substeps, int stride, double positivity_floor, double weno_epsilon) {
-  if (name.empty())
-    throw std::invalid_argument("external riemann brick: block name must be non-empty");
-  if (substeps < 1 || stride < 1)
-    throw std::invalid_argument("external riemann brick: substeps and stride must be >= 1");
-  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
-    throw std::invalid_argument("external riemann brick: positivity_floor must be finite and >= 0");
-  if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
-    throw std::invalid_argument("external riemann brick: weno_epsilon must be finite and > 0");
-  if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
-    throw std::invalid_argument(
-        "external riemann brick: weno_epsilon applies to limiter='weno5' only");
-
-  validate_limiter(limiter, "external riemann brick");
-  const bool recon_prim =
-      parse_recon_route(recon, "external riemann brick") == ReconRouteId::kPrimitive;
-  const TimeRouteId time_route = parse_time_route(time, "external riemann brick");
-  if (time_route == TimeRouteId::kImexRkArs222)
-    throw std::runtime_error(
-        "external riemann brick: time route 'imexrk_ars222' is not wired on the AMR compiled path");
-
-  Model model{};
-  AmrCompiledBlockBuilder builder = [model, limiter](
-                                        const ::pops::detail::SharedAmrLayout& layout,
-                                        const std::string& block_name,
-                                        const std::vector<double>& density, bool has_density,
-                                        const std::vector<double>& state, bool has_state,
-                                        double block_gamma, int block_substeps,
-                                        bool block_recon_prim, int block_stride,
-                                        const std::vector<std::string>& implicit_vars,
-                                        const std::vector<std::string>& implicit_roles,
-                                        double block_positivity_floor, double block_weno_epsilon,
-                                        bool wave_speed_cache) {
-    if (!implicit_vars.empty() || !implicit_roles.empty())
-      throw std::runtime_error("external riemann brick: partial IMEX masks are not part of ABI v2");
-    if (wave_speed_cache)
-      throw std::runtime_error("external riemann brick: wave_speed_cache is not part of ABI v2");
-    return dispatch_limiter(parse_limiter_route(limiter, "external riemann brick"),
-                            "external riemann brick", [&](auto tag) {
-                              using Limiter = typename decltype(tag)::type;
-                              return ::pops::detail::build_amr_block<Model, Limiter, Flux>(
-                                  model, layout, block_name, density, has_density, block_gamma,
-                                  block_substeps, block_recon_prim, block_stride,
-                                  has_state ? &state : nullptr, block_positivity_floor,
-                                  block_weno_epsilon, false);
-                            });
-  };
-  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder), name, recon_prim, time,
-                         stride, {}, {}, positivity_floor, weno_epsilon, false);
+  static_assert(Model::dimension == Dim);
+  validate_external_install(name, limiter, reconstruction, time, gamma, substeps, stride,
+                            positivity_floor, weno_epsilon);
+  CompiledAmrSystemBlockRoutes routes{
+      limiter, "external:" + std::string(flux_identity), reconstruction,
+      time,    static_cast<Real>(positivity_floor),      static_cast<Real>(weno_epsilon),
+      false};
+  auto prepared = prepare_external_amr_block<Dim, Model, Flux>(
+      CompiledAmrSystemBlockPreparation<Dim, Model>{name,
+                                                    external_model<Model>(static_cast<Real>(gamma)),
+                                                    std::move(routes), gamma, substeps, stride},
+      static_cast<Real>(weno_epsilon));
+  system.install_prepared_amr_block(std::move(prepared));
 }
 
 }  // namespace detail
@@ -242,8 +435,8 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
 class ExternalBrickHandle {
  public:
   // Function-pointer type of the brick's residual entry point (POPS_DEFINE_EXTERNAL_RIEMANN_BRICK).
-  using ResidualFn = void (*)(const double*, double*, const double*, int, double, double, int, int,
-                              const char*, int, double);
+  using ResidualFn = void (*)(const double*, double*, const double*, const int*, const double*,
+                              const int*, const char*, int, double, double);
   using InstallSystemFn = void (*)(void*, const char*, const char*, const char*, const char*,
                                    double, int, int, int, double, double);
   using InstallAmrFn = void (*)(void*, const char*, const char*, const char*, const char*, double,
@@ -283,6 +476,7 @@ class ExternalBrickHandle {
 
       require_abi_symbol(*selected, kExternalRiemannBrickAbiVersionSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickAbiKeySymbol);
+      require_abi_symbol(*selected, kExternalRiemannBrickDimensionSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickResidualSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickInstallSystemSymbol);
       require_abi_symbol(*selected, kExternalRiemannBrickInstallAmrSymbol);
@@ -293,7 +487,9 @@ class ExternalBrickHandle {
           reinterpret_cast<int (*)()>(dynlib::sym(handle_, kExternalRiemannBrickAbiVersionSymbol));
       auto abi_key_fn = reinterpret_cast<const char* (*)()>(
           dynlib::sym(handle_, kExternalRiemannBrickAbiKeySymbol));
-      if (version_fn == nullptr || abi_key_fn == nullptr)
+      auto dimension_fn =
+          reinterpret_cast<int (*)()>(dynlib::sym(handle_, kExternalRiemannBrickDimensionSymbol));
+      if (version_fn == nullptr || abi_key_fn == nullptr || dimension_fn == nullptr)
         throw std::runtime_error(
             "external riemann brick '" + id_ +
             "' uses the legacy unversioned residual ABI; rebuild it with the current "
@@ -305,6 +501,10 @@ class ExternalBrickHandle {
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' has incompatible residual ABI version/key; "
                                  "rebuild it with the current PoPS headers");
+      dimension_ = dimension_fn();
+      if (dimension_ != kNativeDimension)
+        throw std::runtime_error("external riemann brick '" + id_ +
+                                 "' targets a different compile-time spatial dimension");
       residual_ =
           reinterpret_cast<ResidualFn>(dynlib::sym(handle_, kExternalRiemannBrickResidualSymbol));
       if (residual_ == nullptr)
@@ -389,6 +589,7 @@ class ExternalBrickHandle {
   const std::string& requirements() const { return requirements_; }
 
   const std::string& id() const { return id_; }
+  int dimension() const noexcept { return dimension_; }
 
  private:
   static std::string file_sha256(const std::string& path) {
@@ -517,6 +718,7 @@ class ExternalBrickHandle {
   InstallAmrFn install_amr_ = nullptr;
   int nvars_ = -1;
   int naux_ = -1;
+  int dimension_ = 0;
   std::string id_;
   std::string requirements_;
 };
@@ -531,90 +733,95 @@ class ExternalBrickHandle {
 //     operator()(const F&, const typename F::Trace&, const typename F::Trace&,
 //                const pops::FaceContext&) const;
 //   };
-//   POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", MyRiemann,
-//                                     pops::CompositeModel<pops::Euler, ...>,
+//   using Model = pops::nd::IdealGasEuler<pops::kNativeDimension>;
+//   POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", MyRiemann, Model,
 //                                     "<compiled-model-hash>", "pressure,wave_speeds");
 //   POPS_DEFINE_BRICK_MANIFEST();  // exports the manifest reader (once per .so)
 //
 // @p id          the brick id a user selects via pops.lib.riemann.User(id);
 // @p Flux        the narrow two-trace NumericalFlux policy (numerics/fv/numerical_flux.hpp);
-// @p Model       a TOP-LEVEL ALIAS of the CompositeModel the .so instantiates the flux against (write
-//                `using Model = pops::CompositeModel<...>;` first and pass the alias -- a bare
-//                CompositeModel<A, B, C> has commas the preprocessor would split);
+// @p Model       a TOP-LEVEL ALIAS of the exact-ranked ConservationLaw the .so instantiates. Its
+//                dimension must equal kNativeDimension and its variable metadata is authenticated;
 // @p model_identity the exact CompiledModel.model_hash this DSO targets; same-size models are not
 //                interchangeable and are rejected before install;
 // @p reqs_csv    the CSV of model capabilities the brick requires (surfaced in the manifest).
 //
-// The emitted pops_brick_residual_v2 instantiates build_block<Limiter, Flux> at the .so's compile
-// time: the flux is a STATIC template argument, never a per-cell string lookup. pops_brick_nvars /
-// pops_brick_naux let the host size its marshaling arrays (same role as pops_compiled_nvars/_naux).
+// The emitted pops_brick_residual_v3 instantiates the exact-ranked Cartesian operator at the .so's
+// compile time: the flux and native rank are STATIC template arguments, never per-cell or runtime
+// dimension lookups. pops_brick_nvars / pops_brick_naux let the host size its compact provider
+// marshaling arrays (the ABI spelling is retained by the external-brick manifest version).
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
 // same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
 // runtime. Installation must therefore pass through the authenticated component loader, which
 // validates the exact component manifest and platform/ABI evidence before publishing the handle.
-#define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, model_identity, reqs_csv)            \
-  static const bool POPS_REGISTER_BRICK_CAT_(pops_external_riemann_registered_, __LINE__) = [] { \
-    ::pops::runtime::program::BrickRegistry::instance().register_brick(                          \
-        {(id), ("riemann"), (reqs_csv), "", (id), "uniform,amr", "", "", "",                     \
-         "pops_brick_nvars,pops_brick_naux,pops_external_riemann_abi_version,"                   \
-         "pops_external_riemann_abi_key,pops_brick_residual_v2,"                                 \
-         "pops_brick_install_system_v2,pops_brick_install_amr_v2,"                               \
-         "pops_brick_model_identity,pops_brick_kokkos_backend,"                                  \
-         "pops_brick_kokkos_version"});                                                          \
-    return true;                                                                                 \
-  }();                                                                                           \
-  extern "C" int pops_brick_nvars() {                                                            \
-    return Model::n_vars;                                                                        \
-  }                                                                                              \
-  extern "C" int pops_brick_naux() {                                                             \
-    return pops::aux_comps<Model>();                                                             \
-  }                                                                                              \
-  extern "C" const char* pops_brick_model_identity() {                                           \
-    return (model_identity);                                                                     \
-  }                                                                                              \
-  extern "C" const char* pops_brick_kokkos_backend() {                                           \
-    return ::pops::runtime::program::detail::external_kokkos_backend_identity();                 \
-  }                                                                                              \
-  extern "C" int pops_brick_kokkos_version() {                                                   \
-    return ::pops::runtime::program::detail::external_kokkos_version_identity();                 \
-  }                                                                                              \
-  extern "C" int pops_external_riemann_abi_version() {                                           \
-    return ::pops::runtime::program::kExternalRiemannBrickAbiVersion;                            \
-  }                                                                                              \
-  extern "C" const char* pops_external_riemann_abi_key() {                                       \
-    return ::pops::runtime::program::kExternalRiemannBrickAbiKey;                                \
-  }                                                                                              \
-  extern "C" void pops_brick_install_system_v2(                                                  \
-      void* system, const char* name, const char* limiter, const char* recon, const char* time,  \
-      double gamma, int substeps, int evolve, int stride, double positivity_floor,               \
-      double weno_epsilon) {                                                                     \
-    if (system == nullptr || name == nullptr || limiter == nullptr || recon == nullptr ||        \
-        time == nullptr)                                                                         \
-      throw std::invalid_argument("external riemann brick: null System installer argument");     \
-    ::pops::runtime::program::detail::external_install_system<Model, Flux>(                      \
-        *static_cast<::pops::System*>(system), name, limiter, recon, time, gamma, substeps,      \
-        evolve != 0, stride, positivity_floor, weno_epsilon);                                    \
-  }                                                                                              \
-  extern "C" void pops_brick_install_amr_v2(                                                     \
-      void* system, const char* name, const char* limiter, const char* recon, const char* time,  \
-      double gamma, int substeps, int stride, double positivity_floor, double weno_epsilon) {    \
-    if (system == nullptr || name == nullptr || limiter == nullptr || recon == nullptr ||        \
-        time == nullptr)                                                                         \
-      throw std::invalid_argument("external riemann brick: null AMR installer argument");        \
-    ::pops::runtime::program::detail::external_install_amr<Model, Flux>(                         \
-        *static_cast<::pops::AmrSystem*>(system), name, limiter, recon, time, gamma, substeps,   \
-        stride, positivity_floor, weno_epsilon);                                                 \
-  }                                                                                              \
-  extern "C" void pops_brick_residual_v2(const double* U, double* R, const double* aux, int n,   \
-                                         double dx, double dy, int periodic_x, int periodic_y,   \
-                                         const char* lim, int recon_prim, double pos_floor) {    \
-    if ((periodic_x != 0 && periodic_x != 1) || (periodic_y != 0 && periodic_y != 1))            \
-      throw std::invalid_argument(                                                               \
-          "external riemann brick: periodic_x and periodic_y must be exact 0/1 values");         \
-    if (lim == nullptr)                                                                          \
-      throw std::invalid_argument("external riemann brick: limiter id must be non-null");        \
-    ::pops::runtime::program::detail::external_residual<Model, Flux>(                            \
-        U, R, aux, n, dx, dy, ::pops::Periodicity{periodic_x != 0, periodic_y != 0}, lim,        \
-        recon_prim != 0, pos_floor);                                                             \
+#define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, model_identity, reqs_csv)              \
+  static_assert(Model::dimension == ::pops::kNativeDimension,                                      \
+                "external Riemann model must match the artifact native dimension");                \
+  static_assert(::pops::nd::ConservationLaw<::pops::kNativeDimension, Model>,                      \
+                "external Riemann model must satisfy the final exact-ranked law contract");        \
+  static const bool POPS_REGISTER_BRICK_CAT_(pops_external_riemann_registered_, __LINE__) = [] {   \
+    ::pops::runtime::program::BrickRegistry::instance().register_brick(                            \
+        {(id), ("riemann"), (reqs_csv), "", (id), "uniform,amr", "", "", "",                       \
+         "pops_brick_nvars,pops_brick_naux,pops_external_riemann_abi_version,"                     \
+         "pops_external_riemann_abi_key,pops_external_riemann_dimension,"                          \
+         "pops_brick_residual_v3,pops_brick_install_system_v3,pops_brick_install_amr_v3,"          \
+         "pops_brick_model_identity,pops_brick_kokkos_backend,"                                    \
+         "pops_brick_kokkos_version"});                                                            \
+    return true;                                                                                   \
+  }();                                                                                             \
+  extern "C" int pops_brick_nvars() {                                                              \
+    return Model::n_vars;                                                                          \
+  }                                                                                                \
+  extern "C" int pops_brick_naux() {                                                               \
+    return pops::provider_count_for<Model, ::pops::kNativeDimension>();                            \
+  }                                                                                                \
+  extern "C" const char* pops_brick_model_identity() {                                             \
+    return (model_identity);                                                                       \
+  }                                                                                                \
+  extern "C" const char* pops_brick_kokkos_backend() {                                             \
+    return ::pops::runtime::program::detail::external_kokkos_backend_identity();                   \
+  }                                                                                                \
+  extern "C" int pops_brick_kokkos_version() {                                                     \
+    return ::pops::runtime::program::detail::external_kokkos_version_identity();                   \
+  }                                                                                                \
+  extern "C" int pops_external_riemann_abi_version() {                                             \
+    return ::pops::runtime::program::kExternalRiemannBrickAbiVersion;                              \
+  }                                                                                                \
+  extern "C" const char* pops_external_riemann_abi_key() {                                         \
+    return ::pops::runtime::program::kExternalRiemannBrickAbiKey;                                  \
+  }                                                                                                \
+  extern "C" int pops_external_riemann_dimension() {                                               \
+    return ::pops::kNativeDimension;                                                               \
+  }                                                                                                \
+  extern "C" void pops_brick_install_system_v3(                                                    \
+      void* system, const char* name, const char* limiter, const char* recon, const char* time,    \
+      double gamma, int substeps, int evolve, int stride, double positivity_floor,                 \
+      double weno_epsilon) {                                                                       \
+    if (system == nullptr || name == nullptr || limiter == nullptr || recon == nullptr ||          \
+        time == nullptr)                                                                           \
+      throw std::invalid_argument("external riemann brick: null System installer argument");       \
+    ::pops::runtime::program::detail::external_install_system<::pops::kNativeDimension, Model,     \
+                                                              Flux>(                               \
+        *static_cast<::pops::System<::pops::kNativeDimension>*>(system), (id), name, limiter,      \
+        recon, time, gamma, substeps, evolve != 0, stride, positivity_floor, weno_epsilon);        \
+  }                                                                                                \
+  extern "C" void pops_brick_install_amr_v3(                                                       \
+      void* system, const char* name, const char* limiter, const char* recon, const char* time,    \
+      double gamma, int substeps, int stride, double positivity_floor, double weno_epsilon) {      \
+    if (system == nullptr || name == nullptr || limiter == nullptr || recon == nullptr ||          \
+        time == nullptr)                                                                           \
+      throw std::invalid_argument("external riemann brick: null AMR installer argument");          \
+    ::pops::runtime::program::detail::external_install_amr<::pops::kNativeDimension, Model, Flux>( \
+        *static_cast<::pops::AmrSystem<::pops::kNativeDimension>*>(system), (id), name, limiter,   \
+        recon, time, gamma, substeps, stride, positivity_floor, weno_epsilon);                     \
+  }                                                                                                \
+  extern "C" void pops_brick_residual_v3(const double* U, double* R, const double* aux,            \
+                                         const int* shape, const double* spacing,                  \
+                                         const int* periodic, const char* lim, int recon_prim,     \
+                                         double pos_floor, double weno_epsilon) {                  \
+    if (lim == nullptr)                                                                            \
+      throw std::invalid_argument("external riemann brick: limiter id must be non-null");          \
+    ::pops::runtime::program::detail::external_residual<::pops::kNativeDimension, Model, Flux>(    \
+        U, R, aux, shape, spacing, periodic, lim, recon_prim != 0, pos_floor, weno_epsilon);       \
   }

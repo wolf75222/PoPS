@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -44,16 +45,24 @@ from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import (
     AcceptedStep,
     AdaptiveCFL,
+    Always,
     AtEnd,
+    AtStart,
     Clock,
     Every,
     ExternalTimeGrid,
     FixedDt,
     Schedule,
+    When,
     every_dt,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.runtime.test_runtime_planning import _artifact as _planning_artifact
+
+
+def _path_owner(path: Path) -> tuple[int, int]:
+    status = path.lstat()
+    return int(status.st_dev), int(status.st_ino)
 
 
 def _install(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",)):
@@ -223,16 +232,19 @@ class _Executor:
         return [(0, 0, self._nx - 1, self._ny - 1)]
 
     def _output_geometry_snapshot(self, origin, spacing, shape, cell_measure):
-        assert tuple(shape) == (self._ny, self._nx)
+        assert tuple(shape) == (self._nx, self._ny)
         assert cell_measure == "pops://cell-measures/cartesian-area@1"
-        valid = np.ones(shape, dtype=np.bool_)
-        coverage = np.zeros(shape, dtype=np.bool_)
-        volumes = np.full(shape, spacing[0] * spacing[1], dtype=np.float64)
+        cell_shape = tuple(reversed(shape))
+        valid = np.ones(cell_shape, dtype=np.bool_)
+        coverage = np.zeros(cell_shape, dtype=np.bool_)
+        volumes = np.full(cell_shape, spacing[0] * spacing[1], dtype=np.float64)
         for value in (valid, coverage, volumes):
             value.setflags(write=False)
         return {
+            "dimension": len(shape),
             "topology_epoch": 0,
-            "boxes": ((0, 0, shape[0], shape[1]),),
+            "cell_shape": cell_shape,
+            "boxes": ((0, 0, cell_shape[0], cell_shape[1]),),
             "valid_cells": valid,
             "coverage": coverage,
             "cell_volumes": volumes,
@@ -259,13 +271,13 @@ class _Executor:
         )
 
     def output_state_root_pieces(self, communicator, block, level):
-        """Expose the exact singleton-world gather required by ROOT publication tests."""
-        from pops._native_collectives import require_world, size
+        """Expose the exact duplicated consumer lane required by ROOT publication tests."""
+        from pops._native_collectives import require_communicator, size
 
         expected = self._plan.execution_context.communicator
-        if communicator is not expected.handle:
-            raise ValueError("ROOT gather did not receive the installed communicator handle")
-        native = require_world(communicator)
+        native = require_communicator(communicator, allow_world=False)
+        if expected.identity != "MPI_COMM_WORLD":
+            raise ValueError("ROOT gather requires an MPI execution context")
         if size(native) != 1:
             raise RuntimeError(
                 "runtime-instance unit executor only implements a singleton ROOT gather"
@@ -385,6 +397,15 @@ def _with_graph(
         "state:u",
         layout.qualified_id,
     )
+    resolved_mode = (
+        parallel_mode
+        if kind is ConsumerKind.SCIENTIFIC_OUTPUT
+        else (
+            ParallelMode(operation.consumer_data()["parallel_mode"])
+            if kind is ConsumerKind.MONITOR
+            else ParallelMode.SERIAL
+        )
+    )
     manifest = ConsumerManifest(
         Handle("density", kind="consumer", owner=OwnerPath.consumer("adc-687")),
         kind,
@@ -394,7 +415,7 @@ def _with_graph(
         NPZ(mode=parallel_mode)
         if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
         else output_format,
-        parallel_mode if kind is ConsumerKind.SCIENTIFIC_OUTPUT else ParallelMode.SERIAL,
+        resolved_mode,
         operation=operation,
     )
     graph = ConsumerGraph((manifest,))
@@ -464,6 +485,14 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["runtime"] == "uniform"
     assert payload["instance"]["bind_identity"] == plan.bind_identity.to_data()
     assert payload["instance"]["plan_identity"] == plan.artifact.plan.plan_identity.to_data()
+    assert payload["instance"]["resolved_dimension"] == 2
+    assert payload["instance"]["supported_dimensions"] == [2]
+    assert payload["runtime_environment"]["dimension"] == 2
+    assert payload["runtime_environment"]["supported_dimensions"] == [2]
+    assert payload["instance"]["native_spatial_layouts"] == {
+        layout_id: row.to_data()
+        for layout_id, row in plan.artifact.native_layouts.items()
+    }
     assert payload["instance"]["runtime_plan"] == runtime._runtime_plan.to_data()
     assert (
         payload["instance"]["runtime_plan"]["communication"]["layout_plan_id"]
@@ -501,6 +530,638 @@ def test_checkpoint_graph_provider_is_the_resolved_restart_authority(tmp_path):
     assert authority.to_data()["operation"] == dict(manifest.operation_data)
     assert runtime._restart_operation() is authority.operation
     assert graph.to_data()["identity"] == runtime.consumer_graph.to_data()["identity"]
+
+
+def test_checkpoint_reseal_failure_removes_its_owned_native_staging(monkeypatch, tmp_path):
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-reseal-cleanup"}
+    )
+    original_seal = _checkpoint_manifest.seal_checkpoint_payload
+    calls = 0
+
+    def fail_runtime_envelope(owner, payload, *, runtime_kind):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected RuntimeInstance envelope reseal failure")
+        return original_seal(owner, payload, runtime_kind=runtime_kind)
+
+    monkeypatch.setattr(_checkpoint_manifest, "seal_checkpoint_payload", fail_runtime_envelope)
+
+    with pytest.raises(RuntimeError, match="injected RuntimeInstance envelope reseal failure"):
+        runtime.checkpoint(tmp_path / "restart")
+
+    assert calls == 2
+    assert not (tmp_path / "restart.npz").exists()
+    assert not tuple(tmp_path.glob(".pops-restart-transaction.*"))
+
+
+def test_checkpoint_reseal_failure_never_deletes_a_replaced_staging_inode(monkeypatch, tmp_path):
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-reseal-replacement"}
+    )
+    original_seal = _checkpoint_manifest.seal_checkpoint_payload
+    calls = 0
+    replacement = b"third-party checkpoint staging replacement"
+    evidence = {}
+
+    def replace_staging_and_fail(owner, payload, *, runtime_kind):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+            staging = transaction / "native.npz"
+            owned_inode = _path_owner(staging)
+            third_party = tmp_path / "third-party-replacement.npz"
+            third_party.write_bytes(replacement)
+            replacement_inode = _path_owner(third_party)
+            assert replacement_inode != owned_inode
+            os.replace(third_party, staging)
+            evidence.update(path=staging, inode=replacement_inode)
+            raise RuntimeError("injected reseal failure after staging replacement")
+        return original_seal(owner, payload, runtime_kind=runtime_kind)
+
+    monkeypatch.setattr(
+        _checkpoint_manifest,
+        "seal_checkpoint_payload",
+        replace_staging_and_fail,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="injected reseal failure after staging replacement",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    staging = evidence["path"]
+    assert staging.read_bytes() == replacement
+    assert _path_owner(staging) == evidence["inode"]
+    assert any(
+        "refuses to delete replaced transaction entry" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_refuses_path_only_capture_without_a_private_transaction_receipt(tmp_path):
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    with pytest.raises(RuntimeError, match="path-only native ABI cannot prove creator ownership"):
+        runtime._checkpoint_payload(tmp_path / "unreceipted")
+
+    assert not (tmp_path / "unreceipted.npz").exists()
+
+
+def test_checkpoint_replacement_before_entry_acquisition_is_never_cleaned(monkeypatch, tmp_path):
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-pre-acquisition-replacement"}
+    )
+    original_authenticate = _checkpoint_manifest.authenticate_checkpoint_payload
+    replacement = b"third-party replacement before entry ownership"
+    evidence = {}
+
+    def replace_after_native_authentication(owner, payload, *, runtime_kind):
+        identity = original_authenticate(owner, payload, runtime_kind=runtime_kind)
+        (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+        staging = transaction / "native.npz"
+        third_party = tmp_path / "third-party-before-acquisition.npz"
+        third_party.write_bytes(replacement)
+        os.replace(third_party, staging)
+        evidence.update(path=staging, inode=_path_owner(staging))
+        return identity
+
+    monkeypatch.setattr(
+        _checkpoint_manifest,
+        "authenticate_checkpoint_payload",
+        replace_after_native_authentication,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="replaced before ownership acquisition",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    staging = evidence["path"]
+    assert staging.read_bytes() == replacement
+    assert _path_owner(staging) == evidence["inode"]
+    assert any(
+        "transaction directory is not empty" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_never_reacquires_created_at_ownership_from_a_valid_replacement(
+    monkeypatch, tmp_path
+):
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-valid-native-replacement"}
+    )
+    original_checkpoint = runtime._executor.checkpoint
+    evidence = {}
+
+    def replace_valid_native_checkpoint(path):
+        target = Path(original_checkpoint(path))
+        payload = target.read_bytes()
+        replacement = tmp_path / "valid-native-replacement.npz"
+        replacement.write_bytes(payload)
+        os.replace(replacement, target)
+        evidence.update(path=target, payload=payload, owner=_path_owner(target))
+        return str(target)
+
+    monkeypatch.setattr(runtime._executor, "checkpoint", replace_valid_native_checkpoint)
+
+    with pytest.raises(RuntimeError, match="replaced its created-at staging inode"):
+        runtime.checkpoint(tmp_path / "restart")
+
+    assert evidence["path"].read_bytes() == evidence["payload"]
+    assert _path_owner(evidence["path"]) == evidence["owner"]
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_eexist_same_inode_never_grants_expected_entry_ownership(monkeypatch, tmp_path):
+    from pops.output._writers import common
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-eexist-same-inode"}
+    )
+    original_rename = common._rename_no_replace
+    evidence = {}
+
+    def create_same_inode_entry_before_rename(source, destination, *args, **kwargs):
+        if destination == "native.npz" and source.endswith(".runtime-instance.tmp"):
+            os.link(
+                source,
+                destination,
+                src_dir_fd=kwargs["src_dir_fd"],
+                dst_dir_fd=kwargs["dst_dir_fd"],
+                follow_symlinks=False,
+            )
+            linked = os.stat(
+                destination,
+                dir_fd=kwargs["dst_dir_fd"],
+                follow_symlinks=False,
+            )
+            evidence["inode"] = (int(linked.st_dev), int(linked.st_ino))
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(common, "_rename_no_replace", create_same_inode_entry_before_rename)
+
+    with pytest.raises(OSError, match="appeared during envelope publication") as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+    expected = transaction / "native.npz"
+    assert _path_owner(expected) == evidence["inode"]
+    assert not tuple(transaction.glob("*.runtime-instance.tmp"))
+    assert any(
+        "transaction directory is not empty" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_temporary_substitution_preserves_primary_error_and_replacement(
+    monkeypatch, tmp_path
+):
+    from pops.output import _restart_provider
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-temporary-substitution"}
+    )
+    original_authenticate = _restart_provider._CheckpointTransactionReceipt.authenticate_entry_at
+    replacement = b"third-party runtime envelope temporary"
+    evidence = {}
+
+    def replace_temporary_before_authentication(transaction, authority):
+        if authority.name.endswith(".runtime-instance.tmp") and not evidence:
+            third_party = tmp_path / "third-party-temporary.npz"
+            third_party.write_bytes(replacement)
+            temporary = transaction.directory / authority.name
+            os.replace(third_party, temporary)
+            evidence.update(
+                path=temporary,
+                inode=_path_owner(temporary),
+            )
+        return original_authenticate(transaction, authority)
+
+    monkeypatch.setattr(
+        _restart_provider._CheckpointTransactionReceipt,
+        "authenticate_entry_at",
+        replace_temporary_before_authentication,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="transaction entry was replaced before ownership acquisition",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    temporary = evidence["path"]
+    assert temporary.read_bytes() == replacement
+    assert _path_owner(temporary) == evidence["inode"]
+    notes = getattr(caught.value, "__notes__", ())
+    assert any("temporary cleanup" in note for note in notes)
+    assert any("transaction directory is not empty" in note for note in notes)
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_transaction_directory_substitution_never_uses_the_replacement(
+    monkeypatch, tmp_path
+):
+    from pops.output import _restart_provider
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-transaction-directory-substitution"}
+    )
+    receipt_type = _restart_provider._CheckpointTransactionReceipt
+    original_open = receipt_type.open_candidate_at
+    replacement = b"third-party transaction directory"
+    evidence = {}
+
+    def substitute_directory(receipt, name):
+        if not evidence:
+            detached = tmp_path / "detached-owned-transaction"
+            os.replace(receipt.directory, detached)
+            receipt.directory.mkdir(mode=0o700)
+            marker = receipt.directory / "third-party-marker"
+            marker.write_bytes(replacement)
+            evidence.update(detached=detached, marker=marker)
+        return original_open(receipt, name)
+
+    monkeypatch.setattr(receipt_type, "open_candidate_at", substitute_directory)
+
+    with pytest.raises(RuntimeError, match="transaction directory authority changed"):
+        runtime.checkpoint(tmp_path / "restart")
+
+    assert evidence["marker"].read_bytes() == replacement
+    assert evidence["detached"].is_dir()
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_post_reseal_handoff_substitution_preserves_replacement(monkeypatch, tmp_path):
+    from pops.output import _restart_provider
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-post-reseal-handoff-substitution"}
+    )
+    proof_type = _restart_provider._CheckpointPayloadProof
+    original_to_data = proof_type.to_data
+    replacement = b"third-party replacement after reseal"
+    evidence = {}
+    calls = 0
+
+    def substitute_before_second_handoff(proof):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            third_party = tmp_path / "third-party-after-reseal.npz"
+            third_party.write_bytes(replacement)
+            os.replace(third_party, proof.path)
+            evidence.update(path=proof.path, owner=_path_owner(proof.path))
+        return original_to_data(proof)
+
+    monkeypatch.setattr(proof_type, "to_data", substitute_before_second_handoff)
+
+    with pytest.raises(
+        RuntimeError,
+        match="transaction entry was replaced before ownership acquisition",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    assert calls == 2
+    assert evidence["path"].read_bytes() == replacement
+    assert _path_owner(evidence["path"]) == evidence["owner"]
+    assert any(
+        "rank-zero checkpoint cleanup also failed" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_resealed_descriptor_survives_handoff_until_rollback(tmp_path):
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-resealed-descriptor-lifecycle"}
+    )
+    operation = runtime._restart_operation()
+    snapshot = operation.snapshot(runtime, tmp_path)
+    proof = snapshot._proof
+    assert proof is not None
+    retained_fd = proof.entry.fileno()
+    retained_owner = _path_owner(snapshot.path)
+    assert (int(os.fstat(retained_fd).st_dev), int(os.fstat(retained_fd).st_ino)) == retained_owner
+
+    target = operation.write(snapshot, tmp_path / "restart")
+
+    assert target.is_file()
+    assert snapshot._published_entry is not None
+    assert snapshot._published_entry.fileno() == retained_fd
+    assert (int(os.fstat(retained_fd).st_dev), int(os.fstat(retained_fd).st_ino)) == retained_owner
+    snapshot.rollback()
+    snapshot.rollback()
+    snapshot.finalize()
+    snapshot.finalize()
+    assert not target.exists()
+    with pytest.raises(OSError):
+        os.fstat(retained_fd)
+
+
+def test_checkpoint_discard_aggregates_independent_cleanup_failures(monkeypatch, tmp_path):
+    from pops.output import _restart_provider
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-aggregate-discard-cleanup"}
+    )
+    snapshot = runtime._restart_operation().snapshot(runtime, tmp_path)
+    receipt_type = _restart_provider._CheckpointTransactionReceipt
+    calls = []
+
+    def fail_quarantine(_receipt, entry, *, phase, close_entry=True):
+        calls.append(("quarantine", phase))
+        if close_entry:
+            entry.close()
+        raise RuntimeError("injected staging quarantine failure")
+
+    def fail_directory_cleanup(receipt):
+        calls.append(("directory", receipt.directory_name))
+        receipt.close()
+        raise RuntimeError("injected transaction directory cleanup failure")
+
+    monkeypatch.setattr(receipt_type, "quarantine_entry_at", fail_quarantine)
+    monkeypatch.setattr(receipt_type, "cleanup_empty", fail_directory_cleanup)
+
+    with pytest.raises(RuntimeError, match="checkpoint snapshot cleanup failed") as caught:
+        snapshot.discard()
+
+    message = str(caught.value)
+    assert "injected staging quarantine failure" in message
+    assert "injected transaction directory cleanup failure" in message
+    assert [row[0] for row in calls] == ["quarantine", "directory"]
+    snapshot.finalize()
+    snapshot.finalize()
+
+
+def test_checkpoint_openat_refuses_symlink_entries_without_following(tmp_path):
+    import errno
+    import stat as stat_module
+
+    from pops.output import _restart_provider
+
+    receipt = _restart_provider._CheckpointTransactionReceipt.created(tmp_path)
+    native = receipt.take_native_entry()
+    os.symlink("missing-target", "candidate", dir_fd=receipt.directory_fileno())
+    try:
+        with pytest.raises(FileExistsError):
+            receipt.created_at("candidate")
+        with pytest.raises(OSError) as caught:
+            receipt.open_candidate_at("candidate")
+        assert caught.value.errno in {errno.ELOOP, errno.EMLINK}
+        status = os.stat(
+            "candidate",
+            dir_fd=receipt.directory_fileno(),
+            follow_symlinks=False,
+        )
+        assert stat_module.S_ISLNK(status.st_mode)
+    finally:
+        os.unlink("candidate", dir_fd=receipt.directory_fileno())
+        receipt.quarantine_entry_at(native, phase="symlink refusal test cleanup")
+        receipt.cleanup_empty()
+
+
+def test_checkpoint_peer_proofs_are_opaque_scalars_without_rank_local_stat(monkeypatch, tmp_path):
+    from pops.output import _restart_provider
+
+    receipt_type = _restart_provider._CheckpointTransactionReceipt
+    proof_type = _restart_provider._CheckpointPayloadProof
+    receipt = receipt_type.created(tmp_path)
+    receipt_data = receipt.to_data()
+    native = receipt.take_native_entry()
+    proof = proof_type(receipt, native)
+    proof_data = proof.to_data()
+
+    def forbid_rank_local_stat(*_args, **_kwargs):
+        raise AssertionError("a peer compared root inode evidence with its local mount")
+
+    with monkeypatch.context() as isolated:
+        isolated.setattr(os, "stat", forbid_rank_local_stat)
+        peer_receipt = receipt_type.observed(receipt_data)
+        peer_proof = proof_type.observed(peer_receipt, proof_data)
+
+    assert not peer_receipt.has_root_descriptor
+    assert not peer_proof.entry.is_open
+    assert peer_receipt.owner == receipt.owner
+    assert peer_proof.owner == proof.owner
+    receipt.quarantine_entry_at(native, phase="opaque peer proof test cleanup")
+    receipt.cleanup_empty()
+
+
+def test_checkpoint_root_attempt_broadcasts_exact_opaque_proof(monkeypatch):
+    from pops.output import _checkpoint_collective
+
+    communicator = object()
+    topology = _checkpoint_collective.CheckpointTopology(0, 2, communicator)
+    proof = {
+        "path": "/opaque/root/path/native.npz",
+        "entry_name": "native.npz",
+        "entry_owner": [17, 23],
+        "directory_name": ".pops-restart-transaction.test",
+        "directory_owner": [5, 11],
+    }
+    envelopes = []
+
+    def broadcast(actual_communicator, envelope, *, root):
+        assert actual_communicator is communicator
+        assert root == 0
+        envelopes.append(envelope)
+        return envelope
+
+    monkeypatch.setattr(_checkpoint_collective, "broadcast_value", broadcast)
+
+    attempt = _checkpoint_collective.root_attempt(topology, "proof handoff", lambda: proof)
+
+    assert attempt.value == proof
+    assert attempt.producer_error is None
+    assert attempt.transport_error is None
+    assert envelopes == [{"value": proof, "error": None}]
+
+
+def test_checkpoint_root_attempt_keeps_producer_and_transport_failures_distinct(monkeypatch):
+    from pops.output import _checkpoint_collective
+
+    communicator = object()
+    topology = _checkpoint_collective.CheckpointTopology(0, 2, communicator)
+    producer_error = ValueError("injected producer failure")
+    broadcasts = 0
+
+    def fail_broadcast(_communicator, _envelope, *, root):
+        nonlocal broadcasts
+        assert root == 0
+        broadcasts += 1
+        raise OSError("injected transport failure")
+
+    def fail_producer():
+        raise producer_error
+
+    monkeypatch.setattr(_checkpoint_collective, "broadcast_value", fail_broadcast)
+
+    attempt = _checkpoint_collective.root_attempt(topology, "broken proof", fail_producer)
+
+    assert broadcasts == 1
+    assert attempt.producer_error is producer_error
+    assert isinstance(attempt.transport_error, OSError)
+    assert "injected transport failure" in str(attempt.transport_error)
+
+
+def test_checkpoint_discard_transport_failure_performs_no_second_collective(monkeypatch, tmp_path):
+    from pops.output import _checkpoint_collective, _restart_provider
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-discard-transport-failure"}
+    )
+    snapshot = runtime._restart_operation().snapshot(runtime, tmp_path)
+    attempts = 0
+
+    def break_after_root_cleanup(_topology, _phase, producer):
+        nonlocal attempts
+        attempts += 1
+        producer()
+        return _checkpoint_collective.RootAttempt(
+            transport_error=OSError("injected post-cleanup transport failure")
+        )
+
+    monkeypatch.setattr(_checkpoint_collective, "root_attempt", break_after_root_cleanup)
+
+    with pytest.raises(
+        _restart_provider._CheckpointTransportFailure,
+        match="transport failed during discard",
+    ):
+        snapshot.discard()
+
+    assert attempts == 1
+    assert not tuple(tmp_path.glob(".pops-restart-transaction.*"))
+
+
+def test_checkpoint_reseal_fails_closed_when_atomic_quarantine_is_unavailable(
+    monkeypatch, tmp_path
+):
+    from pops.output._writers import common
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-atomic-quarantine-unavailable"}
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("injected atomic rename primitive unavailable")
+
+    monkeypatch.setattr(common, "_rename_no_replace", unavailable)
+
+    with pytest.raises(RuntimeError, match="atomic rename primitive unavailable") as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+    assert (transaction / "native.npz").is_file()
+    assert tuple(transaction.glob("*.runtime-instance.tmp"))
+    notes = getattr(caught.value, "__notes__", ())
+    assert any("failed runtime checkpoint staging cleanup" in note for note in notes)
+    assert any("transaction directory is not empty" in note for note in notes)
+    assert not (tmp_path / "restart.npz").exists()
 
 
 def test_runtime_instance_has_one_authored_execution_route():
@@ -720,7 +1381,8 @@ class _BlockingWriter:
 class _BlockingFormat:
     __pops_ir_immutable__ = True
 
-    def __init__(self):
+    def __init__(self, mode: ParallelMode):
+        self._mode = mode
         self.writer_started = threading.Event()
         self.release_writer = threading.Event()
         self.paths = []
@@ -731,7 +1393,7 @@ class _BlockingFormat:
             "provider_id": "pops.test.blocking-async.v1",
             "format_name": "blocking-test",
             "extension": ".async",
-            "parallel_mode": "serial",
+            "parallel_mode": self._mode.value,
         }
 
     def writer(self):
@@ -741,7 +1403,7 @@ class _BlockingFormat:
 def test_async_scientific_output_overlaps_next_step_and_flushes_real_receipts(tmp_path):
     output_root = tmp_path / "async-output"
     output_root.mkdir()
-    format_provider = _BlockingFormat()
+    format_provider = _BlockingFormat(_scientific_output_mode(_install().artifact))
     authoring_clock = Clock("async-authoring")
     descriptor = AsyncScientificOutput(
         format=format_provider,
@@ -1182,6 +1844,137 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     assert tuple(tmp_path.glob("*.npz")) == ()
 
 
+def test_failed_run_keeps_identity_sealed_when_entry_rollback_fails():
+    class _RollbackFailureExecutor(_Executor):
+        def _restore_temporal_restart_state(self, _state):
+            raise RuntimeError("injected run-entry rollback failure")
+
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_RollbackFailureExecutor(plan))
+    calls = []
+    close_failed = runtime._publisher.close_failed_run_consumers
+
+    def capture_close(run_identity, *, release_identity, entry_effect_fence=None):
+        calls.append((run_identity, release_identity))
+        return close_failed(
+            run_identity,
+            release_identity=release_identity,
+            entry_effect_fence=entry_effect_fence,
+        )
+
+    runtime._publisher.close_failed_run_consumers = capture_close
+    with pytest.raises(RuntimeError, match="max_steps exhausted") as caught:
+        runtime._run(t_end=1.0, max_steps=0, console=False)
+
+    assert "injected run-entry rollback failure" in "\n".join(caught.value.__notes__)
+    assert len(calls) == 1
+    run_identity, release_identity = calls[0]
+    assert release_identity is False
+    assert run_identity.token in runtime._publisher._closed_observer_runs
+
+
+def test_runtime_world_collective_loss_skips_post_commit_cleanup_and_stays_sealed(
+    monkeypatch, request
+):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import PostCommitObserverWorker
+
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    publisher = runtime._publisher
+    original_begin = publisher.begin_post_commit_consumers
+    cleanup_calls = []
+    workers = []
+
+    def cleanup_workers():
+        for worker in workers:
+            if worker.close_succeeded is not True:
+                worker.seal_local(RuntimeError("test cleanup"))
+
+    request.addfinalizer(cleanup_workers)
+
+    def lose_world(run_identity):
+        worker = PostCommitObserverWorker(
+            thread_name="test-runtime-world-loss-local-seal",
+            run_identity=run_identity,
+        )
+        workers.append(worker)
+        publisher._observer_workers[run_identity.token] = worker
+        raise _runtime_consumers._ObserverCollectiveLost(
+            "injected runtime MPI_COMM_WORLD proof loss"
+        )
+
+    def forbidden_cleanup(*_args, **_kwargs):
+        cleanup_calls.append(True)
+        raise AssertionError("WORLD loss must skip post-commit cleanup")
+
+    publisher.begin_post_commit_consumers = lose_world
+    publisher.close_failed_run_consumers = forbidden_cleanup
+    publisher.close_live_visualizations = forbidden_cleanup
+
+    with pytest.raises(
+        _runtime_consumers._ObserverCollectiveLost,
+        match="injected runtime MPI_COMM_WORLD proof loss",
+    ) as caught:
+        runtime._run(t_end=0.0, max_steps=0, console=False)
+
+    assert cleanup_calls == []
+    assert len(workers) == 1
+    assert workers[0].close_succeeded is True
+    assert publisher._observer_workers[runtime.last_run_identity.token] is workers[0]
+    assert "cleanup was skipped" in "\n".join(caught.value.__notes__)
+    assert "injected runtime MPI_COMM_WORLD proof loss" in (
+        publisher._observer_world_collective_lost
+    )
+    assert publisher.seal_observer_collective_loss(RuntimeError("later local refusal")) is True
+
+    publisher.begin_post_commit_consumers = original_begin
+    monkeypatch.setattr(
+        RuntimeInstance,
+        "_step_transaction_methods",
+        lambda self: pytest.fail(
+            "a sealed observer WORLD must refuse before native run preparation"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="MPI_COMM_WORLD is sealed"):
+        runtime._run(t_end=0.0, max_steps=0, console=False)
+    assert cleanup_calls == []
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    (
+        lambda clock: Schedule(Always(AcceptedStep(clock))),
+        lambda clock: Schedule(Every(AcceptedStep(clock), 1)),
+        lambda clock: Schedule(AtEnd(AcceptedStep(clock))),
+        lambda clock: Schedule(When(AcceptedStep(clock), True)),
+    ),
+)
+def test_zero_step_run_does_not_fabricate_an_accepted_consumer_occurrence(tmp_path, schedule):
+    plan, _, manifest = _with_graph(tmp_path, schedule=schedule)
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 0
+    assert tuple(tmp_path.glob("*.npz")) == ()
+
+
+def test_zero_step_run_keeps_exactly_one_start_occurrence(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path,
+        schedule=lambda clock: Schedule(AtStart(AcceptedStep(clock))),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 1
+    assert _published_times(tmp_path) == [0.0]
+
+
 def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_path):
     plan, _, _ = _with_graph(tmp_path, output_format=_CustomNPZ)
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
@@ -1577,12 +2370,8 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
-        "composite_integrals_before": [
-            {"block": "tracer", "component": 0, "value": 1.25}
-        ],
-        "composite_integrals_after": [
-            {"block": "tracer", "component": 0, "value": 1.25}
-        ],
+        "composite_integrals_before": [{"block": "tracer", "component": 0, "value": 1.25}],
+        "composite_integrals_after": [{"block": "tracer", "component": 0, "value": 1.25}],
     }
     published = []
 
@@ -1668,12 +2457,10 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         **receipt,
         "accepted_time": receipt["accepted_time"].hex(),
         "composite_integrals_before": [
-            {**row, "value": row["value"].hex()}
-            for row in receipt["composite_integrals_before"]
+            {**row, "value": row["value"].hex()} for row in receipt["composite_integrals_before"]
         ],
         "composite_integrals_after": [
-            {**row, "value": row["value"].hex()}
-            for row in receipt["composite_integrals_after"]
+            {**row, "value": row["value"].hex()} for row in receipt["composite_integrals_after"]
         ],
     }
     expected = make_identity(
@@ -1743,6 +2530,1638 @@ def test_checkpoint_diagnostic_baseline_schema_is_finite_and_canonical():
         )
 
 
+def test_root_output_lane_requires_one_active_run_scoped_communicator():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    lane = SimpleNamespace(active=True, closed=False)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {"run": lane}
+    assert publisher._root_output_communicator() is lane
+
+    publisher._root_output_lanes = {}
+    with pytest.raises(RuntimeError, match="exactly one active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_lanes = {"run": SimpleNamespace(active=False, closed=False)}
+    with pytest.raises(RuntimeError, match="not active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_consumers = ()
+    with pytest.raises(RuntimeError, match="declares no ROOT"):
+        publisher._root_output_communicator()
+
+
+def test_root_output_lane_is_materialized_and_closed_once_per_run():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+
+        def __init__(self):
+            self.close_calls = 0
+            self.identity = ""
+
+        def close_collectively(self):
+            self.close_calls += 1
+            self.active = False
+            self.closed = True
+
+    class _World:
+        identity = "MPI_COMM_WORLD"
+
+        def __init__(self, lane):
+            self.lane = lane
+            self.identities = []
+
+        def duplicate_observer_lane(self, identity):
+            self.identities.append(identity)
+            self.lane.identity = "%s/%s" % (self.identity, identity)
+            return self.lane
+
+    run_identity = make_identity("run", {"case": "root-output-lane"})
+    lane = _Lane()
+    world = _World(lane)
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._communicator = world
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(
+        _consumer_graph=SimpleNamespace(nodes=()),
+    )
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_pending_failures = {}
+
+    publisher.begin_post_commit_consumers(run_identity)
+    assert world.identities == ["scientific-output/root/%s" % run_identity.token]
+    assert publisher._root_output_communicator() is lane
+
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    with pytest.raises(RuntimeError, match="already closed"):
+        publisher.begin_post_commit_consumers(run_identity)
+
+
+def test_root_lane_close_retains_cleanup_authority_for_retry():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+        fail = True
+        identity = ""
+
+        def close_collectively(self):
+            if self.fail:
+                raise RuntimeError("injected collective close failure")
+            self.active = False
+            self.closed = True
+
+    class _World:
+        identity = "MPI_COMM_WORLD"
+
+        def duplicate_observer_lane(self, identity):
+            lane.identity = "%s/%s" % (self.identity, identity)
+            return lane
+
+    run_identity = make_identity("run", {"case": "retained-root-lane-cleanup"})
+    lane = _Lane()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._communicator = _World()
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=()))
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_journals = {}
+    publisher._observer_pending_failures = {}
+
+    publisher.begin_post_commit_consumers(run_identity)
+    with pytest.raises(RuntimeError, match="injected collective close failure"):
+        publisher.close_live_visualizations(run_identity)
+    assert publisher._root_output_lanes[run_identity.token] is lane
+    assert run_identity.token in publisher._closed_observer_runs
+
+    lane.fail = False
+    publisher.close_live_visualizations(run_identity)
+    assert run_identity.token not in publisher._root_output_lanes
+    assert lane.closed is True
+    assert run_identity.token in publisher._closed_observer_runs
+
+
+@pytest.mark.parametrize(
+    ("peer_error", "peer_present", "sentinel_retained"),
+    (
+        ("injected peer ROOT lane construction failure", False, False),
+        (None, True, True),
+    ),
+    ids=("all-ranks-fail", "mixed-rank-success"),
+)
+def test_root_lane_construction_failure_reaches_world_consensus_before_exit(
+    monkeypatch,
+    peer_error,
+    peer_present,
+    sentinel_retained,
+):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _World:
+        identity = "MPI_COMM_WORLD"
+
+        def __init__(self):
+            self.duplicate_calls = 0
+
+        def duplicate_observer_lane(self, _identity):
+            self.duplicate_calls += 1
+            raise RuntimeError("injected local ROOT lane construction failure")
+
+    run_identity = make_identity("run", {"case": "root-lane-construction-consensus"})
+    world = _World()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = world
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=()))
+
+    consensus_envelopes = []
+
+    def gathered(_communicator, envelope):
+        consensus_envelopes.append(dict(envelope))
+        peer = dict(envelope)
+        peer["rank"] = 1
+        peer["error"] = peer_error
+        peer["present"] = peer_present
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", gathered)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverCollectiveRejected,
+        match="ROOT scientific-output lane construction failed",
+    ):
+        publisher.begin_post_commit_consumers(run_identity)
+
+    assert world.duplicate_calls == 1
+    assert len(consensus_envelopes) == 1
+    assert "injected local ROOT lane construction failure" in consensus_envelopes[0]["error"]
+    assert (run_identity.token in publisher._root_output_lanes) is sentinel_retained
+    if sentinel_retained:
+        assert publisher._root_output_lanes[run_identity.token] is None
+    assert publisher._observer_run_phases[run_identity.token] == "opening"
+
+
+def test_only_consumer_free_serial_failed_run_releases_its_identity_for_retry():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+        identity = ""
+
+        def close_collectively(self):
+            self.active = False
+            self.closed = True
+
+    class _World:
+        identity = "MPI_COMM_WORLD"
+
+        def __init__(self):
+            self.lanes = []
+
+        def duplicate_observer_lane(self, identity):
+            lane = _Lane()
+            lane.identity = "%s/%s" % (self.identity, identity)
+            self.lanes.append(lane)
+            return lane
+
+    run_identity = make_identity("run", {"case": "retryable-consumer-free-serial"})
+    world = _World()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._communicator = None
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(
+        _consumer_graph=SimpleNamespace(nodes=()),
+    )
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_journals = {}
+    publisher._observer_preflight_sessions = {}
+    publisher._observer_pending_failures = {}
+
+    entry_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(run_identity)
+    publisher.close_failed_run_consumers(
+        run_identity,
+        release_identity=True,
+        entry_effect_fence=entry_fence,
+    )
+    assert run_identity.token not in publisher._closed_observer_runs
+
+    publisher.begin_post_commit_consumers(run_identity)
+    publisher.close_live_visualizations(run_identity)
+    assert run_identity.token in publisher._closed_observer_runs
+    publisher.close_failed_run_consumers(run_identity, release_identity=True)
+    assert run_identity.token in publisher._closed_observer_runs
+
+    published_identity = make_identity("run", {"case": "published-at-start"})
+    publisher.begin_post_commit_consumers(published_identity)
+    publisher.close_failed_run_consumers(
+        published_identity,
+        release_identity=False,
+    )
+    assert published_identity.token in publisher._closed_observer_runs
+
+    output_identity = make_identity("run", {"case": "root-output-opened"})
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._communicator = world
+    output_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(output_identity)
+    publisher.close_failed_run_consumers(
+        output_identity,
+        release_identity=True,
+        entry_effect_fence=output_fence,
+    )
+    assert output_identity.token in publisher._closed_observer_runs
+    assert world.lanes[0].closed is True
+    publisher._root_output_consumers = ()
+    publisher._communicator = None
+
+    diagnostic_identity = make_identity("run", {"case": "diagnostic-before-failure"})
+    diagnostic_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(diagnostic_identity)
+    publisher._observer_diagnostics.append("provider initialization escaped rollback")
+    publisher.close_failed_run_consumers(
+        diagnostic_identity,
+        release_identity=True,
+        entry_effect_fence=diagnostic_fence,
+    )
+    assert diagnostic_identity.token in publisher._closed_observer_runs
+
+    catalyst_identity = make_identity("run", {"case": "catalyst-begin-failure"})
+    publisher._builtin_catalyst_consumers = ("monitor/catalyst",)
+    catalyst_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(catalyst_identity)
+    publisher.close_failed_run_consumers(
+        catalyst_identity,
+        release_identity=True,
+        entry_effect_fence=catalyst_fence,
+    )
+    assert catalyst_identity.token in publisher._closed_observer_runs
+
+
+def test_mpi_size_one_consumer_free_failed_run_releases_its_identity():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "mpi-size-one-reusable"})
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=()))
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_journals = {}
+    publisher._observer_preflight_sessions = {}
+    publisher._observer_pending_failures = {}
+
+    entry_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(run_identity)
+    publisher.close_failed_run_consumers(
+        run_identity,
+        release_identity=True,
+        entry_effect_fence=entry_fence,
+    )
+    assert run_identity.token not in publisher._closed_observer_runs
+    assert run_identity.token not in publisher._observer_run_phases
+    publisher.begin_post_commit_consumers(run_identity)
+
+
+def test_mpi_multi_rank_consumer_free_failed_run_keeps_its_identity(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "mpi-multi-rank-sealed"})
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=()))
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_journals = {}
+    publisher._observer_preflight_sessions = {}
+    publisher._observer_pending_failures = {}
+
+    def consensus_rows(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", consensus_rows)
+    entry_fence = publisher.failed_run_effect_fence()
+    publisher.begin_post_commit_consumers(run_identity)
+    publisher.close_failed_run_consumers(
+        run_identity,
+        release_identity=True,
+        entry_effect_fence=entry_fence,
+    )
+    assert run_identity.token in publisher._closed_observer_runs
+    assert publisher._observer_run_phases[run_identity.token] == "closed"
+
+
+def test_runtime_instance_exposes_only_exact_native_program_accepted_state():
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(program_accepted_state=lambda: b"accepted-amr-state")
+    assert runtime.program_accepted_state() == b"accepted-amr-state"
+
+    runtime._executor = SimpleNamespace()
+    with pytest.raises(NotImplementedError, match="accepted AMR Program state"):
+        runtime.program_accepted_state()
+
+    runtime._executor = SimpleNamespace(program_accepted_state=lambda: bytearray(b"mutable"))
+    with pytest.raises(TypeError, match="must be exact bytes"):
+        runtime.program_accepted_state()
+
+
+def test_failed_run_close_refuses_divergent_mpi_lane_inventory(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "rank-divergent-release"})
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = object()
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {run_identity.token: "opening"}
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/collective",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        identity=make_identity("consumer-manifest", {"case": "collective-close"}),
+        operation_data={"observer": {"provider": {"provider_id": "test.collective-observer"}}},
+    )
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_journals = {}
+    publisher._observer_pending_failures = {}
+
+    entry_fence = publisher.failed_run_effect_fence()
+
+    def divergent_rows(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        peer["monitors"] = [dict(row) for row in envelope["monitors"]]
+        peer["monitors"][0]["lane"] = {
+            "identity": "MPI_COMM_WORLD/post-commit/%s/%s"
+            % (manifest.identity.token, run_identity.token),
+            "active": True,
+            "closed": False,
+        }
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", divergent_rows)
+    with pytest.raises(RuntimeError, match="divergent MPI monitor inventory"):
+        publisher.close_failed_run_consumers(
+            run_identity,
+            release_identity=True,
+            entry_effect_fence=entry_fence,
+        )
+    assert run_identity.token in publisher._closed_observer_runs
+
+
+def test_opened_root_output_refuses_close_after_lane_authority_disappears():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "missing-open-root-lane"})
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._communicator = object()
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {run_identity.token: "open"}
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=()))
+    publisher._observer_workers = {}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {}
+    publisher._observer_reports = {}
+    publisher._observer_pending_failures = {}
+    publisher._observer_diagnostics = []
+
+    with pytest.raises(RuntimeError, match="lost its opened ROOT output lane"):
+        publisher.close_live_visualizations(run_identity)
+    assert run_identity.token in publisher._closed_observer_runs
+
+
+def test_close_preflight_refuses_queue_owned_by_another_run():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "queue-owner"})
+    other_identity = make_identity("run", {"case": "other-queue-owner"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/serial",
+        parallel_mode=ParallelMode.SERIAL,
+        operation_data={"observer": {"provider": {"provider_id": "test.serial-observer"}}},
+    )
+    queue = SimpleNamespace(
+        close_authority={
+            "run_identity": other_identity.token,
+            "consumer_id": manifest.qualified_id,
+            "provider_id": "test.serial-observer",
+        },
+        close_requested=False,
+        close_succeeded=False,
+    )
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._communicator = None
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._observer_run_phases = {run_identity.token: "open"}
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+    publisher._observer_workers = {}
+    publisher._observer_queues = {(manifest.qualified_id, run_identity.token): queue}
+    publisher._observer_lanes = {}
+
+    with pytest.raises(RuntimeError, match="queue owned by another run or consumer"):
+        publisher._preflight_observer_close(run_identity)
+
+
+def test_pending_observer_abort_retries_only_after_local_failure():
+    from pops.output.observers import authenticate_observer_session
+    from pops.runtime._runtime_consumers import _PendingObserverSession
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-observer",
+            "delivery": "post_commit",
+            "threading": "dedicated_serial",
+            "worker_mpi": False,
+        }
+
+        def __init__(self):
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            self.abort_calls += 1
+            if self.abort_calls == 1:
+                raise RuntimeError("transient abort failure")
+
+    run_identity = make_identity("run", {"case": "pending-abort-retry"})
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        "monitor/pending",
+        session.authority["provider_id"],
+        False,
+        session,
+    )
+    assert authenticate_observer_session(pending)["provider_id"] == "test.pending-observer"
+
+    with pytest.raises(RuntimeError, match="transient abort failure"):
+        pending.abort()
+    assert not pending.abort_succeeded
+
+    pending.abort()
+    pending.abort()
+    assert pending.abort_succeeded
+    assert session.abort_calls == 2
+
+
+def test_pending_observer_abort_marks_worker_collective_loss():
+    from pops.output.observers import ObserverWorkerCollectiveLost
+    from pops.runtime._runtime_consumers import _PendingObserverSession
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-observer-lost-lane",
+            "delivery": "post_commit",
+            "threading": "dedicated_collective",
+            "worker_mpi": True,
+        }
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            raise ObserverWorkerCollectiveLost("injected pending abort lane loss")
+
+    run_identity = make_identity("run", {"case": "pending-abort-lost-lane"})
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        "monitor/pending-lost-lane",
+        session.authority["provider_id"],
+        True,
+        session,
+    )
+
+    with pytest.raises(ObserverWorkerCollectiveLost, match="pending abort lane loss"):
+        pending.abort()
+    assert pending.abort_succeeded is False
+    assert pending.worker_collective_lost is True
+
+
+def test_failed_pending_session_retains_worker_until_owner_thread_retry():
+    from pops.runtime._observer_runtime import PostCommitObserverWorker
+    from pops.runtime._runtime_consumers import (
+        _PendingObserverSession,
+        RuntimeConsumerPublisher,
+    )
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-worker-owner",
+            "delivery": "post_commit",
+            "threading": "dedicated_serial",
+            "worker_mpi": False,
+        }
+
+        def __init__(self):
+            self.abort_threads = []
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            self.abort_threads.append(threading.get_ident())
+            if len(self.abort_threads) == 1:
+                raise RuntimeError("transient owner-thread abort failure")
+
+    run_identity = make_identity("run", {"case": "pending-worker-owner-retry"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/pending-worker-owner",
+        parallel_mode=ParallelMode.SERIAL,
+        identity=make_identity("consumer-manifest", {"case": "pending-worker-owner"}),
+        operation_data={
+            "observer": {"provider": {"provider_id": _Session.authority["provider_id"]}},
+            "on_failure": {"action": "raise_on_flush"},
+        },
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        manifest.qualified_id,
+        session.authority["provider_id"],
+        False,
+        session,
+    )
+    worker = PostCommitObserverWorker(
+        thread_name="test-pending-worker-owner",
+        run_identity=run_identity,
+    )
+    try:
+        owner_thread = worker._thread.ident
+        assert owner_thread is not None
+
+        publisher = object.__new__(RuntimeConsumerPublisher)
+        publisher._rank = 0
+        publisher._size = 1
+        publisher._communicator = None
+        publisher._root_output_consumers = ()
+        publisher._root_output_lanes = {}
+        publisher._closed_observer_runs = set()
+        publisher._observer_run_phases = {run_identity.token: "opening"}
+        publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+        publisher._observer_workers = {run_identity.token: worker}
+        publisher._observer_pending_sessions = {key: pending}
+        publisher._observer_queues = {}
+        publisher._observer_lanes = {}
+        publisher._observer_pending_failures = {}
+        publisher._observer_reports = {}
+        publisher._observer_diagnostics = []
+
+        with pytest.raises(RuntimeError, match="transient owner-thread abort failure"):
+            publisher.close_live_visualizations(run_identity)
+        assert publisher._observer_pending_sessions[key] is pending
+        assert publisher._observer_workers[run_identity.token] is worker
+        assert worker._thread.is_alive()
+        assert worker.close_requested is False
+        assert session.abort_threads == [owner_thread]
+
+        assert publisher.close_live_visualizations(run_identity) == ()
+        assert session.abort_threads == [owner_thread, owner_thread]
+        assert key not in publisher._observer_pending_sessions
+        assert run_identity.token not in publisher._observer_workers
+        assert worker.close_succeeded is True
+        assert worker._thread.is_alive() is False
+        assert publisher._observer_run_phases[run_identity.token] == "closed"
+    finally:
+        if not worker.close_succeeded:
+            worker.close()
+
+
+def test_close_preflight_refuses_divergent_mpi_run_lifecycle_phases(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "divergent-close-phases"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/divergent-close-phases",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        identity=make_identity("consumer-manifest", {"case": "divergent-close-phases"}),
+        operation_data={
+            "observer": {"provider": {"provider_id": "test.collective-observer"}},
+            "on_failure": {"action": "raise_on_flush"},
+        },
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    authority = {
+        "run_identity": run_identity.token,
+        "consumer_id": manifest.qualified_id,
+        "provider_id": "test.collective-observer",
+    }
+    queue = SimpleNamespace(
+        close_authority=authority,
+        close_requested=True,
+        close_succeeded=False,
+    )
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/post-commit/%s/%s" % (manifest.identity.token, run_identity.token),
+        active=True,
+        closed=False,
+    )
+    worker = SimpleNamespace(
+        close_authority=run_identity.token,
+        close_requested=False,
+        close_succeeded=False,
+    )
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._closed_observer_runs = set()
+    publisher._observer_run_phases = {run_identity.token: "closing_opening"}
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+
+    def divergent_phase_rows(_communicator, envelope):
+        assert envelope["phase"] == "closing_opening"
+        peer = dict(envelope)
+        peer["rank"] = 1
+        peer["phase"] = "closing_open"
+        assert all(
+            peer[name] == envelope[name] for name in ("error", "root_lane", "worker", "monitors")
+        )
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", divergent_phase_rows)
+    drain_calls = []
+
+    def forbidden_drain(*_args, **_kwargs):
+        drain_calls.append(True)
+        raise AssertionError("divergent phases must be refused before abort or finalize")
+
+    publisher._drain_observer_manifest = forbidden_drain
+
+    with pytest.raises(RuntimeError, match="divergent run lifecycle phases"):
+        publisher.close_live_visualizations(run_identity)
+
+    assert drain_calls == []
+    assert publisher._observer_queues[key] is queue
+    assert publisher._observer_lanes[key] is lane
+    assert publisher._observer_workers[run_identity.token] is worker
+
+
+def test_opening_preflight_refuses_complementary_mpi_owners_with_partial_worker(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "complementary-opening-owners"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/collective-opening",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        identity=make_identity("consumer-manifest", {"case": "collective-opening"}),
+        operation_data={"observer": {"provider": {"provider_id": "test.collective-observer"}}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    authority = {
+        "run_identity": run_identity.token,
+        "consumer_id": manifest.qualified_id,
+        "provider_id": "test.collective-observer",
+    }
+    queue = SimpleNamespace(
+        close_authority=authority,
+        close_requested=False,
+        close_succeeded=False,
+    )
+    lane_identity = "MPI_COMM_WORLD/post-commit/%s/%s" % (
+        manifest.identity.token,
+        run_identity.token,
+    )
+    lane = SimpleNamespace(identity=lane_identity, active=True, closed=False)
+    worker = SimpleNamespace(
+        close_authority=run_identity.token,
+        close_requested=False,
+        close_succeeded=False,
+    )
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._observer_run_phases = {run_identity.token: "opening"}
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+
+    def complementary_peer(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        peer["worker"] = None
+        peer["monitors"] = [dict(row) for row in envelope["monitors"]]
+        peer["monitors"][0]["session"] = {
+            "authority": authority,
+            "abort_succeeded": False,
+            "authenticated": True,
+        }
+        peer["monitors"][0]["queue"] = None
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", complementary_peer)
+    with pytest.raises(RuntimeError, match="without every run worker"):
+        publisher._preflight_observer_close(run_identity)
+
+
+def test_rank_divergent_collective_abort_is_retained_without_unsafe_retry(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "partial-collective-abort"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/partial-abort",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+
+    class _Queue:
+        close_requested = False
+        close_succeeded = False
+        reports = ()
+
+        def __init__(self):
+            self.abort_calls = 0
+            self.prepare_calls = 0
+
+        def prepare_abort_close(self):
+            self.prepare_calls += 1
+            self.close_requested = True
+            return ()
+
+        def prepare_complete_abort_close(self):
+            return None
+
+        def cancel_complete_abort_close(self, _error):
+            return None
+
+        def arm_complete_abort_close(self):
+            return None
+
+        def complete_abort_close(self):
+            self.abort_calls += 1
+            self.close_succeeded = True
+            return ()
+
+        def close(self):
+            raise AssertionError("failed opening must not finalize its observer queue")
+
+    queue = _Queue()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "closing_opening"}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: SimpleNamespace(closed=False)}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    abort_phases = 0
+
+    def peer_abort_failure(_communicator, envelope):
+        nonlocal abort_phases
+        peer = dict(envelope)
+        peer["rank"] = 1
+        if set(envelope) == {"rank", "lost"}:
+            peer["lost"] = False
+        elif set(envelope) in (
+            {"rank", "owned", "ready"},
+            {"rank", "owned", "ready", "worker_lane_lost"},
+        ):
+            abort_phases += 1
+            peer["owned"] = True
+            peer["ready"] = abort_phases == 1
+            if "worker_lane_lost" in envelope:
+                peer["worker_lane_lost"] = False
+        elif set(envelope) == {"rank", "owned", "error"}:
+            peer["owned"] = True
+            peer["error"] = None
+        elif set(envelope) == {"rank", "ready"}:
+            peer["ready"] = False
+        elif set(envelope) == {"rank", "reports", "diagnostics"}:
+            peer["reports"] = []
+            peer["diagnostics"] = []
+        else:  # pragma: no cover - every collective phase is authenticated above
+            raise AssertionError("unexpected close collective")
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", peer_abort_failure)
+
+    first = publisher._drain_observer_manifest(manifest, run_identity, close=True)
+    assert any("subset of MPI ranks" in failure for failure in first)
+    assert queue.prepare_calls == 1
+    assert queue.abort_calls == 1
+    assert key in publisher._observer_queues
+    assert key in publisher._observer_abort_retry_blocked
+
+    second = publisher._drain_observer_manifest(manifest, run_identity, close=True)
+    assert any("retry refused" in failure for failure in second)
+    assert queue.prepare_calls == 1
+    assert queue.abort_calls == 1
+    assert key in publisher._observer_queues
+
+
+def test_poisoned_worker_lane_refuses_provider_and_lane_cleanup(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "poisoned-worker-lane-close"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/poisoned-worker-lane",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+
+    class _Queue:
+        worker_collective_lost = True
+        close_requested = False
+        close_succeeded = False
+        reports = ()
+
+        def __init__(self):
+            self.seal_calls = 0
+
+        def seal_local(self, _error):
+            self.seal_calls += 1
+
+        def __getattr__(self, name):
+            if name.startswith(("prepare", "arm", "complete", "close", "abort", "flush")):
+                raise AssertionError("poisoned worker lane must not reenter queue lifecycle")
+            raise AttributeError(name)
+
+    class _Lane:
+        def __init__(self):
+            self.closed = False
+            self.close_calls = 0
+
+        def close_collectively(self):
+            self.close_calls += 1
+            raise AssertionError("poisoned worker lane must not be reused or closed")
+
+    class _Worker:
+        def __init__(self):
+            self.seal_calls = 0
+            self.close_succeeded = False
+            self.stopped = False
+
+        def seal_local(self, _error):
+            self.seal_calls += 1
+            self.close_succeeded = True
+            self.stopped = True
+
+    queue = _Queue()
+    lane = _Lane()
+    worker = _Worker()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "closing_open"}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_finalize_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    collective_phases = []
+
+    def gathered(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        if set(envelope) == {"rank", "lost"}:
+            collective_phases.append("health")
+            peer["lost"] = True
+        elif set(envelope) == {"rank", "error", "closed"}:
+            collective_phases.append("local-worker-seal")
+            assert worker.stopped is True
+            assert envelope["error"] is None
+            assert envelope["closed"] is True
+        else:  # pragma: no cover - every worker-loss phase is authenticated above
+            raise AssertionError("unexpected poisoned worker collective envelope")
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", gathered)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverWorkerLaneLost,
+        match="worker lane lost collective proof",
+    ):
+        publisher._drain_observer_manifest(manifest, run_identity, close=True)
+
+    assert collective_phases == ["health", "local-worker-seal"]
+    assert queue.seal_calls == 1
+    assert worker.seal_calls == 1
+    assert worker.close_succeeded is True
+    assert worker.stopped is True
+    assert publisher._observer_workers[run_identity.token] is worker
+    assert publisher._observer_queues[key] is queue
+    assert publisher._observer_lanes[key] is lane
+    assert lane.close_calls == 0
+    assert "worker lane lost collective proof" in publisher._observer_pending_failures[key][0]
+
+
+def test_pending_abort_worker_lane_loss_stops_worker_without_lane_reentry(monkeypatch, request):
+    from pops.output.observers import ObserverWorkerCollectiveLost
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import PostCommitObserverWorker
+    from pops.runtime._runtime_consumers import (
+        _PendingObserverSession,
+        RuntimeConsumerPublisher,
+    )
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-abort-lost-worker-lane",
+            "delivery": "post_commit",
+            "threading": "dedicated_collective",
+            "worker_mpi": True,
+        }
+
+        def __init__(self):
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            self.abort_calls += 1
+            raise ObserverWorkerCollectiveLost("injected pending abort worker-lane loss")
+
+    class _Lane:
+        closed = False
+
+        def close_collectively(self):
+            raise AssertionError("a poisoned worker lane must remain retained")
+
+    run_identity = make_identity("run", {"case": "pending-abort-worker-lane-loss"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/pending-abort-worker-lane-loss",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        manifest.qualified_id,
+        session.authority["provider_id"],
+        True,
+        session,
+    )
+    worker = PostCommitObserverWorker(
+        thread_name="test-pending-abort-worker-lane-loss",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(
+        lambda: None if worker.close_succeeded else worker.seal_local(RuntimeError("test cleanup"))
+    )
+    lane = _Lane()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "closing_opening"}
+    publisher._observer_pending_sessions = {key: pending}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {key: lane}
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_finalize_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    phases = []
+
+    def gathered(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        keys = set(envelope)
+        if keys == {"rank", "lost"}:
+            phases.append("initial-health")
+            peer["lost"] = False
+        elif keys == {"rank", "owned", "ready"}:
+            phases.append("abort-preparation")
+        elif keys == {"rank", "owned", "error"}:
+            phases.append("abort-admission")
+        elif keys == {"rank", "owned", "ready", "worker_lane_lost"}:
+            phases.append("abort-completion")
+            assert envelope["worker_lane_lost"] is True
+            peer["worker_lane_lost"] = True
+        elif keys == {"rank", "error", "closed"}:
+            phases.append("local-worker-seal")
+            assert worker.close_succeeded is True
+        else:  # pragma: no cover - every phase is authenticated above
+            raise AssertionError("unexpected pending-abort collective envelope")
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", gathered)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverWorkerLaneLost,
+        match="abort lost worker-lane collective proof",
+    ):
+        publisher._drain_observer_manifest(manifest, run_identity, close=True)
+
+    assert phases == [
+        "initial-health",
+        "abort-preparation",
+        "abort-admission",
+        "abort-completion",
+        "local-worker-seal",
+    ]
+    assert session.abort_calls == 1
+    assert pending.worker_collective_lost is True
+    assert worker.close_succeeded is True
+    assert publisher._observer_pending_sessions[key] is pending
+    assert publisher._observer_workers[run_identity.token] is worker
+    assert publisher._observer_lanes[key] is lane
+
+
+def test_durable_journal_world_loss_is_not_downgraded_to_local_failure(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    manifest = SimpleNamespace(parallel_mode=ParallelMode.COLLECTIVE)
+    journal = SimpleNamespace(list_committed=lambda: ())
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    collective_calls = 0
+
+    def lost_world(_communicator, _envelope):
+        nonlocal collective_calls
+        collective_calls += 1
+        raise RuntimeError("injected durable WORLD loss")
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", lost_world)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverCollectiveLost,
+        match="lost its WORLD inspection proof",
+    ):
+        publisher._inspect_observer_journal(manifest, journal)
+
+    assert collective_calls == 1
+
+
+def test_mpi_finalize_enqueue_consensus_failure_cancels_prepared_provider_call(
+    monkeypatch,
+    request: pytest.FixtureRequest,
+):
+    from pops import _native_collectives
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import (
+        ObserverRun,
+        PostCommitObserverQueue,
+        PostCommitObserverWorker,
+        _PreparedWorkerCall,
+    )
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "finalize-enqueue-consensus-failure"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/finalize-enqueue-consensus-failure",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.collective-finalize",
+            "delivery": "post_commit",
+            "threading": "dedicated_collective",
+            "worker_mpi": True,
+        }
+
+        def __init__(self):
+            self.finalize_calls = 0
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("finalization admission must not execute an observer frame")
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+        def abort(self):
+            raise AssertionError("normal finalization must not enter provider abort")
+
+    class _Lane:
+        def __init__(self):
+            self.closed = False
+            self.close_calls = 0
+
+        def close_collectively(self):
+            self.close_calls += 1
+            self.closed = True
+
+    monkeypatch.setattr(
+        _native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    session = _Session()
+    lane = _Lane()
+    worker = PostCommitObserverWorker(
+        thread_name="test-finalize-enqueue-consensus-failure",
+        run_identity=run_identity,
+    )
+    try:
+        queue = PostCommitObserverQueue(
+            session,
+            ObserverRun(run_identity),
+            consumer_id=manifest.qualified_id,
+            worker_communicator=lane,
+            shared_worker=worker,
+            defer_initialize=True,
+        )
+    except BaseException:
+        worker.close()
+        raise
+
+    def cleanup() -> None:
+        cleanup_error = RuntimeError("test cleanup cancelled an unresolved lifecycle call")
+        queue.cancel_initialize(cleanup_error)
+        queue.cancel_complete_close(cleanup_error)
+        queue.cancel_complete_abort_close(cleanup_error)
+        worker.close()
+
+    request.addfinalizer(cleanup)
+
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "open"}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_finalize_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    prepared_attempts = []
+    cancelled_attempts = []
+    awaited_attempts = []
+    original_cancel = _PreparedWorkerCall.cancel
+    original_result = _PreparedWorkerCall.result
+
+    def tracked_cancel(attempt, error):
+        cancelled_attempts.append(attempt)
+        return original_cancel(attempt, error)
+
+    def tracked_result(attempt):
+        awaited_attempts.append(attempt)
+        return original_result(attempt)
+
+    monkeypatch.setattr(_PreparedWorkerCall, "cancel", tracked_cancel)
+    monkeypatch.setattr(_PreparedWorkerCall, "result", tracked_result)
+
+    def close_rows(phase, envelope):
+        if phase == "MPI observer queue finalization enqueue":
+            assert queue._finalize_attempt is not None
+            prepared_attempts.append(queue._finalize_attempt)
+            raise RuntimeError("injected finalization enqueue consensus failure")
+        peer = dict(envelope)
+        peer["rank"] = 1
+        return envelope, peer
+
+    publisher._collective_close_rows = close_rows
+
+    def peer_flush(_communicator, envelope):
+        return envelope, {"rank": 1, "reports": [], "diagnostics": []}
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", peer_flush)
+
+    try:
+        with pytest.raises(
+            _runtime_consumers._ObserverCollectiveLost,
+            match="finalization enqueue consensus failed",
+        ):
+            publisher._drain_observer_manifest(manifest, run_identity, close=True)
+        assert len(prepared_attempts) == 1
+        assert cancelled_attempts == prepared_attempts
+        assert awaited_attempts == prepared_attempts
+        assert prepared_attempts[0]._done.is_set()
+        assert queue._finalize_attempt is None
+        assert session.finalize_calls == 0
+        assert key in publisher._observer_queues
+        assert key in publisher._observer_lanes
+        assert lane.close_calls == 0
+        assert lane.closed is False
+        assert publisher._observer_finalize_retry_blocked == set()
+    finally:
+        cleanup()
+
+
+def test_mpi_world_report_consensus_loss_is_sticky_and_keeps_reports_private(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import ObserverDeliveryReport
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "retained-finalized-reports"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/retained-finalized-reports",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    frame_identity = make_identity(
+        "post-commit-observer-frame",
+        {"case": "retained-finalized-reports"},
+    )
+    report = ObserverDeliveryReport(
+        manifest.qualified_id,
+        run_identity,
+        0,
+        frame_identity,
+        "delivered",
+        1,
+        receipt=ObserverReceipt(frame_identity, "test.collective-finalize"),
+    )
+
+    class _Queue:
+        close_requested = False
+        close_succeeded = False
+        abort_required = False
+        reports = (report,)
+
+        def __init__(self):
+            self.finalize_calls = 0
+
+        def prepare_close(self):
+            self.close_requested = True
+            return self.reports
+
+        def prepare_complete_close(self):
+            return None
+
+        def cancel_complete_close(self, _error):
+            return None
+
+        def arm_complete_close(self):
+            return None
+
+        def complete_close(self):
+            self.finalize_calls += 1
+            self.close_succeeded = True
+            return self.reports
+
+    class _Lane:
+        def __init__(self):
+            self.closed = False
+            self.close_calls = 0
+
+        def close_collectively(self):
+            self.close_calls += 1
+            self.closed = True
+
+    queue = _Queue()
+    lane = _Lane()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "closing_open"}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+    publisher._observer_pending_reports = {}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_finalize_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+    assert publisher.post_commit_reports == ()
+
+    def close_rows(_phase, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        return envelope, peer
+
+    publisher._collective_close_rows = close_rows
+    report_consensus_calls = 0
+
+    def fail_report_consensus(_communicator, envelope):
+        nonlocal report_consensus_calls
+        assert set(envelope) == {"rank", "reports", "diagnostics"}
+        report_consensus_calls += 1
+        raise RuntimeError("injected report consensus loss")
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", fail_report_consensus)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverCollectiveLost,
+        match="flush lost its collective proof",
+    ):
+        publisher._drain_observer_manifest(manifest, run_identity, close=True)
+
+    assert queue.finalize_calls == 1
+    assert key not in publisher._observer_queues
+    assert publisher._observer_pending_reports[key] == (report,)
+    assert report.identity.token not in publisher._observer_reports
+    assert publisher.post_commit_reports == ()
+    assert publisher._observer_lanes[key] is lane
+    assert lane.closed is True
+    assert lane.close_calls == 1
+    assert report_consensus_calls == 1
+    assert "flush lost its collective proof" in publisher._observer_world_collective_lost
+
+    with pytest.raises(RuntimeError, match="MPI_COMM_WORLD is sealed"):
+        publisher._drain_observer_manifest(manifest, run_identity, close=True)
+
+    assert report_consensus_calls == 1
+    assert queue.finalize_calls == 1
+    assert publisher._observer_pending_reports[key] == (report,)
+    assert publisher._observer_reports == {}
+    assert publisher.post_commit_reports == ()
+    assert publisher._observer_lanes[key] is lane
+    assert lane.close_calls == 1
+
+
+def test_observer_drain_accepts_recovery_run_identity_and_refuses_foreign_run():
+    from pops.runtime._observer_runtime import ObserverDeliveryReport, ObserverRun
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "active-report-authority"})
+    recovery_identity = make_identity("run", {"case": "recovery-report-authority"})
+    foreign_identity = make_identity("run", {"case": "foreign-report-authority"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/recovery-report-authority",
+        parallel_mode=ParallelMode.SERIAL,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+
+    def delivered_report(identity, sequence):
+        frame_identity = make_identity(
+            "post-commit-observer-frame",
+            {"run": identity.token, "sequence": sequence},
+        )
+        return ObserverDeliveryReport(
+            manifest.qualified_id,
+            identity,
+            sequence,
+            frame_identity,
+            "delivered",
+            1,
+            receipt=ObserverReceipt(frame_identity, "test.recovery-report-authority"),
+        )
+
+    recovery_report = delivered_report(recovery_identity, 0)
+    foreign_report = delivered_report(foreign_identity, 1)
+
+    class _Queue:
+        close_requested = False
+        close_succeeded = False
+
+        def __init__(self):
+            self.reports = (recovery_report,)
+
+        def flush(self):
+            return self.reports
+
+    queue = _Queue()
+    observer_run = ObserverRun(
+        run_identity,
+        recovery_run_identities=(recovery_identity,),
+    )
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 1
+    publisher._communicator = None
+    publisher._observer_run_phases = {run_identity.token: "open"}
+    publisher._observer_pending_sessions = {}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {}
+    publisher._observer_pending_reports = {}
+    publisher._observer_report_run_authorities = {
+        key: frozenset(observer_run.accepted_run_identities)
+    }
+    publisher._observer_pending_failures = {}
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    assert publisher._drain_observer_manifest(manifest, run_identity, close=False) == ()
+    assert publisher._observer_reports[recovery_report.identity.token] == recovery_report
+
+    queue.reports = (foreign_report,)
+    with pytest.raises(RuntimeError, match="authenticates another run or session"):
+        publisher._drain_observer_manifest(manifest, run_identity, close=False)
+    assert foreign_report.identity.token not in publisher._observer_reports
+
+
+def test_close_preflight_refuses_worker_missing_on_one_mpi_rank(monkeypatch):
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    run_identity = make_identity("run", {"case": "missing-rank-worker"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/collective-worker",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        identity=make_identity("consumer-manifest", {"case": "collective-worker"}),
+        operation_data={"observer": {"provider": {"provider_id": "test.collective-observer"}}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    queue = SimpleNamespace(
+        close_authority={
+            "run_identity": run_identity.token,
+            "consumer_id": manifest.qualified_id,
+            "provider_id": "test.collective-observer",
+        },
+        close_requested=False,
+        close_succeeded=False,
+    )
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/post-commit/%s/%s" % (manifest.identity.token, run_identity.token),
+        active=True,
+        closed=False,
+    )
+    worker = SimpleNamespace(
+        close_authority=run_identity.token,
+        close_requested=False,
+        close_succeeded=False,
+    )
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._root_output_consumers = ()
+    publisher._root_output_lanes = {}
+    publisher._observer_run_phases = {run_identity.token: "open"}
+    publisher._owner = SimpleNamespace(_consumer_graph=SimpleNamespace(nodes=(manifest,)))
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_queues = {key: queue}
+    publisher._observer_lanes = {key: lane}
+
+    def missing_peer_worker(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        peer["monitors"] = [dict(row) for row in envelope["monitors"]]
+        peer["worker"] = None
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", missing_peer_worker)
+    with pytest.raises(RuntimeError, match="without every run worker"):
+        publisher._preflight_observer_close(run_identity)
+
+
 def test_diagnostic_component_requires_one_explicit_role_for_multicomponent_state():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
@@ -1783,6 +4202,66 @@ def test_step_change_diagnostic_uses_the_native_transaction_snapshot():
         SimpleNamespace(), _Provider(), "fluid", "step_change_l2", 0, True, (0, 1)
     )
     assert (value, composite) == (0.125, True)
+
+
+def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Provider:
+        def _accepted_balance_terms(self, route):
+            assert route == "pops.balance-ledger-route.v1:sha256:" + "1" * 64
+            return {
+                "storage_change": 11.0,
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    terms = RuntimeConsumerPublisher._native_balance_terms(
+        _Provider(),
+        "pops.balance-ledger-route.v1:sha256:" + "1" * 64,
+        block="fluid",
+        component=0,
+        levels=(0,),
+        automatic_terms=(),
+    )
+    assert terms.residual == 4.0
+    assert terms.reflux == 3.0
+
+    class _Incomplete:
+        def _accepted_balance_terms(self, _route):
+            return {"storage_change": 1.0}
+
+    with pytest.raises(TypeError, match="exactly storage_change"):
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Incomplete(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
+
+    class _Coerced:
+        def _accepted_balance_terms(self, _route):
+            return {
+                "storage_change": "1.0",
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    with pytest.raises(TypeError, match="exact floating-point"):
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Coerced(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
 
 
 def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():

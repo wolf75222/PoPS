@@ -16,7 +16,7 @@ from pops.fields.discretization import (
 from pops.fields.solve import ResolvedHierarchyPolicy
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._system_unified_install import _SystemUnifiedInstall
-from pops.solvers.elliptic import GeometricMG
+from pops.solvers.elliptic import CartesianCG, GeometricMG
 from pops.solvers.options import CompositeFAC
 from pops.time import FailRun
 from tests.python.integration._final_field_program import (
@@ -101,7 +101,7 @@ def _field_program(state, rate, field):
         state, rate=rate, fields=field, solve_action=FailRun())
 
 
-def _resolve(solver: GeometricMG, *, target: str = "amr_system"):
+def _resolve(solver: object, *, target: str = "amr_system"):
     model = scalar_advection_field_model("composite-fac-carrier-model")
     return resolve_periodic_field_program(
         model,
@@ -273,7 +273,8 @@ def test_resolved_plan_reasserts_closed_provider_schema_and_hierarchy() -> None:
     ((_ResolvedAmrInstallProbe, "amr_system"), (_ResolvedSystemInstallProbe, "system")),
 )
 def test_native_install_receives_exact_resolved_plan_identity(probe_type, target) -> None:
-    plan = _only_field_plan(_resolve(GeometricMG(), target=target))
+    solver = GeometricMG() if target == "amr_system" else CartesianCG()
+    plan = _only_field_plan(_resolve(solver, target=target))
     probe = probe_type()
 
     probe._install_field_plan(plan.name, plan)

@@ -57,10 +57,11 @@ a one-axis topology rather than widening it silently.
 
 `CartesianGrid` is the only public Cartesian-grid descriptor. APIs that consume a grid do not
 accept an integer, a shape tuple, or a square-mesh compatibility object: domain, frame, extent,
-cells, and topology remain explicit. The real annular backend remains available separately through
-the advanced `pops.mesh.PolarMesh` descriptor; it is not a root-level shortcut and does not replace
-the framed Cartesian path. Adaptive authoring is imported from `pops.amr`; the internal
-The implementation package is private at `pops.mesh._amr`; `pops.mesh.amr` is not importable.
+cells, and topology remain explicit. `pops.mesh.PolarMesh` remains an inert annular geometry and
+scientific-output descriptor; the exact-ranked native runtime accepts only Cartesian coordinate
+providers and refuses it during resolution. It is not a root-level shortcut and does not replace
+the framed Cartesian path. Adaptive authoring is imported from `pops.amr`; the implementation
+package is private at `pops.mesh._amr`; `pops.mesh.amr` is not importable.
 
 This foundation does not claim a native lowering route. A platform-specific grid component must
 consume and authenticate this canonical descriptor during `resolve`/`compile`; authoring it never

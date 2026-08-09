@@ -7,14 +7,16 @@ module never imports pops.dsl or pops.physics at module level.
 
 Contents
 --------
-_AUX_BASE_COMPS, _AUX_CANONICAL, _AUX_NAMED_BASE   -- aux channel constants
 _CANONICAL_ROLES, _role_of, _roles_for             -- role mirror (dsl.roles_for)
+_ranked_axes, _axis_values                          -- exact Cartesian-rank helpers
 _codegen_exprs, _live_prims, _prim_block, _jac_entries
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from pops._cartesian_axes import canonical_axis_mapping
 from pops.codegen.cpp_writer import (
     _cse_emit,
     _count_cons_denoms,
@@ -22,34 +24,25 @@ from pops.codegen.cpp_writer import (
 )
 from pops._ir.visitors import _dependencies
 
-# --- Aux channel constants (mirrors of pops.dsl module-level constants) -----
-# These duplicate the values from pops.dsl intentionally to avoid an import
-# cycle.  They MUST stay in sync with AUX_BASE_COMPS / AUX_CANONICAL in
-# pops.dsl (which themselves mirror the C++ POPS_AUX_FIELDS table).
-_AUX_BASE_COMPS = 3
-_AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
-_AUX_NAMED_BASE = 5
-
-
 # ---------------------------------------------------------------------------
 # roles_for -- local copy; avoids importing pops.dsl at module level.
 # Logic is identical to dsl.roles_for / dsl.role_of / dsl.CANONICAL_ROLES.
 # ---------------------------------------------------------------------------
 _CANONICAL_ROLES = {
-    "rho": "Density", "n": "Density", "density": "Density",
-    "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-    "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-    "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-    "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-    "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-    "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-    "p": "Pressure", "pressure": "Pressure",
-    "T": "Temperature", "temperature": "Temperature",
+    "rho": "density", "n": "density", "density": "density",
+    "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
+    "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
+    "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
+    "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
+    "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
+    "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
+    "p": "pressure", "pressure": "pressure",
+    "T": "temperature", "temperature": "temperature",
 }
 
 
 def _role_of(name: Any) -> str:
-    return _CANONICAL_ROLES.get(name, "Custom")
+    return _CANONICAL_ROLES.get(name, "custom")
 
 
 def _roles_for(names: Any, override: Any = None) -> list:
@@ -59,6 +52,65 @@ def _roles_for(names: Any, override: Any = None) -> list:
     if len(override) != len(names):
         raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
     return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
+
+
+def _ranked_axes(model: Any) -> tuple[str, ...]:
+    """Return the model's one canonical x[/y[/z]] rank authority."""
+    return tuple(canonical_axis_mapping(model._flux, where="emit_cpp_brick flux").keys())
+
+
+def _axis_values(model: Any, values: Any, *, where: str) -> list:
+    """Flatten one exact-ranked carrier in the physical-flux axis order."""
+    axes = _ranked_axes(model)
+    if not isinstance(values, dict) or tuple(values) != axes:
+        raise ValueError(
+            "%s must cover the exact emitted axis set %s" % (where, axes)
+        )
+    return [item for axis in axes for item in values[axis]]
+
+
+def _exact_brick_contract(
+    model: Any,
+    family: str,
+    *,
+    dimension: int,
+    n_vars: int,
+    runtime_params: bool,
+    slot: str = "",
+) -> list[str]:
+    """Emit the host-side semantic contract owned by one generated physics brick."""
+    model_hash = model._model_hash()
+    if not isinstance(model_hash, str) or not model_hash:
+        raise TypeError("generated physics bricks require a non-empty structural model hash")
+    if not isinstance(family, str) or not family or not isinstance(slot, str):
+        raise TypeError("generated physics brick family/slot identities must be strings")
+
+    lines = [
+        "  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() "
+        "noexcept {",
+        "    return {%s, 1};" % json.dumps("pops.codegen.%s-brick" % family),
+        "  }",
+        "  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {",
+        "    contract.text(\"pops.codegen.exact-physics-brick\")",
+        "        .scalar(std::uint32_t{1})",
+        "        .text(%s)" % json.dumps(model_hash),
+        "        .text(%s)" % json.dumps(slot),
+        "        .scalar(std::int32_t{%d})" % dimension,
+        "        .scalar(std::int32_t{%d});" % n_vars,
+    ]
+    if runtime_params:
+        lines += [
+            "    if (params.count < 0 || params.count > pops::kMaxRuntimeParams)",
+            "      throw std::invalid_argument(\"generated physics brick runtime parameter count "
+            "is invalid\");",
+            "    contract.scalar(static_cast<std::int32_t>(params.count));",
+            "    for (int index = 0; index < params.count; ++index)",
+            "      contract.scalar(params.values[index]);",
+        ]
+    else:
+        lines.append("    contract.scalar(std::int32_t{0});")
+    lines += ["  }", ""]
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +164,14 @@ def _prim_block(model: Any, live: Any = None, hoist: bool = False) -> list:
 
 
 def _jac_entries(model: Any) -> list:
-    """Entries (Expr) of the Jacobian sub-blocks of both directions (wave_speeds 'numeric'
+    """Entries (Expr) of every ranked Jacobian sub-block (wave_speeds 'numeric'
     path). Drives the dead-code elimination of max_wave_speed / wave_speeds."""
     ws = model._ws_jacobian
     out = []
-    for key in ("x", "y"):
+    axes = _ranked_axes(model)
+    if tuple(ws["blocks"]) != axes or tuple(ws["rows"]) != axes:
+        raise ValueError("wave-speed Jacobian must cover the exact emitted axis set %s" % (axes,))
+    for key in axes:
         rows = ws["rows"][key]
         for b in ws["blocks"][key]:
             for gi in b:

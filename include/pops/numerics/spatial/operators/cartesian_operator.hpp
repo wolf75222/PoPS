@@ -1,477 +1,589 @@
 /// @file
-/// @brief Cartesian residual R = -div Fhat + S over the cells of a level (method of lines).
-///
-/// CONTRACT: the "PDE -> ODE system" arrow. The time integrator (time/) only knows R; it is
-/// unaware of the geometry and the reconstruction scheme.
-///   - assemble_rhs<Limiter,NumericalFlux>: main entry point; residual + optional Fickian term.
-///   - assemble_rhs_hll_cached<Limiter>: OPT-IN HLL path with exact reconstructed-trace signal
-///     speeds cached once per face; BIT-IDENTICAL to assemble_rhs<Limiter, HLLFlux>.
-///
-/// Reconstruction (reconstruct_pp) and the structural ghost guard come from face_flux.hpp; the
-/// positivity role from positivity.hpp.
+/// @brief Prepared compile-time-ranked hyperbolic face flux and conservative residual operator.
 
 #pragma once
 
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/primitives/finite.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
-#include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
-#include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux, DiffusiveModel
+#include <pops/numerics/spatial/nd/finite_volume.hpp>
+#include <pops/numerics/spatial/nd/reconstruction.hpp>
 
+#include <Kokkos_MathematicalFunctions.hpp>
+
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <type_traits>
-namespace pops {
+#include <utility>
+#include <vector>
 
-namespace detail {
-inline bool wave_speed_cache_matches(const MultiFab& cache, const MultiFab& state) {
-  if (cache.ncomp() != 4 || cache.n_grow() < 1 ||
-      cache.box_array().size() != state.box_array().size() ||
-      cache.dmap().ranks() != state.dmap().ranks())
-    return false;
-  for (int box = 0; box < state.box_array().size(); ++box)
-    if (cache.box_array()[box] != state.box_array()[box])
-      return false;
-  return true;
-}
+namespace pops::nd {
 
-/// AssembleRhsKernel<Limiter,NumericalFlux,Model>: device kernel of the central residual of
-/// assemble_rhs.
-///
-/// Computes R(i,j) = S - (Fxp-Fxm)/dx - (Fyp-Fym)/dy (+ Fickian term if DiffusiveModel).
-/// Named functor: key point of the AOT native parity (add_compiled_model via external TU).
-/// Body bit-identical to the former lambda. POPS_HD.
-//
-// nvcc does not reliably emit the device kernel of a Model-template extended lambda first
-// instantiated from an EXTERNAL TU through the std::function / host-lambda nesting of block_builder:
-// the test passes on Serial and under compute-sanitizer but segfaults at runtime on Cuda (Heisenbug).
-// A device-callable class does not have these instantiation-context restrictions. Body IDENTICAL to
-// the former lambda -> residual BIT-IDENTICAL to add_block on CPU (and, targeted, on device).
-template <class Limiter, class NumericalFlux, class Model>
-struct AssembleRhsKernel {
-  Model model;
-  ConstArray4 u, ax;
-  Array4 r;
-  Real dx, dy;
-  Limiter lim;
-  NumericalFlux nflux;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
-  FluxEvaluationRecorder failures;
-  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
+namespace cartesian_operator_detail {
 
-    // x faces: reconstruction of the states on either side of each face
-    const auto Lxm =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rxm =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Lxp =
-        reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rxp =
-        reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const FaceContext xface = FaceContext::axis_aligned(0);
-    const auto evaluation_xm =
-        evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
-    const auto evaluation_xp =
-        evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
-    failures.record(evaluation_xm, failure);
-    failures.record(evaluation_xp, failure);
-    const auto Fxm = apply_face_measure(evaluation_xm.checked_density(), xface).value;
-    const auto Fxp = apply_face_measure(evaluation_xp.checked_density(), xface).value;
+template <int Dim>
+struct FieldStatusMaximum {
+  FieldView<const Real, Dim> status{};
 
-    // y faces
-    const auto Lym =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rym =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Lyp =
-        reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Ryp =
-        reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const FaceContext yface = FaceContext::axis_aligned(1);
-    const auto evaluation_ym =
-        evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
-    const auto evaluation_yp =
-        evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
-    failures.record(evaluation_ym, failure);
-    failures.record(evaluation_yp, failure);
-    const auto Fym = apply_face_measure(evaluation_ym.checked_density(), yface).value;
-    const auto Fyp = apply_face_measure(evaluation_yp.checked_density(), yface).value;
-
-    const auto S = model.source(load_state<Model>(u, i, j), Ac);
-    for (int c = 0; c < Model::n_vars; ++c)
-      r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
-
-    // Parabolic (Fickian) term: +nu Lap(U), 5-point centered differences.
-    // Guarded by DiffusiveModel: no effect (nor codegen) for a non-diffusive model.
-    if constexpr (DiffusiveModel<Model>) {
-      const Real nu = model.diffusivity();
-      const Real idx2 = Real(1) / (dx * dx), idy2 = Real(1) / (dy * dy);
-      for (int c = 0; c < Model::n_vars; ++c)
-        r(i, j, c) += nu * ((u(i + 1, j, c) - 2 * u(i, j, c) + u(i - 1, j, c)) * idx2 +
-                            (u(i, j + 1, c) - 2 * u(i, j, c) + u(i, j - 1, c)) * idy2);
-    }
-    if (evaluation_xm.succeeded() && evaluation_xp.succeeded() && evaluation_ym.succeeded() &&
-        evaluation_yp.succeeded())
-      for (int c = 0; c < Model::n_vars; ++c)
-        failures.record_nonfinite(r(i, j, c), failure);
-  }
-};
-}  // namespace detail
-
-/// assemble_rhs<Limiter,NumericalFlux>: residual R = -div Fhat + S over all boxes.
-///
-/// Main entry point of the Cartesian spatial operator. The limiter (reconstruction) AND the
-/// numerical flux are template parameters chosen at compile time (default: NoSlope + RusanovFlux).
-/// recon_prim = true enables reconstruction in primitive variables if the model exposes
-/// HasPrimitiveVars. For the diffusive term, see DiffusiveModel.
-/// INVARIANT: the operator does not modify U, aux -- it only writes R. No ghost fill.
-template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux, const Geometry& geom,
-                  MultiFab& R, bool recon_prim = false, Real pos_floor = Real(0),
-                  Real weno_eps = kWenoEpsilon) {
-  detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
-  const Real dx = geom.dx(), dy = geom.dy();
-  // ADC-645: the per-block WENO-Z regulariser (only Weno5 carries an eps member; the default value
-  // IS kWenoEpsilon, so every existing call site is bit-identical).
-  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
-  const NumericalFlux nflux{};
-  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
-  FluxEvaluationTracker failures{process_world_flux_collective};
-  for (int li = 0; li < U.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    const ConstArray4 ax = aux.fab(li).const_array();
-    Array4 r = R.fab(li).array();
-    const Box2D v = R.box(li);
-    failures.merge(
-        reduce_max_uint64_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
-                                      model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor,
-                                      pos_comp, failures.recorder()}));
-  }
-  failures.throw_if_failed("assemble_rhs");
-}
-
-namespace detail {
-/// Exact HLL signal speeds for the x-normal face indexed by (i,j).  The cache stores the same
-/// reconstructed traces, provider samples and canonical face orientation consumed by HLLFlux; it
-/// therefore remains exact for first-order, MUSCL and WENO reconstructions.
-template <class Limiter, class Model>
-struct HllFaceSpeedXKernel {
-  Model model;
-  ConstArray4 u, ax;
-  Array4 ws;
-  Limiter lim;
-  bool recon_prim;
-  Real pos_floor;
-  int pos_comp;
-
-  POPS_HD void operator()(int i, int j) const {
-    const auto left =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto right =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const FaceContext face = FaceContext::axis_aligned(0);
-    const PhysicalFluxView<Model> physical{model};
-    Real lower, upper;
-    hll_speeds(physical, make_face_trace_at<Model>(left, ax, i - 1, j),
-               make_face_trace_at<Model>(right, ax, i, j), face, lower, upper);
-    ws(i, j, 0) = lower;
-    ws(i, j, 1) = upper;
-  }
+  POPS_HD Real operator()(const Index<Dim>& index) const { return status(index); }
 };
 
-/// Exact HLL signal speeds for the y-normal face indexed by (i,j).  Components 2/3 are disjoint
-/// from the x-face lanes, so both face families share the existing four-component scratch.
-template <class Limiter, class Model>
-struct HllFaceSpeedYKernel {
-  Model model;
-  ConstArray4 u, ax;
-  Array4 ws;
-  Limiter lim;
-  bool recon_prim;
-  Real pos_floor;
-  int pos_comp;
-
-  POPS_HD void operator()(int i, int j) const {
-    const auto left =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto right =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const FaceContext face = FaceContext::axis_aligned(1);
-    const PhysicalFluxView<Model> physical{model};
-    Real lower, upper;
-    hll_speeds(physical, make_face_trace_at<Model>(left, ax, i, j - 1),
-               make_face_trace_at<Model>(right, ax, i, j), face, lower, upper);
-    ws(i, j, 2) = lower;
-    ws(i, j, 3) = upper;
-  }
+/// Device-clean provider storage for laws that explicitly declare no qualified provider rows.
+/// It is selected by capability at compile time and never stands in for a missing authored field.
+template <int Dim>
+struct ProviderFreeStorage {
+  POPS_HD Real operator()(const Index<Dim>&, int) const { return Real(0); }
 };
 
-template <class Limiter, class Model>
-inline void fill_hll_face_speed_cache(const Model& model, const MultiFab& U, const MultiFab& aux,
-                                      MultiFab& cache, const Limiter& limiter, bool recon_prim,
-                                      Real pos_floor, int pos_comp) {
-  for (int local = 0; local < U.local_size(); ++local) {
-    const ConstArray4 state = U.fab(local).const_array();
-    const ConstArray4 providers = aux.fab(local).const_array();
-    Array4 speeds = cache.fab(local).array();
-    for_each_cell(xface_box(U.box(local)),
-                  HllFaceSpeedXKernel<Limiter, Model>{model, state, providers, speeds, limiter,
-                                                      recon_prim, pos_floor, pos_comp});
-    for_each_cell(yface_box(U.box(local)),
-                  HllFaceSpeedYKernel<Limiter, Model>{model, state, providers, speeds, limiter,
-                                                      recon_prim, pos_floor, pos_comp});
-  }
-}
-
-/// AssembleRhsHllCachedKernel: residual R = -div Fhat + S for HLL with exact per-face signal speeds
-/// pre-computed from the reconstructed traces. Reconstruction and numerical flux are identical to
-/// AssembleRhsKernel<.., HLLFlux>; only duplicate calls to model.wave_speeds are removed.
-template <class Limiter, class Model>
-struct AssembleRhsHllCachedKernel {
-  Model model;
-  ConstArray4 u, ax, ws;
-  Array4 r;
-  Real dx, dy;
-  Limiter lim;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  int pos_comp = 0;          ///< Density role component (resolved by the host caller)
-  FluxEvaluationRecorder failures;
-  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-
-    // x faces: reconstruction of the states on both sides of each face
-    const auto Lxm =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rxm =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Lxp =
-        reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rxp =
-        reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const Real sLxm = ws(i, j, 0), sRxm = ws(i, j, 1);
-    const Real sLxp = ws(i + 1, j, 0), sRxp = ws(i + 1, j, 1);
-    const FaceContext xface = FaceContext::axis_aligned(0);
-    const PhysicalFluxView<Model> physical{model};
-    const auto evaluation_xm =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lxm, ax, i - 1, j),
-                             make_face_trace_at<Model>(Rxm, ax, i, j), xface, sLxm, sRxm);
-    const auto evaluation_xp =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lxp, ax, i, j),
-                             make_face_trace_at<Model>(Rxp, ax, i + 1, j), xface, sLxp, sRxp);
-    failures.record(evaluation_xm, failure);
-    failures.record(evaluation_xp, failure);
-    const auto Fxm = apply_face_measure(evaluation_xm.checked_density(), xface).value;
-    const auto Fxp = apply_face_measure(evaluation_xp.checked_density(), xface).value;
-
-    // y faces (components 2/3 hold the exact interval of the indexed y-normal face)
-    const auto Lym =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rym =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Lyp =
-        reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Ryp =
-        reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const Real sLym = ws(i, j, 2), sRym = ws(i, j, 3);
-    const Real sLyp = ws(i, j + 1, 2), sRyp = ws(i, j + 1, 3);
-    const FaceContext yface = FaceContext::axis_aligned(1);
-    const auto evaluation_ym =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lym, ax, i, j - 1),
-                             make_face_trace_at<Model>(Rym, ax, i, j), yface, sLym, sRym);
-    const auto evaluation_yp =
-        hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lyp, ax, i, j),
-                             make_face_trace_at<Model>(Ryp, ax, i, j + 1), yface, sLyp, sRyp);
-    failures.record(evaluation_ym, failure);
-    failures.record(evaluation_yp, failure);
-    const auto Fym = apply_face_measure(evaluation_ym.checked_density(), yface).value;
-    const auto Fyp = apply_face_measure(evaluation_yp.checked_density(), yface).value;
-
-    const auto S = model.source(load_state<Model>(u, i, j), Ac);
-    for (int c = 0; c < Model::n_vars; ++c)
-      r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
-
-    // Parabolic (Fickian) term: identical to AssembleRhsKernel, guarded by DiffusiveModel.
-    if constexpr (DiffusiveModel<Model>) {
-      const Real nu = model.diffusivity();
-      const Real idx2 = Real(1) / (dx * dx), idy2 = Real(1) / (dy * dy);
-      for (int c = 0; c < Model::n_vars; ++c)
-        r(i, j, c) += nu * ((u(i + 1, j, c) - 2 * u(i, j, c) + u(i - 1, j, c)) * idx2 +
-                            (u(i, j + 1, c) - 2 * u(i, j, c) + u(i, j - 1, c)) * idy2);
-    }
-    if (evaluation_xm.succeeded() && evaluation_xp.succeeded() && evaluation_ym.succeeded() &&
-        evaluation_yp.succeeded())
-      for (int c = 0; c < Model::n_vars; ++c)
-        failures.record_nonfinite(r(i, j, c), failure);
-  }
-};
-
-template <class Limiter, class Model>
-struct FaceFluxHllCachedXKernel {
-  Model model;
-  ConstArray4 u, ax, ws;
-  Array4 flux;
-  Real dx;
-  Limiter lim;
-  bool recon_prim;
-  Real pos_floor;
-  int pos_comp;
-  FluxEvaluationRecorder failures;
-
-  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto left =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto right =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const Real speed_left = ws(i, j, 0), speed_right = ws(i, j, 1);
-    const FaceContext face = FaceContext::axis_aligned(0);
-    const PhysicalFluxView<Model> physical{model};
-    const auto evaluation = hll_flux_with_speeds(
-        physical, make_face_trace_at<Model>(left, ax, i - 1, j),
-        make_face_trace_at<Model>(right, ax, i, j), face, speed_left, speed_right);
-    failures.record(evaluation, failure);
-    const auto value = apply_face_measure(evaluation.checked_density(), face).value;
-    for (int component = 0; component < Model::n_vars; ++component)
-      flux(i, j, component) = value[component];
-    if constexpr (DiffusiveModel<Model>) {
-      const Real nu = model.diffusivity();
-      for (int component = 0; component < Model::n_vars; ++component)
-        flux(i, j, component) += -nu * (u(i, j, component) - u(i - 1, j, component)) / dx;
-    }
-    if (evaluation.succeeded())
-      for (int component = 0; component < Model::n_vars; ++component)
-        failures.record_nonfinite(flux(i, j, component), failure);
-  }
-};
-
-template <class Limiter, class Model>
-struct FaceFluxHllCachedYKernel {
-  Model model;
-  ConstArray4 u, ax, ws;
-  Array4 flux;
-  Real dy;
-  Limiter lim;
-  bool recon_prim;
-  Real pos_floor;
-  int pos_comp;
-  FluxEvaluationRecorder failures;
-
-  POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto left =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto right =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const Real speed_left = ws(i, j, 2), speed_right = ws(i, j, 3);
-    const FaceContext face = FaceContext::axis_aligned(1);
-    const PhysicalFluxView<Model> physical{model};
-    const auto evaluation = hll_flux_with_speeds(
-        physical, make_face_trace_at<Model>(left, ax, i, j - 1),
-        make_face_trace_at<Model>(right, ax, i, j), face, speed_left, speed_right);
-    failures.record(evaluation, failure);
-    const auto value = apply_face_measure(evaluation.checked_density(), face).value;
-    for (int component = 0; component < Model::n_vars; ++component)
-      flux(i, j, component) = value[component];
-    if constexpr (DiffusiveModel<Model>) {
-      const Real nu = model.diffusivity();
-      for (int component = 0; component < Model::n_vars; ++component)
-        flux(i, j, component) += -nu * (u(i, j, component) - u(i, j - 1, component)) / dy;
-    }
-    if (evaluation.succeeded())
-      for (int component = 0; component < Model::n_vars; ++component)
-        failures.record_nonfinite(flux(i, j, component), failure);
-  }
-};
-}  // namespace detail
-
-/// assemble_rhs_hll_cached<Limiter>: residual R = -div Fhat + S at the HLL flux, with exact signal
-/// speeds pre-computed once for every reconstructed face trace pair (OPT-IN). The residual then
-/// consumes those intervals without recalling model.wave_speeds for shared faces.
-/// @p cache must have the layout of @p U, 4 components, >= 1 ghost (re-allocated by the caller).
-/// BIT-IDENTICAL to assemble_rhs<Limiter, HLLFlux> for every supported Limiter. The model MUST expose
-/// wave_speeds (guaranteed by the HLL dispatch).
-template <class Limiter = NoSlope, class Model>
-void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiFab& aux,
-                             const Geometry& geom, MultiFab& R, MultiFab& cache,
-                             bool recon_prim = false, Real pos_floor = Real(0),
-                             Real weno_eps = kWenoEpsilon) {
-  detail::require_reconstruction_ghosts<Limiter>(U);
-  if (!detail::wave_speed_cache_matches(cache, U))
+template <class Model>
+int resolve_positivity_component(Real floor) {
+  if (!(floor > Real(0)))
+    return 0;
+  if (!std::isfinite(floor))
+    throw std::invalid_argument("prepared ND positivity floor must be finite");
+  if constexpr (requires { Model::conservative_vars(); }) {
+    const int component = Model::conservative_vars().index_of(VariableRole::Density);
+    if (component >= 0)
+      return component;
     throw std::invalid_argument(
-        "assemble_rhs_hll_cached requires an exact four-component face-speed cache");
-  const Real dx = geom.dx(), dy = geom.dy();
-  Limiter lim = configured_reconstruction<Limiter>(weno_eps);
-  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
-  detail::fill_hll_face_speed_cache(model, U, aux, cache, lim, recon_prim, pos_floor, pos_comp);
-  FluxEvaluationTracker failures{process_world_flux_collective};
-  for (int li = 0; li < U.local_size(); ++li) {
-    const ConstArray4 u = U.fab(li).const_array();
-    const ConstArray4 ax = aux.fab(li).const_array();
-    const ConstArray4 ws = cache.fab(li).const_array();
-    Array4 r = R.fab(li).array();
-    const Box2D v = R.box(li);
-    failures.merge(reduce_max_uint64_cell(v, detail::AssembleRhsHllCachedKernel<Limiter, Model>{
-                                                 model, u, ax, ws, r, dx, dy, lim, recon_prim,
-                                                 pos_floor, pos_comp, failures.recorder()}));
+        "prepared ND positivity requires a conservative Density variable");
   }
-  failures.throw_if_failed("assemble_rhs_hll_cached");
+  throw std::invalid_argument(
+      "prepared ND positivity requires conservative-variable introspection");
 }
 
-/// Materialise the exact cached-HLL face flux used by AMR reflux and prepared-interface omission.
-/// Keeping this twin next to assemble_rhs_hll_cached prevents a cached residual from being paired
-/// with an independently evaluated, uncached conservation register.
-template <class Limiter = NoSlope, class Model>
-void compute_face_fluxes_hll_cached(const Model& model, const MultiFab& U, const MultiFab& aux,
-                                    MultiFab& Fx, MultiFab& Fy, MultiFab& cache, Real dx = Real(0),
-                                    Real dy = Real(0), bool recon_prim = false,
-                                    Real pos_floor = Real(0), Real weno_eps = kWenoEpsilon) {
-  detail::require_reconstruction_ghosts<Limiter>(U);
-  if (!detail::wave_speed_cache_matches(cache, U))
-    cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
-  Limiter limiter = configured_reconstruction<Limiter>(weno_eps);
-  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
-  detail::fill_hll_face_speed_cache(model, U, aux, cache, limiter, recon_prim, pos_floor, pos_comp);
-  FluxEvaluationTracker failures{process_world_flux_collective};
-  for (int local = 0; local < U.local_size(); ++local) {
-    const ConstArray4 state = U.fab(local).const_array();
-    const ConstArray4 providers = aux.fab(local).const_array();
-    const ConstArray4 speeds = cache.fab(local).const_array();
-    failures.merge(
-        reduce_max_uint64_cell(xface_box(U.box(local)),
-                               detail::FaceFluxHllCachedXKernel<Limiter, Model>{
-                                   model, state, providers, speeds, Fx.fab(local).array(), dx,
-                                   limiter, recon_prim, pos_floor, pos_comp, failures.recorder()}));
-    failures.merge(
-        reduce_max_uint64_cell(yface_box(U.box(local)),
-                               detail::FaceFluxHllCachedYKernel<Limiter, Model>{
-                                   model, state, providers, speeds, Fy.fab(local).array(), dy,
-                                   limiter, recon_prim, pos_floor, pos_comp, failures.recorder()}));
-  }
-  failures.throw_if_failed("compute_face_fluxes_hll_cached");
-}
+template <int Axis, int Dim>
+struct CopyFaceAxis {
+  FaceFieldView<const Real, Dim> source{};
+  FaceFieldView<Real, Dim> destination{};
+  int ncomp = 0;
 
-template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
-void compute_face_fluxes_with_optional_hll_cache(const Model& model, const MultiFab& U,
-                                                 const MultiFab& aux, MultiFab& Fx, MultiFab& Fy,
-                                                 MultiFab* wave_speed_cache, Real dx = Real(0),
-                                                 Real dy = Real(0), bool recon_prim = false,
-                                                 Real pos_floor = Real(0),
-                                                 Real weno_eps = kWenoEpsilon) {
-  if constexpr (std::is_same_v<NumericalFlux, HLLFlux>) {
-    if (wave_speed_cache != nullptr) {
-      compute_face_fluxes_hll_cached<Limiter>(model, U, aux, Fx, Fy, *wave_speed_cache, dx, dy,
-                                              recon_prim, pos_floor, weno_eps);
+  POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
+    for (int component = 0; component < ncomp; ++component)
+      destination.template operator()<Axis>(face.coordinate, component) =
+          source.template operator()<Axis>(face.coordinate, component);
+  }
+};
+
+template <int Dim>
+struct CopyCellField {
+  FieldView<const Real, Dim> source{};
+  FieldView<Real, Dim> destination{};
+  int ncomp = 0;
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    for (int component = 0; component < ncomp; ++component)
+      destination(cell, component) = source(cell, component);
+  }
+};
+
+template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+          class Reconstruction, class NumericalFlux, class ProviderStorage>
+struct MaterializeFaceFlux {
+  Model model;
+  Metric metric;
+  Reconstruction reconstruction;
+  NumericalFlux numerical_flux;
+  Real positivity_floor = Real(0);
+  int positivity_component = 0;
+  FieldView<const Real, Dim> state{};
+  ProviderStorage providers;
+  FaceFieldView<Real, Dim> integrated_fluxes{};
+  FaceFieldView<Real, Dim> statuses{};
+
+  POPS_HD void fail(const FaceIndex<Dim, Axis>& face, FiniteVolumeStatus status) const {
+    for (int component = 0; component < Model::n_vars; ++component)
+      integrated_fluxes.template operator()<Axis>(face.coordinate, component) = Real(0);
+    statuses.template operator()<Axis>(face.coordinate) = static_cast<Real>(status);
+  }
+
+  POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
+    auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+    if (traces.left_status != StateConversionStatus::Success) {
+      fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
       return;
     }
+    if (traces.right_status != StateConversionStatus::Success) {
+      fail(face, finite_volume_detail::finite_volume_status(traces.right_status));
+      return;
+    }
+
+    Index<Dim> left_cell = face.coordinate;
+    --left_cell[Axis];
+    const Index<Dim> right_cell = face.coordinate;
+    if (positivity_floor > Real(0)) {
+      if (traces.left[positivity_component] < positivity_floor) {
+        traces.left = load_state<Model>(state, left_cell);
+        traces.left_status = model.admissibility(traces.left);
+      }
+      if (traces.right[positivity_component] < positivity_floor) {
+        traces.right = load_state<Model>(state, right_cell);
+        traces.right_status = model.admissibility(traces.right);
+      }
+      if (traces.left_status != StateConversionStatus::Success) {
+        fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
+        return;
+      }
+      if (traces.right_status != StateConversionStatus::Success) {
+        fail(face, finite_volume_detail::finite_volume_status(traces.right_status));
+        return;
+      }
+    }
+    FaceContext context{};
+    if (face[Axis] == integrated_fluxes.cells.lo[Axis])
+      context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
+    else
+      context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
+
+    const auto evaluation = evaluate_numerical_flux_at(
+        numerical_flux, model, traces.left, providers, left_cell, traces.right, providers,
+        right_cell, context);
+    if (!evaluation.succeeded()) {
+      fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
+      return;
+    }
+    const auto integrated = apply_face_measure(evaluation.checked_density(), context);
+    for (int component = 0; component < Model::n_vars; ++component) {
+      if (!Kokkos::isfinite(integrated.value[component])) {
+        fail(face, FiniteVolumeStatus::NonFiniteFaceFlux);
+        return;
+      }
+    }
+    for (int component = 0; component < Model::n_vars; ++component)
+      integrated_fluxes.template operator()<Axis>(face.coordinate, component) =
+          integrated.value[component];
+    statuses.template operator()<Axis>(face.coordinate) =
+        static_cast<Real>(FiniteVolumeStatus::Success);
   }
-  compute_face_fluxes<Limiter, NumericalFlux>(model, U, aux, Fx, Fy, dx, dy, recon_prim, pos_floor,
-                                              weno_eps);
+};
+
+template <int Dim, class Metric, int N>
+struct MaterializeResidual {
+  Metric metric;
+  FaceFieldView<const Real, Dim> integrated_fluxes{};
+  FieldView<Real, Dim> candidate{};
+  FieldView<Real, Dim> statuses{};
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    const auto result = conservative_residual<N>(metric, integrated_fluxes, cell);
+    if (!result.succeeded()) {
+      for (int component = 0; component < N; ++component)
+        candidate(cell, component) = Real(0);
+      statuses(cell) = static_cast<Real>(result.status);
+      return;
+    }
+    for (int component = 0; component < N; ++component)
+      candidate(cell, component) = result.value[component];
+    statuses(cell) = static_cast<Real>(FiniteVolumeStatus::Success);
+  }
+};
+
+template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
+void materialize_axes(const Model& model, const Metric& metric,
+                      const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
+                      Real positivity_floor, int positivity_component,
+                      const Fab<Dim, MemorySpace>& state, const ProviderStorage& providers,
+                      FaceField<Dim, MemorySpace>& integrated_fluxes,
+                      FaceField<Dim, MemorySpace>& statuses) {
+  for_each_face<Axis>(
+      state.box(),
+      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
+                          ProviderStorage>{model, metric, reconstruction, numerical_flux,
+                                           positivity_floor, positivity_component, state.view(),
+                                           providers, integrated_fluxes.view(), statuses.view()});
+  if constexpr (Axis + 1 < Dim)
+    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux,
+                                          positivity_floor, positivity_component, state, providers,
+                                          integrated_fluxes, statuses);
 }
 
-}  // namespace pops
+template <int Axis, int Dim, class MemorySpace>
+Real maximum_face_status(const FaceField<Dim, MemorySpace>& statuses) {
+  const auto view = statuses.template field<Axis>().view();
+  const Real local = for_each_cell_reduce_max(statuses.template field<Axis>().box(),
+                                              FieldStatusMaximum<Dim>{view});
+  if constexpr (Axis + 1 < Dim) {
+    const Real remaining = maximum_face_status<Axis + 1>(statuses);
+    return local > remaining ? local : remaining;
+  }
+  return local;
+}
+
+template <int Axis, int Dim, class MemorySpace>
+void copy_face_axes(const FaceField<Dim, MemorySpace>& source,
+                    FaceField<Dim, MemorySpace>& destination, int ncomp) {
+  for_each_face<Axis>(source.cell_box(),
+                      CopyFaceAxis<Axis, Dim>{source.view(), destination.view(), ncomp});
+  if constexpr (Axis + 1 < Dim)
+    copy_face_axes<Axis + 1>(source, destination, ncomp);
+}
+
+template <int Dim, class MemorySpace>
+void require_face_output(const FaceField<Dim, MemorySpace>& output, const Box<Dim>& cells,
+                         int nvars) {
+  if (!(output.cell_box() == cells) || output.ncomp() != nvars)
+    throw std::invalid_argument(
+        "prepared ND hyperbolic face output does not match the patch and conservation law");
+}
+
+template <int Dim, class MemorySpace>
+void require_residual_shape(const Fab<Dim, MemorySpace>& residual, const Box<Dim>& cells,
+                            int nvars) {
+  if (!(residual.box() == cells) || residual.ncomp() != nvars)
+    throw std::invalid_argument(
+        "prepared ND hyperbolic residual does not match the state patch and conservation law");
+}
+
+template <int Dim, class MemorySpace>
+void require_residual_output(const Fab<Dim, MemorySpace>& state,
+                             const Fab<Dim, MemorySpace>& residual, int nvars) {
+  require_residual_shape(residual, state.box(), nvars);
+  if (state.view().data == residual.view().data)
+    throw std::invalid_argument("prepared ND hyperbolic state and residual may not alias storage");
+}
+
+}  // namespace cartesian_operator_detail
+
+/// One immutable hyperbolic numerical specialization over a global prepared metric.
+///
+/// `Dim`, the conservation law, reconstruction protocol, variables and Riemann solver are type
+/// properties.  A call may operate on any local patch contained in the metric domain; the patch
+/// carries the exact reconstruction ghosts and owns one axis-indexed FaceField.
+template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
+          class NumericalFlux = RusanovFlux,
+          ReconstructionVariables Variables = ReconstructionVariables::Conservative>
+  requires(ConservationLaw<Dim, Model> && PreparedMetricProvider<Dim, Metric> &&
+           ReconstructionPolicy<Reconstruction>)
+class PreparedCartesianOperator {
+ public:
+  static_assert(stencil_envelope_fits_storage<Reconstruction>);
+  static_assert(std::is_trivially_copyable_v<Reconstruction>);
+  static_assert(std::is_trivially_copyable_v<NumericalFlux>);
+
+  using State = typename Model::State;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Model::n_vars;
+  static constexpr int ghost_depth = Reconstruction::n_ghost;
+  static constexpr ReconstructionVariables reconstruction_variables = Variables;
+
+  PreparedCartesianOperator(Model model, Metric metric, Reconstruction reconstruction = {},
+                            NumericalFlux numerical_flux = {}, Real positivity_floor = Real(0))
+      : model_(std::move(model)),
+        metric_(std::move(metric)),
+        reconstruction_(std::move(reconstruction)),
+        numerical_flux_(std::move(numerical_flux)),
+        positivity_floor_(positivity_floor),
+        positivity_component_(
+            cartesian_operator_detail::resolve_positivity_component<Model>(positivity_floor)) {
+    if (metric_.identity().domain.empty())
+      throw std::invalid_argument("prepared ND hyperbolic metric domain must be non-empty");
+  }
+
+  const Model& model() const noexcept { return model_; }
+  const Metric& metric() const noexcept { return metric_; }
+  Box<Dim> domain() const noexcept { return metric_.identity().domain; }
+
+  template <class MemorySpace>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               FaceField<Dim, MemorySpace>& output) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+
+    FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state,
+        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+
+    cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const Fab<Dim, MemorySpace>& providers,
+                               FaceField<Dim, MemorySpace>& output) const {
+    require_state_patch_(state);
+    require_provider_patch_(state, providers);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+
+    FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state, providers.view(), candidate, statuses);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+
+    cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
+    device_fence();
+  }
+
+  /// Plan-mapped provider route.  The host has already validated the immutable consumer plan and
+  /// gathered its storage-component map; this operator sees only dense local slots.
+  template <class MemorySpace, int Count>
+  void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
+                               const ProviderStorageView<Dim, Count>& providers,
+                               FaceField<Dim, MemorySpace>& output) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_face_output(output, state.box(), n_vars);
+
+    FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state, providers, candidate, statuses);
+    const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
+    if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+
+    cartesian_operator_detail::copy_face_axes<0>(candidate, output, n_vars);
+    device_fence();
+  }
+
+  /// Assemble a conservative residual from one already integrated axis-indexed face field.  This
+  /// explicit seam lets boundary topology apply post-Riemann conditions (notably NoFlux) without
+  /// introducing a boundary type or a two-dimensional adapter into the numerical operator.
+  template <class MemorySpace>
+  void assemble_residual_from_face_fluxes(const FaceField<Dim, MemorySpace>& integrated_fluxes,
+                                          Fab<Dim, MemorySpace>& residual) const {
+    const Box<Dim>& cells = integrated_fluxes.cell_box();
+    if (!domain().contains(cells))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic face patch lies outside the metric domain");
+    cartesian_operator_detail::require_face_output(integrated_fluxes, cells, n_vars);
+    cartesian_operator_detail::require_residual_shape(residual, cells, n_vars);
+
+    Fab<Dim, MemorySpace> candidate(cells, n_vars);
+    Fab<Dim, MemorySpace> cell_statuses(cells, 1);
+    for_each_cell(cells,
+                  cartesian_operator_detail::MaterializeResidual<Dim, Metric, n_vars>{
+                      metric_, integrated_fluxes.view(), candidate.view(), cell_statuses.view()});
+    const Real cell_failure = for_each_cell_reduce_max(
+        cells, cartesian_operator_detail::FieldStatusMaximum<Dim>{
+                   static_cast<const Fab<Dim, MemorySpace>&>(cell_statuses).view()});
+    if (cell_failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic residual refused publication");
+
+    for_each_cell(cells, cartesian_operator_detail::CopyCellField<Dim>{
+                             static_cast<const Fab<Dim, MemorySpace>&>(candidate).view(),
+                             residual.view(), n_vars});
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         Fab<Dim, MemorySpace>& residual) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
+
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    FaceField<Dim, MemorySpace> face_statuses(state.box(), 1);
+    cartesian_operator_detail::materialize_axes<0, Variables>(
+        model_, metric_, reconstruction_, numerical_flux_, positivity_floor_,
+        positivity_component_, state,
+        cartesian_operator_detail::ProviderFreeStorage<Dim>{}, integrated_fluxes, face_statuses);
+    const Real face_failure = cartesian_operator_detail::maximum_face_status<0>(face_statuses);
+    if (face_failure != static_cast<Real>(FiniteVolumeStatus::Success))
+      throw std::runtime_error("prepared ND hyperbolic face evaluation refused publication");
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& providers,
+                         Fab<Dim, MemorySpace>& residual) const {
+    require_state_patch_(state);
+    require_provider_patch_(state, providers);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
+
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    materialize_face_fluxes(state, providers, integrated_fluxes);
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace, int Count>
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const ProviderStorageView<Dim, Count>& providers,
+                         Fab<Dim, MemorySpace>& residual) const
+    requires(Count == flux_provider_count<Model>)
+  {
+    require_state_patch_(state);
+    cartesian_operator_detail::require_residual_output(state, residual, n_vars);
+    FaceField<Dim, MemorySpace> integrated_fluxes(state.box(), n_vars);
+    materialize_face_fluxes(state, providers, integrated_fluxes);
+    assemble_residual_from_face_fluxes(integrated_fluxes, residual);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         MultiFab<Dim, MemorySpace>& residual) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    if (state.ncomp() != n_vars || residual.ncomp() != n_vars ||
+        !(state.layout() == residual.layout()) ||
+        !(state.distribution() == residual.distribution()) ||
+        !(state.local_rank() == residual.local_rank()) ||
+        state.local_size() != residual.local_size() || state.shares_storage_with(residual))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic MultiFab state and residual layouts differ or alias storage");
+    MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                         residual.local_rank(), n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      assemble_residual(state.fab(local), candidate.fab(local));
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    cartesian_operator_detail::CopyCellField<Dim>{
+                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), n_vars});
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
+                         const MultiFab<Dim, MemorySpace>& providers,
+                         MultiFab<Dim, MemorySpace>& residual) const {
+    require_multifab_layout_(state, residual);
+    if (providers.layout() != state.layout() ||
+        providers.distribution() != state.distribution() ||
+        providers.local_rank() != state.local_rank() ||
+        providers.local_size() != state.local_size() ||
+        providers.ncomp() < flux_provider_count<Model>)
+      throw std::invalid_argument(
+          "prepared ND provider field differs from the state layout or model contract");
+    MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                         residual.local_rank(), n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      assemble_residual(state.fab(local), providers.fab(local), candidate.fab(local));
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    cartesian_operator_detail::CopyCellField<Dim>{
+                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), n_vars});
+    device_fence();
+  }
+
+  template <class MemorySpace>
+  void assemble_residual_from_face_fluxes(
+      const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
+      MultiFab<Dim, MemorySpace>& residual) const {
+    if (residual.ncomp() != n_vars || integrated_fluxes.size() != residual.local_size())
+      throw std::invalid_argument(
+          "prepared ND hyperbolic face workspace does not match the residual MultiFab");
+    for (std::size_t local = 0; local < residual.local_size(); ++local) {
+      if (!(integrated_fluxes[local].cell_box() == residual.box(local)) ||
+          !domain().contains(residual.box(local)))
+        throw std::invalid_argument(
+            "prepared ND hyperbolic face workspace patch does not match the residual layout");
+      cartesian_operator_detail::require_face_output(integrated_fluxes[local], residual.box(local),
+                                                     n_vars);
+    }
+
+    MultiFab<Dim, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                         residual.local_rank(), n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < residual.local_size(); ++local)
+      assemble_residual_from_face_fluxes(integrated_fluxes[local], candidate.fab(local));
+    for (std::size_t local = 0; local < residual.local_size(); ++local)
+      for_each_cell(residual.box(local),
+                    cartesian_operator_detail::CopyCellField<Dim>{
+                        static_cast<const Fab<Dim, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), n_vars});
+    device_fence();
+  }
+
+ private:
+  template <class MemorySpace>
+  void require_multifab_layout_(const MultiFab<Dim, MemorySpace>& state,
+                                const MultiFab<Dim, MemorySpace>& residual) const {
+    if (state.ncomp() != n_vars || residual.ncomp() != n_vars ||
+        !(state.layout() == residual.layout()) ||
+        !(state.distribution() == residual.distribution()) ||
+        !(state.local_rank() == residual.local_rank()) ||
+        state.local_size() != residual.local_size() || state.shares_storage_with(residual))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic MultiFab state and residual layouts differ or alias storage");
+  }
+
+  template <class MemorySpace>
+  void require_provider_patch_(const Fab<Dim, MemorySpace>& state,
+                               const Fab<Dim, MemorySpace>& providers) const {
+    if (!(providers.box() == state.box()) || providers.ncomp() < flux_provider_count<Model> ||
+        !providers.grown_box().contains(state.box().grow(1)))
+      throw std::invalid_argument(
+          "prepared ND provider patch does not cover the model-qualified face traces");
+  }
+
+  template <class MemorySpace>
+  void require_state_patch_(const Fab<Dim, MemorySpace>& state) const {
+    if (!domain().contains(state.box()))
+      throw std::invalid_argument(
+          "prepared ND hyperbolic state patch lies outside the metric domain");
+    require_reconstruction_storage<Reconstruction>(state, state.box(), n_vars);
+  }
+
+  Model model_;
+  Metric metric_;
+  Reconstruction reconstruction_;
+  NumericalFlux numerical_flux_;
+  Real positivity_floor_ = Real(0);
+  int positivity_component_ = 0;
+};
+
+template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
+          class NumericalFlux = RusanovFlux,
+          ReconstructionVariables Variables = ReconstructionVariables::Conservative>
+  requires(ConservationLaw<Dim, Model> && PreparedMetricProvider<Dim, Metric> &&
+           ReconstructionPolicy<Reconstruction>)
+auto prepare_cartesian_operator(Model model, Metric metric, Reconstruction reconstruction = {},
+                                NumericalFlux numerical_flux = {},
+                                Real positivity_floor = Real(0)) {
+  return PreparedCartesianOperator<Dim, Model, Metric, Reconstruction, NumericalFlux, Variables>(
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
+      positivity_floor);
+}
+
+/// Convenience factory for the canonical Cartesian Geometry authority.
+template <int Dim, class Model, class Reconstruction = NoSlope, class NumericalFlux = RusanovFlux,
+          ReconstructionVariables Variables = ReconstructionVariables::Conservative>
+  requires ConservationLaw<Dim, Model>
+auto prepare_cartesian_operator(const Geometry<Dim>& geometry, Model model,
+                                Reconstruction reconstruction = {},
+                                NumericalFlux numerical_flux = {},
+                                Real positivity_floor = Real(0)) {
+  RealVector<Dim> lengths{};
+  for (int axis = 0; axis < Dim; ++axis)
+    lengths[axis] = geometry.upper()[axis] - geometry.lower()[axis];
+  const auto map = CartesianCoordinateMap<Dim>::make(geometry.lower(), lengths);
+  auto metric = prepare_metric_provider(geometry.domain(), map);
+  return prepare_cartesian_operator<Dim, Model, decltype(metric), Reconstruction, NumericalFlux,
+                                    Variables>(
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
+      positivity_floor);
+}
+
+template <int Dim, class MemorySpace>
+std::vector<FaceField<Dim, MemorySpace>> make_face_flux_workspace(
+    const MultiFab<Dim, MemorySpace>& state) {
+  std::vector<FaceField<Dim, MemorySpace>> result;
+  result.reserve(state.local_size());
+  for (std::size_t local = 0; local < state.local_size(); ++local)
+    result.emplace_back(state.box(local), state.ncomp());
+  return result;
+}
+
+}  // namespace pops::nd

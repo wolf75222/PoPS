@@ -13,7 +13,8 @@ from typing import Any
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.routes import (
     RECON_CONSERVATIVE, RECON_PRIMITIVE,
-    RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_RUSANOV,
+    RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
+    RIEMANN_RUSANOV,
     TIME_EULER, TIME_EXPLICIT, TIME_SSPRK3,
 )
 
@@ -60,14 +61,19 @@ _FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
     # "user" stays a plain token: an EXTERNAL C++ flux brick resolves through the external-brick
     # catalog manifest (pops.descriptors), not the native route registry.
     "rusanov": RIEMANN_RUSANOV, "hll": RIEMANN_HLL, "hllc": RIEMANN_HLLC, "roe": RIEMANN_ROE,
+    "roe_hll_rusanov_recovery": RIEMANN_ROE_HLL_RUSANOV_RECOVERY,
     "user": "user",
 }
 _RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon route
     "conservative": RECON_CONSERVATIVE, "primitive": RECON_PRIMITIVE,
 }
-_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer(), "
+_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer() / .MC() / "
+                    ".Superbee(), "
                     "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
-_FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
+_FLUX_SUGGEST = (
+    "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe() / "
+    "Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))"
+)
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
 
 
@@ -134,22 +140,27 @@ class Spatial:
     weno5=/primitive=) stay as typed-flag sugar.
 
     - ``limiter`` (Spec 5 sec.14.1 alias: ``reconstruction``): a reconstruction / limiter descriptor
-      lowering to "none" | "minmod" | "vanleer" | "weno5".
+      lowering to "none" | "minmod" | "vanleer" | "mc" | "superbee" | "weno5".
       ``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()`` /
-      ``.VanLeer()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5, ``.MUSCL(limiter=...)`` -> its limiter.
+      ``.VanLeer()`` / ``.MC()`` / ``.Superbee()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5,
+      ``.MUSCL(limiter=...)`` -> its limiter.
       weno5 = WENO5-Z, order 5 in smooth regions, 5-point stencil (3 ghosts), oscillation-free
-      capture near a front; only the native ``add_block`` path exposes it (the compiled .so paths
-      allocate 2 ghosts -> explicit rejection).
+      capture near a front; only the private native-``ModelSpec`` branch of ``add_equation``
+      exposes it (the compiled .so paths allocate 2 ghosts -> explicit rejection).
     - ``flux``: a ``pops.numerics.riemann`` descriptor lowering to "rusanov" | "hll" | "hllc" |
-      "roe".
+      "roe" | the fixed "roe_hll_rusanov_recovery" policy.
       Rusanov() = minimal generic (requires only max_wave_speed, any model).
       HLL() = generic with signed waves (requires model.wave_speeds: native isothermal/compressible
       model, or a DSL model declaring a primitive 'p'); less diffusive than rusanov, without
       requiring a pressure or n_vars == 4. This is the recommended path for a NON Euler model with
       signed waves (moment system, isothermal): HLL() + Minmod().
       HLLC() / Roe() = capability-driven contact-resolving and Roe-linearized solvers. The model
-      MUST supply HasHLLCStructure / HasRoeDissipation; the native Euler brick and DSL providers
-      conform through that same contract. There is no layout inference or implicit fallback.
+      MUST supply HasHLLCStructure / HasRoeDissipation; native Euler/isothermal bricks and DSL
+      providers conform through that same contract, including the annular-polar isothermal route.
+      There is no layout or coordinate inference and no implicit fallback.
+      Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov())) is the sole explicit ordered recovery
+      policy. Only typed solver rejection advances the chain; retry/fatal outcomes remain terminal.
+      It is available on Uniform and AMR Cartesian routes and refused on annular polar geometry.
     - ``recon``: a ``pops.numerics.variables`` descriptor lowering to "conservative" | "primitive"
       (reconstructed variables; primitive more robust for Euler: positivity of rho and p; shortcut
       primitive=).
@@ -340,6 +351,11 @@ class Spatial:
             positivity_floor, where="Spatial.positivity_floor", minimum=0))
         self.wave_speed_cache = strict_bool(
             wave_speed_cache, where="Spatial.wave_speed_cache")
+        if self.wave_speed_cache and self.flux != RIEMANN_HLL:
+            raise ValueError(
+                "Spatial.wave_speed_cache requires flux=riemann.HLL(); got flux=%r; "
+                "no alternate flux is selected" % getattr(self.flux, "token", str(self.flux))
+            )
 
     def __str__(self) -> Any:
         # Spec 5 sec.12.1: a SHORT, deterministic one-line summary of the chosen scheme (the

@@ -68,7 +68,7 @@ def test_layout_inspect_reports_native_routes_and_limitations():
     assert any(row["route_id"] == "layout:Uniform"
                for row in uniform_info["native_capabilities"]["routes"])
     assert uniform_info["amr_report"]["layout"] == "uniform"
-    assert any(row["route_id"] == "mesh:2d_storage_arithmetic" and row["status"] == "partial"
+    assert any(row["route_id"] == "mesh:nd_storage_arithmetic" and row["status"] == "available"
                for row in uniform_info["native_capabilities"]["routes"])
 
     amr = final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2)

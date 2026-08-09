@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// @file
@@ -21,27 +22,83 @@ namespace pops {
 /// Used as a tag in VariableSet; do not use it to dispatch numerical logic.
 enum class VariableKind { Conservative, Primitive };
 
-/// PHYSICAL role of a component. Lets you address a component by its MEANING
-/// (index_of(MomentumX)) rather than by a magic index u[1]: a coupled source can target
-/// "the momentum of a given species" without hard-coding the index. Custom = role not provided.
-enum class VariableRole {
+/// Axis-independent kind of a variable semantic.
+///
+/// Vector semantics carry their spatial component separately in VariableSemantic::axis.  There is
+/// deliberately no X/Y/Z enumerator: an algorithm can ask for `momentum(axis)` for every native
+/// axis without carrying a 3D vocabulary through a 1D or 2D artifact.
+enum class VariableRoleKind {
   Density,
-  MomentumX,
-  MomentumY,
-  MomentumZ,
+  Momentum,
   Energy,
-  VelocityX,
-  VelocityY,
-  VelocityZ,
+  Velocity,
   Pressure,
   Temperature,
   Scalar,
-  Custom
+  Custom,
+  Axial,
 };
+
+/// Physical meaning of a component, optionally qualified by one spatial axis.
+///
+/// This is host metadata, so `axis == -1` represents a scalar semantic and `axis >= 0` represents
+/// a vector semantic.  `validate_for_dimension` is the sole rank gate: producers and consumers
+/// must validate their exact native specialization before using an axis.
+struct VariableSemantic {
+  VariableRoleKind kind = VariableRoleKind::Custom;
+  int axis = -1;
+
+  constexpr bool operator==(const VariableSemantic&) const = default;
+  constexpr bool has_axis() const noexcept { return axis >= 0; }
+  constexpr bool is_vector() const noexcept {
+    return kind == VariableRoleKind::Momentum || kind == VariableRoleKind::Velocity ||
+           kind == VariableRoleKind::Axial;
+  }
+
+  constexpr void validate() const {
+    if (is_vector() != has_axis())
+      throw std::invalid_argument("vector variable semantics require exactly one non-negative axis");
+  }
+
+  template <int Dim>
+  constexpr void validate_for_dimension() const {
+    validate();
+    if (has_axis() && axis >= Dim)
+      throw std::invalid_argument("variable semantic axis lies outside the native dimension");
+  }
+
+  static constexpr VariableSemantic density() { return {VariableRoleKind::Density, -1}; }
+  static constexpr VariableSemantic momentum(int axis) { return {VariableRoleKind::Momentum, axis}; }
+  static constexpr VariableSemantic energy() { return {VariableRoleKind::Energy, -1}; }
+  static constexpr VariableSemantic velocity(int axis) { return {VariableRoleKind::Velocity, axis}; }
+  static constexpr VariableSemantic pressure() { return {VariableRoleKind::Pressure, -1}; }
+  static constexpr VariableSemantic temperature() { return {VariableRoleKind::Temperature, -1}; }
+  static constexpr VariableSemantic scalar() { return {VariableRoleKind::Scalar, -1}; }
+  static constexpr VariableSemantic custom() { return {VariableRoleKind::Custom, -1}; }
+  static constexpr VariableSemantic axial(int axis) { return {VariableRoleKind::Axial, axis}; }
+
+  // Scalar aliases keep user models concise.  Vector components always use the factories above.
+  static const VariableSemantic Density;
+  static const VariableSemantic Energy;
+  static const VariableSemantic Pressure;
+  static const VariableSemantic Temperature;
+  static const VariableSemantic Scalar;
+  static const VariableSemantic Custom;
+};
+
+inline constexpr VariableSemantic VariableSemantic::Density = VariableSemantic::density();
+inline constexpr VariableSemantic VariableSemantic::Energy = VariableSemantic::energy();
+inline constexpr VariableSemantic VariableSemantic::Pressure = VariableSemantic::pressure();
+inline constexpr VariableSemantic VariableSemantic::Temperature = VariableSemantic::temperature();
+inline constexpr VariableSemantic VariableSemantic::Scalar = VariableSemantic::scalar();
+inline constexpr VariableSemantic VariableSemantic::Custom = VariableSemantic::custom();
+
+/// Public role spelling used by generic consumers.  It is a structured semantic, not an enum ABI.
+using VariableRole = VariableSemantic;
 
 /// Forward declaration: VariableSet::index_of(const std::string&) resolves a canonical role NAME via
 /// role_from_name (defined below) before matching a user-defined role label.
-inline VariableRole role_from_name(const std::string& s);
+inline VariableSemantic role_from_name(const std::string& s);
 
 /// A variable: name, physical role, component index in the state.
 struct Variable {
@@ -59,12 +116,12 @@ struct VariableSet {
   VariableKind kind;
   std::vector<std::string> names;
   int size;
-  std::vector<VariableRole> roles{};      ///< parallel to `names`; empty = roles not provided
+  std::vector<VariableSemantic> roles{};  ///< parallel to `names`; empty = roles not provided
   std::vector<std::string> user_roles{};  ///< parallel to `names`; per-component user-defined role
                                           ///< label (Custom role); empty entry = canonical role
 
   /// Index of the component carrying @p role (first occurrence), -1 if absent.
-  int index_of(VariableRole role) const {
+  int index_of(VariableSemantic role) const {
     for (int i = 0; i < static_cast<int>(roles.size()); ++i)
       if (roles[i] == role)
         return i;
@@ -78,8 +135,8 @@ struct VariableSet {
   int index_of(const std::string& role) const {
     if (role.empty())
       return -1;
-    const VariableRole r = role_from_name(role);
-    if (r != VariableRole::Custom)
+    const VariableSemantic r = role_from_name(role);
+    if (r != VariableSemantic::Custom)
       return index_of(r);
     for (int i = 0; i < static_cast<int>(user_roles.size()); ++i)
       if (user_roles[i] == role)
@@ -88,38 +145,33 @@ struct VariableSet {
   }
   /// Full descriptor of component @p i (Custom role if not provided).
   Variable at(int i) const {
-    return {names[i], i < static_cast<int>(roles.size()) ? roles[i] : VariableRole::Custom, i};
+    return {names[i], i < static_cast<int>(roles.size()) ? roles[i] : VariableSemantic::Custom, i};
   }
 };
 
 /// Human-readable name of a role (introspection, Python binding). Stable: used as a key on the
 /// application side.
-inline const char* role_name(VariableRole r) {
-  switch (r) {
-    case VariableRole::Density:
+inline std::string role_name(VariableSemantic role) {
+  role.validate();
+  switch (role.kind) {
+    case VariableRoleKind::Density:
       return "density";
-    case VariableRole::MomentumX:
-      return "momentum_x";
-    case VariableRole::MomentumY:
-      return "momentum_y";
-    case VariableRole::MomentumZ:
-      return "momentum_z";
-    case VariableRole::Energy:
+    case VariableRoleKind::Momentum:
+      return "momentum:" + std::to_string(role.axis);
+    case VariableRoleKind::Energy:
       return "energy";
-    case VariableRole::VelocityX:
-      return "velocity_x";
-    case VariableRole::VelocityY:
-      return "velocity_y";
-    case VariableRole::VelocityZ:
-      return "velocity_z";
-    case VariableRole::Pressure:
+    case VariableRoleKind::Velocity:
+      return "velocity:" + std::to_string(role.axis);
+    case VariableRoleKind::Pressure:
       return "pressure";
-    case VariableRole::Temperature:
+    case VariableRoleKind::Temperature:
       return "temperature";
-    case VariableRole::Scalar:
+    case VariableRoleKind::Scalar:
       return "scalar";
-    case VariableRole::Custom:
+    case VariableRoleKind::Custom:
       return "custom";
+    case VariableRoleKind::Axial:
+      return "axial:" + std::to_string(role.axis);
   }
   return "custom";
 }
@@ -127,30 +179,39 @@ inline const char* role_name(VariableRole r) {
 /// Inverse of role_name: physical role from its stable name (Custom if unknown). Used to
 /// reconstruct a VariableSet with roles from TEXT metadata (e.g. the string carried by a compiled /
 /// dynamic .so: the extern "C" ABI carries only strings, not the enum).
-inline VariableRole role_from_name(const std::string& s) {
+inline VariableSemantic role_from_name(const std::string& s) {
   if (s == "density")
-    return VariableRole::Density;
-  if (s == "momentum_x")
-    return VariableRole::MomentumX;
-  if (s == "momentum_y")
-    return VariableRole::MomentumY;
-  if (s == "momentum_z")
-    return VariableRole::MomentumZ;
+    return VariableSemantic::Density;
   if (s == "energy")
-    return VariableRole::Energy;
-  if (s == "velocity_x")
-    return VariableRole::VelocityX;
-  if (s == "velocity_y")
-    return VariableRole::VelocityY;
-  if (s == "velocity_z")
-    return VariableRole::VelocityZ;
+    return VariableSemantic::Energy;
   if (s == "pressure")
-    return VariableRole::Pressure;
+    return VariableSemantic::Pressure;
   if (s == "temperature")
-    return VariableRole::Temperature;
+    return VariableSemantic::Temperature;
   if (s == "scalar")
-    return VariableRole::Scalar;
-  return VariableRole::Custom;
+    return VariableSemantic::Scalar;
+  const auto parse_axis = [&s](const char* prefix) -> int {
+    const std::string_view head(prefix);
+    if (!s.starts_with(head))
+      return -1;
+    const std::string axis_text = s.substr(head.size());
+    if (axis_text.empty())
+      return -1;
+    int axis = 0;
+    for (const char character : axis_text) {
+      if (character < '0' || character > '9')
+        return -1;
+      axis = axis * 10 + (character - '0');
+    }
+    return axis;
+  };
+  if (const int axis = parse_axis("momentum:"); axis >= 0)
+    return VariableSemantic::momentum(axis);
+  if (const int axis = parse_axis("velocity:"); axis >= 0)
+    return VariableSemantic::velocity(axis);
+  if (const int axis = parse_axis("axial:"); axis >= 0)
+    return VariableSemantic::axial(axis);
+  return VariableSemantic::Custom;
 }
 
 /// CSV of a VariableSet's names (separator ','). Building block of the TEXT metadata that a generated
@@ -199,9 +260,9 @@ inline void parse_roles_into(VariableSet& vs, const std::string& csv) {
     const std::size_t comma = csv.find(',', start);
     const std::string tok =
         csv.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-    const VariableRole r = role_from_name(tok);
+    const VariableSemantic r = role_from_name(tok);
     vs.roles.push_back(r);
-    const bool is_user = (r == VariableRole::Custom && tok != role_name(VariableRole::Custom));
+    const bool is_user = (r == VariableSemantic::Custom && tok != role_name(VariableSemantic::Custom));
     labels.push_back(is_user ? tok : std::string());
     any_user = any_user || is_user;
     if (comma == std::string::npos)
@@ -216,7 +277,7 @@ inline void parse_roles_into(VariableSet& vs, const std::string& csv) {
 /// role metadata is an invalid executable contract: a canonical component-index guess can silently
 /// apply physics to another quantity after a state reordering. The caller names the subject in the
 /// diagnostic (a block, model, or operator).
-inline int require_role_index(const VariableSet& vs, VariableRole role, const char* origin,
+inline int require_role_index(const VariableSet& vs, VariableSemantic role, const char* origin,
                               const std::string& subject) {
   if (vs.size < 0 || static_cast<std::size_t>(vs.size) != vs.names.size() ||
       vs.roles.size() != vs.names.size() ||
@@ -239,6 +300,17 @@ inline int require_role_index(const VariableSet& vs, VariableRole role, const ch
     return resolved;
   throw std::runtime_error(std::string(origin) + " : '" + subject + "' declares roles (" +
                            roles_csv(vs) + ") but not the required role '" + role_name(role) + "'");
+}
+
+/// Validate that every declared role is meaningful for one exact native specialization.
+template <int Dim>
+inline void validate_variable_semantics(const VariableSet& vs, const char* origin,
+                                        const std::string& subject) {
+  if (vs.roles.size() != vs.names.size())
+    throw std::runtime_error(std::string(origin) + " : '" + subject +
+                             "' has incomplete variable semantic metadata");
+  for (const VariableSemantic role : vs.roles)
+    role.template validate_for_dimension<Dim>();
 }
 
 /// A model's "names" metadata: "cons_csv|prim_csv" (separator '|' between the two sets). Read

@@ -3,6 +3,7 @@
 All Cartesian, scalar-operator and System/AMR decisions live here, behind the same open provider
 interface available to third parties.  ``field_install`` never branches on these semantics.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -41,12 +42,13 @@ from pops.math import principal_kinds
 
 
 def _reject(
-    rows: list[LoweringCoverageRow], source: str, gate: str, message: str,
+    rows: list[LoweringCoverageRow],
+    source: str,
+    gate: str,
+    message: str,
 ) -> NoReturn:
-    report = LoweringCoverageReport((*rows, LoweringCoverageRow(
-        source, "rejected", gate=gate)))
-    raise LoweringRejection(
-        message, coverage_report=report, source=source, gate=gate)
+    report = LoweringCoverageReport((*rows, LoweringCoverageRow(source, "rejected", gate=gate)))
+    raise LoweringRejection(message, coverage_report=report, source=source, gate=gate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,12 +58,26 @@ class _HierarchyPolicyContext:
     def inferred_hierarchy_policy(self) -> ResolvedHierarchyPolicy:
         return self.inferred
 
-    def bind_hierarchy_policy(
-        self, policy: ResolvedHierarchyPolicy
-    ) -> ResolvedHierarchyPolicy:
+    def bind_hierarchy_policy(self, policy: ResolvedHierarchyPolicy) -> ResolvedHierarchyPolicy:
         if not isinstance(policy, ResolvedHierarchyPolicy):
             raise TypeError("field hierarchy policy returned a foreign authority")
         return policy
+
+
+def _layout_dimension(layout: Any) -> int:
+    """Read one authenticated rank from an authoring or normalized layout."""
+    normalized = getattr(layout, "normalized_geometry", None)
+    geometry = normalized() if callable(normalized) else getattr(layout, "geometry", None)
+    if geometry is None:
+        mesh = getattr(layout, "mesh", None)
+        frame = None if mesh is None else getattr(mesh, "frame", None)
+        axes = None if frame is None else getattr(frame, "axes", None)
+        dimension = None if axes is None else len(axes)
+    else:
+        dimension = getattr(geometry, "dimension", None)
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise TypeError("cell-centred field layout has no exact Cartesian rank")
+    return dimension
 
 
 def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, Any], int]:
@@ -70,9 +86,11 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
     operator = request.operator
     outputs = tuple(operator.outputs)
     components = request.output_components
-    if len(components) not in (1, 3):
+    dimension = _layout_dimension(request.layout)
+    if len(components) not in (1, 1 + dimension):
         raise TypeError(
-            "cell-centred output must be one potential component or potential plus two gradients"
+            "cell-centred output must be one scalar or that scalar plus exactly %d ranked "
+            "gradient components" % dimension
         )
     if len(components) == 1:
         if len(outputs) != 1 or not isinstance(outputs[0], FieldOutput):
@@ -84,12 +102,19 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
             or not isinstance(outputs[0], FieldOutput)
             or not isinstance(outputs[1], GradientOutput)
         ):
-            raise TypeError(
-                "cell-centred gradient output must be FieldOutput + GradientOutput"
-            )
+            raise TypeError("cell-centred gradient output must be FieldOutput + GradientOutput")
         gradient_sign = outputs[1].sign
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError("resolved GradientOutput sign must be exactly -1 or 1")
+        expected = (
+            outputs[0].name,
+            *(outputs[1].name + "_" + axis for axis in ("x", "y", "z")[:dimension]),
+        )
+        if components != expected:
+            raise ValueError(
+                "resolved GradientOutput components %r differ from the ranked layout route %r"
+                % (components, expected)
+            )
     potential_source = outputs[0].source
     if potential_source is not None and potential_source != operator.unknown:
         raise ValueError("FieldOutput source disagrees with the FieldOperator solved unknown")
@@ -98,11 +123,27 @@ def _validate_outputs(request: PreparedFieldLoweringRequest) -> tuple[dict[str, 
     output_block = operator.unknown.block_ref
     if output_block is None:
         raise RuntimeError("resolved field output lost its owner-qualified block")
+    declaration = operator.unknown.declaration_ref
+    if declaration is None:
+        raise RuntimeError("resolved field output lost its FieldSpace declaration")
+    # ``components`` remains the small human-facing report used by the field
+    # authoring API.  Installation deliberately carries the complete key for
+    # each value instead: an output may be homonymous with another block's
+    # field and storage locations are allocated only by the global native
+    # provider registry.
+    output_keys = tuple({
+        "owner_qid": output_block.canonical_identity(),
+        "space_kind": "field",
+        "space_name": declaration.local_id,
+        "component": component,
+    } for component in components)
     return {
         "owner_identity": output_block.canonical_identity(),
         "owner_block": output_block.local_id,
         "key": operator.name,
         "components": components,
+        "component_keys": output_keys,
+        "dimension": dimension,
         "gradient_sign": gradient_sign,
     }, gradient_sign
 
@@ -117,7 +158,9 @@ def _reaction(
     kinds = principal_kinds(operator.equation.lhs)
     if "laplacian" not in kinds or kinds - {"laplacian", "reaction"}:
         _reject(
-            rows, source, "field.operator.not_native",
+            rows,
+            source,
+            "field.operator.not_native",
             "field %r principal operator %s has no cell-centred native lowering"
             % (name, sorted(kinds)),
         )
@@ -130,20 +173,25 @@ def _reaction(
     reactions = [term for term in terms if isinstance(term, Reaction)]
     if len(laplacians) != 1 or len(reactions) > 1 or len(terms) != 1 + len(reactions):
         _reject(
-            rows, source, "field.operator.poisson_shape_not_native",
-            "field %r requires exactly one Laplacian and at most one scalar reaction term"
-            % name,
+            rows,
+            source,
+            "field.operator.poisson_shape_not_native",
+            "field %r requires exactly one Laplacian and at most one scalar reaction term" % name,
         )
     laplacian_term = laplacians[0]
     if not _field_targets_unknown(laplacian_term.field, operator.unknown):
         _reject(
-            rows, source, "field.operator.unknown_mismatch",
+            rows,
+            source,
+            "field.operator.unknown_mismatch",
             "field %r Laplacian does not act on its declared unknown" % name,
         )
     normalization = -float(laplacian_term.scale)
     if not math.isfinite(normalization) or normalization == 0.0:
         _reject(
-            rows, source, "field.operator.invalid_laplacian_scale",
+            rows,
+            source,
+            "field.operator.invalid_laplacian_scale",
             "field %r Laplacian scale must be finite and non-zero" % name,
         )
     result = None
@@ -162,27 +210,33 @@ def _reaction(
         )
         if not _field_targets_unknown(reaction.field, operator.unknown):
             _reject(
-                rows, source, "field.operator.reaction_unknown_mismatch",
+                rows,
+                source,
+                "field.operator.reaction_unknown_mismatch",
                 "field %r reaction does not act on its declared unknown" % name,
             )
         if constant is NotImplemented and not bind_parameter:
             _reject(
-                rows, source, "field.operator.reaction_coefficient_not_native",
+                rows,
+                source,
+                "field.operator.reaction_coefficient_not_native",
                 "field %r reaction requires a finite real/ConstParam or one typed Real "
                 "RuntimeParam/DerivedParam read" % name,
             )
         if not math.isfinite(multiplier):
             _reject(
-                rows, source, "field.operator.reaction_sign_not_native",
-                "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
-                % name,
+                rows,
+                source,
+                "field.operator.reaction_sign_not_native",
+                "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0" % name,
             )
         if constant is NotImplemented:
             if multiplier <= 0.0:
                 _reject(
-                    rows, source, "field.operator.reaction_sign_not_native",
-                    "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
-                    % name,
+                    rows,
+                    source,
+                    "field.operator.reaction_sign_not_native",
+                    "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0" % name,
                 )
             if handle is None:
                 raise RuntimeError("validated bind-parameter reaction lost its handle")
@@ -200,9 +254,10 @@ def _reaction(
                 effective = float("nan")
             if not math.isfinite(effective) or effective <= 0.0:
                 _reject(
-                    rows, source, "field.operator.reaction_sign_not_native",
-                    "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
-                    % name,
+                    rows,
+                    source,
+                    "field.operator.reaction_sign_not_native",
+                    "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0" % name,
                 )
             result = {
                 "schema_version": 1,
@@ -210,19 +265,21 @@ def _reaction(
                 "value": effective,
             }
             route = "scalar-constant"
-        rows.append(LoweringCoverageRow(
-            "field:%s:reaction" % name,
-            "lowered",
-            ("field-install:%s:reaction:%s" % (name, route),),
-        ))
-    rows.append(LoweringCoverageRow(
-        source, "lowered", ("field-install:%s:residual" % name,)
-    ))
+        rows.append(
+            LoweringCoverageRow(
+                "field:%s:reaction" % name,
+                "lowered",
+                ("field-install:%s:reaction:%s" % (name, route),),
+            )
+        )
+    rows.append(LoweringCoverageRow(source, "lowered", ("field-install:%s:residual" % name,)))
     return result
 
 
 def _resolve(
-    options: Mapping[str, Any], request: PreparedFieldLoweringRequest, where: str,
+    options: Mapping[str, Any],
+    request: PreparedFieldLoweringRequest,
+    where: str,
 ) -> PreparedFieldLoweringResolution:
     if options:
         raise TypeError("%s cell-centred second-order method accepts no options" % where)
@@ -238,35 +295,43 @@ def _resolve(
     rows: list[LoweringCoverageRow] = []
     output_route, _ = _validate_outputs(request)
     reaction = _reaction(request, rows)
-    rows.append(LoweringCoverageRow(
-        "field:%s:method" % name,
-        "lowered",
-        ("field-install:%s:cell-centered-second-order" % name,),
-    ))
+    rows.append(
+        LoweringCoverageRow(
+            "field:%s:method" % name,
+            "lowered",
+            ("field-install:%s:cell-centered-second-order" % name,),
+        )
+    )
 
     layout_contract = field_layout_contract(request.layout)
     recipe = topology_recipe(request.layout)
     if layout_contract.embedded_boundary is not None:
         _reject(
-            rows, "field:%s:topology" % name,
+            rows,
+            "field:%s:topology" % name,
             "field.topology.embedded_boundary_not_native",
             "field %r uses an embedded boundary, but this residual provider has no "
             "material-cell connectivity/mask lowering" % name,
         )
-    rows.append(LoweringCoverageRow(
-        "field:%s:topology" % name,
-        "derived",
-        rule="resolved full rectangular cell graph has one connected material component",
-    ))
+    rows.append(
+        LoweringCoverageRow(
+            "field:%s:topology" % name,
+            "derived",
+            rule="resolved full rectangular cell graph has one connected material component",
+        )
+    )
 
     bc, faces = boundary_plan(
-        name, plan, rows, request.layout, request.operator.unknown
+        name,
+        plan,
+        rows,
+        request.layout,
+        request.operator.unknown,
+        output_route["dimension"],
     )
     dependencies = boundary_dependency_pack(plan, request.operator.unknown)
     boundary_dynamic = faces is not None and any(face["dynamic"] for face in faces)
-    boundary_iterate = faces is not None and any(
-        face["iterate_dependent"] for face in faces
-    )
+    boundary_iterate = faces is not None and any(face["iterate_dependent"] for face in faces)
 
     inferred_hierarchy = (
         CompositeHierarchySolve().resolved_authority()
@@ -276,73 +341,78 @@ def _resolve(
     resolver = getattr(plan.hierarchy_policy, "resolve", None)
     if not callable(resolver):
         _reject(
-            rows, "field:%s:hierarchy" % name, "field.hierarchy.invalid_policy",
+            rows,
+            "field:%s:hierarchy" % name,
+            "field.hierarchy.invalid_policy",
             "field %r hierarchy policy does not implement resolve(capabilities)" % name,
         )
     try:
         hierarchy_resolution = resolver(_HierarchyPolicyContext(inferred_hierarchy))
     except (TypeError, ValueError) as exc:
-        _reject(
-            rows, "field:%s:hierarchy" % name, "field.hierarchy.unsupported", str(exc)
-        )
+        _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.unsupported", str(exc))
     if type(hierarchy_resolution) is not ResolvedHierarchyPolicy:
         _reject(
-            rows, "field:%s:hierarchy" % name,
+            rows,
+            "field:%s:hierarchy" % name,
             "field.hierarchy.invalid_resolution",
             "field %r hierarchy policy returned a foreign resolution" % name,
         )
     hierarchy_authority = hierarchy_resolution.authority()
     policy = hierarchy_resolution.policy_id
-    rows.append(LoweringCoverageRow(
-        "field:%s:hierarchy" % name,
-        "derived",
-        rule="%s + provider-target=%s" % (policy, target),
-    ))
+    rows.append(
+        LoweringCoverageRow(
+            "field:%s:hierarchy" % name,
+            "derived",
+            rule="%s + provider-target=%s" % (policy, target),
+        )
+    )
     for kind in ("states", "fields"):
         for dependency in dependencies[kind]:
             route = "field-install:%s:boundary-buffer:%s" % (name, kind)
             if target == "amr_system":
                 route += ":level-qualified"
-            rows.append(LoweringCoverageRow(
-                "field:%s:boundary-dependency:%s:%d" % (
-                    name, dependency["qualified_id"], dependency["component"]
-                ),
-                "lowered",
-                (route,),
-            ))
+            rows.append(
+                LoweringCoverageRow(
+                    "field:%s:boundary-dependency:%s:%d"
+                    % (name, dependency["qualified_id"], dependency["component"]),
+                    "lowered",
+                    (route,),
+                )
+            )
     for coordinate in dependencies["logical_time"]:
-        rows.append(LoweringCoverageRow(
-            "field:%s:boundary-time:%s" % (name, coordinate),
-            "lowered",
-            ("field-install:%s:logical-timepoint" % name,),
-        ))
+        rows.append(
+            LoweringCoverageRow(
+                "field:%s:boundary-time:%s" % (name, coordinate),
+                "lowered",
+                ("field-install:%s:logical-timepoint" % name,),
+            )
+        )
 
     if plan.preconditioner is not None:
         _reject(
-            rows, "field:%s:preconditioner" % name,
+            rows,
+            "field:%s:preconditioner" % name,
             "field.preconditioner.not_native",
             "field %r declares a preconditioner this spatial provider cannot consume" % name,
         )
-    rows.append(LoweringCoverageRow(
-        "field:%s:preconditioner" % name, "documentary"
-    ))
+    rows.append(LoweringCoverageRow("field:%s:preconditioner" % name, "documentary"))
     if boundary_iterate and plan.nonlinear is None:
         _reject(
-            rows, "field:%s:boundaries" % name,
+            rows,
+            "field:%s:boundaries" % name,
             "field.boundary.nonlinear_outer_solver_required",
             "field %r has iterate-dependent boundary expressions and requires a prepared "
             "nonlinear outer solver" % name,
         )
     dynamic_alpha = faces is not None and any("alpha" in face["dynamic"] for face in faces)
     statically_anchored = faces is not None and any(
-        face["type"] != "periodic"
-        and "alpha" not in face["dynamic"]
-        and face["alpha"] != 0.0
+        face["type"] != "periodic" and "alpha" not in face["dynamic"] and face["alpha"] != 0.0
         for face in faces
     )
     if reaction is None and dynamic_alpha and not statically_anchored:
         _reject(
-            rows, "field:%s:boundaries" % name,
+            rows,
+            "field:%s:boundaries" % name,
             "field.boundary.dynamic_nullspace_topology",
             "field %r dynamic Robin alpha can change the nullspace dimension" % name,
         )
@@ -372,9 +442,7 @@ def _resolve(
         boundary={
             "faces": () if faces is None else faces,
             "dynamic": boundary_dynamic,
-            "dependent": any(
-                dependencies[kind] for kind in ("states", "fields", "logical_time")
-            ),
+            "dependent": any(dependencies[kind] for kind in ("states", "fields", "logical_time")),
             "state_dependent": bool(dependencies["states"]),
             "field_dependent": bool(dependencies["fields"]),
             "logical_time_coordinates": tuple(dependencies["logical_time"]),
@@ -416,19 +484,18 @@ def _resolve(
         "hierarchy_policy": hierarchy_authority,
         "topology_recipe": recipe,
     }
-    rows.append(LoweringCoverageRow(
-        "field:%s:output" % name,
-        "lowered",
-        ("field-install:%s:output:%s:%s" % (
-            name, output_route["owner_block"], request.operator.unknown.qualified_id
-        ),),
-    ))
-    evidence = tuple(
-        PreparedFieldLoweringEvidence.from_data(row.to_data()) for row in rows
+    rows.append(
+        LoweringCoverageRow(
+            "field:%s:output" % name,
+            "lowered",
+            (
+                "field-install:%s:output:%s:%s"
+                % (name, output_route["owner_block"], request.operator.unknown.qualified_id),
+            ),
+        )
     )
-    return PreparedFieldLoweringResolution(
-        native_options, solver_facts, nullspace_facts, evidence
-    )
+    evidence = tuple(PreparedFieldLoweringEvidence.from_data(row.to_data()) for row in rows)
+    return PreparedFieldLoweringResolution(native_options, solver_facts, nullspace_facts, evidence)
 
 
 def _validate_reaction(value: Any) -> None:
@@ -437,6 +504,7 @@ def _validate_reaction(value: Any) -> None:
     if not isinstance(value, Mapping) or value.get("schema_version") != 1:
         raise TypeError("cell-centred reaction must be a schema-v1 mapping")
     from pops.solvers._numeric import native_float
+
     if value.get("kind") == "scalar_constant":
         if set(value) != {"schema_version", "kind", "value"}:
             raise ValueError("scalar_constant reaction has an invalid shape")
@@ -455,9 +523,7 @@ def _validate_reaction(value: Any) -> None:
             or not parameter["qualified_id"]
         ):
             raise ValueError("scalar_bind_parameter reaction lost its parameter identity")
-        if native_float(
-            value["multiplier"], where="field reaction parameter multiplier"
-        ) <= 0.0:
+        if native_float(value["multiplier"], where="field reaction parameter multiplier") <= 0.0:
             raise ValueError("field reaction multiplier must be strictly positive")
         return
     raise ValueError("cell-centred reaction carries an unknown kind")
@@ -468,15 +534,26 @@ def _validate_binding(binding: PreparedFieldLoweringBinding, where: str) -> None
         raise ValueError("%s cell-centred lowering options changed" % where)
     resolution = binding.resolution
     expected = {
-        "rhs", "rhs_identity", "output_route", "method", "reaction", "bc", "boundary_faces",
-        "boundary_kernel_required", "boundary_iterate_dependent",
-        "boundary_dependencies", "hierarchy_policy", "topology_recipe",
+        "rhs",
+        "rhs_identity",
+        "output_route",
+        "method",
+        "reaction",
+        "bc",
+        "boundary_faces",
+        "boundary_kernel_required",
+        "boundary_iterate_dependent",
+        "boundary_dependencies",
+        "hierarchy_policy",
+        "topology_recipe",
     }
     if set(resolution.native_options) != expected:
         raise ValueError("%s cell-centred native contract changed shape" % where)
     method = resolution.native_options["method"]
     if not isinstance(method, Mapping) or dict(method) != {
-        "native_method": "cell_centered_second_order", "order": 2, "ghost_depth": 1,
+        "native_method": "cell_centered_second_order",
+        "order": 2,
+        "ghost_depth": 1,
     }:
         raise ValueError("%s cell-centred method consequences changed" % where)
     _validate_reaction(resolution.native_options["reaction"])
@@ -494,14 +571,16 @@ def _validate_binding(binding: PreparedFieldLoweringBinding, where: str) -> None
 
 
 def _operator_parameter_handles(
-    binding: PreparedFieldLoweringBinding, operator: Any,
+    binding: PreparedFieldLoweringBinding,
+    operator: Any,
 ) -> tuple[Any, ...]:
     reaction = binding.resolution.native_options["reaction"]
     if reaction is None or reaction["kind"] == "scalar_constant":
         return ()
     qualified_id = reaction["parameter"]["qualified_id"]
     matches = tuple(
-        reference for reference in operator.declaration_references()
+        reference
+        for reference in operator.declaration_references()
         if getattr(reference, "kind", None) == "parameter"
         and reference.qualified_id == qualified_id
     )
@@ -539,12 +618,9 @@ def _bind_native_options(
     if reaction is None:
         return {}
     from pops.solvers._numeric import native_float
+
     if reaction["kind"] == "scalar_constant":
-        return {
-            "reaction": native_float(
-                reaction["value"], where="constant field reaction"
-            )
-        }
+        return {"reaction": native_float(reaction["value"], where="constant field reaction")}
     handles = _operator_parameter_handles(binding, operator)
     if len(handles) != 1 or handles[0] not in params:
         raise ValueError(
@@ -555,14 +631,10 @@ def _bind_native_options(
         params[handles[0]],
         where="screened field reaction parameter %s" % handles[0].qualified_id,
     )
-    multiplier = native_float(
-        reaction["multiplier"], where="screened field reaction multiplier"
-    )
+    multiplier = native_float(reaction["multiplier"], where="screened field reaction multiplier")
     effective = value * multiplier
     if not math.isfinite(effective) or effective <= 0.0:
-        raise ValueError(
-            "screened field reaction coefficient must be strictly positive at bind"
-        )
+        raise ValueError("screened field reaction coefficient must be strictly positive at bind")
     return {"reaction": effective}
 
 
@@ -595,27 +667,35 @@ def _prepare_output(
     model = models.get(block)
     if model is None:
         raise ValueError("field output route names unknown block %r" % block)
-    from pops.physics.aux import aux_component_index
-
-    declared = tuple(getattr(model, "aux_extra_names", ()) or ())
     components = tuple(route["components"])
-    try:
-        indices = [aux_component_index(component, declared) for component in components]
-    except ValueError as error:
+    keys = tuple(route.get("component_keys", ()))
+    if len(keys) != len(components):
         raise ValueError(
-            "field output route %r is absent from block %r native aux layout: %s"
-            % (operator.name, block, ", ".join(components))
-        ) from error
-    indices.extend([-1] * (3 - len(indices)))
+            "field output route %r has no exact ComponentKey for each output"
+            % operator.name
+        )
+    for component, key in zip(components, keys, strict=True):
+        if (
+            not isinstance(key, Mapping)
+            or set(key) != {"owner_qid", "space_kind", "space_name", "component"}
+            or key["owner_qid"] != route["owner_identity"]
+            or key["space_kind"] != "field"
+            or key["component"] != component
+            or not all(isinstance(value, str) and value for value in key.values())
+        ):
+            raise ValueError(
+                "field output route %r carries an invalid owner-qualified ComponentKey"
+                % operator.name
+            )
     gradient_sign = route.get("gradient_sign")
     if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
         raise ValueError("field output route has no valid GradientOutput sign")
-    if indices[1] < 0 and gradient_sign != 1:
+    if len(keys) == 1 and gradient_sign != 1:
         raise ValueError("field output route carries a sign without gradient components")
     return {
         "block": block,
         "key": route["key"],
-        "indices": indices,
+        "output_keys": keys,
         "gradient_sign": gradient_sign,
     }
 
@@ -627,55 +707,49 @@ def _install_output(
 ) -> None:
     """Commit the provider-owned output payload after every input preflight succeeded."""
     del binding
-    indices = output_payload["indices"]
+    output_keys = output_payload["output_keys"]
     context.engine.register_elliptic_field(
         output_payload["block"],
         output_payload["key"],
-        indices[0],
-        indices[1],
-        indices[2],
+        output_keys,
         output_payload["gradient_sign"],
     )
 
 
-_PROVIDER = register_prepared_field_lowering_provider(PreparedFieldLoweringProvider(
-    provider_id="pops.field-lowering.cell-centered-second-order",
-    version=1,
-    resolver_id="pops.field-lowering.cell-centered-second-order.resolve@1",
-    resolution_validator_id=(
-        "pops.field-lowering.cell-centered-second-order.validate@1"
-    ),
-    runtime_binder_id="pops.field-lowering.cell-centered-second-order.bind@1",
-    output_preparer_id=(
-        "pops.field-lowering.cell-centered-second-order.prepare-output@1"
-    ),
-    bound_options_installer_id=(
-        "pops.field-lowering.cell-centered-second-order.install-options@1"
-    ),
-    output_installer_id=(
-        "pops.field-lowering.cell-centered-second-order.install-output@1"
-    ),
-    capabilities={
-        "targets": ("system", "amr_system"),
-        "dimension": 2,
-        "layout": ("uniform", "amr"),
-        "principal": "scalar-laplacian",
-        "reaction": "positive-scalar",
-        "order": 2,
-        "ghost_depth": 1,
-        "runtime_installation": {
-            "preflight": "engine-free-canonical@1",
-            "commit": "provider-owned@1",
+_PROVIDER = register_prepared_field_lowering_provider(
+    PreparedFieldLoweringProvider(
+        provider_id="pops.field-lowering.cell-centered-second-order",
+        version=1,
+        resolver_id="pops.field-lowering.cell-centered-second-order.resolve@1",
+        resolution_validator_id=("pops.field-lowering.cell-centered-second-order.validate@1"),
+        runtime_binder_id="pops.field-lowering.cell-centered-second-order.bind@1",
+        output_preparer_id=("pops.field-lowering.cell-centered-second-order.prepare-output@1"),
+        bound_options_installer_id=(
+            "pops.field-lowering.cell-centered-second-order.install-options@1"
+        ),
+        output_installer_id=("pops.field-lowering.cell-centered-second-order.install-output@1"),
+        capabilities={
+            "targets": ("system", "amr_system"),
+            "dimensions": (1, 2, 3),
+            "layout": ("uniform", "amr"),
+            "principal": "scalar-laplacian",
+            "reaction": "positive-scalar",
+            "order": 2,
+            "ghost_depth": 1,
+            "runtime_installation": {
+                "preflight": "engine-free-canonical@1",
+                "commit": "provider-owned@1",
+            },
         },
-    },
-    resolver=_resolve,
-    resolution_validator=_validate_binding,
-    parameter_handles=_parameter_handles,
-    bind_native_options=_bind_native_options,
-    prepare_output=_prepare_output,
-    install_bound_options=_install_bound_options,
-    install_output=_install_output,
-))
+        resolver=_resolve,
+        resolution_validator=_validate_binding,
+        parameter_handles=_parameter_handles,
+        bind_native_options=_bind_native_options,
+        prepare_output=_prepare_output,
+        install_bound_options=_install_bound_options,
+        install_output=_install_output,
+    )
+)
 
 
 def cell_centered_second_order_field_lowering_provider() -> PreparedFieldLoweringProvider:

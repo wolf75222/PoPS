@@ -209,7 +209,7 @@ CPP_ZERO_IMPACT_FILES = {
 }
 
 CPP_SMOKE_TARGETS = (
-    "test_box2d",
+    "test_box",
     "test_reduce",
     "test_system_abstraction",
 )
@@ -846,7 +846,11 @@ def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
             raise SystemExit(f"C++ {label} duration catalog is invalid: {exc}") from exc
         catalogues.append((label, durations))
     failures: list[str] = []
-    for label, durations in catalogues:
+    for (label, durations), path in zip(
+        catalogues,
+        (CPP_BUILD_DURATIONS_JSON, CPP_DURATIONS_JSON),
+        strict=True,
+    ):
         actual = set(durations)
         missing = sorted(expected - actual)
         orphaned = sorted(actual - expected)
@@ -857,6 +861,31 @@ def validate_cpp_duration_catalogs(targets: Iterable[str]) -> None:
             failures.append(f"{label} orphaned={orphaned}")
         if non_positive:
             failures.append(f"{label} non-positive={non_positive}")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            failures.append(f"{label} metadata unreadable={exc}")
+            continue
+        metadata = raw.get("_meta")
+        if not isinstance(metadata, dict):
+            failures.append(f"{label} metadata missing")
+            continue
+        target_count = metadata.get("target_count")
+        if type(target_count) is not int or target_count != len(durations):
+            failures.append(
+                f"{label} target_count={target_count!r} expected={len(durations)}"
+            )
+        estimated = metadata.get("estimated_targets")
+        if (
+            not isinstance(estimated, list)
+            or any(not isinstance(name, str) or not name for name in estimated)
+            or estimated != sorted(set(estimated))
+        ):
+            failures.append(f"{label} estimated_targets must be sorted unique names")
+        elif not set(estimated) <= actual:
+            failures.append(
+                f"{label} estimated_targets orphaned={sorted(set(estimated) - actual)}"
+            )
     if failures:
         raise SystemExit("C++ duration catalog inventory mismatch: " + "; ".join(failures))
 

@@ -1,70 +1,96 @@
-"""The System elliptic extension seam stays request-driven and open-ended."""
+"""The exact-ranked System field protocol has one open extension seam."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SYSTEM_FIELD_SOLVER = ROOT / "include/pops/runtime/system/system_field_solver.hpp"
-ELLIPTIC_BACKEND = ROOT / "include/pops/runtime/system/system_elliptic_backend.hpp"
+LEGACY_FIELD_SOLVER = ROOT / "include/pops/runtime/system/system_field_solver.hpp"
+LEGACY_BACKEND_METRICS = ROOT / "include/pops/runtime/system/system_elliptic_backend.hpp"
+HEADER_MANIFEST = ROOT / "include/pops_headers.manifest"
+EXACT_BACKEND = ROOT / "include/pops/runtime/system/exact_field_solver_backend.hpp"
+PREPARED_COMPONENT = ROOT / "include/pops/runtime/system/prepared_field_solver_component.hpp"
+FIELD_PLANS = ROOT / "src/runtime/system/system_field_plans.cpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
+SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
+SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 
 
-def test_system_elliptic_core_has_no_closed_capability_vocabulary() -> None:
-    source = SYSTEM_FIELD_SOLVER.read_text(encoding="utf-8")
-    support = ELLIPTIC_BACKEND.read_text(encoding="utf-8")
-    forbidden = (
-        "EllipticBackendCapability",
-        "EllipticBackendCapabilities",
-        "required_capabilities_",
-        "require_capabilities",
-        "capability_name",
-    )
-    assert not {token for token in forbidden if token in source or token in support}
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
 
 
-def test_provider_support_decides_from_the_complete_typed_request() -> None:
-    source = SYSTEM_FIELD_SOLVER.read_text(encoding="utf-8")
-    provider_protocol = source.split("class EllipticBackendProvider", 1)[1].split(
-        "class GeometricMgBackendProvider", 1
-    )[0]
-    assert "capability_contracts()" in provider_protocol
-    assert "supports(" in provider_protocol
-    assert "const EllipticBackendBuildRequest& request" in provider_protocol
-    assert "supports(request) is the sole compatibility authority" in provider_protocol
+def test_parallel_2d_system_field_engine_is_retired() -> None:
+    assert not LEGACY_FIELD_SOLVER.exists()
+    assert not LEGACY_BACKEND_METRICS.exists()
+    manifest = _read(HEADER_MANIFEST)
+    assert "system_field_solver.hpp" not in manifest
+    assert "system_elliptic_backend.hpp" not in manifest
 
 
-def test_generic_backend_protocol_has_no_feature_specific_configuration_setters() -> None:
-    source = SYSTEM_FIELD_SOLVER.read_text(encoding="utf-8")
-    backend_protocol = source.split("class NamedFieldBackend", 1)[1].split(
-        "/// Canonical component", 1
-    )[0]
-    forbidden = (
-        "capabilities()",
-        "set_scalar_coefficient",
-        "set_diagonal_tensor_coefficient",
-        "set_reaction_coefficient",
-        "set_dynamic_boundary",
-        "set_nonlinear_boundary",
-    )
-    assert not {token for token in forbidden if token in backend_protocol}
+def test_builtin_and_component_backends_share_one_ranked_protocol() -> None:
+    source = _read(EXACT_BACKEND)
+    assert "template <int Dim>" in source
+    assert "class ExactFieldSolverBackend" in source
+    assert "class CartesianCgFieldSolverBackend final" in source
+    assert "class ComponentFieldSolverBackend final" in source
+    for operation in (
+        "field_type& rhs()",
+        "field_type& candidate()",
+        "SolveReport solve(const field_type& warm_start)",
+        "std::string_view provider_identity()",
+        "topology_report()",
+    ):
+        assert operation in source
+    for legacy in ("Box2D", "Fab2D", "DistributionMapping", "Array4"):
+        assert legacy not in source
 
 
-def test_cartesian_runtime_dispatches_only_through_the_provider_registry() -> None:
-    source = SYSTEM_FIELD_SOLVER.read_text(encoding="utf-8")
-    ensure_elliptic = source.split("void ensure_elliptic()", 1)[1].split(
-        "MultiFab& ell_rhs()", 1
-    )[0]
-    assert "elliptic_registry_.prepare(p_solver" in ensure_elliptic
-    assert "p_solver ==" not in ensure_elliptic
-    assert "p_solver !=" not in ensure_elliptic
+def test_external_component_is_prepared_for_the_exact_dimension() -> None:
+    source = _read(PREPARED_COMPONENT)
+    assert "template <int Dim>" in source
+    assert "class PreparedFieldSolverComponent" in source
+    assert "Geometry<Dim>" in source
+    assert "MultiFab<Dim>" in source
+    assert "std::array<bool, Dim>" in source
+    for legacy in ("Box2D", "Fab2D", "DistributionMapping"):
+        assert legacy not in source
 
 
-def test_set_poisson_does_not_enumerate_registered_backend_routes() -> None:
-    source = SYSTEM_INSTALL.read_text(encoding="utf-8")
-    set_poisson = source.split("void System::set_poisson", 1)[1].split(
-        "System::register_configured_field_solver_provider", 1
-    )[0]
-    assert 'solver != "fft"' not in set_poisson
-    assert 'solver != "fft_spectral"' not in set_poisson
-    assert "has_elliptic_provider(solver)" in set_poisson
+def test_install_resolves_configured_and_component_providers_by_qualified_slot() -> None:
+    plans = _read(FIELD_PLANS)
+    install = _read(SYSTEM_INSTALL)
+    assert "register_configured_field_solver_provider" in plans
+    assert "register_field_solver_provider" in plans
+    assert "configured_field_solver_providers_" in install
+    assert "component_field_solver_providers_" in install
+    assert "backend_provider_route" in install
+    assert "SystemFieldSolver" not in plans
+    assert "SystemFieldSolver" not in install
+
+
+def test_uniform_configured_backend_has_one_honest_cartesian_cg_schema() -> None:
+    plans = _read(FIELD_PLANS)
+    assert 'family_route != "cartesian_cg"' in plans
+    assert '"pops.system.cartesian-cg-options@1"' in plans
+    assert 'exact_int_option(options, "max_iterations")' in plans
+    for geometric_mg_option in (
+        'exact_int_option(options, "max_cycles")',
+        'exact_int_option(options, "min_coarse")',
+        'exact_int_option(options, "pre_smooth")',
+    ):
+        assert geometric_mg_option not in plans
+    assert "GeometricMG is reserved for the AMR MG/FAC route" in plans
+
+
+def test_uniform_surface_does_not_advertise_amr_only_operator_coefficients() -> None:
+    header = _read(SYSTEM_HEADER)
+    binding = _read(SYSTEM_BINDING)
+    for ghost_api in (
+        "set_epsilon_field",
+        "set_epsilon_anisotropic_field",
+        "set_reaction_field",
+    ):
+        assert ghost_api not in header
+        assert ghost_api not in binding

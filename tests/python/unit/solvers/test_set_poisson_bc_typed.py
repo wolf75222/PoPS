@@ -1,4 +1,5 @@
 """Typed-only boundary selectors for the low-level Poisson runtime seam."""
+
 import sys
 
 import pytest
@@ -10,11 +11,13 @@ from pops.runtime._system_install import _lower_bc
 try:
     import pops._pops  # noqa: F401
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+
     _HAVE_ENGINE = True
 except Exception:  # pragma: no cover - exercised only without a built extension
     _HAVE_ENGINE = False
 requires_engine = pytest.mark.skipif(
-    not _HAVE_ENGINE, reason="compiled _pops extension not importable")
+    not _HAVE_ENGINE, reason="compiled _pops extension not importable"
+)
 
 
 def test_bc_lowers_to_private_native_tokens():
@@ -37,21 +40,19 @@ def test_set_poisson_rejects_string_bc():
 
 @requires_engine
 def test_amr_set_poisson_uses_the_same_typed_contract():
-    from pops.mesh.geometry import Disc
     system = AmrSystem(n=8, L=1.0, periodicity=(False, False), regrid_every=0)
     with pytest.raises(TypeError, match="string selectors"):
         system.set_poisson(bc="dirichlet")
-    with pytest.raises(TypeError, match="string selectors"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'wall'"):
         system.set_poisson(wall="circle")
-    system.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
+    system.set_poisson(bc=Dirichlet())
 
 
 @requires_engine
 def test_set_poisson_typed_bc_executes():
-    from pops.mesh.geometry import Disc
     system = System(n=8, L=1.0, periodicity=(False, False))
-    system.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
-    assert system.poisson_solver() == "geometric_mg"
+    system.set_poisson(bc=Dirichlet())
+    assert system.poisson_solver() == "cartesian_cg"
 
 
 if __name__ == "__main__":

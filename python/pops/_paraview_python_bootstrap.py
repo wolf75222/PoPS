@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -14,9 +15,18 @@ def main() -> None:
     if not script.is_file():
         raise SystemExit("PoPS Catalyst script does not exist: %s" % script)
 
-    # This import must precede Catalyst.  The MPI build requests MPI_THREAD_MULTIPLE while the
-    # process is still neutral; pvpython/pvbatch initialize MPI too early with MPI_THREAD_SINGLE.
-    from pops import _pops  # noqa: F401
+    # Native selection must precede Catalyst.  The launcher supplies the resolved dimension
+    # explicitly because this neutral host has no ResolvedSimulationPlan of its own.  The MPI build
+    # requests MPI_THREAD_MULTIPLE while the process is still neutral; pvpython/pvbatch would
+    # otherwise initialize MPI too early with MPI_THREAD_SINGLE.
+    native_dimension = os.environ.get("POPS_NATIVE_DIM")
+    if native_dimension not in {"1", "2", "3"}:
+        raise SystemExit(
+            "pops ParaView bootstrap requires launcher-provided POPS_NATIVE_DIM=1, 2, or 3"
+        )
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(int(native_dimension))
 
     try:
         __import__("catalyst")

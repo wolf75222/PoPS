@@ -1,12 +1,10 @@
-#include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/runtime/amr/exact_field_solver_provider.hpp>
+#include <pops/runtime/amr/field_solver_options.hpp>
 
-#include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/runtime/system/system_poisson_options.hpp>
-
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -16,368 +14,269 @@
 #include <variant>
 #include <vector>
 
-namespace pops {
+namespace pops::runtime::amr {
 namespace {
 
-struct GeometricMgAmrOptions {
-  GeometricMgOptions mg;
+struct BuiltinOptions {
+  elliptic::mg::GeometricMultigridOptions mg;
   CompositeFacOptions fac;
 };
 
 template <class Value>
-Value solver_option(const AmrFieldSolverOptions& options, std::string_view name) {
+Value option(const PreparedProviderOptions& options, std::string_view name) {
   const auto found = options.values.find(std::string(name));
   if (found == options.values.end() || !std::holds_alternative<Value>(found->second))
-    throw std::invalid_argument("AMR field solver option '" + std::string(name) +
+    throw std::invalid_argument("geometric MG option '" + std::string(name) +
                                 "' is missing or has the wrong type");
   return std::get<Value>(found->second);
 }
 
-GeometricMgAmrOptions decode_options(const AmrFieldSolverOptions& options) {
+template <int Dim>
+BuiltinOptions decode_options(const PreparedProviderOptions& options) {
   if (options.schema_identity != "pops.amr.field-solver-options.geometric-mg@1" ||
       options.values.size() != 16)
-    throw std::invalid_argument("invalid geometric-MG AMR field solver option schema");
-  GeometricMgAmrOptions decoded;
-  decoded.mg.abs_tol = static_cast<Real>(solver_option<double>(options, "mg.abs_tol"));
-  decoded.mg.rel_tol = static_cast<Real>(solver_option<double>(options, "mg.rel_tol"));
-  decoded.mg.max_cycles = static_cast<int>(solver_option<std::int64_t>(options, "mg.max_cycles"));
-  decoded.mg.min_coarse = static_cast<int>(solver_option<std::int64_t>(options, "mg.min_coarse"));
-  decoded.mg.nu1 = static_cast<int>(solver_option<std::int64_t>(options, "mg.pre_smooth"));
-  decoded.mg.nu2 = static_cast<int>(solver_option<std::int64_t>(options, "mg.post_smooth"));
-  decoded.mg.nbottom = static_cast<int>(solver_option<std::int64_t>(options, "mg.bottom_sweeps"));
-  decoded.mg.coarse_threshold =
-      static_cast<int>(solver_option<std::int64_t>(options, "mg.coarse_threshold"));
-  decoded.fac.max_iters = static_cast<int>(solver_option<std::int64_t>(options, "fac.max_iters"));
-  decoded.fac.fine_sweeps =
-      static_cast<int>(solver_option<std::int64_t>(options, "fac.fine_sweeps"));
-  decoded.fac.rel_tol = static_cast<Real>(solver_option<double>(options, "fac.rel_tol"));
-  decoded.fac.abs_tol = static_cast<Real>(solver_option<double>(options, "fac.abs_tol"));
-  decoded.fac.coarse_rel_tol =
-      static_cast<Real>(solver_option<double>(options, "fac.coarse_rel_tol"));
-  decoded.fac.coarse_abs_tol =
-      static_cast<Real>(solver_option<double>(options, "fac.coarse_abs_tol"));
-  decoded.fac.coarse_cycles =
-      static_cast<int>(solver_option<std::int64_t>(options, "fac.coarse_cycles"));
-  decoded.fac.verbose = solver_option<bool>(options, "fac.verbose");
-  return decoded;
+    throw std::invalid_argument("invalid exact-ranked geometric MG option schema");
+  BuiltinOptions result;
+  result.mg.absolute_tolerance = static_cast<Real>(option<double>(options, "mg.abs_tol"));
+  result.mg.relative_tolerance = static_cast<Real>(option<double>(options, "mg.rel_tol"));
+  result.mg.maximum_cycles = static_cast<int>(option<std::int64_t>(options, "mg.max_cycles"));
+  result.mg.minimum_coarse_extent =
+      static_cast<int>(option<std::int64_t>(options, "mg.min_coarse"));
+  result.mg.pre_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.pre_smooth"));
+  result.mg.post_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.post_smooth"));
+  result.mg.bottom_sweeps = static_cast<int>(option<std::int64_t>(options, "mg.bottom_sweeps"));
+  result.mg.coarse_cell_threshold =
+      static_cast<int>(option<std::int64_t>(options, "mg.coarse_threshold"));
+  result.fac.max_iters = static_cast<int>(option<std::int64_t>(options, "fac.max_iters"));
+  result.fac.fine_sweeps = static_cast<int>(option<std::int64_t>(options, "fac.fine_sweeps"));
+  result.fac.rel_tol = static_cast<Real>(option<double>(options, "fac.rel_tol"));
+  result.fac.abs_tol = static_cast<Real>(option<double>(options, "fac.abs_tol"));
+  result.fac.coarse_rel_tol = static_cast<Real>(option<double>(options, "fac.coarse_rel_tol"));
+  result.fac.coarse_abs_tol = static_cast<Real>(option<double>(options, "fac.coarse_abs_tol"));
+  result.fac.coarse_cycles = static_cast<int>(option<std::int64_t>(options, "fac.coarse_cycles"));
+  result.fac.verbose = option<bool>(options, "fac.verbose");
+  elliptic::mg::detail::validate_options<Dim>(result.mg);
+  elliptic::mg::detail::validate_fac_options(result.fac);
+  return result;
 }
 
-void validate_options(const GeometricMgAmrOptions& options) {
-  const auto& mg = options.mg;
-  if (!std::isfinite(static_cast<double>(mg.abs_tol)) || mg.abs_tol < Real(0) ||
-      !std::isfinite(static_cast<double>(mg.rel_tol)) || mg.rel_tol <= Real(0) ||
-      mg.max_cycles < 1 || mg.min_coarse < 1 || mg.nu1 < 0 || mg.nu2 < 0 || mg.nbottom < 0 ||
-      mg.coarse_threshold < 0)
-    throw std::invalid_argument("invalid geometric-MG AMR field solver options");
-  const auto& fac = options.fac;
-  if (fac.max_iters < 1 || fac.fine_sweeps < 1 || fac.coarse_cycles < 1 ||
-      !std::isfinite(static_cast<double>(fac.rel_tol)) || fac.rel_tol <= Real(0) ||
-      fac.rel_tol >= Real(1) || !std::isfinite(static_cast<double>(fac.abs_tol)) ||
-      fac.abs_tol < Real(0) || !std::isfinite(static_cast<double>(fac.coarse_rel_tol)) ||
-      fac.coarse_rel_tol <= Real(0) || fac.coarse_rel_tol >= Real(1) ||
-      !std::isfinite(static_cast<double>(fac.coarse_abs_tol)) || fac.coarse_abs_tol < Real(0))
-    throw std::invalid_argument("invalid composite-FAC AMR field solver options");
-}
-
-enum class HierarchyPolicy : std::uint8_t { LevelLocal, Composite };
-
-std::optional<HierarchyPolicy> decode_hierarchy_policy(
-    const AmrFieldHierarchyPolicyAuthority& authority) noexcept {
-  if (authority.interface_version != 1 ||
-      authority.options.schema_identity != "pops.field-hierarchy.options.empty@1" ||
-      !authority.options.values.empty())
-    return std::nullopt;
-  if (authority.policy_id == "pops.field-hierarchy.level-local")
-    return HierarchyPolicy::LevelLocal;
-  if (authority.policy_id == "pops.field-hierarchy.composite")
-    return HierarchyPolicy::Composite;
-  return std::nullopt;
-}
-
-bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
-  if (request.hierarchy.nlev() < 2)
-    return false;
-  int parent_refinement = 1;
-  for (int level = 0; level + 1 < request.hierarchy.nlev(); ++level) {
-    const int ratio = request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
-    if (ratio <= 0)
-      return false;
-    const Geometry parent_geometry = request.geometry.refine(parent_refinement);
-    const BoxArray& children = request.hierarchy.ba.at(static_cast<std::size_t>(level + 1));
-    std::uint64_t covered_cells = 0;
-    for (int patch = 0; patch < children.size(); ++patch) {
-      const Box2D footprint = children[patch].coarsen(ratio);
-      if (footprint.refine(ratio) != children[patch] || !parent_geometry.domain.contains(footprint))
-        return false;
-      for (int previous = 0; previous < patch; ++previous)
-        if (!footprint.intersect(children[previous].coarsen(ratio)).empty())
-          return false;
-      covered_cells += static_cast<std::uint64_t>(footprint.num_cells());
-    }
-    if (covered_cells != static_cast<std::uint64_t>(parent_geometry.domain.num_cells()))
-      return false;
-    if (parent_refinement > std::numeric_limits<int>::max() / ratio)
-      return false;
-    parent_refinement *= ratio;
-  }
-  return true;
-}
-
-class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
+template <int Dim, class MemorySpace>
+class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemorySpace> {
  public:
-  PreparedGeometricMgFieldSolver(const AmrFieldSolverBuildRequest& request, std::string contract)
-      : contract_(std::move(contract)),
-        plan_(request.plan),
-        options_(decode_options(request.plan.solver_options)) {
-    validate_options(options_);
-    const auto policy = decode_hierarchy_policy(request.plan.hierarchy_policy);
-    if (!policy)
-      throw std::invalid_argument("geometric-MG received an unknown hierarchy-policy authority");
-    const bool composite = *policy == HierarchyPolicy::Composite && request.hierarchy.nlev() > 1;
-    if (composite) {
-      distributions_.assign(static_cast<std::size_t>(request.hierarchy.nlev()),
-                            FieldDistribution::Distributed);
-      distributions_.front() = FieldDistribution::Replicated;
-      std::vector<BoxArray> fine_boxes;
-      fine_boxes.reserve(request.hierarchy.ba.size() - 1);
-      for (std::size_t level = 1; level < request.hierarchy.ba.size(); ++level)
-        fine_boxes.push_back(request.hierarchy.ba[level]);
-      fac_ = std::make_unique<CompositeFacPoisson>(request.geometry, request.hierarchy.ba.front(),
-                                                   request.boundary, fine_boxes);
-      fac_->set_options(options_.fac);
-      if (request.plan.has_reaction)
-        fac_->set_reaction(request.plan.reaction);
-      if (request.plan.has_boundary_kernel)
-        fac_->set_boundary_kernel(request.plan.boundary_kernel, request.plan.boundary_context);
-      if (request.plan.has_newton)
-        fac_->set_field_nonlinear_options(request.plan.newton);
+  using base_type = ExactAmrFieldSolver<Dim, MemorySpace>;
+  using field_type = typename base_type::field_type;
+  using request_type = ExactAmrFieldSolverBuildRequest<Dim>;
+
+  BuiltinExactAmrFieldSolver(const request_type& request, std::string contract,
+                             BuiltinOptions options)
+      : contract_(std::move(contract)), mode_(request.mode), options_(options) {
+    if (mode_ == ExactFieldHierarchyMode::composite) {
+      composite_ = std::make_unique<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>>(
+          request.hierarchy, options_.fac, request.reaction);
       return;
     }
-
-    const int levels = *policy == HierarchyPolicy::LevelLocal ? request.hierarchy.nlev() : 1;
-    distributions_.reserve(static_cast<std::size_t>(levels));
-    level_solvers_.reserve(static_cast<std::size_t>(levels));
-    int refinement = 1;
-    for (int level = 0; level < levels; ++level) {
-      const Geometry geometry = request.geometry.refine(refinement);
-      const auto index = static_cast<std::size_t>(level);
-      auto solver = std::make_unique<GeometricMG>(
-          geometry, request.hierarchy.ba[index], request.hierarchy.dm[index], request.boundary,
-          request.active, options_.mg.min_coarse, options_.mg.nu1, options_.mg.nu2,
-          options_.mg.nbottom, options_.mg.coarse_threshold,
-          level == 0 && request.replicated_coarse ? FieldDistribution::Replicated
-                                                  : FieldDistribution::Distributed);
-      distributions_.push_back(level == 0 && request.replicated_coarse
-                                   ? FieldDistribution::Replicated
-                                   : FieldDistribution::Distributed);
-      solver->set_abs_tol(options_.mg.abs_tol);
-      if (request.plan.has_reaction)
-        solver->set_reaction(constant_scalar_field_provider(request.plan.reaction));
-      if (request.plan.has_boundary_kernel)
-        solver->set_boundary_kernel(request.plan.boundary_kernel, request.plan.boundary_context);
-      if (request.plan.has_newton)
-        solver->set_field_newton_options(request.plan.newton);
-      level_solvers_.push_back(std::move(solver));
-      if (index < request.hierarchy.refinement_ratios.size())
-        refinement *= request.hierarchy.refinement_ratios[index];
+    local_.reserve(request.hierarchy.levels.size());
+    for (const auto& level : request.hierarchy.levels) {
+      auto controls = options_.mg;
+      controls.reaction = request.reaction;
+      local_.push_back(
+          std::make_unique<elliptic::mg::GeometricMG<Dim, MemorySpace>>(level, controls));
     }
   }
 
-  [[nodiscard]] std::string_view provider_identity() const noexcept override {
-    return "geometric_mg";
+  std::string_view provider_identity() const noexcept override { return "geometric_mg"; }
+  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
+  bool couples_hierarchy_levels() const noexcept override { return static_cast<bool>(composite_); }
+  int level_count() const noexcept override {
+    return composite_ ? composite_->n_levels() : static_cast<int>(local_.size());
   }
-  [[nodiscard]] std::string_view exact_prepared_contract() const noexcept override {
-    return contract_;
+  field_type& rhs_level(int level) override {
+    return composite_ ? composite_->rhs_level(level)
+                      : local_.at(static_cast<std::size_t>(level))->rhs();
   }
-  [[nodiscard]] bool couples_hierarchy_levels() const noexcept override {
-    return static_cast<bool>(fac_);
+  field_type& candidate_level(int level) override {
+    return composite_ ? composite_->phi_level(level)
+                      : local_.at(static_cast<std::size_t>(level))->phi();
   }
-  [[nodiscard]] int level_count() const noexcept override {
-    return fac_ ? fac_->n_levels() : static_cast<int>(level_solvers_.size());
+  const field_type& candidate_level(int level) const override {
+    return composite_ ? composite_->phi_level(level)
+                      : local_.at(static_cast<std::size_t>(level))->phi();
   }
-  [[nodiscard]] FieldDistribution level_distribution(int level) const override {
-    return distributions_.at(static_cast<std::size_t>(level));
-  }
-  MultiFab& rhs_level(int level) override {
-    return fac_ ? fac_->rhs_level(level)
-                : level_solvers_.at(static_cast<std::size_t>(level))->rhs();
-  }
-  MultiFab& phi_level(int level) override {
-    return fac_ ? fac_->phi_level(level)
-                : level_solvers_.at(static_cast<std::size_t>(level))->phi();
-  }
-  void set_boundary_context(const FieldBoundaryExecutionContext& context) override {
-    if (fac_) {
-      fac_->set_boundary_context(context);
+  void install_newton(FieldNewtonOptions options) override {
+    if (composite_) {
+      composite_->install_newton(options);
       return;
     }
-    for (auto& solver : level_solvers_)
-      solver->set_boundary_context(context);
+    for (auto& solver : local_)
+      solver->install_newton(options);
   }
-  void set_boundary_context_at_level(int level,
-                                     const FieldBoundaryExecutionContext& context) override {
-    if (fac_) {
-      fac_->set_boundary_context_at_level(level, context);
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) override {
+    if (composite_) {
+      composite_->install_boundary_kernel(std::move(kernel));
       return;
     }
-    if (level < 0 || level >= level_count())
-      throw std::out_of_range(
-          "geometric-MG boundary context level is outside the prepared hierarchy");
-    level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
+    for (auto& solver : local_)
+      solver->install_boundary_kernel(kernel);
+  }
+  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) override {
+    if (contexts.size() != static_cast<std::size_t>(level_count()))
+      throw std::invalid_argument(
+          "exact AMR field solver requires one boundary context per live level");
+    if (composite_) {
+      composite_->set_boundary_contexts(std::move(contexts));
+      return;
+    }
+    for (std::size_t level = 0; level < local_.size(); ++level)
+      local_[level]->set_boundary_context(contexts[level]);
+  }
+  void install_nullspace(
+      PreparedFieldNullspace<Dim> prepared,
+      std::vector<PreparedVectorDistribution<Dim>> level_distributions) override {
+    if (!nullspace_contract_.empty())
+      throw std::logic_error("exact AMR field nullspace authority is already installed");
+    if (prepared.provider_identity.empty() || prepared.provider_version == 0 ||
+        prepared.exact_prepared_contract.empty())
+      throw std::invalid_argument(
+          "exact AMR field nullspace authority requires authenticated provider metadata");
+    if (level_distributions.size() != static_cast<std::size_t>(level_count()))
+      throw std::invalid_argument(
+          "exact AMR field nullspace authority requires one distribution per level");
+
+    if (composite_) {
+      composite_->install_nullspace(std::move(prepared.plan), std::move(level_distributions));
+    } else {
+      std::vector<FieldNullspacePlan<Dim>> plans;
+      plans.reserve(local_.size());
+      for (std::size_t level = 0; level < local_.size(); ++level)
+        plans.push_back(level_local_plan_(prepared.plan, level));
+      for (std::size_t level = 0; level < local_.size(); ++level)
+        local_[level]->install_nullspace(std::move(plans[level]),
+                                         std::move(level_distributions[level]));
+    }
+    nullspace_contract_ = std::move(prepared.exact_prepared_contract);
+  }
+  int maximum_iterations() const noexcept override {
+    if (composite_)
+      return composite_->maximum_iterations();
+    int result = 0;
+    for (const auto& solver : local_)
+      result = std::max(result, solver->maximum_iterations());
+    return result;
   }
   SolveReport solve() override {
-    if (fac_) {
-      if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
-        if (!plan_.has_newton) {
-          report_ = SolveReport::capability_failure();
-          return report_;
-        }
-        report_ = fac_->solve_boundary_fas(plan_.newton);
-      } else {
-        const CompositeFacOptions& options = options_.fac;
-        fac_->solve(options.max_iters, options.fine_sweeps, options.rel_tol, options.abs_tol);
-        report_ = fac_->last_solve_report();
-      }
-      return report_;
+    if (nullspace_contract_.empty())
+      throw std::logic_error("exact AMR field solve has no prepared nullspace authority");
+    if (composite_)
+      return composite_->solve();
+    SolveReport result;
+    result.mark_solved("geometric_mg_empty_level_set");
+    for (auto& solver : local_) {
+      result = solver->solve();
+      if (!result.solved())
+        return result;
     }
-    for (auto& solver : level_solvers_) {
-      if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
-        if (!plan_.has_newton) {
-          report_ = SolveReport::capability_failure();
-          return report_;
-        }
-        report_ = solver->solve_boundary_newton(plan_.newton);
-      } else {
-        solver->solve(options_.mg.rel_tol, options_.mg.max_cycles, options_.mg.abs_tol);
-        report_ = solver->last_solve_report();
-      }
-      if (!report_.solved())
-        return report_;
-    }
-    return report_;
+    return result;
   }
-  [[nodiscard]] const SolveReport& last_solve_report() const noexcept override { return report_; }
 
  private:
+  static FieldNullspacePlan<Dim> level_local_plan_(const FieldNullspacePlan<Dim>& hierarchy_plan,
+                                                   std::size_t level) {
+    if (hierarchy_plan.empty())
+      return {};
+    FieldNullspacePlan<Dim> result;
+    result.identity = hierarchy_plan.identity + ":level-local:" + std::to_string(level);
+    result.layout_identity =
+        hierarchy_plan.layout_identity + ":level-local:" + std::to_string(level);
+    result.gauges = hierarchy_plan.gauges;
+    result.bases.reserve(hierarchy_plan.bases.size());
+    for (const FieldNullspaceBasis<Dim>& source : hierarchy_plan.bases) {
+      FieldNullspaceBasis<Dim> basis;
+      basis.identity = source.identity;
+      basis.provenance = source.provenance;
+      basis.recipe_identity = source.recipe_identity + ":level-local:" + std::to_string(level);
+      basis.field_component = source.field_component;
+      if (!source.masks.empty()) {
+        if (level >= source.masks.size() || !source.masks[level])
+          throw std::invalid_argument(
+              "exact AMR level-local nullspace basis is missing its level mask");
+        basis.masks.push_back(source.masks[level]);
+      }
+      basis.cell_measure.push_back(source.measure(static_cast<int>(level)));
+      result.bases.push_back(std::move(basis));
+    }
+    return result;
+  }
+
   std::string contract_;
-  AmrFieldSolveConfig plan_;
-  GeometricMgAmrOptions options_;
-  std::vector<std::unique_ptr<GeometricMG>> level_solvers_;
-  std::vector<FieldDistribution> distributions_;
-  std::unique_ptr<CompositeFacPoisson> fac_;
-  SolveReport report_{};
+  std::string nullspace_contract_;
+  ExactFieldHierarchyMode mode_ = ExactFieldHierarchyMode::level_local;
+  BuiltinOptions options_{};
+  std::vector<std::unique_ptr<elliptic::mg::GeometricMG<Dim, MemorySpace>>> local_{};
+  std::unique_ptr<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>> composite_{};
 };
 
-class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
+template <int Dim, class MemorySpace>
+class BuiltinExactAmrFieldSolverProvider final
+    : public ExactAmrFieldSolverProvider<Dim, MemorySpace> {
  public:
-  [[nodiscard]] std::string_view identity() const noexcept override { return "geometric_mg"; }
-  [[nodiscard]] std::uint64_t interface_version() const noexcept override { return 1; }
-  [[nodiscard]] std::string_view collective_contract() const noexcept override {
-    return "pops.amr.field-solver.geometric-mg@1";
+  using request_type = ExactAmrFieldSolverBuildRequest<Dim>;
+  using solver_type = ExactAmrFieldSolver<Dim, MemorySpace>;
+
+  std::string_view identity() const noexcept override { return "geometric_mg"; }
+  std::string_view collective_contract() const noexcept override {
+    return "pops.amr.field-solver.geometric-mg.exact-ranked@3";
   }
-  [[nodiscard]] std::vector<std::string> capability_contracts() const override {
-    return {
-        "pops.amr.field-solver.geometric-mg.active-region@1",
-        "pops.amr.field-solver.geometric-mg.composite-hierarchy@1",
-        "pops.amr.field-solver.geometric-mg.composite-fully-refined-level-qualified-boundary@1",
-        "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
-        "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
-        "pops.amr.field-solver.geometric-mg.exact-preparation@1",
-        "pops.amr.field-solver.geometric-mg.level-qualified-dynamic-boundary@1",
-        "pops.amr.field-solver.geometric-mg.level-local-hierarchy@1",
-        "pops.amr.field-solver.geometric-mg.nonlinear-boundary@1",
-        "pops.amr.field-solver.geometric-mg.reaction@1",
-        "pops.amr.field-solver.geometric-mg.replicated-coarse@1",
-    };
-  }
-  [[nodiscard]] AmrFieldSolverOptions default_field_options() const override {
-    return geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
-  }
-  [[nodiscard]] std::optional<AmrFieldHierarchyPolicyAuthority> default_hierarchy_policy(
-      std::string_view use_contract_identity) const override {
-    if (use_contract_identity != "pops.amr.field-solver-use.default@1")
-      return std::nullopt;
-    return AmrFieldHierarchyPolicyAuthority{
-        "pops.field-hierarchy.level-local",
-        1,
-        {"pops.field-hierarchy.options.empty@1", {}},
-    };
-  }
-  [[nodiscard]] PreparedProviderSupport accepts_options(
-      const AmrFieldSolverOptions& options) const noexcept override {
+  PreparedProviderSupport supports(const request_type& request) const noexcept override {
     try {
-      validate_options(decode_options(options));
-      return PreparedProviderSupport::accept();
-    } catch (...) {
-      return PreparedProviderSupport::reject(
-          1, "geometric multigrid options do not match the provider schema");
-    }
-  }
-  [[nodiscard]] PreparedProviderSupport supports(
-      const AmrFieldSolverBuildRequest& request) const noexcept override {
-    if (!accepts_options(request.plan.solver_options).accepted())
-      return PreparedProviderSupport::reject(10, "field solver options are incompatible");
-    const auto policy = decode_hierarchy_policy(request.plan.hierarchy_policy);
-    if (!policy)
-      return PreparedProviderSupport::reject(
-          11, "hierarchy policy is not implemented by this provider");
-    const bool composite = *policy == HierarchyPolicy::Composite;
-    const bool level_local = *policy == HierarchyPolicy::LevelLocal;
-    const bool default_field =
-        request.use_contract_identity == "pops.amr.field-solver-use.default@1";
-    const bool named_field = request.use_contract_identity == "pops.amr.field-solver-use.named@1";
-    if (!default_field && !named_field)
-      return PreparedProviderSupport::reject(12, "field-solver use contract is unsupported");
-    if (default_field && (!level_local || request.hierarchy.nlev() != 1))
-      return PreparedProviderSupport::reject(
-          13, "default field solve requires this provider's one-level policy");
-    if (composite && request.hierarchy.nlev() > 1 &&
-        (!request.replicated_coarse || static_cast<bool>(request.active)))
-      return PreparedProviderSupport::reject(
-          14, "composite hierarchy cannot represent this coarse distribution or active region");
-    if (composite && request.hierarchy.nlev() > 1 && request.plan.has_boundary_kernel) {
-      bool fully_refined = false;
-      try {
-        fully_refined = fully_refines_every_level(request);
-      } catch (...) {
-        return PreparedProviderSupport::reject(
-            18, "composite hierarchy coverage could not be validated for dynamic boundaries");
+      const BuiltinOptions decoded = decode_options<Dim>(request.provider_options);
+      (void)decoded;
+      if (request.hierarchy.levels.empty() ||
+          request.hierarchy.ratios.size() + 1 != request.hierarchy.levels.size())
+        return PreparedProviderSupport::reject(1, "AMR hierarchy is incomplete");
+      if (!std::isfinite(static_cast<double>(request.reaction)) || request.reaction < Real(0))
+        return PreparedProviderSupport::reject(2, "reaction coefficient is invalid");
+      if (request.mode == ExactFieldHierarchyMode::level_local) {
+        for (const auto& level : request.hierarchy.levels)
+          if (!level.boxes.tiles_exactly(level.geometry.domain(), level.layout_budget))
+            return PreparedProviderSupport::reject(
+                3, "level-local geometric MG requires a complete uniform level");
+      } else if (n_ranks() > 1) {
+        for (const auto& level : request.hierarchy.levels)
+          if (!level.distribution.replicated())
+            return PreparedProviderSupport::reject(
+                4, "composite FAC distributed inter-level transfers are unavailable");
       }
-      if (!fully_refined)
-        return PreparedProviderSupport::reject(
-            16,
-            "partially refined FAC has no level-qualified homogeneous/JVP boundary correction "
-            "operator");
+      return PreparedProviderSupport::accept();
+    } catch (const std::exception& error) {
+      return PreparedProviderSupport::reject(5, error.what());
+    } catch (...) {
+      return PreparedProviderSupport::reject(6, "geometric MG provider validation failed");
     }
-    if (composite && request.plan.has_boundary_kernel &&
-        request.plan.boundary_kernel.observes_iteration && !request.plan.has_newton)
-      return PreparedProviderSupport::reject(
-          17, "iterate-dependent composite boundary requires an explicit nonlinear solve plan");
-    if (level_local && request.hierarchy.nlev() > 1 &&
-        (request.plan.has_newton ||
-         (request.plan.has_boundary_kernel && request.plan.boundary_kernel.observes_iteration)))
-      return PreparedProviderSupport::reject(
-          15,
-          "multi-level local hierarchy cannot represent an iterate-dependent nonlinear boundary");
-    return PreparedProviderSupport::accept();
   }
-  [[nodiscard]] std::string expected_prepared_contract(
-      const AmrFieldSolverBuildRequest& request) const override {
-    return make_amr_field_solver_contract(identity(), request);
+  std::string expected_prepared_contract(const request_type& request) const override {
+    return make_exact_amr_field_solver_contract(identity(), request);
   }
-  [[nodiscard]] std::unique_ptr<AmrPreparedFieldSolver> build(
-      const AmrFieldSolverBuildRequest& request) const override {
-    return std::make_unique<PreparedGeometricMgFieldSolver>(request,
-                                                            expected_prepared_contract(request));
+  std::unique_ptr<solver_type> build(const request_type& request) const override {
+    const PreparedProviderSupport decision = supports(request);
+    if (!decision.accepted())
+      throw std::invalid_argument(std::string(decision.reason));
+    return std::make_unique<BuiltinExactAmrFieldSolver<Dim, MemorySpace>>(
+        request, expected_prepared_contract(request),
+        decode_options<Dim>(request.provider_options));
   }
 };
 
 }  // namespace
 
-std::shared_ptr<AmrFieldSolverProviderRegistry> make_default_amr_field_solver_registry() {
-  auto registry = std::make_shared<AmrFieldSolverProviderRegistry>();
-  registry->add(std::make_shared<GeometricMgFieldSolverProvider>());
-  return registry;
+template <int Dim, class MemorySpace>
+std::shared_ptr<const ExactAmrFieldSolverProvider<Dim, MemorySpace>>
+make_builtin_exact_amr_field_solver_provider() {
+  return std::make_shared<BuiltinExactAmrFieldSolverProvider<Dim, MemorySpace>>();
 }
 
-}  // namespace pops
+template POPS_EXPORT std::shared_ptr<const ExactAmrFieldSolverProvider<
+    kNativeDimension, typename Kokkos::DefaultExecutionSpace::memory_space>>
+make_builtin_exact_amr_field_solver_provider<
+    kNativeDimension, typename Kokkos::DefaultExecutionSpace::memory_space>();
+
+}  // namespace pops::runtime::amr

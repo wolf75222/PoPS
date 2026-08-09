@@ -59,6 +59,7 @@ def test_manifest_exactly_classifies_all_tracked_headers_and_include_fragments()
         "pops/runtime/config/generated_route_accessors.inc"
     ) in manifest.sdk_support
     assert PurePosixPath("pops/parallel/load_balance.hpp") in manifest.api
+    assert PurePosixPath("pops/parallel/ownership_plan.hpp") in manifest.api
     assert PurePosixPath("pops/parallel/prepared_load_balance.hpp") in manifest.api
 
 
@@ -66,33 +67,27 @@ def test_amr_layout_paths_require_one_prepared_load_balance_authority():
     paths = (
         "include/pops/amr/hierarchy/amr_hierarchy.hpp",
         "include/pops/amr/regridding/regrid.hpp",
-        "include/pops/coupling/amr/amr_coupler_mp.hpp",
-        "include/pops/coupling/amr/amr_regrid_coupler.hpp",
         "include/pops/runtime/amr/amr_runtime.hpp",
-        "include/pops/runtime/builders/compiled/amr_dsl_block.hpp",
     )
     sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in paths}
 
     assert all("make_default_load_balance_authority" not in source for source in sources.values())
-    assert all(
-        "DistributionMapping(ba.size(), n_ranks())" not in source
-        and "DistributionMapping(fine_ba.size(), n_ranks())" not in source
-        for source in sources.values()
-    )
-    assert "load_balance.distribute(ba, n_ranks())" in sources[paths[2]]
+    assert all("DistributionMapping" not in source for source in sources.values())
+    assert "const PreparedLoadBalanceAuthority<Dim>& load_balance" in sources[paths[1]]
+    assert "load_balance.prepare(" in sources[paths[1]]
+    assert "ownership->plan().distribution()" in sources[paths[1]]
     assert (
-        "load_balance.distribute(*candidate_layout, communicator.size(), {}, communicator)"
-        in sources[paths[3]]
+        "std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance"
+        in sources[paths[2]]
     )
-    assert "hierarchy.load_balance_authority()" in sources[paths[3]]
-    assert "*hierarchy_.load_balance" in sources[paths[4]]
-    assert "bp.mesh.load_balance->distribute" in sources[paths[5]]
+    assert "load_balance_->decide_rebalance(" in sources[paths[2]]
 
 
 def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():
     """Prepared field-solver façades own the supported solve/consumption boundary."""
     manifest = packaging.read_manifest(ROOT)
     raw_engines = {
+        PurePosixPath("pops/numerics/elliptic/amr/composite_fac_poisson.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/composite_fac_nlevel.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/composite_fac_poisson.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/geometric_mg.hpp"),
@@ -105,13 +100,10 @@ def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():
     geometric_mg = (
         ROOT / "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
     ).read_text(encoding="utf-8")
-    robust_solve = geometric_mg.index("int solve_robust(")
-    assert geometric_mg.rfind("private:", 0, robust_solve) > geometric_mg.rfind(
-        "public:", 0, robust_solve
-    )
+    assert "solve_robust" not in geometric_mg
     assert (
         PurePosixPath("pops/validation/numerics/geometric_mg.hpp")
-        in manifest.test_only
+        not in manifest.test_only
     )
 
 
@@ -283,47 +275,50 @@ def _compile_staged_root(
     name: str,
     roots: tuple[str, ...],
 ) -> None:
-    source = temporary / f"{name}.cpp"
-    depfile = temporary / f"{name}.d"
-    source.write_text(
-        "".join(f"#include <{header}>\n" for header in roots)
-        + "int main() { return 0; }\n",
-        encoding="utf-8",
-    )
     environment = os.environ.copy()
     for variable in ("CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH", "POPS_INCLUDE"):
         environment.pop(variable, None)
-    command = [
-        *compiler,
-        "-std=c++20",
-        "-fsyntax-only",
-        "-DPOPS_HAS_KOKKOS",
-        # A configured Kokkos-OpenMP header checks _OPENMP even for syntax-only compilation.
-        "-D_OPENMP=201511",
-        "-I",
-        str(wheel_include),
-        "-isystem",
-        str(kokkos_include),
-        "-MMD",
-        "-MF",
-        str(depfile),
-        str(source),
-    ]
-    result = subprocess.run(
-        command,
-        cwd=temporary,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    assert result.returncode == 0, (
-        f"{name} staged generated-loader root did not compile:\n"
-        f"command: {' '.join(command)}\n{result.stdout}\n{result.stderr}"
-    )
-    dependencies = depfile.read_text(encoding="utf-8", errors="replace")
-    assert str((ROOT / "include").resolve()) not in dependencies
+    for native_dimension in (1, 2, 3):
+        specialization = f"{name}_dim{native_dimension}"
+        source = temporary / f"{specialization}.cpp"
+        depfile = temporary / f"{specialization}.d"
+        source.write_text(
+            "".join(f"#include <{header}>\n" for header in roots)
+            + "int main() { return 0; }\n",
+            encoding="utf-8",
+        )
+        command = [
+            *compiler,
+            "-std=c++20",
+            "-fsyntax-only",
+            "-DPOPS_HAS_KOKKOS",
+            f"-DPOPS_NATIVE_DIM={native_dimension}",
+            # A configured Kokkos-OpenMP header checks _OPENMP even for syntax-only compilation.
+            "-D_OPENMP=201511",
+            "-I",
+            str(wheel_include),
+            "-isystem",
+            str(kokkos_include),
+            "-MMD",
+            "-MF",
+            str(depfile),
+            str(source),
+        ]
+        result = subprocess.run(
+            command,
+            cwd=temporary,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"{specialization} staged generated-loader root did not compile:\n"
+            f"command: {' '.join(command)}\n{result.stdout}\n{result.stderr}"
+        )
+        dependencies = depfile.read_text(encoding="utf-8", errors="replace")
+        assert str((ROOT / "include").resolve()) not in dependencies
 
 
 def test_wheel_style_staged_headers_compile_system_and_amr_generated_roots(tmp_path):

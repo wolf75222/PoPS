@@ -14,7 +14,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableRole, VariableSet: Density-role resolution
-#include <pops/mesh/storage/fab2d.hpp>    // ConstArray4: face-state source cell read
+#include <pops/mesh/storage/field_view.hpp>
 
 #include <stdexcept>  // positivity_comp: model without Density role -> clear error
 
@@ -24,7 +24,7 @@ namespace pops {
 /// (vacuum-robust variant of the Zhang & Shu scaling, JCP 2010).
 ///
 /// If component @p pos_comp (Density role) of the face state @p s falls below @p floor, the WHOLE
-/// face state is replaced by the average of its SOURCE cell u(i,j,.) (locally zero slope).
+/// face state is replaced by the average of its source cell (locally zero slope).
 /// WHY not the paper's colinear theta-scaling (s <- ubar + theta (s - ubar), theta such that
 /// rho_face = floor): in CONSERVATIVE variables at the edge of a QUASI-VACUUM (a ~1e-6 background under a
 /// ~1e6 top-hat contrast), it sets rho_face = floor while leaving a face momentum O(average) -> the
@@ -38,15 +38,16 @@ namespace pops {
 /// undershoots at the top-hat jump with 1e6 contrast -> negative face rho -> 1/rho and the Lorentz
 /// source detonate -> NaN (positivity-fallback provenance: docs/validation/HEADER_PROVENANCE.md).
 /// POINTWISE device-clean function. POPS_HD.
-template <class Model>
-POPS_HD inline void zhang_shu_scale(typename Model::State& s, const ConstArray4& u, int i, int j,
-                                    Real floor, int pos_comp) {
+template <class Model, int Dim>
+POPS_HD inline void zhang_shu_scale(typename Model::State& s,
+                                    const FieldView<const Real, Dim>& state,
+                                    const Index<Dim>& source_cell, Real floor, int pos_comp) {
   if (!(floor > Real(0)))
     return;  // strict opt-in: floor <= 0 -> no effect
   if (!(s[pos_comp] < floor))
     return;  // face already above the floor
   for (int c = 0; c < Model::n_vars; ++c)
-    s[c] = u(i, j, c);  // order-1 fallback: face = average
+    s[c] = state(source_cell, c);  // order-1 fallback: face = average
 }
 
 namespace detail {

@@ -3,14 +3,18 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.analytic import angle, between, param, radius, sin, where, x
+from pops.analytic import angle, between, param, radius, sin, time, where, x
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.model import BindSchema
 from pops.model.resolved_bindings import ResolvedBindings
 from pops.params import ConstParam, RuntimeParam
 from pops.runtime._analytic_expression_lowering import lower_analytic_components
-from pops.runtime._initial_source_lowering import native_binary64, validate_initial_source
+from pops.runtime._initial_source_lowering import (
+    native_binary64,
+    ranked_gaussian_center,
+    validate_initial_source,
+)
 
 
 def _profile():
@@ -133,6 +137,30 @@ def test_parameter_lowering_rejects_a_foreign_authenticated_schema() -> None:
             [expression.to_data()], frame_id=frame.canonical_id, bindings=bindings)
 
 
+def test_time_lowers_only_for_the_exact_consuming_clock() -> None:
+    frame = Rectangle("time-domain", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    program = pops.Program("analytic-lowering-time")
+    expression = x(frame) + 2.0 * time(program.clock)
+
+    ((opcodes, literals),) = lower_analytic_components(
+        [expression.to_data()],
+        frame_id=frame.canonical_id,
+        time_clock_id=program.clock.qualified_id,
+    )
+    assert opcodes == ("x", "constant", "input", "mul", "add")
+    assert literals[2] == 0.0
+
+    with pytest.raises(NotImplementedError, match="exact physical-time Clock"):
+        lower_analytic_components([expression.to_data()], frame_id=frame.canonical_id)
+    other = pops.Program("analytic-lowering-other-time")
+    with pytest.raises(ValueError, match="another logical Clock"):
+        lower_analytic_components(
+            [expression.to_data()],
+            frame_id=frame.canonical_id,
+            time_clock_id=other.clock.qualified_id,
+        )
+
+
 @pytest.mark.parametrize(
     "source",
     (
@@ -174,3 +202,27 @@ def test_native_initial_routes_uniformly_reject_additional_schema_keys(source):
     forged = {**canonical, "unexpected": "must-not-be-ignored"}
     with pytest.raises(TypeError, match="requires exactly keys"):
         validate_initial_source(forged, where="test initial source")
+
+
+@pytest.mark.parametrize("names", (("x",), ("x", "y"), ("x", "y", "z")))
+def test_gaussian_center_preserves_exact_inferred_rank(names):
+    source = {
+        "center": {
+            name: {"binary64": (0.125 * (index + 1)).hex()}
+            for index, name in enumerate(names)
+        }
+    }
+    assert ranked_gaussian_center(source, where="ranked Gaussian") == tuple(
+        0.125 * (index + 1) for index in range(len(names))
+    )
+
+
+def test_gaussian_center_rejects_non_cartesian_axis_gaps():
+    source = {
+        "center": {
+            "x": {"binary64": (0.25).hex()},
+            "z": {"binary64": (0.75).hex()},
+        }
+    }
+    with pytest.raises(TypeError, match="exact Cartesian axis prefix"):
+        ranked_gaussian_center(source, where="ranked Gaussian")

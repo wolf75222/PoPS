@@ -21,9 +21,6 @@ On verifie :
      cutcell, via set_disc_domain / set_geometry_mode) -> erreur explicite dans LES DEUX ORDRES
      (cache puis disque, disque puis cache). Le cache n'est cable que sur l'avance cartesienne pleine.
 
-NOTE : la PREUVE D'ENGAGEMENT (le cache appelle wave_speeds par cellule, pas par face) vit dans le
-test C++ tests/cpp/integration/runtime/test_wave_speed_cache_engagement.cpp (compteur de wave_speeds, calls_on < calls_off) :
-les verifs ON==OFF ci-dessous reussiraient meme si le cache devenait un no-op silencieux.
 Modele natif IsothermalFlux (expose wave_speeds) : aucun compilateur requis.
 """
 from pops.numerics.reconstruction import FirstOrder
@@ -66,12 +63,12 @@ def make_sim(cache, riemann=None, limiter=None, time=None):
     riemann = riemann if riemann is not None else HLL()
     limiter = limiter if limiter is not None else FirstOrder()
     sim = System(n=N, L=1.0, periodicity=(True, True))
-    sim.add_block("ions",
-                  Model(state=FluidState("isothermal", cs2=CS2),
-                        transport=IsothermalFlux(), source=NoSource(),
-                        elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
-                  spatial=Spatial(limiter=limiter, flux=riemann, wave_speed_cache=cache),
-                  time=time if time is not None else Explicit())
+    sim.add_equation("ions",
+                     Model(state=FluidState("isothermal", cs2=CS2),
+                           transport=IsothermalFlux(), source=NoSource(),
+                           elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
+                     spatial=Spatial(limiter=limiter, flux=riemann, wave_speed_cache=cache),
+                     time=time if time is not None else Explicit())
     return sim
 
 
@@ -98,12 +95,12 @@ chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'e
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
 s_def = System(n=N, L=1.0, periodicity=(True, True))
-s_def.add_block("ions",
-                Model(state=FluidState("isothermal", cs2=CS2),
-                      transport=IsothermalFlux(), source=NoSource(),
-                      elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
-                spatial=Spatial(limiter=FirstOrder(), flux=HLL()),
-                time=Explicit())
+s_def.add_equation("ions",
+                   Model(state=FluidState("isothermal", cs2=CS2),
+                         transport=IsothermalFlux(), source=NoSource(),
+                         elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
+                   spatial=Spatial(limiter=FirstOrder(), flux=HLL()),
+                   time=Explicit())
 s_def.set_state("ions", U0)
 install_forward_euler_program(s_def)
 for _ in range(20):
@@ -136,13 +133,13 @@ def make_disc_sim_then_mode():
 def make_mode_then_cache():
     sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=CutCell()))
-    sim.add_block("ions",
-                  Model(state=FluidState("isothermal", cs2=CS2),
-                        transport=IsothermalFlux(), source=NoSource(),
-                        elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
-                  spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
-                                  wave_speed_cache=True),  # doit lever (mode disque actif)
-                  time=Explicit())
+    sim.add_equation("ions",
+                     Model(state=FluidState("isothermal", cs2=CS2),
+                           transport=IsothermalFlux(), source=NoSource(),
+                           elliptic=BackgroundDensity(alpha=1.0, n0=1.0)),
+                     spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
+                                     wave_speed_cache=True),  # doit lever (mode disque actif)
+                     time=Explicit())
 
 
 msg = err_msg(make_disc_sim_then_mode)
@@ -150,10 +147,10 @@ chk("wave_speed_cache" in msg and ("staircase" in msg or "disque" in msg),
     f"cache puis set_disc_domain(staircase) rejete ({msg[:60]}...)")
 msg = err_msg(make_mode_then_cache)
 chk("wave_speed_cache" in msg and ("cutcell" in msg or "staircase" in msg),
-    f"set_disc_domain(cutcell) puis add_block(cache) rejete ({msg[:60]}...)")
+    f"set_disc_domain(cutcell) puis add_equation(cache) rejete ({msg[:60]}...)")
 
 print("== (6) garde backend compile : cache + add_equation(modele .so) -> erreur ==")
-# Le cache n'est cable que sur le chemin natif compose (add_block). Le package de production ne
+# Le cache n'est cable que sur le chemin natif compose de add_equation. Le package de production ne
 # transporte pas le flag : il serait ignore en silence. On verifie le rejet avant le dlopen.
 from pops.codegen.loader import CompiledModel  # noqa: E402
 
@@ -161,7 +158,7 @@ fake = CompiledModel(so_path="/inexistant.so", backend="production",
                      cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"],
                      n_vars=1, gamma=None, n_aux=0, params={}, caps={}, abi_key="k",
                      model_hash="h", cxx="c++", std="c++20", wave_speeds=True,
-                     wave_speed_provider="explicit_pair")
+                     wave_speed_provider="explicit_pair", native_dimension=2)
 
 def add_eq_cache():
     s = System(n=16, L=1.0, periodicity=(True, True))

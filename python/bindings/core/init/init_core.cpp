@@ -4,7 +4,6 @@
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
 #endif
 
-#include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
@@ -244,14 +243,14 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
       throw std::runtime_error(
           "serial RuntimeBackendManifest requested while native MPI_COMM_WORLD is active");
     }
-    evidence = "pops.native.2d-float64.serial.v2";
+    evidence = "pops.native." + std::to_string(pops::kNativeDimension) + "d-float64.serial.v2";
   } else if (communicator == "MPI_COMM_WORLD") {
     if (!runtime.mpi_compiled || !runtime.mpi_active || runtime.communicator != "MPI_COMM_WORLD") {
       throw std::runtime_error(
           "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
           "MPI world launch");
     }
-    evidence = "pops.native.2d-float64.mpi-world.v2";
+    evidence = "pops.native." + std::to_string(pops::kNativeDimension) + "d-float64.mpi-world.v2";
   } else {
     throw std::invalid_argument("runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
   }
@@ -568,9 +567,21 @@ void init_core(py::module_& m) {
       .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
       .def_readonly("step_norm", &pops::SolveReport::step_norm)
       .def_readonly("condition_evidence", &pops::SolveReport::condition_evidence)
-      .def_readonly("failed_i", &pops::SolveReport::failed_i)
-      .def_readonly("failed_j", &pops::SolveReport::failed_j)
-      .def_readonly("failed_component", &pops::SolveReport::failed_component)
+      .def_property_readonly("failure_index",
+                             [](const pops::SolveReport& report) -> py::object {
+                               if (!report.failure.found)
+                                 return py::none();
+                               py::tuple coordinates(report.failure.rank);
+                               for (int axis = 0; axis < report.failure.rank; ++axis)
+                                 coordinates[axis] =
+                                     report.failure.index[static_cast<std::size_t>(axis)];
+                               return coordinates;
+                             })
+      .def_property_readonly("failure_component",
+                             [](const pops::SolveReport& report) -> py::object {
+                               return report.failure.found ? py::cast(report.failure.component)
+                                                           : py::none();
+                             })
       .def_property_readonly("status",
                              [](const pops::SolveReport& report) { return report.status_name(); })
       .def_property_readonly("action",
@@ -603,6 +614,7 @@ void init_core(py::module_& m) {
   // key (which itself always encodes __cplusplus). 202002L -> 20, beyond -> 23.
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
+  m.attr("__native_dimension__") = pops::kNativeDimension;
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
@@ -725,7 +737,7 @@ void init_core(py::module_& m) {
 
   m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
         py::arg("target"), py::arg("communicator"),
-        "Explicit 2D/float64 RuntimeBackendManifest derived from the installed Kokkos "
+        "Explicit native-rank/float64 RuntimeBackendManifest derived from the installed Kokkos "
         "DefaultExecutionSpace/SharedSpace and serial or active exact MPI_COMM_WORLD route. "
         "Custom communicators are rejected.");
 
@@ -740,26 +752,10 @@ void init_core(py::module_& m) {
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
 
-  // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
-  // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
-  // (AUX_NAMED_MAX / AUX_NAMED_BASE / AUX_CANONICAL in dsl.py) cannot SILENTLY drift from C++:
-  // test_capabilities.py asserts they match. kAuxMaxExtra is the only remaining compile-time aux
-  // limit and is now declarative + introspectable here.
-  m.attr("__aux_base_comps__") = static_cast<int>(pops::kAuxBaseComps);
-  m.attr("__aux_named_base__") = static_cast<int>(pops::kAuxNamedBase);
-  m.attr("__aux_max_extra__") = static_cast<int>(pops::kAuxMaxExtra);
-  m.attr("__aux_max_comps__") = static_cast<int>(pops::kAuxMaxComps);
   // Runtime-param capacity (ADC-610): the SINGLE C++ source of kMaxRuntimeParams
   // (pops/runtime/config/runtime_params.hpp). The codegen guard reads this so the Python literal
   // fallback (physics/aux.py) cannot SILENTLY drift from the fixed-size device array bound.
   m.attr("__max_runtime_params__") = static_cast<int>(pops::kMaxRuntimeParams);
-  {
-    py::dict canon;
-    for (const auto& [name, comp] : pops::kAuxCanonicalNames)
-      canon[py::str(std::string(name))] = static_cast<int>(comp);
-    m.attr("__aux_canonical__") = canon;
-  }
-
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
   // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
   // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
@@ -775,26 +771,49 @@ void init_core(py::module_& m) {
       },
       "True if the module's Kokkos runtime is already initialized.");
 
-  py::class_<SystemConfig>(m, "SystemConfig")
+  using NativeSystemConfig = SystemConfig<kNativeDimension>;
+  py::class_<NativeSystemConfig>(m, "SystemConfig")
       .def(py::init<>())
-      .def_readwrite("n", &SystemConfig::n)
-      .def_readwrite("L", &SystemConfig::L)
+      .def_property(
+          "shape",
+          [](const NativeSystemConfig& config) { return ranked_extent_to_python(config.shape); },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.shape = ranked_extent_from_python<kNativeDimension>(value, "SystemConfig.shape");
+          })
+      .def_property(
+          "lower",
+          [](const NativeSystemConfig& config) {
+            return ranked_real_vector_to_python(config.lower);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.lower =
+                ranked_real_vector_from_python<kNativeDimension>(value, "SystemConfig.lower");
+          })
+      .def_property(
+          "upper",
+          [](const NativeSystemConfig& config) {
+            return ranked_real_vector_to_python(config.upper);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.upper =
+                ranked_real_vector_from_python<kNativeDimension>(value, "SystemConfig.upper");
+          })
       .def_property(
           "periodicity",
-          [](const SystemConfig& config) { return periodicity_to_python(config.periodicity); },
-          [](SystemConfig& config, const py::handle& value) {
-            config.periodicity = periodicity_from_python(value, "SystemConfig");
+          [](const NativeSystemConfig& config) {
+            return ranked_periodicity_to_python(config.periodicity);
+          },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.periodicity =
+                ranked_periodicity_from_python<kNativeDimension>(value, "SystemConfig");
           })
-      // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
-      // "polar" = global ring carried by pops.mesh.PolarMesh. Polar fields ignored for cartesian.
-      .def_readwrite("geometry", &SystemConfig::geometry)
-      .def_readwrite("nr", &SystemConfig::nr)
-      .def_readwrite("ntheta", &SystemConfig::ntheta)
-      .def_readwrite("r_min", &SystemConfig::r_min)
-      .def_readwrite("r_max", &SystemConfig::r_max)
-      .def_readwrite("theta_boxes", &SystemConfig::theta_boxes)
-      .def_readwrite("xlo", &SystemConfig::xlo)
-      .def_readwrite("ylo", &SystemConfig::ylo);
+      .def_property(
+          "boxes",
+          [](const NativeSystemConfig& config) { return ranked_boxes_to_python(config.boxes); },
+          [](NativeSystemConfig& config, const py::handle& value) {
+            config.boxes = ranked_boxes_from_python<kNativeDimension>(value, "SystemConfig.boxes");
+          })
+      .def_readwrite("coordinate_system", &NativeSystemConfig::coordinate_system);
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
   // No named scenario; the private Python ModelSpec composer fills these engine fields.

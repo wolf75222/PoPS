@@ -36,10 +36,10 @@ def _euler(custom_pressure=None):
     u, v = mx / rho, my / rho
     d.conservative_from([rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)])
     d._m.set_primitive_state(rho, u, v, p)
-    d.flux([mx, mx * u + p, mx * v, (E + p) * u],
-           [my, my * u, my * v + p, (E + p) * v])
+    d.flux(x=[mx, mx * u + p, mx * v, (E + p) * u],
+           y=[my, my * u, my * v + p, (E + p) * v])
     c = sqrt(g * p / rho)
-    d.eigenvalues([u - c, u, u, u + c], [v - c, v, v, v + c])
+    d.eigenvalues(x=[u - c, u, u, u + c], y=[v - c, v, v, v + c])
     kw = {}
     if custom_pressure is not None:
         kw["pressure"] = custom_pressure(m, U)
@@ -116,8 +116,8 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     u, v = mx / rho, my / rho
     d.conservative_from([rho, rho * u, rho * v, E])
     d._m.set_primitive_state(rho, u, v, p)
-    d.flux([mx, mx, mx, mx], [my, my, my, my])
-    d.eigenvalues([u, u, u, u], [v, v, v, v])
+    d.flux(x=[mx, mx, mx, mx], y=[my, my, my, my])
+    d.eigenvalues(x=[u, u, u, u], y=[v, v, v, v])
     m.riemann("hllc", pressure=rho + Var("B_z", "aux"))   # references an undeclared capability
     with pytest.raises(ValueError, match="undeclared quantity"):
         d._m.emit_cpp_brick(name="EulerGen")

@@ -1,362 +1,294 @@
 /// @file
-/// @brief Exact selected-level AMR reductions on native Kokkos storage.
+/// @brief Exact-mask composite reductions over compile-time-ranked AMR fields.
 
 #pragma once
 
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
-#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <limits>
+#include <span>
 #include <stdexcept>
-#include <string>
-#include <utility>
-#include <vector>
 
 namespace pops::runtime::amr {
 
+/// One level participating in a composite reduction.
+///
+/// `active` is an authenticated one-component mask on exactly the same layout and ownership as
+/// `values`: one selects a valid composite cell and zero hides a cell shadowed by a finer level.
+/// Reconstructing coverage from boxes inside a reduction would create a second topology authority,
+/// so the prepared AMR owner must supply this mask explicitly.
+template <int Dim, class MemorySpace>
+struct CompositeLevelView {
+  const MultiFab<Dim, MemorySpace>* values = nullptr;
+  const MultiFab<Dim, MemorySpace>* active = nullptr;
+  std::array<Real, Dim> cell_extent{};
+  /// Optional exact relative cell measure.  Staircase EB supplies its binary active mask and
+  /// cut-cell EB supplies kappa.  Hierarchy coverage remains the independent binary `active`
+  /// authority, so refinement shadowing and physical volume cannot overwrite each other.
+  const MultiFab<Dim, MemorySpace>* relative_measure = nullptr;
+};
+
+enum class CompositeReductionKind : unsigned char {
+  Sum,
+  AbsoluteSum,
+  SumSquares,
+  Minimum,
+  Maximum,
+  AbsoluteMaximum,
+};
+
+struct CompositeReductionResult {
+  Real value = Real(0);
+  Real active_measure = Real(0);
+};
+
 namespace composite_detail {
 
-struct CompositeLevelView {
-  const MultiFab* values = nullptr;
-  Real dx = Real(0);
-  Real dy = Real(0);
-};
+template <int Dim>
+struct InvalidMaskValue {
+  FieldView<const Real, Dim> active{};
 
-struct SetCompositeMask {
-  Array4 mask;
-  Real value;
-  POPS_HD void operator()(int i, int j) const { mask(i, j, 0) = value; }
-};
-
-enum class CompositeSumKind : int { Sum, AbsSum, SumSq };
-
-struct CompositeSum {
-  ConstArray4 values;
-  ConstArray4 mask;
-  int component;
-  CompositeSumKind kind;
-  POPS_HD void operator()(int i, int j, Real& result) const {
-    if (mask(i, j, 0) == Real(0))
-      return;
-    const Real value = values(i, j, component);
-    if (kind == CompositeSumKind::Sum)
-      result += value;
-    else if (kind == CompositeSumKind::AbsSum)
-      result += value < Real(0) ? -value : value;
-    else
-      result += value * value;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real value = active(index);
+    return value == Real(0) || value == Real(1) ? Real(0) : Real(1);
   }
 };
 
-struct CompositeDifferenceSumSq {
-  ConstArray4 current;
-  ConstArray4 previous;
-  ConstArray4 mask;
-  int component;
-  POPS_HD void operator()(int i, int j, Real& result) const {
-    if (mask(i, j, 0) == Real(0))
-      return;
-    const Real difference = current(i, j, component) - previous(i, j, component);
-    result += difference * difference;
+template <int Dim>
+struct InvalidSelectedValue {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
+  int component = 0;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
+      return Real(0);
+    const Real value = values(index, component);
+    return value <= std::numeric_limits<Real>::max() && value >= std::numeric_limits<Real>::lowest()
+               ? Real(0)
+               : Real(1);
   }
 };
 
-struct CompositeMin {
-  ConstArray4 values;
-  ConstArray4 mask;
-  int component;
-  POPS_HD void operator()(int i, int j, Real& result) const {
-    if (mask(i, j, 0) == Real(0))
-      return;
-    const Real value = values(i, j, component);
-    if (!(value <= std::numeric_limits<Real>::max() &&
-          value >= std::numeric_limits<Real>::lowest())) {
-      result = -std::numeric_limits<Real>::infinity();
-      return;
-    }
-    if (value < result)
-      result = value;
+template <int Dim>
+struct InvalidRelativeMeasure {
+  FieldView<const Real, Dim> relative{};
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real value = relative(index);
+    return value >= Real(0) && value <= Real(1) && Kokkos::isfinite(value) ? Real(0) : Real(1);
   }
 };
 
-struct CompositeMax {
-  ConstArray4 values;
-  ConstArray4 mask;
-  int component;
-  bool absolute;
-  POPS_HD void operator()(int i, int j, Real& result) const {
-    if (mask(i, j, 0) == Real(0))
-      return;
-    const Real value = values(i, j, component);
-    if (!(value <= std::numeric_limits<Real>::max() &&
-          value >= std::numeric_limits<Real>::lowest())) {
-      result = std::numeric_limits<Real>::infinity();
-      return;
-    }
-    const Real selected = absolute && value < Real(0) ? -value : value;
-    if (selected > result)
-      result = selected;
+template <int Dim>
+struct ActiveCell {
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return active(index) == Real(1) ? (has_relative ? relative(index) : Real(1)) : Real(0);
   }
 };
 
-inline std::vector<int> selected_levels(int count, const std::vector<int>& requested) {
-  if (count < 1)
-    throw std::runtime_error("composite_reduce: AMR hierarchy has no active level");
-  if (requested.empty()) {
-    std::vector<int> all(static_cast<std::size_t>(count));
-    for (int level = 0; level < count; ++level)
-      all[static_cast<std::size_t>(level)] = level;
-    return all;
+template <int Dim>
+struct SumValue {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
+  int component = 0;
+  CompositeReductionKind kind = CompositeReductionKind::Sum;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
+      return Real(0);
+    const Real value = values(index, component);
+    const Real weight = has_relative ? relative(index) : Real(1);
+    if (kind == CompositeReductionKind::AbsoluteSum)
+      return (value < Real(0) ? -value : value) * weight;
+    if (kind == CompositeReductionKind::SumSquares)
+      return value * value * weight;
+    return value * weight;
   }
-  int previous = -1;
-  for (const int level : requested) {
-    if (level < 0 || level >= count)
-      throw std::out_of_range("composite_reduce: selected AMR level is out of bounds");
-    if (level <= previous)
+};
+
+template <int Dim>
+struct ExtremumValue {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> relative{};
+  bool has_relative = false;
+  int component = 0;
+  bool absolute = false;
+  bool negate = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index) == Real(0) || (has_relative && relative(index) == Real(0)))
+      return std::numeric_limits<Real>::lowest();
+    Real value = values(index, component);
+    if (absolute && value < Real(0))
+      value = -value;
+    return negate ? -value : value;
+  }
+};
+
+template <int Dim, class MemorySpace>
+void require_level_shape(const CompositeLevelView<Dim, MemorySpace>& level, int component) {
+  if (level.values == nullptr || level.active == nullptr)
+    throw std::invalid_argument("composite reduction requires values and an active-cell mask");
+  const auto& values = *level.values;
+  const auto& active = *level.active;
+  if (component < 0 || component >= values.ncomp())
+    throw std::out_of_range("composite reduction component is outside the level field");
+  if (active.ncomp() != 1 || values.layout() != active.layout() ||
+      values.distribution() != active.distribution() ||
+      values.local_rank() != active.local_rank() || values.local_size() != active.local_size())
+    throw std::invalid_argument(
+        "composite reduction mask does not authenticate the field layout and ownership");
+  if (level.relative_measure != nullptr) {
+    const auto& relative = *level.relative_measure;
+    if (relative.ncomp() != 1 || values.layout() != relative.layout() ||
+        values.distribution() != relative.distribution() ||
+        values.local_rank() != relative.local_rank() ||
+        values.local_size() != relative.local_size())
       throw std::invalid_argument(
-          "composite_reduce: selected AMR levels must be strictly increasing and unique");
-    previous = level;
+          "composite reduction relative measure does not authenticate the field ownership");
   }
-  return requested;
+  for (int axis = 0; axis < Dim; ++axis)
+    if (!(level.cell_extent[static_cast<std::size_t>(axis)] > Real(0)) ||
+        !std::isfinite(level.cell_extent[static_cast<std::size_t>(axis)]))
+      throw std::invalid_argument("composite reduction cell extents must be finite and positive");
 }
 
-inline int adjacent_ratio(const CompositeLevelView& coarse, const CompositeLevelView& fine) {
-  const double rx = static_cast<double>(coarse.dx) / static_cast<double>(fine.dx);
-  const double ry = static_cast<double>(coarse.dy) / static_cast<double>(fine.dy);
-  const int ratio = static_cast<int>(std::llround(rx));
-  const double tolerance =
-      64.0 * std::numeric_limits<double>::epsilon() * std::max({1.0, std::abs(rx), std::abs(ry)});
-  if (!std::isfinite(rx) || !std::isfinite(ry) || ratio < 2 || std::abs(rx - ratio) > tolerance ||
-      std::abs(ry - ratio) > tolerance)
-    throw std::runtime_error(
-        "composite_reduce: adjacent AMR levels lack one isotropic integer refinement ratio");
-  return ratio;
+template <int Dim, class MemorySpace>
+bool contributes_on_this_rank(const MultiFab<Dim, MemorySpace>& values) {
+  return !values.distribution().replicated() ||
+         values.local_rank() == values.rank_space().coordinate(0);
 }
 
-inline int ratio_between(const std::vector<CompositeLevelView>& hierarchy, int coarse, int fine) {
-  int ratio = 1;
-  for (int level = coarse; level < fine; ++level) {
-    const int next = adjacent_ratio(hierarchy[static_cast<std::size_t>(level)],
-                                    hierarchy[static_cast<std::size_t>(level + 1)]);
-    if (ratio > std::numeric_limits<int>::max() / next)
-      throw std::overflow_error("composite_reduce: cumulative AMR refinement ratio overflows int");
-    ratio *= next;
-  }
-  return ratio;
+template <std::size_t Dim>
+Real cell_measure(const std::array<Real, Dim>& extent) {
+  Real measure = Real(1);
+  for (std::size_t axis = 0; axis < Dim; ++axis)
+    measure *= extent[axis];
+  return measure;
 }
 
-inline MultiFab active_mask(const std::vector<CompositeLevelView>& hierarchy, int level,
-                            int next_selected) {
-  const MultiFab& values = *hierarchy[static_cast<std::size_t>(level)].values;
-  MultiFab mask(values.box_array(), values.dmap(), 1, 0);
-  for (int local = 0; local < mask.local_size(); ++local)
-    for_each_cell(mask.box(local), SetCompositeMask{mask.fab(local).array(), Real(1)});
-  if (next_selected < 0)
-    return mask;
-
-  const int ratio = ratio_between(hierarchy, level, next_selected);
-  const BoxArray& finer = hierarchy[static_cast<std::size_t>(next_selected)].values->box_array();
-  for (int local = 0; local < mask.local_size(); ++local) {
-    const Box2D valid = mask.box(local);
-    const Array4 active = mask.fab(local).array();
-    for (const Box2D& fine_box : finer.boxes()) {
-      const Box2D intersection = valid.intersect(fine_box.coarsen(ratio));
-      if (!intersection.empty())
-        for_each_cell(intersection, SetCompositeMask{active, Real(0)});
-    }
-  }
-  return mask;
-}
-
-inline Real local_sum(const MultiFab& values, const MultiFab& mask, int component,
-                      CompositeSumKind kind) {
-  Real result = 0;
-  for (int local = 0; local < values.local_size(); ++local)
-    result += reduce_sum_cell(values.box(local),
-                              CompositeSum{values.fab(local).const_array(),
-                                           mask.fab(local).const_array(), component, kind});
-  return result;
-}
-
-inline Real local_difference_sum_sq(const MultiFab& current, const MultiFab& previous,
-                                    const MultiFab& mask) {
-  Real result = 0;
-  for (int local = 0; local < current.local_size(); ++local)
-    for (int component = 0; component < current.ncomp(); ++component)
-      result += reduce_sum_cell(current.box(local),
-                                CompositeDifferenceSumSq{current.fab(local).const_array(),
-                                                         previous.fab(local).const_array(),
-                                                         mask.fab(local).const_array(), component});
-  return result;
-}
-
-inline Real local_min(const MultiFab& values, const MultiFab& mask, int component) {
-  Real result = std::numeric_limits<Real>::infinity();
-  for (int local = 0; local < values.local_size(); ++local)
-    result = std::min(
-        result,
-        reduce_min_cell(values.box(local), CompositeMin{values.fab(local).const_array(),
-                                                        mask.fab(local).const_array(), component}));
-  return result;
-}
-
-inline Real local_max(const MultiFab& values, const MultiFab& mask, int component, bool absolute) {
-  Real result = absolute ? Real(0) : -std::numeric_limits<Real>::infinity();
-  for (int local = 0; local < values.local_size(); ++local)
-    result = std::max(
-        result, reduce_max_cell(values.box(local),
-                                CompositeMax{values.fab(local).const_array(),
-                                             mask.fab(local).const_array(), component, absolute}));
-  return result;
+inline bool is_sum_kind(CompositeReductionKind kind) {
+  return kind == CompositeReductionKind::Sum || kind == CompositeReductionKind::AbsoluteSum ||
+         kind == CompositeReductionKind::SumSquares;
 }
 
 }  // namespace composite_detail
 
-inline double composite_reduce_views(
-    const std::vector<composite_detail::CompositeLevelView>& hierarchy, bool replicated_coarse,
-    const std::string& kind, int component, const std::vector<int>& requested_levels = {}) {
-  if (hierarchy.empty())
-    throw std::runtime_error("composite_reduce: AMR hierarchy has no active level");
-  for (const auto& level : hierarchy)
-    if (level.values == nullptr || !std::isfinite(static_cast<double>(level.dx)) ||
-        !std::isfinite(static_cast<double>(level.dy)) || level.dx <= Real(0) || level.dy <= Real(0))
-      throw std::invalid_argument(
-          "composite_reduce: every level requires native storage and positive finite metrics");
+/// Reduce an exact prepared composite view on the supplied execution lane.
+///
+/// Replicated levels contribute from the canonical process coordinate only; distributed levels
+/// contribute all local owners.  The final collective therefore counts every physical cell once.
+template <int Dim, class MemorySpace>
+CompositeReductionResult composite_reduce(
+    std::span<const CompositeLevelView<Dim, MemorySpace>> levels, int component,
+    CompositeReductionKind kind, const ExecutionLane& lane = ExecutionLane::world()) {
+  if (levels.empty())
+    throw std::invalid_argument("composite reduction requires at least one prepared level");
 
-  const std::vector<int> levels =
-      composite_detail::selected_levels(static_cast<int>(hierarchy.size()), requested_levels);
-  const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
-  const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
-  const bool additive = base == "sum" || base == "abs_sum" || base == "sum_sq";
-  if (!additive && base != "min" && base != "max" && base != "abs_max")
-    throw std::invalid_argument(
-        "composite_reduce: unknown kind '" + kind +
-        "' (expected sum/min/max/abs_sum/sum_sq/abs_max and optional _all)");
-  const int components = hierarchy.front().values->ncomp();
-  if (!full && (component < 0 || component >= components))
-    throw std::out_of_range("composite_reduce: selected component is out of bounds");
-  for (const auto& level : hierarchy)
-    if (level.values->ncomp() != components)
-      throw std::runtime_error("composite_reduce: AMR levels disagree on component count");
+  Real local_selected =
+      composite_detail::is_sum_kind(kind) ? Real(0) : std::numeric_limits<Real>::lowest();
+  Real local_active_measure = Real(0);
+  Real local_invalid = Real(0);
 
-  double result = additive ? 0.0
-                           : (base == "min" ? std::numeric_limits<double>::infinity()
-                                            : -std::numeric_limits<double>::infinity());
-  if (base == "abs_max")
-    result = 0.0;
-  for (std::size_t selected = 0; selected < levels.size(); ++selected) {
-    const int level = levels[selected];
-    const int next = selected + 1 < levels.size() ? levels[selected + 1] : -1;
-    const auto& entry = hierarchy[static_cast<std::size_t>(level)];
-    const MultiFab& values = *entry.values;
-    MultiFab mask = composite_detail::active_mask(hierarchy, level, next);
-    const int first_component = full ? 0 : component;
-    const int end_component = full ? components : component + 1;
-
-    if (additive) {
-      Real local = 0;
-      const composite_detail::CompositeSumKind sum_kind =
-          base == "sum" ? composite_detail::CompositeSumKind::Sum
-                        : (base == "abs_sum" ? composite_detail::CompositeSumKind::AbsSum
-                                             : composite_detail::CompositeSumKind::SumSq);
-      for (int current = first_component; current < end_component; ++current)
-        local += composite_detail::local_sum(values, mask, current, sum_kind);
-      const double global = level == 0 && replicated_coarse
-                                ? static_cast<double>(local)
-                                : all_reduce_sum(static_cast<double>(local));
-      result += static_cast<double>(entry.dx) * static_cast<double>(entry.dy) * global;
+  for (const auto& level : levels) {
+    composite_detail::require_level_shape(level, component);
+    const auto& values = *level.values;
+    const auto& active = *level.active;
+    if (!composite_detail::contributes_on_this_rank(values))
       continue;
+
+    Real level_active = Real(0);
+    Real level_selected =
+        composite_detail::is_sum_kind(kind) ? Real(0) : std::numeric_limits<Real>::lowest();
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      const Box<Dim>& cells = values.box(local);
+      const auto value_view = values.fab(local).view();
+      const auto active_view = active.fab(local).view();
+      const bool has_relative = level.relative_measure != nullptr;
+      const auto relative_view =
+          has_relative ? level.relative_measure->fab(local).view() : FieldView<const Real, Dim>{};
+      local_invalid = std::max(
+          local_invalid,
+          for_each_cell_reduce_max(cells, composite_detail::InvalidMaskValue<Dim>{active_view}));
+      local_invalid = std::max(
+          local_invalid,
+          for_each_cell_reduce_max(
+              cells, composite_detail::InvalidSelectedValue<Dim>{
+                         value_view, active_view, relative_view, has_relative, component}));
+      if (has_relative)
+        local_invalid =
+            std::max(local_invalid,
+                     for_each_cell_reduce_max(
+                         cells, composite_detail::InvalidRelativeMeasure<Dim>{relative_view}));
+      level_active += for_each_cell_reduce_sum(
+          cells, composite_detail::ActiveCell<Dim>{active_view, relative_view, has_relative});
+
+      if (composite_detail::is_sum_kind(kind)) {
+        level_selected += for_each_cell_reduce_sum(
+            cells, composite_detail::SumValue<Dim>{value_view, active_view, relative_view,
+                                                   has_relative, component, kind});
+      } else {
+        const bool absolute = kind == CompositeReductionKind::AbsoluteMaximum;
+        const bool negate = kind == CompositeReductionKind::Minimum;
+        level_selected = std::max(
+            level_selected,
+            for_each_cell_reduce_max(cells, composite_detail::ExtremumValue<Dim>{
+                                                value_view, active_view, relative_view,
+                                                has_relative, component, absolute, negate}));
+      }
     }
 
-    if (base == "min") {
-      Real local = std::numeric_limits<Real>::infinity();
-      for (int current = first_component; current < end_component; ++current)
-        local = std::min(local, composite_detail::local_min(values, mask, current));
-      result = std::min(result, all_reduce_min(static_cast<double>(local)));
-    } else {
-      const bool absolute = base == "abs_max";
-      Real local = absolute ? Real(0) : -std::numeric_limits<Real>::infinity();
-      for (int current = first_component; current < end_component; ++current)
-        local = std::max(local, composite_detail::local_max(values, mask, current, absolute));
-      result = std::max(result, all_reduce_max(static_cast<double>(local)));
-    }
+    const Real measure = composite_detail::cell_measure(level.cell_extent);
+    local_active_measure += level_active * measure;
+    if (composite_detail::is_sum_kind(kind))
+      local_selected += level_selected * measure;
+    else
+      local_selected = std::max(local_selected, level_selected);
   }
-  if (!std::isfinite(result))
-    throw std::runtime_error("composite_reduce: selected AMR levels contain no active cell");
+
+  if (all_reduce_max(local_invalid, lane) != Real(0))
+    throw std::runtime_error("composite reduction observed a non-binary mask or non-finite value");
+  const Real global_active_measure = all_reduce_sum(local_active_measure, lane);
+  if (!(global_active_measure > Real(0)) || !std::isfinite(global_active_measure))
+    throw std::runtime_error("composite reduction has no finite positive active measure");
+
+  Real global_value = Real(0);
+  if (composite_detail::is_sum_kind(kind)) {
+    global_value = all_reduce_sum(local_selected, lane);
+  } else {
+    global_value = all_reduce_max(local_selected, lane);
+    if (kind == CompositeReductionKind::Minimum)
+      global_value = -global_value;
+  }
+  if (!std::isfinite(global_value))
+    throw std::runtime_error("composite reduction result is not finite");
+  return {global_value, global_active_measure};
+}
+
+template <int Dim, class MemorySpace>
+CompositeReductionResult composite_l2_norm(
+    std::span<const CompositeLevelView<Dim, MemorySpace>> levels, int component,
+    const ExecutionLane& lane = ExecutionLane::world()) {
+  CompositeReductionResult result =
+      composite_reduce(levels, component, CompositeReductionKind::SumSquares, lane);
+  result.value = std::sqrt(result.value);
   return result;
-}
-
-/// Reduce exactly @p requested_levels. Empty keeps the low-level C++ all-level convention; the
-/// resolved Python DSL always supplies its explicit level tuple. Coarser selected levels are masked
-/// only by the next SELECTED finer level, so CoarseOnly, SelectedLevels, and AllLevels have distinct
-/// and predictable meanings. Every per-cell fold remains on Kokkos storage; only one scalar per level
-/// crosses the host/MPI boundary.
-inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
-                                      bool replicated_coarse, const std::string& kind,
-                                      int component,
-                                      const std::vector<int>& requested_levels = {}) {
-  std::vector<composite_detail::CompositeLevelView> views;
-  views.reserve(hierarchy.size());
-  for (const AmrLevelMP& level : hierarchy)
-    views.push_back({&level.U, level.dx, level.dy});
-  return composite_reduce_views(views, replicated_coarse, kind, component, requested_levels);
-}
-
-/// Volume-weighted L2 change over the visible composite AMR hierarchy. Covered coarse cells are
-/// excluded exactly like composite_reduce(sum_sq_all). A topology-changing step is reported as
-/// unavailable rather than comparing unrelated cells.
-inline double composite_difference_l2_levels(const std::vector<AmrLevelMP>& current,
-                                             const std::vector<AmrLevelMP>& previous,
-                                             bool replicated_coarse) {
-  if (current.size() != previous.size() || current.empty())
-    throw std::runtime_error("step-change L2 unavailable after an AMR topology change");
-  std::vector<composite_detail::CompositeLevelView> views;
-  views.reserve(current.size());
-  for (std::size_t level = 0; level < current.size(); ++level) {
-    const MultiFab& now = current[level].U;
-    const MultiFab& before = previous[level].U;
-    if (now.ncomp() != before.ncomp() || now.box_array().boxes() != before.box_array().boxes() ||
-        now.dmap().ranks() != before.dmap().ranks() || now.local_size() != before.local_size() ||
-        current[level].dx != previous[level].dx || current[level].dy != previous[level].dy)
-      throw std::runtime_error("step-change L2 unavailable after an AMR topology change");
-    views.push_back({&now, current[level].dx, current[level].dy});
-  }
-
-  double sum_sq = 0.0;
-  for (std::size_t level = 0; level < current.size(); ++level) {
-    const int next = level + 1 < current.size() ? static_cast<int>(level + 1) : -1;
-    MultiFab mask = composite_detail::active_mask(views, static_cast<int>(level), next);
-    const Real local =
-        composite_detail::local_difference_sum_sq(current[level].U, previous[level].U, mask);
-    const double global = level == 0 && replicated_coarse
-                              ? static_cast<double>(local)
-                              : all_reduce_sum(static_cast<double>(local));
-    sum_sq +=
-        static_cast<double>(current[level].dx) * static_cast<double>(current[level].dy) * global;
-  }
-  return std::sqrt(sum_sq);
-}
-
-/// The same native composite fold for a hierarchy whose scalar values do not live in AmrLevelMP::U
-/// (for example a qualified elliptic output field).  Layout and metric metadata stay explicit and
-/// index-aligned; no field is gathered or copied to Python/host storage.
-inline double composite_reduce_fields(const std::vector<const MultiFab*>& hierarchy,
-                                      const std::vector<std::pair<Real, Real>>& metrics,
-                                      bool replicated_coarse, const std::string& kind,
-                                      int component,
-                                      const std::vector<int>& requested_levels = {}) {
-  if (hierarchy.size() != metrics.size())
-    throw std::invalid_argument(
-        "composite_reduce: field hierarchy and metric hierarchy sizes differ");
-  std::vector<composite_detail::CompositeLevelView> views;
-  views.reserve(hierarchy.size());
-  for (std::size_t level = 0; level < hierarchy.size(); ++level)
-    views.push_back({hierarchy[level], metrics[level].first, metrics[level].second});
-  return composite_reduce_views(views, replicated_coarse, kind, component, requested_levels);
 }
 
 }  // namespace pops::runtime::amr

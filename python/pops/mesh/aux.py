@@ -22,7 +22,7 @@ class AuxHalo(MeshDescriptor):
     - ``kind='dirichlet'``: fixed value (ghost = 2*value - interior), ``value`` imposed.
 
     Applied UNIFORMLY to the NON-PERIODIC faces; periodic faces keep their wrap. Works on
-    System (Cartesian + polar) and the AMR coarse level. No halo (default) -> the shared
+    the Cartesian System and AMR levels. No halo (default) -> the shared
     aux BC, bit-identical.
     """
 

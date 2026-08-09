@@ -39,6 +39,8 @@ def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
         ),
         "t": np.array(0.3, dtype=np.float64),
         "macro_step": np.array(3, dtype=np.int64),
+        "pops_spatial_contract": np.array("{}"),
+        "pops_embedded_boundary_contract": np.array("{}"),
         "program_hash": np.array("deadbeef" * 8),
         "temporal_restart_state": np.array("{}"),
         "program_cadence_substeps": np.array(1, dtype=np.int64),

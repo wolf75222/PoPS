@@ -252,12 +252,10 @@ def _recip_rewrite(e: Any, inv_set: Any) -> Any:
 
 
 def _dir_key(direction: Any) -> str:
-    """Normalize a direction into 'x' / 'y' (accepts 0/'x'/'X' and 1/'y'/'Y'). Raises otherwise."""
-    if direction in (0, "x", "X"):
-        return "x"
-    if direction in (1, "y", "Y"):
-        return "y"
-    raise ValueError("invalid direction %r (expected 0/'x' or 1/'y')" % (direction,))
+    """Normalize one canonical Cartesian ordinal/name without selecting a model rank."""
+    from pops._cartesian_axes import CARTESIAN_AXIS_NAMES, axis_name
+
+    return axis_name(direction, CARTESIAN_AXIS_NAMES, where="C++ direction lowering")
 
 
 # --- Roe dissipation PROVIDED by the user (m.roe_dissipation) ---------

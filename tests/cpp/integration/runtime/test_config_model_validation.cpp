@@ -38,19 +38,34 @@ using namespace pops;
 
 namespace {
 
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeAmrSystem = AmrSystem<kTestDimension>;
+using NativeAmrSystemConfig = AmrSystemConfig<kTestDimension>;
+
 template <class T>
 concept HasPublicFreezeRestore = requires(T& value) { value.pops_freeze_restore(false); };
 
+template <class T>
+concept HasUniformVariableEllipticCoefficient = requires(T& value, std::vector<double> field) {
+  value.set_epsilon_field(field);
+  value.set_epsilon_anisotropic_field(field, field);
+  value.set_reaction_field(field);
+};
+
 static_assert(!HasPublicFreezeRestore<ModelSpec>,
               "ModelSpec.freeze() must be irreversible through its public C++ API");
+static_assert(!HasUniformVariableEllipticCoefficient<NativeSystem>,
+              "uniform System must not advertise coefficients unsupported by CartesianCG");
 
-// true si @p f leve un std::runtime_error DONT le message contient @p frag : on ne se contente pas du
+// true si @p f lève une exception de contrat DONT le message contient @p frag : on ne se contente pas du
 // refus, on verifie que c'est le BON refus (le champ manquant nomme), donc un message lisible.
 template <class F>
 bool raises_with(F&& f, const std::string& frag) {
   try {
     f();
-  } catch (const std::runtime_error& e) {
+  } catch (const std::exception& e) {
     return std::string(e.what()).find(frag) != std::string::npos;
   } catch (...) {
     return false;
@@ -58,7 +73,7 @@ bool raises_with(F&& f, const std::string& frag) {
   return false;
 }
 
-// true si @p f leve un std::runtime_error (le refus attendu, sans egard au message).
+// true si @p f lève une exception de contrat (le refus attendu, sans égard au message).
 template <class F>
 bool raises(F&& f) {
   return raises_with(std::forward<F>(f), "");
@@ -71,6 +86,28 @@ ModelSpec exb_charge() {
   s.source = "none";
   s.elliptic = "charge";
   return s;
+}
+
+NativeSystemConfig native_system_config(int cells, bool periodic = false) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = periodic;
+  }
+  return config;
+}
+
+NativeAmrSystemConfig native_amr_config(int cells) {
+  NativeAmrSystemConfig config;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = false;
+  }
+  return config;
 }
 
 #if defined(POPS_HAS_KOKKOS)
@@ -96,98 +133,99 @@ class KokkosEnvironment : public ::testing::Environment {
 // ADC-299 : SystemConfig invalide rejetee AVANT la construction de Impl (allocation geom/ba/dm/aux).
 // ================================================================================================
 TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
-  EXPECT_TRUE(
-      raises_with([&] { System s(SystemConfig{0, 1.0, Periodicity{false, false}}); }, "n >= 1"))
-      << "System(n=0) rejete avant Impl (n >= 1)";
-  EXPECT_TRUE(
-      raises_with([&] { System s(SystemConfig{-4, 1.0, Periodicity{false, false}}); }, "n >= 1"))
-      << "System(n<0) rejete";
-  EXPECT_TRUE(
-      raises_with([&] { System s(SystemConfig{16, 0.0, Periodicity{false, false}}); }, "L > 0"))
-      << "System(L=0) rejete (L > 0)";
-  EXPECT_TRUE(
-      raises_with([&] { System s(SystemConfig{16, -1.0, Periodicity{false, false}}); }, "L > 0"))
-      << "System(L<0) rejete";
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    SCOPED_TRACE(::testing::Message() << "axis=" << axis);
+    {
+      NativeSystemConfig config = native_system_config(16);
+      config.shape[axis] = 0;
+      EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
+          << "System(rank axis extent=0) rejects before Impl";
+    }
+    {
+      NativeSystemConfig config = native_system_config(16);
+      config.shape[axis] = -4;
+      EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
+          << "System(rank axis extent<0) rejects before Box materialization";
+    }
+  }
+  {
+    NativeSystemConfig config = native_system_config(16);
+    config.upper[0] = Real(0);
+    EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly increasing"))
+        << "System(rank physical extent=0) rejects";
+  }
+  {
+    NativeSystemConfig config = native_system_config(16);
+    config.upper[0] = Real(-1);
+    EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly increasing"))
+        << "System(rank physical extent<0) rejects";
+  }
   // Une config valide CONSTRUIT toujours (le garde-fou ne sur-rejette pas).
   {
     bool ok = false;
     try {
-      System s(SystemConfig{16, 1.0, Periodicity{false, false}});
-      ok = (s.nx() == 16);
+      NativeSystem s(native_system_config(16));
+      const Geometry<kTestDimension> geometry = s.prepared_block_geometry();
+      ok = true;
+      for (int axis = 0; axis < kTestDimension; ++axis)
+        ok = ok && geometry.domain().length(axis) == 16;
     } catch (...) {
       ok = false;
     }
-    EXPECT_TRUE(ok) << "System config valide construit (nx == 16)";
+    EXPECT_TRUE(ok) << "System exact-ranked valid config constructs";
   }
-}
-
-TEST(ConfigModelValidation, SystemRejectsAmbiguousDiffusionCoefficientShapes) {
-  const std::vector<double> scalar(8 * 8, 2.0);
-  const std::vector<double> diagonal_x(8 * 8, 3.0);
-  const std::vector<double> diagonal_y(8 * 8, 4.0);
-
-  System scalar_first(SystemConfig{8, 1.0, Periodicity{false, false}});
-  scalar_first.set_epsilon_field(scalar);
-  EXPECT_TRUE(
-      raises_with([&] { scalar_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y); },
-                  "cannot be combined"));
-
-  System diagonal_first(SystemConfig{8, 1.0, Periodicity{false, false}});
-  diagonal_first.set_epsilon_anisotropic_field(diagonal_x, diagonal_y);
-  EXPECT_TRUE(raises_with([&] { diagonal_first.set_epsilon_field(scalar); }, "cannot be combined"));
-
-  // Reconfiguration within the same exact shape is intentional and remains available while the
-  // System is assembling; only a physically ambiguous shape change is rejected.
-  EXPECT_NO_THROW(scalar_first.set_epsilon_field(std::vector<double>(8 * 8, 5.0)));
-  EXPECT_NO_THROW(diagonal_first.set_epsilon_anisotropic_field(std::vector<double>(8 * 8, 6.0),
-                                                               std::vector<double>(8 * 8, 7.0)));
 }
 
 // ================================================================================================
 // ADC-299 : AmrSystemConfig invalide rejetee AVANT Impl (parite avec System).
 // ================================================================================================
 TEST(ConfigModelValidation, AmrSystemConfigInvalidRejectedBeforeImpl) {
-  EXPECT_TRUE(raises_with([&] { AmrSystem a(AmrSystemConfig{0}); }, "n >= 1"))
-      << "AmrSystem(n=0) rejete (n >= 1)";
-  {
-    AmrSystemConfig c;
-    c.n = 32;
-    c.L = 0.0;
-    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "L > 0")) << "AmrSystem(L=0) rejete (L > 0)";
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    SCOPED_TRACE(::testing::Message() << "axis=" << axis);
+    {
+      NativeAmrSystemConfig config = native_amr_config(32);
+      config.shape[axis] = 0;
+      EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"))
+          << "AmrSystem(rank axis extent=0) rejects before Impl";
+    }
+    {
+      NativeAmrSystemConfig config = native_amr_config(32);
+      config.shape[axis] = -1;
+      EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"))
+          << "AmrSystem(rank axis extent<0) rejects before Box materialization";
+    }
   }
   {
-    AmrSystemConfig c;
-    c.ny = -1;
-    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "ny"));
+    NativeAmrSystemConfig config = native_amr_config(32);
+    config.upper[0] = Real(0);
+    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly increasing"));
   }
   {
-    AmrSystemConfig c;
-    c.Ly = -1.0;
-    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "Ly"));
+    NativeAmrSystemConfig config = native_amr_config(32);
+    config.upper[kTestDimension - 1] = Real(-1);
+    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly increasing"));
   }
   {
-    AmrSystemConfig c;
-    c.n = 32;
-    c.regrid_every = -1;
-    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "regrid_every"))
+    NativeAmrSystemConfig config = native_amr_config(32);
+    config.regrid_every = -1;
+    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "regrid_every"))
         << "AmrSystem(regrid_every<0) rejete";
   }
   {
-    AmrSystemConfig c;
-    c.n = 32;
-    c.coarse_max_grid = -1;
-    EXPECT_TRUE(raises_with([&] { AmrSystem a(c); }, "coarse_max_grid"))
+    NativeAmrSystemConfig config = native_amr_config(32);
+    config.coarse_max_grid[0] = -1;
+    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "coarse_max_grid"))
         << "AmrSystem(coarse_max_grid<0) rejete";
   }
   {
     bool ok = false;
     try {
-      AmrSystem a(AmrSystemConfig{32});
-      ok = (a.nx() == 32 && a.ny() == 32);
+      NativeAmrSystem a(native_amr_config(32));
+      ok = true;
     } catch (...) {
       ok = false;
     }
-    EXPECT_TRUE(ok) << "AmrSystem config valide construit (nx == 32)";
+    EXPECT_TRUE(ok) << "AmrSystem exact-ranked valid config constructs";
   }
 }
 
@@ -290,35 +328,37 @@ TEST(ConfigModelValidation, ModelSpecCopyAndMoveRebindEveryProxyToItsDestination
 }
 
 // ================================================================================================
-// ADC-290 (b)/(c) : la surface utilisateur (System / AmrSystem add_block) applique le meme contrat.
+// ADC-290 (b)/(c) : l'ancienne surface ModelSpec échoue fermement après la migration vers les
+// fournisseurs compilés qualifiés par dimension.
 // ================================================================================================
 TEST(ConfigModelValidation, AddBlockAppliesContractBeforeStringRouting) {
-  // Surface utilisateur : le contrat s'applique a l'entree de System::add_block, AVANT le routage
-  // par chaine sur model.transport (qui dirait sinon "unknown transport ''"). Le defaut-construit
-  // ne devient JAMAIS un Euler silencieux.
+  // Aucune façade native ne reconstruit désormais un modèle depuis ModelSpec : cette représentation
+  // reste validable par le front-end, mais l'installation demande un fournisseur compilé exact.
   EXPECT_TRUE(raises_with(
       [&] {
-        System s(SystemConfig{16, 1.0, Periodicity{false, false}});
+        NativeSystem s(native_system_config(16));
         s.add_block("m", ModelSpec{});
       },
-      "transport"))
-      << "System::add_block(ModelSpec incomplet) rejete -- pas de transport 'compressible' "
-         "silencieux";
-  // Un modele complet s'installe (chemin natif ExB scalaire complet, sans lever).
-  EXPECT_TRUE(!raises([&] {
-    System s(SystemConfig{16, 1.0, Periodicity{false, false}});
-    s.add_block("ne", exb_charge());
-  })) << "System::add_block(modele complet) accepte";
-
-  // Meme contrat a l'entree de AmrSystem::add_block (parite). add_block est paresseux : le refus
-  // tombe au contrat, sans declencher le build de la hierarchie.
+      "removed from the native core"));
   EXPECT_TRUE(raises_with(
       [&] {
-        AmrSystem a(AmrSystemConfig{16});
+        NativeSystem s(native_system_config(16));
+        s.add_block("ne", exb_charge());
+      },
+      "removed from the native core"));
+
+  EXPECT_TRUE(raises_with(
+      [&] {
+        NativeAmrSystem a(native_amr_config(16));
         a.add_block("m", ModelSpec{});
       },
-      "transport"))
-      << "AmrSystem::add_block(ModelSpec incomplet) rejete -- pas de fallback silencieux";
+      "dimension-qualified compiled block provider"));
+  EXPECT_TRUE(raises_with(
+      [&] {
+        NativeAmrSystem a(native_amr_config(16));
+        a.add_block("ne", exb_charge());
+      },
+      "dimension-qualified compiled block provider"));
 }
 
 // ================================================================================================
@@ -369,12 +409,17 @@ TEST(ConfigModelValidation, EveryBuiltinRegistryTagIsRouted) {
     s.source = t.name;
     bool routed = false;
     try {
-      detail::dispatch_source<4>(s, [&](auto) { routed = true; });
+      detail::dispatch_source<kTestDimension + 2>(s, [&](auto) { routed = true; });
     } catch (...) {
       routed = false;
     }
-    all_src = all_src && routed;
+    bool expected_routed = true;
+    if constexpr (kTestDimension != 2)
+      expected_routed =
+          std::string(t.name) != "magnetic" && std::string(t.name) != "potential_magnetic";
+    EXPECT_EQ(routed, expected_routed) << "source route capability: " << t.name;
+    all_src = all_src && (routed == expected_routed);
   }
   EXPECT_TRUE(all_src)
-      << "ADC-331 : tout source builtin de la registry route a NV=4 (pas de derive)";
+      << "ADC-331 : chaque source builtin suit exactement sa capacité de rang native";
 }

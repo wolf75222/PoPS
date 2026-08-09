@@ -96,6 +96,17 @@ inline void require_mpi_success(int code, std::string_view operation) {
     throw_mpi_error(code, operation);
 }
 
+inline int chunk_capacity(int ranks) {
+  const int divisor = std::max(1, ranks);
+  return std::max(1, std::numeric_limits<int>::max() / divisor);
+}
+
+inline const char* chunk_pointer(const std::string& payload, unsigned long long offset, int count) {
+  if (count == 0)
+    return nullptr;
+  return payload.data() + static_cast<std::size_t>(offset);
+}
+
 inline bool comm_active_unlocked() noexcept {
   int initialized = 0;
   int finalized = 0;

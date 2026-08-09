@@ -1,246 +1,410 @@
-// ADC-632: CORE System-facade TU. Impl, the anon-namespace helpers, the config/geometry/lifecycle
-// guards, the includes and the ctor/dtor/abi_key/lifecycle live here or in the shared private
-// header system_impl.hpp; the responsibility split (install / fields / io / profiling / program)
-// moves the remaining method bodies into sibling TUs that all include system_impl.hpp. This file
-// keeps: abi_key, the ctor/dtor/move, mark_bound / lifecycle_state, and the thin step forwards.
-#include "system_impl.hpp"  // ADC-632: System::Impl + shared facade helpers (runtime-private)
+// Core exact-ranked System facade. Provider-specific installation and execution seams live in
+// sibling translation units; this file owns only layout-independent lifecycle, clock and cadence.
+#include "system_impl.hpp"
 
-// native_loader.hpp templates instantiate on Impl; included AFTER system_impl.hpp so the Impl
-// definition is complete (the historical "templates instantiated lower down" ordering, per-TU).
-#include <pops/runtime/builders/compiled/native_loader.hpp>  // .so loading (JIT/AOT/native) + ABI guard
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/program/profiler.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
 
 namespace pops {
 
-// MODULE ABI key (frozen at compile time of this TU). Defined here so the _pops module
-// exports it (POPS_EXPORT): add_native_block compares it to the key baked into the loader .so.
 POPS_EXPORT std::string abi_key() {
   return detail::abi_key_string();
 }
 
-// Convenience static method (Python binding + add_native_block): delegates to the module's free key.
-std::string System::abi_key() {
+template <int Dim>
+std::string System<Dim>::abi_key() {
   return pops::abi_key();
 }
 
-System::System(const SystemConfig& c) {
-  validate_system_config(c);  // BEFORE any allocation/derivation (Impl builds geom/ba/dm/aux)
-  p_ = std::make_unique<Impl>(c);
+template <int Dim>
+System<Dim>::System(const SystemConfig<Dim>& config) {
+  validate_system_config(config);
+  p_ = std::make_unique<Impl>(config);
 }
-System::~System() = default;
-System::System(System&&) noexcept = default;
-System& System::operator=(System&&) noexcept = default;
 
-// Program cadence and native CFL-bound evaluation live in program_driver_. The public facade keeps
-// the accepted-step transaction and profiling boundary.
-void System::step(double dt) {
+template <int Dim>
+System<Dim>::~System() = default;
+
+template <int Dim>
+System<Dim>::System(System&&) noexcept = default;
+
+template <int Dim>
+System<Dim>& System<Dim>::operator=(System&&) noexcept = default;
+
+template <int Dim>
+void System<Dim>::step(double dt) {
   p_->program_.require_step_installed("System::step");
-  p_->program_.begin_step_projection_report();
-  pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
+  runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
-  p_->execute_step_transaction([&] { p_->program_driver_.step(dt); });
+  p_->execute_step_transaction(
+      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, dt, "System"); });
 }
-void System::advance(double dt, int nsteps) {
+
+template <int Dim>
+void System<Dim>::advance(double dt, int nsteps) {
   p_->program_.require_step_installed("System::advance");
-  for (int i = 0; i < nsteps; ++i)
+  if (nsteps < 0)
+    throw std::invalid_argument("System::advance requires a non-negative step count");
+  for (int step_index = 0; step_index < nsteps; ++step_index)
     step(dt);
 }
-void System::begin_step_transaction() {
+
+template <int Dim>
+void System<Dim>::begin_step_transaction() {
   if (p_->external_step_transaction_)
     throw std::runtime_error("System::begin_step_transaction: transaction already active");
-  p_->external_step_transaction_ = std::make_unique<Impl::AcceptedSnapshot>(*p_);
+  p_->external_step_transaction_ = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
   p_->external_step_transaction_committed_ = false;
 }
-void System::commit_step_transaction() {
+
+template <int Dim>
+void System<Dim>::commit_step_transaction() {
   if (!p_->external_step_transaction_)
     throw std::runtime_error("System::commit_step_transaction: no active transaction");
   if (p_->external_step_transaction_committed_)
     throw std::runtime_error("System::commit_step_transaction: transaction already committed");
   p_->external_step_transaction_committed_ = true;
 }
-std::map<std::string, double> System::step_change_l2() const {
+
+template <int Dim>
+std::map<std::string, double> System<Dim>::step_change_l2() const {
   if (!p_->external_step_transaction_)
-    throw std::runtime_error(
-        "System::step_change_l2 requires an active external step transaction");
-  if (p_->polar_)
-    throw std::runtime_error(
-        "System::step_change_l2 does not yet define the polar cell measure");
-  const auto& previous = p_->external_step_transaction_->states;
+    throw std::runtime_error("System::step_change_l2 requires an active external step transaction");
+  const std::vector<MultiFab<Dim>>& previous = p_->external_step_transaction_->states;
   if (previous.size() != p_->sp.size())
     throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
-  RelativeCellMeasure measure;
-  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
-    measure.active_cells = &p_->domain_mask_;
-    if (p_->geometry_mode_ == GeometryMode::CutCell)
-      measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
-  }
-  const double cell_area =
-      static_cast<double>(p_->geom.dx()) * static_cast<double>(p_->geom.dy());
+
+  double cell_measure = 1.0;
+  for (int axis = 0; axis < Dim; ++axis)
+    cell_measure *= static_cast<double>(p_->geom.spacing(axis));
+
   std::map<std::string, double> result;
   for (std::size_t block = 0; block < p_->sp.size(); ++block) {
-    const double sum_sq = static_cast<double>(
-        pops::difference_sum_sq_all(p_->sp[block].U, previous[block], measure));
-    result.emplace(p_->sp[block].name, std::sqrt(cell_area * sum_sq));
+    const double sum_sq =
+        static_cast<double>(difference_sum_sq_all(p_->sp[block].U, previous[block]));
+    result.emplace(p_->sp[block].name, std::sqrt(cell_measure * sum_sq));
   }
   return result;
 }
-void System::finalize_step_transaction() {
+
+template <int Dim>
+void System<Dim>::finalize_step_transaction() {
   if (!p_->external_step_transaction_ || !p_->external_step_transaction_committed_)
     throw std::runtime_error("System::finalize_step_transaction: no committed transaction");
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
-void System::rollback_step_transaction() {
+
+template <int Dim>
+void System<Dim>::rollback_step_transaction() {
   if (!p_->external_step_transaction_)
     throw std::runtime_error("System::rollback_step_transaction: no active transaction");
   p_->external_step_transaction_->restore(*p_);
   p_->external_step_transaction_.reset();
   p_->external_step_transaction_committed_ = false;
 }
-double System::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+
+template <int Dim>
+double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->program_.require_step_installed("System::step_cfl");
-  p_->program_.begin_step_projection_report();
-  return p_->execute_step_transaction(
-      [&] { return p_->program_driver_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
+  if (!std::isfinite(cfl) || !(cfl > 0.0))
+    throw std::invalid_argument("System::step_cfl cfl must be finite and positive");
+  if (!std::isfinite(speed_floor) || !(speed_floor > 0.0))
+    throw std::invalid_argument("System::step_cfl speed_floor must be finite and positive");
+  if (std::isnan(max_dt) || max_dt <= 0.0)
+    throw std::invalid_argument("System::step_cfl max_dt must be positive or +infinity");
+  if (!std::isfinite(min_dt) || min_dt < 0.0)
+    throw std::invalid_argument("System::step_cfl min_dt must be finite and non-negative");
+
+  SolveOutcome field_outcome = solve_fields();
+  const SolveConsumption field_consumption =
+      field_outcome.report().solved_value_available()
+          ? SolveConsumption::kAccept
+          : (field_outcome.report().action == SolveAction::kRejectAttempt
+                 ? SolveConsumption::kRejectAttempt
+                 : SolveConsumption::kFailRun);
+  const SolveReport field_report = field_outcome.consume(field_consumption);
+  if (!field_report.solved_value_available()) {
+    if (field_consumption == SolveConsumption::kRejectAttempt)
+      throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
+                                                  field_report.reason);
+    throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+                             field_report.status_name() + " action=" + field_report.action_name() +
+                             " reason=" + field_report.reason);
+  }
+
+  Real minimum_spacing = p_->geom.spacing(0);
+  for (int axis = 1; axis < Dim; ++axis)
+    minimum_spacing = std::min(minimum_spacing, p_->geom.spacing(axis));
+
+  double selected = std::numeric_limits<double>::infinity();
+  std::string reason = "degenerate";
+  for (typename Impl::Species& block : p_->sp) {
+    if (!block.evolve)
+      continue;
+    if (!block.max_speed)
+      throw std::runtime_error("System block '" + block.name +
+                               "' lacks a dimension-qualified stability-speed provider");
+    const Real speed = std::max(block.max_speed(block.U), static_cast<Real>(speed_floor));
+    double block_dt = cfl * static_cast<double>(minimum_spacing) * block.substeps /
+                      (static_cast<double>(block.stride) * static_cast<double>(speed));
+    const char* block_reason = "transport";
+    if (block.source_frequency) {
+      const Real frequency = block.source_frequency(block.U);
+      if (frequency > Real(0)) {
+        const double source_dt =
+            cfl * block.substeps /
+            (static_cast<double>(block.stride) * static_cast<double>(frequency));
+        if (source_dt < block_dt) {
+          block_dt = source_dt;
+          block_reason = "source_frequency";
+        }
+      }
+    }
+    if (block.stability_dt) {
+      const Real admissible = block.stability_dt(block.U);
+      if (admissible > Real(0)) {
+        const double admissible_dt =
+            static_cast<double>(admissible) * block.substeps / static_cast<double>(block.stride);
+        if (admissible_dt < block_dt) {
+          block_dt = admissible_dt;
+          block_reason = "stability_dt";
+        }
+      }
+    }
+    if (block_dt < selected) {
+      selected = block_dt;
+      reason = std::string(block_reason) + ":" + block.name;
+    }
+  }
+
+  for (const runtime::system::CoupledFreq& frequency : p_->coupling_.coupled_freqs) {
+    if (!(frequency.mu > 0.0))
+      continue;
+    const double candidate = cfl / frequency.mu;
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "coupled_source:" + frequency.label;
+    }
+  }
+  for (const runtime::system::PreparedCoupledFrequency& frequency :
+       p_->coupling_.coupled_frequencies) {
+    if (!frequency.maximum_frequency)
+      continue;
+    const double maximum_frequency = static_cast<double>(frequency.maximum_frequency());
+    if (!std::isfinite(maximum_frequency))
+      throw std::runtime_error(
+          "System coupled-source frequency provider returned a non-finite "
+          "maximum for '" +
+          frequency.label + "'");
+    if (!(maximum_frequency > 0.0))
+      continue;
+    const double candidate = cfl / maximum_frequency;
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "coupled_source:" + frequency.label;
+    }
+  }
+  for (const runtime::system::GlobalDtBound& bound : p_->coupling_.dt_bounds) {
+    if (!bound.fn)
+      continue;
+    double candidate = bound.fn();
+    if (!(candidate > 0.0) || !std::isfinite(candidate))
+      candidate = std::numeric_limits<double>::infinity();
+    candidate = all_reduce_min(candidate);
+    if (candidate < selected) {
+      selected = candidate;
+      reason = "global:" + bound.label;
+    }
+  }
+
+  if (p_->program_.dt_bound_) {
+    const double program_dt = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
+    if (std::isfinite(program_dt) && program_dt > 0.0 && program_dt < selected) {
+      selected = program_dt;
+      reason = "program:dt_bound";
+    }
+  }
+  if (!std::isfinite(selected))
+    selected = cfl * static_cast<double>(minimum_spacing) / speed_floor;
+  if (max_dt < selected) {
+    selected = max_dt;
+    reason = "strategy:max_dt";
+  }
+  if (selected < min_dt)
+    throw std::runtime_error("System::step_cfl stability bound is below declared min_dt");
+
+  p_->last_dt_reason_ = std::move(reason);
+  p_->execute_step_transaction(
+      [&] { p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System"); });
+  return selected;
 }
 
-// System clock (IO v1, audit wave 2): macro_step is REQUIRED by the restart (the
-// hold-then-catch-up stride cadence reads macro_step % stride; t alone is not enough).
-int System::macro_step() const {
+template <int Dim>
+int System<Dim>::macro_step() const {
   return p_->macro_step_;
 }
 
-// RUNTIME FREEZE LIFECYCLE (ADC-592 / ADC-578). mark_bound() is the ONE transition into the frozen
-// state; the Python bind flow calls it LAST (after every install call), so the install sequence itself
-// never trips require_assembling. A second call throws (a composition binds exactly once).
-// lifecycle_state() reports "assembling" (not bound), "bound" (bound, no macro-step advanced),
-// "running" (bound AND macro_step_ > 0) -- the running edge is derived from the macro-step counter, so
-// it needs no extra state (and SystemProgramDriver never reads lifecycle_ -> no MockImpl impact). The new
-// checkpointed / finalized phases (SystemLifecycle) are reachable only through explicit transitions
-// with no current caller, so the observable strings above are preserved bit-for-bit.
-void System::mark_bound() {
+template <int Dim>
+void System<Dim>::mark_bound() {
+  // The provider graph is the only authority for the compact auxiliary carrier.  Seal it before
+  // freezing composition so every rank either agrees on one graph or remains fully mutable after a
+  // failed collective preflight.
+  seal_auxiliary_providers();
+
   if (p_->lifecycle_.frozen())
-    p_->lifecycle_.to_bound();  // raises the canonical second-bind refusal before any collective
-  // All resolved field plans have now been installed and no named backend has been
-  // materialized yet. Agree the complete registry before rank-local validation so a
-  // divergent rank cannot throw locally while its peers enter the collective.
-  p_->fields_.require_field_plan_consensus();
-  if (!p_->block_state_identities_.empty() && p_->block_state_identities_.size() != p_->sp.size())
+    p_->lifecycle_.to_bound();
+
+  // Field-plan setters are deliberately local: one rank may author an extra plan and must not
+  // strand peers inside the setter.  Freeze is the single collective commit point for the complete
+  // canonical registry and its selected exact-ranked backend authorities.
+  p_->require_field_plan_consensus();
+
+  const auto& state_routes = p_->boundary_registry_.state_routes();
+  if (!state_routes.empty() && state_routes.size() != p_->sp.size())
     throw std::runtime_error(
         "System::mark_bound: block state routes do not exactly cover materialized blocks");
-  for (const auto& block : p_->sp)
-    if (!p_->block_state_identities_.empty() &&
-        (block.state_identity.empty() ||
-         p_->block_state_identities_.find(block.name) == p_->block_state_identities_.end()))
+  for (typename Impl::Species& block : p_->sp) {
+    const auto route = state_routes.find(block.name);
+    if (!state_routes.empty() && route == state_routes.end())
       throw std::runtime_error(
           "System::mark_bound: materialized block lacks its exact state route");
-  for (const auto& [name, plan] : p_->boundary_plans_) {
-    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None &&
-        plan->has_component_boundaries())
-      throw std::runtime_error(
-          "System::mark_bound: embedded-boundary block '" + name +
-          "' has a native boundary component without a geometry-aware provider");
-    auto found = std::find_if(p_->sp.begin(), p_->sp.end(),
-                              [&name](const Impl::Species& block) { return block.name == name; });
-    if (found == p_->sp.end())
-      throw std::runtime_error(
-          "System::mark_bound: prepared boundary plan references unknown block '" + name + "'");
-    if (plan->ncomp() != found->ncomp)
-      throw std::runtime_error(
-          "System::mark_bound: prepared boundary component count differs from block '" + name +
-          "'");
-    if (!same_periodicity(plan->periodicity(), p_->per_))
-      throw std::runtime_error(
-          "System::mark_bound: prepared boundary plan periodicity disagrees with the domain "
-          "topology for block '" +
-          name + "'");
-    (void)plan->has_boundary_linearization();
-    runtime::multiblock::BoundaryEvaluationPoint preparation_point;
-    preparation_point.clock = plan->identity() + "::bound-runtime";
-    preparation_point.level = 0;
-    preparation_point.dt = 0.0;
-    preparation_point.physical_time = p_->t;
-    found->boundary_lane =
-        std::make_shared<ExecutionLane>(ExecutionLane::world(plan->identity(), "::runtime"));
-    found->boundary_session = std::make_shared<PreparedGridBoundarySession>(
-        p_->grid_ctx(name), *found->boundary_lane, found->U, preparation_point);
+    if (route != state_routes.end())
+      block.state_identity = route->second;
   }
-  p_->lifecycle_.to_bound();  // Assembling -> Bound; throws the same message on a second bind
+
+  for (const auto& [name, installed] : p_->boundary_registry_.boundaries()) {
+    typename Impl::Species& block = p_->find(name);
+    if (installed.authority->ncomp() != block.ncomp)
+      throw std::runtime_error("System::mark_bound: boundary component count differs from block '" +
+                               name + "'");
+    if (installed.state_identity != block.state_identity)
+      throw std::runtime_error("System::mark_bound: boundary state identity differs from block '" +
+                               name + "'");
+    if (installed.authority->periodic_axes() != p_->periodicity)
+      throw std::runtime_error(
+          "System::mark_bound: boundary periodicity differs from the domain for block '" + name +
+          "'");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (block.U.ghosts()[axis] < installed.required_depth)
+        throw std::runtime_error("System::mark_bound: boundary depth exceeds block storage for '" +
+                                 name + "'");
+    p_->publish_boundary_to_block(name);
+  }
+  p_->lifecycle_.to_bound();
 }
-std::string System::lifecycle_state() const {
-  // "running" stays DERIVED from the macro-step counter (the stepper never touches lifecycle_), so
-  // the observable three strings are unchanged; the new checkpointed / finalized states surface only
-  // when explicitly transitioned (no current caller).
+
+template <int Dim>
+std::string System<Dim>::lifecycle_state() const {
   return p_->lifecycle_.state(p_->macro_step_);
 }
-// SCHEDULER VALUE CACHE (ADC-458): the System-owned CacheManager every ProgramContext forwards to. The
-// .so resolves this across the dlopen boundary (POPS_EXPORT), so the step closure's cache_store_aux /
-// cache_should_update reach the SAME manager the checkpoint serializes.
-POPS_EXPORT pops::runtime::program::CacheManager& System::program_cache() {
+
+template <int Dim>
+runtime::program::CacheManager<Dim>& System<Dim>::program_cache() {
   return p_->program_.cache_;
 }
-int System::nx() const {
-  return p_->cfg.n;
+
+template <int Dim>
+Extent<Dim> System<Dim>::spatial_shape() const {
+  return p_->cfg.shape;
 }
-// SLOW axis of the field (rows of the (ny, nx) array). We read it from the INDEX domain (dom = nx() x ny()),
-// SINGLE SOURCE of the extents for both geometries: Cartesian dom = n x n -> ny() == nx() == n (square,
-// UNCHANGED); polar dom = nr x ntheta -> nx() == nr (fast, i), ny() == ntheta (slow, j). It is this
-// dimension that sizes the numpy array on the bindings side: a polar field has nx()*ny() = nr*ntheta
-// values, and with nr != ntheta the square reshape (nx, nx) overflows the buffer (teardown bug).
-int System::ny() const {
-  return p_->dom.ny();
-}
-double System::time() const {
+
+template <int Dim>
+double System<Dim>::time() const {
   return p_->t;
 }
-int System::n_species() const {
+
+template <int Dim>
+int System<Dim>::n_species() const {
   return p_->blocks_.size();
 }
-std::vector<std::string> System::block_names() const {
-  // SINGLE block registry (store), populated by the native install paths.
+
+template <int Dim>
+std::vector<std::string> System<Dim>::block_names() const {
   return p_->blocks_.names();
 }
 
-EffectiveOptionsReport System::effective_options_report() const {
+template <int Dim>
+EffectiveOptionsReport System<Dim>::effective_options_report() const {
   EffectiveOptionsReport report;
   report.runtime = "system";
-  report.topology.periodic_x = p_->per_.x;
-  report.topology.periodic_y = p_->per_.y;
-  report.poisson.rhs = p_->fields_.p_rhs;
-  report.poisson.solver = p_->fields_.p_solver;
-  report.poisson.bc = p_->fields_.p_bc;
-  report.poisson.wall = p_->fields_.p_wall;
-  report.poisson.wall_radius = p_->fields_.p_wall_radius;
-  report.poisson.epsilon = static_cast<double>(p_->fields_.p_eps_);
-  p_->fields_.write_effective_poisson_options(report.poisson);
-  report.poisson.has_epsilon_field = p_->fields_.has_scalar_diffusion_coefficient();
-  report.poisson.has_anisotropic_epsilon = p_->fields_.has_anisotropic_diffusion_coefficient();
-  report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;
-  // ADC-615: effective cut-cell / EB thresholds (default kEb* unless overridden by set_disc_domain).
-  report.eb.enabled = p_->eb_set_ && p_->geometry_mode_ == GeometryMode::CutCell;
-  report.eb.geometry_mode =
-      (p_->geometry_mode_ == GeometryMode::CutCell)
-          ? "cutcell"
-          : (p_->geometry_mode_ == GeometryMode::Staircase ? "staircase" : "none");
-  report.eb.kappa_min = static_cast<double>(p_->eb_thresholds_.kappa_min);
-  report.eb.face_open_eps = static_cast<double>(p_->eb_thresholds_.face_open_eps);
-  report.eb.cut_theta_min = static_cast<double>(p_->eb_thresholds_.cut_theta_min);
+  report.topology.dimension = Dim;
+  report.topology.periodicity.reserve(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    report.topology.periodicity.push_back(p_->periodicity[axis]);
+  report.poisson.solver = p_->poisson_solver_;
+  report.poisson.solver_option_schema = "pops.system.cartesian-cg-options@1";
+  report.poisson.bc = p_->poisson_bc_;
+  report.poisson.rel_tol = p_->poisson_rel_tol_;
+  report.poisson.abs_tol = p_->poisson_abs_tol_;
+  report.poisson.max_iterations = p_->poisson_max_iterations_;
+  if (p_->embedded_boundary_) {
+    report.eb.enabled = true;
+    report.eb.geometry_mode = std::string(
+        runtime::system::prepared_embedded_boundary_mode_name(p_->embedded_boundary_->mode()));
+    report.eb.kappa_min = static_cast<double>(p_->embedded_boundary_->thresholds().kappa_min);
+    report.eb.face_open_eps =
+        static_cast<double>(p_->embedded_boundary_->thresholds().face_open_eps);
+    report.eb.cut_theta_min =
+        static_cast<double>(p_->embedded_boundary_->thresholds().cut_theta_min);
+    report.eb.semantic_digest = p_->embedded_boundary_->semantic_digest();
+    report.eb.materialization_digest = p_->embedded_boundary_->digest();
+    report.eb.generation = p_->embedded_boundary_->generation();
+  }
 
-  for (const Impl::Species& s : p_->sp) {
+  report.blocks.reserve(p_->sp.size());
+  for (const typename Impl::Species& block : p_->sp) {
     EffectiveBlockOptions row;
-    if (const EffectiveBlockOptions* opt = p_->diagnostics_.block_options_ptr(s.name))
-      row = *opt;
-    row.name = s.name;
-    row.ncomp = s.ncomp;
-    row.n_ghost = s.U.n_grow();
-    row.substeps = s.substeps;
-    row.stride = s.stride;
-    row.evolve = s.evolve;
-    row.gamma = s.gamma;
-    row.conservative_vars = s.cons_vars.names;
-    row.primitive_vars = s.prim_vars.names;
+    row.name = block.name;
+    row.ncomp = block.ncomp;
+    row.substeps = block.substeps;
+    row.stride = block.stride;
+    row.evolve = block.evolve;
+    row.gamma = block.gamma;
+    row.conservative_vars = block.cons_vars.names;
+    row.primitive_vars = block.prim_vars.names;
+    const Extent<Dim> ghosts = block.U.ghosts();
+    row.n_ghost = ghosts[0];
+    for (int axis = 1; axis < Dim; ++axis)
+      if (ghosts[axis] != row.n_ghost)
+        throw std::runtime_error(
+            "System effective-options schema cannot project anisotropic ghost extents");
     report.blocks.push_back(std::move(row));
   }
   return report;
 }
+
+template std::string System<kNativeDimension>::abi_key();
+template System<kNativeDimension>::System(const SystemConfig<kNativeDimension>&);
+template System<kNativeDimension>::~System();
+template System<kNativeDimension>::System(System&&) noexcept;
+template System<kNativeDimension>& System<kNativeDimension>::operator=(System&&) noexcept;
+template void System<kNativeDimension>::step(double);
+template void System<kNativeDimension>::advance(double, int);
+template void System<kNativeDimension>::begin_step_transaction();
+template void System<kNativeDimension>::commit_step_transaction();
+template std::map<std::string, double> System<kNativeDimension>::step_change_l2() const;
+template void System<kNativeDimension>::finalize_step_transaction();
+template void System<kNativeDimension>::rollback_step_transaction();
+template double System<kNativeDimension>::step_cfl(double, double, double, double);
+template int System<kNativeDimension>::macro_step() const;
+template void System<kNativeDimension>::mark_bound();
+template std::string System<kNativeDimension>::lifecycle_state() const;
+template runtime::program::CacheManager<kNativeDimension>&
+System<kNativeDimension>::program_cache();
+template Extent<kNativeDimension> System<kNativeDimension>::spatial_shape() const;
+template double System<kNativeDimension>::time() const;
+template int System<kNativeDimension>::n_species() const;
+template std::vector<std::string> System<kNativeDimension>::block_names() const;
+template EffectiveOptionsReport System<kNativeDimension>::effective_options_report() const;
 
 }  // namespace pops

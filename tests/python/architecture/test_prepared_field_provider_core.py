@@ -25,6 +25,10 @@ GENERIC_NATIVE_NULLSPACE_PROTOCOLS = (
     ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_builtins.hpp",
     ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_prepare.hpp",
 )
+EXACT_RANKED_NULLSPACE_CONSUMERS = GENERIC_NATIVE_NULLSPACE_PROTOCOLS + (
+    ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_workspace.hpp",
+    ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp",
+)
 CONCRETE_PATTERNS = (
     r"\bgeometric[_-]?mg\b",
     r"\bcomposite[_-]?fac\b",
@@ -100,9 +104,7 @@ def test_runtime_adapters_do_not_interpret_method_owned_install_records(
     assert not {pattern for pattern in concrete if re.search(pattern, source)}
 
 
-@pytest.mark.parametrize(
-    "path", GENERIC_NATIVE_NULLSPACE_PROTOCOLS, ids=lambda path: path.stem
-)
+@pytest.mark.parametrize("path", GENERIC_NATIVE_NULLSPACE_PROTOCOLS, ids=lambda path: path.stem)
 def test_native_nullspace_protocol_has_no_cartesian_boundary_record_leak(
     path: Path,
 ) -> None:
@@ -114,6 +116,38 @@ def test_native_nullspace_protocol_has_no_cartesian_boundary_record_leak(
         r"\b(?:xlo|xhi|ylo|yhi)\b",
         r"std::array\s*<\s*FieldBoundaryNullspaceBehavior\s*,\s*4\s*>",
     )
-    assert not {
-        pattern for pattern in cartesian_record_patterns if re.search(pattern, source)
-    }
+    assert not {pattern for pattern in cartesian_record_patterns if re.search(pattern, source)}
+
+
+@pytest.mark.parametrize("path", EXACT_RANKED_NULLSPACE_CONSUMERS, ids=lambda path: path.stem)
+def test_native_nullspace_consumers_have_no_legacy_or_dimension_branch(
+    path: Path,
+) -> None:
+    source = path.read_text(encoding="utf-8")
+    forbidden = (
+        r"\bBCRec\b",
+        r"\bBCType\b",
+        r"\bBox2D\b",
+        r"\bDistributionMapping\b",
+        r"if\s*\(\s*Dim\s*==",
+        r"if\s+constexpr\s*\(\s*Dim",
+    )
+    assert not {pattern for pattern in forbidden if re.search(pattern, source)}
+
+
+def test_native_nullspace_spatial_contracts_are_compile_time_ranked() -> None:
+    provider = (
+        ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_provider.hpp"
+    ).read_text(encoding="utf-8")
+    workspace = (
+        ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_workspace.hpp"
+    ).read_text(encoding="utf-8")
+    adapter = (
+        ROOT / "include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp"
+    ).read_text(encoding="utf-8")
+    assert "FieldNullspaceProviderRequest<Dim>" in provider
+    assert "FieldNullspacePlan<Dim>" in provider
+    assert "class FieldNullspaceWorkspace" in workspace
+    assert "MultiFab<Dim>" in workspace
+    assert "PhysicalBoundaryConditions<Dim>" in adapter
+    assert "for (int axis = 0; axis < Dim; ++axis)" in adapter

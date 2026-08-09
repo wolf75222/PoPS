@@ -1,410 +1,332 @@
-// ADC-327 : CONTRAT GENERIQUE embedded-boundary / level-set domain (non lie au disque).
-//
-// Le coeur EB est deja generique : cut_fraction / assemble_rhs_eb sont templates sur un level set
-// callable Real(Real, Real) device-safe, et assemble_rhs_masked consomme un masque 0/1 quelconque.
-// Le disque (detail::DiscDomain) n'est qu'UNE instance du contrat. Ce test PROUVE que le contrat
-// admet un domaine NON-disque de bout en bout, via detail::HalfPlaneDomain (level set lineaire
-// a*x + b*y - c, actif < 0), et verifie que le contrat lui-meme (level_set / operator() / cell_active,
-// convention de signe) tient pour le disque ET le demi-plan.
-//
-// Assertions (vraies, pas de no-op) :
-//
-//   (1) CONTRAT : DiscDomain et HalfPlaneDomain satisfont le concept LevelSetDomain (static_assert,
-//       diagnostics uniquement) ; operator() == level_set ; cell_active == (level_set < 0) ; convention
-//       de signe (interieur < 0, exterieur > 0).
-//
-//   (2) EB cut-cell sur un demi-plan : le level set NON-disque partitionne la grille en cellules actives
-//       ET inactives et produit de VRAIES cellules coupees (kappa < 1 sur la bande de bord).
-//
-//   (3) BIT-IDENTITE sans coupe : un demi-plan REJETE loin (toute la grille + ghosts active, aucune coupe
-//       -> alpha = 1, kappa = 1) rend assemble_rhs_eb STRICTEMENT egal a assemble_rhs (diff = 0). Invariant
-//       "EB additif et inerte sans coupe", prouve sur une geometrie NON-disque.
-//
-//   (4) RESIDU FINI : un demi-plan qui COUPE la boite donne un residu fini partout sur quelques pas
-//       explicites (le clamp small-cell borne 1/kappa sur une geometrie generique : pas de NaN).
-//
-//   (5) MASQUE STAIRCASE generique : un masque 0/1 materialise depuis HalfPlaneDomain rend assemble_rhs_masked
-//       a residu EXACTEMENT nul sur les cellules inactives ; un masque tout-actif (demi-plan rejete) est
-//       BIT-IDENTIQUE a assemble_rhs (chemin masque inerte, geometrie generique).
-//
-//   (6) CONSERVATION DE MASSE a la machine sur une geometrie NON-disque BORNEE (bande |y - yc| - h,
-//       periodique en x : faces y haut/bas fermees par l'EB, x telescope) : la masse EB coherente avec le
-//       schema, Sum_active n kappa_eff dx dy, est conservee a la machine (drift < 1e-12) sur K pas Euler.
-//
-// Modele jouet INLINE : advection scalaire a vitesse constante (vx, vy), div v = 0.
+/// @file
+/// @brief Exact-ranked staircase transport and explicit two-dimensional cut-cell capability.
 
 #include <gtest/gtest.h>
 
-#include <pops/core/model/physical_model.hpp>
-#include <pops/core/state/state.hpp>
-#include <pops/core/foundation/types.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/mesh/geometry/coordinate_map.hpp>
+#include <pops/mesh/geometry/prepared_metric_provider.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // ADC-327 : contrat generique (DiscDomain + HalfPlaneDomain + concept)
-#include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/spatial_operator.hpp>  // assemble_rhs, assemble_rhs_masked
-#include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb
+#include <pops/numerics/elliptic/eb/cut_fraction.hpp>
+#include <pops/numerics/spatial/embedded_boundary/domain.hpp>
+#include <pops/numerics/spatial/embedded_boundary/operator.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/spatial/operators/masked_operator.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
+#include <Kokkos_MathematicalFunctions.hpp>
 
-using namespace pops;
+#include <cstddef>
+#include <utility>
+#include <vector>
 
-static constexpr double kL = 1.0;  // boite carree [0, L]^2
-static constexpr double kVx = 0.7;
-static constexpr double kVy = -0.4;
+namespace {
 
-// Advection scalaire a vitesse (vx, vy). Flux F = (vx u, vy u).
-struct Advect {
-  using State = StateVec<1>;
-  using Aux = pops::Aux;
-  static constexpr int n_vars = 1;
-  Real vx = 0.0, vy = 0.0;
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
-    return State{(dir == 0 ? vx : vy) * u[0]};
+template <int Dim>
+pops::Extent<Dim> filled_extent(int value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+pops::RealVector<Dim> filled_real(pops::Real value) {
+  pops::RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+using CartesianMetric = pops::PreparedMappedMetricProvider<pops::CartesianCoordinateMap<Dim>>;
+
+template <int Dim>
+struct ExactFixture {
+  using field_type = pops::MultiFab<Dim>;
+
+  explicit ExactFixture(int cells_per_axis)
+      : domain(pops::Box<Dim>::from_extents(filled_extent<Dim>(cells_per_axis))),
+        metric(pops::prepare_metric_provider(
+            domain, pops::CartesianCoordinateMap<Dim>::make(pops::RealVector<Dim>{},
+                                                            filled_real<Dim>(pops::Real(1))))),
+        layout(std::vector<pops::Box<Dim>>{domain}),
+        ranks(pops::Index<Dim>{}, filled_extent<Dim>(1)),
+        distribution(pops::mesh::Distribution<Dim>::replicated(layout, ranks)),
+        state(layout, distribution, local_rank, 1, filled_extent<Dim>(1)) {}
+
+  field_type make_field(int components, int ghost_depth) const {
+    return field_type(layout, distribution, local_rank, components,
+                      filled_extent<Dim>(ghost_depth));
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int dir) const {
-    return std::fabs(dir == 0 ? vx : vy);
-  }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
-  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+
+  pops::Box<Dim> domain;
+  CartesianMetric<Dim> metric;
+  pops::mesh::BoxArray<Dim> layout;
+  pops::mesh::RankSpace<Dim> ranks;
+  pops::mesh::Distribution<Dim> distribution;
+  pops::Index<Dim> local_rank{};
+  field_type state;
 };
 
-static_assert(PhysicalModel<Advect>, "Advect est un PhysicalModel");
+template <int Dim, class Metric>
+struct FillSmoothState {
+  pops::FieldView<pops::Real, Dim> state{};
+  Metric metric;
 
-// ADC-327 : le contrat doit reconnaitre les deux instances natives, a la compilation. Diagnostics
-// UNIQUEMENT : le concept ne contraint AUCUNE signature hot-path (cf. embedded_boundary.hpp).
-static_assert(LevelSetDomain<detail::DiscDomain>, "DiscDomain satisfait le contrat LevelSetDomain");
-static_assert(LevelSetDomain<detail::HalfPlaneDomain>,
-              "HalfPlaneDomain satisfait le contrat LevelSetDomain");
-
-// Bande NON-disque BORNEE en y : |y - yc| - h, active ssi |y - yc| < h. Periodique en x, la bande
-// est fermee par l'EB en haut/bas -> masse conservee (cf. assertion (6)). Fonteur NOMME, device-safe.
-struct SlabBand {
-  Real yc, h;
-  POPS_HD Real operator()(Real, Real y) const {
-    const Real ay = (y - yc) < Real(0) ? -(y - yc) : (y - yc);
-    return ay - h;
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    const auto point = metric.cell_center(cell);
+    pops::Real value = pops::Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += pops::Real(0.04 * (axis + 1)) * (point[axis] + point[axis] * point[axis]);
+    state(cell) = value;
   }
 };
 
-// (1) CONTRAT : convention de signe, operator() == level_set, cell_active == (ls < 0).
-TEST(EmbeddedBoundaryGeneric, LevelSetContract) {
-  // Demi-plan a*x + b*y - c : actif (ls < 0) du cote a*x + b*y < c. Diagonal (a, b != 0) : geometrie
-  // franchement non-axiale, non-disque.
-  const detail::HalfPlaneDomain hp{1.0, 1.0, 1.0};  // x + y < 1 actif
-  // Convention de signe : (0.1, 0.1) dedans (0.2 < 1), (0.9, 0.9) dehors (1.8 > 1).
-  EXPECT_TRUE(double(hp.level_set(Real(0.1), Real(0.1))) < 0.0) << "demi-plan : interieur ls < 0";
-  EXPECT_TRUE(double(hp.level_set(Real(0.9), Real(0.9))) > 0.0) << "demi-plan : exterieur ls > 0";
-  EXPECT_TRUE(hp.cell_active(Real(0.1), Real(0.1)) && !hp.cell_active(Real(0.9), Real(0.9)))
-      << "demi-plan : cell_active == (ls < 0)";
-  // operator() (forme callable consommee par les operateurs) == level_set (alias nomme).
-  bool callable_ok = true;
-  for (double x = 0.05; x < 1.0; x += 0.17)
-    for (double y = 0.05; y < 1.0; y += 0.19)
-      if (double(hp(Real(x), Real(y))) != double(hp.level_set(Real(x), Real(y))))
-        callable_ok = false;
-  EXPECT_TRUE(callable_ok) << "demi-plan : operator() == level_set (forme callable)";
+template <int Dim, class Metric>
+struct MaterializeStaircaseMask {
+  pops::FieldView<pops::Real, Dim> active{};
+  Metric metric;
 
-  // Le disque (instance historique) respecte le meme contrat (operator() ajoute, level_set inchange).
-  const detail::DiscDomain disc = detail::DiscDomain::centered_in_box(kL, 0.3);
-  EXPECT_TRUE(double(disc.level_set(Real(0.5), Real(0.5))) < 0.0) << "disque : centre ls < 0";
-  EXPECT_TRUE(double(disc(Real(0.5), Real(0.5))) == double(disc.level_set(Real(0.5), Real(0.5))))
-      << "disque : operator() == level_set";
-}
-
-// (2) EB cut-cell sur un demi-plan : partition active/inactive + vraies cellules coupees.
-TEST(EmbeddedBoundaryGeneric, HalfPlaneCutCellPartition) {
-  {
-    const int n = 64;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, kL, 0.0, kL};
-    const detail::HalfPlaneDomain hp{1.0, 0.6, 0.55};  // diagonal : coupe la boite en biais
-    const double dx = geom.dx(), dy = geom.dy();
-    int n_active = 0, n_inactive = 0, n_cut = 0;
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-        const double x = geom.x_cell(i), y = geom.y_cell(j);
-        if (double(hp.level_set(Real(x), Real(y))) >= 0.0) {
-          ++n_inactive;
-          continue;
-        }
-        ++n_active;
-        const detail::CutFraction cf =
-            detail::cut_fraction(hp, Real(x), Real(y), Real(dx), Real(dy));
-        if (double(cf.kappa) < 1.0 - 1e-9)
-          ++n_cut;
-      }
-    EXPECT_TRUE(n_active > 0 && n_inactive > 0)
-        << "le demi-plan partitionne la grille (actives ET inactives); n_active=" << n_active
-        << " n_inactive=" << n_inactive;
-    EXPECT_TRUE(n_cut > 0) << "le demi-plan produit de vraies cellules coupees (kappa < 1)";
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    active(cell) = metric.cell_center(cell)[0] < pops::Real(0.57) ? pops::Real(1) : pops::Real(0);
   }
-}
+};
 
-// (3) BIT-IDENTITE sans coupe : demi-plan rejete loin -> EB == cartesien (diff = 0).
-TEST(EmbeddedBoundaryGeneric, NoCutIsBitIdenticalToCartesian) {
-  {
-    const int n = 48;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, kL, 0.0, kL};
-    const BoxArray ba(std::vector<Box2D>{dom});
-    const DistributionMapping dm(1, n_ranks());
-    BCRec bc;
-    // Demi-plan x + y - 100 : ls < 0 sur TOUTE la grille (y compris ghosts), aucun voisin franchi
-    // -> alpha = 1, kappa = 1 partout -> l'EB doit reproduire le cartesien BIT a BIT.
-    const detail::HalfPlaneDomain hp{1.0, 1.0, 100.0};
+template <int Dim>
+struct CountActive {
+  pops::FieldView<const pops::Real, Dim> active{};
 
-    MultiFab U(ba, dm, 1, 2), aux(ba, dm, kAuxBaseComps, 2);
-    aux.set_val(0.0);
-    {
-      Array4 a = U.fab(0).array();
-      const Box2D g = U.fab(0).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-          const double x = geom.x_cell(i), y = geom.y_cell(j);
-          a(i, j, 0) =
-              1.0 + 0.5 * std::exp(-(((x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)) / 0.02));
-        }
-    }
-    const Advect model{kVx, kVy};
-    fill_ghosts(U, geom.domain, bc);
-    MultiFab R_ref(ba, dm, 1, 0), R_eb(ba, dm, 1, 0);
-    assemble_rhs<Minmod, RusanovFlux>(model, U, aux, geom, R_ref);
-    assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, hp, geom, R_eb);
-
-    sync_host();
-    double max_abs_diff = 0.0;
-    const ConstArray4 rr = R_ref.fab(0).const_array();
-    const ConstArray4 re = R_eb.fab(0).const_array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        max_abs_diff = std::max(max_abs_diff, std::fabs(double(rr(i, j, 0)) - double(re(i, j, 0))));
-    EXPECT_TRUE(max_abs_diff == 0.0)
-        << "demi-plan sans coupe : residu EB BIT-IDENTIQUE au cartesien (alpha=1, kappa=1), got "
-        << max_abs_diff;
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return active(cell) >= pops::Real(0.5) ? pops::Real(1) : pops::Real(0);
   }
-}
+};
 
-// (4) RESIDU FINI : un demi-plan qui coupe la boite -> residu fini (clamp small-cell, pas de NaN).
-TEST(EmbeddedBoundaryGeneric, CuttingHalfPlaneProducesFiniteResidual) {
-  {
-    const int n = 64;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, kL, 0.0, kL};
-    const BoxArray ba(std::vector<Box2D>{dom});
-    const DistributionMapping dm(1, n_ranks());
-    BCRec bc;
-    const detail::HalfPlaneDomain hp{1.0, 0.6, 0.55};
+template <int Dim>
+struct CountInactive {
+  pops::FieldView<const pops::Real, Dim> active{};
 
-    MultiFab U(ba, dm, 1, 2), aux(ba, dm, kAuxBaseComps, 2);
-    aux.set_val(0.0);
-    {
-      Array4 a = U.fab(0).array();
-      const Box2D g = U.fab(0).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-          a(i, j, 0) = 1.0 + 0.3 * std::sin(2.0 * M_PI * geom.x_cell(i)) *
-                                 std::cos(2.0 * M_PI * geom.y_cell(j));
-    }
-    const Advect model{kVx, kVy};
-    const double v = std::hypot(kVx, kVy);
-    const double dt = 0.2 * geom.dx() / v;
-    bool any_nan = false;
-    for (int s = 0; s < 20; ++s) {
-      fill_ghosts(U, geom.domain, bc);
-      MultiFab R(ba, dm, 1, 0);
-      assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, hp, geom, R);
-      device_fence();
-      const ConstArray4 rr = R.fab(0).const_array();
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-          if (!std::isfinite(double(rr(i, j, 0))))
-            any_nan = true;
-      saxpy(U, Real(dt), R);
-    }
-    EXPECT_TRUE(!any_nan)
-        << "demi-plan coupant : residu FINI partout (clamp small-cell generique, pas de NaN)";
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return active(cell) < pops::Real(0.5) ? pops::Real(1) : pops::Real(0);
   }
-}
+};
 
-// (5) MASQUE STAIRCASE generique : residu nul sur les inactives ; tout-actif == cartesien.
-TEST(EmbeddedBoundaryGeneric, GenericStaircaseMask) {
-  {
-    const int n = 48;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, kL, 0.0, kL};
-    const BoxArray ba(std::vector<Box2D>{dom});
-    const DistributionMapping dm(1, n_ranks());
-    BCRec bc;
-    const Advect model{kVx, kVy};
+template <int Dim>
+struct CountNonFinite {
+  pops::FieldView<const pops::Real, Dim> values{};
 
-    // Materialise un masque 0/1 (1 ghost, comme System::set_disc_domain) depuis un level set quelconque.
-    auto materialize_mask = [&](const detail::HalfPlaneDomain& hp) {
-      MultiFab mask(ba, dm, 1, 1);
-      Array4 m = mask.fab(0).array();
-      const Box2D g = mask.fab(0).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-          m(i, j, 0) =
-              hp.cell_active(Real(geom.x_cell(i)), Real(geom.y_cell(j))) ? Real(1) : Real(0);
-      return mask;
-    };
-
-    MultiFab U(ba, dm, 1, 2), aux(ba, dm, kAuxBaseComps, 2);
-    aux.set_val(0.0);
-    {
-      Array4 a = U.fab(0).array();
-      const Box2D g = U.fab(0).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-          const double x = geom.x_cell(i), y = geom.y_cell(j);
-          a(i, j, 0) =
-              1.0 + 0.5 * std::exp(-(((x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)) / 0.02));
-        }
-    }
-    fill_ghosts(U, geom.domain, bc);
-
-    // (5a) masque coupant : residu EXACTEMENT nul sur les inactives.
-    const detail::HalfPlaneDomain hp_cut{1.0, 0.6, 0.55};
-    MultiFab mask_cut = materialize_mask(hp_cut);
-    MultiFab R_masked(ba, dm, 1, 0);
-    assemble_rhs_masked<Minmod, RusanovFlux>(model, U, aux, mask_cut, geom, R_masked);
-    sync_host();
-    {
-      const ConstArray4 rr = R_masked.fab(0).const_array();
-      double max_inactive_residual = 0.0;
-      int n_inactive = 0;
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-          if (!hp_cut.cell_active(Real(geom.x_cell(i)), Real(geom.y_cell(j)))) {
-            ++n_inactive;
-            max_inactive_residual = std::max(max_inactive_residual, std::fabs(double(rr(i, j, 0))));
-          }
-      EXPECT_TRUE(n_inactive > 0) << "le masque demi-plan a de vraies cellules inactives";
-      EXPECT_TRUE(max_inactive_residual == 0.0)
-          << "residu masque EXACTEMENT nul sur les cellules inactives (demi-plan generique), got "
-          << max_inactive_residual;
-    }
-
-    // (5b) masque tout-actif (demi-plan rejete) : assemble_rhs_masked BIT-IDENTIQUE a assemble_rhs.
-    const detail::HalfPlaneDomain hp_far{1.0, 1.0, 100.0};
-    MultiFab mask_all = materialize_mask(hp_far);
-    MultiFab R_ref(ba, dm, 1, 0), R_all(ba, dm, 1, 0);
-    assemble_rhs<Minmod, RusanovFlux>(model, U, aux, geom, R_ref);
-    assemble_rhs_masked<Minmod, RusanovFlux>(model, U, aux, mask_all, geom, R_all);
-    sync_host();
-    {
-      const ConstArray4 rr = R_ref.fab(0).const_array();
-      const ConstArray4 ra = R_all.fab(0).const_array();
-      double max_abs_diff = 0.0;
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-          max_abs_diff =
-              std::max(max_abs_diff, std::fabs(double(rr(i, j, 0)) - double(ra(i, j, 0))));
-      EXPECT_TRUE(max_abs_diff == 0.0)
-          << "masque tout-actif : residu masque BIT-IDENTIQUE au cartesien (chemin inerte), got "
-          << max_abs_diff;
-    }
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    return Kokkos::isfinite(values(cell)) ? pops::Real(0) : pops::Real(1);
   }
-}
+};
 
-// (6) CONSERVATION de masse a la machine sur une geometrie NON-disque BORNEE (bande |y - yc| - h).
-TEST(EmbeddedBoundaryGeneric, MassConservationOnBoundedNonDiscGeometry) {
-  {
-    const int n = 96;
-    const Box2D dom = Box2D::from_extents(n, n);
-    const Geometry geom{dom, 0.0, kL, 0.0, kL};
-    const BoxArray ba(std::vector<Box2D>{dom});
-    const DistributionMapping dm(1, n_ranks());
-    BCRec bc;  // periodique : la bande EB ferme haut/bas, x telescope
-    const double dx = geom.dx(), dy = geom.dy();
-    const SlabBand ls{Real(0.5 * kL),
-                      Real(0.22 * kL)};  // bande centree, epaisseur non alignee grille
+template <int Dim>
+struct MaximumInactiveResidual {
+  pops::FieldView<const pops::Real, Dim> residual{};
+  pops::FieldView<const pops::Real, Dim> active{};
 
-    MultiFab U(ba, dm, 1, 2), aux(ba, dm, kAuxBaseComps, 2);
-    aux.set_val(0.0);
-    {
-      Array4 a = U.fab(0).array();
-      const Box2D g = U.fab(0).grown_box();
-      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-        for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
-          const double x = geom.x_cell(i), y = geom.y_cell(j);
-          a(i, j, 0) =
-              1.0 + 0.5 * std::exp(-(((x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)) / 0.02));
-        }
-    }
-    const Advect model{kVx, kVy};
-
-    auto eb_mass = [&](const MultiFab& F) {
-      device_fence();
-      const ConstArray4 f = F.fab(0).const_array();
-      double s = 0.0;
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-          const double x = geom.x_cell(i), y = geom.y_cell(j);
-          if (double(ls(Real(x), Real(y))) >= 0.0)
-            continue;  // inactive : hors masse
-          const detail::CutFraction cf =
-              detail::cut_fraction(ls, Real(x), Real(y), Real(dx), Real(dy));
-          const double kappa_eff = std::max(double(cf.kappa), double(kEbKappaMin));
-          s += double(f(i, j, 0)) * kappa_eff * dx * dy;
-        }
-      return s;
-    };
-
-    int n_active = 0, n_cut = 0;
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-        const double x = geom.x_cell(i), y = geom.y_cell(j);
-        if (double(ls(Real(x), Real(y))) >= 0.0)
-          continue;
-        ++n_active;
-        const detail::CutFraction cf =
-            detail::cut_fraction(ls, Real(x), Real(y), Real(dx), Real(dy));
-        if (double(cf.kappa) < 1.0 - 1e-9)
-          ++n_cut;
-      }
-    ASSERT_TRUE(n_active > 0 && n_cut > 0)
-        << "la bande produit des cellules actives ET coupees (test EB non vide); n_active="
-        << n_active << " n_cut=" << n_cut;
-
-    const double m0 = eb_mass(U);
-    ASSERT_TRUE(m0 > 0.0) << "masse EB initiale strictement positive";
-    const double v = std::hypot(kVx, kVy);
-    const double dt = 0.2 * geom.dx() / v;
-    for (int s = 0; s < 60; ++s) {
-      fill_ghosts(U, geom.domain, bc);
-      MultiFab R(ba, dm, 1, 0);
-      assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R);
-      saxpy(U, Real(dt), R);
-    }
-    const double m1 = eb_mass(U);
-    const double rel_drift = std::fabs(m1 - m0) / std::fabs(m0);
-    EXPECT_TRUE(rel_drift < 1e-12)
-        << "masse EB conservee a la machine sur une geometrie non-disque (drift < 1e-12), got "
-        << rel_drift;
-    {
-      device_fence();
-      const ConstArray4 u = U.fab(0).const_array();
-      double max_dev = 0.0;
-      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-          const double x = geom.x_cell(i), y = geom.y_cell(j);
-          if (double(ls(Real(x), Real(y))) >= 0.0)
-            continue;
-          max_dev = std::max(max_dev, std::fabs(double(u(i, j, 0)) - 1.0));
-        }
-      EXPECT_TRUE(max_dev > 1e-3)
-          << "le transport EB a effectivement avance l'etat (conservation non triviale)";
-    }
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    if (active(cell) >= pops::Real(0.5))
+      return pops::Real(0);
+    const pops::Real value = residual(cell);
+    return value < pops::Real(0) ? -value : value;
   }
+};
+
+template <int Dim>
+struct MaximumActiveResidual {
+  pops::FieldView<const pops::Real, Dim> residual{};
+  pops::FieldView<const pops::Real, Dim> active{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    if (active(cell) < pops::Real(0.5))
+      return pops::Real(0);
+    const pops::Real value = residual(cell);
+    return value < pops::Real(0) ? -value : value;
+  }
+};
+
+template <int Dim>
+struct MaximumDifference {
+  pops::FieldView<const pops::Real, Dim> left{};
+  pops::FieldView<const pops::Real, Dim> right{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real difference = left(cell) - right(cell);
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
+pops::RealVector<Dim> velocity() {
+  pops::RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = pops::Real(0.25 + 0.1 * axis);
+  return result;
 }
+
+template <int Dim>
+void prove_staircase_operator() {
+  ExactFixture<Dim> fixture(18);
+  auto active = fixture.make_field(1, 1);
+  auto residual = fixture.make_field(1, 0);
+
+  pops::for_each_cell(
+      fixture.state.fab(0).grown_box(),
+      FillSmoothState<Dim, CartesianMetric<Dim>>{fixture.state.fab(0).view(), fixture.metric});
+  pops::for_each_cell(
+      active.fab(0).grown_box(),
+      MaterializeStaircaseMask<Dim, CartesianMetric<Dim>>{active.fab(0).view(), fixture.metric});
+
+  const auto model = pops::nd::ScalarAdvection<Dim>::prepare(velocity<Dim>());
+  auto providers = fixture.make_field(pops::flux_provider_count<decltype(model)>, 1);
+  providers.set_val(pops::Real(0));
+  const auto masked = pops::nd::prepare_masked_cartesian_operator<Dim>(model, fixture.metric);
+  masked.assemble_residual(fixture.state, providers, active, residual);
+
+  const auto active_view = std::as_const(active.fab(0)).view();
+  const auto residual_view = std::as_const(residual.fab(0)).view();
+  const pops::Real active_count =
+      pops::for_each_cell_reduce_sum(fixture.domain, CountActive<Dim>{active_view});
+  const pops::Real inactive_count =
+      pops::for_each_cell_reduce_sum(fixture.domain, CountInactive<Dim>{active_view});
+  EXPECT_GT(active_count, pops::Real(0));
+  EXPECT_GT(inactive_count, pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_sum(fixture.domain, CountNonFinite<Dim>{residual_view}),
+            pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_max(
+                fixture.domain, MaximumInactiveResidual<Dim>{residual_view, active_view}),
+            pops::Real(0));
+  EXPECT_GT(pops::for_each_cell_reduce_max(fixture.domain,
+                                           MaximumActiveResidual<Dim>{residual_view, active_view}),
+            pops::Real(0));
+
+  auto all_active = fixture.make_field(1, 1);
+  auto masked_all_active = fixture.make_field(1, 0);
+  auto cartesian = fixture.make_field(1, 0);
+  all_active.set_val(pops::Real(1));
+  masked.assemble_residual(fixture.state, providers, all_active, masked_all_active);
+  pops::nd::prepare_cartesian_operator<Dim>(model, fixture.metric)
+      .assemble_residual(fixture.state, providers, cartesian);
+  EXPECT_EQ(
+      pops::for_each_cell_reduce_max(
+          fixture.domain, MaximumDifference<Dim>{std::as_const(masked_all_active.fab(0)).view(),
+                                                 std::as_const(cartesian.fab(0)).view()}),
+      pops::Real(0));
+}
+
+template <int Dim>
+concept HasExplicitCutCellOperator = requires {
+  typename pops::nd::PreparedEmbeddedBoundaryOperator2D<pops::nd::ScalarAdvection<Dim>,
+                                                         CartesianMetric<Dim>>;
+};
+
+static_assert(!HasExplicitCutCellOperator<1>);
+static_assert(HasExplicitCutCellOperator<2>);
+static_assert(!HasExplicitCutCellOperator<3>);
+
+struct MaterializeCutMask2D {
+  pops::FieldView<pops::Real, 2> active{};
+  CartesianMetric<2> metric;
+  pops::detail::HalfPlaneDomain level_set;
+
+  POPS_HD void operator()(const pops::Index<2>& cell) const {
+    const auto point = metric.cell_center(cell);
+    active(cell) = level_set.cell_active(point[0], point[1]) ? pops::Real(1) : pops::Real(0);
+  }
+};
+
+struct MaterializeInverseVolume2D {
+  pops::FieldView<pops::Real, 2> inverse_volume{};
+  CartesianMetric<2> metric;
+  pops::detail::HalfPlaneDomain level_set;
+  pops::Real dx = pops::Real(0);
+  pops::Real dy = pops::Real(0);
+
+  POPS_HD void operator()(const pops::Index<2>& cell) const {
+    const auto point = metric.cell_center(cell);
+    if (!level_set.cell_active(point[0], point[1])) {
+      inverse_volume(cell) = pops::Real(0);
+      return;
+    }
+    const auto cut = pops::detail::cut_fraction(level_set, point[0], point[1], dx, dy);
+    const pops::Real kappa = cut.kappa < pops::kEbKappaMin ? pops::kEbKappaMin : cut.kappa;
+    inverse_volume(cell) = pops::Real(1) / kappa;
+  }
+};
+
+struct CountCutCells2D {
+  pops::FieldView<const pops::Real, 2> inverse_volume{};
+
+  POPS_HD pops::Real operator()(const pops::Index<2>& cell) const {
+    return inverse_volume(cell) > pops::Real(1) + pops::Real(1e-9) ? pops::Real(1) : pops::Real(0);
+  }
+};
+
+TEST(EmbeddedBoundaryGeneric, StaircaseKernelUsesOneExactAlgorithmInOneTwoAndThreeDimensions) {
+  prove_staircase_operator<1>();
+  prove_staircase_operator<2>();
+  prove_staircase_operator<3>();
+}
+
+TEST(EmbeddedBoundaryGeneric, CutCellCapabilityIsExplicitAndOperationalOnlyInTwoDimensions) {
+  ExactFixture<2> fixture(32);
+  auto active = fixture.make_field(1, 1);
+  auto inverse_volume = fixture.make_field(1, 0);
+  auto residual = fixture.make_field(1, 0);
+
+  pops::for_each_cell(
+      fixture.state.fab(0).grown_box(),
+      FillSmoothState<2, CartesianMetric<2>>{fixture.state.fab(0).view(), fixture.metric});
+  const pops::detail::HalfPlaneDomain level_set{1.0, 0.6, 0.75};
+  pops::for_each_cell(active.fab(0).grown_box(),
+                      MaterializeCutMask2D{active.fab(0).view(), fixture.metric, level_set});
+  const pops::Real spacing = pops::Real(1) / pops::Real(32);
+  pops::for_each_cell(fixture.domain,
+                      MaterializeInverseVolume2D{inverse_volume.fab(0).view(), fixture.metric,
+                                                 level_set, spacing, spacing});
+
+  const auto model = pops::nd::ScalarAdvection<2>::prepare(velocity<2>());
+  auto providers = fixture.make_field(pops::flux_provider_count<decltype(model)>, 1);
+  providers.set_val(pops::Real(0));
+  const auto embedded = pops::nd::prepare_embedded_boundary_operator(model, fixture.metric);
+  static_assert(decltype(embedded)::dimension == 2);
+  constexpr auto capabilities = decltype(embedded)::capabilities();
+  static_assert(capabilities.centre_sampled_activity);
+  static_assert(capabilities.binary_face_aperture);
+  static_assert(capabilities.prepared_inverse_volume);
+  embedded.assemble_residual(fixture.state, providers, active, inverse_volume, residual);
+
+  const auto active_view = std::as_const(active.fab(0)).view();
+  const auto inverse_view = std::as_const(inverse_volume.fab(0)).view();
+  const auto residual_view = std::as_const(residual.fab(0)).view();
+  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountActive<2>{active_view}),
+            pops::Real(0));
+  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountInactive<2>{active_view}),
+            pops::Real(0));
+  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountCutCells2D{inverse_view}),
+            pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_sum(fixture.domain, CountNonFinite<2>{residual_view}),
+            pops::Real(0));
+  EXPECT_EQ(pops::for_each_cell_reduce_max(fixture.domain,
+                                           MaximumInactiveResidual<2>{residual_view, active_view}),
+            pops::Real(0));
+
+  auto all_active = fixture.make_field(1, 1);
+  auto full_volume = fixture.make_field(1, 0);
+  auto embedded_no_cut = fixture.make_field(1, 0);
+  auto cartesian = fixture.make_field(1, 0);
+  all_active.set_val(pops::Real(1));
+  full_volume.set_val(pops::Real(1));
+  embedded.assemble_residual(fixture.state, providers, all_active, full_volume, embedded_no_cut);
+  pops::nd::prepare_cartesian_operator<2>(model, fixture.metric)
+      .assemble_residual(fixture.state, providers, cartesian);
+  EXPECT_EQ(pops::for_each_cell_reduce_max(
+                fixture.domain, MaximumDifference<2>{std::as_const(embedded_no_cut.fab(0)).view(),
+                                                     std::as_const(cartesian.fab(0)).view()}),
+            pops::Real(0));
+}
+
+}  // namespace

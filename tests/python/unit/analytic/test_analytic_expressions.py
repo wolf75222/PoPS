@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+import pops
 from pops.analytic import (
     AnalyticTruthValueError,
     PredicateExpr,
@@ -34,11 +35,13 @@ from pops.analytic import (
     radius,
     sin,
     sqrt,
+    time,
     where,
     x,
     y,
+    z,
 )
-from pops.domain import Rectangle
+from pops.domain import CartesianDomain, Rectangle
 from pops.frames import Cartesian2D
 from pops.model import Handle
 from pops.params import ConstParam, RuntimeParam
@@ -67,6 +70,53 @@ def test_coordinates_are_typed_and_bound_to_one_frame() -> None:
         coordinate(frame, "x")
     with pytest.raises(ValueError, match="different frames"):
         x_value + x(_frame("other"))
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_coordinates_and_radius_follow_the_inferred_domain_rank(dimension: int) -> None:
+    domain = CartesianDomain(
+        "ranked-%d" % dimension,
+        (-1.0,) * dimension,
+        (1.0,) * dimension,
+    )
+    frame = domain.frame()
+    values = coordinates(frame)
+
+    assert len(values) == dimension
+    assert all(value.frame_id == frame.canonical_id for value in values)
+    assert radius(frame, center=(0.0,) * dimension).frame_id == frame.canonical_id
+    if dimension == 3:
+        assert values[2].same_as(z(frame))
+    else:
+        with pytest.raises(TypeError, match="z axis"):
+            z(frame)
+    if dimension != 2:
+        with pytest.raises(TypeError, match="two-dimensional"):
+            angle(frame)
+
+
+def test_physical_time_is_bound_to_one_exact_owner_qualified_clock() -> None:
+    program = pops.Program("analytic-time-program")
+    value = time(program.clock)
+    payload = value.to_data()
+
+    assert value.time_clocks() == (program.clock,)
+    assert payload["root"] == {
+        "kind": "scalar",
+        "op": "time",
+        "clock": program.clock.to_data(),
+        "clock_id": program.clock.qualified_id,
+    }
+    assert ScalarExpr.from_data(payload).same_as(value)
+
+    from pops.time import Clock
+
+    with pytest.raises(TypeError, match="owner-qualified"):
+        time(Clock("unowned"))
+    forged = copy.deepcopy(payload)
+    forged["root"]["clock_id"] = "pops.clock.v1::sha256:forged"
+    with pytest.raises(ValueError, match="Clock identity"):
+        ScalarExpr.from_data(forged)
 
 
 def test_scalar_math_builds_a_data_only_canonical_tree() -> None:

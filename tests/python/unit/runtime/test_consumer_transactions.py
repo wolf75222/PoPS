@@ -47,6 +47,14 @@ from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint, every_dt
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
 
+def _output_mode(runtime) -> ParallelMode:
+    return (
+        ParallelMode.SERIAL
+        if runtime.communication.communicator_id == "serial"
+        else ParallelMode.PER_RANK
+    )
+
+
 def _runtime(*, collective: bool = False):
     install = _install()
     requirements = ()
@@ -77,7 +85,7 @@ def _manifest_for(
     resource: str = "state:u",
     dependency: Handle | None = None,
     action=None,
-    parallel_mode=ParallelMode.SERIAL,
+    parallel_mode=None,
 ) -> ConsumerManifest:
     owner = OwnerPath.consumer("adc-685")
     handle = Handle(name, kind="consumer", owner=owner)
@@ -89,6 +97,8 @@ def _manifest_for(
     dependencies = (dependency,) if dependency is not None else ()
     if action is None:
         action = FailRun()
+    if parallel_mode is None:
+        parallel_mode = _output_mode(runtime)
     return ConsumerManifest(
         handle=handle,
         kind=ConsumerKind.SCIENTIFIC_OUTPUT,
@@ -97,7 +107,9 @@ def _manifest_for(
         target_uri="file:///adc-685/%s" % name,
         output_format=(
             HDF5(mode=ParallelMode.COLLECTIVE)
-            if parallel_mode is ParallelMode.COLLECTIVE else NPZ()),
+            if parallel_mode is ParallelMode.COLLECTIVE
+            else NPZ(mode=parallel_mode)
+        ),
         parallel_mode=parallel_mode,
         dependencies=dependencies,
         failure_action=action,
@@ -138,11 +150,19 @@ class _Prepared(PreparedPublication):
         self.publisher.temporaries.remove(self.temp_id)
         artifact = "artifact-%s" % self.effect.payload.identity.hexdigest[:12]
         self.publisher.artifacts.add(artifact)
+        mode = self.effect.target.parallel_mode
+        rank_artifacts = ()
+        if mode is ParallelMode.PER_RANK:
+            rank_artifacts = tuple(
+                (rank, "%s-r%d" % (artifact, rank)) for rank in range(2)
+            )
         return PublicationReceipt(
             self.effect.identity,
             self.effect.payload.identity,
             "test-publisher",
             artifact,
+            parallel_mode=mode,
+            rank_artifacts=rank_artifacts,
         )
 
     def discard(self):
@@ -221,6 +241,24 @@ def test_graph_and_plan_are_semantic_and_insertion_order_independent():
 def test_distributed_modes_require_a_nonserial_context_before_planning(parallel_mode):
     _, serial_runtime = _runtime()
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-collective"))
+    if serial_runtime.communication.communicator_id != "serial":
+        # The installed MPI package cannot manufacture a serial ExecutionContext.  Prove the
+        # inverse mismatch against its real context instead; the serial CI route exercises every
+        # distributed mode below.
+        manifest = replace(
+            _manifest_for(serial_runtime, "serial", clock),
+            output_format=NPZ(mode=ParallelMode.SERIAL),
+            parallel_mode=ParallelMode.SERIAL,
+        )
+        with pytest.raises(RuntimePlanningError) as error:
+            plan_accepted_side_effects(
+                serial_runtime, ConsumerGraph((manifest,)), _moment(clock)
+            )
+        assert error.value.code == "serial_consumer_requires_serial_context"
+        assert error.value.evidence == {
+            "communicator": serial_runtime.communication.communicator_id
+        }
+        return
     output_format = (
         HDF5(mode=parallel_mode)
         if parallel_mode is not ParallelMode.PER_RANK
@@ -314,14 +352,15 @@ def test_stale_field_requires_explicit_policy_and_records_recompute_without_solv
         runtime.calls[0].layout_id,
         field_context=context,
     )
+    parallel_mode = _output_mode(runtime)
     manifest = ConsumerManifest(
         Handle("field-output", kind="consumer", owner=OwnerPath.consumer("adc-685-field")),
         ConsumerKind.SCIENTIFIC_OUTPUT,
         (quantity,),
         Schedule(Every(AcceptedStep(clock), 1)),
         "file:///adc-685/field",
-        NPZ(),
-        ParallelMode.SERIAL,
+        NPZ(mode=parallel_mode),
+        parallel_mode,
     )
     moment = _moment(clock, step=2, layouts=(layout,))
     with pytest.raises(RuntimePlanningError) as error:

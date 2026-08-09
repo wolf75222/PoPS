@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import importlib
+import math
 from typing import Any
 
 from pops.codegen._artifact_models import (
@@ -95,10 +96,10 @@ def _native_memory_context() -> _MemoryRuntimeContext:
                 "estimate_memory requires native runtime_environment_report[%r] as a positive int "
                 "(got %r)" % (key, value), field="runtime.%s" % key, actual=value)
         values[key] = value
-    if values["dimension"] != 2:
+    if values["dimension"] not in (1, 2, 3):
         raise MemoryEstimateCapabilityError(
-            "estimate_memory currently implements an explicit 2D perimeter/hierarchy formula; native "
-            "dimension=%d requires a dimension-aware estimator" % values["dimension"],
+            "estimate_memory requires a native dimension in {1, 2, 3} (got %d)"
+            % values["dimension"],
             field="runtime.dimension", actual=values["dimension"])
     return _MemoryRuntimeContext(**values)
 
@@ -193,7 +194,7 @@ def build_arguments(compiled: Any) -> Arguments:
         each is required and carries the model's conservative state space + component count;
       - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
-      - aux: the model's named external aux inputs (``model.aux_extra_names`` minus the exact,
+      - provider components: the model's generic external inputs (report-only; exact identity is
         owner-scoped components produced by resolved field plans), each required;
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
       - layout_runtime: every exact compiled layout partition, its target, MPI optionality and
@@ -348,7 +349,7 @@ def _build_aux_arguments(model_rows: Any, produced_by_block: Any) -> dict[str, d
     aux_args: dict[str, dict[str, Any]] = {}
     for row in model_rows:
         produced = frozenset(produced_by_block.get(row.block_name, ()))
-        for name in row.aux_names:
+        for name in row.provider_components:
             if name not in produced:
                 aux_args.setdefault(name, {"layout": "cell", "required": True})
     return aux_args
@@ -411,7 +412,7 @@ def _build_arguments(
         for value in getattr(program, "_values", []):
             if value.op == "store_history":
                 outputs[value.name or "history"] = {"kind": "history"}
-            elif value.op == "record" or value.op == "record_scalar":
+            elif value.op in {"record", "record_scalar", "record_balance_term"}:
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
     ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
@@ -653,12 +654,7 @@ def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
             % (dimension, cells), field="mesh.cells", actual=cells)
     shape = tuple(_positive_int(value, field="mesh.cells[%d]" % index)
                   for index, value in enumerate(cells))
-    if dimension != 2:
-        raise MemoryEstimateCapabilityError(
-            "estimate_memory currently implements a 2D perimeter/hierarchy formula; mesh dimension=%d "
-            "requires a dimension-aware estimator" % dimension,
-            field="mesh.dimension", actual=dimension)
-    return shape[0] * shape[1], shape
+    return math.prod(shape), shape
 
 
 def _layout_dimension(layout: Any, capabilities: dict[str, Any]) -> int:
@@ -736,7 +732,7 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
       - ``scalar_field`` = (#field solves) * C * B  (the elliptic unknown buffer)
       - ``krylov``       = (#linear solves) * 4 * C * B (Krylov needs ~4 work vectors per solve)
       - ``multigrid``    = (#field solves) * (4/3) * C * B (the geometric V-cycle hierarchy ~ 4/3 C)
-      - ``halo``         = ghost_depth * perimeter * n_cons * B (the ghost ring, 2D)
+      - ``halo``         = (grown cell box - valid cell box) * n_cons * B
       - ``mpi_buffer``   = same as halo, only when ``platform`` requests MPI (else 0)
       - ``amr_patch``    = for an ``AMR`` layout: a CONSERVATIVE per-level patch budget
 
@@ -749,7 +745,7 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     context = _native_memory_context()
     program = getattr(compiled, "program", None)
     cells, shape = _mesh_shape(mesh, context)
-    _cons, n_cons, _params, _aux_names, n_aux, _space = _model_metadata(compiled)
+    _cons, n_cons, _params, _provider_components, n_aux, _space = _model_metadata(compiled)
     if n_cons < 0 or n_aux < 0:
         raise MemoryEstimateCapabilityError(
             "estimate_memory requires non-negative compiled component counts (got n_cons=%r, n_aux=%r)"
@@ -790,9 +786,9 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     }
 
     ghost = _ghost_depth(compiled)
-    nx, ny = shape
-    perimeter = 2 * (nx + ny)                      # cells on the domain boundary ring (2D)
-    halo = ghost * perimeter * n_cons * context.real_bytes
+    grown_cells = math.prod(extent + 2 * ghost for extent in shape)
+    halo_cells = grown_cells - cells
+    halo = halo_cells * n_cons * context.real_bytes
     categories["halo"] = halo
 
     requires_mpi = bool(platform) and "mpi" in str(platform).lower()
@@ -800,7 +796,8 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
 
     assumptions = [
         "native precision: %d bytes per cell value" % context.real_bytes,
-        "native dimension=%d: %d cells = %d x %d" % (context.dimension, cells, nx, ny),
+        "native dimension=%d: %d cells = %s" % (
+            context.dimension, cells, " x ".join(str(extent) for extent in shape)),
         "scratch counted AFTER the Program's static buffer-reuse report (%d buffers); the codegen "
         "may keep more, so this is a lower bound on scratch reuse" % scratch_buffers,
         "ghost halo depth assumed %d (conservative MUSCL stencil; not recorded in today's metadata)"
@@ -835,7 +832,7 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     patch budget (``amr_patch_bytes`` is ``None``). For an AMR layout with ``max_levels=L`` and
     transition ratio ``r`` the
     worst case fully refines every level: a level ``k`` covering the whole domain at refinement
-    ``r^k`` has ``r^(2k)`` times the base cells (2D). Summing the geometric series over the refined
+    ``r^k`` has ``r^(Dim*k)`` times the base cells. Summing the geometric series over the refined
     levels (1..L-1) gives the extra fine-grid footprint on top of the base level. This is an UPPER
     bound (real regrids refine a fraction of the domain); a tight figure needs a bind."""
     layout_context = _layout_context(layout, context)
@@ -846,8 +843,9 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
         return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
     ratio = layout_context.ratio
     assert ratio is not None  # established by _layout_context for a refining AMR hierarchy
-    # Sum r^(2k) for k = 1 .. max_levels-1 (each refined level fully covering the domain).
-    refine_factor = sum(ratio ** (2 * k) for k in range(1, max_levels))
+    # Sum r^(Dim*k) for k = 1 .. max_levels-1 (full-domain refinement at every level).
+    refine_factor = sum(
+        ratio ** (layout_context.dimension * k) for k in range(1, max_levels))
     # Each refined cell carries the same per-cell footprint as the base (state + one elliptic field).
     per_cell_levels = state_field + n_elliptic * cell_field
     amr_bytes = refine_factor * per_cell_levels
@@ -856,8 +854,8 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
         "at ratio %d (worst case); a real regrid tags a fraction of cells, so the true footprint is "
         "smaller. A tight AMR figure needs a bind (the regrid pattern is data-dependent)."
         % (max_levels - 1, ratio),
-        "AMR refine factor (sum of r^(2k), k=1..%d) = %d base-grid equivalents"
-        % (max_levels - 1, refine_factor),
+        "AMR refine factor (sum of r^(%d*k), k=1..%d) = %d base-grid equivalents"
+        % (layout_context.dimension, max_levels - 1, refine_factor),
     ]
     return "amr", amr_bytes, notes
 

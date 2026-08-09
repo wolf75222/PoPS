@@ -48,12 +48,13 @@ struct PreparedVectorDistributionStatus {
 /// objects are immutable and shared by concurrent workspace lanes; callbacks must be reentrant and
 /// keep mutable state exclusively in the caller-provided scratch spans. Collective callbacks are
 /// noexcept and must complete one identical trace and status on every lane rank.
-template <class Source>
+template <int Dim, class Source>
 concept PreparedVectorDistributionSource =
     std::copy_constructible<std::remove_cvref_t<Source>> &&
     requires(const std::remove_cvref_t<Source>& source, ExactContractBuilder& contract,
-             const MultiFab& field, std::span<double> values, std::span<double> reduction_scratch,
-             std::span<char> validation_scratch, const char* where, const ExecutionLane& lane) {
+             const MultiFab<Dim>& field, std::span<double> values,
+             std::span<double> reduction_scratch, std::span<char> validation_scratch,
+             const char* where, const ExecutionLane& lane) {
       {
         std::remove_cvref_t<Source>::provider_identity()
       } noexcept -> std::same_as<PreparedProviderIdentity>;
@@ -75,6 +76,7 @@ concept PreparedVectorDistributionSource =
 
 namespace detail {
 
+template <int Dim>
 struct NativeFieldDistributionSource {
   FieldDistribution distribution = FieldDistribution::Distributed;
 
@@ -86,11 +88,11 @@ struct NativeFieldDistributionSource {
     contract.scalar(distribution);
   }
 
-  [[nodiscard]] bool layout_matches(const MultiFab& field) const {
+  [[nodiscard]] bool layout_matches(const MultiFab<Dim>& field) const {
     return field_distribution_layout_matches(field, distribution);
   }
 
-  [[nodiscard]] std::string layout_contract(const MultiFab& field) const {
+  [[nodiscard]] std::string layout_contract(const MultiFab<Dim>& field) const {
     return field_distribution_layout_contract(field, distribution);
   }
 
@@ -143,7 +145,7 @@ struct NativeFieldDistributionSource {
     }
   }
 
-  PreparedVectorDistributionStatus require_exact_values(const MultiFab& field,
+  PreparedVectorDistributionStatus require_exact_values(const MultiFab<Dim>& field,
                                                         std::span<char> scratch, const char* where,
                                                         const ExecutionLane& lane) const noexcept {
     if (distribution != FieldDistribution::Replicated)
@@ -163,8 +165,11 @@ struct NativeFieldDistributionSource {
 
 /// Immutable, type-erased provider handle.  Builtin distributed/replicated values are presets of
 /// the same public extension protocol and not cases known by Krylov.
+template <int Dim>
 class PreparedVectorDistribution {
  public:
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PreparedVectorDistribution only supports dimensions 1, 2, and 3");
   PreparedVectorDistribution(const PreparedVectorDistribution&) = default;
   PreparedVectorDistribution(PreparedVectorDistribution&&) noexcept = default;
   PreparedVectorDistribution& operator=(const PreparedVectorDistribution&) = default;
@@ -172,30 +177,30 @@ class PreparedVectorDistribution {
 
   template <class Source>
     requires(!std::same_as<std::remove_cvref_t<Source>, PreparedVectorDistribution> &&
-             PreparedVectorDistributionSource<Source>)
+             PreparedVectorDistributionSource<Dim, Source>)
   explicit PreparedVectorDistribution(Source source)
       : implementation_(std::make_shared<Model<std::remove_cvref_t<Source>>>(std::move(source))) {}
 
   /// Bridge from the mesh storage descriptor into the prepared provider protocol.  Numerical
   /// consumers retain only this authenticated handle; extension providers are not limited to it.
   explicit PreparedVectorDistribution(FieldDistribution distribution)
-      : PreparedVectorDistribution(detail::NativeFieldDistributionSource{distribution}) {
+      : PreparedVectorDistribution(detail::NativeFieldDistributionSource<Dim>{distribution}) {
     if (!field_distribution_is_valid(distribution))
       throw std::invalid_argument("invalid native field distribution");
   }
 
   PreparedVectorDistribution()
       : PreparedVectorDistribution(
-            detail::NativeFieldDistributionSource{FieldDistribution::Distributed}) {}
+            detail::NativeFieldDistributionSource<Dim>{FieldDistribution::Distributed}) {}
 
   [[nodiscard]] static PreparedVectorDistribution distributed() {
     return PreparedVectorDistribution(
-        detail::NativeFieldDistributionSource{FieldDistribution::Distributed});
+        detail::NativeFieldDistributionSource<Dim>{FieldDistribution::Distributed});
   }
 
   [[nodiscard]] static PreparedVectorDistribution replicated() {
     return PreparedVectorDistribution(
-        detail::NativeFieldDistributionSource{FieldDistribution::Replicated});
+        detail::NativeFieldDistributionSource<Dim>{FieldDistribution::Replicated});
   }
 
   [[nodiscard]] PreparedProviderIdentity provider_identity() const noexcept {
@@ -206,11 +211,11 @@ class PreparedVectorDistribution {
     return implementation_->collective_contract();
   }
 
-  [[nodiscard]] bool layout_matches(const MultiFab& field) const {
+  [[nodiscard]] bool layout_matches(const MultiFab<Dim>& field) const {
     return implementation_->layout_matches(field);
   }
 
-  [[nodiscard]] std::string layout_contract(const MultiFab& field) const {
+  [[nodiscard]] std::string layout_contract(const MultiFab<Dim>& field) const {
     return implementation_->layout_contract(field);
   }
 
@@ -246,7 +251,7 @@ class PreparedVectorDistribution {
     reduce_max_values(values, scratch, where, lane);
   }
 
-  void require_collective_layout(const MultiFab& field, const char* where,
+  void require_collective_layout(const MultiFab<Dim>& field, const char* where,
                                  const ExecutionLane& lane) const {
     const PreparedProviderIdentity identity = provider_identity();
     bool matches = false;
@@ -289,18 +294,18 @@ class PreparedVectorDistribution {
                                   ": vector distribution contract differs between ranks");
   }
 
-  void require_collective_layout(const MultiFab& field, const char* where) const {
+  void require_collective_layout(const MultiFab<Dim>& field, const char* where) const {
     const ExecutionLane lane = ExecutionLane::world();
     require_collective_layout(field, where, lane);
   }
 
-  void require_exact_values(const MultiFab& field, std::span<char> scratch, const char* where,
+  void require_exact_values(const MultiFab<Dim>& field, std::span<char> scratch, const char* where,
                             const ExecutionLane& lane) const {
     const PreparedVectorDistributionStatus status =
         implementation_->require_exact_values(field, scratch, where, lane);
     require_callback_success_(status, where);
   }
-  void require_exact_values(const MultiFab& field, std::span<char> scratch,
+  void require_exact_values(const MultiFab<Dim>& field, std::span<char> scratch,
                             const char* where) const {
     const ExecutionLane lane = ExecutionLane::world();
     require_exact_values(field, scratch, where, lane);
@@ -324,8 +329,8 @@ class PreparedVectorDistribution {
     virtual ~Concept() = default;
     [[nodiscard]] virtual PreparedProviderIdentity provider_identity() const noexcept = 0;
     [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
-    [[nodiscard]] virtual bool layout_matches(const MultiFab&) const = 0;
-    [[nodiscard]] virtual std::string layout_contract(const MultiFab&) const = 0;
+    [[nodiscard]] virtual bool layout_matches(const MultiFab<Dim>&) const = 0;
+    [[nodiscard]] virtual std::string layout_contract(const MultiFab<Dim>&) const = 0;
     [[nodiscard]] virtual std::size_t reduction_scratch_value_count(std::size_t) const noexcept = 0;
     [[nodiscard]] virtual std::size_t validation_scratch_byte_count() const noexcept = 0;
     virtual PreparedVectorDistributionStatus reduce_sum_values(
@@ -333,10 +338,12 @@ class PreparedVectorDistribution {
     virtual PreparedVectorDistributionStatus reduce_max_values(
         std::span<double>, std::span<double>, const char*, const ExecutionLane&) const noexcept = 0;
     virtual PreparedVectorDistributionStatus require_exact_values(
-        const MultiFab&, std::span<char>, const char*, const ExecutionLane&) const noexcept = 0;
+        const MultiFab<Dim>&, std::span<char>, const char*,
+        const ExecutionLane&) const noexcept = 0;
   };
 
-  template <PreparedVectorDistributionSource Source>
+  template <class Source>
+    requires PreparedVectorDistributionSource<Dim, Source>
   class Model final : public Concept {
    public:
     explicit Model(Source source) : source_(std::move(source)) {
@@ -358,10 +365,10 @@ class PreparedVectorDistribution {
       return Source::provider_identity();
     }
     std::string_view collective_contract() const noexcept override { return collective_contract_; }
-    bool layout_matches(const MultiFab& field) const override {
+    bool layout_matches(const MultiFab<Dim>& field) const override {
       return source_.layout_matches(field);
     }
-    std::string layout_contract(const MultiFab& field) const override {
+    std::string layout_contract(const MultiFab<Dim>& field) const override {
       return source_.layout_contract(field);
     }
     std::size_t reduction_scratch_value_count(std::size_t count) const noexcept override {
@@ -381,7 +388,7 @@ class PreparedVectorDistribution {
       return source_.reduce_max_values(values, scratch, where, lane);
     }
     PreparedVectorDistributionStatus require_exact_values(
-        const MultiFab& field, std::span<char> scratch, const char* where,
+        const MultiFab<Dim>& field, std::span<char> scratch, const char* where,
         const ExecutionLane& lane) const noexcept override {
       return source_.require_exact_values(field, scratch, where, lane);
     }
@@ -408,42 +415,51 @@ class PreparedVectorDistribution {
   }
 };
 
-inline const PreparedVectorDistribution PreparedVectorDistribution::Distributed =
-    PreparedVectorDistribution::distributed();
-inline const PreparedVectorDistribution PreparedVectorDistribution::Replicated =
-    PreparedVectorDistribution::replicated();
+template <int Dim>
+inline const PreparedVectorDistribution<Dim> PreparedVectorDistribution<Dim>::Distributed =
+    PreparedVectorDistribution<Dim>::distributed();
+template <int Dim>
+inline const PreparedVectorDistribution<Dim> PreparedVectorDistribution<Dim>::Replicated =
+    PreparedVectorDistribution<Dim>::replicated();
 
-inline bool field_distribution_is_valid(const PreparedVectorDistribution&) noexcept {
+template <int Dim>
+bool field_distribution_is_valid(const PreparedVectorDistribution<Dim>&) noexcept {
   return true;
 }
 
 namespace detail {
 
-inline std::string field_distribution_layout_contract(
-    const MultiFab& field, const PreparedVectorDistribution& distribution) {
+template <int Dim>
+std::string field_distribution_layout_contract(
+    const MultiFab<Dim>& field, const PreparedVectorDistribution<Dim>& distribution) {
   return distribution.layout_contract(field);
 }
 
-inline bool field_distribution_layout_matches(const MultiFab& field,
-                                              const PreparedVectorDistribution& distribution) {
+template <int Dim>
+bool field_distribution_layout_matches(const MultiFab<Dim>& field,
+                                       const PreparedVectorDistribution<Dim>& distribution) {
   return distribution.layout_matches(field);
 }
 
-inline void require_collective_field_distribution_layout(
-    const MultiFab& field, const PreparedVectorDistribution& distribution, const char* where) {
+template <int Dim>
+void require_collective_field_distribution_layout(
+    const MultiFab<Dim>& field, const PreparedVectorDistribution<Dim>& distribution,
+    const char* where) {
   distribution.require_collective_layout(field, where);
 }
 
-inline void require_collective_field_distribution_layout(
-    const MultiFab& field, const PreparedVectorDistribution& distribution, const char* where,
-    const ExecutionLane& lane) {
+template <int Dim>
+void require_collective_field_distribution_layout(
+    const MultiFab<Dim>& field, const PreparedVectorDistribution<Dim>& distribution,
+    const char* where, const ExecutionLane& lane) {
   distribution.require_collective_layout(field, where, lane);
 }
 
-inline void reduce_prepared_vector_values_inplace(const PreparedVectorDistribution& distribution,
-                                                  double* values, int count, double* scratch,
-                                                  std::size_t scratch_count, const char* quantity,
-                                                  const ExecutionLane& lane) {
+template <int Dim>
+void reduce_prepared_vector_values_inplace(const PreparedVectorDistribution<Dim>& distribution,
+                                           double* values, int count, double* scratch,
+                                           std::size_t scratch_count, const char* quantity,
+                                           const ExecutionLane& lane) {
   if (count < 0)
     throw std::invalid_argument(std::string(quantity) + " has a negative reduction count");
   distribution.reduce_sum_values(std::span<double>(values, static_cast<std::size_t>(count)),

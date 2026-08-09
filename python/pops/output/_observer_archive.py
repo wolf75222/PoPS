@@ -18,6 +18,8 @@ from pops.output.data import (
     ArrayPiece,
     DiagnosticKey,
     DiagnosticPayload,
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     FieldKey,
     FieldPayload,
     LevelGeometry,
@@ -32,7 +34,7 @@ from pops.output.data import (
 from pops.output.observers import ObserverFrame
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _FORMAT = "pops-observer-frame-archive"
 _MANIFEST_MEMBER = "manifest.json"
 _ARRAY_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -252,6 +254,34 @@ def _frame_projection(
             "dtype": field.array_dtype,
             "pieces": pieces,
         })
+    embedded_boundaries = []
+    for sidecar_index, sidecar in enumerate(frame.snapshot.embedded_boundaries):
+        sidecar_arrays = {}
+        for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+            pieces = []
+            for piece_index, piece in enumerate(sidecar.pieces(name)):
+                array_name = "embedded_%04d_%s_piece_%04d" % (
+                    sidecar_index,
+                    name,
+                    piece_index,
+                )
+                add_array(array_name, piece.values)
+                pieces.append({
+                    "lower": list(piece.lower),
+                    "upper": list(piece.upper),
+                    "global_box_index": piece.global_box_index,
+                    "owner_rank": piece.owner_rank,
+                    "replicated": piece.replicated,
+                    "array": array_name,
+                })
+            sidecar_arrays[name] = pieces
+        embedded_boundaries.append({
+            "layout_identity": sidecar.layout_identity.token,
+            "level": sidecar.level,
+            "global_shape": list(sidecar.global_shape),
+            "dtype": sidecar.dtype,
+            "arrays": sidecar_arrays,
+        })
     native_integrals = [{
         "family_identity": item.family_identity.token,
         "levels": list(item.levels),
@@ -262,6 +292,7 @@ def _frame_projection(
         "provenance": frame.snapshot.provenance.to_data(),
         "geometries": geometries,
         "fields": fields,
+        "embedded_boundaries": embedded_boundaries,
         "diagnostics": [item.to_data() for item in frame.snapshot.diagnostics],
         "native_composite_integrals": native_integrals,
         "metadata": dict(frame.snapshot.metadata),
@@ -431,12 +462,59 @@ def _decode_field(data: Any, arrays: Mapping[str, Any]) -> FieldPayload:
     )
 
 
+def _decode_embedded_boundary(
+    data: Any, arrays: Mapping[str, Any],
+) -> EmbeddedBoundaryPayload:
+    row = _mapping(data, {
+        "layout_identity", "level", "global_shape", "dtype", "arrays",
+    }, "observer archive embedded boundary")
+    descriptions = _mapping(
+        row["arrays"],
+        set(EMBEDDED_BOUNDARY_ARRAY_NAMES),
+        "observer archive embedded-boundary arrays",
+    )
+    decoded = {}
+    for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+        raw_pieces = descriptions[name]
+        if not isinstance(raw_pieces, list):
+            raise TypeError("observer archive embedded-boundary pieces must be a list")
+        pieces = []
+        for raw in raw_pieces:
+            piece = _mapping(raw, {
+                "lower", "upper", "global_box_index", "owner_rank", "replicated", "array",
+            }, "observer archive embedded-boundary array piece")
+            try:
+                value = arrays[piece["array"]]
+            except KeyError as error:
+                raise ValueError(
+                    "observer archive embedded boundary references an unknown array"
+                ) from error
+            pieces.append(ArrayPiece(
+                tuple(piece["lower"]), tuple(piece["upper"]), value,
+                piece["global_box_index"], piece["owner_rank"], piece["replicated"],
+            ))
+        decoded[name] = tuple(pieces)
+    return EmbeddedBoundaryPayload(
+        Identity.from_token(row["layout_identity"]),
+        row["level"],
+        tuple(row["global_shape"]),
+        decoded,
+        dtype=row["dtype"],
+    )
+
+
 def _decode_frame(data: Any, arrays: Mapping[str, Any]) -> ObserverFrame:
     row = _mapping(data, {
-        "clock", "provenance", "geometries", "fields", "diagnostics",
+        "clock", "provenance", "geometries", "fields", "embedded_boundaries", "diagnostics",
         "native_composite_integrals", "metadata", "request",
     }, "observer archive frame")
-    for name in ("geometries", "fields", "diagnostics", "native_composite_integrals"):
+    for name in (
+        "geometries",
+        "fields",
+        "embedded_boundaries",
+        "diagnostics",
+        "native_composite_integrals",
+    ):
         if not isinstance(row[name], list):
             raise TypeError("observer archive frame %s must be a list" % name)
     native_integrals = []
@@ -447,7 +525,8 @@ def _decode_frame(data: Any, arrays: Mapping[str, Any]) -> ObserverFrame:
         try:
             value = float.fromhex(item["value"])
         except (TypeError, ValueError) as error:
-            raise ValueError("observer archive native integral has invalid float.hex data") from error
+            raise ValueError(
+                "observer archive native integral has invalid float.hex data") from error
         native_integrals.append(_NativeCompositeIntegral(
             Identity.from_token(item["family_identity"]), tuple(item["levels"]), value))
     snapshot = OutputSnapshot(
@@ -457,6 +536,10 @@ def _decode_frame(data: Any, arrays: Mapping[str, Any]) -> ObserverFrame:
         tuple(_decode_field(item, arrays) for item in row["fields"]),
         row["metadata"],
         diagnostics=tuple(_diagnostic(item) for item in row["diagnostics"]),
+        embedded_boundaries=tuple(
+            _decode_embedded_boundary(item, arrays)
+            for item in row["embedded_boundaries"]
+        ),
         _native_composite_integrals=tuple(native_integrals),
     )
     frame = ObserverFrame(snapshot, _request(row["request"]))

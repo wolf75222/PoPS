@@ -8,8 +8,10 @@ other.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
+import tomllib
 
 
 FINAL_SPECIFICATION = Path("docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md")
@@ -19,6 +21,79 @@ FINAL_EXAMPLES = (
     Path("examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py"),
     Path("examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"),
 )
+FINAL_EXAMPLE_ACCEPTANCE_TESTS = (
+    "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py"
+    "::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart",
+    "tests/python/examples/final/test_multiphysics_core_example.py"
+    "::test_example_script_runs_outputs_and_restart_without_mock_or_fallback",
+    "tests/python/examples/final/test_imex_amr_final_example.py"
+    "::test_example_runs_and_every_scientific_format_reopens",
+    "tests/python/examples/final/test_hyqmom15_final_example.py"
+    "::test_hyqmom15_example_runs_outputs_and_restarts_bit_identically",
+)
+FINAL_EXAMPLE_QUALIFICATION_TESTS = (
+    "tests/python/examples/final/test_scalar_advection_final_example.py"
+    "::test_target_has_one_authority_per_concern_and_no_legacy_path",
+    "tests/python/examples/final/test_multiphysics_core_example.py"
+    "::test_program_has_exact_field_context_and_transactional_implicit_join",
+    "tests/python/examples/final/test_imex_amr_final_example.py"
+    "::test_resolved_amr_lowering_report_covers_every_executed_authority",
+    "tests/python/unit/moments/test_hyqmom15_final_contract.py"
+    "::test_particle_number_diagnostic_integrates_m00_and_rejects_drift",
+)
+FINAL_EXAMPLE_REQUIRED_TESTS = (
+    *FINAL_EXAMPLE_ACCEPTANCE_TESTS,
+    *FINAL_EXAMPLE_QUALIFICATION_TESTS,
+)
+FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS = {
+    FINAL_EXAMPLES[0]: {
+        "hdf5": ({
+            "consumer_target": "state/tracer",
+            "artifact_root": "manual/accepted/state/tracer",
+        },),
+        "npz": (),
+        "paraview": ({
+            "consumer_target": "solution/tracer",
+            "artifact_root": "manual/accepted/solution/tracer",
+        },),
+    },
+    FINAL_EXAMPLES[1]: {
+        "hdf5": ({
+            "consumer_target": "state/two_fluid",
+            "artifact_root": "accepted/state/two_fluid",
+        },),
+        "npz": (),
+        "paraview": ({
+            "consumer_target": "visualization/two_fluid",
+            "artifact_root": "accepted/visualization/two_fluid",
+        },),
+    },
+    FINAL_EXAMPLES[2]: {
+        "hdf5": ({
+            "consumer_target": "hdf5/state",
+            "artifact_root": "manual/accepted/hdf5/state",
+        },),
+        "npz": ({
+            "consumer_target": "npz/state",
+            "artifact_root": "manual/accepted/npz/state",
+        },),
+        "paraview": ({
+            "consumer_target": "paraview/state",
+            "artifact_root": "manual/accepted/paraview/state",
+        },),
+    },
+    FINAL_EXAMPLES[3]: {
+        "hdf5": ({
+            "consumer_target": "state/hyqmom15",
+            "artifact_root": "accepted/state/hyqmom15",
+        },),
+        "npz": (),
+        "paraview": ({
+            "consumer_target": "visualization/hyqmom15",
+            "artifact_root": "accepted/visualization/hyqmom15",
+        },),
+    },
+}
 REQUIRED_PROOF_MARKERS = (
     "HDF5:",
     "ParaView:",
@@ -32,13 +107,20 @@ FORBIDDEN_FINAL_IMPORTS = (
     "pops.runtime.integrate",
     "CartesianMesh",
 )
-# The published wheel matrix is CPU/Kokkos Serial without MPI or parallel HDF5. The full suite still
-# runs; this supported-platform subset is repeated with a strict all-pass/no-hidden-skip policy.
-PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
+# The complete source suite is authenticated by the release workflow's ``full-source-matrix`` job.
+# The exact published wheel repeats the closed M4 Python ledger plus the final-example ledger; it
+# must not serialize the complete suite a second time under a short release timeout.
+PYTHON_CONFORMANCE_MANIFEST = Path("tests/gates/m4_runtime_io.toml")
+PYTHON_REQUIRED_SELECTION = "m4-runtime-io-pytest+final-example-ledger"
+INSTALLED_COMPONENT_PACKAGE_NODEID = (
+    "tests/python/integration/native_loader/test_external_component_package.py"
+    "::test_source_component_executes_through_generic_native_loader_and_flux_consumer"
+)
 REQUIRED_RELEASE_GATES = (
     "official_build",
-    "doctor",
+    "installed_wheel",
     "codesign",
+    "doctor",
     "native_conformance",
     "python_conformance",
     "examples",
@@ -50,6 +132,49 @@ REQUIRED_RELEASE_GATES = (
 )
 
 
+def required_python_conformance_nodeids(root: Path) -> tuple[str, ...]:
+    """Return the exact installed-wheel Python ledger for the final gate.
+
+    MPI-only rows stay proved by ``full-source-matrix`` because the published wheel is Serial.
+    The external component row is executed separately with checkout headers explicitly cleared,
+    which is a strictly stronger installed-wheel proof than repeating it in the main lane.
+    """
+
+    path = root / PYTHON_CONFORMANCE_MANIFEST
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError("cannot read final Python conformance manifest: %s" % exc) from exc
+    if data.get("schema_version") != 1 or data.get("gate") != "m4-runtime-io":
+        raise ValueError("final Python conformance manifest identity drifted")
+    if data.get("deferred") != []:
+        raise ValueError("final Python conformance manifest must be closed")
+    checks = data.get("check")
+    if not isinstance(checks, list) or not checks:
+        raise ValueError("final Python conformance manifest has no executable checks")
+
+    nodeids: list[str] = []
+    manifest_nodeids: set[str] = set()
+    for row in checks:
+        if not isinstance(row, dict):
+            raise ValueError("final Python conformance manifest contains a malformed row")
+        if row.get("kind") != "pytest":
+            continue
+        nodeid = row.get("nodeid")
+        if not isinstance(nodeid, str) or "::" not in nodeid:
+            raise ValueError("final Python conformance manifest contains an invalid pytest nodeid")
+        if nodeid in manifest_nodeids:
+            raise ValueError("final Python conformance manifest contains duplicate pytest nodeids")
+        manifest_nodeids.add(nodeid)
+        if nodeid != INSTALLED_COMPONENT_PACKAGE_NODEID \
+                and nodeid not in FINAL_EXAMPLE_REQUIRED_TESTS:
+            nodeids.append(nodeid)
+    nodeids.extend(FINAL_EXAMPLE_REQUIRED_TESTS)
+    if len(nodeids) != len(set(nodeids)):
+        raise ValueError("final Python conformance ledger contains duplicate nodeids")
+    return tuple(nodeids)
+
+
 def release_matrix_source_errors(root: Path) -> list[str]:
     """Return drift between the declared support matrix and its executable workflow proof.
 
@@ -59,7 +184,7 @@ def release_matrix_source_errors(root: Path) -> list[str]:
     """
 
     errors: list[str] = []
-    contract_path = root / "schemas" / "release_contract.v1.json"
+    contract_path = root / "schemas" / "release_contract.v2.json"
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
         matrix = contract["supported_matrix"]
@@ -323,6 +448,8 @@ def source_contract_errors(root: Path) -> list[str]:
     expected = tuple(sorted(FINAL_EXAMPLES))
     if actual != expected:
         errors.append("final examples must be exactly %s (found %s)" % (expected, actual))
+    if set(FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS) != set(FINAL_EXAMPLES):
+        errors.append("final scientific-output ledger must cover exactly the final examples")
 
     for relative in FINAL_EXAMPLES:
         path = root / relative
@@ -341,6 +468,192 @@ def source_contract_errors(root: Path) -> list[str]:
             errors.append(
                 "%s imports transitional/internal authoring names %s" % (relative, forbidden)
             )
+        formats = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(relative)
+        if not isinstance(formats, dict) or set(formats) != {"hdf5", "npz", "paraview"}:
+            errors.append("%s has no exact scientific-output format ledger" % relative)
+            continue
+        artifact_roots: set[str] = set()
+        for format_name, expectations in formats.items():
+            if not isinstance(expectations, tuple):
+                errors.append(
+                    "%s has a malformed %s scientific-output target ledger"
+                    % (relative, format_name)
+                )
+                continue
+            consumer_targets: set[str] = set()
+            for expectation in expectations:
+                if not isinstance(expectation, dict) or set(expectation) != {
+                    "consumer_target", "artifact_root",
+                }:
+                    errors.append(
+                        "%s has a malformed %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_target = expectation["consumer_target"]
+                artifact_root = expectation["artifact_root"]
+                if not isinstance(consumer_target, str) or not consumer_target \
+                        or not isinstance(artifact_root, str) or not artifact_root:
+                    errors.append(
+                        "%s has an invalid %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_path = Path(consumer_target)
+                artifact_path = Path(artifact_root)
+                if consumer_path.is_absolute() or ".." in consumer_path.parts \
+                        or artifact_path.is_absolute() or ".." in artifact_path.parts:
+                    errors.append(
+                        "%s has an escaping %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                if len(artifact_path.parts) < len(consumer_path.parts) or tuple(
+                    artifact_path.parts[-len(consumer_path.parts):]
+                ) != consumer_path.parts:
+                    errors.append(
+                        "%s %s artifact root %s does not end with consumer target %s"
+                        % (relative, format_name, artifact_root, consumer_target)
+                    )
+                    continue
+                if consumer_target in consumer_targets or artifact_root in artifact_roots:
+                    errors.append(
+                        "%s has duplicate %s scientific-output expectations"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_targets.add(consumer_target)
+                artifact_roots.add(artifact_root)
+                if 'target="%s"' % consumer_target not in text:
+                    errors.append(
+                        "%s lacks its exact %s scientific-output target %s"
+                        % (relative, format_name, consumer_target)
+                    )
+    ledgers = (
+        ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
+        ("qualification", FINAL_EXAMPLE_QUALIFICATION_TESTS),
+    )
+    required_nodeids = tuple(nodeid for _kind, ledger in ledgers for nodeid in ledger)
+    if len(set(required_nodeids)) != len(required_nodeids):
+        errors.append("final-example required test nodeids must be unique")
+    for proof_kind, ledger in ledgers:
+        if len(ledger) != len(FINAL_EXAMPLES):
+            errors.append(
+                "final examples and exact %s tests must have one-to-one coverage"
+                % proof_kind
+            )
+        for example, nodeid in zip(FINAL_EXAMPLES, ledger, strict=False):
+            relative, separator, function_name = nodeid.partition("::")
+            if not separator or not relative or not function_name:
+                errors.append("invalid final-example %s nodeid %r" % (proof_kind, nodeid))
+                continue
+            test_path = root / relative
+            if not test_path.is_file():
+                errors.append("missing final-example %s test: %s" % (proof_kind, nodeid))
+                continue
+            source = test_path.read_text(encoding="utf-8")
+            try:
+                tree = ast.parse(source, filename=str(test_path))
+            except SyntaxError as exc:
+                errors.append(
+                    "cannot parse final-example %s test %s: %s"
+                    % (proof_kind, nodeid, exc)
+                )
+                continue
+            functions = [
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == function_name
+            ]
+            if len(functions) != 1:
+                errors.append(
+                    "final-example %s nodeid must resolve exactly once: %s"
+                    % (proof_kind, nodeid)
+                )
+                continue
+            function = functions[0]
+            fixture_names = {
+                argument.arg
+                for argument in (
+                    *function.args.posonlyargs,
+                    *function.args.args,
+                    *function.args.kwonlyargs,
+                )
+            }
+            if fixture_names & {"mock", "mocker", "monkeypatch", "patch"}:
+                errors.append("%s uses a mock fixture" % nodeid)
+            forbidden_calls = []
+            forbidden_imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (
+                    node.module or ""
+                ).startswith(("unittest.mock", "pytest_mock")):
+                    forbidden_imports.append(node.module or "")
+                elif isinstance(node, ast.Import) and any(
+                    alias.name.startswith(("unittest.mock", "pytest_mock"))
+                    for alias in node.names
+                ):
+                    forbidden_imports.extend(alias.name for alias in node.names)
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Call):
+                    continue
+                call = node.func
+                parts = []
+                while isinstance(call, ast.Attribute):
+                    parts.append(call.attr)
+                    call = call.value
+                if isinstance(call, ast.Name):
+                    parts.append(call.id)
+                name = ".".join(reversed(parts))
+                if name in {
+                    "patch",
+                    "pytest.importorskip",
+                    "pytest.skip",
+                    "pytest.xfail",
+                } or name.startswith(("mock.", "mocker.", "unittest.mock.")):
+                    forbidden_calls.append(name)
+            decorators = []
+            for decorator in function.decorator_list:
+                text = ast.unparse(decorator)
+                if "skip" in text or "xfail" in text:
+                    decorators.append(text)
+            module_markers = []
+            for statement in tree.body:
+                value = None
+                targets = ()
+                if isinstance(statement, ast.Assign):
+                    value = statement.value
+                    targets = statement.targets
+                elif isinstance(statement, ast.AnnAssign):
+                    value = statement.value
+                    targets = (statement.target,)
+                if value is not None and any(
+                    isinstance(target, ast.Name) and target.id == "pytestmark"
+                    for target in targets
+                ):
+                    text = ast.unparse(value)
+                    if "skip" in text or "xfail" in text:
+                        module_markers.append(text)
+            if forbidden_calls or forbidden_imports or decorators or module_markers:
+                errors.append(
+                    "%s is optional: %s"
+                    % (
+                        nodeid,
+                        sorted(
+                            set(
+                                (
+                                    *forbidden_calls,
+                                    *forbidden_imports,
+                                    *decorators,
+                                    *module_markers,
+                                )
+                            )
+                        ),
+                    )
+                )
+            if example.name not in source:
+                errors.append("%s is not bound to %s" % (nodeid, example))
     return errors
 
 

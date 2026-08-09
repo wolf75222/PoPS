@@ -7,7 +7,7 @@ explicitly with :class:`ValueExpr` when an expression is required.
 from __future__ import annotations
 
 __all__ = [
-    "sqrt", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
+    "sqrt", "minimum", "maximum", "grad", "norm", "div", "laplacian", "dx", "dy", "dz", "ddt", "rate", "unknown",
     "integral",
     # Public symbolic values and node types.
     "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
@@ -52,6 +52,7 @@ from pops._ir.ops import (  # noqa: F401
     norm,
     dx,
     dy,
+    dz,
     laplacian,
     div,
     ddt,

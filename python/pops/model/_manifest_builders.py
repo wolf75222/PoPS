@@ -183,8 +183,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
     }
     eigenvalues = getattr(module, "_eigenvalues", None)
     has_eigenvalues = {
-        "x": bool(eigenvalues and eigenvalues.get("x")),
-        "y": bool(eigenvalues and eigenvalues.get("y")),
+        axis: bool(values) for axis, values in (eigenvalues or {}).items()
     }
     wave_speed_provider = getattr(module, "wave_speed_provider_kind", None)
     capabilities_provider = getattr(module, "capabilities", None)

@@ -415,16 +415,15 @@ class _EllipticTerm(_BoardNode):
 
 
 class Partial(_BoardNode):
-    """A first partial derivative ``scale * d(field)/dx_axis`` (axis 0=x, 1=y).
+    """A first partial derivative ``scale * d(field)/dx_axis``.
 
-    ``grad(phi).x`` and ``dx(phi)`` build this. A model resolves it to the field's
-    canonical gradient aux (``grad_x`` / ``grad_y``). Negation/scaling track the
-    leading coefficient so ``-grad(phi).x`` resolves to ``-grad_x``.
+    Axis ordinals are canonical Cartesian ordinals (0=x, 1=y, 2=z).  The owning model authenticates
+    the ordinal against its inferred frame rank before lowering it to a native field component.
     """
 
     def __init__(self, field: Any, axis: Any, scale: Any = 1.0) -> None:
-        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1):
-            raise ValueError("Partial: axis must be the integer 0 or 1")
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(3):
+            raise ValueError("Partial: axis must be a canonical Cartesian ordinal (0, 1, or 2)")
         self.field = field
         self.axis = axis
         self.scale = exact_numeric_scalar(scale, where="Partial scale")
@@ -441,12 +440,12 @@ class Partial(_BoardNode):
         return self.__mul__(o)
 
     def __repr__(self) -> str:
-        d = "x" if self.axis == 0 else "y"
+        d = ("x", "y", "z")[self.axis]
         return "Partial(%s%r.d%s)" % (exact_scale_prefix(self.scale), self.field, d)
 
 
 class Gradient(_BoardNode):
-    """The gradient of a scalar field; ``grad(phi).x`` / ``.y`` are :class:`Partial`."""
+    """The gradient of a scalar field; each Cartesian component is a :class:`Partial`."""
 
     def __init__(self, field: Any, scale: Any = 1.0) -> None:
         self.field = field
@@ -459,6 +458,15 @@ class Gradient(_BoardNode):
     @property
     def y(self) -> Any:
         return Partial(self.field, 1, self.scale)
+
+    @property
+    def z(self) -> Any:
+        return Partial(self.field, 2, self.scale)
+
+    def __getitem__(self, axis: Any) -> Any:
+        """Select a component with a typed Cartesian axis or its exact ordinal."""
+        ordinal = getattr(axis, "index", axis)
+        return Partial(self.field, ordinal, self.scale)
 
     def __neg__(self) -> Any:
         return Gradient(self.field, -self.scale)

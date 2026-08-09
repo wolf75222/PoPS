@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
         const pops::bench::RuntimeMetadata metadata = pops::bench::collect_runtime_metadata();
         if (config.case_id == "all" || config.case_id == "arith_halo")
           pops::bench::run_arith_halo_case(config, metadata, writer);
-        if (config.case_id == "all" || config.case_id == "tensor_krylov")
-          pops::bench::run_tensor_krylov_case(config, metadata, writer);
+        if (config.case_id == "all" || config.case_id == "scalar_mg")
+          pops::bench::run_scalar_mg_case(config, metadata, writer);
       }
     } catch (const std::exception& error) {
       std::cerr << "pops_benchmark rank " << pops::my_rank() << ": " << error.what() << '\n';

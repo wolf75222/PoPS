@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
+import json
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,16 @@ from pops.time import AdaptiveCFL, StagePoint, TimePoint
 
 
 OUTPUT_ROOT = Path("outputs/scalar_advection")
+VELOCITY_X = 1.0
+VELOCITY_Y = 0.25
+INFLOW_X = 0.0
+INFLOW_Y = 0.0
+GAUSSIAN_BACKGROUND = 0.05
+GAUSSIAN_AMPLITUDE = 0.95
+GAUSSIAN_INVERSE_WIDTH = 120.0
+GAUSSIAN_CENTER_X = 0.30
+GAUSSIAN_CENTER_Y = 0.35
+RELATIVE_L2_TOLERANCE = 0.10
 ProgramBuilder = Callable[[Any, Any], pops.Program]
 
 
@@ -114,9 +125,33 @@ class ScalarRuntimeSnapshot:
     macro_step: int
     states: tuple[np.ndarray, ...]
     patch_boxes: tuple[tuple[int, ...], ...]
+    regrid_count: int
+    topology_epoch: int
     program_hash: str
+    program_transaction_state: str
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarErrorNorms:
+    """Cell-volume-weighted error against the exact characteristic solution."""
+
+    time: float
+    active_cells: int
+    l1: float
+    l2: float
+    linf: float
+    relative_l2: float
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarAMRProgramEvidence:
+    """Accepted conservative coupling recorded by the native Program report."""
+
+    flux_ledger_levels: tuple[int, ...]
+    synchronization_relations: tuple[tuple[int, int], ...]
+    synchronization_phases: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +163,8 @@ class ScalarExecutionEvidence:
     checkpoint_path: Path
     hdf5_identity: str
     paraview_identity: str
+    error_norms: ScalarErrorNorms
+    program_evidence: ScalarAMRProgramEvidence
     accepted: ScalarRuntimeSnapshot
     restored: ScalarRuntimeSnapshot
     continuous: ScalarRuntimeSnapshot
@@ -212,16 +249,16 @@ def build_authoring(
     (u,) = state
 
     velocity_x_param = model.param(
-        RuntimeParam("a_x", default=1.0, domain=Positive())
+        RuntimeParam("a_x", default=VELOCITY_X, domain=Positive())
     )
     velocity_y_param = model.param(
-        RuntimeParam("a_y", default=0.25, domain=Positive())
+        RuntimeParam("a_y", default=VELOCITY_Y, domain=Positive())
     )
     inlet_x_param = model.param(
-        RuntimeParam("u_in_x", default=0.0, domain=Interval(-10.0, 10.0))
+        RuntimeParam("u_in_x", default=INFLOW_X, domain=Interval(-10.0, 10.0))
     )
     inlet_y_param = model.param(
-        RuntimeParam("u_in_y", default=0.0, domain=Interval(-10.0, 10.0))
+        RuntimeParam("u_in_y", default=INFLOW_Y, domain=Interval(-10.0, 10.0))
     )
 
     # Handles remain stable identities.  Only explicit value reads enter symbolic algebra.
@@ -278,7 +315,9 @@ def build_authoring(
 
     # Run controls do not select physics, a spatial method, a time method or a CFL strategy.
     run_controls = {
-        "t_end": 1.0,
+        # At t=0.2 the translated Gaussian is still inside the domain, so the accepted scientific
+        # artifact can be checked against the non-trivial characteristic solution.
+        "t_end": 0.20,
         "max_steps": 100_000,
         "output_dir": Path(output_root),
     }
@@ -408,10 +447,13 @@ def build_initial_condition(core: ScalarAdvectionAuthoring) -> Any:
 
     gaussian = Gaussian(
         frame=core.frame,
-        center={core.frame.x: 0.30, core.frame.y: 0.35},
-        background=0.05,
-        amplitude=0.95,
-        inverse_width=120.0,
+        center={
+            core.frame.x: GAUSSIAN_CENTER_X,
+            core.frame.y: GAUSSIAN_CENTER_Y,
+        },
+        background=GAUSSIAN_BACKGROUND,
+        amplitude=GAUSSIAN_AMPLITUDE,
+        inverse_width=GAUSSIAN_INVERSE_WIDTH,
     )
     return InitialCondition(
         state=core.tracer_state,
@@ -495,10 +537,10 @@ def build_bind_params(core: ScalarAdvectionAuthoring) -> dict[Any, float]:
 
     resolve = core.case.resolve
     return {
-        resolve(core.velocity_x_param): 1.0,
-        resolve(core.velocity_y_param): 0.25,
-        resolve(core.inlet_x_param): 0.0,
-        resolve(core.inlet_y_param): 0.0,
+        resolve(core.velocity_x_param): VELOCITY_X,
+        resolve(core.velocity_y_param): VELOCITY_Y,
+        resolve(core.inlet_x_param): INFLOW_X,
+        resolve(core.inlet_y_param): INFLOW_Y,
         resolve(core.refine_threshold): 0.10,
         resolve(core.coarsen_threshold): 0.04,
     }
@@ -521,6 +563,22 @@ def compile_final_case(
     return target, pops.compile(resolved)
 
 
+def _program_transaction_state(simulation: Any) -> str:
+    """Canonicalize every restart-sensitive Program registry without native objects."""
+
+    report = simulation.program_report().to_dict()
+    return json.dumps({
+        "cache": report["cache"],
+        "clocks": report["clocks"],
+        "diagnostics": report["diagnostics"],
+        "flux_ledger": report["flux_ledger"],
+        "histories": report["histories"],
+        "level_relations": report["level_relations"],
+        "synchronization": report["synchronization"],
+        "temporal": report["temporal"],
+    }, sort_keys=True, separators=(",", ":"))
+
+
 def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
     """Capture every state item required for strict AMR continuation parity."""
 
@@ -530,6 +588,7 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
     level_count = int(simulation.n_levels())
     if level_count <= 0:
         raise RuntimeError("scalar acceptance installed no AMR hierarchy levels")
+    regrid = simulation.amr.explain_regrid()
     return ScalarRuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
@@ -544,7 +603,10 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
             tuple(int(value) for value in row)
             for row in simulation.patch_boxes()
         ),
+        regrid_count=int(regrid.regrid_count),
+        topology_epoch=int(regrid.topology_epoch),
         program_hash=str(simulation.installed_program_hash()),
+        program_transaction_state=_program_transaction_state(simulation),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
     )
@@ -562,7 +624,13 @@ def _require_same_snapshot(
         "time": (left.time, right.time),
         "macro_step": (left.macro_step, right.macro_step),
         "patch_boxes": (left.patch_boxes, right.patch_boxes),
+        "regrid_count": (left.regrid_count, right.regrid_count),
+        "topology_epoch": (left.topology_epoch, right.topology_epoch),
         "program_hash": (left.program_hash, right.program_hash),
+        "program_transaction_state": (
+            left.program_transaction_state,
+            right.program_transaction_state,
+        ),
         "consumer_graph_identity": (
             left.consumer_graph_identity,
             right.consumer_graph_identity,
@@ -592,9 +660,149 @@ def _require_refined_hierarchy(snapshot: ScalarRuntimeSnapshot, *, where: str) -
             "%s did not execute the requested refined AMR hierarchy: expected=%r, actual=%r"
             % (where, expected_levels, actual_levels)
         )
+    if snapshot.regrid_count <= 0 or snapshot.topology_epoch <= 0:
+        raise RuntimeError(
+            "%s exposes refined patches but no completed dynamic topology replacement: "
+            "regrid_count=%d, topology_epoch=%d"
+            % (where, snapshot.regrid_count, snapshot.topology_epoch)
+        )
 
 
-def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
+def _require_regrid_progress(
+    before: ScalarRuntimeSnapshot,
+    after: ScalarRuntimeSnapshot,
+    *,
+    where: str,
+) -> None:
+    """Require continuation to cross a completed topology-changing regrid window."""
+
+    if after.macro_step <= before.macro_step:
+        raise RuntimeError(
+            "%s did not advance the accepted macro-step (%d -> %d)"
+            % (where, before.macro_step, after.macro_step)
+        )
+    if after.regrid_count <= before.regrid_count:
+        raise RuntimeError(
+            "%s did not complete a dynamic regrid (%d -> %d)"
+            % (where, before.regrid_count, after.regrid_count)
+        )
+    if after.topology_epoch <= before.topology_epoch:
+        raise RuntimeError(
+            "%s did not replace the accepted topology (%d -> %d)"
+            % (where, before.topology_epoch, after.topology_epoch)
+        )
+
+
+def _analytic_solution(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    time: float,
+) -> np.ndarray:
+    """Backtrace positive characteristics through the two zero-inflow boundaries."""
+
+    departure_x = x - VELOCITY_X * time
+    departure_y = y - VELOCITY_Y * time
+    inside = (
+        (departure_x >= 0.0)
+        & (departure_x <= 1.0)
+        & (departure_y >= 0.0)
+        & (departure_y <= 1.0)
+    )
+    exact = np.zeros_like(x, dtype=np.float64)
+    exact[inside] = (
+        GAUSSIAN_BACKGROUND
+        + GAUSSIAN_AMPLITUDE
+        * np.exp(
+            -GAUSSIAN_INVERSE_WIDTH
+            * (
+                (departure_x[inside] - GAUSSIAN_CENTER_X) ** 2
+                + (departure_y[inside] - GAUSSIAN_CENTER_Y) ** 2
+            )
+        )
+    )
+    return exact
+
+
+def _scalar_error_norms(paraview: Any) -> ScalarErrorNorms:
+    """Measure the accepted leaf-cell solution stored in one reopened VTU artifact."""
+
+    field_records = tuple(paraview.manifest["datasets"]["fields"].values())
+    field_names = {
+        str(record["name"])
+        for record in field_records
+        if record["association"] == "cell"
+    }
+    if len(field_names) != 1:
+        raise RuntimeError(
+            "scalar acceptance expected one cell-field family, got %r"
+            % (tuple(sorted(field_names)),)
+        )
+    (field_name,) = tuple(field_names)
+    values = np.asarray(paraview.arrays[field_name], dtype=np.float64)
+    if values.ndim == 2 and values.shape[1] == 1:
+        values = values[:, 0]
+    if values.ndim != 1:
+        raise RuntimeError("scalar VTU field must contain one component per cell")
+
+    points = np.asarray(paraview.arrays["Points"], dtype=np.float64)
+    offsets = np.asarray(paraview.arrays["offsets"], dtype=np.int64)
+    connectivity = np.asarray(paraview.arrays["connectivity"], dtype=np.int64)
+    cell_sizes = np.diff(np.concatenate((np.asarray((0,), dtype=np.int64), offsets)))
+    if (
+        offsets.size != values.size
+        or cell_sizes.size == 0
+        or not np.all(cell_sizes == cell_sizes[0])
+    ):
+        raise RuntimeError("scalar VTU topology is not one fixed-size cell family")
+    cell_points = connectivity.reshape((offsets.size, int(cell_sizes[0])))
+    centers = np.mean(points[cell_points, :2], axis=1)
+
+    coverage = np.asarray(paraview.arrays["pops_coverage"], dtype=np.uint8)
+    ghost_types = np.asarray(paraview.arrays["vtkGhostType"], dtype=np.uint8)
+    volumes = np.asarray(paraview.arrays["pops_cell_volume"], dtype=np.float64)
+    if not (
+        coverage.shape == ghost_types.shape == volumes.shape == values.shape
+    ):
+        raise RuntimeError("scalar VTU geometry and field arrays have inconsistent extents")
+    # Ignore covered coarse cells and replicated MPI cells. Bit 0 is VTK_DUPLICATECELL.
+    active = (coverage == 0) & ((ghost_types & np.uint8(1)) == 0)
+    if not np.any(active) or np.any(volumes[active] <= 0.0):
+        raise RuntimeError("scalar VTU contains no positive-volume active leaf cells")
+
+    time_values = np.asarray(paraview.arrays["TimeValue"], dtype=np.float64)
+    if time_values.shape != (1,) or not np.isfinite(time_values[0]):
+        raise RuntimeError("scalar VTU must contain one finite physical TimeValue")
+    time = float(time_values[0])
+    exact = _analytic_solution(centers[:, 0], centers[:, 1], time=time)
+    error = values - exact
+    weights = volumes[active]
+    active_error = error[active]
+    exact_l2 = float(np.sqrt(np.sum(exact[active] ** 2 * weights)))
+    if not np.isfinite(active_error).all() or exact_l2 <= 0.0:
+        raise RuntimeError("scalar analytic comparison is non-finite or has zero reference norm")
+    l1 = float(np.sum(np.abs(active_error) * weights))
+    l2 = float(np.sqrt(np.sum(active_error**2 * weights)))
+    linf = float(np.max(np.abs(active_error)))
+    result = ScalarErrorNorms(
+        time=time,
+        active_cells=int(np.count_nonzero(active)),
+        l1=l1,
+        l2=l2,
+        linf=linf,
+        relative_l2=l2 / exact_l2,
+    )
+    if result.relative_l2 > RELATIVE_L2_TOLERANCE:
+        raise RuntimeError(
+            "scalar relative L2 error %.6e exceeds documented tolerance %.6e at t=%.6e"
+            % (result.relative_l2, RELATIVE_L2_TOLERANCE, result.time)
+        )
+    return result
+
+
+def _reopen_scientific_outputs(
+    root: Path,
+) -> tuple[Path, Path, str, str, ScalarErrorNorms]:
     """Reopen one independently persisted HDF5 and ParaView artifact."""
 
     from pops.output import read_hdf5, read_paraview
@@ -606,11 +814,73 @@ def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
     hdf5_path, paraview_path = hdf5_paths[-1], paraview_paths[-1]
     hdf5 = read_hdf5(hdf5_path)
     paraview = read_paraview(paraview_path)
+    if not hdf5.arrays or not paraview.arrays:
+        raise RuntimeError("published scalar artifacts reopened without arrays")
+    if not all(
+        np.isfinite(value).all()
+        for artifact in (hdf5, paraview)
+        for value in artifact.arrays.values()
+    ):
+        raise RuntimeError("published scalar output contains a non-finite value")
     return (
         hdf5_path,
         paraview_path,
         hdf5.output_identity.token,
         paraview.output_identity.token,
+        _scalar_error_norms(paraview),
+    )
+
+
+def _require_multilevel_program_evidence(
+    report: Any,
+    *,
+    expected_levels: tuple[int, ...],
+) -> ScalarAMRProgramEvidence:
+    """Authenticate flux contributions and reflux-before-average-down coupling."""
+
+    if not report.installed:
+        raise RuntimeError("scalar acceptance has no installed native Program report")
+    levels = tuple(sorted({int(row["level"]) for row in report.flux_ledger}))
+    if levels != expected_levels:
+        raise RuntimeError(
+            "scalar flux ledger levels differ from the installed hierarchy: %r != %r"
+            % (levels, expected_levels)
+        )
+
+    phase_groups: dict[tuple[int, ...], list[str]] = {}
+    for row in report.synchronization:
+        clock_phase = row["clock_phase"]
+        key = (
+            int(row["parent_level"]),
+            int(row["child_level"]),
+            int(row["block"]),
+            int(row["macro_step"]),
+            int(clock_phase["numerator"]),
+            int(clock_phase["denominator"]),
+        )
+        phase_groups.setdefault(key, []).append(str(row["phase"]))
+    expected_phases = ("reflux", "average_down")
+    if not phase_groups:
+        raise RuntimeError("scalar acceptance published no AMR synchronization phases")
+    for key, phases in phase_groups.items():
+        if tuple(phases) != expected_phases:
+            raise RuntimeError(
+                "scalar AMR synchronization %r must be reflux then average_down, got %r"
+                % (key, tuple(phases))
+            )
+    relations = tuple(sorted({(key[0], key[1]) for key in phase_groups}))
+    expected_relations = tuple(
+        (parent, parent + 1) for parent in range(len(expected_levels) - 1)
+    )
+    if relations != expected_relations:
+        raise RuntimeError(
+            "scalar synchronization relations differ from the installed hierarchy: %r != %r"
+            % (relations, expected_relations)
+        )
+    return ScalarAMRProgramEvidence(
+        flux_ledger_levels=levels,
+        synchronization_relations=relations,
+        synchronization_phases=expected_phases,
     )
 
 
@@ -630,8 +900,14 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     if run_report.accepted_steps <= 0:
         raise RuntimeError("the explicit scalar Program executed no accepted macro-step")
 
-    hdf5_path, paraview_path, hdf5_identity, paraview_identity = \
+    hdf5_path, paraview_path, hdf5_identity, paraview_identity, error_norms = \
         _reopen_scientific_outputs(accepted_root)
+    checkpoint_contract = simulation.amr.explain_checkpoint()
+    if not checkpoint_contract.restartable or checkpoint_contract.violations:
+        raise RuntimeError(
+            "scalar AMR runtime does not expose a strict restart contract: %r"
+            % (tuple(checkpoint_contract.violations),)
+        )
     checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
     accepted = _snapshot(simulation)
     _require_refined_hierarchy(accepted, where="accepted scalar run")
@@ -661,12 +937,34 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     )
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    _require_regrid_progress(accepted, continuous, where="uninterrupted continuation")
+    _require_regrid_progress(restored, restarted, where="restarted continuation")
+    expected_levels = tuple(range(len(continuous.states)))
+    continuous_report = simulation.program_report()
+    restarted_report = resumed.program_report()
+    continuous_program = _require_multilevel_program_evidence(
+        continuous_report,
+        expected_levels=expected_levels,
+    )
+    restarted_program = _require_multilevel_program_evidence(
+        restarted_report,
+        expected_levels=expected_levels,
+    )
+    if continuous_program != restarted_program:
+        raise RuntimeError("restart changed scalar AMR ledger/synchronization evidence")
+    if (
+        continuous_report.flux_ledger != restarted_report.flux_ledger
+        or continuous_report.synchronization != restarted_report.synchronization
+    ):
+        raise RuntimeError("restart changed scalar AMR ledger/synchronization entries")
     return ScalarExecutionEvidence(
         hdf5_path=hdf5_path,
         paraview_path=paraview_path,
         checkpoint_path=checkpoint_path,
         hdf5_identity=hdf5_identity,
         paraview_identity=paraview_identity,
+        error_norms=error_norms,
+        program_evidence=continuous_program,
         accepted=accepted,
         restored=restored,
         continuous=continuous,
@@ -735,6 +1033,33 @@ def main() -> None:
     print("PoPS final scalar-advection acceptance:")
     print("  HDF5: %s" % evidence.hdf5_identity)
     print("  ParaView: %s" % evidence.paraview_identity)
+    print(
+        "  analytic error at t=%.6f: L1=%.6e L2=%.6e Linf=%.6e relative-L2=%.6e"
+        % (
+            evidence.error_norms.time,
+            evidence.error_norms.l1,
+            evidence.error_norms.l2,
+            evidence.error_norms.linf,
+            evidence.error_norms.relative_l2,
+        )
+    )
+    print(
+        "  AMR synchronization: levels=%r relations=%r phases=%r"
+        % (
+            evidence.program_evidence.flux_ledger_levels,
+            evidence.program_evidence.synchronization_relations,
+            evidence.program_evidence.synchronization_phases,
+        )
+    )
+    print(
+        "  AMR regrid: count=%d -> %d topology-epoch=%d -> %d"
+        % (
+            evidence.accepted.regrid_count,
+            evidence.restarted.regrid_count,
+            evidence.accepted.topology_epoch,
+            evidence.restarted.topology_epoch,
+        )
+    )
     print("  checkpoint: %s" % evidence.checkpoint_path)
     print("  bit-identical restart: step %d" % evidence.restarted.macro_step)
     print("  explicit/pops.lib.time.SSPRK2 parity: %s" % preset.program_hash)

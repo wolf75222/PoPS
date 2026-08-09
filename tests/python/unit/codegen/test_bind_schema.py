@@ -58,8 +58,8 @@ def test_field_provider_outputs_are_not_external_aux_inputs_across_block_owners(
     assert produced == {"plasma": ("phi2", "g2_x", "g2_y")}
 
     rows = (
-        SimpleNamespace(block_name="plasma", aux_names=("phi2", "g2_x", "g2_y", "B_z")),
-        SimpleNamespace(block_name="other", aux_names=("g2_x",)),
+        SimpleNamespace(block_name="plasma", provider_components=("phi2", "g2_x", "g2_y", "B_z")),
+        SimpleNamespace(block_name="other", provider_components=("g2_x",)),
     )
     # The provider owns only plasma's channels: an imposed homonym on another block remains a
     # required external input instead of being globally exempted by name.

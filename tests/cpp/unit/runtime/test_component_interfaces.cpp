@@ -1,4 +1,3 @@
-#include <pops/amr/tagging/tagging_truth.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/amr/persistent_tagging_state.hpp>
@@ -54,6 +53,12 @@ struct TransferComponent {
   std::string restart() const { return "stateless"; }
 };
 
+struct RefluxComponent {
+  int stencil() const { return 1; }
+  std::string lower(Context&) const { return "integrated-interface-correction"; }
+  std::vector<std::string> effects() const { return {"local-correction"}; }
+};
+
 struct SolverComponent {
   pops::component::EvaluationOutcome<int> evaluate(Context&) const {
     return pops::component::EvaluationOutcome<int>::reject("non-converged");
@@ -68,16 +73,93 @@ struct WriterComponent {
   std::string report() const { return "writer-report"; }
 };
 
+template <int Dim>
 struct FillPreparedTaggingFields {
-  pops::Array4 scalar;
-  pops::Array4 vector;
+  pops::FieldView<pops::Real, Dim> scalar;
+  pops::FieldView<pops::Real, Dim> vector;
 
-  POPS_HD void operator()(int i, int j) const {
-    scalar(i, j, 0) = static_cast<pops::Real>(i);
-    vector(i, j, 0) = pops::Real(-17);
-    vector(i, j, 1) = static_cast<pops::Real>(i + j);
+  POPS_HD void operator()(const pops::Index<Dim>& index) const {
+    scalar(index, 0) = static_cast<pops::Real>(index[0]);
+    vector(index, 0) = pops::Real(-17);
+    pops::Real sum = pops::Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      sum += static_cast<pops::Real>(index[axis]);
+    vector(index, 1) = sum;
   }
 };
+
+template <int Dim>
+struct SetPreparedTaggingSample {
+  pops::FieldView<pops::Real, Dim> field;
+  pops::Real value = pops::Real(0);
+
+  POPS_HD void operator()(const pops::Index<Dim>& index) const { field(index, 0) = value; }
+};
+
+template <int Dim>
+pops::Box<Dim> tagging_domain() {
+  pops::Index<Dim> lower{};
+  pops::Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = axis - 3;
+    upper[axis] = axis + 2;
+  }
+  return {lower, upper};
+}
+
+template <int Dim>
+pops::amr::hierarchy::LevelLayout<Dim> tagging_layout(const pops::Box<Dim>& domain) {
+  pops::Box<Dim> left = domain;
+  pops::Box<Dim> right = domain;
+  left.hi[0] = -1;
+  right.lo[0] = 0;
+  const pops::mesh::BoxArray<Dim> patches(std::vector<pops::Box<Dim>>{left, right});
+  pops::Index<Dim> rank_origin{};
+  pops::Extent<Dim> rank_extent{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    rank_origin[axis] = axis - 2;
+    rank_extent[axis] = 1;
+  }
+  rank_extent[0] = pops::world_communicator_view().size();
+  return {0,
+          domain,
+          patches,
+          pops::mesh::Distribution<Dim>::replicated(
+              patches, pops::mesh::RankSpace<Dim>{rank_origin, rank_extent}),
+          pops::amr::RefinementRatio<Dim>{},
+          pops::mesh::BoxArrayValidationBudget{2, 1}};
+}
+
+template <int Dim>
+pops::runtime::amr::PreparedTaggingExecutionBudget tagging_budget(
+    const pops::amr::hierarchy::LevelLayout<Dim>& layout) {
+  std::size_t total = 0;
+  std::size_t maximum = 0;
+  for (const pops::Box<Dim>& patch : layout.patches().boxes()) {
+    const std::size_t cells = static_cast<std::size_t>(patch.numPts());
+    total += cells;
+    maximum = std::max(maximum, cells);
+  }
+  return {{layout.patches().size(), layout.patches().size(), maximum, total, total, 1U << 20},
+          total,
+          total * 2u};
+}
+
+template <int Dim, class Function>
+void for_each_host_cell(const pops::Box<Dim>& box, Function&& function) {
+  const std::size_t count = static_cast<std::size_t>(box.numPts());
+  for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
+    pops::Index<Dim> index{};
+    std::size_t quotient = ordinal;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t length = static_cast<std::size_t>(box.length(axis));
+      index[axis] = static_cast<int>(static_cast<std::int64_t>(box.lo[axis]) +
+                                     static_cast<std::int64_t>(quotient % length));
+      quotient /= length;
+    }
+    function(index);
+  }
+}
 
 static_assert(pops::component::Requirement<FluxComponent>);
 static_assert(pops::component::Stability<FluxComponent>);
@@ -90,6 +172,9 @@ static_assert(pops::component::Lowering<ClusteringComponent, Context>);
 static_assert(pops::component::Effects<ClusteringComponent>);
 static_assert(pops::component::Stencil<TransferComponent>);
 static_assert(pops::component::Restart<TransferComponent>);
+static_assert(pops::component::Stencil<RefluxComponent>);
+static_assert(pops::component::Lowering<RefluxComponent, Context>);
+static_assert(pops::component::Effects<RefluxComponent>);
 static_assert(pops::component::FallibleEvaluation<SolverComponent, Context&>);
 static_assert(pops::component::Restart<SolverComponent>);
 static_assert(pops::component::Format<WriterComponent, double>);
@@ -117,15 +202,24 @@ TEST(ComponentInterfaces, FallibleOutcomeKeepsTransactionActionExplicit) {
   EXPECT_THROW(pops::component::EvaluationOutcome<int>::retry(""), std::invalid_argument);
 }
 
-TEST(ComponentInterfaces, PersistentTaggingStateUsesInclusiveCyclesAndCanonicalRestartImage) {
-  using State = pops::runtime::amr::PersistentTaggingState;
+template <int Dim>
+void verify_persistent_tagging_state() {
+  using State = pops::runtime::amr::PersistentTaggingState<Dim>;
   constexpr std::int32_t minimum_cycles = 2;
-  const State::CellKey first{0, 3, 4};
-  const State::CellKey redistributed{1, 6, 8};
+  pops::Index<Dim> first_cell{};
+  pops::Index<Dim> redistributed_cell{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    first_cell[axis] = axis + 1;
+    redistributed_cell[axis] = axis + 4;
+  }
+  const typename State::CellKey first{0, first_cell};
+  const typename State::CellKey redistributed{1, redistributed_cell};
 
   State state;
   state.begin_cycle(minimum_cycles);
   ASSERT_TRUE(state.transition_allowed(first, minimum_cycles));
+  EXPECT_THROW(state.record(first, static_cast<typename State::Decision>(0), minimum_cycles),
+               std::invalid_argument);
   state.record(first, State::Decision::Refine, minimum_cycles);
   EXPECT_FALSE(state.transition_allowed(first, minimum_cycles));
 
@@ -135,10 +229,14 @@ TEST(ComponentInterfaces, PersistentTaggingStateUsesInclusiveCyclesAndCanonicalR
   const auto image = state.encode(minimum_cycles, "test::tagging-graph@1");
   ASSERT_FALSE(image.empty());
 
-  const std::vector<pops::Box2D> domains{
-      pops::Box2D{{0, 0}, {7, 7}},
-      pops::Box2D{{0, 0}, {15, 15}},
-  };
+  pops::Index<Dim> zero{};
+  pops::Index<Dim> coarse_high{};
+  pops::Index<Dim> fine_high{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    coarse_high[axis] = 7;
+    fine_high[axis] = 15;
+  }
+  const std::vector<pops::Box<Dim>> domains{{zero, coarse_high}, {zero, fine_high}};
   State restored = State::decode(image, minimum_cycles, "test::tagging-graph@1", domains);
   EXPECT_EQ(restored.cycle(), state.cycle());
   EXPECT_EQ(restored.active_entry_count(), state.active_entry_count());
@@ -159,6 +257,22 @@ TEST(ComponentInterfaces, PersistentTaggingStateUsesInclusiveCyclesAndCanonicalR
   std::vector<std::uint8_t> truncated = image;
   truncated.pop_back();
   EXPECT_THROW((void)State::decode(truncated, minimum_cycles, "test::tagging-graph@1", domains),
+               std::invalid_argument);
+}
+
+TEST(ComponentInterfaces, PersistentTaggingStateUsesExactRankAndCanonicalRestartImage) {
+  verify_persistent_tagging_state<1>();
+  verify_persistent_tagging_state<2>();
+  verify_persistent_tagging_state<3>();
+
+  using Line = pops::runtime::amr::PersistentTaggingState<1>;
+  Line line;
+  line.begin_cycle(2);
+  line.record({0, pops::Index<1>{1}}, Line::Decision::Refine, 2);
+  const auto image = line.encode(2, "test::ranked-tagging@1");
+  EXPECT_THROW((void)pops::runtime::amr::PersistentTaggingState<2>::decode(
+                   image, 2, "test::ranked-tagging@1",
+                   {pops::Box<2>{pops::Index<2>{0, 0}, pops::Index<2>{7, 7}}}),
                std::invalid_argument);
 }
 
@@ -194,223 +308,282 @@ TEST(ComponentInterfaces, RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen) 
                std::logic_error);
 }
 
-TEST(ComponentInterfaces, TaggingTruthPreservesEqualityThroughLogicalRoots) {
-  using pops::amr::TagTruth;
-  const std::array any_unknown{TagTruth::False, TagTruth::Unknown};
-  const std::array any_true{TagTruth::Unknown, TagTruth::True};
-  const std::array all_unknown{TagTruth::True, TagTruth::Unknown};
-  const std::array all_false{TagTruth::Unknown, TagTruth::False};
-
-  EXPECT_EQ(pops::amr::tag_not(TagTruth::Unknown), TagTruth::Unknown);
-  EXPECT_EQ(pops::amr::tag_not(TagTruth::True), TagTruth::False);
-  EXPECT_EQ(pops::amr::tag_any(any_unknown.begin(), any_unknown.end()), TagTruth::Unknown);
-  EXPECT_EQ(pops::amr::tag_any(any_true.begin(), any_true.end()), TagTruth::True);
-  EXPECT_EQ(pops::amr::tag_all(all_unknown.begin(), all_unknown.end()), TagTruth::Unknown);
-  EXPECT_EQ(pops::amr::tag_all(all_false.begin(), all_false.end()), TagTruth::False);
-}
-
-TEST(ComponentInterfaces, TaggingComparisonsRejectNonFiniteBeforeBooleanLogic) {
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_THROW((void)pops::amr::tag_comparison(nan, 0.0, true), std::domain_error);
-  EXPECT_THROW((void)pops::amr::tag_comparison(nan, 0.0, false), std::domain_error);
-  EXPECT_THROW((void)pops::amr::tag_not(pops::amr::tag_comparison(nan, 0.0, true)),
-               std::domain_error);
-}
-
-TEST(ComponentInterfaces, TaggingEqualityIsMappedBeforeConflictResolution) {
-  using pops::amr::TagConflictPolicy;
-  using pops::amr::TagEqualityPolicy;
-  using pops::amr::TagTruth;
-
-  const auto hold = pops::amr::resolve_tag_decision(
-      TagTruth::Unknown, TagTruth::False, TagEqualityPolicy::Hold, TagConflictPolicy::Error);
-  EXPECT_FALSE(hold.refine);
-  EXPECT_FALSE(hold.coarsen);
-  EXPECT_FALSE(hold.conflict_error);
-
-  const auto refine = pops::amr::resolve_tag_decision(
-      TagTruth::Unknown, TagTruth::False, TagEqualityPolicy::Refine, TagConflictPolicy::Error);
-  EXPECT_TRUE(refine.refine);
-  EXPECT_FALSE(refine.coarsen);
-
-  const auto coarsen = pops::amr::resolve_tag_decision(
-      TagTruth::False, TagTruth::Unknown, TagEqualityPolicy::Coarsen, TagConflictPolicy::Error);
-  EXPECT_FALSE(coarsen.refine);
-  EXPECT_TRUE(coarsen.coarsen);
-
-  const auto equality_conflict = pops::amr::resolve_tag_decision(
-      TagTruth::True, TagTruth::Unknown, TagEqualityPolicy::Coarsen, TagConflictPolicy::Error);
-  EXPECT_TRUE(equality_conflict.conflict_error);
-  const auto refine_wins = pops::amr::resolve_tag_decision(
-      TagTruth::True, TagTruth::Unknown, TagEqualityPolicy::Coarsen, TagConflictPolicy::RefineWins);
-  EXPECT_TRUE(refine_wins.refine);
-  EXPECT_FALSE(refine_wins.coarsen);
-}
-
-TEST(ComponentInterfaces, PreparedTaggingExecutesGradientLogicOnNegativeMultiblockIndices) {
-  using Program = pops::runtime::amr::PreparedTaggingProgram;
-  const pops::Box2D domain{{-3, -2}, {2, 1}};
-  const pops::BoxArray boxes(std::vector<pops::Box2D>{{{-3, -2}, {-1, 1}}, {{0, -2}, {2, 1}}});
-  const pops::DistributionMapping distribution(boxes.size(), pops::n_ranks());
-  pops::MultiFab scalar(boxes, distribution, 1, 1);
-  pops::MultiFab vector(boxes, distribution, 2, 1);
-  for (int local = 0; local < scalar.local_size(); ++local)
-    pops::for_each_cell(
-        scalar.fab(local).grown_box(),
-        FillPreparedTaggingFields{scalar.fab(local).array(), vector.fab(local).array()});
-  pops::device_fence();
+template <int Dim>
+void verify_prepared_tagging_execution() {
+  using Program = pops::runtime::amr::PreparedTaggingProgram<Dim>;
+  using Plan = pops::runtime::amr::PreparedTaggingExecutionPlan<Dim>;
+  using Field = pops::runtime::amr::PreparedTaggingField<
+      Dim, typename Kokkos::DefaultExecutionSpace::memory_space>;
+  const pops::Box<Dim> domain = tagging_domain<Dim>();
+  const auto layout = tagging_layout(domain);
+  const pops::Index<Dim> local_rank = layout.distribution().rank_space().coordinate(
+      static_cast<std::size_t>(pops::world_communicator_view().rank()));
+  pops::Extent<Dim> ghosts{};
+  std::array<pops::Real, Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    ghosts[axis] = 1;
+    spacing[axis] = pops::Real(1);
+  }
+  pops::MultiFab<Dim> scalar(layout.patches(), layout.distribution(), local_rank, 1, ghosts);
+  pops::MultiFab<Dim> vector(layout.patches(), layout.distribution(), local_rank, 2, ghosts);
+  const auto refill = [&] {
+    for (std::size_t local = 0; local < scalar.local_size(); ++local)
+      pops::for_each_cell(
+          scalar.fab(local).grown_box(),
+          FillPreparedTaggingFields<Dim>{scalar.fab(local).view(), vector.fab(local).view()});
+    pops::device_fence();
+  };
+  refill();
 
   Program program;
-  program.stencils = {
-      Program::Stencil{"test::centered-gradient",
-                       POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-                       "l2",
-                       "inverse_cell_size",
-                       "ghost_extension",
-                       2,
-                       {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
-                        Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
-  program.leaves = {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.5, 0},
-                    Program::Leaf{1, 1, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1},
-                    Program::Leaf{1, 1, POPS_TAGGING_BELOW_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
+  typename Program::Stencil centered;
+  centered.identity = "test::centered-gradient";
+  centered.route = POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1;
+  centered.norm = "l2";
+  centered.scale = "inverse_cell_size";
+  centered.boundary_mode = "ghost_extension";
+  for (int axis = 0; axis < Dim; ++axis)
+    centered.axes[static_cast<std::size_t>(axis)] =
+        typename Program::AxisStencil{axis, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}};
+  program.stencils = {std::move(centered)};
+  program.leaves = {
+      typename Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.5, 0},
+      typename Program::Leaf{1, 1, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1},
+      typename Program::Leaf{1, 1, POPS_TAGGING_BELOW_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
   program.refine_ops = {POPS_TAGGING_GRADIENT_ABOVE_V1, POPS_TAGGING_ABOVE_V1,
                         POPS_TAGGING_ALL_OF_V1};
   program.refine_args = {0, 1, 2};
   program.coarsen_ops = {POPS_TAGGING_BELOW_V1};
   program.coarsen_args = {2};
-  program.non_finite_policy = POPS_TAGGING_NON_FINITE_REJECT_V1;
   program.clock_identity = "test::clock";
   program.provider_identity = "test::prepared-tagger";
   program.prepared = true;
+  const std::vector<std::vector<Field>> fields{
+      {{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}};
+  const std::vector<pops::amr::hierarchy::LevelLayout<Dim>> layouts{layout};
+  const std::vector<pops::runtime::amr::PreparedTaggingExecutionBudget> budgets{
+      tagging_budget(layout)};
 
-  auto plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-      program, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain}, 7);
-  const auto& first = plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
-  for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
-    for (int i = domain.lo[0]; i <= domain.hi[0]; ++i) {
-      EXPECT_EQ(first.refine.tagged(i, j), i + j > 0);
-      EXPECT_EQ(first.refine_equalities.tagged(i, j), i + j == 0);
-      EXPECT_EQ(first.coarsen.tagged(i, j), i + j < 0);
-      EXPECT_EQ(first.coarsen_equalities.tagged(i, j), i + j == 0);
-    }
+  auto plan = Plan::prepare(program, fields, layouts, budgets, 7);
+  const auto& first = plan.execute(0, layout, spacing, 7);
+  for (std::size_t global = 0; global < layout.patches().size(); ++global)
+    for_each_host_cell(layout.patches()[global], [&](const pops::Index<Dim>& index) {
+      int sum = 0;
+      for (int axis = 0; axis < Dim; ++axis)
+        sum += index[axis];
+      EXPECT_EQ(first.refine.tagged(global, index), sum > 0);
+      EXPECT_EQ(first.refine_equalities.tagged(global, index), sum == 0);
+      EXPECT_EQ(first.coarsen.tagged(global, index), sum < 0);
+      EXPECT_EQ(first.coarsen_equalities.tagged(global, index), sum == 0);
+    });
 
   const auto allocations_before = pops::allocation_event_stats();
-  const auto& second = plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
+  const std::uint64_t consensus_allocations_before = pops::exact_consensus_dynamic_storage_calls();
+  const auto& second = plan.execute(0, layout, spacing, 7);
   const auto allocations_after = pops::allocation_event_stats();
+  const std::uint64_t consensus_allocations_after = pops::exact_consensus_dynamic_storage_calls();
   EXPECT_EQ(second.refine.count(), first.refine.count());
   EXPECT_EQ(allocations_after.fab_calls, allocations_before.fab_calls)
       << "fixed-topology tagging must not rematerialize device storage";
+  EXPECT_EQ(allocations_after.communication_calls, allocations_before.communication_calls);
+  EXPECT_EQ(consensus_allocations_after, consensus_allocations_before)
+      << "the tagging hot path must use only prepared scalar or fixed-buffer collectives";
 
-  const auto refill = [&] {
-    for (int local = 0; local < scalar.local_size(); ++local)
-      pops::for_each_cell(
-          scalar.fab(local).grown_box(),
-          FillPreparedTaggingFields{scalar.fab(local).array(), vector.fab(local).array()});
-    pops::device_fence();
-  };
   const std::size_t expected_coarsen = second.coarsen.count();
   scalar.set_val(pops::Real(0));
-  const auto& without_gradient = plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
-  EXPECT_EQ(without_gradient.refine.count(), 0u)
-      << "mutating the gradient field must change its exact expression child";
-  EXPECT_EQ(without_gradient.coarsen.count(), expected_coarsen)
-      << "mutating the gradient field must not overwrite the independent value child";
+  const auto& without_gradient = plan.execute(0, layout, spacing, 7);
+  EXPECT_EQ(without_gradient.refine.count(), 0u);
+  EXPECT_EQ(without_gradient.coarsen.count(), expected_coarsen);
 
   refill();
   vector.set_val(pops::Real(-1));
-  const auto& without_positive_value = plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
-  EXPECT_EQ(without_positive_value.refine.count(), 0u)
-      << "mutating the value field must change its exact expression child";
-  EXPECT_EQ(without_positive_value.coarsen.count(), static_cast<std::size_t>(domain.num_cells()));
+  const auto& without_positive_value = plan.execute(0, layout, spacing, 7);
+  EXPECT_EQ(without_positive_value.refine.count(), 0u);
+  EXPECT_EQ(without_positive_value.coarsen.count(), static_cast<std::size_t>(domain.numPts()));
   refill();
 
   Program magnitude = program;
   magnitude.stencils.clear();
-  magnitude.leaves = {
-      Program::Leaf{1, 0, POPS_TAGGING_MAGNITUDE_ABOVE_V1, 17.0, POPS_TAGGING_NO_STENCIL_V1}};
+  magnitude.leaves = {typename Program::Leaf{1, 0, POPS_TAGGING_MAGNITUDE_ABOVE_V1, 17.0,
+                                             POPS_TAGGING_NO_STENCIL_V1}};
   magnitude.refine_ops = {POPS_TAGGING_MAGNITUDE_ABOVE_V1};
   magnitude.refine_args = {0};
   magnitude.coarsen_ops.clear();
   magnitude.coarsen_args.clear();
-  auto magnitude_plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-      magnitude, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain}, 8);
-  const auto& magnitude_equality =
-      magnitude_plan.execute(0, domain, pops::Real(1), pops::Real(1), 8);
+  auto magnitude_plan = Plan::prepare(magnitude, fields, layouts, budgets, 8);
+  const auto& magnitude_equality = magnitude_plan.execute(0, layout, spacing, 8);
   EXPECT_EQ(magnitude_equality.refine.count(), 0u);
   EXPECT_EQ(magnitude_equality.refine_equalities.count(),
-            static_cast<std::size_t>(domain.num_cells()));
+            static_cast<std::size_t>(domain.numPts()));
 
   magnitude.leaves[0].threshold = 16.0;
-  auto magnitude_strict_plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-      magnitude, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain}, 9);
-  EXPECT_EQ(
-      magnitude_strict_plan.execute(0, domain, pops::Real(1), pops::Real(1), 9).refine.count(),
-      static_cast<std::size_t>(domain.num_cells()));
+  auto magnitude_strict_plan = Plan::prepare(magnitude, fields, layouts, budgets, 9);
+  EXPECT_EQ(magnitude_strict_plan.execute(0, layout, spacing, 9).refine.count(),
+            static_cast<std::size_t>(domain.numPts()));
 
   Program gradient_equality = program;
-  gradient_equality.leaves = {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 1.0, 0}};
+  gradient_equality.leaves = {typename Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 1.0, 0}};
   gradient_equality.refine_ops = {POPS_TAGGING_GRADIENT_ABOVE_V1};
   gradient_equality.refine_args = {0};
   gradient_equality.coarsen_ops.clear();
   gradient_equality.coarsen_args.clear();
-  auto gradient_equality_plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-      gradient_equality, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain},
-      10);
-  const auto& gradient_boundary =
-      gradient_equality_plan.execute(0, domain, pops::Real(1), pops::Real(1), 10);
+  auto gradient_equality_plan = Plan::prepare(gradient_equality, fields, layouts, budgets, 10);
+  const auto& gradient_boundary = gradient_equality_plan.execute(0, layout, spacing, 10);
   EXPECT_EQ(gradient_boundary.refine.count(), 0u);
-  EXPECT_EQ(gradient_boundary.refine_equalities.count(),
-            static_cast<std::size_t>(domain.num_cells()));
+  EXPECT_EQ(gradient_boundary.refine_equalities.count(), static_cast<std::size_t>(domain.numPts()));
+
+  Program logical = program;
+  logical.stencils.clear();
+  logical.leaves = {
+      typename Program::Leaf{0, 0, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1},
+      typename Program::Leaf{0, 0, POPS_TAGGING_BELOW_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
+  logical.coarsen_ops.clear();
+  logical.coarsen_args.clear();
+  const std::size_t tangent_cells =
+      static_cast<std::size_t>(domain.numPts()) / static_cast<std::size_t>(domain.length(0));
+
+  logical.refine_ops = {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_NOT_V1};
+  logical.refine_args = {0, 1};
+  auto not_plan = Plan::prepare(logical, fields, layouts, budgets, 11);
+  const auto& not_result = not_plan.execute(0, layout, spacing, 11);
+  EXPECT_EQ(not_result.refine.count(), 3u * tangent_cells);
+  EXPECT_EQ(not_result.refine_equalities.count(), tangent_cells);
+
+  logical.refine_ops = {POPS_TAGGING_ABOVE_V1, POPS_TAGGING_BELOW_V1, POPS_TAGGING_ANY_OF_V1};
+  logical.refine_args = {0, 1, 2};
+  auto any_plan = Plan::prepare(logical, fields, layouts, budgets, 12);
+  const auto& any_result = any_plan.execute(0, layout, spacing, 12);
+  EXPECT_EQ(any_result.refine.count(), 5u * tangent_cells);
+  EXPECT_EQ(any_result.refine_equalities.count(), tangent_cells);
+
+  logical.refine_ops.back() = POPS_TAGGING_ALL_OF_V1;
+  auto all_plan = Plan::prepare(logical, fields, layouts, budgets, 13);
+  const auto& all_result = all_plan.execute(0, layout, spacing, 13);
+  EXPECT_EQ(all_result.refine.count(), 0u);
+  EXPECT_EQ(all_result.refine_equalities.count(), tangent_cells);
 }
 
-TEST(ComponentInterfaces, PreparedTaggingRejectsNonFiniteSamplesBeforePublishingMasks) {
-  using Program = pops::runtime::amr::PreparedTaggingProgram;
-  const pops::Box2D domain{{-2, -1}, {1, 1}};
-  const pops::BoxArray boxes(std::vector<pops::Box2D>{domain});
-  pops::MultiFab state(boxes, pops::DistributionMapping(1, pops::n_ranks()), 1, 0);
+TEST(ComponentInterfaces, PreparedTaggingExecutionIsExactRankedAndAllocationFree) {
+  verify_prepared_tagging_execution<1>();
+  verify_prepared_tagging_execution<2>();
+  verify_prepared_tagging_execution<3>();
+}
+
+template <int Dim>
+void verify_prepared_tagging_failure_is_transactional() {
+  using Program = pops::runtime::amr::PreparedTaggingProgram<Dim>;
+  using Plan = pops::runtime::amr::PreparedTaggingExecutionPlan<Dim>;
+  using Field = pops::runtime::amr::PreparedTaggingField<
+      Dim, typename Kokkos::DefaultExecutionSpace::memory_space>;
+  const pops::Box<Dim> domain = tagging_domain<Dim>();
+  const auto layout = tagging_layout(domain);
+  const pops::Index<Dim> local_rank = layout.distribution().rank_space().coordinate(
+      static_cast<std::size_t>(pops::world_communicator_view().rank()));
+  pops::Extent<Dim> ghosts{};
+  std::array<pops::Real, Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    ghosts[axis] = 1;
+    spacing[axis] = pops::Real(1);
+  }
+  pops::MultiFab<Dim> state(layout.patches(), layout.distribution(), local_rank, 1, ghosts);
   state.set_val(pops::Real(1));
+
   Program program;
-  program.leaves = {Program::Leaf{0, 0, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
+  program.leaves = {
+      typename Program::Leaf{0, 0, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
   program.refine_ops = {POPS_TAGGING_ABOVE_V1};
   program.refine_args = {0};
-  program.non_finite_policy = POPS_TAGGING_NON_FINITE_REJECT_V1;
   program.clock_identity = "test::clock";
   program.provider_identity = "test::prepared-tagger";
   program.prepared = true;
-  auto plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-      program, {{{"case::state::U", &state}}}, {domain}, 3);
-  EXPECT_EQ(plan.execute(0, domain, pops::Real(1), pops::Real(1), 3).refine.count(),
-            domain.num_cells());
+  const std::vector<std::vector<Field>> fields{{{"case::state::U", &state}}};
+  const std::vector<pops::amr::hierarchy::LevelLayout<Dim>> layouts{layout};
+  const std::vector<pops::runtime::amr::PreparedTaggingExecutionBudget> budgets{
+      tagging_budget(layout)};
+  auto plan = Plan::prepare(program, fields, layouts, budgets, 3);
+  const auto& accepted = plan.execute(0, layout, spacing, 3);
+  EXPECT_EQ(accepted.refine.count(), static_cast<std::size_t>(domain.numPts()));
 
-  state.sync_host();
-  state.fab(0)(-1, 0, 0) = std::numeric_limits<pops::Real>::quiet_NaN();
-  state.sync_device();
-  EXPECT_THROW((void)plan.execute(0, domain, pops::Real(1), pops::Real(1), 3), std::runtime_error);
-  EXPECT_THROW((void)plan.execute(0, domain, pops::Real(1), pops::Real(1), 4), std::runtime_error);
+  const pops::Index<Dim> bad = layout.patches()[0].lo;
+  pops::for_each_cell(pops::Box<Dim>{bad, bad},
+                      SetPreparedTaggingSample<Dim>{state.fab_global(0).view(),
+                                                    std::numeric_limits<pops::Real>::quiet_NaN()});
+  pops::device_fence();
+  EXPECT_THROW((void)plan.execute(0, layout, spacing, 3), std::runtime_error);
+  EXPECT_EQ(accepted.refine.count(), static_cast<std::size_t>(domain.numPts()))
+      << "a rejected evaluation must retain the prior accepted mask";
+  EXPECT_THROW((void)plan.execute(0, layout, spacing, 4), std::runtime_error);
+  state.set_val(pops::Real(1));
 
   auto malformed = program;
   malformed.refine_args = {7};
-  EXPECT_THROW((void)pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-                   malformed, {{{"case::state::U", &state}}}, {domain}, 5),
-               std::invalid_argument);
+  EXPECT_THROW((void)Plan::prepare(malformed, fields, layouts, budgets, 5), std::invalid_argument);
 
   auto gradient = program;
-  gradient.stencils = {
-      Program::Stencil{"test::centered-gradient",
-                       POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-                       "l2",
-                       "inverse_cell_size",
-                       "ghost_extension",
-                       2,
-                       {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
-                        Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
+  typename Program::Stencil centered;
+  centered.identity = "test::centered-gradient";
+  centered.route = POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1;
+  centered.norm = "l2";
+  centered.scale = "inverse_cell_size";
+  centered.boundary_mode = "ghost_extension";
+  for (int axis = 0; axis < Dim; ++axis)
+    centered.axes[static_cast<std::size_t>(axis)] =
+        typename Program::AxisStencil{axis, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}};
+  gradient.stencils = {std::move(centered)};
   gradient.leaves[0].opcode = POPS_TAGGING_GRADIENT_ABOVE_V1;
   gradient.leaves[0].stencil_index = 0;
   gradient.refine_ops = {POPS_TAGGING_GRADIENT_ABOVE_V1};
-  EXPECT_THROW((void)pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-                   gradient, {{{"case::state::U", &state}}}, {domain}, 6),
+
+  auto false_order = gradient;
+  false_order.stencils[0].axes[0] =
+      typename Program::AxisStencil{0, 1, 2, 0, 1, {0, 1}, {-1.0, 1.0}};
+  EXPECT_THROW((void)Plan::prepare(false_order, fields, layouts, budgets, 6), std::invalid_argument)
+      << "a stencil may not claim an order its exact moments do not prove";
+
+  auto repeated_offset = gradient;
+  repeated_offset.stencils[0].axes[0] =
+      typename Program::AxisStencil{0, 1, 1, 0, 0, {0, 0}, {-1.0, 1.0}};
+  EXPECT_THROW((void)Plan::prepare(repeated_offset, fields, layouts, budgets, 6),
+               std::invalid_argument);
+
+  auto minimum_offset = gradient;
+  minimum_offset.stencils[0].axes[0] = typename Program::AxisStencil{
+      0, 1, 1, 0, 0, {std::numeric_limits<std::int32_t>::min(), 0}, {-1.0, 1.0}};
+  EXPECT_THROW((void)Plan::prepare(minimum_offset, fields, layouts, budgets, 6),
                std::invalid_argument)
-      << "a prepared stencil must fit the bound field's allocated halo";
+      << "INT_MIN stencil offsets must reject without signed overflow";
+
+  auto overflow = gradient;
+  for (int axis = 0; axis < Dim; ++axis)
+    overflow.stencils[0].axes[static_cast<std::size_t>(axis)] =
+        typename Program::AxisStencil{axis, 1, 1, 0, 1, {0, 1}, {-1.0, 1.0}};
+  auto overflow_plan = Plan::prepare(overflow, fields, layouts, budgets, 6);
+  const auto& finite_gradient = overflow_plan.execute(0, layout, spacing, 6);
+  EXPECT_EQ(finite_gradient.refine.count(), 0u);
+  pops::Index<Dim> adjacent = bad;
+  ++adjacent[0];
+  pops::for_each_cell(pops::Box<Dim>{bad, bad},
+                      SetPreparedTaggingSample<Dim>{state.fab_global(0).view(),
+                                                    -std::numeric_limits<pops::Real>::max()});
+  pops::for_each_cell(pops::Box<Dim>{adjacent, adjacent},
+                      SetPreparedTaggingSample<Dim>{state.fab_global(0).view(),
+                                                    std::numeric_limits<pops::Real>::max()});
+  pops::device_fence();
+  EXPECT_THROW((void)overflow_plan.execute(0, layout, spacing, 6), std::runtime_error);
+  EXPECT_EQ(finite_gradient.refine.count(), 0u)
+      << "a derived non-finite indicator must not publish partial masks";
+
+  for (int axis = 0; axis < Dim; ++axis)
+    gradient.stencils[0].axes[static_cast<std::size_t>(axis)] =
+        typename Program::AxisStencil{axis, 1, 2, 2, 2, {-2, 2}, {-0.25, 0.25}};
+  EXPECT_THROW((void)Plan::prepare(gradient, fields, layouts, budgets, 6), std::invalid_argument)
+      << "a prepared stencil must fit every axis of the bound field halo";
+}
+
+TEST(ComponentInterfaces, PreparedTaggingRejectsNonFiniteBeforePublishingMasks) {
+  verify_prepared_tagging_failure_is_transactional<1>();
+  verify_prepared_tagging_failure_is_transactional<2>();
+  verify_prepared_tagging_failure_is_transactional<3>();
 }
 
 PopsComponentTableHeaderV1 abi_header(std::size_t size, PopsNativeInterfaceIdV1 id,
@@ -433,6 +606,301 @@ const double* values(const PopsConstFieldViewV1& view) {
 
 double* values(PopsFieldViewV1& view) {
   return static_cast<double*>(view.data);
+}
+
+template <int Dim>
+PopsFieldPatchMetadataV1 material_patch_metadata(
+    const std::array<std::size_t, Dim>& interior_extents) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  PopsFieldPatchMetadataV1 metadata{sizeof(PopsFieldPatchMetadataV1),
+                                    0,
+                                    0,
+                                    0,
+                                    Dim,
+                                    {},
+                                    {},
+                                    {},
+                                    {},
+                                    POPS_FIELD_CENTERING_CELL_V1,
+                                    0,
+                                    "test::ranked-material-layout",
+                                    "test::ranked-material-patch"};
+  for (int axis = 0; axis < Dim; ++axis) {
+    metadata.upper[axis] = static_cast<std::int64_t>(interior_extents[axis] - 1);
+    metadata.physical_lower[axis] = -0.5 * static_cast<double>(axis + 1);
+    metadata.cell_spacing[axis] = 0.125 * static_cast<double>(axis + 1);
+  }
+  return metadata;
+}
+
+template <int Dim>
+PopsConstFieldViewV1 strided_fraction_view(const double* data,
+                                           const std::array<std::size_t, Dim>& interior_extents,
+                                           const std::array<std::size_t, Dim>& ghost_lower,
+                                           const std::array<std::size_t, Dim>& ghost_upper,
+                                           const std::array<std::ptrdiff_t, Dim>& axis_strides) {
+  static_assert(Dim >= 1 && Dim <= 3);
+  PopsConstFieldViewV1 view{sizeof(PopsConstFieldViewV1),
+                            data,
+                            Dim,
+                            {1, 1, 1},
+                            {},
+                            1,
+                            1,
+                            POPS_FIELD_CENTERING_CELL_V1,
+                            0,
+                            {},
+                            {},
+                            POPS_SCALAR_FLOAT64_V1,
+                            POPS_MEMORY_SPACE_HOST_V1,
+                            "test::ranked-material-layout",
+                            "test::ranked-material-patch",
+                            POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+  for (int axis = 0; axis < Dim; ++axis) {
+    view.extents[axis] = interior_extents[axis] + ghost_lower[axis] + ghost_upper[axis];
+    view.axis_strides[axis] = axis_strides[axis];
+    view.ghost_lower[axis] = ghost_lower[axis];
+    view.ghost_upper[axis] = ghost_upper[axis];
+  }
+  return view;
+}
+
+PopsFieldViewV1 mutable_view_like(double* data, const PopsConstFieldViewV1& source) {
+  PopsFieldViewV1 result{sizeof(PopsFieldViewV1),
+                         data,
+                         source.dimension,
+                         {},
+                         {},
+                         source.component_count,
+                         source.component_stride,
+                         source.centering,
+                         source.centering_axes,
+                         {},
+                         {},
+                         source.scalar_type,
+                         source.memory_space,
+                         source.layout_identity,
+                         source.patch_identity,
+                         source.ownership};
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    result.extents[axis] = source.extents[axis];
+    result.axis_strides[axis] = source.axis_strides[axis];
+    result.ghost_lower[axis] = source.ghost_lower[axis];
+    result.ghost_upper[axis] = source.ghost_upper[axis];
+  }
+  return result;
+}
+
+template <int Dim>
+void verify_ranked_material_fraction_mask(const std::array<std::size_t, Dim>& interior_extents,
+                                          const std::array<std::size_t, Dim>& ghost_lower,
+                                          const std::array<std::size_t, Dim>& ghost_upper,
+                                          const std::array<std::ptrdiff_t, Dim>& axis_strides) {
+  const auto metadata = material_patch_metadata<Dim>(interior_extents);
+  std::size_t point_count = 1;
+  std::size_t maximum_offset = 0;
+  for (int axis = 0; axis < Dim; ++axis) {
+    point_count *= interior_extents[axis];
+    maximum_offset += (ghost_lower[axis] + interior_extents[axis] - 1) *
+                      static_cast<std::size_t>(axis_strides[axis]);
+  }
+  std::vector<double> storage(maximum_offset + 1, 0.0);
+  std::vector<std::uint8_t> expected(point_count, 0);
+  for (std::size_t point = 0; point < point_count; ++point) {
+    std::size_t remaining = point;
+    std::size_t offset = 0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::size_t coordinate = remaining % interior_extents[axis];
+      remaining /= interior_extents[axis];
+      offset += (coordinate + ghost_lower[axis]) * static_cast<std::size_t>(axis_strides[axis]);
+    }
+    expected[point] = ((point * 7 + static_cast<std::size_t>(Dim)) % 5) != 0 ? 1u : 0u;
+    storage[offset] = expected[point] != 0 ? 0.625 : 0.0;
+  }
+  const auto view = strided_fraction_view<Dim>(storage.data(), interior_extents, ghost_lower,
+                                               ghost_upper, axis_strides);
+  const pops::component::FieldTopologyPatchInputV2 input{
+      0, POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1, {}, view, {}};
+  EXPECT_EQ(pops::component::expected_topology_material_mask(input, metadata), expected);
+}
+
+TEST(ComponentInterfaces, TopologyMaterialFractionsUseExactRankedStridesAndGhosts) {
+  verify_ranked_material_fraction_mask<1>({4}, {2}, {1}, {3});
+  verify_ranked_material_fraction_mask<2>({3, 2}, {1, 2}, {2, 1}, {2, 17});
+  verify_ranked_material_fraction_mask<3>({2, 3, 2}, {1, 1, 2}, {2, 1, 1}, {3, 19, 113});
+}
+
+TEST(ComponentInterfaces, TopologyMaterialFractionsFailClosedOnRankAndStrideOverflow) {
+  const std::array<double, 1> storage{0.5};
+  auto metadata = material_patch_metadata<1>({2});
+  auto view = strided_fraction_view<1>(storage.data(), {2}, {2}, {1},
+                                       {std::numeric_limits<std::ptrdiff_t>::max()});
+  pops::component::FieldTopologyPatchInputV2 input{
+      0, POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1, {}, view, {}};
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, metadata),
+               std::invalid_argument);
+
+  auto invalid_rank = metadata;
+  invalid_rank.dimension = 4;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, invalid_rank),
+               std::invalid_argument);
+  invalid_rank.dimension = 0;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, invalid_rank),
+               std::invalid_argument);
+
+  auto hidden_metadata_axis = metadata;
+  hidden_metadata_axis.upper[1] = 1;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, hidden_metadata_axis),
+               std::invalid_argument);
+  auto hidden_view_axis = view;
+  hidden_view_axis.axis_strides[1] = 1;
+  input.cut_cell_volume_fraction = hidden_view_axis;
+  EXPECT_THROW((void)pops::component::expected_topology_material_mask(input, metadata),
+               std::invalid_argument);
+}
+
+TEST(ComponentInterfaces, BoundaryFluxValidatesCoordinatesAndNormalsAcrossExactRank) {
+  constexpr std::array<std::size_t, 3> extents{2, 2, 2};
+  constexpr std::array<std::size_t, 3> no_ghosts{};
+  constexpr std::array<std::ptrdiff_t, 3> flux_strides{2, 13, 41};
+  constexpr std::array<std::ptrdiff_t, 3> coordinate_strides{7, 29, 83};
+  constexpr std::array<std::ptrdiff_t, 3> normal_strides{5, 23, 67};
+  std::array<double, 57> base_flux{};
+  std::array<double, 57> transformed_flux{};
+  std::array<double, 124> coordinates{};
+  std::array<double, 100> normals{};
+  std::array<double, 8> face_measures{};
+  std::array<PopsComponentActionV1, 8> actions{};
+
+  auto base_view =
+      strided_fraction_view<3>(base_flux.data(), extents, no_ghosts, no_ghosts, flux_strides);
+  base_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_view.centering_axes = 1u << 2u;
+  auto coordinate_view = strided_fraction_view<3>(coordinates.data(), extents, no_ghosts, no_ghosts,
+                                                  coordinate_strides);
+  coordinate_view.component_count = 3;
+  coordinate_view.component_stride = 2;
+  auto normal_view =
+      strided_fraction_view<3>(normals.data(), extents, no_ghosts, no_ghosts, normal_strides);
+  normal_view.component_count = 3;
+  normal_view.component_stride = 2;
+
+  for (std::size_t point = 0; point < face_measures.size(); ++point) {
+    face_measures[point] = 0.25 + 0.01 * static_cast<double>(point);
+    std::size_t remaining = point;
+    std::array<std::size_t, 3> coordinate{};
+    for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+      coordinate[axis] = remaining % extents[axis];
+      remaining /= extents[axis];
+    }
+    for (std::size_t component = 0; component < coordinate.size(); ++component) {
+      std::size_t coordinate_offset = component * 2;
+      std::size_t normal_offset = component * 2;
+      for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+        coordinate_offset += coordinate[axis] * static_cast<std::size_t>(coordinate_strides[axis]);
+        normal_offset += coordinate[axis] * static_cast<std::size_t>(normal_strides[axis]);
+      }
+      coordinates[coordinate_offset] = static_cast<double>(10 * component + coordinate[component]);
+      normals[normal_offset] = component == 2 ? 1.0 : 0.0;
+    }
+  }
+
+  auto transformed_view = mutable_view_like(transformed_flux.data(), base_view);
+
+  const std::array<std::int32_t, 1> axes{2};
+  const std::array<std::int32_t, 1> sides{1};
+  const PopsBoundaryRegionV1 region{sizeof(PopsBoundaryRegionV1),
+                                    POPS_BOUNDARY_FACE_V1,
+                                    3,
+                                    1,
+                                    axes.size(),
+                                    axes.data(),
+                                    sides.data(),
+                                    "z-high"};
+  PopsBoundaryFluxApiV1 api{
+      abi_header(sizeof(PopsBoundaryFluxApiV1), POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1),
+      +[](void*, const PopsBoundaryFluxRequestV1* request, PopsBoundaryFluxResultV1* result) {
+        const std::size_t points =
+            pops::component::field_point_count(request->base_outward_normal_flux);
+        std::fill(result->actions, result->actions + points, POPS_COMPONENT_CONTINUE_V1);
+        result->status = ok_status();
+        return 0;
+      }};
+  PopsBoundaryFluxRequestV1 request{sizeof(PopsBoundaryFluxRequestV1),
+                                    "test::ranked-boundary-flux",
+                                    "test::ranked-state",
+                                    base_view,
+                                    coordinate_view,
+                                    normal_view,
+                                    face_measures.data(),
+                                    region,
+                                    0,
+                                    nullptr,
+                                    0,
+                                    nullptr,
+                                    abi::logical_time(),
+                                    abi::host_execution_context()};
+  PopsBoundaryFluxResultV1 result{
+      sizeof(PopsBoundaryFluxResultV1), transformed_view, actions.data(), {}};
+  EXPECT_EQ(pops::component::transform_boundary_flux(api, nullptr, request, result), 0);
+
+  const std::size_t last_point_axis_two_normal_offset =
+      static_cast<std::size_t>(normal_strides[0] + normal_strides[1] + normal_strides[2]) + 4;
+  normals[last_point_axis_two_normal_offset] = -1.0;
+  EXPECT_THROW(pops::component::transform_boundary_flux(api, nullptr, request, result),
+               std::invalid_argument)
+      << "the final z-slice must not escape ranked coordinate/normal validation";
+}
+
+TEST(ComponentInterfaces, RefluxBatchAcceptsAxisTwoAndRejectsAxesOutsideExactRank) {
+  constexpr std::array<std::size_t, 3> extents{2, 3, 1};
+  constexpr std::array<std::size_t, 3> no_ghosts{};
+  constexpr std::array<std::ptrdiff_t, 3> strides{1, 2, 6};
+  std::array<double, 6> coarse_values{};
+  std::array<double, 6> fine_values{};
+  std::array<double, 6> correction_values{};
+  auto coarse =
+      strided_fraction_view<3>(coarse_values.data(), extents, no_ghosts, no_ghosts, strides);
+  coarse.centering = POPS_FIELD_CENTERING_FACE_V1;
+  coarse.centering_axes = 1u << 2u;
+  coarse.layout_identity = "test::reflux-parent-layout";
+  coarse.patch_identity = "test::reflux-parent-patch";
+  auto fine = strided_fraction_view<3>(fine_values.data(), extents, no_ghosts, no_ghosts, strides);
+  fine.centering = POPS_FIELD_CENTERING_FACE_V1;
+  fine.centering_axes = 1u << 2u;
+  fine.layout_identity = "test::reflux-child-layout";
+  fine.patch_identity = "test::reflux-child-patch";
+  auto correction = mutable_view_like(correction_values.data(), coarse);
+  correction.centering = POPS_FIELD_CENTERING_CELL_V1;
+  correction.centering_axes = 0;
+
+  PopsRefluxFaceV1 face{sizeof(PopsRefluxFaceV1),
+                        "test::reflux-z-high",
+                        2,
+                        POPS_REFLUX_FACE_HIGH_V1,
+                        4.0,
+                        coarse,
+                        fine,
+                        correction};
+  PopsRefluxRequestV1 request{sizeof(PopsRefluxRequestV1),
+                              "test::reflux-transition",
+                              0,
+                              1,
+                              1,
+                              &face,
+                              abi::logical_time(),
+                              abi::noncollective_host_execution_context()};
+  PopsRefluxApiV1 api{abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+                      +[](void*, const PopsRefluxRequestV1*, PopsComponentStatusV1* status) {
+                        *status = ok_status();
+                        return 0;
+                      }};
+  auto status = ok_status();
+  EXPECT_EQ(pops::component::apply_reflux_interface_batch(api, nullptr, request, status), 0);
+
+  face.axis = 3;
+  EXPECT_THROW(pops::component::apply_reflux_interface_batch(api, nullptr, request, status),
+               std::invalid_argument);
 }
 
 TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
@@ -578,6 +1046,66 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   auto invalid_region = ghost_request;
   invalid_region.region.kind = POPS_BOUNDARY_FACE_V1;
   EXPECT_THROW(pops::component::apply_ghost_boundary(ghost_api, nullptr, invalid_region, status),
+               std::invalid_argument);
+
+  std::array<double, 2> transformed_outward_flux{};
+  const std::array<double, 2> lower_outward_normal{-1.0, 0.0};
+  const std::array<double, 1> face_measure{0.5};
+  PopsComponentActionV1 boundary_flux_action = POPS_COMPONENT_ABORT_RUN_V1;
+  PopsBoundaryFluxApiV1 boundary_flux_api{
+      abi_header(sizeof(PopsBoundaryFluxApiV1), POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1),
+      +[](void*, const PopsBoundaryFluxRequestV1* request, PopsBoundaryFluxResultV1* result) {
+        if (request->region.kind != POPS_BOUNDARY_FACE_V1 ||
+            request->outward_normals.component_count != 2 ||
+            values(request->outward_normals)[0] != -1.0 || request->face_measures[0] != 0.5)
+          return 12;
+        const auto* base = values(request->base_outward_normal_flux);
+        auto* output = values(result->outward_normal_flux);
+        for (std::size_t component = 0;
+             component < request->base_outward_normal_flux.component_count; ++component)
+          output[component] = base[component] + 3.0;
+        result->actions[0] = POPS_COMPONENT_CONTINUE_V1;
+        result->status = ok_status();
+        return 0;
+      }};
+  auto base_outward_flux_view = abi::const_field_view(left.data(), 1, 1, 2);
+  base_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_outward_flux_view.centering_axes = 1u;
+  auto transformed_outward_flux_view = abi::field_view(transformed_outward_flux.data(), 1, 1, 2);
+  transformed_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  transformed_outward_flux_view.centering_axes = 1u;
+  PopsBoundaryFluxRequestV1 boundary_flux_request{
+      sizeof(PopsBoundaryFluxRequestV1),
+      "case::boundary-flux-provider",
+      "case::state",
+      base_outward_flux_view,
+      abi::const_field_view(normal.data(), 1, 1, 2),
+      abi::const_field_view(lower_outward_normal.data(), 1, 1, 2),
+      face_measure.data(),
+      face_region,
+      0,
+      nullptr,
+      0,
+      nullptr,
+      abi::logical_time(),
+      execution};
+  PopsBoundaryFluxResultV1 boundary_flux_result{
+      sizeof(PopsBoundaryFluxResultV1), transformed_outward_flux_view, &boundary_flux_action, {}};
+  EXPECT_EQ(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                     boundary_flux_request, boundary_flux_result),
+            0);
+  EXPECT_EQ(transformed_outward_flux, (std::array<double, 2>{5.0, 7.0}));
+  EXPECT_EQ(boundary_flux_action, POPS_COMPONENT_CONTINUE_V1);
+  const std::array<double, 2> wrong_lower_normal{1.0, 0.0};
+  auto wrong_orientation = boundary_flux_request;
+  wrong_orientation.outward_normals = abi::const_field_view(wrong_lower_normal.data(), 1, 1, 2);
+  EXPECT_THROW(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                        wrong_orientation, boundary_flux_result),
+               std::invalid_argument);
+  auto mismatched_flux_output = boundary_flux_result;
+  mismatched_flux_output.outward_normal_flux.component_count = 1;
+  EXPECT_THROW(pops::component::transform_boundary_flux(
+                   boundary_flux_api, nullptr, boundary_flux_request, mismatched_flux_output),
                std::invalid_argument);
 
   std::array<double, 2> direction{1.0, 2.0}, boundary_output{};
@@ -776,6 +1304,78 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   wrong_transfer_shape.destination.extents[1] = 2;
   EXPECT_THROW(pops::component::apply_transfer(transfer_api, nullptr, wrong_transfer_shape, status),
                std::invalid_argument);
+
+  std::array<double, 2> coarse_integrated_flux{1.0, 2.0};
+  std::array<double, 2> fine_integrated_flux{3.0, 6.0};
+  std::array<double, 2> reflux_correction{};
+  PopsRefluxApiV1 reflux_api{
+      abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result) {
+        for (std::size_t face_index = 0; face_index < request->face_count; ++face_index) {
+          const auto& face = request->faces[face_index];
+          const auto* coarse = static_cast<const double*>(face.coarse_integrated_flux.data);
+          const auto* fine = static_cast<const double*>(face.fine_integrated_flux.data);
+          auto* correction = static_cast<double*>(face.correction.data);
+          const std::size_t points =
+              pops::component::field_point_count(face.coarse_integrated_flux);
+          for (std::size_t point = 0; point < points; ++point)
+            correction[point] = static_cast<double>(face.side) * (fine[point] - coarse[point]) *
+                                face.inverse_coarse_cell_spacing;
+        }
+        *result = ok_status();
+        return 0;
+      }};
+  auto coarse_face = abi::const_field_view(coarse_integrated_flux.data(), 1, 2, 1, "parent::layout",
+                                           "parent::patch");
+  coarse_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  coarse_face.centering_axes = 1u;
+  auto fine_face =
+      abi::const_field_view(fine_integrated_flux.data(), 1, 2, 1, "child::layout", "child::patch");
+  fine_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  fine_face.centering_axes = 1u;
+  PopsRefluxFaceV1 reflux_face{
+      sizeof(PopsRefluxFaceV1),
+      "transition::0-to-1/x-low",
+      0,
+      POPS_REFLUX_FACE_LOW_V1,
+      2.0,
+      coarse_face,
+      fine_face,
+      abi::field_view(reflux_correction.data(), 1, 2, 1, "parent::layout", "parent::patch")};
+  PopsRefluxRequestV1 reflux_request{sizeof(PopsRefluxRequestV1),
+                                     "transition::0-to-1",
+                                     0,
+                                     1,
+                                     1,
+                                     &reflux_face,
+                                     abi::logical_time(),
+                                     abi::noncollective_host_execution_context()};
+  EXPECT_TRUE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &reflux_api, sizeof(reflux_api)));
+  EXPECT_EQ(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, reflux_request, status),
+      0);
+  EXPECT_EQ(reflux_correction, (std::array<double, 2>{-4.0, -8.0}));
+
+  auto incomplete_reflux_api = reflux_api;
+  incomplete_reflux_api.apply_interface_batch = nullptr;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &incomplete_reflux_api, sizeof(incomplete_reflux_api)));
+  EXPECT_THROW(pops::component::apply_reflux_interface_batch(incomplete_reflux_api, nullptr,
+                                                             reflux_request, status),
+               std::runtime_error);
+  auto collective_reflux = reflux_request;
+  collective_reflux.execution = execution;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, collective_reflux, status),
+      std::invalid_argument);
+  auto malformed_reflux = reflux_request;
+  auto malformed_face = reflux_face;
+  malformed_face.correction.layout_identity = "other::parent-layout";
+  malformed_reflux.faces = &malformed_face;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, malformed_reflux, status),
+      std::invalid_argument);
 
   auto overflowing_ghosts = abi::const_field_view(tag_values.data(), 2, 2);
   overflowing_ghosts.ghost_lower[0] = std::numeric_limits<std::size_t>::max();
@@ -1286,6 +1886,145 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::publish_output(writer_api, &writer_state, writer_request, receipt),
                std::runtime_error);
   EXPECT_EQ(writer_state.publish_count, 1);
+}
+
+TEST(ComponentInterfaces, FieldSolverV2CarriesOneBinaryCoverageMultilevelBatch) {
+  const PopsExecutionContextV1 execution = abi::host_execution_context();
+  static constexpr PopsTopologyLabelV2 labels[] = {
+      {sizeof(PopsTopologyLabelV2), 1, "composite-material", "multilevel-test"}};
+  std::array<std::string, 2> patch_identities{"coarse-patch", "fine-patch"};
+  std::array<PopsFieldPatchMetadataV1, 2> metadata{};
+  for (std::size_t index = 0; index < metadata.size(); ++index) {
+    metadata[index] = {sizeof(PopsFieldPatchMetadataV1),
+                       index,
+                       0,
+                       static_cast<std::int32_t>(index),
+                       2,
+                       {},
+                       {},
+                       {},
+                       {},
+                       POPS_FIELD_CENTERING_CELL_V1,
+                       0,
+                       "multilevel-layout",
+                       patch_identities[index].c_str()};
+    metadata[index].lower[0] = static_cast<std::int64_t>(2 * index);
+    metadata[index].upper[0] = static_cast<std::int64_t>(2 * index + 1);
+    metadata[index].lower[1] = metadata[index].upper[1] = 0;
+    metadata[index].cell_spacing[0] = metadata[index].cell_spacing[1] = index == 0 ? 1.0 : 0.5;
+  }
+  PopsFieldGlobalTopologyV1 global{sizeof(PopsFieldGlobalTopologyV1),
+                                   "multilevel-recipe",
+                                   "multilevel-layout",
+                                   "multilevel-materialization",
+                                   2,
+                                   {},
+                                   {},
+                                   0,
+                                   metadata.size(),
+                                   metadata.data()};
+  global.domain_upper[0] = 3;
+  std::array<std::uint8_t, 2> coarse_coverage{1, 0};
+  std::array<std::uint8_t, 2> fine_coverage{1, 1};
+  const std::vector<pops::component::FieldTopologyPatchInputV2> inputs{
+      {0,
+       POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1,
+       {sizeof(PopsConstByteViewV1), coarse_coverage.data(), coarse_coverage.size()},
+       {},
+       {}},
+      {1,
+       POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1,
+       {sizeof(PopsConstByteViewV1), fine_coverage.data(), fine_coverage.size()},
+       {},
+       {}},
+  };
+  struct Calls {
+    int topology = 0;
+    int solver = 0;
+  } calls;
+  PopsFieldTopologyApiV2 topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2), POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void* raw, const PopsFieldTopologyRequestV2* request, PopsFieldTopologyResultV2* result) {
+        auto& state = *static_cast<Calls*>(raw);
+        ++state.topology;
+        if (request->topology.patch_count != 2 || request->local_patch_count != 2 ||
+            request->topology.patches[0].level != 0 || request->topology.patches[1].level != 1)
+          return 7;
+        for (std::size_t index = 0; index < request->local_patch_count; ++index) {
+          const auto& patch = request->local_patches[index];
+          if (patch.material_representation != POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1 ||
+              patch.material_coverage.size != 2)
+            return 8;
+          std::copy(patch.material_coverage.data,
+                    patch.material_coverage.data + patch.material_coverage.size,
+                    patch.material_mask.data);
+          for (std::size_t point = 0; point < patch.component_labels.size; ++point)
+            patch.component_labels.data[point] = patch.material_mask.data[point] == 1 ? 1 : 0;
+        }
+        result->label_count = 1;
+        result->labels = labels;
+        result->provenance = "multilevel-test";
+        result->topology_digest = "multilevel-topology-digest";
+        result->status = ok_status();
+        return 0;
+      }};
+  const auto topology =
+      pops::component::prepare_field_topology(topology_api, &calls, global, inputs, execution);
+  ASSERT_EQ(topology.local_patches().size(), 2u);
+  EXPECT_EQ(topology.local_patches()[0].material_mask, (std::vector<std::uint8_t>{1, 0}));
+  EXPECT_EQ(topology.local_patches()[1].material_mask, (std::vector<std::uint8_t>{1, 1}));
+
+  std::array<double, 2> coarse_rhs{2.0, 99.0}, fine_rhs{3.0, 4.0};
+  std::array<double, 2> coarse_solution{}, fine_solution{};
+  const auto& owned = topology.global_patches();
+  const std::vector<pops::component::FieldSolverPatchBindingV2> bindings{
+      {0,
+       abi::const_field_view(coarse_rhs.data(), 2, 1, 1, owned[0].layout_identity,
+                             owned[0].patch_identity),
+       abi::field_view(coarse_solution.data(), 2, 1, 1, owned[0].layout_identity,
+                       owned[0].patch_identity),
+       {}},
+      {1,
+       abi::const_field_view(fine_rhs.data(), 2, 1, 1, owned[1].layout_identity,
+                             owned[1].patch_identity),
+       abi::field_view(fine_solution.data(), 2, 1, 1, owned[1].layout_identity,
+                       owned[1].patch_identity),
+       {}},
+  };
+  const auto request = pops::component::bind_field_solver_request(
+      topology, bindings, execution, "{\"identity\":\"multilevel-boundary\"}", 1e-8, 0.0, 10);
+  PopsFieldSolverApiV2 solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void* raw, const PopsFieldSolverRequestV2* request, PopsSolveReportV2* report) {
+        auto& state = *static_cast<Calls*>(raw);
+        ++state.solver;
+        if (request->topology.patch_count != 2 || request->local_patch_count != 2 ||
+            request->topology.patches[0].level != 0 || request->topology.patches[1].level != 1 ||
+            request->local_patches[0].material_mask.data[1] != 0 ||
+            request->local_patches[1].material_mask.data[1] != 1)
+          return 9;
+        for (std::size_t patch = 0; patch < request->local_patch_count; ++patch) {
+          const auto* rhs = static_cast<const double*>(request->local_patches[patch].rhs.data);
+          auto* solution = static_cast<double*>(request->local_patches[patch].solution.data);
+          for (std::size_t point = 0; point < 2; ++point)
+            if (request->local_patches[patch].material_mask.data[point] == 1)
+              solution[point] = rhs[point];
+        }
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 0.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 0.0;
+        report->reason = "multilevel batch solved";
+        return 0;
+      }};
+  PopsSolveReportV2 report{};
+  EXPECT_EQ(pops::component::solve_field(solver_api, &calls, request, report), 0);
+  EXPECT_EQ(calls.topology, 1);
+  EXPECT_EQ(calls.solver, 1);
+  EXPECT_EQ(coarse_solution, (std::array<double, 2>{2.0, 0.0}));
+  EXPECT_EQ(fine_solution, fine_rhs);
 }
 
 TEST(ComponentInterfaces, PreparedExecutionContextBindsExactExecutionLaneAuthority) {

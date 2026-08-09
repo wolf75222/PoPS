@@ -23,9 +23,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/physics/bricks/source.hpp>                // NoSource
-#include <pops/physics/composition/composite.hpp>        // CompositeModel
-#include <pops/physics/fluids/euler.hpp>                 // Euler
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
@@ -39,24 +37,31 @@
 
 using namespace pops;
 
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
 namespace {
 
-// A no-charge elliptic brick (phi = 0): the gas model only needs to give the System a block, since
-// register_history is co-distributed with block 0 -- the ring VALUES below are hand-built buffers.
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
 constexpr double kGamma = 1.4;
-constexpr int kNcomp = 4;  // Euler: rho, rho u, rho v, E (the block-0 ncomp the rings carry)
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using NativeGasLaw = nd::IdealGasEuler<kTestDimension>;
+constexpr int kNcomp = NativeGasLaw::n_vars;  // density, one momentum per axis, total energy
 
-void add_gas(System& s) {
-  add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", kGamma);
-  s.set_poisson("charge_density", "geometric_mg");
+void add_gas(NativeSystem& s) {
+  s.install_block_state_route("gas", "test.checkpoint-history.gas.state@1");
+  add_compiled_model(s, "gas", NativeGasLaw::prepare(kGamma), "minmod", "rusanov", "conservative",
+                     "explicit", kGamma);
+  s.set_poisson("charge_density", "cartesian_cg");
 }
 
 // A distinct per-component, per-cell buffer so a slot mixup (wrong lag / wrong ncomp) is caught:
@@ -94,7 +99,7 @@ struct SerializedHistory {
 };
 
 // Serialize every registered ring the way sim.checkpoint does (history_names -> per-name accessors).
-std::vector<SerializedHistory> serialize(const System& s) {
+std::vector<SerializedHistory> serialize(const NativeSystem& s) {
   std::vector<SerializedHistory> out;
   for (const std::string& name : s.history_names()) {
     SerializedHistory h;
@@ -113,7 +118,7 @@ std::vector<SerializedHistory> serialize(const System& s) {
 
 // Restore the serialized rings into a fresh System the way sim.restart does (restore_history per slot
 // then set_history_initialized). restore_history registers the ring co-distributed with block 0.
-void deserialize(System& s, const std::vector<SerializedHistory>& hist) {
+void deserialize(NativeSystem& s, const std::vector<SerializedHistory>& hist) {
   for (const SerializedHistory& h : hist) {
     for (int slot = 0; slot < h.depth; ++slot) {
       s.restore_history(h.name, slot, h.slots[static_cast<std::size_t>(slot)]);
@@ -130,14 +135,18 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   static Kokkos::ScopeGuard guard;
 #endif
   const int n = 8;
-  const int nn = n * n;
+  int nn = 1;
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+  NativeSystemConfig cfg;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    cfg.shape[axis] = n;
+    cfg.lower[axis] = Real(0);
+    cfg.upper[axis] = Real(1);
+    cfg.periodicity[axis] = true;
+    nn *= n;
+  }
 
-  System src(cfg);
+  NativeSystem src(cfg);
   add_gas(src);
 
   // A cold-start broadcast is valid for multistep evaluation but does not make the copied slots
@@ -176,7 +185,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   src.register_history("scratch_b", /*lag=*/1);
   src.restore_history("scratch_b", 0, B);
   src.set_history_initialized("scratch_b", true);
-  MultiFab& b_val = src.read_history("scratch_b", 0);
+  NativeField& b_val = src.read_history("scratch_b", 0);
   src.store_history("rhs_prev",
                     b_val);  // current slot [0] <- B (already initialized: no re-broadcast)
 
@@ -201,7 +210,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   EXPECT_TRUE(saw_rhs_prev) << "rhs_prev_serialized";
 
   // --- RESTART: a fresh System (same block) restores the rings -----------------------------------
-  System dst(cfg);
+  NativeSystem dst(cfg);
   add_gas(dst);
   deserialize(dst, blob);
 
@@ -219,7 +228,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   // history): lag 1 == A. read_history is the accessor the generated step body calls; history_global
   // of the same slot proves the read handle points at the restored data.
   {
-    const MultiFab& r1 = dst.read_history("rhs_prev", 1);
+    const NativeField& r1 = dst.read_history("rhs_prev", 1);
     (void)r1;  // the handle exists (no throw on an initialized ring); its data checked via slot 1
     EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 1), A) < 1e-15) << "restored_lag1_is_A";
   }
@@ -233,7 +242,7 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   const std::vector<double> C = ramp(nn, 42.0);
   dst.restore_history("scratch_c", 0, C);
   dst.set_history_initialized("scratch_c", true);
-  MultiFab& c_val = dst.read_history("scratch_c", 0);
+  NativeField& c_val = dst.read_history("scratch_c", 0);
   dst.store_history("rhs_prev",
                     c_val);  // current slot [0] <- C; already-initialized -> no broadcast
   EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 0), C) < 1e-15)

@@ -7,7 +7,7 @@ import pytest
 
 import pops
 from pops.analytic import PredicateExpr, constant, coordinates, input as analytic_input, param
-from pops.domain import Rectangle
+from pops.domain import CartesianDomain, Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh.geometry import (
     Disc,
@@ -90,10 +90,24 @@ def test_half_plane_level_set_has_negative_active_side() -> None:
         HalfPlane(normal=(0.0, 0.0))
 
 
-def test_no_wall_is_the_generic_all_active_geometry() -> None:
-    geometry = NoWall().level_set(_frame())
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_no_wall_is_the_ranked_all_active_geometry(dimension: int) -> None:
+    frame = CartesianDomain(
+        "ranked-no-wall-%d" % dimension,
+        (-1.0,) * dimension,
+        (1.0,) * dimension,
+    ).frame()
+    geometry = NoWall().level_set(frame)
 
     assert geometry.expression.same_as(constant(-1.0))
+
+
+@pytest.mark.parametrize("provider", (Disc(), HalfPlane()))
+def test_planar_geometry_providers_remain_explicit_capabilities(provider: object) -> None:
+    frame = CartesianDomain("ranked-geometry", (-1.0,), (1.0,)).frame()
+
+    with pytest.raises(TypeError, match="two-dimensional Cartesian frame"):
+        provider.level_set(frame)
 
 
 def test_boolean_composition_is_generic_immutable_and_canonical() -> None:

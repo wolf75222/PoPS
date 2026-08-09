@@ -2,7 +2,7 @@
 
 :class:`AmrRuntimeView` is the runtime-bound handle returned by ``AmrSystem.amr``. It is the only
 part of :mod:`pops.runtime.amr` tied to a live system: it reads the already-built box accessors
-(``patch_rectangles`` / ``patch_boxes`` / ``coarse_local_boxes`` / ``coarse_total_boxes``) and the
+(``patch_bounds`` / ``patch_boxes`` / ``coarse_local_boxes`` / ``coarse_total_boxes``) and the
 static config the ``AmrSystem`` retained, then packages them into the inert report value classes.
 
 It is INERT: it builds nothing, allocates nothing, steps no clock. The native box accessors trigger
@@ -14,6 +14,7 @@ reported as honestly unavailable.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from pops.runtime.amr._reports import (
@@ -77,49 +78,65 @@ class AmrRuntimeView:
             raise
 
     def _per_level(self) -> Any:
-        """Per-level patch census from patch_boxes() + patch_rectangles(), level 0 = base box."""
+        """Per-level patch census from exact ranked index and physical bounds."""
         s = self._sim._s
         n_levels = int(s.n_levels())
-        base_nx, base_ny = int(s.nx()), int(s.ny())
+        base_shape = tuple(int(value) for value in s.spatial_shape())
         # Level 0: the coarse base covers the whole domain; report it as one covering box.
         levels = {
             0: {
                 "level": 0,
                 "n_patches": 1,
-                "cells": base_nx * base_ny,
+                "cells": math.prod(base_shape),
                 "boxes": [],
-                "rectangles": [],
+                "physical_bounds": [],
             }
         }
         for lvl in range(1, n_levels):
-            levels[lvl] = {"level": lvl, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []}
-        rects = self._sim.patch_rectangles()
-        # patch_boxes() and patch_rectangles() are parallel (one rectangle per box); strict=True
+            levels[lvl] = {
+                "level": lvl,
+                "n_patches": 0,
+                "cells": 0,
+                "boxes": [],
+                "physical_bounds": [],
+            }
+        physical_bounds = self._sim.patch_bounds()
+        # Both projections are parallel (one physical tuple per index box); strict=True
         # asserts that invariant rather than silently truncating to the shorter.
-        for (level, ilo, jlo, ihi, jhi), rect in zip(s.patch_boxes(), rects, strict=True):
+        for (level, lower, upper), physical in zip(s.patch_boxes(), physical_bounds, strict=True):
             level = int(level)
+            lower = tuple(int(value) for value in lower)
+            upper = tuple(int(value) for value in upper)
+            if len(lower) != len(base_shape) or len(upper) != len(base_shape):
+                raise ValueError("native AMR patch bounds differ from the runtime spatial rank")
             entry = levels.setdefault(
-                level, {"level": level, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []}
+                level,
+                {
+                    "level": level,
+                    "n_patches": 0,
+                    "cells": 0,
+                    "boxes": [],
+                    "physical_bounds": [],
+                },
             )
             entry["n_patches"] += 1
-            entry["cells"] += (int(ihi) - int(ilo) + 1) * (int(jhi) - int(jlo) + 1)
-            entry["boxes"].append((int(ilo), int(jlo), int(ihi), int(jhi)))
-            entry["rectangles"].append(tuple(float(v) for v in rect))
+            entry["cells"] += math.prod(
+                high - low + 1 for low, high in zip(lower, upper, strict=True)
+            )
+            entry["boxes"].append((lower, upper))
+            entry["physical_bounds"].append(tuple(float(value) for value in physical))
         return [levels[k] for k in sorted(levels)]
 
     # --- the sec.8.12 reports ------------------------------------------------
     def patch_table(self) -> Any:
         """Return a :class:`PatchReport` of the live patches + coarse box distribution."""
         coarse_local, coarse_total = self._coarse_boxes()
-        bounds = (
-            (self._sim._xlo, self._sim._ylo),
-            (self._sim._xlo + self._sim._L, self._sim._ylo + self._sim._Ly),
-        )
+        bounds = (self._sim._lower, self._sim._upper)
         if not self._is_built():
             return PatchReport(
                 built=False,
                 n_levels=None,
-                base_cells=(self._sim._s.nx(), self._sim._s.ny()),
+                base_cells=self._sim._shape,
                 domain_bounds=bounds,
                 per_level=[],
                 coarse_local_boxes=coarse_local,
@@ -128,7 +145,7 @@ class AmrRuntimeView:
         return PatchReport(
             built=True,
             n_levels=int(self._sim._s.n_levels()),
-            base_cells=(int(self._sim._s.nx()), int(self._sim._s.ny())),
+            base_cells=tuple(int(value) for value in self._sim._s.spatial_shape()),
             domain_bounds=bounds,
             per_level=self._per_level(),
             coarse_local_boxes=coarse_local,
@@ -172,7 +189,7 @@ class AmrRuntimeView:
             per_level_depth=None,
             requirement_note=(
                 "the reconstruction stencil sets the ghost depth "
-                "(minmod / vanleer -> 1, weno5 -> 3); the coarse-fine fine ghosts "
+                "(minmod / vanleer / mc / superbee -> 1, weno5 -> 3); the coarse-fine fine ghosts "
                 "are re-derived per path on the AMR transport."
             ),
             notes=["per-level ghost depth is not exposed by this native build."],

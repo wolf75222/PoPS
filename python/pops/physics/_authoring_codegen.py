@@ -57,7 +57,7 @@ class _CodegenMixin(_HyperbolicModel):
     def emit_cpp_brick(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                        hoist_reciprocals: bool = False) -> Any:
         """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
-        2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
+        2bis). The produced struct uses StateVec / ProviderValues / POPS_HD / Variables and exposes flux,
         max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
         therefore enter a CompositeModel and run in the compiled solver.
 
@@ -78,10 +78,9 @@ class _CodegenMixin(_HyperbolicModel):
         bricks written by hand (NoSource, PotentialForce in pops/model/bricks.hpp) and can therefore
         enter as the Source parameter of a CompositeModel.
 
-        CONVENTION: the auxiliary names (set via aux(...)) must be FIELDS of pops::Aux,
-        because they are read directly as a.<name> (e.g. aux('grad_x') -> a.grad_x, aux('grad_y') ->
-        a.grad_y). This convention is the same as that of the manual bricks, where the source reads
-        the outer state only through the pops::Aux channel (potential and its gradient).
+        Every ``aux(name)`` is resolved through the exact ProviderPack.  The
+        generated source reads the consumer-local provider slot, never a
+        member selected by a conventional field name.
 
         Style identical to emit_cpp_brick (inlined constants, cons -> locals, primitives -> locals;
         plus, aux -> locals); cse=True factors the common sub-expressions. Raises ValueError if
@@ -100,12 +99,12 @@ class _CodegenMixin(_HyperbolicModel):
         return _cg._emit_bricks(self, name=name, hoist_reciprocals=hoist_reciprocals)
 
     def _elliptic_field_registrations(self, nm: Any) -> Any:
-        """Per named elliptic field (ADC-428): (field, brick_struct, phi_comp, gx_comp, gy_comp) for the
-        native loader. The aux component of each output name is its channel index: a CANONICAL name
-        (phi/grad_x/...) maps via AUX_CANONICAL; a model-named aux (aux_field) maps to
-        AUX_NAMED_BASE + its position in aux_extra_names. A name the model never declared as an aux is
-        rejected (the solve would write a component no source can read). gx/gy default to -1 (phi only)
-        when the field lists fewer than 3 aux names."""
+        """Return named elliptic-field registrations with ProviderPack storage slots.
+
+        Every output name is an ordinary declared auxiliary component.  The
+        code generator resolves its exact compact storage slot from the pack;
+        no potential, gradient, or physics-specific prefix is reserved.
+        """
         from pops.codegen import module_codegen as _cg
         return _cg._elliptic_field_registrations(self, nm)
 

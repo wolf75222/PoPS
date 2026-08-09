@@ -1,182 +1,217 @@
 /// @file
-/// @brief CopySchedule: memoized inter-layout redistribution plan for parallel_copy (ADC-607).
-///
-/// parallel_copy used to enumerate, on EVERY call, the src-box job schedule: a BoxHash build over
-/// the SRC BoxArray plus a local (and, under MPI, a global) enumeration over the two BoxArrays. That
-/// schedule is a pure function of the LAYOUT PAIR (dst BoxArray/DistributionMapping, src
-/// BoxArray/DistributionMapping); only the copy/pack/MPI/unpack of the LIVE data must rerun. This
-/// header holds the cacheable plan so the enumeration runs ONCE per (dst layout, src layout). Unlike
-/// the intra-level halo schedule (halo_schedule.hpp, ADC-260) the plan depends on BOTH layouts, so
-/// the cache LIVES ON the dst MultiFab (auto-dropped when regrid move-assigns a fresh dst) but each
-/// entry is KEYED on a SRC-LAYOUT fingerprint (src BoxArray + src DistributionMapping): a fresh src
-/// serves a fresh entry, never a stale one. Jobs carry GLOBAL box indices (resolved to local fabs at
-/// replay), so a plan is valid for any MultiFab pair over the same layouts. MPI-free: the in-flight
-/// buffers and MPI_Request stay in parallel_copy (refinement.hpp). Jobs replay in the SAME
-/// deterministic order as the legacy inline enumeration (local: dst-local x sorted src candidates;
-/// global: gd x sorted src candidates) so the packed buffers stay bit-identical.
+/// @brief Authenticated compile-time-ranked inter-layout copy schedules.
 
 #pragma once
 
-#include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/storage/multifab.hpp>
 
-#include <atomic>
-#include <cstdint>
-#include <memory>
+#include <cstddef>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace pops {
 
-struct CopyExchangeStorage;
+struct CopyScheduleBudget {
+  std::size_t box_pairs = 0;
+  std::size_t jobs = 0;
+  std::size_t destination_overlap_pairs = 0;
+  std::size_t source_overlap_pairs = 0;
+};
 
-/// One redistribution copy: the overlap @p region of dst box @p gd is filled from the SAME-index
-/// region of src box @p gs (no shift: parallel_copy is a same-domain redistribution). @p gs and @p
-/// gd are GLOBAL box indices (into the src / dst BoxArray respectively), resolved to local fabs when
-/// the job is replayed.
+template <int Dim>
 struct CopyJob {
-  int gs = 0;
-  int gd = 0;
-  Box2D region{};
+  std::size_t source_box = 0;
+  std::size_t destination_box = 0;
+  Box<Dim> region{};
+
+  bool operator==(const CopyJob&) const = default;
 };
 
-/// A src-layout fingerprint: the src BoxArray boxes AND the src DistributionMapping ranks. The
-/// schedule depends on both (which src box overlaps which dst box, and who owns each), so both are
-/// part of the key. Compared by exact vector equality (not a hash) so a fingerprint collision can
-/// never serve a wrong plan; the vectors are small (one entry per src box). Component width and
-/// communicator identity live on CopySchedule itself so changing either cannot reuse communication
-/// preparation from a different native contract.
-struct SrcLayoutKey {
-  std::vector<Box2D> boxes;  // src BoxArray boxes (order significant, = global index)
-  std::vector<int> ranks;    // src DistributionMapping owner-rank per box
+template <int Dim>
+struct CopyPeerPlan {
+  Index<Dim> peer{};
+  std::vector<CopyJob<Dim>> jobs{};
 
-  bool matches(const BoxArray& sba, const DistributionMapping& sdm) const {
-    return boxes == sba.boxes() && ranks == sdm.ranks();
+  bool operator==(const CopyPeerPlan&) const = default;
+};
+
+namespace copy_schedule_detail {
+
+inline std::size_t checked_pair_count(std::size_t left, std::size_t right) {
+  if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
+    throw std::length_error("pops::CopySchedule patch pair count exceeds size_t");
+  return left * right;
+}
+
+template <int Dim>
+void validate_disjoint(const mesh::BoxArray<Dim>& layout, std::size_t pair_budget,
+                       const char* name) {
+  const std::size_t pair_count =
+      layout.size() < 2 ? 0 : checked_pair_count(layout.size(), layout.size() - 1) / 2;
+  if (pair_count > pair_budget)
+    throw std::length_error(std::string("pops::CopySchedule ") + name +
+                            " overlap-pair budget exceeded");
+  for (std::size_t left = 0; left < layout.size(); ++left) {
+    if (layout[left].empty())
+      throw std::invalid_argument(std::string("pops::CopySchedule ") + name +
+                                  " layout contains an empty patch");
+    for (std::size_t right = 0; right < left; ++right)
+      if (!layout[left].intersect(layout[right]).empty())
+        throw std::invalid_argument(std::string("pops::CopySchedule ") + name +
+                                    " layout contains overlapping patches");
   }
-};
+}
 
-/// Memoized schedule for ONE (dst layout, src layout) pair. @p local holds the copies whose dst AND
-/// src are owned by this rank; @p send[r]/@p recv[r] hold the jobs exchanged with rank r (both empty
-/// unless built under MPI with n_ranks() > 1). @p key fingerprints the SRC layout it was built for;
-/// the DST layout is implicit because the plan is stored on the dst MultiFab that owns the dst
-/// BoxArray/DistributionMapping (see CopyScheduleCache). Although the geometry jobs do not depend
-/// on ncomp, the cache identity deliberately does because its prepared buffers do.
-struct CopySchedule {
-  SrcLayoutKey key;
-  int ncomp = 0;
-  int communicator_size = 1;
-  int communicator_rank = 0;
-  std::int64_t communicator_identity = 0;
-  int message_tag = 0;
-  std::vector<CopyJob> local;
-  std::vector<std::vector<CopyJob>> send;  // [rank]; empty unless MPI && n_ranks() > 1
-  std::vector<std::vector<CopyJob>> recv;  // [rank]
-  std::vector<std::int64_t> send_cells;    // [rank], before multiplication by ncomp
-  std::vector<std::int64_t> recv_cells;    // [rank], before multiplication by ncomp
-};
+template <int Dim>
+CopyPeerPlan<Dim>& peer_plan(std::vector<CopyPeerPlan<Dim>>& plans, const Index<Dim>& peer) {
+  for (CopyPeerPlan<Dim>& plan : plans)
+    if (plan.peer == peer)
+      return plan;
+  plans.push_back(CopyPeerPlan<Dim>{peer, {}});
+  return plans.back();
+}
 
-/// Small per-MultiFab cache of copy schedules, one entry per distinct SRC layout. In practice a dst
-/// MultiFab is the target of parallel_copy from a handful of distinct src layouts (the fine-coarsen
-/// grid, the replicated coarse), so this holds a few entries; lookup is a short linear scan.
-/// Entries are shared_ptr so an in-flight copy can hold a stable handle to the plan it is replaying
-/// even if a later call appends a new entry. The cache LIVES ON the dst MultiFab (multifab.hpp); it
-/// is dropped when the dst MultiFab is reassigned (e.g. AMR regrid builds a fresh dst and
-/// move-assigns it over the slot), which is the only way the DST layout changes, so a stale
-/// dst-layout plan can never be served; a changed SRC layout is caught by the fingerprint key. NOT
-/// thread-safe (the parallel_copy path is driven from a single host thread).
-class CopyScheduleCache {
+}  // namespace copy_schedule_detail
+
+/// Immutable per-rank overlap plan.  Source and destination layouts may be partitioned differently,
+/// but they must cover the same cell set exactly; partial copies are never published as complete.
+template <int Dim>
+class CopySchedule {
  public:
-  /// Existing schedule whose SRC-layout fingerprint matches (sba, sdm), or nullptr if none is
-  /// cached yet.
-  std::shared_ptr<const CopySchedule> find(const BoxArray& sba, const DistributionMapping& sdm,
-                                           int ncomp, int communicator_size, int communicator_rank,
-                                           std::int64_t communicator_identity,
-                                           int message_tag) const {
-    for (const auto& s : entries_) {
-      if (s->key.matches(sba, sdm) && s->ncomp == ncomp &&
-          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank &&
-          s->communicator_identity == communicator_identity && s->message_tag == message_tag) {
-        return s;
+  using job_type = CopyJob<Dim>;
+  using peer_plan_type = CopyPeerPlan<Dim>;
+
+  CopySchedule(const mesh::BoxArray<Dim>& destination_layout,
+               const mesh::Distribution<Dim>& destination_distribution,
+               const mesh::BoxArray<Dim>& source_layout,
+               const mesh::Distribution<Dim>& source_distribution, Index<Dim> local_rank,
+               CopyScheduleBudget budget)
+      : destination_layout_(destination_layout),
+        destination_distribution_(destination_distribution),
+        source_layout_(source_layout),
+        source_distribution_(source_distribution),
+        local_rank_(local_rank) {
+    validate_metadata_(budget);
+
+    const std::size_t pair_count =
+        copy_schedule_detail::checked_pair_count(destination_layout_.size(), source_layout_.size());
+    if (pair_count > budget.box_pairs)
+      throw std::length_error("pops::CopySchedule patch-pair budget exceeded");
+
+    mesh::ExactCellCount covered;
+    std::vector<job_type> jobs;
+    for (std::size_t destination = 0; destination < destination_layout_.size(); ++destination) {
+      for (std::size_t source = 0; source < source_layout_.size(); ++source) {
+        const Box<Dim> region = destination_layout_[destination].intersect(source_layout_[source]);
+        if (region.empty())
+          continue;
+        if (jobs.size() >= budget.jobs)
+          throw std::length_error("pops::CopySchedule job budget exceeded");
+        if (!covered.add(mesh::ExactCellCount::from_box(region)))
+          throw std::overflow_error("pops::CopySchedule covered-cell count overflow");
+        jobs.push_back(job_type{source, destination, region});
       }
     }
-    return nullptr;
+    if (covered != destination_layout_.exact_cell_count() ||
+        covered != source_layout_.exact_cell_count())
+      throw std::invalid_argument(
+          "pops::CopySchedule source and destination layouts must cover the same cells exactly");
+
+    for (const job_type& job : jobs)
+      classify_(job);
   }
 
-  /// Reserve publication capacity during collective preparation. Once this succeeds on every
-  /// rank, publish_prepared() cannot allocate and the freshly built plan becomes visible
-  /// transactionally only after the common success witness.
-  void reserve_for_append() { entries_.reserve(entries_.size() + 1u); }
+  const mesh::BoxArray<Dim>& destination_layout() const noexcept { return destination_layout_; }
+  const mesh::Distribution<Dim>& destination_distribution() const noexcept {
+    return destination_distribution_;
+  }
+  const mesh::BoxArray<Dim>& source_layout() const noexcept { return source_layout_; }
+  const mesh::Distribution<Dim>& source_distribution() const noexcept {
+    return source_distribution_;
+  }
+  const Index<Dim>& local_rank() const noexcept { return local_rank_; }
+  const std::vector<job_type>& local_jobs() const noexcept { return local_; }
+  const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
+  const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
 
-  void publish_prepared(std::shared_ptr<CopySchedule> schedule) noexcept {
-    entries_.push_back(std::move(schedule));
+  bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
+
+  void require_local_execution() const {
+    if (has_remote_jobs())
+      throw std::logic_error(
+          "pops::CopySchedule contains remote ND jobs; this build has no production ND transport");
   }
 
-  /// Drops every cached schedule, forcing a rebuild on the next parallel_copy. Used by tests to
-  /// compare the cached path against a fresh rebuild; not needed in production (regrid drops the
-  /// whole cache by reassigning the dst MultiFab).
-  void clear() {
-    entries_.clear();
-    exchange_pool_.clear();
+  template <class DestinationMemorySpace, class SourceMemorySpace>
+  void authenticate(const MultiFab<Dim, DestinationMemorySpace>& destination,
+                    const MultiFab<Dim, SourceMemorySpace>& source) const {
+    if (destination.layout() != destination_layout_ ||
+        destination.distribution() != destination_distribution_ ||
+        source.layout() != source_layout_ || source.distribution() != source_distribution_ ||
+        destination.local_rank() != local_rank_ || source.local_rank() != local_rank_)
+      throw std::invalid_argument(
+          "pops::CopySchedule does not match the source/destination fields");
   }
-
-  /// Number of cached schedules (test/instrumentation hook).
-  std::size_t size() const { return entries_.size(); }
-  std::size_t exchange_pool_size() const { return exchange_pool_.size(); }
-
-  /// Borrow communication storage prepared for one exact schedule, provider width, and MPI
-  /// communicator context. Concurrent calls receive distinct leases; sequential calls on a stable
-  /// layout/lane reuse pinned buffer and MPI_Request capacity.
-  std::shared_ptr<CopyExchangeStorage> acquire_exchange(
-      const std::shared_ptr<const CopySchedule>& schedule, int ncomp,
-      std::int64_t communicator_identity);
 
  private:
-  std::vector<std::shared_ptr<CopySchedule>> entries_;
-  std::vector<std::shared_ptr<CopyExchangeStorage>> exchange_pool_;
+  void validate_metadata_(const CopyScheduleBudget& budget) const {
+    if (!destination_distribution_.matches_layout(destination_layout_) ||
+        !source_distribution_.matches_layout(source_layout_))
+      throw std::invalid_argument("pops::CopySchedule distribution/layout identity mismatch");
+    if (destination_distribution_.rank_space() != source_distribution_.rank_space())
+      throw std::invalid_argument("pops::CopySchedule fields use different rank spaces");
+    if (!destination_distribution_.rank_space().contains(local_rank_))
+      throw std::out_of_range("pops::CopySchedule local rank is outside the rank space");
+    if (destination_distribution_.replicated() != source_distribution_.replicated())
+      throw std::invalid_argument(
+          "pops::CopySchedule cannot infer ownership for mixed replicated/partitioned fields");
+    copy_schedule_detail::validate_disjoint(destination_layout_, budget.destination_overlap_pairs,
+                                            "destination");
+    copy_schedule_detail::validate_disjoint(source_layout_, budget.source_overlap_pairs, "source");
+  }
+
+  void classify_(const job_type& job) {
+    const bool source_local = source_distribution_.is_local(job.source_box, local_rank_);
+    const bool destination_local =
+        destination_distribution_.is_local(job.destination_box, local_rank_);
+    if (source_local && destination_local) {
+      local_.push_back(job);
+      return;
+    }
+    if (source_distribution_.replicated())
+      throw std::logic_error("pops::CopySchedule replicated ownership classification is invalid");
+    if (source_local) {
+      copy_schedule_detail::peer_plan(send_, destination_distribution_.owner(job.destination_box))
+          .jobs.push_back(job);
+    } else if (destination_local) {
+      copy_schedule_detail::peer_plan(receive_, source_distribution_.owner(job.source_box))
+          .jobs.push_back(job);
+    }
+  }
+
+  mesh::BoxArray<Dim> destination_layout_{};
+  mesh::Distribution<Dim> destination_distribution_{};
+  mesh::BoxArray<Dim> source_layout_{};
+  mesh::Distribution<Dim> source_distribution_{};
+  Index<Dim> local_rank_{};
+  std::vector<job_type> local_{};
+  std::vector<peer_plan_type> send_{};
+  std::vector<peer_plan_type> receive_{};
 };
 
-namespace detail {
-/// Process-wide counters are atomic because independent execution lanes may warm private caches
-/// concurrently. They remain instrumentation only and use relaxed ordering.
-inline std::atomic<std::int64_t>& copy_schedule_build_counter() {
-  static std::atomic<std::int64_t> n{0};
-  return n;
-}
-/// Process-wide count of copy-schedule cache HITS (a parallel_copy that reused a memoized plan).
-inline std::atomic<std::int64_t>& copy_schedule_hit_counter() {
-  static std::atomic<std::int64_t> n{0};
-  return n;
-}
-/// Process-wide count of copy-schedule cache MISSES (a parallel_copy that built a fresh plan). Equal
-/// to the build counter by construction (a miss always builds); kept as a separate name so the
-/// hit/miss pair reads symmetrically at the profiler seam.
-inline std::atomic<std::int64_t>& copy_schedule_miss_counter() {
-  static std::atomic<std::int64_t> n{0};
-  return n;
-}
-}  // namespace detail
-
-/// Number of times parallel_copy has BUILT (enumerated) a copy schedule. A reused (cached) schedule
-/// does NOT increment it, so a stable layout pair copied K times reports 1. Test hook for cache
-/// engagement; not part of the public numerical API.
-inline std::int64_t copy_schedule_build_count() {
-  return detail::copy_schedule_build_counter().load(std::memory_order_relaxed);
-}
-
-/// Number of parallel_copy calls served from the cache (hits) and rebuilt (misses). A stable layout
-/// pair copied K times reports 1 miss and K-1 hits. Test / profiler hooks.
-inline std::int64_t copy_schedule_hit_count() {
-  return detail::copy_schedule_hit_counter().load(std::memory_order_relaxed);
-}
-inline std::int64_t copy_schedule_miss_count() {
-  return detail::copy_schedule_miss_counter().load(std::memory_order_relaxed);
-}
-
-/// Resets the build / hit / miss counters (tests).
-inline void reset_copy_schedule_build_count() {
-  detail::copy_schedule_build_counter().store(0, std::memory_order_relaxed);
-  detail::copy_schedule_hit_counter().store(0, std::memory_order_relaxed);
-  detail::copy_schedule_miss_counter().store(0, std::memory_order_relaxed);
+template <int Dim, class DestinationMemorySpace, class SourceMemorySpace>
+CopySchedule<Dim> prepare_copy_schedule(const MultiFab<Dim, DestinationMemorySpace>& destination,
+                                        const MultiFab<Dim, SourceMemorySpace>& source,
+                                        CopyScheduleBudget budget) {
+  if (destination.local_rank() != source.local_rank())
+    throw std::invalid_argument("pops::prepare_copy_schedule fields use different local ranks");
+  return CopySchedule<Dim>{destination.layout(),  destination.distribution(), source.layout(),
+                           source.distribution(), destination.local_rank(),   budget};
 }
 
 }  // namespace pops

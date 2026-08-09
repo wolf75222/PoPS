@@ -7,6 +7,10 @@ spatial methods and the canonical Case ownership graph.
 
 from .transport import (
     BoundaryStencilRequirement,
+    model_characteristic_no_inflow,
+    model_primitive_to_conservative,
+    NoFlux,
+    SlipWall,
     TransportBoundarySet,
 )
 from .embedded import EmbeddedBoundaryFlux, ZeroFlux
@@ -14,6 +18,10 @@ from .embedded import EmbeddedBoundaryFlux, ZeroFlux
 __all__ = [
     "BoundaryStencilRequirement",
     "EmbeddedBoundaryFlux",
+    "model_characteristic_no_inflow",
+    "model_primitive_to_conservative",
+    "NoFlux",
+    "SlipWall",
     "TransportBoundarySet",
     "ZeroFlux",
 ]

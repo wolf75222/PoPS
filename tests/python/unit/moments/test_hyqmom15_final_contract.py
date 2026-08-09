@@ -20,11 +20,25 @@ from pops.moments import (
 from pops.domain import RectangleFrame
 from pops.frames import Cartesian2D
 from pops.physics import Model
-from pops.time import ProjectAndRecheck, RejectAttempt
+from pops.time import ALL_PROVISIONAL_STORES, ProjectAndRecheck, RejectAttempt
 
 
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"
+_STANDARDIZED_SAMPLE = {
+    "S03": -0.2,
+    "S04": 2.8,
+    "S11": 0.15,
+    "S12": -0.35,
+    "S13": 0.42,
+    "S20": 1.0,
+    "S21": 0.25,
+    "S22": 1.2,
+    "S30": 0.3,
+    "S31": -0.1,
+    "S40": 3.1,
+    "S02": 1.0,
+}
 
 
 def test_moment_flux_generator_is_public_for_explicit_python_models() -> None:
@@ -83,22 +97,7 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
 def test_hyqmom15_closure_matches_closure_s5_matlab_oracle() -> None:
     """Pin the six non-Gaussian polynomial relations used by closureS5.m."""
 
-    standardized = {
-        "S03": -0.2,
-        "S04": 2.8,
-        "S11": 0.15,
-        "S12": -0.35,
-        "S13": 0.42,
-        "S20": 1.0,
-        "S21": 0.25,
-        "S22": 1.2,
-        "S30": 0.3,
-        "S31": -0.1,
-        "S40": 3.1,
-        "S02": 1.0,
-    }
-
-    closed = HyQMOM15Closure()(standardized)
+    closed = HyQMOM15Closure()(_STANDARDIZED_SAMPLE)
 
     assert closed == pytest.approx({
         "S50": 2.1345,
@@ -148,12 +147,22 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     target = _load_example().build_authoring()
 
     assert type(target.model) is Model
+    assert type(target.closure) is LocalClosure
+    assert target.closure.contract_data() == {
+        "kind": "local_moment_closure",
+        "order": 4,
+        "name": "user_hyqmom15_closure",
+    }
+    assert target.closure(_STANDARDIZED_SAMPLE) == pytest.approx(
+        HyQMOM15Closure()(_STANDARDIZED_SAMPLE)
+    )
     assert isinstance(target.model.frame, RectangleFrame)
     assert target.components == tuple(moment_names(4))
     assert target.model.field_spaces()[target.field.local_id].components == (
         "phi", "grad_x", "grad_y")
     assert target.field_provider == target.model.operators["fields"]
     assert target.program.transaction_plan() is not None
+    assert target.program.transaction_plan().stores == ALL_PROVISIONAL_STORES
     guards = target.program.transaction_plan().guards
     assert [guard.name for guard in guards] == [
         "hyqmom15_realizability_density",
@@ -167,6 +176,36 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert local_map.domain == local_map.range
     projection = target.model.module.operator_registry().get("projection")
     assert projection.kind == "projection"
+
+
+def test_particle_number_diagnostic_integrates_m00_and_rejects_drift() -> None:
+    example = _load_example()
+    target = example.build_authoring()
+    state = example.build_initial_state(cells=4)["plasma"]
+    reference = example._particle_number(state)
+
+    assert reference == pytest.approx(1.0)
+    diagnostics = example._require_physical_diagnostics(
+        state,
+        projection=target.realizability,
+        reference_particle_number=reference,
+        where="initial state",
+    )
+    assert diagnostics.realizable is True
+    assert diagnostics.particle_number == pytest.approx(reference)
+    assert diagnostics.particle_number_relative_error == pytest.approx(0.0)
+
+    drifted = state.copy()
+    drifted[HyQMOM15.components.index("M00")] += (
+        2.0 * example.PARTICLE_NUMBER_RELATIVE_TOLERANCE
+    )
+    with pytest.raises(RuntimeError, match="changed particle number"):
+        example._require_physical_diagnostics(
+            drifted,
+            projection=target.realizability,
+            reference_particle_number=reference,
+            where="drifted state",
+        )
 
 
 def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_density() -> None:

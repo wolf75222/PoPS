@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +16,7 @@ from pops._platform_contracts import (
     launch_checked,
     proven_serial_manifest,
     validate_component_launch,
+    validate_component_runtime,
     validate_launch,
 )
 from pops.identity import make_identity
@@ -120,11 +123,49 @@ def test_unknown_is_missing_proof_and_3d_is_representable_then_refused():
         launch_checked(_platform(), _context(), [three_d], lambda *_: None)
 
 
+def test_platform_support_set_is_distinct_from_layout_resolved_dimension():
+    platform = _platform()
+    context = _context()
+    supported = _proof((1, 2, 3))
+    platform = replace(
+        platform,
+        capabilities=dict(platform.capabilities, supported_dimensions=supported),
+    )
+    context = replace(
+        context,
+        backend=replace(
+            context.backend,
+            capabilities=dict(
+                context.backend.capabilities,
+                supported_dimensions=supported,
+            ),
+        ),
+    )
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            platform_manifest=platform,
+            plan=SimpleNamespace(resolved_dimension=2),
+        ),
+        execution_context=context,
+    )
+
+    from pops.runtime._runtime_plan_io import proved_platform
+
+    _, _, _, facts = proved_platform(plan)
+    assert facts["supported_dimensions"] == (1, 2, 3)
+    assert facts["dimension"] == 2
+
+
 @pytest.mark.parametrize("changed", [
     {"centering": "node"},
     {"scalar": "float32"},
     {"extents": (15, 12)},
     {"memory_space": "device"},
+    {"strides": (1, 16)},
+    {"ghosts": ((1, 0), (0, 0))},
+    {"patch": "patch-1"},
+    {"layout": "left"},
+    {"ownership": "owned"},
 ])
 def test_field_mismatch_refuses_before_kernel(changed):
     launched = []
@@ -133,6 +174,62 @@ def test_field_mismatch_refuses_before_kernel(changed):
             _platform(), _context(), [_field(**changed)],
             lambda *_: launched.append(True), expected_fields=[_field()])
     assert launched == []
+
+
+def test_field_view_requires_exact_capability_proofs_before_kernel():
+    launched = []
+    platform = _platform()
+    context = _context()
+
+    missing = dict(platform.capabilities)
+    missing.pop("ownership")
+    with pytest.raises(PlatformContractError, match="omitted required field-view capability"):
+        launch_checked(
+            replace(platform, capabilities=missing), context, [_field()],
+            lambda *_: launched.append(True))
+
+    unsupported_layout = _proof(("left",))
+    artifact_capabilities = dict(platform.capabilities, layouts=unsupported_layout)
+    runtime_capabilities = dict(context.backend.capabilities, layouts=unsupported_layout)
+    with pytest.raises(PlatformContractError, match="unsupported layout='right'"):
+        launch_checked(
+            replace(platform, capabilities=artifact_capabilities),
+            replace(context, backend=replace(
+                context.backend, capabilities=runtime_capabilities)),
+            [_field()], lambda *_: launched.append(True))
+
+    generic_disabled = _proof(False)
+    artifact_capabilities = dict(platform.capabilities, generic_field_view=generic_disabled)
+    runtime_capabilities = dict(context.backend.capabilities, generic_field_view=generic_disabled)
+    with pytest.raises(PlatformContractError, match="does not prove the generic field-view"):
+        launch_checked(
+            replace(platform, capabilities=artifact_capabilities),
+            replace(context, backend=replace(
+                context.backend, capabilities=runtime_capabilities)),
+            [_field()], lambda *_: launched.append(True))
+
+    assert launched == []
+
+
+@pytest.mark.parametrize("expected", [False, True])
+def test_duplicate_field_names_refuse_before_kernel(expected):
+    launched = []
+    actual_fields = [_field(), _field()]
+    expected_fields = [_field(), _field()] if expected else [_field()]
+    if expected:
+        actual_fields = [_field()]
+    with pytest.raises(PlatformContractError, match="descriptors contain duplicate name"):
+        launch_checked(
+            _platform(), _context(), actual_fields, lambda *_: launched.append(True),
+            expected_fields=expected_fields)
+    assert launched == []
+
+
+def test_field_view_ghosts_must_leave_positive_interior():
+    with pytest.raises(ValueError, match="positive interior"):
+        _field(ghosts=((16, 0), (0, 0)))
+    with pytest.raises(ValueError, match="positive interior"):
+        _field(ghosts=((8, 8), (0, 0)))
 
 
 def test_generic_2d_double_descriptor_launches_once():
@@ -163,6 +260,16 @@ def test_aot_component_build_route_is_checked_against_simulation_execution_facts
         validate_component_launch(_platform(), context, ())
 
 
+def test_aot_component_field_capabilities_fail_before_native_load():
+    component = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++23")
+    runtime = _context().backend
+    missing = dict(component.capabilities)
+    missing.pop("layouts")
+    with pytest.raises(PlatformContractError, match="omitted required field-view capability"):
+        validate_component_runtime(replace(component, capabilities=missing), runtime)
+
+
 def test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard():
     openmpi = (
         "compiler=clang;std=202002;headers=same;kokkos=1;stdlib=libc++;"
@@ -191,3 +298,46 @@ def test_final_generic_contract_has_no_implicit_device_capture():
         assert forbidden not in text
     assert "def mpi_world(cls, artifact: Any)" in text
     assert "handle=communicator.datatype_float64" in text
+
+
+@pytest.mark.parametrize(
+    ("dimension", "native_shape", "numpy_shape", "expected_strides"),
+    (
+        (1, (7,), (7,), (1,)),
+        (2, (5, 3), (3, 5), (5, 1)),
+        (3, (4, 3, 2), (2, 3, 4), (12, 4, 1)),
+    ),
+)
+def test_bind_field_descriptors_retain_the_compiled_rank(
+    dimension,
+    native_shape,
+    numpy_shape,
+    expected_strides,
+):
+    import numpy as np
+
+    from pops.runtime._platform_validation import (
+        _compiled_spatial_facts,
+        _initial_field,
+    )
+
+    plan = SimpleNamespace(
+        resolved_dimension=dimension,
+        native_layouts={"layout": SimpleNamespace(shape=native_shape)},
+    )
+    resolved_dimension, mesh_shapes = _compiled_spatial_facts(plan)
+
+    shaped = np.empty((2, *numpy_shape), dtype=np.float64)
+    descriptor = _initial_field("state", shaped, resolved_dimension, mesh_shapes)
+    assert descriptor.dimension == dimension
+    assert descriptor.extents == numpy_shape
+    assert descriptor.strides == expected_strides
+    assert descriptor.ghosts == ((0, 0),) * dimension
+
+    flattened = np.empty(2 * math.prod(native_shape), dtype=np.float64)
+    flat_descriptor = _initial_field(
+        "flat-state", flattened, resolved_dimension, mesh_shapes
+    )
+    assert flat_descriptor.dimension == dimension
+    assert flat_descriptor.extents == numpy_shape
+    assert flat_descriptor.strides == expected_strides

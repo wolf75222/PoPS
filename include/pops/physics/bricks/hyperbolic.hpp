@@ -2,10 +2,16 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/state/variables.hpp>
 #include <pops/physics/fluids/euler.hpp>  // Euler: reused as the CompressibleFlux hyperbolic brick
+#include <pops/numerics/fv/flux_interfaces.hpp>
 
+#include <array>
 #include <cmath>
+#include <limits>
+#include <type_traits>
+#include <utility>
 
 /// @file
 /// @brief Generic HYPERBOLIC bricks: Vars (cons U / prim P + conversions + descriptor) +
@@ -13,43 +19,136 @@
 ///        n_vars, flux, max_wave_speed, to_primitive/to_conservative, conservative_vars/primitive_vars
 ///        (+ pressure/wave_speeds if HLLC flux). Source and elliptic right-hand side are SEPARATE
 ///        bricks (physics/source.hpp, physics/elliptic.hpp); CompositeModel (physics/composite.hpp)
-///        assembles them. ExBVelocity (1 var), CompressibleFlux (= Euler, 4 var), IsothermalFlux (3 var).
+///        assembles them. ExBVelocity has one scalar; CompressibleFlux and IsothermalFlux carry
+///        respectively Dim+2 and Dim+1 variables in the selected native rank.
 
 namespace pops {
 
-/// Scalar advection by the E x B drift: v = (-d_y phi, d_x phi)/B0 (divergence-free).
+namespace hyperbolic_detail {
+
+template <int Dim>
+struct DefaultGradientProviderSlots;
+template <>
+struct DefaultGradientProviderSlots<1> {
+  using type = ProviderSlots<0>;
+};
+template <>
+struct DefaultGradientProviderSlots<2> {
+  using type = ProviderSlots<0, 1>;
+};
+template <>
+struct DefaultGradientProviderSlots<3> {
+  using type = ProviderSlots<0, 1, 2>;
+};
+
+template <int Axis, int Dim, class GradientSlots, class Providers>
+POPS_HD Real gradient_provider(const Providers& providers) {
+  static_assert(Axis >= 0 && Axis < Dim, "gradient provider axis is outside the spatial rank");
+  static_assert(GradientSlots::count == Dim,
+                "gradient consumer requires one explicit provider slot per axis");
+  constexpr int component = GradientSlots::template slot<Axis>();
+  return provider_value<component>(providers);
+}
+
+template <int Axis, int Dim, class Brick, class Providers>
+POPS_HD Real runtime_velocity(const Brick& brick, const Providers& providers, int axis) {
+  if (axis == Axis)
+    return brick.template velocity<Axis>(providers);
+  if constexpr (Axis + 1 < Dim)
+    return runtime_velocity<Axis + 1, Dim>(brick, providers, axis);
+  return std::numeric_limits<Real>::quiet_NaN();
+}
+
+}  // namespace hyperbolic_detail
+
+/// Exact-ranked scalar advection by the Cartesian E x B drift for `B = B0 e_z`.
 ///
-/// 1-variable HYPERBOLIC brick (scalar density n). Satisfies HyperbolicPhysicalModel.
-/// CONTRACT: purely pointwise functions, device-callable (POPS_HD). No MultiFab,
-/// no allocation, no global access. The divergence-free E x B drift ensures
-/// exact conservation (no compression term in this flux).
-/// Variables cons = prim = {n} (scalar: no nontrivial conversion).
-struct ExBVelocity {
+/// In 2D this is `(-d_y phi, d_x phi)/B0`. A 3D Cartesian build carries the same planar drift
+/// with a zero z component. Under a 1D invariant reduction the projected velocity is zero because
+/// the transverse derivative is absent. Every available axis is selected at compile time.
+template <int Dim, class GradientSlots = typename hyperbolic_detail::DefaultGradientProviderSlots<Dim>::type>
+struct ExBVelocityND {
+  static_assert(Dim >= 1 && Dim <= 3, "ExBVelocityND supports dimensions 1, 2, and 3");
   static constexpr int n_vars = 1;
-  using State = StateVec<1>;
+  static constexpr int dimension = Dim;
+  using Schema = nd::ScalarStateSchema<Dim>;
+  using State = typename Schema::Conservative;
+  using Primitive = typename Schema::Primitive;
+  using Prim = Primitive;
+  using gradient_slots = GradientSlots;
+  static_assert(gradient_slots::count == Dim,
+                "ExBVelocityND requires one explicit gradient provider slot per axis");
+  static constexpr int n_providers = gradient_slots::required_count();
   Real B0 = 1;
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.exb-velocity-nd", 1};
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
-    StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
-    return f;
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(B0);
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+
+  template <int Axis, class Providers>
+  POPS_HD Real velocity(const Providers& providers) const {
+    static_assert(Axis >= 0 && Axis < Dim, "Cartesian E x B axis is outside the spatial rank");
+    if constexpr (Dim < 2 || Axis >= 2)
+      return Real(0);
+    else if constexpr (Axis == 0)
+      return -hyperbolic_detail::gradient_provider<1, Dim, gradient_slots>(providers) / B0;
+    else
+      return hyperbolic_detail::gradient_provider<0, Dim, gradient_slots>(providers) / B0;
+  }
+
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    return hyperbolic_detail::runtime_velocity<0, Dim>(*this, providers, dir);
+  }
+
+  template <int Axis, class Providers>
+  POPS_HD State flux(const State& state, const Providers& providers) const {
+    return State{state[0] * velocity<Axis>(providers)};
+  }
+
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
+    return State{u[0] * velocity(providers, dir)};
+  }
+
+  template <int Axis, class Providers>
+  POPS_HD Real max_wave_speed(const State&, const Providers& providers) const {
+    const Real speed = velocity<Axis>(providers);
+    return speed < Real(0) ? -speed : speed;
+  }
+
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
-  /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
-    StateVec<1> e{};
-    e[0] = velocity(a, dir);
-    return e;
+
+  template <int Axis, class Providers>
+  POPS_HD State eigenvalues(const State&, const Providers& providers) const {
+    return State{velocity<Axis>(providers)};
   }
-  // Scalar: primitive variables = conservative (transported density).
-  using Prim = StateVec<1>;
-  POPS_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
-  POPS_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
+
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
+    return State{velocity(providers, dir)};
+  }
+
+  /// The scalar E×B state is already primitive.  These are the same exact ranked law contract
+  /// used by generated Cartesian blocks; they contain no separate conversion algorithm.
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
+    return {state, Kokkos::isfinite(state[0]) ? nd::StateConversionStatus::Success
+                                              : nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return {primitive, Kokkos::isfinite(primitive[0]) ? nd::StateConversionStatus::Success
+                                                      : nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
+    return recover(state).status;
+  }
+  POPS_HD Prim to_primitive(const State& state) const { return state; }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
   static VariableSet conservative_vars() {
     return {VariableKind::Conservative, {"n"}, 1, {VariableRole::Density}};
   }
@@ -58,19 +157,14 @@ struct ExBVelocity {
   }
 };
 
+using ExBVelocity = ExBVelocityND<kNativeDimension>;
+
 /// Scalar advection by the E x B drift in POLAR coordinates (r, theta) -- "annular polar grid"
-/// effort, Phase 1. This is a brick SEPARATE from ExBVelocity (Cartesian), not a
-/// modification: the polar solver (assemble_rhs_polar) uses it on a PolarGeometry.
+/// capability. This type is intrinsically two-dimensional and remains separate from the ranked
+/// Cartesian brick.
 ///
-/// aux CHANNEL LAYOUT IN POLAR (documented, contract of this brick) -- the base components
-/// [0..2] carry the E field in the LOCAL ORTHONORMAL BASIS (e_r, e_theta):
-///   aux.phi    [0] = phi (potential; unused by the flux, present for symmetry)
-///   aux.grad_x [1] = grad_r     = d phi / d r            (radial component of grad phi)
-///   aux.grad_y [2] = grad_theta = (1/r) d phi / d theta  (PHYSICAL AZIMUTHAL component of grad phi)
-/// We REUSE the two grad_x/grad_y slots of pops::Aux for grad_r/grad_theta (no new aux
-/// field); the MEANING is polar and carried by this brick alone. grad_theta is the
-/// PHYSICAL derivative (already divided by r): thus the velocity below is symmetric to the
-/// Cartesian one (vr <- -grad_theta/B, vtheta <- grad_r/B) and the caller that fills aux carries the 1/r.
+/// `gradient<0>()` is the radial derivative and `gradient<1>()` is the physical azimuthal
+/// derivative `(1/r) d_phi/d_theta`. The metric-aware caller owns that conversion.
 ///
 /// E x B VELOCITY IN POLAR (PHYSICAL components in the local basis):
 ///   v_r     = -(1/(B r)) d phi/d theta = -grad_theta / B   (dir == 0, radial)
@@ -80,28 +174,64 @@ struct ExBVelocity {
 /// NOT by this brick. The brick thus stays a pure physics (no box, no r).
 struct ExBVelocityPolar {
   static constexpr int n_vars = 1;
+  static constexpr int dimension = 2;
+  static constexpr bool planar_polar_capability = true;
   using State = StateVec<1>;
+  using gradient_slots = ProviderSlots<0, 1>;
+  static constexpr int n_providers = gradient_slots::required_count();
   Real B0 = 1;
-  /// PHYSICAL component of the drift velocity in direction index dir (0 = r, 1 = theta).
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.exb-velocity-polar", 1};
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
-    StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
-    return f;
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(B0);
+    for (int axis = 0; axis < dimension; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+
+  template <int Axis, class Providers>
+  POPS_HD Real velocity(const Providers& providers) const {
+    static_assert(Axis >= 0 && Axis < dimension, "polar E x B axis must be radial or azimuthal");
+    if constexpr (Axis == 0)
+      return -hyperbolic_detail::gradient_provider<1, dimension, gradient_slots>(providers) / B0;
+    else
+      return hyperbolic_detail::gradient_provider<0, dimension, gradient_slots>(providers) / B0;
+  }
+
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    return hyperbolic_detail::runtime_velocity<0, dimension>(*this, providers, dir);
+  }
+
+  template <int Axis, class Providers>
+  POPS_HD State flux(const State& state, const Providers& providers) const {
+    return State{state[0] * velocity<Axis>(providers)};
+  }
+
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
+    return State{u[0] * velocity(providers, dir)};
+  }
+
+  template <int Axis, class Providers>
+  POPS_HD Real max_wave_speed(const State&, const Providers& providers) const {
+    const Real speed = velocity<Axis>(providers);
+    return speed < Real(0) ? -speed : speed;
+  }
+
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
-  /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
-    StateVec<1> e{};
-    e[0] = velocity(a, dir);
-    return e;
+
+  template <int Axis, class Providers>
+  POPS_HD State eigenvalues(const State&, const Providers& providers) const {
+    return State{velocity<Axis>(providers)};
   }
-  // Scalar: primitive variables = conservative (transported density).
+
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
+    return State{velocity(providers, dir)};
+  }
+
   using Prim = StateVec<1>;
   POPS_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
   POPS_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
@@ -113,21 +243,23 @@ struct ExBVelocityPolar {
   }
 };
 
-/// Compressible 2D Euler flux (reuses Euler: gamma, pressure, signed wave speeds).
-/// Compat alias: CompressibleFlux == Euler; the complete hyperbolic brick.
+/// Compressible exact-ranked Euler flux. The build-specialized name is the native `EulerND<Dim>`.
 using CompressibleFlux = Euler;
 
-/// ISOTHERMAL Euler flux (p = cs2 rho), 3 variables (rho, rho u, rho v).
+/// Exact-ranked ISOTHERMAL Euler flux (p = cs2 rho), density plus one momentum per axis.
 ///
-/// 3-variable HYPERBOLIC brick (density + momenta). Satisfies
+/// Exact-ranked HYPERBOLIC brick with Dim+1 variables (density + one momentum per axis). Satisfies
 /// HyperbolicPhysicalModel. Isothermal closure law: p = cs2 * rho (no energy
 /// equation). CONTRACT: purely pointwise functions, device-callable (POPS_HD).
 /// No MultiFab, no allocation, no global access.
 /// Invariant: cs2 > 0 so that the wave speed sqrt(cs2) is real.
-struct IsothermalFlux {
-  static constexpr int n_vars = 3;
-  using State = StateVec<3>;  ///< conservative variables (rho, rho u, rho v)
-  using Prim = StateVec<3>;   ///< primitive variables (rho, u, v)
+template <int Dim>
+struct IsothermalFluxND {
+  static_assert(Dim >= 1 && Dim <= 3, "IsothermalFluxND supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Dim + 1;
+  using State = StateVec<n_vars>;
+  using Prim = StateVec<n_vars>;
   Real cs2 = 1;
   /// Quasi-vacuum density floor (ADC-77). When > 0, the velocity is computed as u = m / max(rho,
   /// vacuum_floor) so it stays bounded where the rollup evacuates the background (rho -> ~0); this
@@ -136,78 +268,187 @@ struct IsothermalFlux {
   /// so the conservative state is untouched (unlike a cell density clamp). <= 0: inactive, and the raw
   /// 1/rho path is taken verbatim (bit-identical, including for rho <= 0).
   Real vacuum_floor = 0;
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.isothermal-flux-nd", 2};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(cs2).scalar(vacuum_floor);
+  }
+  POPS_HD static constexpr int momentum_component(int axis) { return 1 + axis; }
   /// rho clamped from below by vacuum_floor for the velocity division ONLY. Manual max (device-safe,
   /// no std:: in the kernel path). floor <= 0 -> returns rho unchanged (bit-identical).
   POPS_HD Real velocity_rho(Real rho) const {
     return (vacuum_floor > Real(0) && rho < vacuum_floor) ? vacuum_floor : rho;
   }
-  POPS_HD StateVec<3> flux(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const Real rho = u[0];
-    const Real vn = (dir == 0 ? u[1] : u[2]) / velocity_rho(rho);
+    const int normal = momentum_component(dir);
+    const Real vn = u[normal] / velocity_rho(rho);
     const Real p = cs2 * rho;
-    StateVec<3> f{};
-    f[0] = (dir == 0 ? u[1] : u[2]);
-    f[1] = u[1] * vn + (dir == 0 ? p : Real(0));
-    f[2] = u[2] * vn + (dir == 1 ? p : Real(0));
+    State f{};
+    f[0] = u[normal];
+    for (int axis = 0; axis < Dim; ++axis)
+      f[momentum_component(axis)] = u[momentum_component(axis)] * vn + (axis == dir ? p : Real(0));
     return f;
   }
-  /// Conservative -> primitive: (rho, rho u, rho v) -> (rho, u, v). The velocity uses the quasi-vacuum
+  /// Conservative -> primitive. Each velocity uses the quasi-vacuum
   /// floored density (velocity_rho); rho itself (p[0]) stays the raw conserved value.
-  POPS_HD Prim to_primitive(const StateVec<3>& u) const {
+  POPS_HD Prim to_primitive(const State& u) const {
     Prim p{};
     p[0] = u[0];
     const Real rho_v = velocity_rho(u[0]);
-    p[1] = u[1] / rho_v;
-    p[2] = u[2] / rho_v;
+    for (int axis = 0; axis < Dim; ++axis)
+      p[momentum_component(axis)] = u[momentum_component(axis)] / rho_v;
     return p;
   }
-  /// Primitive -> conservative: (rho, u, v) -> (rho, rho u, rho v).
-  POPS_HD StateVec<3> to_conservative(const Prim& p) const {
-    StateVec<3> u{};
+  /// Primitive -> conservative for every native momentum component.
+  POPS_HD State to_conservative(const Prim& p) const {
+    State u{};
     u[0] = p[0];
-    u[1] = p[0] * p[1];
-    u[2] = p[0] * p[2];
+    for (int axis = 0; axis < Dim; ++axis)
+      u[momentum_component(axis)] = p[0] * p[momentum_component(axis)];
     return u;
   }
-  POPS_HD Real max_wave_speed(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real a = vn < 0 ? -vn : vn;
     return a + std::sqrt(cs2);
   }
-  /// Full spectrum: (v_dir - c, v_dir, v_dir + c), c = sqrt(cs2).
-  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const Aux&, int dir) const {
+  /// Full spectrum: two acoustic waves and Dim-1 shear waves, c = sqrt(cs2).
+  POPS_HD State eigenvalues(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real c = std::sqrt(cs2);
-    StateVec<3> e{};
+    State e{};
     e[0] = vn - c;
-    e[1] = vn;
-    e[2] = vn + c;
+    for (int component = 1; component < Dim; ++component)
+      e[component] = vn;
+    e[Dim] = vn + c;
     return e;
   }
   /// Signed speeds (HLL/HLLC): v_dir -+ c_s.
-  POPS_HD void wave_speeds(const StateVec<3>& u, const Aux&, int dir, Real& smin,
-                           Real& smax) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& smin, Real& smax) const {
     const Prim p = to_primitive(u);
-    const Real vn = (dir == 0 ? p[1] : p[2]);
+    const Real vn = p[momentum_component(dir)];
     const Real c = std::sqrt(cs2);
     smin = vn - c;
     smax = vn + c;
   }
+
+  // -------------------------------------------------------------------------------------------
+  // RIEMANN CAPABILITIES: the isothermal closure owns its contact construction and Roe action.
+  // HLLCFlux / RoeFlux remain layout-blind and consume these hooks through the same
+  // HasHLLCStructure / HasRoeDissipation contracts as every other physical provider.
+  // -------------------------------------------------------------------------------------------
+
+  /// Barotropic pressure p = c_s^2 rho used by the HLLC physical provider.
+  POPS_HD Real pressure(const State& u) const { return cs2 * u[0]; }
+
+  /// Contact-wave speed for the isothermal Euler closure.
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real lower, Real upper, int dir) const {
+    const int normal = momentum_component(dir);
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    return (pressure_right - pressure_left +
+            density_left * velocity_left * (lower - velocity_left) -
+            density_right * velocity_right * (upper - velocity_right)) /
+           (density_left * (lower - velocity_left) - density_right * (upper - velocity_right));
+  }
+
+  /// HLLC star state for an exact-ranked barotropic state.
+  POPS_HD State hllc_star_state(const State& value, Real, Real speed, Real contact, int dir) const {
+    const int normal = momentum_component(dir);
+    const Real density = value[0];
+    const Real normal_velocity = value[normal] / velocity_rho(density);
+    const Real star_density = density * (speed - normal_velocity) / (speed - contact);
+    State result{};
+    result[0] = star_density;
+    result[normal] = star_density * contact;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int component = momentum_component(axis);
+      if (axis != dir)
+        result[component] = star_density * (value[component] / velocity_rho(density));
+    }
+    return result;
+  }
+
+  /// Roe action |A_roe| dU for the isothermal Euler closure.
+  POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                int dir) const {
+    const int normal = momentum_component(dir);
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    const Real root_left = std::sqrt(density_left);
+    const Real root_right = std::sqrt(density_right);
+    const Real denominator = root_left + root_right;
+    const Real normal_velocity =
+        (root_left * velocity_left + root_right * velocity_right) / denominator;
+    std::array<Real, Dim> velocity{};
+    std::array<Real, Dim> velocity_left_all{};
+    std::array<Real, Dim> velocity_right_all{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int component = momentum_component(axis);
+      velocity_left_all[axis] = left[component] / velocity_rho(density_left);
+      velocity_right_all[axis] = right[component] / velocity_rho(density_right);
+      velocity[axis] =
+          (root_left * velocity_left_all[axis] + root_right * velocity_right_all[axis]) /
+          denominator;
+    }
+    const Real roe_density = root_left * root_right;
+    const Real sound_speed = std::sqrt(cs2);
+
+    const Real density_jump = density_right - density_left;
+    const Real normal_jump = velocity_right - velocity_left;
+    const Real acoustic_minus =
+        (cs2 * density_jump - roe_density * sound_speed * normal_jump) / (Real(2) * cs2);
+    const Real acoustic_plus =
+        (cs2 * density_jump + roe_density * sound_speed * normal_jump) / (Real(2) * cs2);
+
+    const HartenEntropyFix entropy_fix{Real(0.1)};
+    const Real lambda_minus = entropy_fix(normal_velocity - sound_speed, sound_speed);
+    const Real lambda_shear = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
+    const Real lambda_plus = entropy_fix(normal_velocity + sound_speed, sound_speed);
+
+    State result{};
+    result[0] = lambda_minus * acoustic_minus + lambda_plus * acoustic_plus;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real directional = axis == dir ? sound_speed : Real(0);
+      const Real shear = axis == dir
+                             ? Real(0)
+                             : roe_density * (velocity_right_all[axis] - velocity_left_all[axis]);
+      result[momentum_component(axis)] =
+          lambda_minus * acoustic_minus * (velocity[axis] - directional) + lambda_shear * shear +
+          lambda_plus * acoustic_plus * (velocity[axis] + directional);
+    }
+    return result;
+  }
   static VariableSet conservative_vars() {
-    return {VariableKind::Conservative,
-            {"rho", "rho_u", "rho_v"},
-            3,
-            {VariableRole::Density, VariableRole::MomentumX, VariableRole::MomentumY}};
+    std::vector<std::string> names{"rho"};
+    std::vector<VariableRole> roles{VariableRole::Density};
+    for (int axis = 0; axis < Dim; ++axis) {
+      names.emplace_back("momentum_" + std::to_string(axis));
+      roles.push_back(VariableRole::momentum(axis));
+    }
+    return {VariableKind::Conservative, std::move(names), n_vars, std::move(roles)};
   }
   static VariableSet primitive_vars() {
-    return {VariableKind::Primitive,
-            {"rho", "u", "v"},
-            3,
-            {VariableRole::Density, VariableRole::VelocityX, VariableRole::VelocityY}};
+    std::vector<std::string> names{"rho"};
+    std::vector<VariableRole> roles{VariableRole::Density};
+    for (int axis = 0; axis < Dim; ++axis) {
+      names.emplace_back("velocity_" + std::to_string(axis));
+      roles.push_back(VariableRole::velocity(axis));
+    }
+    return {VariableKind::Primitive, std::move(names), n_vars, std::move(roles)};
   }
 };
+
+using IsothermalFlux = IsothermalFluxND<kNativeDimension>;
 
 /// ISOTHERMAL Euler flux in POLAR geometry (ring r, theta), 3 variables (rho, rho v_r,
 /// rho v_theta) -- "polar fluid grid" effort, Path A step 1. This is a brick SEPARATE
@@ -239,7 +480,17 @@ struct IsothermalFlux {
 ///
 /// CONTRACT: pointwise PHYSICAL brick, device-callable (POPS_HD), no box, no allocation.
 /// polar_geom_source takes ONLY the state and r (no aux): it is pure metric.
-struct IsothermalFluxPolar : IsothermalFlux {
+struct IsothermalFluxPolar : IsothermalFluxND<2> {
+  static constexpr int dimension = 2;
+  static constexpr bool planar_polar_capability = true;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.hyperbolic.isothermal-flux-polar", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(cs2).scalar(vacuum_floor);
+  }
+
   /// GEOMETRIC curvature source term in a cell of radius r > 0 (ring). See the @file block
   /// above for the derivation. S_geom = (0, (rho v_theta^2 + p)/r, -(rho v_r v_theta)/r),
   /// p = cs2 rho. Component 0 (mass) is zero: mass is purely conservative in polar.

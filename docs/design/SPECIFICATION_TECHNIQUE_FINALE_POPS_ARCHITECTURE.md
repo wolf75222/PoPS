@@ -424,15 +424,23 @@ vérifier `residual_norm <= max(relative_tolerance * reference_residual_norm, ab
 uniquement un échec de transport ABI et ne fabrique jamais de statut scientifique.
 
 La représentation matière est typée (`full`, couverture binaire, fraction cut-cell, ids matériau ou
-leur combinaison), jamais simulée par un tableau de `1`. La route actuellement prouvée de bout en bout
-est plus étroite que cette ABI : `Uniform(CartesianGrid)`, cell-centered, plein matériau, float64,
-host, communicateur série et politique `pops.field-hierarchy.level-local`. Le champ `level` des
-métadonnées ABI ne constitue pas à lui seul une implémentation AMR : aucun bridge ne matérialise la
-paire externe comme `AmrFieldSolverProvider`. L'autorité expose donc explicitement `max_levels=1`,
-`hierarchy_materialization=false` et `amr_provider_bridge=false`. AMR, une autre politique de
-hiérarchie, embedded boundary, multimatériau, GPU, MPI sans consensus global,
-conditions de bord dépendantes d'un état/champ/temps et outer solve non linéaire sont refusés à
-`resolve`; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
+leur combinaison), jamais simulée par un tableau de `1`. Deux routes sont prouvées : le `System`
+uniforme cell-centered utilise un batch plein matériau, et `AmrSystem` matérialise tous les niveaux
+en un unique batch composite. Chaque patch AMR porte son `level`; une couverture binaire masque sur
+le niveau parent les cellules couvertes par le niveau enfant. Le couple authentifié est enregistré
+comme un `AmrFieldSolverProvider`, appelé une fois collectivement, puis détruit et rematérialisé avec
+le nouveau layout après regrid. Après publication et jauge, le runtime restreint les valeurs fines
+sur les cellules grossières couvertes, puis matérialise les halos same-level, physiques et
+coarse/fine avant tout gradient centré. Les preuves de déclaration, contrat préparé, digest et provenance
+sont consensuelles sur le communicateur. La route reste ratio-2, float64/host : MPI exige que les deux
+manifests déclarent leur variant CPU+MPI, que le contexte installe exactement
+`MPI_COMM_WORLD`/`MPI_DOUBLE` et que le niveau grossier soit distribué. Embedded/cut-cell,
+multimatériau, GPU, conditions de bord dépendantes d'un état/champ/temps, réaction et outer solve non
+linéaire/JVP restent refusés ; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
+La preuve exécutable MPI actuelle est bornée à deux rangs : chacun possède réellement des patches L0
+et L1, le couple est rematérialisé après un regrid qui change le layout, un échec scientifique
+collectif restaure puis réessaie l'état accepté, et une publication divergente sur un seul rang est
+refusée par consensus exact. Les tailles de communicateur supérieures à deux restent à qualifier.
 
 Cette route sélectionne, pour chacun des deux composants, exactement un variant cible
 `{dimension: 2, scalar: "float64", device: "cpu"}`. Un variant uniquement 3D, ou plusieurs variants
@@ -505,7 +513,8 @@ canonique dérive alors les paires périodiques et les axes physiques complémen
 `CartesianGrid` est l'unique descripteur cartésien public : il n'existe ni descripteur carré
 concurrent, ni raccourci entier/tuple dans les APIs qui demandent une grille. Le domaine, le frame,
 les cellules et la topologie restent donc visibles et authentifiables. `pops.mesh.PolarMesh` demeure
-un descripteur avancé supporté pour l'anneau natif ; il ne constitue pas une seconde route
+un descripteur inerte de géométrie annulaire et de sortie scientifique ; le runtime natif exact-rank
+refuse son fournisseur non cartésien pendant la résolution. Il ne constitue pas une seconde route
 cartésienne et n'est pas réexporté à la racine `pops`.
 
 `Rectangle.preview(geometry=...)` et son raccourci `Rectangle.show(...)` constituent la surface de
@@ -610,22 +619,24 @@ Les builtins de `pops.lib.amr` et les composants externes implémentent le même
 provider. Un composant externe est sélectionné sans callback Python :
 
 ```python
-from pops.amr import ClusteringProvider, TaggerProvider
+from pops.amr import ClusteringProvider, RefluxProvider, TaggerProvider
 
 layout = AMR(
     ...,
     tagger=TaggerProvider(component=my_tagger),
     clustering=ClusteringProvider(component=my_clustering),
+    reflux=RefluxProvider(component=my_reflux),
 )
 resolved = pops.resolve(
     pops.validate(case),
     layout=layout,
-    components=(my_tagger, my_clustering),
+    components=(my_tagger, my_clustering, my_reflux),
 )
 ```
 
-Les deux valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
-respectivement l'interface générée `Tagger` ou `Clustering`. Le même objet exact doit être fourni à
+Les trois valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
+respectivement l'interface générée `Tagger`, `Clustering` ou `Reflux`. Le même objet exact doit
+être fourni à
 `resolve(components=...)`; son identité de manifest, son interface et sa version traversent
 `resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
 `reproducible`, car chaque rang doit produire la même hiérarchie. Un `Tagger` déclare en plus une
@@ -709,9 +720,13 @@ doivent couvrir exactement la hiérarchie.
 
 Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
 correction conservative et sous-cyclage AMR exigent un ratio de transition égal à 2. La correction
-coarse/fine reste l'unique ledger de flux détenu par PoPS : aucune interface externe `Reflux`
-n'existe, car déléguer ce dépôt créerait une seconde autorité conservative. Une autre dimension ou un autre
-ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
+coarse/fine reste l'unique ledger de flux détenu par PoPS. L'interface native `Reflux` ne peut
+déléguer qu'un kernel local et non collectif : PoPS lui fournit les flux coarse/fine déjà intégrés
+dans le temps et ramenés sur la même face coarse ; le kernel écrit la correction locale
+`side * (fine - coarse) / dx`. PoPS conserve exclusivement la topologie d'interface, le ledger, la
+réduction MPI, la transaction et l'application à l'état. Un provider `Reflux` ne devient donc jamais
+une seconde autorité conservative. Une autre dimension ou un autre ratio est refusé pendant la
+résolution ou le bind avec les capacités observées. Le coeur de
 planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
 `AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
 de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
@@ -955,10 +970,12 @@ capacités, sans table centrale de noms d'opérations. `matrix_free_operator(ste
 contrainte explicite pour un provider plus profond : elle est refusée sous le minimum composé et
 transporte autrement tout entier `n >= 0` jusqu'aux allocations natives.
 
-Le préconditionneur livré `preconditioners.GeometricMG()` est un opérateur scalaire : son `phi`, son
-second membre et son V-cycle natifs ont exactement une composante. Il est donc refusé à l'authoring
-pour `ncomp != 1`, avec une seconde garde native ; PoPS ne diagonalise pas silencieusement un problème
-multicomposant. Un tel problème utilise `Identity()` ou un futur provider réellement block-aware.
+Le préconditionneur Program intégré livré est `preconditioners.Identity()`. L'ancienne route callback
+`preconditioners.GeometricMG()` a été retirée lors du cutover exact 1D/2D/3D : le solveur elliptique
+`GeometricMG<Dim>` reste disponible, mais il ne sera republié comme préconditionneur Program que par un
+provider recevant la géométrie, les frontières et la distribution exactes du rang de compilation. Un
+provider externe préparé et authentifié reste possible ; aucun fallback composante-par-composante
+n'est effectué.
 
 À la frontière C++, un solve global ne reçoit jamais un callback brut plus un entier de méthode. Le
 code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinearPreconditioner` et
@@ -1321,9 +1338,10 @@ provider déclare aussi `validate_snapshot()` et doit produire une préparation 
 `discard()` et `rollback()` ; ce protocole est vérifié avant qu'un effet accepté puisse être publié.
 
 Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés vers des writers réels.
-La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
-l'existence du fichier seule n'est pas une preuve. La route NPZ est exercée par l'exemple IMEX-AMR et
-ses tests de format, sans être présentée comme une réouverture supplémentaire de la gate groupée.
+La gate finale rouvre indépendamment chaque HDF5 et ParaView scientifique émis et vérifie leur contenu
+structurel ; l'existence du fichier seule n'est pas une preuve. La route NPZ scientifique est exercée
+et rouverte uniquement par l'exemple IMEX-AMR. Les archives NPZ de checkpoint appartiennent à la
+preuve `strict_restart` et ne peuvent jamais satisfaire cette preuve de format scientifique.
 La cible d'un `ScientificOutput` est toujours un chemin logique sans suffixe ; le provider possède
 seul l'extension. `schedule=every(100, clock=program.clock)` publie donc un artefact distinct après
 chaque centième pas accepté, visible pendant la poursuite du run. Une petite capability de catalogue,
@@ -1409,13 +1427,31 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, solveur de champ, writer et
-topologie de champ). Le reflux conservatif reste une autorité interne pilotée par le flux ledger ;
-aucune table externe `Reflux` n'est annoncée. Chaque famille possède sa propre version d'interface, indépendante de la version
+ghost boundary, closure de champ, tagging, clustering, transfert, kernel local de reflux, solveur de
+champ, writer et topologie de champ). Le reflux conservatif complet reste une autorité interne
+pilotée par le flux ledger ; la table externe `Reflux` ne couvre que la transformation locale,
+non collective, de flux intégrés en correction non appliquée. Chaque famille possède sa propre version d'interface, indépendante de la version
 du protocole enveloppe. Le loader authentifie identité sémantique, manifest, digest du catalogue,
 taille/header de table et opérations requises avant de conserver le handle de bibliothèque. Les tables
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
 une boucle de cellules.
+
+Le contrat `Reflux` v1 reste un kernel local sans autorité AMR. Le Program prépare une unique
+`PreparedAmrSubcycleTransition<Dim>` à partir des layouts vivants et publie les contributions
+face-centred, qualifiées par axe, horloge, stage et tentative dans le
+`TransactionalFaceFluxLedger<Dim, Payload>`. `metric_reflux` authentifie ensuite le pavage
+tangentiel et la couverture exacte de la fenêtre de sous-pas avant de comparer les flux intégrés.
+Seuls les fragments publiés franchissent une frontière acceptée ou un checkpoint ; une transaction
+active, une tentative périmée, une couverture incomplète ou une divergence entre rangs échoue avant
+publication. Il n'existe plus de façade parallèle `EdgeStrip`/`Fx`/`Fy` ni d'adaptateur 2D du
+Program.
+
+La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
+normalisée, identité de provider, artifact et transaction d'installation que `Tagger` et
+`Clustering`. Sans sélection explicite, `FluxRegisterReflux` décrit le kernel builtin par le même
+protocole et apparaît dans le même rapport de providers. La qualification initiale de l'adaptateur
+reste limitée à la cible 2D, `float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par
+exécution MPI avec un composant externe, mesure de conservation ni backend GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
@@ -1495,10 +1531,13 @@ scientifiques choisissent obligatoirement un `ParallelMode` typé :
 d'un unique writer rang 0, `COLLECTIVE` pour les hyperslabs HDF5 MPIO exacts, ou `PER_RANK` pour des
 artefacts locaux qualifiés par rang et un reçu agrégé. Le mode, le format, la sélection, la cible et
 l'identité de chaque pièce native (`global_box_index`, `owner_rank`, `replicated`) sont authentifiés
-entre rangs avant toute écriture. La route `COLLECTIVE` appelle le backend C++ HDF5 parallèle sur
-`MPI_COMM_WORLD`; `h5py` reste uniquement un lecteur/écrivain série optionnel et n'est jamais un
-transport MPI. Une dépendance HDF5 parallèle native absente, un mode incompatible ou un backend
-Kokkos GPU/device handle non supporté est refusé avant le
+entre rangs avant toute écriture. La capture native `ROOT` reçoit uniquement une lane consommateur
+dupliquée pour le run et la libère collectivement à sa fermeture ; les façades
+`System`/`AmrSystem` n'acceptent plus le singleton monde pour cette route. La route `COLLECTIVE`
+appelle le backend C++ HDF5 parallèle avec la lane MPI dupliquée possédée par la session observateur ;
+le writer ne redécouvre ni n'emprunte `MPI_COMM_WORLD`. `h5py` reste uniquement un
+lecteur/écrivain série optionnel et n'est jamais un transport MPI. Une dépendance HDF5 parallèle
+native absente, un mode incompatible ou un backend Kokkos GPU/device handle non supporté est refusé avant le
 constructeur de `System`/`AmrSystem`; aucune route série implicite ne remplace une demande MPI.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
@@ -1520,10 +1559,12 @@ Quatre scripts sont des tests d'acceptation, pas des esquisses :
    `AMRExecution.subcycled()`, regrid/reflux, HDF5/NPZ/ParaView, restart strict et continuation
    bit-identique ;
 4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : état 15 moments, layout Uniform,
-   `Program` IMEX explicite avec garde de réalisabilité dans sa transaction, champ de Poisson,
-   HDF5/ParaView et continuation bit-identique, sans branche de scénario dans le compilateur. Le
-   preset `pops.lib.time.IMEX` reste un constructeur d'un `Program` ordinaire ; il ne remplace pas
-   cette écriture explicite lorsqu'une garde scientifique spécifique doit être composée.
+   fermeture utilisateur `@closure(4)` abaissée dans le graphe de flux générique, `Program` IMEX
+   explicite avec garde de réalisabilité et ensemble complet des stores provisoires dans sa
+   transaction, champ de Poisson, conservation du nombre de particules, HDF5/ParaView et
+   continuation bit-identique, sans branche de scénario dans le compilateur. Le preset
+   `pops.lib.time.IMEX` reste un constructeur d'un `Program` ordinaire ; il ne remplace pas cette
+   écriture explicite lorsqu'une garde scientifique spécifique doit être composée.
 
 `scripts/final_release_contract.py` fixe cet ensemble exact : aucun cinquième script `.py` n'est admis
 dans `examples/final/`. Chaque script doit :
@@ -1540,28 +1581,51 @@ dans `examples/final/`. Chaque script doit :
 
 ## 14. Gate de conformance finale
 
+Le job de release exécute d'abord
+`scripts/run_final_gate.py --wheel <wheel> --evidence <chemin-hors-checkout>`. Ce gate installe
+l'artefact exact avant que
+`scripts/prove_public_api_parity.py --wheel <wheel> --installed --evidence <autre-chemin-hors-checkout>`
+ne résolve la distribution installée avec `importlib.metadata`, sans importer `pops` dans le
+processus du gate. Le chemin résolu doit être extérieur au checkout. La preuve compare octet par
+octet tous les fichiers Python et de typage (`*.py`, `*.pyi`, `py.typed`) du checkout, du wheel
+retenu et du package installé, puis importe séparément les trois arbres dans des interpréteurs
+isolés. Les trois snapshots doivent exposer la même racine publique, les mêmes signatures et
+annotations, un `Case` explicite, des handles qualifiés distincts et
+authoring/validation/inspection sans chargement de `_pops`. Un ancien nom public, un fichier de
+typage absent, un chemin provenant du checkout ou une divergence source/wheel/installé bloque la
+publication. La preuve authentifie aussi le `Name`, la `Version` et le digest du `METADATA` de la
+distribution installée contre ceux du wheel. Enfin `release_preflight.py` reçoit cette evidence via
+`--public-api-evidence` et vérifie son producteur, le SHA-256 du wheel et le chemin du package contre
+le même runtime installé que l'evidence finale ; une evidence de parité issue d'un autre wheel ou
+d'une autre installation ne peut donc pas être réutilisée.
+
 Une release ne peut être déclarée conforme que par
 `scripts/run_final_gate.py --evidence <chemin-hors-checkout>`. La commande exige un checkout propre,
 refuse d'écraser une evidence existante et produit une evidence JSON liée au commit, à la version du
 package, au digest du release contract et au SHA-256 de l'extension native installée. L'evidence est
 générée depuis les retours de commandes et ne contient pas de booléens fournis à la main.
 
-La séquence groupée couvre exactement les onze lignes authentifiées suivantes :
+La séquence groupée couvre exactement les douze lignes authentifiées suivantes :
 
 1. `official_build` : `scripts/setup_env.sh`, `scripts/build_python.sh`, puis configure/build du preset
    CMake `serial` avec les headers `POPS_INCLUDE` du checkout validé ;
-2. `doctor` : `pops.runtime.doctor.doctor()` sur le package installé, sans échec ;
-3. `codesign` : `scripts/codesign_pops_extensions.py` sur les extensions installées ;
-4. `native_conformance` : CTest complet avec JUnit non vide, sans skip, xfail, failure ni error ;
-5. `python_conformance` : suite Python complète, puis lane obligatoire
-   `not mpi and not hdf5` avec JUnit all-pass et sans skip caché ;
-6. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
-7. `artifact_reopen` : parsing indépendant de chaque HDF5/NPZ/ParaView, puis réouverture de chaque
-   HDF5 par `h5py` et de chaque archive/array NPZ par NumPy avec `allow_pickle=False` ;
-8. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
-9. `documentation` : `docs/check_docs.py` ;
-10. `generated_products` : release contract et component catalog régénérés avec `--check` ;
-11. `diff` : `git diff --check`, `git diff --cached --check` et checkout encore propre.
+2. `installed_wheel` : installation du wheel retenu puis preuve byte-identical de son extension native,
+   de ses métadonnées et de son arbre installé ;
+3. `codesign` : `scripts/codesign_pops_extensions.py` sur les extensions installées, sans modifier les
+   octets natifs retenus ;
+4. `doctor` : `pops.runtime.doctor.doctor()` sur le package installé, sans échec ;
+5. `native_conformance` : CTest complet avec JUnit non vide, sans skip, xfail, failure ni error ;
+6. `python_conformance` : ledger Pytest fermé de M4 plus les huit preuves finales d'exemples, exécuté
+   une fois contre le wheel avec JUnit all-pass, sans skip caché. La suite source complète reste la
+   responsabilité du job parallèle `full-source-matrix` et n'est pas rejouée en série dans ce job ;
+7. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
+8. `artifact_reopen` : parsing indépendant des HDF5 et ParaView scientifiques de chaque exemple, plus
+   du NPZ scientifique IMEX-AMR, puis réouverture HDF5 par `h5py` et NPZ par NumPy avec
+   `allow_pickle=False` ;
+9. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
+10. `documentation` : `docs/check_docs.py` ;
+11. `generated_products` : release contract et component catalog régénérés avec `--check` ;
+12. `diff` : `git diff --check`, `git diff --cached --check` et checkout encore propre.
 
 `scripts/release_preflight.py --release --tag <tag> --installed --evidence <json>` refuse une
 evidence incomplète, issue d'un autre commit, d'un autre digest, d'un autre script de gate ou d'une autre
@@ -1599,7 +1663,8 @@ extension installée. Une exigence de la lane obligatoire ne peut pas être couv
 - `docs/design/consumer_graph_transaction_contract.md` : effets acceptés et rollback ;
 - `docs/design/temporal-execution-contract.md` : clocks, sous-cycles et restart temporel v2 ;
 - `docs/design/external-component-packages.md` : extension C++ externe ;
-- `schemas/release_contract.v1.json` : versions de schémas, ABI et matrice supportée ;
+- `schemas/release_contract.v2.json` : versions de schémas, ABI, digests exacts du catalogue de
+  composants et matrice supportée ;
 - `schemas/component_catalog.v2.json` : composants builtin et routes natives ;
 - `scripts/final_release_contract.py` : spécification et ensemble exact des quatre exemples ;
 - `scripts/run_final_gate.py` : producteur unique de l'evidence groupée ;

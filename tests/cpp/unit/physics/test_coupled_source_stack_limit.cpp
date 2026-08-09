@@ -1,146 +1,105 @@
-// Capacity audit: of the four fixed capacities bounding a CoupledSourceProgram bytecode term
-// (include/pops/coupling/source/coupled_source_program.hpp:42-45 -- kCsMaxReg, kCsMaxStack, kCsMaxProg,
-// kCsMaxTerms), kCsMaxReg / kCsMaxProg / kCsMaxTerms are already exercised as OVERFLOW checks against the
-// C++ guard reachable from the public path: System::add_coupled_source
-// (src/runtime/system/system.cpp) throws EXPLICITLY when in_blocks+consts > kCsMaxReg,
-// out_blocks > kCsMaxTerms, or a term's prog_lens > kCsMaxProg -- BEFORE calling
-// validate_cs_program_stack. kCsMaxStack had no equivalent OVERFLOW test: only the MALFORMED-program
-// cases (underflow, leftover stack) are covered by test_public_validation_errors.cpp, calling
-// validate_cs_program_stack directly rather than through the public add_coupled_source path.
-//
-// This closes that gap at the HONEST level: validate_cs_program_stack (coupled_source_program.hpp:171)
-// IS a real C++ guard reachable through the public API -- System::add_coupled_source calls it for every
-// term (system.cpp, "System::add_coupled_source term " + index) BEFORE the coupling is registered, so a
-// program whose postfix stack would exceed kCsMaxStack is rejected with an EXPLICIT std::runtime_error,
-// never reaching the device kernel. We build such a program (kCsMaxStack + 1 consecutive PushReg with no
-// operator to drain the stack) through the SAME public entry point a real coupling would use
-// (System::add_coupled_source, not a direct call to validate_cs_program_stack) and assert the throw,
-// naming the capacity in the message.
-//
-// A program AT the capacity (exactly kCsMaxStack PushReg, still short of a valid single-result program --
-// it would fail the "leaves exactly one result" check first) is not what we probe here: the boundary
-// condition of PushReg's OWN bound (sp < kCsMaxStack before incrementing) already means kCsMaxStack pushes
-// are accepted and the (kCsMaxStack+1)-th is rejected; that is the overflow this test locks.
+#include <pops/coupling/source/coupled_source_program.hpp>
+
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include "test_harness.hpp"                                 // pops::test::Checker, raises
-#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp, kCsMaxStack
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalar 1-var block, role Density)
-#include <pops/physics/bricks/source.hpp>      // NoSource
-#include <pops/physics/composition/composite.hpp>
-#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/facade_options.hpp>               // CoupledSourceProgram
-#include <pops/runtime/system.hpp>
-
-#include <cstdio>
+#include <array>
+#include <stdexcept>
 #include <string>
-#include <vector>
-
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
-
-using namespace pops;
 
 namespace {
 
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-using Dens = CompositeModel<ExBVelocity, NoSource, NoEll>;  // scalar density block, role "density"
+using pops::CoupledFreqKernel;
+using pops::CoupledSourceKernel;
+using pops::CsOp;
+using pops::CsProgram;
+using pops::FieldView;
+using pops::Index;
+using pops::Real;
+using pops::kCsMaxStack;
 
-// Builds a CoupledSourceProgram with ONE input register (block "a" / role "density") and a single
-// output term whose postfix program is @p n_pushes consecutive PushReg(0) opcodes (no operator to drain
-// the stack): a well-formed source program never does this (it always leaves exactly one result), but a
-// generated / hand-built program that DOES is exactly the shape the overflow guard exists to reject.
-CoupledSourceProgram all_pushes_program(int n_pushes) {
-  CoupledSourceProgram prog;
-  prog.in_blocks = {"a"};
-  prog.in_roles = {"density"};
-  prog.out_blocks = {"a"};
-  prog.out_roles = {"density"};
-  const int push = static_cast<int>(CsOp::PushReg);
-  std::vector<int> ops(static_cast<std::size_t>(n_pushes), push);
-  std::vector<int> args(static_cast<std::size_t>(n_pushes),
-                        0);  // always read register 0 (the input)
-  prog.prog_ops = ops;
-  prog.prog_args = args;
-  prog.prog_lens = {n_pushes};
-  return prog;
+CsProgram multiply_registers() {
+  CsProgram program{};
+  program.len = 3;
+  program.op[0] = static_cast<int>(CsOp::PushReg);
+  program.arg[0] = 0;
+  program.op[1] = static_cast<int>(CsOp::PushReg);
+  program.arg[1] = 1;
+  program.op[2] = static_cast<int>(CsOp::Mul);
+  return program;
+}
+
+template <class Value, int Dim>
+FieldView<Value, Dim> one_cell_view(Value* value, const Index<Dim>& index) {
+  FieldView<Value, Dim> view{};
+  view.data = value;
+  view.origin = index;
+  for (int axis = 0; axis < Dim; ++axis) {
+    view.extents[axis] = 1;
+    view.strides[axis] = 1;
+  }
+  view.ncomp = 1;
+  view.component_stride = 1;
+  return view;
+}
+
+template <int Dim>
+void expect_exact_ranked_kernels() {
+  Index<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis)
+    index[axis] = 4 + axis;
+
+  Real first = Real(3);
+  Real second = Real(5);
+  Real output = Real(7);
+
+  CoupledSourceKernel<Dim> source{};
+  source.in[0] = one_cell_view<const Real, Dim>(&first, index);
+  source.in[1] = one_cell_view<const Real, Dim>(&second, index);
+  source.n_in = 2;
+  source.in_comp[0] = 0;
+  source.in_comp[1] = 0;
+  source.out[0] = one_cell_view<Real, Dim>(&output, index);
+  source.out_comp[0] = 0;
+  source.prog[0] = multiply_registers();
+  source.n_terms = 1;
+  source.dt = Real(0.25);
+  source(index);
+  EXPECT_DOUBLE_EQ(output, Real(10.75));
+
+  CoupledFreqKernel<Dim> frequency{};
+  frequency.in[0] = one_cell_view<const Real, Dim>(&first, index);
+  frequency.in[1] = one_cell_view<const Real, Dim>(&second, index);
+  frequency.n_in = 2;
+  frequency.in_comp[0] = 0;
+  frequency.in_comp[1] = 0;
+  frequency.prog = multiply_registers();
+  Real maximum = Real(4);
+  frequency(index, maximum);
+  EXPECT_DOUBLE_EQ(maximum, Real(15));
+}
+
+TEST(test_coupled_source_stack_limit, ExecutesOneTypedKernelInOneTwoAndThreeDimensions) {
+  expect_exact_ranked_kernels<1>();
+  expect_exact_ranked_kernels<2>();
+  expect_exact_ranked_kernels<3>();
+}
+
+TEST(test_coupled_source_stack_limit, RejectsStackOverflowBeforeExecution) {
+  CsProgram program{};
+  program.len = kCsMaxStack + 1;
+  for (int instruction = 0; instruction < program.len; ++instruction) {
+    program.op[instruction] = static_cast<int>(CsOp::PushReg);
+    program.arg[instruction] = 0;
+  }
+
+  try {
+    pops::validate_cs_program_stack(program, "coupled source test");
+    FAIL() << "stack overflow was accepted";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("stack overflow"), std::string::npos);
+    EXPECT_NE(message.find(std::to_string(kCsMaxStack)), std::string::npos);
+  }
 }
 
 }  // namespace
-
-static int pops_run_test_coupled_source_stack_limit(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  pops::test::Checker chk;
-
-  const int n = 8;
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-
-  // (1) at EXACTLY kCsMaxStack consecutive PushReg (no operator), validate_cs_program_stack's own
-  // "leaves exactly one result" check rejects it FIRST (sp == kCsMaxStack != 1) -- so this shape never
-  // reaches a device kernel either way, but the diagnostic is the SHAPE check, not the stack-overflow
-  // check. We assert it is rejected (for completeness) without asserting which specific message it is.
-  {
-    System sys(cfg);
-    add_compiled_model(sys, "a", Dens{}, "none", "rusanov", "conservative", "explicit");
-    sys.set_poisson("charge_density", "geometric_mg");
-    sys.set_density("a", std::vector<double>(static_cast<std::size_t>(n) * n, 1.0));
-    const CoupledSourceProgram prog = all_pushes_program(kCsMaxStack);
-    chk(pops::test::raises([&] { sys.add_coupled_source(prog); }),
-        "exactly kCsMaxStack pushes (no operator) rejected (malformed program)");
-  }
-
-  // (2) kCsMaxStack + 1 consecutive PushReg: the (kCsMaxStack+1)-th push finds sp == kCsMaxStack BEFORE
-  // incrementing -> validate_cs_program_stack's OVERFLOW branch (coupled_source_program.hpp:190-193)
-  // throws EXPLICITLY, reached through the PUBLIC path System::add_coupled_source (system.cpp:1649),
-  // never through a direct call to validate_cs_program_stack. This is the capacity this test locks.
-  {
-    System sys(cfg);
-    add_compiled_model(sys, "a", Dens{}, "none", "rusanov", "conservative", "explicit");
-    sys.set_poisson("charge_density", "geometric_mg");
-    sys.set_density("a", std::vector<double>(static_cast<std::size_t>(n) * n, 1.0));
-    const CoupledSourceProgram prog = all_pushes_program(kCsMaxStack + 1);
-    bool raised = false;
-    std::string what;
-    try {
-      sys.add_coupled_source(prog);
-    } catch (const std::runtime_error& e) {
-      raised = true;
-      what = e.what();
-    }
-    chk(raised, "kCsMaxStack + 1 pushes: System::add_coupled_source throws std::runtime_error");
-    chk(what.find("postfix stack depth") != std::string::npos,
-        "overflow message names the postfix stack depth capacity");
-    chk(what.find(std::to_string(kCsMaxStack)) != std::string::npos,
-        "overflow message names the kCsMaxStack bound");
-    chk(what.find("stack overflow") != std::string::npos,
-        "overflow message says 'stack overflow' (not underflow/leftover)");
-    std::printf("  message: %s\n", what.c_str());
-  }
-
-  if (chk.fails() == 0)
-    std::printf(
-        "OK test_coupled_source_stack_limit (kCsMaxStack overflow rejected by "
-        "System::add_coupled_source, the public path validate_cs_program_stack guards)\n");
-  return chk.failed();
-}
-
-TEST(test_coupled_source_stack_limit, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_coupled_source_stack_limit,
-                                    "test_coupled_source_stack_limit"),
-            0);
-}

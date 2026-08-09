@@ -5,7 +5,7 @@
 /// generate one .so per coupling, NOR one Python callback per cell. So we transport the symbolic
 /// expression as postfix (stack) BYTECODE to evaluate inside the SAME for_each_cell device kernel as
 /// the named couplings. The bytecode (CsProgram) is a FIXED-CAPACITY POD: capturable by value in a
-/// device kernel (like an Array4); the evaluator (CoupledSourceKernel) is a NAMED FUNCTOR (no extended
+/// device kernel (like a FieldView); the evaluator (CoupledSourceKernel) is a NAMED FUNCTOR (no extended
 /// lambda) -> device-clean. Per-cell registers: r[0..n_in-1] = input fields, r[n_in..] = constants.
 /// Output writes are ADDITIVE (forward-Euler split). The capacities (kCsMaxReg, kCsMaxStack, kCsMaxProg,
 /// kCsMaxTerms) bound the stack/registers; an overflow raises an error on the Python side BEFORE the
@@ -15,7 +15,7 @@
 
 #include <pops/core/foundation/validation.hpp>
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/storage/fab2d.hpp>  // Array4 (POD device-copyable)
+#include <pops/mesh/storage/field_view.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -201,28 +201,31 @@ inline void validate_cs_program_stack(const CsProgram& pg, const std::string& wh
 }
 
 /// Device functor applying ONE coupled source over a box: captures the PODs by VALUE
-/// (input/output Array4, programs, constants) -> device-clean. operator()(i, j) loads the
+/// (input/output FieldView, programs, constants) -> device-clean. operator()(index) loads the
 /// registers, evaluates each term and WRITES additively out[t] += dt * S_t (forward-Euler
 /// split). All terms are evaluated on the state AT THE START of the step (frozen reg) before the writes.
+template <int Dim>
 struct CoupledSourceKernel {
-  Array4 in[kCsMaxReg];  // input fields (one per (block, role) read); only the first n_in are valid
+  static_assert(Dim >= 1 && Dim <= 3, "CoupledSourceKernel only supports dimensions 1, 2, and 3");
+
+  FieldView<const Real, Dim> in[kCsMaxReg];  // input fields; only the first n_in are valid
   int in_comp[kCsMaxReg];
   int n_in = 0;
 
   Real consts[kCsMaxReg];  // constants (parameters), loaded into r[n_in ..]
   int n_const = 0;
 
-  Array4 out[kCsMaxTerms];  // target of each term (may alias an input: same fab)
+  FieldView<Real, Dim> out[kCsMaxTerms];  // target of each term (may alias an input: same Fab)
   int out_comp[kCsMaxTerms];
   CsProgram prog[kCsMaxTerms];
   int n_terms = 0;
 
   Real dt = Real(0);
 
-  POPS_HD void operator()(int i, int j) const {
+  POPS_HD void operator()(const Index<Dim>& index) const {
     Real reg[kCsMaxReg];
     for (int c = 0; c < n_in; ++c)
-      reg[c] = in[c](i, j, in_comp[c]);
+      reg[c] = in[c](index, in_comp[c]);
     for (int c = 0; c < n_const; ++c)
       reg[n_in + c] = consts[c];
     // We evaluate ALL terms on the state AT THE START of the step (frozen reg), then write: a term writing
@@ -232,22 +235,25 @@ struct CoupledSourceKernel {
     for (int t = 0; t < n_terms; ++t)
       sval[t] = prog[t].eval(reg);
     for (int t = 0; t < n_terms; ++t)
-      out[t](i, j, out_comp[t]) += dt * sval[t];
+      out[t](index, out_comp[t]) += dt * sval[t];
   }
 };
 
 // MAX REDUCTION functor of a PER-CELL COUPLED FREQUENCY (CoupledSource.frequency with an Expr,
-// refinement of the declared CONSTANT frequency). mu(i, j) = prog.eval(cell registers): same
+// refinement of the declared CONSTANT frequency). mu(index) = prog.eval(cell registers): same
 // vocabulary as the source terms ((block, role) input fields + .param() constants). Modeled on
 // CoupledSourceKernel but READ-ONLY (no writes); it reduces the MAX instead of writing outputs.
-// Captures the PODs by VALUE (input Array4, program, constants) -> device-clean (nvcc/Kokkos);
-// the signature (i, j, Real& acc) is the one expected by reduce_max_cell. Registers loaded
+// Captures the PODs by VALUE (input FieldView, program, constants) -> device-clean (nvcc/Kokkos);
+// the signature (index, Real& acc) is the one expected by reduce_max_cell. Registers loaded
 // EXACTLY like the source kernel: r[0 .. n_in-1] = inputs, r[n_in ..] = constants -> the register
 // indices of the program (emitted on the Python side against the SAME table) are consistent. The step
 // bound that derives from it is dt <= cfl / max(mu) (global max aggregated by step_cfl, all_reduce_max
 // over all ranks).
+template <int Dim>
 struct CoupledFreqKernel {
-  Array4 in[kCsMaxReg];  // input fields (one per (block, role) read); only the first n_in are valid
+  static_assert(Dim >= 1 && Dim <= 3, "CoupledFreqKernel only supports dimensions 1, 2, and 3");
+
+  FieldView<const Real, Dim> in[kCsMaxReg];  // input fields; only the first n_in are valid
   int in_comp[kCsMaxReg];
   int n_in = 0;
 
@@ -256,10 +262,10 @@ struct CoupledFreqKernel {
 
   CsProgram prog;  // postfix program of the frequency (final top = mu of the cell)
 
-  POPS_HD void operator()(int i, int j, Real& acc) const {
+  POPS_HD void operator()(const Index<Dim>& index, Real& acc) const {
     Real reg[kCsMaxReg];
     for (int c = 0; c < n_in; ++c)
-      reg[c] = in[c](i, j, in_comp[c]);
+      reg[c] = in[c](index, in_comp[c]);
     for (int c = 0; c < n_const; ++c)
       reg[n_in + c] = consts[c];
     const Real mu = prog.eval(reg);

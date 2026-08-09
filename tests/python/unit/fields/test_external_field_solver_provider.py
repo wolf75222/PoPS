@@ -28,7 +28,7 @@ from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
 def _component(
     tmp_path, *, name, interface, source_suffix=b"", dimension=2,
-    manifest_parameters=(), instance_parameters=None,
+    manifest_parameters=(), instance_parameters=None, features=(), device="cpu",
 ):
     root = tmp_path / name
     root.mkdir(parents=True)
@@ -46,8 +46,8 @@ def _component(
         target={"variants": [{
             "dimension": dimension,
             "scalar": "float64",
-            "device": "cpu",
-            "features": [],
+            "device": device,
+            "features": list(features),
         }]},
         entry_points={"interface_table": "pops_component_interface_v1"},
     )
@@ -99,16 +99,29 @@ def _provider(tmp_path):
     ), topology, solver
 
 
-def test_external_field_solver_refuses_a_3d_only_pair_member(tmp_path):
+def test_external_field_solver_refuses_pair_without_a_common_ranked_dimension(tmp_path):
     topology = _component(
         tmp_path, name="topology", interface=interfaces.FieldTopology)
     solver = _component(
         tmp_path, name="solver_3d", interface=interfaces.FieldSolver, dimension=3)
 
-    with pytest.raises(
-        ValueError, match="one exact supported 2D float64 target variant"
-    ):
+    with pytest.raises(ValueError, match="share no supported native dimension"):
         ExternalFieldSolver(topology=topology, solver=solver)
+
+
+def test_external_field_solver_accepts_a_3d_pair_then_uses_the_domain_rank(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_3d", interface=interfaces.FieldTopology, dimension=3)
+    solver = _component(
+        tmp_path, name="solver_3d", interface=interfaces.FieldSolver, dimension=3)
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+
+    assert provider.capabilities().to_dict()["host"] is True
+    with pytest.raises(LoweringRejection, match="compatible Dim=2 float64 CPU targets"):
+        capture_field_plans(
+            _case(provider), lambda value: value, target="system",
+            layout=Uniform(cartesian_grid(n=8, periodic=False)),
+        )
 
 
 def test_external_pair_survives_field_lowering_with_exact_component_authorities(tmp_path):
@@ -130,19 +143,24 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     provider_authority = external.to_data()["provider"]
     assert provider_authority["use_policy"] == {
         "policy_id": "pops.fields.external-field-solver.use",
-        "version": 3,
+        "version": 4,
         "capabilities": {
             "provider_id": "pops.fields.external-field-solver",
             "provider_version": 2,
-            "adapter_identity": ("pops.fields.external-field-solver.system-host-serial@1"),
-            "targets": ["system"],
-            "layout_kinds": ["uniform"],
-            "max_levels": 1,
-            "hierarchy_policies": ["pops.field-hierarchy.level-local"],
+            "adapter_identity": ("pops.fields.external-field-solver.system-amr-host@2"),
+            "targets": ["system", "amr_system"],
+            "layout_kinds": ["uniform", "amr"],
+            "max_levels": None,
+            "refinement_ratios": [2],
+            "hierarchy_policies": [
+                "pops.field-hierarchy.level-local",
+                "pops.field-hierarchy.composite",
+            ],
             "abi_patch_level_metadata": True,
-            "hierarchy_materialization": False,
-            "amr_provider_bridge": False,
-            "execution": "host-serial-multi-patch-batch",
+            "hierarchy_materialization": True,
+            "amr_provider_bridge": True,
+            "binary_coarse_fine_coverage": True,
+            "execution": "host-serial-or-declared-mpi-hierarchy-batch",
             "components": ["FieldTopology@2", "FieldSolver@2"],
         },
     }
@@ -165,8 +183,9 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     capabilities = provider.capabilities().to_dict()
     assert capabilities["provider"] == provider_authority
     assert capabilities["adapter"] == provider_authority["use_policy"]["capabilities"]
-    assert capabilities["supports_amr"] is False
-    assert capabilities["max_levels"] == 1
+    assert capabilities["supports_amr"] is True
+    assert capabilities["max_levels"] is None
+    assert capabilities["refinement_ratios"] == (2,)
     plan.require_component_inputs((topology, solver))
 
     # Artifact state is recursively immutable, but the Python/native boundary must receive an
@@ -233,25 +252,67 @@ def test_external_pair_canonicalizes_nested_parameters_without_weakening_identit
         plan.require_component_inputs((topology, substituted_solver))
 
 
-@pytest.mark.parametrize(
-    "hierarchy_policy",
-    (LevelByLevelSolve(), CompositeHierarchySolve()),
-)
-def test_external_field_solver_v2_refuses_real_amr_during_resolve(
-    tmp_path,
-    hierarchy_policy,
-):
+def test_external_field_solver_v2_resolves_one_composite_amr_hierarchy(tmp_path):
+    provider, topology, solver = _provider(tmp_path)
+
+    plan = capture_field_plans(
+        _case(provider, hierarchy_policy=CompositeHierarchySolve()),
+        lambda value: value,
+        target="amr_system",
+        layout=final_amr_layout(cartesian_grid(n=8, periodic=False), max_levels=3, ratio=2),
+    )["potential"]
+
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    layout = plan.native_options["solver_provider"]["facts"]["layout"]
+    assert layout["kind"] == "amr"
+    assert layout["levels"] == 3
+    plan.require_component_inputs((topology, solver))
+
+
+def test_external_field_solver_v2_refuses_level_local_amr(tmp_path):
     provider, _topology, _solver = _provider(tmp_path)
 
-    with pytest.raises(LoweringRejection, match="no AMR provider bridge") as error:
+    with pytest.raises(LoweringRejection, match="supports only hierarchy policy") as error:
         capture_field_plans(
-            _case(provider, hierarchy_policy=hierarchy_policy),
+            _case(provider, hierarchy_policy=LevelByLevelSolve()),
             lambda value: value,
             target="amr_system",
             layout=final_amr_layout(cartesian_grid(n=8, periodic=False), max_levels=2, ratio=2),
         )
     assert error.value.gate == "field.solver.provider_incompatible"
-    assert "FieldSolver@2 patch-level metadata is only a carrier" in str(error.value)
+
+
+def test_external_field_solver_v2_refuses_non_binary_amr_ratio(tmp_path):
+    provider, _topology, _solver = _provider(tmp_path)
+
+    with pytest.raises(LoweringRejection, match="requires one ratio-2 transition") as error:
+        capture_field_plans(
+            _case(provider, hierarchy_policy=CompositeHierarchySolve()),
+            lambda value: value,
+            target="amr_system",
+            layout=final_amr_layout(
+                cartesian_grid(n=8, periodic=False), max_levels=2, ratio=4
+            ),
+        )
+    assert error.value.gate == "field.solver.provider_incompatible"
+
+
+def test_external_field_solver_reports_mpi_only_when_both_host_variants_declare_it(tmp_path):
+    topology = _component(
+        tmp_path, name="topology_mpi", interface=interfaces.FieldTopology, features=("mpi",))
+    solver = _component(
+        tmp_path, name="solver_serial", interface=interfaces.FieldSolver)
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+    assert provider.capabilities().to_dict()["mpi"] is False
+    assert provider.capabilities().to_dict()["component_pair_declares_mpi"] is False
+
+    solver_mpi = _component(
+        tmp_path, name="solver_mpi", interface=interfaces.FieldSolver, features=("mpi",))
+    mpi_provider = ExternalFieldSolver(topology=topology, solver=solver_mpi)
+    assert mpi_provider.capabilities().to_dict()["mpi"] is True
+    assert mpi_provider.capabilities().to_dict()["gpu"] is False
 
 
 def test_external_field_solver_refuses_unsupported_hierarchy_policy_at_resolve(tmp_path):

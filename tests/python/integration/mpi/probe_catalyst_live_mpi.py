@@ -12,6 +12,7 @@ same exact objects consumed by a ``RuntimeInstance`` monitor: a native PoPS worl
 duplicated observer lane, one rank-local piece of a canonical distributed ``ObserverFrame``, and
 the production ``CatalystPythonProvider`` lifecycle.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,7 @@ import time
 from typing import Any
 
 
-_PIPELINE_SOURCE = r'''# script-version: 2.0
+_PIPELINE_SOURCE = r"""# script-version: 2.0
 import os
 from pathlib import Path
 import threading
@@ -67,11 +68,10 @@ def catalyst_execute(info):
         % (step, rank, size),
         encoding="utf-8",
     )
-'''
+"""
 
 
-_MPI_IMAGE = re.compile(
-    r"^lib(?:mpi|pmpi|mpicxx)(?:\.[0-9]+)*(?:\.dylib|\.so(?:\.[0-9]+)*)$")
+_MPI_IMAGE = re.compile(r"^lib(?:mpi|pmpi|mpicxx)(?:\.[0-9]+)*(?:\.dylib|\.so(?:\.[0-9]+)*)$")
 _ACTIVE_MPI_ENV = {
     "libmpi": "POPS_ACTIVE_MPI_LIBRARY",
     "libpmpi": "POPS_ACTIVE_PMPI_LIBRARY",
@@ -103,7 +103,8 @@ def _loaded_shared_libraries() -> tuple[Path, ...]:
                 rows.append(Path(candidate).resolve())
         return tuple(sorted(set(rows)))
     raise RuntimeError(
-        "Catalyst MPI loaded-library authentication is unsupported on %s" % sys.platform)
+        "Catalyst MPI loaded-library authentication is unsupported on %s" % sys.platform
+    )
 
 
 def _authenticate_loaded_mpi_stack() -> tuple[str, ...]:
@@ -112,7 +113,7 @@ def _authenticate_loaded_mpi_stack() -> tuple[str, ...]:
     prefix_text = os.environ.get("CONDA_PREFIX")
     if not prefix_text:
         raise RuntimeError("Catalyst MPI probe requires an active CONDA_PREFIX")
-    active_lib = (Path(prefix_text).resolve() / "lib")
+    active_lib = Path(prefix_text).resolve() / "lib"
     images = _loaded_shared_libraries()
     mpi_images = tuple(path for path in images if _MPI_IMAGE.fullmatch(path.name))
     if not mpi_images:
@@ -121,7 +122,8 @@ def _authenticate_loaded_mpi_stack() -> tuple[str, ...]:
     if foreign:
         raise RuntimeError(
             "Catalyst loaded a second MPI implementation outside the active Conda prefix: %s"
-            % ", ".join(map(str, foreign)))
+            % ", ".join(map(str, foreign))
+        )
     for family, variable in _ACTIVE_MPI_ENV.items():
         configured = os.environ.get(variable)
         if not configured:
@@ -130,12 +132,14 @@ def _authenticate_loaded_mpi_stack() -> tuple[str, ...]:
         if not expected.is_file() or not expected.is_relative_to(active_lib):
             raise RuntimeError("Catalyst MPI probe received an invalid %s" % variable)
         family_pattern = re.compile(
-            r"^%s(?:\.[0-9]+)*(?:\.dylib|\.so(?:\.[0-9]+)*)$" % re.escape(family))
+            r"^%s(?:\.[0-9]+)*(?:\.dylib|\.so(?:\.[0-9]+)*)$" % re.escape(family)
+        )
         loaded = tuple(path for path in mpi_images if family_pattern.fullmatch(path.name))
         if loaded != (expected,):
             raise RuntimeError(
                 "Catalyst must load exactly %s for %s, found %s"
-                % (expected, family, ", ".join(map(str, loaded)) or "none"))
+                % (expected, family, ", ".join(map(str, loaded)) or "none")
+            )
     return tuple(str(path) for path in mpi_images)
 
 
@@ -167,17 +171,14 @@ def _collective_agree(world: Any, phase: str, error: BaseException | None) -> No
         or (row["error"] is not None and not isinstance(row["error"], str))
         for owner, row in enumerate(rows)
     ):
-        raise RuntimeError(
-            "Catalyst MPI %s returned malformed rank evidence" % phase)
+        raise RuntimeError("Catalyst MPI %s returned malformed rank evidence" % phase)
     failures = [
         "rank %d: %s" % (owner, row["error"])
         for owner, row in enumerate(rows)
         if row["error"] is not None
     ]
     if failures:
-        raise RuntimeError(
-            "Catalyst MPI %s failed collectively: %s" % (phase, "; ".join(failures))
-        )
+        raise RuntimeError("Catalyst MPI %s failed collectively: %s" % (phase, "; ".join(failures)))
 
 
 def _shared_probe_directory(world: Any) -> Path:
@@ -230,7 +231,8 @@ def _wait_for_client_evidence(
                 if failure.is_file():
                     raise RuntimeError(
                         "Catalyst Live client failed: %s"
-                        % failure.read_text(encoding="utf-8").strip())
+                        % failure.read_text(encoding="utf-8").strip()
+                    )
                 if time.monotonic() >= deadline:
                     raise TimeoutError("timed out waiting for Catalyst Live %s" % name)
                 time.sleep(0.01)
@@ -302,7 +304,8 @@ def _distributed_frame(rank: int, size: int, macro_step: int) -> Any:
         {"test": "real-catalyst-live-mpi"},
     )
     request = OutputRequest(
-        "catalyst-live-mpi", (key,), ParallelMode.COLLECTIVE, rank=rank, size=size)
+        "catalyst-live-mpi", (key,), ParallelMode.COLLECTIVE, rank=rank, size=size
+    )
     return ObserverFrame(snapshot, request)
 
 
@@ -316,11 +319,13 @@ def main() -> None:
     size = int(world.size)
     if size != 2:
         raise RuntimeError(
-            "real Catalyst live MPI probe requires mpiexec -n 2 (observed %d ranks)" % size)
+            "real Catalyst live MPI probe requires mpiexec -n 2 (observed %d ranks)" % size
+        )
     if int(world.thread_level) < 3:  # MPI_THREAD_MULTIPLE has the standard value 3.
         raise RuntimeError(
             "real Catalyst live MPI probe requires MPI_THREAD_MULTIPLE; PoPS reports %d"
-            % int(world.thread_level))
+            % int(world.thread_level)
+        )
 
     import_error = None
     try:
@@ -356,22 +361,26 @@ def main() -> None:
         raise RuntimeError("distributed Catalyst frame construction returned no frames")
 
     lane = world.duplicate_observer_lane("real-catalyst-live-mpi")
+    lane_close_authorized = False
     session = None
     try:
         from pops.output.observers import Catalyst, ObserverRun
 
         context = SimpleNamespace(
-            communicator=SimpleNamespace(identity="MPI_COMM_WORLD", handle=world))
+            communicator=SimpleNamespace(identity="MPI_COMM_WORLD", handle=world)
+        )
         session_error = None
         try:
             declaration = Catalyst(pipeline=str(pipeline))
-            session = declaration.open_runtime_session(
-                {"worker_communicator": lane}, context)
+            session = declaration.open_runtime_session({"worker_communicator": lane}, context)
             authority = session.authority
-            if authority.get("threading") != "dedicated_collective" \
-                    or authority.get("worker_mpi") is not True:
+            if (
+                authority.get("threading") != "dedicated_collective"
+                or authority.get("worker_mpi") is not True
+            ):
                 raise RuntimeError(
-                    "real Catalyst session did not authenticate a collective MPI worker")
+                    "real Catalyst session did not authenticate a collective MPI worker"
+                )
         except BaseException as caught:  # noqa: BLE001 - make provider failures collective
             session_error = caught
         _collective_agree(world, "session construction", session_error)
@@ -394,25 +403,67 @@ def main() -> None:
             )
 
             worker = PostCommitObserverWorker(
-                thread_name="real-catalyst-live-mpi-worker")
-            queue = PostCommitObserverQueue(
-                session,
-                run,
-                consumer_id="real-catalyst-live-mpi",
-                worker_communicator=lane,
-                shared_worker=worker,
+                thread_name="real-catalyst-live-mpi-worker",
+                run_identity=run.run_identity,
             )
+            queue_error = None
+            try:
+                queue = PostCommitObserverQueue(
+                    session,
+                    run,
+                    consumer_id="real-catalyst-live-mpi",
+                    worker_communicator=lane,
+                    shared_worker=worker,
+                    defer_initialize=True,
+                )
+            except BaseException as caught:  # noqa: BLE001 - agree before provider entry
+                queue_error = caught
+            _collective_agree(world, "post-commit queue construction", queue_error)
+            if queue is None:
+                raise RuntimeError("Catalyst MPI queue construction returned no queue")
+
+            initialize_prepared = False
+            initialize_error = None
+            try:
+                queue.prepare_initialize()
+                initialize_prepared = True
+            except BaseException as caught:  # noqa: BLE001 - WORLD gates provider entry
+                initialize_error = caught
+            try:
+                _collective_agree(world, "post-commit initialization enqueue", initialize_error)
+            except BaseException as agreement_error:  # noqa: BLE001 - cancel before arm
+                if initialize_prepared:
+                    try:
+                        queue.cancel_initialize(agreement_error)
+                    except BaseException as cleanup_error:  # noqa: BLE001 - retain primary
+                        add_note = getattr(agreement_error, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "prepared initialization cancellation also failed: %s"
+                                % _error_text(cleanup_error)
+                            )
+                raise
+            queue.arm_initialize()
+            initialize_error = None
+            try:
+                queue.complete_initialize()
+            except BaseException as caught:  # noqa: BLE001 - completion must agree on WORLD
+                initialize_error = caught
+            _collective_agree(world, "post-commit initialization completion", initialize_error)
+
             queue.submit(frames[0])
             queue.flush()
             if len(frames) == 2:
+
                 def validate_extract(evidence: Any) -> None:
-                    if not isinstance(evidence, dict) \
-                            or evidence.get("source") != "mesh" \
-                            or not isinstance(evidence.get("port"), int):
+                    if (
+                        not isinstance(evidence, dict)
+                        or evidence.get("source") != "mesh"
+                        or not isinstance(evidence.get("port"), int)
+                    ):
                         raise RuntimeError("Catalyst Live client extract evidence is invalid")
 
-                _wait_for_client_evidence(
-                    world, "client-extract-requested.json", validate_extract)
+                _wait_for_client_evidence(world, "client-extract-requested.json", validate_extract)
                 queue.submit(frames[1])
                 queue.flush()
 
@@ -427,18 +478,56 @@ def main() -> None:
                     }
                     if evidence != expected:
                         raise RuntimeError(
-                            "Catalyst Live client frame evidence differs: %r" % evidence)
+                            "Catalyst Live client frame evidence differs: %r" % evidence
+                        )
 
-                _wait_for_client_evidence(
-                    world, "client-frame.json", validate_frame)
-            reports = queue.close()
+                _wait_for_client_evidence(world, "client-frame.json", validate_frame)
+
+            finalize_prepare_error = None
+            try:
+                reports = queue.prepare_close()
+            except BaseException as caught:  # noqa: BLE001 - agree before finalization
+                finalize_prepare_error = caught
+            _collective_agree(world, "post-commit finalization preparation", finalize_prepare_error)
+
+            finalize_prepared = False
+            finalize_enqueue_error = None
+            try:
+                queue.prepare_complete_close()
+                finalize_prepared = True
+            except BaseException as caught:  # noqa: BLE001 - WORLD gates provider entry
+                finalize_enqueue_error = caught
+            try:
+                _collective_agree(world, "post-commit finalization enqueue", finalize_enqueue_error)
+            except BaseException as agreement_error:  # noqa: BLE001 - cancel before arm
+                if finalize_prepared:
+                    try:
+                        queue.cancel_complete_close(agreement_error)
+                    except BaseException as cleanup_error:  # noqa: BLE001 - retain primary
+                        add_note = getattr(agreement_error, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "prepared finalization cancellation also failed: %s"
+                                % _error_text(cleanup_error)
+                            )
+                raise
+            queue.arm_complete_close()
+            finalize_error = None
+            try:
+                reports = queue.complete_close()
+            except BaseException as caught:  # noqa: BLE001 - never retry provider entry
+                finalize_error = caught
+            _collective_agree(world, "post-commit finalization completion", finalize_error)
+
             worker.close()
             worker = None
-            if len(reports) != len(frames) \
-                    or any(report.status != "delivered" for report in reports):
+            if len(reports) != len(frames) or any(
+                report.status != "delivered" for report in reports
+            ):
                 raise RuntimeError(
                     "Catalyst worker did not deliver every collective frame: %r"
-                    % [(report.status, report.reason) for report in reports])
+                    % [(report.status, report.reason) for report in reports]
+                )
             for frame, report in zip(frames, reports, strict=True):
                 receipt = report.receipt
                 if receipt is None or receipt.frame_identity != frame.identity:
@@ -447,25 +536,20 @@ def main() -> None:
                     raise RuntimeError("Catalyst receipt exposes an unexpected provider")
                 if receipt.detail.get("implementation") != "paraview":
                     raise RuntimeError("Catalyst did not load the ParaView implementation")
-                marker = marker_dir / (
-                    "execute-step-%04d-rank-%04d.txt" % (frame.macro_step, rank))
+                marker = marker_dir / ("execute-step-%04d-rank-%04d.txt" % (frame.macro_step, rank))
                 expected = (
                     "step=%d\nrank=%d\nsize=2\nfield=U\nlive=enabled\n"
-                    "worker=background\n" % (frame.macro_step, rank))
+                    "worker=background\n" % (frame.macro_step, rank)
+                )
                 if marker.read_text(encoding="utf-8") != expected:
                     raise RuntimeError(
                         "Catalyst live pipeline marker does not authenticate step %d rank %d"
-                        % (frame.macro_step, rank))
+                        % (frame.macro_step, rank)
+                    )
             mpi_images = _authenticate_loaded_mpi_stack()
         except BaseException as caught:  # noqa: BLE001 - backend already agrees on its lane
             delivery_error = caught
         finally:
-            if queue is not None:
-                try:
-                    queue.close()
-                except BaseException as caught:  # noqa: BLE001 - retain the primary failure
-                    if delivery_error is None:
-                        delivery_error = caught
             if worker is not None:
                 try:
                     worker.close()
@@ -473,15 +557,17 @@ def main() -> None:
                     if delivery_error is None:
                         delivery_error = caught
         _collective_agree(world, "post-commit worker delivery", delivery_error)
+        lane_close_authorized = True
         if len(frames) == 2:
+
             def validate_closed(evidence: Any) -> None:
                 if evidence != {"received": True}:
-                    raise RuntimeError(
-                        "Catalyst Live client close evidence differs: %r" % evidence)
+                    raise RuntimeError("Catalyst Live client close evidence differs: %r" % evidence)
 
             _wait_for_client_evidence(world, "client-closed.json", validate_closed)
     finally:
-        lane.close_collectively()
+        if lane_close_authorized:
+            lane.close_collectively()
 
     world.barrier()
     marker_set_error = None
@@ -489,14 +575,15 @@ def main() -> None:
         try:
             expected_markers = {
                 "execute-step-%04d-rank-%04d.txt" % (frame.macro_step, owner)
-                for frame in frames for owner in range(size)
+                for frame in frames
+                for owner in range(size)
             }
-            actual_markers = {
-                path.name for path in marker_dir.glob("execute-step-*-rank-*.txt")}
+            actual_markers = {path.name for path in marker_dir.glob("execute-step-*-rank-*.txt")}
             if actual_markers != expected_markers:
                 raise RuntimeError(
                     "Catalyst pipeline marker set differs from both MPI ranks: %r"
-                    % sorted(actual_markers))
+                    % sorted(actual_markers)
+                )
         except BaseException as caught:  # noqa: BLE001 - report before peers continue
             marker_set_error = caught
     _collective_agree(world, "complete pipeline marker set", marker_set_error)

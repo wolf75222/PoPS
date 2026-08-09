@@ -111,7 +111,7 @@ class _RateAuthoringMixin(_BoardModel):
 
         hyp = self._dsl._m
         with atomic_attrs(
-                (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_hllc"), (hyp, "_roe"),
+                (hyp, "_provider_components"), (hyp, "_hllc"), (hyp, "_roe"),
                 (hyp, "_riemann_hook_forms"), (hyp, "_rate_operators"),
                 (self, "_riemann"), (self, "_reconstruction"),
                 (self, "_rate_contracts")):

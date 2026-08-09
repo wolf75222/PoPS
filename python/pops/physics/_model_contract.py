@@ -32,8 +32,8 @@ class _HyperbolicModel:
     prim_defs: Any
     prim_roles: Any
     prim_state: Any
-    aux_names: Any
-    aux_extra_names: Any
+    _recovery_admissibility: Any
+    _provider_components: Any
     gamma: Any
     _flux: Any
     _flux_terms: Any
@@ -52,6 +52,7 @@ class _HyperbolicModel:
     _roe: Any
     _roe_rows: Any
     _roe_jacobian: Any
+    _roe_entropy_policy: Any
     _riemann_hook_forms: Any
     _hllc: Any
     _src_freq: Any
@@ -63,6 +64,10 @@ class _HyperbolicModel:
     _to_expr: Any
     _state_space_metadata: Any
     _operator_registry_cache: Any
+    _auxiliary_provider_pack: Any
+    _auxiliary_provider_metadata: Any
+    _component_flux_consumer_plan: Any
+    _component_operator_consumer_plans: Any
     params: Any
     module: Any
 

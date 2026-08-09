@@ -14,7 +14,7 @@ Flux-DSL free functions
   left, right.
 
 Board free functions
-  grad, dx, dy, laplacian, div, ddt, rate, unknown, integral,
+  grad, dx, dy, dz, laplacian, div, ddt, rate, unknown, integral,
   board_sqrt.
 """
 from __future__ import annotations
@@ -124,7 +124,7 @@ def right(expr: Any) -> Any:
 # =============================================================================
 
 def grad(field: Any) -> Any:
-    """The gradient of a scalar field; use ``grad(phi).x`` / ``.y`` for components."""
+    """The gradient of a scalar field; select a component with a typed frame axis."""
     return Gradient(field)
 
 
@@ -147,6 +147,11 @@ def dx(field: Any) -> Any:
 def dy(field: Any) -> Any:
     """The y partial derivative of a field (``grad(field).y``)."""
     return Partial(field, 1)
+
+
+def dz(field: Any) -> Any:
+    """The z partial derivative of a field (``grad(field).z``)."""
+    return Partial(field, 2)
 
 
 def laplacian(field: Any) -> Any:

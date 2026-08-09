@@ -17,14 +17,7 @@ from pops.runtime._threading import has_kokkos
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
 _RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
-_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
-# Riemann fluxes wired on the polar geometry: rusanov (any model) + hll (isothermal fluid declares
-# wave_speeds). hllc/roe have no polar energy-flux brick (make_block_polar rejects them), so the
-# polar row is the catalog intersected with this allow-list -- a removed flux cannot leave a phantom
-# polar token, and an added flux is not silently advertised as polar-capable.
-_POLAR_RIEMANN = ("rusanov", "hll")
-
-
+_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5", "mc", "superbee")
 def _ordered(tokens: Any, order: Any) -> Any:
     """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
     present = set(tokens)
@@ -40,13 +33,14 @@ def _descriptor_tokens() -> Any:
     the internal descriptor catalog report walks (riemann / limiter / reconstruction /
     elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
     from the introspectable capability matrix. Only descriptors that declare themselves available
-    are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
-    ``_pops`` import, no numeric loop.
+    are reported; MC and Superbee are ordinary native limiter descriptors and therefore appear
+    through this same path without a doctor-specific allowlist. Pure: no ``_pops`` import, no
+    numeric loop.
     """
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.riemann import riemann
-    from pops.solvers.elliptic import FFT, GeometricMG
+    from pops.solvers.elliptic import CartesianCG, FFT, GeometricMG
 
     def _available(namespace: Any) -> Any:
         names = []
@@ -71,17 +65,15 @@ def _descriptor_tokens() -> Any:
     # printed list stays the historical set while still being sourced from the catalog.
     high_order = ["weno5"] if "weno5" in recon_tokens else []
     dsl_limiters = _ordered(["none", *limiter_tokens, *high_order], _LIMITER_ORDER)
-    # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
-    # GeometricMG plus the FFT discrete / spectral schemes.
+    # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors.
     poisson = {
+        "cartesian_cg": CartesianCG().name,
         "geometric_mg": GeometricMG().name,
         "fft": FFT().scheme,
-        "fft_spectral": FFT(spectral=True).scheme,
     }
 
     return {
         "riemann": riemann_tokens,
-        "riemann_polar": [t for t in riemann_tokens if t in _POLAR_RIEMANN],
         "dsl_limiters": dsl_limiters,
         "poisson": poisson,
     }
@@ -99,8 +91,9 @@ def doctor(verbose: bool = True) -> Any:
     checks = {}
 
     # 1. interpreter + extension (cpython-3XY ABI trap)
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     so = getattr(_pops, "__file__", "?")
     checks["interpreteur"] = (
         True,
@@ -249,8 +242,8 @@ def capabilities() -> Any:
     """OFFICIAL MATRIX of capabilities by facade / geometry / backend (audit 2026-06, wave 2).
 
     SINGLE source of truth consultable by scripts and docs (the audits showed that System,
-    AMR, polar and the DSL backends diverged silently). The entries reflect the GATES
-    actually coded (make_block / dispatch_amr_* / block_builder_polar / dsl._BACKENDS) ; the
+    uniform System, AMR and the DSL backends diverged silently). The entries reflect the gates
+    actually coded by the exact-ranked runtime and ``dsl._BACKENDS``; the
     combinations outside the matrix raise an explicit error on the C++ side (never a silent ignore).
 
     Sec 12: the riemann / limiter / reconstruction / Poisson token lists are DERIVED from the
@@ -258,34 +251,36 @@ def capabilities() -> Any:
     the internal descriptor report reads), not hardcoded, so adding or retiring a
     brick cannot silently desync this matrix from the introspectable one.
     """
-    from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
-    from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
-
-    aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
+    from pops._native_selector import selected_native_module
+    selected_native_module(required=True)
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
     tok = _descriptor_tokens()
     riemann_all = list(tok["riemann"])
-    riemann_polar = list(tok["riemann_polar"])
+    poisson_cg = tok["poisson"]["cartesian_cg"]
     poisson_mg = tok["poisson"]["geometric_mg"]
     poisson_fft = tok["poisson"]["fft"]
-    poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
     from pops.runtime_environment import runtime_environment_report
 
     runtime_env = runtime_environment_report()
+    poisson_system = [
+        "%s (exact-ranked Cartesian Poisson; 1D/2D/3D)" % poisson_cg,
+    ]
+    if runtime_env["dimension"] == 2:
+        poisson_system.append(
+            "%s (exact Dim=2, periodic, n = 2^k, constant eps, ordered MPI slabs)"
+            % poisson_fft
+        )
+    else:
+        poisson_system.append(
+            "%s unavailable for Dim=%d (concrete backend is exact Dim=2)"
+            % (poisson_fft, runtime_env["dimension"])
+        )
     return {
-        # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
-        # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
-        # paired FaceFluxX / FaceFluxY kernels, the 2-component momentum, the 5-point Poisson and the
-        # Box2D / Geometry index space -- not a naming detail. Published as an explicit, introspectable
-        # structured scalar (hard limits are scalars, not prose) so scripts and the limitations doc can
-        # key off it. The polar mesh is a second GEOMETRY at the SAME dimension ((r, theta) is a
-        # 2-index Box2D), so this is a separate top-level key, NOT nested under "geometry". An ND core
-        # (BoxND / GeometryND) is deferred to a future milestone; see
-        # docs/sphinx/reference/known-limitations.md and include/pops/mesh/box2d.hpp.
-        "dimension": 2,
+        # Immutable rank selected by the loaded native artifact before runtime construction.
+        "dimension": runtime_env["dimension"],
         "precision": {
             "real": runtime_env["precision"],
             "real_bytes": runtime_env["real_bytes"],
@@ -295,17 +290,14 @@ def capabilities() -> Any:
         "runtime_environment": runtime_env,
         "riemann": {
             "system_cartesian": riemann_all,
-            "system_polar": riemann_polar,
             "amr": list(riemann_all),
             "notes": {
                 "rusanov": "minimal generic (physical flux + exact provider pack + declared stability bound)",
                 "hll": "generic with signed waves (typed Model.wave_speeds(...) "
-                "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
-                "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
-                "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
+                "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p')",
                 "hllc": "model capability HasHLLCStructure required -- "
                 "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
-                "Euler, passive advected scalars) ; the native Euler brick provides it. "
+                "Euler, passive advected scalars) ; native Euler and isothermal bricks provide it. "
                 "No component-count/layout inference and no fallback.",
                 "roe": "model capability HasRoeDissipation required "
                 "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
@@ -313,9 +305,9 @@ def capabilities() -> Any:
                 "c=sqrt(p/rho) Roe average, passive scalars on the entropy wave) ; (b) "
                 "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
                 "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
-                "exclusive (a single provider of the hook). has_roe covers both ; the native "
-                "Euler brick provides the hook. No component-count/layout inference and no "
-                "fallback.",
+                "exclusive (a single provider of the hook). has_roe covers both ; native Euler "
+                "and isothermal bricks provide the hook. "
+                "No component-count/layout inference and no fallback.",
             },
         },
         "time": {
@@ -334,10 +326,6 @@ def capabilities() -> Any:
                 "IMEX execution requires a typed implicit Program primitive "
                 "(no AMR spatial-runtime fallback)",
                 "Program factories Lie|Strang + hierarchy-scoped Program.solve",
-            ],
-            "system_polar": [
-                "explicit (ssprk2|ssprk3)",
-                "metric-aware explicit Program.solve graph",
             ],
             "newton_options": "options (max_iters/tol/fd_eps/damping) : System route "
             "or typed Program solve; AMR rejects non-default block options and "
@@ -363,35 +351,13 @@ def capabilities() -> Any:
                 "add_dt_bound",
                 "last_dt_bound",
             ],
-            "system_polar": [
-                "transport (max_wave_speed | stability_speed)",
-                "source_frequency",
-                "stability_dt",
-                "coupled_source.frequency",
-                "add_dt_bound",
-                "last_dt_bound",
-            ],
         },
         "poisson": {
-            "system_cartesian": [
-                "%s (wall, eps(x), aniso, screened)" % poisson_mg,
-                "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
-                "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral,
-            ],
-            "system_polar": [
-                "polar direct (mono-rank, one box) -- clear UPSTREAM REJECT if theta_boxes>1"
-            ],
+            "system_cartesian": poisson_system,
             "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
-            "system_polar": "ring (r, theta) global ; theta_boxes=1 mono-box (default) OR "
-            "theta_boxes>1 split into theta bands (divides ntheta). MATRIX "
-            "multi-box (ADC-67) : TRANSPORT (assemble_rhs_polar + fill_ghosts "
-            "collective) multi-box OK ; polar Poisson DIRECT mono-box only (upstream "
-            "reject if theta_boxes>1) ; polar tensor Schur stage multi-box. "
-            "get/set state (and eval_rhs/density) reconstruct the global ring "
-            "multi-box ; mono-rank (the direct Poisson refuses MPI).",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
             "refinement_ratio = 2 only (single native AMR invariant, centralized in "
             "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
@@ -401,8 +367,6 @@ def capabilities() -> Any:
             "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
             "solver=GMRES/BiCGStab) ; "
             "authored roles/fields ; generic matrix-free operator",
-            "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
-            "PolarTensorKrylovSolver provider",
             "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
             "one composite tensor solve, then reconstruct-all-levels through the Program",
         },
@@ -426,7 +390,7 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state Uniform v5 / AMR v7, including multi-block, active "
+                "strict accepted-state Uniform v6 / AMR v8, including multi-block, active "
                 "regridding, fields, histories, clocks, tagging hysteresis and consumer cursors; "
                 "exact MPI_COMM_WORLD captures collectively and publishes one rank-0 NPZ artifact"
             ),
@@ -442,37 +406,10 @@ def capabilities() -> Any:
             "phi_gradient": "ordinary prepared field-gradient leaf",
         },
         "aux": {
-            "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "
-            "(set_electron_temperature_from), closed list POPS_AUX_FIELDS / AUX_CANONICAL "
-            "(C++ name table pops/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
-            "named": {
-                # Model-declared NAMED aux fields (ADC-70 phase 1 + ADC-291 phase 2): m.aux_field('name')
-                # reserves component AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k));
-                # set_aux_field(block, name, array) carries the static field. STATIC + persistent.
-                "backends": [
-                    "system_cartesian",
-                    "system_polar",
-                    "amr_single_block",
-                    "amr_multi_block",
-                ],
-                # The ONLY remaining compile-time aux limit, declarative + introspectable (= C++
-                # kAuxMaxExtra, mirrored by dsl.AUX_NAMED_MAX ; test_capabilities.py pins the match).
-                "limit": aux_max_extra,
-                # Aux ghost width is fixed at 1 cell (the halo EXCHANGE is already component-generic, so
-                # a named field participates ; a per-field CONFIGURABLE radius is a follow-up).
-                "halo_radius": 1,
-                "persistent": True,
-                # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
-                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces -- periodic
-                # domain, polar theta -- keep their wrap). Uniform over the 4 faces; per-face asymmetric
-                # BC is a follow-up. Default (no halo) inherits the shared aux BC, bit-identical.
-                "halo_policy": {
-                    "kinds": ["inherit", "foextrap", "dirichlet"],
-                    "faces": "uniform (non-periodic faces ; periodic faces keep their wrap)",
-                    "backends": ["system_cartesian", "system_polar", "amr_coarse"],
-                },
-            },
-            "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-            "AMR path needs target='amr_system'",
+            "authority": "owner-qualified ProviderPack ComponentKey routes; no reserved names or fixed width",
+            "inputs": "stage_auxiliary_input(ComponentKey(...), values) only for declared InputAux",
+            "derived": "native DerivedAux launchers publish transactionally from their exact dependency DAG",
+            "field_outputs": "FieldOperator/solve producers own their typed routes and storage groups",
+            "boundary": "per-output AuxiliaryBoundary: topology inheritance, first-order extrapolation, or dirichlet",
         },
     }

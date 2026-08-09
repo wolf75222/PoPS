@@ -27,6 +27,63 @@ def _validated_native_materialization(entry: Any) -> Any:
     return native
 
 
+def _ranked_ghost_depth(
+    value: Any, *, dimension: int, where: str
+) -> tuple[int, ...]:
+    try:
+        raw = tuple(value)
+    except TypeError as exc:
+        raise TypeError("%s must be an ordered axis sequence" % where) from exc
+    if len(raw) not in (1, dimension) or any(
+        type(item) is not int or item < 0 for item in raw
+    ):
+        raise TypeError(
+            "%s must contain one or %d non-negative integers" % (where, dimension)
+        )
+    if len(raw) == 1:
+        return tuple(raw[0] for _ in range(dimension))
+    return raw
+
+
+def _physical_axis_contract(
+    plan: Any, requirement: Any
+) -> tuple[tuple[str, str], str | None, int]:
+    """Classify one physical transfer key against its exact layout axis names."""
+    from pops.mesh._amr.transfer import (
+        BuiltinTransferAxis,
+        CELL_CENTERED,
+        CELL_SPACE,
+        FACE_SPACE,
+        NODE_CENTERED,
+        NODE_SPACE,
+    )
+
+    normalized = plan.layout_plan.normalized(requirement.layout)
+    axis_names = tuple(normalized.geometry.axis_names)
+    dimension = len(axis_names)
+    if requirement.accuracy.dimension != dimension:
+        raise ValueError(
+            "AMR transfer requirement dimension differs from its normalized layout geometry"
+        )
+    key = requirement.key.to_data()
+    axis = (key["space"]["qualified_id"], key["centering"]["qualified_id"])
+    cell_axis = (CELL_SPACE.qualified_id, CELL_CENTERED.qualified_id)
+    node_axis = (NODE_SPACE.qualified_id, NODE_CENTERED.qualified_id)
+    face_axes = {
+        (
+            FACE_SPACE.qualified_id,
+            BuiltinTransferAxis("centering", "face_%s" % axis_name).qualified_id,
+        )
+        for axis_name in axis_names
+    }
+    axis_kind = {
+        cell_axis: "cell",
+        node_axis: "node",
+        **{face_axis: "face" for face_axis in face_axes},
+    }.get(axis)
+    return axis, axis_kind, dimension
+
+
 def validate_amr_authorities(plan: Any) -> None:
     from pops.initial import InitialConditionPlan
 
@@ -81,8 +138,9 @@ def validate_amr_authorities(plan: Any) -> None:
             or plan.bootstrap_plan.initial_identity != plan.initial_condition_plan.identity:
         raise ValueError("ResolvedSimulationPlan bootstrap does not authenticate AMR authorities")
     providers = plan.amr_providers
-    if tuple(providers) != ("clustering", "tagger"):
-        raise ValueError("AMR plan requires exact clustering and tagger provider bindings")
+    if tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError(
+            "AMR plan requires exact clustering, tagger and reflux provider bindings")
     # Component inputs deliberately admit both source authorities and already-compiled
     # artifacts.  Their representations differ, but both expose the same authenticated
     # projection protocol.  Index that projection instead of reaching through the source-only
@@ -178,8 +236,6 @@ def validate_amr_authorities(plan: Any) -> None:
         )
     from pops.mesh._amr.transfer import (
         CACHE,
-        CELL_CENTERED,
-        CELL_SPACE,
         CONSERVATIVE_REPRESENTATION,
         DENSE_STORAGE,
         DERIVED_FIELD,
@@ -189,11 +245,6 @@ def validate_amr_authorities(plan: Any) -> None:
         COARSE_FINE_FILL,
         TEMPORAL_INTERPOLATION,
         PRIMITIVE_REPRESENTATION,
-        FACE_SPACE,
-        FACE_X_CENTERED,
-        FACE_Y_CENTERED,
-        NODE_SPACE,
-        NODE_CENTERED,
         NativeAMRMaterializationKind,
     )
 
@@ -245,18 +296,11 @@ def validate_amr_authorities(plan: Any) -> None:
                 )
             if requirement.materialization == PHYSICAL:
                 key = requirement.key.to_data()
-                axis = (key["space"]["qualified_id"], key["centering"]["qualified_id"])
-                supported_axis = axis in {
-                    (CELL_SPACE.qualified_id, CELL_CENTERED.qualified_id),
-                    (FACE_SPACE.qualified_id, FACE_X_CENTERED.qualified_id),
-                    (FACE_SPACE.qualified_id, FACE_Y_CENTERED.qualified_id),
-                    (NODE_SPACE.qualified_id, NODE_CENTERED.qualified_id),
-                }
+                _, axis_kind, dimension = _physical_axis_contract(plan, requirement)
+                supported_axis = axis_kind is not None
                 expected_representation = (
                     PRIMITIVE_REPRESENTATION.qualified_id
-                    if axis in {
-                        (NODE_SPACE.qualified_id, NODE_CENTERED.qualified_id),
-                    }
+                    if axis_kind == "node"
                     else CONSERVATIVE_REPRESENTATION.qualified_id
                 )
                 expected_storage = DENSE_STORAGE.qualified_id
@@ -275,38 +319,49 @@ def validate_amr_authorities(plan: Any) -> None:
                     RESTRICTION,
                     COARSE_FINE_FILL,
                     TEMPORAL_INTERPOLATION,
-                } and axis != (
-                    CELL_SPACE.qualified_id,
-                    CELL_CENTERED.qualified_id,
-                ):
+                } and axis_kind != "cell":
                     supported_key = False
-                if axis == (CELL_SPACE.qualified_id, CELL_CENTERED.qualified_id) \
-                        and requirement.subject.block_ref is None:
+                if axis_kind == "cell" and requirement.subject.block_ref is None:
                     supported_key = False
                 if requirement.subject.qualified_id not in initial_ids or not supported_key:
                     raise NotImplementedError(
                         "native AMR bootstrap supports initialized dense conservative "
-                        "cell/face_x/face_y/node states"
+                        "cell/oriented-face/node states"
                     )
                 prolong_contract = {
-                    (CELL_SPACE.qualified_id, CELL_CENTERED.qualified_id):
-                        ("conservative_linear", 2, (1,)),
-                    (FACE_SPACE.qualified_id, FACE_X_CENTERED.qualified_id):
-                        ("face_divergence_preserving", 2, (1,)),
-                    (FACE_SPACE.qualified_id, FACE_Y_CENTERED.qualified_id):
-                        ("face_divergence_preserving", 2, (1,)),
-                    (NODE_SPACE.qualified_id, NODE_CENTERED.qualified_id):
-                        ("node_bilinear", 2, (1,)),
-                }.get(axis)
+                    "cell": (
+                        "conservative_linear",
+                        2,
+                        tuple(1 for _ in range(dimension)),
+                    ),
+                    "face": (
+                        "face_divergence_preserving",
+                        2,
+                        tuple(1 for _ in range(dimension)),
+                    ),
+                    "node": (
+                        "node_bilinear",
+                        2,
+                        tuple(1 for _ in range(dimension)),
+                    ),
+                }.get(axis_kind)
                 if requirement.key.operation == RESTRICTION:
-                    route_contract = ("volume_average", 1, (0,))
+                    route_contract = (
+                        "volume_average",
+                        1,
+                        tuple(0 for _ in range(dimension)),
+                    )
                 elif requirement.key.operation == COARSE_FINE_FILL:
                     # Coarse/fine providers form an open capability family.  The resolved action
                     # already proves that its exact route supports this requirement; the native
                     # registry authenticates and prepares the named implementation at bind time.
                     route_contract = None
                 elif requirement.key.operation == TEMPORAL_INTERPOLATION:
-                    route_contract = ("linear_time_interpolation", 2, (0,))
+                    route_contract = (
+                        "linear_time_interpolation",
+                        2,
+                        tuple(0 for _ in range(dimension)),
+                    )
                 else:
                     route_contract = prolong_contract
                 if native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
@@ -328,7 +383,11 @@ def validate_amr_authorities(plan: Any) -> None:
                         or (
                             native.native_route,
                             capabilities.order,
-                            capabilities.ghost_depth,
+                            _ranked_ghost_depth(
+                                capabilities.ghost_depth,
+                                dimension=dimension,
+                                where="native AMR transfer capability ghost_depth",
+                            ),
                         ) != route_contract:
                     raise NotImplementedError(
                         "native AMR prolongation provider does not match the exact builtin "
@@ -362,21 +421,21 @@ def validate_amr_authorities(plan: Any) -> None:
         capabilities = native.capabilities.transfer
         if capabilities is None:
             raise TypeError("physical coarse/fine transfer omitted its capabilities")
-        ghost = tuple(capabilities.ghost_depth)
-        if not ghost or len(ghost) not in (1, 2) or any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in ghost):
-            raise TypeError(
-                "physical coarse/fine transfer requires one isotropic or two axis ghost depths"
-            )
         for requirement in entry.requirements:
             subject = requirement.subject.qualified_id
+            dimension = requirement.accuracy.dimension
+            _ranked_ghost_depth(
+                capabilities.ghost_depth,
+                dimension=dimension,
+                where="physical coarse/fine transfer ghost_depth",
+            )
             previous = coarse_fine_capabilities.get(subject)
-            if previous is not None and previous != capabilities:
+            selected = (capabilities, dimension)
+            if previous is not None and previous != selected:
                 raise ValueError(
                     "AMR state %s has conflicting coarse/fine transfer capabilities" % subject
                 )
-            coarse_fine_capabilities[subject] = capabilities
+            coarse_fine_capabilities[subject] = selected
     for block in plan.blocks:
         formal_order = getattr(block.spatial, "formal_order", None)
         ghost_depth = getattr(block.spatial, "ghost_depth", None)
@@ -384,13 +443,16 @@ def validate_amr_authorities(plan: Any) -> None:
                 or isinstance(ghost_depth, bool) or not isinstance(ghost_depth, int):
             raise TypeError("AMR spatial provider lacks exact reconstruction order/halo metadata")
         for subject in block.state_identities:
-            capabilities = coarse_fine_capabilities.get(subject)
-            if capabilities is None:
+            selected = coarse_fine_capabilities.get(subject)
+            if selected is None:
                 raise ValueError(
                     "AMR state %s has no resolved coarse/fine transfer authority" % subject)
-            available_ghost = tuple(capabilities.ghost_depth)
-            if len(available_ghost) == 1:
-                available_ghost *= 2
+            capabilities, dimension = selected
+            available_ghost = _ranked_ghost_depth(
+                capabilities.ghost_depth,
+                dimension=dimension,
+                where="physical coarse/fine transfer ghost_depth",
+            )
             if capabilities.order < formal_order or any(
                     value < ghost_depth for value in available_ghost):
                 raise NotImplementedError(

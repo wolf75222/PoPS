@@ -23,6 +23,9 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kPolarTensorKrylovDefaultMaxIters": "public_knob",
     "kSchurKrylovPolarMaxIters": "public_knob",
     "kKrylovBreakdownTiny": "internal_default",
+    "kCartesianCGDefaultRelTol": "public_knob",
+    "kCartesianCGDefaultAbsTol": "public_knob",
+    "kCartesianCGDefaultMaxIterations": "public_knob",
     "kMGDefaultRelTol": "public_knob",
     "kMGDefaultMaxCycles": "public_knob",
     "kMGDefaultAbsTol": "public_knob",
@@ -38,7 +41,6 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kFACInitialCoarseRelTol": "public_knob",
     "kFACInitialCoarseAbsTol": "public_knob",
     "kFACInitialCoarseMaxCycles": "public_knob",
-    "kFFTDefaultSpectral": "public_knob",
     "kFFTZeroMeanGauge": "internal_default",
     "kFFTDirectDftFallback": "diagnostic_only",
     "kEbCutFractionFloor": "public_knob",
@@ -88,6 +90,11 @@ def _static_report() -> dict:
             "schur_polar_max_iters": 600,
             "breakdown_tiny": 1e-300,
         },
+        "cartesian_cg": {
+            "rel_tol": 1e-10,
+            "abs_tol": 0.0,
+            "max_iterations": 2000,
+        },
         "mg": {
             "rel_tol": 1e-8,
             "max_cycles": 50,
@@ -108,7 +115,6 @@ def _static_report() -> dict:
             "coarse_cycles": 100,
         },
         "fft": {
-            "spectral_default": False,
             "zero_mean_gauge": True,
             "direct_dft_fallback": True,
         },

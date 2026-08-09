@@ -1,13 +1,13 @@
 /// @file
-/// @brief for_each_cell and reductions: the parallelism SEAM over the cells of a Box2D;
+/// @brief Compile-time-ranked cell, face, product, and reduction iteration through Kokkos.
 ///        sync_host / sync_device: the residency COHERENCE seam (counterpart for host accesses).
 ///
 /// KOKKOS IS THE ONLY on-node backend: this seam compiles ONLY under POPS_HAS_KOKKOS (cf. CMake, which
 /// makes Kokkos mandatory; without it, #error below). The functor is taken BY VALUE and receives
-/// (i, j); it captures Array4 handles by value (POD), never the Fab nor anything virtual:
+/// a typed Index<Dim>; it captures field views by value (POD), never the Fab nor anything virtual:
 /// exactly the constraint of a device kernel. The on-node target (sequential = Kokkos Serial, CPU
 /// multi-thread = Kokkos OpenMP, GPU = Kokkos Cuda/HIP) is chosen AT KOKKOS INSTALLATION, not
-/// by an pops flag: a single for_each_cell call (Kokkos::parallel_for over MDRangePolicy<Rank<2>>)
+/// by a PoPS flag: one rank-generic for_each_cell call
 /// covers all three. The CPU -> GPU switch therefore does NOT change the call sites.
 /// FP CHOICE: the SUM reduction (Kokkos::Sum) reassociates the addition per tile -> DETERMINISTIC per
 /// tile (idempotent: same data, same backend -> same bits) but NOT bit-identical to a lexicographic
@@ -21,7 +21,8 @@
 #include <pops/core/foundation/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (life cycle)
 #include <pops/core/foundation/types.hpp>
 #include <pops/diagnostics/fallback_diagnostics.hpp>
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/index/entity_index.hpp>
 
 #include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
 #include <cstdlib>  // getenv / strtol: overridable serial fallback threshold (#165)
@@ -46,7 +47,7 @@ namespace pops {
 // its first kokkos_malloc, otherwise the Kokkos build crashes when constructing a Fab).
 
 // SERIAL FALLBACK THRESHOLD for for_each_cell (#165). Under a HOST Kokkos execution space
-// (Serial/OpenMP), launching a Kokkos::parallel_for(MDRangePolicy) on a tiny box pays a
+// (Serial/OpenMP), launching a Kokkos::parallel_for on a tiny box pays a
 // fork/join (and the policy construction) that OVERWHELMS the useful work. The multigrid
 // V-cycle descends down to ~2x2/4x4 grids; on those levels the GS smoother, the residual,
 // the restriction/prolongation and the copies chain dozens of parallel_for over a few
@@ -54,12 +55,12 @@ namespace pops {
 // a SEQUENTIAL host loop (internal to the Kokkos path, this is NOT a separate backend),
 // above it we keep Kokkos parallel_for for the fine grids.
 //
-// BIT-IDENTITY. for_each_cell has NO inter-iteration dependency: each f(i, j)
-// writes only cell (i, j) of its destination and reads cells IT DOES NOT WRITE
+// BIT-IDENTITY. for_each_cell has NO inter-iteration dependency: each f(index)
+// writes only its destination cell and reads cells IT DOES NOT WRITE
 // in the same call (the GS smoother is RED-BLACK colored -- one color only reads
 // the other; residual/restriction/prolongation/copies/saxpy write a destination
 // distinct from the source). The result is therefore INDEPENDENT OF the traversal ORDER:
-// the sequential loop yields exactly the same bits as MDRangePolicy<Rank<2>>.
+// the sequential loop yields exactly the same bits as the matching flattened Kokkos policy.
 // The threshold touches ONLY for_each_cell (not the reductions for_each_cell_reduce_*:
 // the Kokkos parallel sum reassociates the addition, so switching them to serial would
 // NOT be bit-identical -- we leave them intact; the max is exact but the smoother itself
@@ -69,18 +70,6 @@ namespace pops {
 // resweep the threshold without recompiling; default 4096 (same fork/join vs computation
 // trade-off as the old if() clause of the removed OpenMP path).
 namespace detail {
-inline void require_iterable_box(const Box2D& box) {
-  if (box.empty())
-    return;
-  const std::int64_t nx = static_cast<std::int64_t>(box.hi[0]) - box.lo[0] + 1;
-  const std::int64_t ny = static_cast<std::int64_t>(box.hi[1]) - box.lo[1] + 1;
-  if (nx > std::numeric_limits<int>::max() || ny > std::numeric_limits<int>::max() ||
-      box.hi[0] == std::numeric_limits<int>::max() || box.hi[1] == std::numeric_limits<int>::max())
-    throw std::overflow_error(
-        "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index below "
-        "INT_MAX");
-}
-
 inline std::int64_t foreach_serial_threshold() {
   static const std::int64_t thr = []() -> std::int64_t {
     if (const char* e = std::getenv("POPS_FOREACH_SERIAL_THRESHOLD")) {
@@ -93,6 +82,7 @@ inline std::int64_t foreach_serial_threshold() {
   }();
   return thr;
 }
+
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -146,192 +136,226 @@ inline void sync_host() {
 /// deep_copy host->device on a non-unified path.
 inline void sync_device() {}
 
-/// Applies @p f to EACH cell (i, j) of box @p b (bounds inclusive), via Kokkos::parallel_for
-/// (Serial / OpenMP / Cuda depending on the Kokkos install). @p f is taken by value and MUST be
-/// device-callable (annotated POPS_HD, captures POD by value). No order guarantee.
-template <class F>
-void for_each_cell(const Box2D& b, F f) {
+namespace detail {
+
+template <int Dim>
+inline void require_iterable_box(const Box<Dim>& box) {
+  if (box.empty())
+    return;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (box.length(axis) > std::numeric_limits<int>::max() ||
+        box.hi[axis] == std::numeric_limits<int>::max())
+      throw std::overflow_error(
+          "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index "
+          "below "
+          "INT_MAX");
+  }
+}
+
+template <int Dim>
+inline bool foreach_small_box(const Box<Dim>& box, std::int64_t threshold) noexcept {
+  if (box.empty() || threshold <= 0)
+    return false;
+  std::int64_t remaining = threshold - 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::int64_t extent = box.length(axis);
+    if (extent <= 0 || extent > remaining)
+      return false;
+    remaining /= extent;
+  }
+  return true;
+}
+
+template <int Dim>
+POPS_HD CellIndex<Dim> cell_index_from_ordinal(const Index<Dim>& lower, const Extent<Dim>& extent,
+                                               std::int64_t ordinal) {
+  CellIndex<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    index[axis] = lower[axis] + static_cast<int>(ordinal % extent[axis]);
+    ordinal /= extent[axis];
+  }
+  return index;
+}
+
+template <class ExecutionSpace, int Dim, class F>
+void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
+                        F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS iteration requires a Kokkos execution-space instance");
+  const Index<Dim> lower = box.lo;
+  const Extent<Dim> extent = box.extent();
+  Kokkos::parallel_for(
+      label,
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           box.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal) {
+        f(cell_index_from_ordinal(lower, extent, ordinal));
+      });
+}
+
+template <int Dim, int Axis, class F>
+struct FaceKernelAdapter {
+  F functor;
+
+  POPS_HD void operator()(const CellIndex<Dim>& index) const {
+    functor(FaceIndex<Dim, Axis>{index});
+  }
+};
+
+}  // namespace detail
+
+/// Return the face-index box normal to compile-time @p Axis.  A cell box contains one more face
+/// than cells along its normal axis and retains the cell extents along every tangent axis.
+template <int Axis, int Dim>
+Box<Dim> face_box(const Box<Dim>& cells) {
+  static_assert(Axis >= 0 && Axis < Dim,
+                "pops::face_box axis must lie inside the compile-time rank");
+  if (cells.empty())
+    return cells;
+  detail::require_iterable_box(cells);
+  Box<Dim> faces = cells;
+  ++faces.hi[Axis];
+  return faces;
+}
+
+/// Submit a cell kernel to an explicit Kokkos execution-space instance.  Unlike the default host
+/// convenience overload, this path never substitutes a synchronous small-box loop, so task-graph
+/// and accelerator-stream ordering remain owned by the supplied instance.
+template <class ExecutionSpace, int Dim, class F>
+void for_each_cell(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
   if (b.empty())
     return;
   detail::require_iterable_box(b);
-  // SMALL BOXES (#165): under a HOST Kokkos execution space (Serial/OpenMP), the
-  // fork/join of a parallel_for on a tiny grid (coarse V-cycle levels,
-  // ~2x2..32x32) overwhelms the computation. We then run a sequential host loop (internal
-  // to the Kokkos path). BIT-IDENTICAL: no inter-iteration dependency (cf. the threshold note),
-  // so the order affects no bit.
-  //
-  // DEVICE GUARD (if constexpr): the serial fallback is taken ONLY if the default execution space
-  // of Kokkos IS the host space (Serial/OpenMP). Under a DEVICE space (Cuda
-  // on a CUDA device), DefaultExecutionSpace != DefaultHostExecutionSpace: the host loop
-  // would run on the CPU while the preceding device kernels are in flight (no
-  // fence laid here) -- data race. We therefore keep parallel_for on device WHATEVER
-  // THE size -> GPU path STRICTLY unchanged (the if constexpr evaporates at
-  // compile time, zero overhead). Under SharedSpace + host execution, the loop is
-  // race-free: the existing coherence seams (gs_rb_sweep lays its device_fence around the
-  // sweeps, sync_host before the host accesses) stay in place and unchanged.
+  detail::ensure_kokkos_initialized();
+  detail::launch_index_space(execution, b, "pops_for_each_cell", f);
+}
+
+/// Applies @p f to every index of a compile-time-ranked box.  The functor is passed by value and
+/// receives CellIndex<Dim>; one flattened policy decodes the box's compile-time rank without a
+/// dimension-specific launch branch.
+template <int Dim, class F>
+void for_each_cell(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return;
+  detail::require_iterable_box(b);
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
-    const std::int64_t nx = static_cast<std::int64_t>(b.hi[0]) - b.lo[0] + 1;
-    const std::int64_t ny = static_cast<std::int64_t>(b.hi[1]) - b.lo[1] + 1;
-    const std::int64_t n_cells = nx * ny;
-    if (n_cells < detail::foreach_serial_threshold()) {
+    if (detail::foreach_small_box(b, detail::foreach_serial_threshold())) {
       record_fallback(FallbackCounter::kForeachSerialSmallBox);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          f(i, j);
+      const Extent<Dim> extent = b.extent();
+      const std::int64_t point_count = b.numPts();
+      for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+        f(detail::cell_index_from_ordinal(b.lo, extent, ordinal));
       return;
     }
   }
   detail::ensure_kokkos_initialized();
-  // IndexType<int>: SIGNED indices. Ghost boxes have negative low
-  // bounds (e.g. lo = -ng for copy_shifted); without an explicit signed type,
-  // MDRangePolicy rejects the bound -1 (implicit conversion deemed unsafe).
-  Kokkos::parallel_for("pops_for_each_cell",
-                       Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-                           {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-                       f);
+  const Kokkos::DefaultExecutionSpace execution{};
+  for_each_cell(execution, b, f);
 }
 
-// Device reductions: the reducing counterpart of for_each_cell. Same constraints
-// on the functor (device-callable POD, taken by value, captures a ConstArray4,
-// never the Fab); it receives (i, j) and returns the value to accumulate. The seam carries
-// the device ordering: under Kokkos the scalar is ready on return without a
-// prior device_fence() (parallel_reduce is blocking host-side and orders itself
-// after the parallel_for already submitted in the same space).
-//
-// IMPORTANT FP CHOICE. A true parallel reduction reassociates floating-point
-// addition (non-associative in IEEE754): the result of the sum depends on
-// the traversal order.
-//   - SUM: Kokkos::Sum, DETERMINISTIC per-tile reduction (no floating-point
-//     atomics). Two calls on identical data return exactly the
-//     same bit -> idempotence (sum_unchanged) holds. But the per-tile order
-//     DIFFERS from a lexicographic sum: the value is NOT bit-identical to
-//     a hand-written (i, j) loop. Since Kokkos is the only backend, this
-//     holds for ALL spaces (Serial, OpenMP, Cuda).
-//   - MAX: Kokkos::Max, exact everywhere (max is associative/commutative and
-//     rounding-free in IEEE754) -> bit-identical across Kokkos spaces.
-// Summary: the SUM is deterministic-per-tile (idempotent) but reassociated; the
-// MAX (norm_inf) is exact.
+/// Submit the product of a compile-time-ranked integer box.  This is the non-cell semantic facade
+/// used by topology, pack/unpack, and task-graph work while sharing the same static Kokkos policies.
+template <class ExecutionSpace, int Dim, class F>
+void for_each_product(const ExecutionSpace& execution, const Box<Dim>& product, F f) {
+  for_each_cell(execution, product, f);
+}
 
-/// SUM reduction of @p f(i, j) over box @p b. @p f device-callable (POPS_HD) returning the value
-/// to accumulate. FP WARNING: Kokkos::Sum reassociates the sum per tile (deterministic/idempotent but
-/// not bit-identical to a lexicographic sum), for all Kokkos spaces. Blocking host-side.
-template <class F>
-Real for_each_cell_reduce_sum(const Box2D& b, F f) {
+template <int Dim, class F>
+void for_each_product(const Box<Dim>& product, F f) {
+  for_each_cell(product, f);
+}
+
+/// Submit faces normal to compile-time @p Axis.  Axis is a type property of every FaceIndex passed
+/// to the functor, so flux and metric kernels do not branch on direction in their inner loop.
+template <int Axis, class ExecutionSpace, int Dim, class F>
+void for_each_face(const ExecutionSpace& execution, const Box<Dim>& cells, F f) {
+  const Box<Dim> faces = face_box<Axis>(cells);
+  for_each_cell(execution, faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
+}
+
+template <int Axis, int Dim, class F>
+void for_each_face(const Box<Dim>& cells, F f) {
+  const Box<Dim> faces = face_box<Axis>(cells);
+  for_each_cell(faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
+}
+
+/// SUM reduction on an explicit execution-space instance.  The returned scalar establishes the
+/// completion dependency for this reduction only; unrelated submitted work remains unfenced.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
   if (b.empty())
     return Real(0);
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
+  const Index<Dim> lower = b.lo;
+  const Extent<Dim> extent = b.extent();
   Kokkos::parallel_reduce(
-      "pops_reduce_sum",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
-                                                                     {b.hi[0] + 1, b.hi[1] + 1}),
-      KOKKOS_LAMBDA(int i, int j, Real& acc) { acc += f(i, j); }, Kokkos::Sum<Real>{result});
-  return result;  // blocking host-side: valid on return, without device_fence()
+      "pops_reduce_sum_index",
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           b.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+        accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+      },
+      Kokkos::Sum<Real>{result});
+  return result;
 }
 
-/// MAX reduction of @p f(i, j) over box @p b. @p f device-callable (POPS_HD). EXACT everywhere (max
-/// is associative/commutative in IEEE754, rounding-free) -> bit-identical across Kokkos spaces. Blocking.
-template <class F>
-Real for_each_cell_reduce_max(const Box2D& b, F f) {
+/// SUM reduction over a compile-time-ranked box on the default execution-space instance.
+template <int Dim, class F>
+Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::ensure_kokkos_initialized();
+  const Kokkos::DefaultExecutionSpace execution{};
+  return for_each_cell_reduce_sum(execution, b, f);
+}
+
+/// MAX reduction on an explicit execution-space instance.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
   if (b.empty())
     return Real(0);
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  Real result = 0;
+  Real result = std::numeric_limits<Real>::lowest();
+  const Index<Dim> lower = b.lo;
+  const Extent<Dim> extent = b.extent();
   Kokkos::parallel_reduce(
-      "pops_reduce_max",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
-                                                                     {b.hi[0] + 1, b.hi[1] + 1}),
-      KOKKOS_LAMBDA(int i, int j, Real& acc) {
-        const Real v = f(i, j);
-        if (v > acc)
-          acc = v;
+      "pops_reduce_max_index",
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           b.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+        const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+        if (value > accumulator)
+          accumulator = value;
       },
       Kokkos::Max<Real>{result});
-  return result;  // exact max (associative/commutative IEEE754), no fence
+  return result;
 }
 
-// MAX variant with a REDUCING FUNCTOR: @p f is passed DIRECTLY to Kokkos::parallel_reduce and
-// receives (i, j, Real& acc) to update acc (acc = max(acc, value)). Unlike
-// for_each_cell_reduce_max, NO extended lambda wraps @p f: this is the device-clean path
-// for a Model-template kernel instantiated from an EXTERNAL TRANSLATION UNIT (add_compiled_model),
-// where nvcc does not reliably emit an extended lambda (cf. the named functors of spatial_operator.hpp).
-// Determinism and bit-exactness IDENTICAL to for_each_cell_reduce_max (same Kokkos::Max): only the
-// carrier of the computation changes (named functor instead of a lambda wrapper).
-/// MAX reduction with a REDUCING FUNCTOR: @p f receives (i, j, Real& acc) and updates acc, passed
-/// DIRECTLY to Kokkos::parallel_reduce without a wrapper lambda (device-clean path for a kernel
-/// instantiated cross-TU). Bit-exactness identical to for_each_cell_reduce_max.
-template <class F>
-Real reduce_max_cell(const Box2D& b, F f) {
+/// MAX reduction over a compile-time-ranked box on the default execution-space instance.
+template <int Dim, class F>
+Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
   if (b.empty())
     return Real(0);
-  detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  Real result = 0;
-  Kokkos::parallel_reduce("pops_reduce_max_cell",
-                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-                              {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-                          f, Kokkos::Max<Real>{result});
-  return result;
+  const Kokkos::DefaultExecutionSpace execution{};
+  return for_each_cell_reduce_max(execution, b, f);
 }
 
-/// Exact integer-control counterpart of reduce_max_cell.  Spatial flux kernels write their field
-/// output and join a packed status/reason value into this reduction, avoiding a hot-path scalar
-/// device allocation and a second scan kernel.  Unsigned max is deterministic on every Kokkos
-/// execution space.
-template <class F>
-std::uint64_t reduce_max_uint64_cell(const Box2D& b, F f) {
-  if (b.empty())
-    return std::uint64_t{0};
-  detail::require_iterable_box(b);
-  detail::ensure_kokkos_initialized();
-  std::uint64_t result = 0;
-  Kokkos::parallel_reduce("pops_reduce_max_uint64_cell",
-                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-                              {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-                          f, Kokkos::Max<std::uint64_t>{result});
-  return result;
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_product_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& product, F f) {
+  return for_each_cell_reduce_sum(execution, product, f);
 }
 
-// MIN variant: exact counterpart of reduce_max_cell for Kokkos::Min (dt_hotspot diagnostic,
-// ADC-182: reduction of the smallest index encoded among the cells that equal the max).
-template <class F>
-Real reduce_min_cell(const Box2D& b, F f) {
-  if (b.empty())
-    return Real(0);
-  detail::require_iterable_box(b);
-  detail::ensure_kokkos_initialized();
-  Real result = 0;
-  Kokkos::parallel_reduce("pops_reduce_min_cell",
-                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-                              {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-                          f, Kokkos::Min<Real>{result});
-  return result;
-}
-
-// SUM variant with a REDUCING FUNCTOR: exact counterpart of reduce_max_cell for Kokkos::Sum. @p f
-// receives (i, j, Real& acc) and accumulates (acc += value), passed DIRECTLY to parallel_reduce WITHOUT
-// a wrapping extended lambda (unlike for_each_cell_reduce_sum, which lays one). This is
-// the device-clean path required by a kernel instantiated from an EXTERNAL TRANSLATION UNIT (the
-// Krylov solver drawn from the native harness/loader): nvcc does not reliably emit an extended lambda
-// first-instantiated cross-TU (cf. the named functors of mf_arith.hpp / spatial_operator.hpp).
-// Determinism and FP IDENTICAL to for_each_cell_reduce_sum: same per-tile deterministic Kokkos::Sum.
-/// SUM reduction with a REDUCING FUNCTOR: @p f receives (i, j, Real& acc) and accumulates, passed DIRECTLY
-/// to Kokkos::parallel_reduce without a wrapper lambda (device-clean cross-TU path). Same FP
-/// guarantees as for_each_cell_reduce_sum (Kokkos::Sum reassociated per tile, deterministic/idempotent).
-template <class F>
-Real reduce_sum_cell(const Box2D& b, F f) {
-  if (b.empty())
-    return Real(0);
-  detail::require_iterable_box(b);
-  detail::ensure_kokkos_initialized();
-  Real result = 0;
-  Kokkos::parallel_reduce("pops_reduce_sum_cell",
-                          Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-                              {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-                          f, Kokkos::Sum<Real>{result});
-  return result;
+template <int Dim, class F>
+Real for_each_product_reduce_sum(const Box<Dim>& product, F f) {
+  return for_each_cell_reduce_sum(product, f);
 }
 
 }  // namespace pops

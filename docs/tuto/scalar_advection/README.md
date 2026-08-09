@@ -187,14 +187,16 @@ Les substitutions suivantes utilisent toutes des briques natives :
 reconstruction.FirstOrder()
 reconstruction.MUSCL(limiters.Minmod())
 reconstruction.MUSCL(limiters.VanLeer())
+reconstruction.MUSCL(limiters.MC())
+reconstruction.MUSCL(limiters.Superbee())
 reconstruction.WENO5()  # implementation native WENO5-Z
 ```
 
-Le document source cite aussi les limiteurs MC et Superbee. Leurs fonctions usuelles sont
+Les limiteurs MC et Superbee utilisent respectivement
 $\phi_{MC}(r)=\max(0,\min(2r,(1+r)/2,2))$ et
-$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. PoPS 1.0.0 ne fournit pas encore de descriptor
-natif pour ces deux limiteurs. Ils peuvent etre compares sur le papier, mais ne sont pas
-selectionnables dans ce tutoriel.
+$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. Ils passent par le meme registre prepare que Minmod
+et VanLeer, demandent exactement deux couches de cellules fantomes et sont selectionnables sans
+branche specifique Uniform, AMR, MPI ou backend.
 
 ## Tutoriel 1 : briques preimplementees
 
@@ -564,11 +566,13 @@ PVSM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pvsm' | sort | tail -n 1
 "$POPS_PARAVIEW_ROOT/Contents/MacOS/paraview" --state "$PVSM"
 ```
 
-Ce tutoriel et la capture native PoPS restent 2D et centres cellules. Le writer VTU sous-jacent sait
-aussi representer des snapshots cartesiens exacts 1D, 2D ou 3D. Il place les champs centres cellules
-dans `CellData` et les champs nodaux dans `PointData`/`PPointData` avec `state=None`; cela ne signifie
-pas encore que le solveur natif produit des etats 1D, 3D ou nodaux. Les champs centres faces sont
-refuses explicitement tant qu'une topologie de faces distincte n'est pas fournie. En MPI,
+Ce tutoriel reste 2D et centre cellules, mais ce n'est plus une limite de la capture native PoPS :
+l'artifact compile en 1D, 2D ou 3D et la capture, le snapshot immuable, le writer VTU et le Blueprint
+Catalyst conservent tous ce rang exact. La capture native et Catalyst acceptent actuellement les
+champs centres cellules; un centering natif different est refuse explicitement avant publication.
+Le writer VTU peut aussi placer un snapshot nodal fourni par un autre provider dans
+`PointData`/`PPointData` avec `state=None`. Les champs centres faces sont refuses tant qu'une
+topologie de faces distincte n'est pas fournie. En MPI,
 `ParaView(mode=ParallelMode.PER_RANK)` produit un `.pvtu`; le placement par defaut relaie les morceaux
 bornes par une lane MPI privee vers le rang zero, sans filesystem partage, tandis que
 `placement=SharedDirectory()` demande explicitement un repertoire visible par tous les rangs.
@@ -801,4 +805,14 @@ ici utilise SSPRK2.
 
 [L'exemple final d'advection scalaire](../../../examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 compose toutes ces briques avec trois niveaux, diagnostics, controles d'identite et preuves de
-restart exhaustives.
+restart exhaustives. Son gate natif rouvre le dernier VTU accepte, ne conserve que les cellules
+feuilles AMR, calcule les normes ponderees par le volume face a la solution exacte transportee et
+impose une erreur L2 relative inferieure ou egale a `0.10`. Il authentifie aussi les contributions
+de flux de chaque niveau et l'ordre `reflux`, puis `average_down`, pour chaque relation parent/enfant.
+Une hierarchie raffinee preexistante ne suffit pas : le gate lit les compteurs publics
+`regrid_count` et `topology_epoch`, exige un remplacement topologique termine avant le checkpoint et
+pendant chaque continuation, puis verifie leur restauration exacte. Il refuse aussi la publication si
+`simulation.amr.explain_checkpoint()` signale une violation du contrat de restart strict.
+L'etude `15_openmp_convergence.py` reste la preuve separee de raffinement conjoint MUSCL/SSPRK2 :
+elle exige la decroissance de L1, L2 et Linf sur les grilles 32², 64², 128² et 256² et publie les
+ordres observes plutot que de supposer un ordre effectif constant pres des extrema limites.

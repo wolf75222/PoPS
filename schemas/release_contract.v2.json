@@ -1,0 +1,43 @@
+{
+  "release_contract_schema_version": 2,
+  "public_api_version": 1,
+  "semantic_ir_version": 1,
+  "normalization_version": 1,
+  "component_catalog_schema_version": 2,
+  "component_manifest_schema_version": 2,
+  "component_registry_version": 4,
+  "capability_vocabulary_version": 4,
+  "component_interface_abi_version": 1,
+  "native_abi_version": 3,
+  "checkpoint_envelope_schema_version": 1,
+  "checkpoint_spatial_schema_version": 1,
+  "uniform_checkpoint_payload_version": 7,
+  "amr_checkpoint_payload_version": 8,
+  "component_catalog_sha256": "06e90f38d927e8543e9020d9b2ce1a4f6722630d5c65f347cc9a175cc31f7746",
+  "component_catalog_semantic_sha256": "27ac54a69188657111717e78b90d2b75c06fdb971ed6b70e96fe68be5de78ad2",
+  "supported_matrix": {
+    "language": {
+      "python": ["3.12"],
+      "cpp_standard": 20,
+      "compiler_families": ["GNU", "AppleClang"]
+    },
+    "kokkos": {
+      "version": "4.4.01",
+      "execution_spaces": ["Serial", "OpenMP"]
+    },
+    "distributed": {
+      "mpi_implementation": "OpenMPI",
+      "execution_spaces": ["Serial"]
+    },
+    "source_builds": [
+      {"os": "linux", "arch": "x86_64", "backend": "Kokkos Serial"},
+      {"os": "linux", "arch": "x86_64", "backend": "Kokkos OpenMP"},
+      {"os": "linux", "arch": "x86_64", "backend": "Kokkos Serial + OpenMPI"},
+      {"os": "macos", "arch": "arm64", "backend": "Kokkos Serial"}
+    ],
+    "wheels": [
+      {"os": "macos", "arch": "arm64", "python": "cp312", "backend": "Kokkos Serial"}
+    ],
+    "not_promised": ["CUDA wheel", "HIP wheel", "MPI wheel", "Windows wheel"]
+  }
+}

@@ -24,7 +24,7 @@ class PatchReport:
     """The live patch table of an AMR hierarchy (Spec 5 sec.8.12 ``patch_table()``).
 
     A per-level census of the refined patches that ACTUALLY exist on the built hierarchy right now
-    (read from ``patch_rectangles`` + ``patch_boxes``), plus the coarse (base) box distribution
+    (read from ``patch_bounds`` + ``patch_boxes``), plus the coarse (base) box distribution
     (``coarse_local_boxes`` / ``coarse_total_boxes``). It dumps no field data: each patch is its
     integer box corners + physical rectangle, summarized per level. ``built`` is False when the
     hierarchy has not been built yet (no block added / no first step), in which case there are no
@@ -50,20 +50,19 @@ class PatchReport:
             if domain_bounds is None
             else tuple(tuple(float(value) for value in point) for point in domain_bounds)
         )
-        # Historical scalar inspection remains truthful for square configurations only.
+        # Historical scalar inspection remains truthful only for isotropic configurations.
         self.base_n = (
             self.base_cells[0]
-            if self.base_cells is not None and self.base_cells[0] == self.base_cells[1]
+            if self.base_cells is not None and len(set(self.base_cells)) == 1
             else None
         )
         if self.domain_bounds is None:
             self.domain_l = None
         else:
             lower, upper = self.domain_bounds
-            lengths = (upper[0] - lower[0], upper[1] - lower[1])
-            self.domain_l = lengths[0] if lengths[0] == lengths[1] else None
-        # per_level: ordered list of dicts {level, n_patches, cells, boxes=[(ilo,jlo,ihi,jhi)],
-        # rectangles=[(x0,y0,w,h)]}; level 0 (the coarse base) is reported as a single covering box.
+            lengths = tuple(high - low for low, high in zip(lower, upper, strict=True))
+            self.domain_l = lengths[0] if len(set(lengths)) == 1 else None
+        # per_level stores ranked inclusive integer boxes and physical lower+extent tuples.
         self.per_level = list(per_level)
         self.coarse_local_boxes = coarse_local_boxes
         self.coarse_total_boxes = coarse_total_boxes
@@ -273,7 +272,7 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the authenticated AMR v7 accepted-state envelope: exact recorded patch geometry, every
+    Surfaces the authenticated AMR v8 accepted-state envelope: exact recorded patch geometry, every
     block and level, field/history state, runtime-owned tagging hysteresis, regrid metadata, rational
     clocks and transfer-plan provenance. Owner ranks remain exact for bit-identical replay; the
     explicitly non-bit-identical route may rematerialize ownership without changing the recorded
@@ -299,7 +298,7 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v7 envelope)" % head]
+        lines = ["AMR checkpoint policy: %s (authenticated accepted-state v8 envelope)" % head]
         lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")

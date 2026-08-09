@@ -13,6 +13,7 @@ from pops.external import (
     SourcePackageRegistry,
     build_fixed_binary_manifest,
     build_source_package_manifest,
+    compile_component,
     load,
 )
 from pops.model import ComponentManifest
@@ -20,8 +21,11 @@ from pops.runtime._platform_manifest import proven_serial_manifest
 
 
 def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_points=None,
-              parameters=()):
+              parameters=(), variants=None):
     interface = interfaces.NumericalFlux
+    target_variants = [{
+        "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
+    }] if variants is None else list(variants)
     return ComponentManifest(
         uri=uri, component_type="numerical_flux", version="1.0.0",
         facets=interface.facets,
@@ -30,9 +34,7 @@ def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_
                    "native_interface": interface.signature_declaration()},
         interfaces=interface.manifest_declarations(),
         parameters=parameters,
-        target={"variants": [{
-            "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
-        }]},
+        target={"variants": target_variants},
         entry_points=entry_points or {
             "interface_table": "pops_component_interface_v1",
         },
@@ -81,7 +83,7 @@ def test_external_component_parameters_are_deeply_frozen_authorities(tmp_path):
         component.parameters["options"]["policy"]["strict"] = False
 
 
-def test_tampered_manifest_digest_is_rejected(tmp_path):
+def test_tampered_manifest_and_retained_source_are_rejected_at_phase_boundaries(tmp_path):
     path, data = _write_source(tmp_path)
     changed = deepcopy(data)
     changed["exports"] = {"other": _manifest().component_id}
@@ -89,6 +91,97 @@ def test_tampered_manifest_digest_is_rejected(tmp_path):
     with pytest.raises(ComponentPackageError) as error:
         load(path)
     assert error.value.code == "package_digest"
+
+    retained_root = tmp_path / "retained"
+    retained_root.mkdir()
+    retained = load(_write_source(retained_root)[0])
+    component = retained.require("average", interface=interfaces.NumericalFlux)()
+
+    # Frozen values are still part of a hostile extension boundary: prove that even deliberate
+    # in-memory corruption cannot turn the Python type itself into package authority.
+    object.__setattr__(retained.payloads[0], "content", b"tampered-retained-bytes")
+
+    registry = SourcePackageRegistry()
+    with pytest.raises(ComponentPackageError) as registry_error:
+        registry.register(retained)
+    assert registry_error.value.code == "source_digest"
+    assert registry.revision == 0
+
+    # This refusal occurs before toolchain discovery, compilation or native module access.
+    with pytest.raises(ComponentPackageError) as compile_error:
+        compile_component(component)
+    assert compile_error.value.code == "source_digest"
+
+
+def test_ranked_component_targets_are_available_at_authoring_and_exact_at_compile(tmp_path):
+    variants = tuple({
+        "dimension": dimension,
+        "scalar": "float64",
+        "device": "cpu",
+        "features": [],
+    } for dimension in (1, 2, 3))
+    package = load(_write_source(tmp_path, manifest=_manifest(variants=variants))[0])
+    component = package.require("average", interface=interfaces.NumericalFlux)()
+
+    available = interfaces.NumericalFlux.native_target_variants(component)
+    assert {row["dimension"] for row in available} == {1, 2, 3}
+    assert interfaces.NumericalFlux.resolve_native_target(
+        component, dimension=3, device="host") == {
+            "dimension": 3,
+            "scalar": "float64",
+            "device": "cpu",
+            "features": (),
+        }
+
+
+def test_exact_ranked_component_target_refuses_feature_ambiguity(tmp_path):
+    variants = (
+        {"dimension": 3, "scalar": "float64", "device": "cpu", "features": []},
+        {"dimension": 3, "scalar": "float64", "device": "cpu", "features": ["mpi"]},
+    )
+    package = load(_write_source(tmp_path, manifest=_manifest(variants=variants))[0])
+    component = package.require("average", interface=interfaces.NumericalFlux)()
+
+    with pytest.raises(ComponentPackageError, match="one exact supported Dim=3"):
+        interfaces.NumericalFlux.resolve_native_target(
+            component, dimension=3, device="cpu")
+
+
+@pytest.mark.parametrize(("requested", "selected"), ((None, 3), (1, 1)))
+def test_standalone_component_compilation_requires_or_reuses_one_exact_dimension(
+    tmp_path, monkeypatch, requested, selected,
+):
+    package = load(_write_source(tmp_path)[0])
+    component = package.require("average", interface=interfaces.NumericalFlux)()
+    from pops import _native_selector
+    from pops.codegen import _compile_platform
+
+    monkeypatch.setattr(
+        _compile_platform, "require_shared_library_compile_platform", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_native_selector, "selected_native_dimension", lambda: selected)
+    seen = []
+
+    def stop_after_selection(dimension):
+        seen.append(dimension)
+        raise RuntimeError("selection checkpoint")
+
+    monkeypatch.setattr(_native_selector, "select_native_dimension", stop_after_selection)
+    with pytest.raises(RuntimeError, match="selection checkpoint"):
+        compile_component(component, native_dimension=requested)
+    assert seen == [selected]
+
+
+def test_standalone_component_compilation_never_defaults_to_2d(tmp_path, monkeypatch):
+    package = load(_write_source(tmp_path)[0])
+    component = package.require("average", interface=interfaces.NumericalFlux)()
+    from pops import _native_selector
+    from pops.codegen import _compile_platform
+
+    monkeypatch.setattr(
+        _compile_platform, "require_shared_library_compile_platform", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_native_selector, "selected_native_dimension", lambda: None)
+    with pytest.raises(TypeError, match="requires native_dimension=1, 2, or 3"):
+        compile_component(component)
 
 
 def test_source_registry_is_atomic_idempotent_collision_safe_and_frozen(tmp_path):
@@ -119,6 +212,32 @@ def test_fixed_binary_cannot_claim_template_genericity():
             binary_path="average.so", binary=b"not-a-binary",
             symbols=("pops_component_interface_v1",))
     assert error.value.code == "fixed_generic_claim"
+
+
+def test_fixed_binary_bytes_are_authenticated_before_package_use(tmp_path):
+    platform = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++20")
+    component = _manifest(generic=False)
+    binary = b"authenticated-fixed-component"
+    data = build_fixed_binary_manifest(
+        components={"average": component},
+        platform=platform,
+        binary_path="average.so",
+        binary=binary,
+        symbols=("pops_component_interface_v1",),
+    )
+    binary_path = tmp_path / "average.so"
+    manifest_path = tmp_path / "average.pops.json"
+    binary_path.write_bytes(binary)
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    package = load(manifest_path)
+    assert package.binary == binary
+
+    binary_path.write_bytes(binary + b"-tampered")
+    with pytest.raises(ComponentPackageError) as error:
+        load(manifest_path)
+    assert error.value.code == "binary_digest"
 
 
 def test_compiled_registry_refuses_source_values_and_freezes():

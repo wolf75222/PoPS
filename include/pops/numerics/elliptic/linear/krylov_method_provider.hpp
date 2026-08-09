@@ -21,8 +21,11 @@
 
 namespace pops {
 
+template <int Dim>
 class KrylovWorkspace;
+template <int Dim>
 struct KrylovControls;
+template <int Dim>
 class PreparedKrylovSolveContext;
 
 inline int max_krylov_batched_basis_extent(std::size_t robust_payload_width) noexcept {
@@ -42,9 +45,10 @@ struct KrylovMethodControls {
 };
 
 /// Exact vector-space facts needed before persistent method storage is allocated.
+template <int Dim>
 struct KrylovWorkspaceRequest {
-  KrylovFootprint footprint{};
-  PreparedVectorDistribution distribution = PreparedVectorDistribution::Distributed;
+  KrylovFootprint<Dim> footprint{};
+  PreparedVectorDistribution<Dim> distribution = PreparedVectorDistribution<Dim>::Distributed;
   std::size_t robust_payload_width = 0;
 };
 
@@ -72,10 +76,11 @@ struct KrylovWorkspaceRequirements {
 };
 
 /// Authenticated mathematical and storage facts offered to a method at the solve boundary.
+template <int Dim>
 struct KrylovMethodProblemFacts {
   LinearOperatorProperties properties{};
-  KrylovFootprint footprint{};
-  PreparedVectorDistribution distribution = PreparedVectorDistribution::Distributed;
+  KrylovFootprint<Dim> footprint{};
+  PreparedVectorDistribution<Dim> distribution = PreparedVectorDistribution<Dim>::Distributed;
   std::size_t robust_payload_width = 0;
   bool has_nullspace = false;
   bool has_preconditioner = false;
@@ -101,6 +106,7 @@ struct KrylovMethodValidation {
 /// One immutable provider object is shared by concurrent workspace lanes: implementations must be
 /// reentrant and keep every invocation-specific value in PreparedKrylovSolveContext and its prepared
 /// workspace, never in mutable provider members.
+template <int Dim>
 class PreparedKrylovMethodProvider {
  public:
   virtual ~PreparedKrylovMethodProvider() = default;
@@ -113,23 +119,24 @@ class PreparedKrylovMethodProvider {
       const KrylovMethodControls& controls,
       const PreparedProviderOptions& options) const noexcept = 0;
   [[nodiscard]] virtual KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
+      const KrylovMethodProblemFacts<Dim>& facts,
       const PreparedProviderOptions& options) const noexcept = 0;
   [[nodiscard]] virtual KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request, const PreparedProviderOptions& options) const = 0;
+      const KrylovWorkspaceRequest<Dim>& request, const PreparedProviderOptions& options) const = 0;
   /// Execute one complete recurrence. If the provider enters MPI it must execute the same complete
   /// collective trace on every rank before returning or throwing; the common boundary can make a
   /// post-trace failure uniform, but cannot repair an abandoned collective.
-  [[nodiscard]] virtual SolveReport solve(PreparedKrylovSolveContext& context,
+  [[nodiscard]] virtual SolveReport solve(PreparedKrylovSolveContext<Dim>& context,
                                           const PreparedProviderOptions& options) const = 0;
 };
 
 /// Immutable prepared handle. Equality is semantic and exact, never pointer- or name-based.
+template <int Dim>
 class PreparedKrylovMethod {
  public:
   PreparedKrylovMethod() = default;
 
-  explicit PreparedKrylovMethod(std::shared_ptr<const PreparedKrylovMethodProvider> provider,
+  explicit PreparedKrylovMethod(std::shared_ptr<const PreparedKrylovMethodProvider<Dim>> provider,
                                 PreparedProviderOptions options)
       : provider_(std::move(provider)), options_(std::move(options)) {
     if (!provider_)
@@ -168,12 +175,12 @@ class PreparedKrylovMethod {
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }
   [[nodiscard]] KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts) const noexcept {
+      const KrylovMethodProblemFacts<Dim>& facts) const noexcept {
     return provider_ ? provider_->validate_problem(facts, options_)
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }
   [[nodiscard]] KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request) const {
+      const KrylovWorkspaceRequest<Dim>& request) const {
     if (!provider_)
       throw std::invalid_argument("prepared Krylov method provider is empty");
     KrylovWorkspaceRequirements result = provider_->workspace_requirements(request, options_);
@@ -181,7 +188,7 @@ class PreparedKrylovMethod {
       throw std::invalid_argument("prepared Krylov method provider returned an invalid workspace");
     return result;
   }
-  [[nodiscard]] SolveReport solve(PreparedKrylovSolveContext& context) const {
+  [[nodiscard]] SolveReport solve(PreparedKrylovSolveContext<Dim>& context) const {
     if (!provider_)
       throw std::invalid_argument("prepared Krylov method provider is empty");
     return provider_->solve(context, options_);
@@ -193,7 +200,7 @@ class PreparedKrylovMethod {
   }
 
  private:
-  std::shared_ptr<const PreparedKrylovMethodProvider> provider_{};
+  std::shared_ptr<const PreparedKrylovMethodProvider<Dim>> provider_{};
   PreparedProviderOptions options_{};
   std::string collective_contract_{};
   OperatorFingerprint fingerprint_{};
@@ -201,9 +208,10 @@ class PreparedKrylovMethod {
 
 /// Append-only native registry.  Resolving a fifth method returns the same prepared handle type as
 /// resolving a builtin; consumers never branch on the registered identity.
+template <int Dim>
 class PreparedKrylovMethodRegistry {
  public:
-  void add(std::shared_ptr<const PreparedKrylovMethodProvider> provider) {
+  void add(std::shared_ptr<const PreparedKrylovMethodProvider<Dim>> provider) {
     if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
         provider->collective_contract().empty())
       throw std::invalid_argument("prepared Krylov method provider requires exact identities");
@@ -212,17 +220,17 @@ class PreparedKrylovMethodRegistry {
       throw std::invalid_argument("duplicate prepared Krylov method provider '" + identity + "'");
   }
 
-  [[nodiscard]] PreparedKrylovMethod resolve(std::string_view identity,
-                                             PreparedProviderOptions options) const {
+  [[nodiscard]] PreparedKrylovMethod<Dim> resolve(std::string_view identity,
+                                                  PreparedProviderOptions options) const {
     const auto found = providers_.find(std::string(identity));
     if (found == providers_.end())
       throw std::invalid_argument("unknown prepared Krylov method provider '" +
                                   std::string(identity) + "'");
-    return PreparedKrylovMethod(found->second, std::move(options));
+    return PreparedKrylovMethod<Dim>(found->second, std::move(options));
   }
 
  private:
-  std::map<std::string, std::shared_ptr<const PreparedKrylovMethodProvider>> providers_{};
+  std::map<std::string, std::shared_ptr<const PreparedKrylovMethodProvider<Dim>>> providers_{};
 };
 
 namespace detail {
@@ -268,13 +276,17 @@ inline const double* exact_real_option(const PreparedProviderOptions& options,
   return entry.first == key ? std::get_if<double>(&entry.second) : nullptr;
 }
 
+template <int Dim>
 inline KrylovMethodValidation validate_generic_problem_facts(
-    const KrylovMethodProblemFacts& facts) noexcept {
+    const KrylovMethodProblemFacts<Dim>& facts) noexcept {
   if (!facts.properties.valid())
     return KrylovMethodValidation::reject(20, "operator properties are incoherent");
   if (!field_distribution_is_valid(facts.distribution))
     return KrylovMethodValidation::reject(21, "vector distribution is invalid");
-  if (facts.footprint.components < 1 || facts.footprint.input_ghosts < 0 ||
+  bool valid_ghosts = true;
+  for (int axis = 0; axis < Dim; ++axis)
+    valid_ghosts = valid_ghosts && facts.footprint.input_ghosts[axis] >= 0;
+  if (facts.footprint.components < 1 || !valid_ghosts ||
       facts.footprint.preconditioned != facts.has_preconditioner)
     return KrylovMethodValidation::reject(22, "prepared footprint is incoherent");
   if (facts.robust_payload_width == 0)
@@ -296,7 +308,8 @@ inline std::size_t checked_krylov_sum(std::size_t left, std::size_t right,
   return left + right;
 }
 
-class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider {
+template <int Dim>
+class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider<Dim> {
  public:
   std::string_view identity() const noexcept override { return "pops.krylov.cg"; }
   std::uint64_t interface_version() const noexcept override { return 1; }
@@ -308,7 +321,7 @@ class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider {
       return KrylovMethodValidation::reject(14, "CG options contract is invalid");
     return validate_common_krylov_controls(controls);
   }
-  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts<Dim>& facts,
                                           const PreparedProviderOptions&) const noexcept override {
     if (const KrylovMethodValidation common = validate_generic_problem_facts(facts);
         !common.accepted())
@@ -321,16 +334,17 @@ class CgKrylovMethodProvider final : public PreparedKrylovMethodProvider {
     return KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest<Dim>& request, const PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("CG workspace requires no preconditioner");
     return {.field_count = 4, .initial_residual_field = 1};
   }
-  SolveReport solve(PreparedKrylovSolveContext& context,
+  SolveReport solve(PreparedKrylovSolveContext<Dim>& context,
                     const PreparedProviderOptions& options) const override;
 };
 
-class BicgstabKrylovMethodProvider final : public PreparedKrylovMethodProvider {
+template <int Dim>
+class BicgstabKrylovMethodProvider final : public PreparedKrylovMethodProvider<Dim> {
  public:
   std::string_view identity() const noexcept override { return "pops.krylov.bicgstab"; }
   std::uint64_t interface_version() const noexcept override { return 1; }
@@ -344,19 +358,20 @@ class BicgstabKrylovMethodProvider final : public PreparedKrylovMethodProvider {
       return KrylovMethodValidation::reject(14, "BiCGStab options contract is invalid");
     return validate_common_krylov_controls(controls);
   }
-  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts<Dim>& facts,
                                           const PreparedProviderOptions&) const noexcept override {
     return validate_generic_problem_facts(facts);
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest<Dim>& request, const PreparedProviderOptions&) const override {
     return {.field_count = request.footprint.preconditioned ? 9u : 7u, .initial_residual_field = 1};
   }
-  SolveReport solve(PreparedKrylovSolveContext& context,
+  SolveReport solve(PreparedKrylovSolveContext<Dim>& context,
                     const PreparedProviderOptions& options) const override;
 };
 
-class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider {
+template <int Dim>
+class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider<Dim> {
  public:
   std::string_view identity() const noexcept override { return "pops.krylov.gmres"; }
   std::uint64_t interface_version() const noexcept override { return 1; }
@@ -376,7 +391,7 @@ class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider {
     return KrylovMethodValidation::accept();
   }
   KrylovMethodValidation validate_problem(
-      const KrylovMethodProblemFacts& facts,
+      const KrylovMethodProblemFacts<Dim>& facts,
       const PreparedProviderOptions& options) const noexcept override {
     if (const KrylovMethodValidation common = validate_generic_problem_facts(facts);
         !common.accepted())
@@ -389,7 +404,7 @@ class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider {
     return KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request,
+      const KrylovWorkspaceRequest<Dim>& request,
       const PreparedProviderOptions& options) const override {
     const std::int64_t* prepared_restart =
         exact_int_option(options, kGmresOptionsSchema, "restart");
@@ -413,11 +428,12 @@ class GmresKrylovMethodProvider final : public PreparedKrylovMethodProvider {
             .reduction_value_capacity = reduction_capacity,
             .initial_residual_field = extent + 2u};
   }
-  SolveReport solve(PreparedKrylovSolveContext& context,
+  SolveReport solve(PreparedKrylovSolveContext<Dim>& context,
                     const PreparedProviderOptions& options) const override;
 };
 
-class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider {
+template <int Dim>
+class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider<Dim> {
  public:
   std::string_view identity() const noexcept override { return "pops.krylov.richardson"; }
   std::uint64_t interface_version() const noexcept override { return 1; }
@@ -435,7 +451,7 @@ class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider
       return KrylovMethodValidation::reject(15, "relaxation must be finite and positive");
     return KrylovMethodValidation::accept();
   }
-  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts& facts,
+  KrylovMethodValidation validate_problem(const KrylovMethodProblemFacts<Dim>& facts,
                                           const PreparedProviderOptions&) const noexcept override {
     if (const KrylovMethodValidation common = validate_generic_problem_facts(facts);
         !common.accepted())
@@ -445,12 +461,12 @@ class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider
     return KrylovMethodValidation::accept();
   }
   KrylovWorkspaceRequirements workspace_requirements(
-      const KrylovWorkspaceRequest& request, const PreparedProviderOptions&) const override {
+      const KrylovWorkspaceRequest<Dim>& request, const PreparedProviderOptions&) const override {
     if (request.footprint.preconditioned)
       throw std::invalid_argument("Richardson workspace requires no preconditioner");
     return {.field_count = 2, .initial_residual_field = 1};
   }
-  SolveReport solve(PreparedKrylovSolveContext& context,
+  SolveReport solve(PreparedKrylovSolveContext<Dim>& context,
                     const PreparedProviderOptions& options) const override;
 };
 
@@ -458,11 +474,16 @@ class RichardsonKrylovMethodProvider final : public PreparedKrylovMethodProvider
 
 /// Builtin presets. Their providers are registered through the same append-only registry used by
 /// extensions; these functions are conveniences, not a closed dispatch vocabulary.
-[[nodiscard]] PreparedKrylovMethod cg_krylov_method();
-[[nodiscard]] PreparedKrylovMethod bicgstab_krylov_method();
-[[nodiscard]] PreparedKrylovMethod gmres_krylov_method(int restart = 30);
-[[nodiscard]] PreparedKrylovMethod richardson_krylov_method(Real relaxation = Real(1));
-[[nodiscard]] std::shared_ptr<PreparedKrylovMethodRegistry>
+template <int Dim>
+[[nodiscard]] PreparedKrylovMethod<Dim> cg_krylov_method();
+template <int Dim>
+[[nodiscard]] PreparedKrylovMethod<Dim> bicgstab_krylov_method();
+template <int Dim>
+[[nodiscard]] PreparedKrylovMethod<Dim> gmres_krylov_method(int restart = 30);
+template <int Dim>
+[[nodiscard]] PreparedKrylovMethod<Dim> richardson_krylov_method(Real relaxation = Real(1));
+template <int Dim>
+[[nodiscard]] std::shared_ptr<PreparedKrylovMethodRegistry<Dim>>
 make_default_krylov_method_provider_registry();
 
 }  // namespace pops

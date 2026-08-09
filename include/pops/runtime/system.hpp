@@ -6,20 +6,21 @@
 #include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
 #include <pops/diagnostics/runtime_diagnostics.hpp>
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
-#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
-#include <pops/mesh/boundary/periodicity.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
-#include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
-#include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (native package seam)
+#include <pops/runtime/facade_options.hpp>  // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
+#include <pops/runtime/config/spatial_domain.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
-#include <pops/runtime/system/prepared_field_solver_component.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
+#include <pops/runtime/system/system_block_closures.hpp>
 
 #include <array>
 #include <cstddef>
@@ -27,7 +28,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 /// @file
@@ -47,17 +50,70 @@
 
 namespace pops {
 
-class WorldCommunicator;
+class ObserverMpiLane;
+template <int Dim>
+class FieldNullspaceProvider;
+struct FieldLogicalTimePoint;
+template <int Dim>
+struct CompiledFieldBoundaryKernel;
+template <int Dim>
 class PreparedSystemLayoutTransfer;
 
 namespace component {
 class LoadedComponent;
 }
 
+namespace runtime::system {
+
+enum class AnalyticMappedInputKind : std::uint8_t { state_component = 0, provider_component = 1 };
+
+/// One exact input to a bind-time mapped analytic state expression.
+///
+/// State components are local to the target state carrier. Provider components are addressed only
+/// by their owner-qualified key and are resolved through a sealed consumer plan. No physical name
+/// or global storage component crosses this interface.
+struct AnalyticMappedInput {
+  AnalyticMappedInputKind kind = AnalyticMappedInputKind::state_component;
+  int state_component = -1;
+  AuxiliaryComponentKey provider_key;
+
+  static AnalyticMappedInput state(int component) {
+    return {AnalyticMappedInputKind::state_component, component, {}};
+  }
+  static AnalyticMappedInput provider(AuxiliaryComponentKey key) {
+    return {AnalyticMappedInputKind::provider_component, -1, std::move(key)};
+  }
+
+  void validate() const {
+    if (kind == AnalyticMappedInputKind::state_component) {
+      if (state_component < 0)
+        throw std::invalid_argument("mapped analytic state component must be non-negative");
+      return;
+    }
+    if (kind != AnalyticMappedInputKind::provider_component)
+      throw std::invalid_argument("mapped analytic input kind is invalid");
+    provider_key.validate();
+  }
+
+  void serialize_exact(ExactContractBuilder& contract) const {
+    validate();
+    contract.scalar(static_cast<std::uint8_t>(kind));
+    if (kind == AnalyticMappedInputKind::state_component)
+      contract.scalar(state_component);
+    else
+      provider_key.serialize_exact(contract);
+  }
+};
+
+}  // namespace runtime::system
+
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
-/// Ratios follow the component ABI axis order (y, x); the runtime validates them against the
+/// Ratios follow the native ranked axis order; the runtime validates them against the
 /// actual source/target domains before allocating or launching a kernel.
+template <int Dim>
 struct SystemLayoutTransferSpec {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "SystemLayoutTransferSpec only supports dimensions 1, 2, and 3");
   std::string mapping_identity;
   std::string provider_identity;
   std::string provider_component_identity;
@@ -69,7 +125,11 @@ struct SystemLayoutTransferSpec {
   std::string source_representation;
   std::string target_representation;
   std::string synchronization_identity;
-  std::array<std::int32_t, 2> refinement_ratio{1, 1};
+  std::array<std::int32_t, Dim> refinement_ratio = [] {
+    std::array<std::int32_t, Dim> value{};
+    value.fill(1);
+    return value;
+  }();
   std::int32_t operation = 0;
 };
 
@@ -113,80 +173,70 @@ struct SystemLayoutTransferReceipt {
 };
 
 namespace runtime::program {
-class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+class Profiler;  // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+template <int Dim>
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
+template <int Dim>
 class ProgramContext;
+template <int Dim>
 struct ProgramRuntimeState;
 }  // namespace runtime::program
 
+namespace runtime::field {
+struct PreparedFieldSolverSpec;
+struct FieldTopologyReportRow;
+}  // namespace runtime::field
+
 namespace runtime::multiblock {
-struct AxisAlignedInterface;
-struct PreparedInterfaceFluxSpec;
+struct BoundaryEvaluationPoint;
 }  // namespace runtime::multiblock
 
-/// Mesh and domain shared by all blocks (physical parameters are per block, in the ModelSpec).
-///
-/// Geometry reaches the native runtime only through this internal config. CartesianGrid authoring
-/// is validated and lowered before construction; the advanced pops.mesh.PolarMesh descriptor uses
-/// the private config-lowering protocol. Geometry is NOT a numerical-scheme choice. Default
-/// "cartesian": square domain [xlo,xlo+L] x [ylo,ylo+L]. The default origin is (0,0), preserving
-/// the historical behavior and numerics bit-for-bit.
-/// "polar" describes a global ring r in [r_min, r_max] x theta in [0, 2pi) (cf. PolarGeometry); it is
-/// wired through System transport and polar field routes. Polar-only config fields are ignored while
-/// geometry == "cartesian".
-struct SystemConfig {
-  int n = 64;      ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
-  double L = 1.0;  ///< size of the square domain [0,L]^2 (cartesian)
-  Periodicity periodicity{true, true};  ///< Cartesian topology, independently on x and y
-  // --- internal geometry: "cartesian" (default, bit-identical) | "polar" (global ring) ---
-  std::string geometry = "cartesian";  ///< internal choice lowered from CartesianGrid or advanced
-                                       ///< pops.mesh.PolarMesh authoring
-  int nr = 0;                          ///< radial cells (polar; 0 => takes n)
-  int ntheta = 0;                      ///< azimuthal cells (polar; 0 => takes n)
-  double r_min = 0.0;                  ///< inner radius of the ring (polar)
-  double r_max = 1.0;                  ///< outer radius of the ring (polar)
-  // --- multi-box split of the polar TRANSPORT (split into theta BANDS, ADC-67) -----------------
-  // Number of boxes of the ring, split in theta (each box covers the whole radius [0, nr-1] and one
-  // azimuthal band). 1 (default) = mono-box STRICTLY bit-identical to history. theta_boxes > 1:
-  // polar transport (assemble_rhs_polar + collective fill_ghosts) runs multi-box. CONSTRAINTS (cf.
-  // pops.mesh.PolarMesh / check_geometry): 1 <= theta_boxes <= ntheta AND theta_boxes divides ntheta.
-  // INERT in
-  // cartesian (the cartesian split goes through AmrSystem / the historical mono-box MPI multi-box).
-  // SCOPE: multi-box transport OK; DIRECT polar Poisson mono-box only (clear UPSTREAM rejection if
-  // theta_boxes > 1, cf. ensure_elliptic_polar); polar tensor Schur stage multi-box.
-  int theta_boxes = 1;  ///< boxes of the theta split of polar transport (1 = mono-box)
-  // Cartesian physical origin. Ignored while geometry == "polar".
-  double xlo = 0.0;
-  double ylo = 0.0;
+/// Exact compile-time-ranked mesh authority shared by every block of one uniform runtime.
+/// Shape, physical bounds, topology and decomposition are lowered once from the resolved layout;
+/// the native runtime never reconstructs one axis from another or recovers rank from array shape.
+template <int Dim>
+struct SystemConfig : RuntimeSpatialDomain<Dim> {
+  static_assert(Dim >= 1 && Dim <= 3, "SystemConfig only supports dimensions 1, 2, and 3");
+
+  std::string load_balance_route = "round_robin";
+  std::string load_balance_identity = "pops.system.default.round-robin@1";
+  PreparedProviderOptions load_balance_options{"pops.amr.load-balance.round-robin@1", {}};
 };
 
 /// Coupled multi-species system, composed at runtime from generic bricks.
 ///
 /// @code{.cpp}
-/// pops::SystemConfig cfg;                  // n x n cells on [0, L]^2, periodic
-/// cfg.n = 96;
-/// pops::System sys(cfg);
+/// pops::SystemConfig<3> cfg;
+/// cfg.shape = pops::Extent<3>{96, 64, 48};
+/// pops::System<3> sys(cfg);
 ///
 /// pops::ModelSpec ne;                       // scalar density advected by E x B
 /// ne.transport = "exb";
 /// ne.source = "none";
 /// ne.elliptic = "charge";
 /// sys.add_block("ne", ne, "minmod", "rusanov", "conservative", "explicit");
-/// sys.set_poisson("charge_density", "geometric_mg");
+/// sys.set_poisson("charge_density", "cartesian_cg");
 ///
 /// sys.set_density("ne", rho0);             // rho0: initial density, flattened row-major (n*n)
 /// const double dt = sys.step_cfl(0.4);     // one CFL-limited step of the coupled system
 /// @endcode
+template <int Dim>
 class System {
+  static_assert(Dim >= 1 && Dim <= 3, "System only supports dimensions 1, 2, and 3");
+
  public:
-  explicit System(const SystemConfig& cfg);
+  static constexpr int dimension = Dim;
+  using HyperbolicBoundary = PreparedHyperbolicBoundary<Dim>;
+
+  explicit System(const SystemConfig<Dim>& cfg);
   ~System();
   System(System&&) noexcept;
   System& operator=(System&&) noexcept;
 
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5"
+  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5" | "mc" |
+  ///                 "superbee"
   /// @param riemann  numerical flux: "rusanov" (minimal generic) | "hll" (generic, requires
   ///                 model.wave_speeds) | "hllc" | "roe" (generic when the model supplies the
   ///                 HasHLLCStructure / HasRoeDissipation hooks; no layout inference or fallback)
@@ -223,19 +273,18 @@ class System {
   ///                 rel_tol / abs_tol define the mandatory per-cell stopping criterion
   ///                 ||F||inf <= abs_tol + rel_tol*||F0||inf; fd_eps controls the finite-difference
   ///                 Jacobian and damping controls W -= damping*delta in (0, 1].
-  /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
-  ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
-  ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
-  ///                 flat (a separate bool, outside the homogeneous family of convergence options).
+  /// @param newton_diagnostics Reserved compatibility flag. The Program-only System runtime rejects
+  ///                 true until a typed implicit Program consumer actually publishes a Newton
+  ///                 report; accepting it would otherwise allocate a carrier that no execution
+  ///                 route writes.
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
   ///                 adjacent residual cells. Net gain when wave_speeds is expensive (moment hierarchy).
   ///                 BIT-IDENTICAL to the direct HLL path for first-order, MUSCL and WENO reconstruction.
   ///                 false (default) = direct per-cell face evaluation unchanged. Wired
-  ///                 on the FULL cartesian advance only: refused if riemann != 'hll', time IMEX, polar
-  ///                 geometry, or a staircase/cutcell disc transport mode is active (explicit error,
-  ///                 never a silent ignore).
+  ///                 on the full exact-ranked advance only: refused if riemann != 'hll', time IMEX,
+  ///                 or a staircase/cutcell disc transport mode is active (explicit error, never a
+  ///                 silent ignore).
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
                  const std::string& recon = "conservative", const std::string& time = "explicit",
@@ -246,30 +295,14 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Report of the implicit source Newton (IMEX) of a block, AGGREGATED over the substeps of the
-  /// LAST advance of the block. Only exists if the block was added with newton_diagnostics=true
-  /// (explicit error otherwise). Flat copy (no dependency on the numerics header).
-  struct SourceNewtonReport {
-    bool enabled;           ///< a report was computed (at least one IMEX advance played)
-    bool converged;         ///< no failed cell on the last advance
-    double max_residual;    ///< max over cells/substeps of ||F||_inf at the Newton exit
-    double max_iters_used;  ///< max over cells/substeps of the iterations consumed
-    double
-        n_failed;  ///< number of (cells x substeps) failed (non-finite / pivot / non-convergence)
-    double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
-    double failed_j;     ///< j of the same cell (-1 if none)
-    double failed_comp;  ///< conservative component of the worst residual of that cell (-1 unknown)
-    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
-  };
-  SourceNewtonReport newton_report(const std::string& name) const;
-
   /// Internal installation seam for a compiled production package. The loader
   /// inlines the header template pops::add_compiled_model<ProdModel>, which builds the closures on the
   /// real System context and installs a zero-copy native block. The complete canonical BindSchema
   /// vector crosses the fixed ABI once and is injected into the generated model before those closures
   /// are constructed. Package and module ABI keys must match.
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5: add_compiled_model reallocates
-  ///                the block state to block_n_ghost = 3 ghosts after install_block, like add_block)
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
+  ///                (weno5: add_compiled_model reallocates the block state to block_n_ghost = 3
+  ///                ghosts after install_block, like add_block)
   /// @param riemann "rusanov" | "hll" | "hllc" | "roe"
   /// @param recon   "conservative" | "primitive"
   /// @param time    "explicit" (SSPRK2) | "ssprk3" | "euler" | "imex" (the template marshals the explicit
@@ -277,14 +310,30 @@ class System {
   /// @param gamma   adiabatic index of the block (set_density / inter-species couplings)
   /// @param params complete resolved runtime-parameter vector in declaration order
   /// @param stride block cadence (1 = every step, default; cf. add_block)
-  void add_native_block(const std::string& name, const std::string& so_path,
-                        const std::string& limiter = "minmod",
-                        const std::string& riemann = "rusanov",
-                        const std::string& recon = "conservative",
-                        const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
-                        bool evolve = true, int stride = 1, const std::vector<double>& params = {},
-                        double positivity_floor = 0.0);
+  /// Stage one compiled package.  Staging validates the DSO and registers its typed auxiliary
+  /// routes, but deliberately does not build its blocks: all packages must first contribute to the
+  /// one global provider graph.  Call ``finalize_native_packages`` exactly once afterwards.
+  void register_native_package(const std::string& name, const std::string& so_path,
+                               const std::string& limiter = "minmod",
+                               const std::string& riemann = "rusanov",
+                               const std::string& recon = "conservative",
+                               const std::string& time = "explicit",
+                               double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                               int substeps = 1, bool evolve = true, int stride = 1,
+                               const std::vector<double>& params = {},
+                               double positivity_floor = 0.0);
+
+  /// Seal the aggregate auxiliary graph, allocate its exact compact carrier, then install every
+  /// staged native block in canonical package order.  Any installer failure restores the complete
+  /// pre-finalization System image and unloads the staged packages.
+  void finalize_native_packages();
+
+  /// Native-loader-only hand-off after ABI/manifest validation.  The package lifetime keeps its
+  /// local DSO resident until all closures it installed have been destroyed.  This is intentionally
+  /// a typed C++ seam, not a metadata/JSON parser.
+  POPS_EXPORT void stage_prepared_native_package(std::string identity,
+                                                 std::function<void()> installer,
+                                                 std::shared_ptr<void> package_lifetime);
 
   /// Installs an authenticated external Riemann policy against its compiled Model on the real
   /// System storage. The loaded library remains alive until every installed closure is destroyed.
@@ -303,40 +352,24 @@ class System {
   static std::string abi_key();
 
   /// @name Native compiled-model seam
-  /// To wire a DSL-generated model by COMPOSING at COMPILATION time (production Kokkos + MPI + AMR
-  /// binary), via the free template pops::add_compiled_model<Model> of
-  /// pops/runtime/dsl_block.hpp: it builds the closures with block_builder.hpp on the REAL
-  /// CONTEXT of the System (grid_context) -- so the block runs the same path as add_block (fill_boundary
-  /// = MPI halos, assemble_rhs device), without copying the arrays.
   /// @{
-  /// DEFAULT VISIBILITY (POPS_EXPORT): grid_context / install_block / ensure_aux_width are the
-  /// only methods called by the header template add_compiled_model. A generated loader .so (DSL
-  /// "production" path, cf. emit_cpp_native_loader / add_native_block) inlines this template and must
-  /// resolve these symbols from the already loaded _pops module. Compiled with -fvisibility=hidden (pybind11),
-  /// the module would not export them without this annotation and the loader's dlopen would fail.
-  POPS_EXPORT GridContext grid_context();  ///< Legacy unqualified context (no resolved block plan)
-  /// Block-qualified context used by generated packages.  It captures the exact prepared boundary
-  /// authority installed before block construction, so two blocks may use different physical data.
-  POPS_EXPORT GridContext grid_context(const std::string& name);
-  /// Index-qualified twin for an already authenticated Program block map.
-  POPS_EXPORT GridContext grid_context(int block);
-  /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
-  /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
-  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
-                                         int required_depth,
-                                         const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values, int ncomp,
-                                         const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {},
-                                         PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload. The historical exported signature above remains available so
-  /// translation-only callers retain their ABI and execution path.
-  POPS_EXPORT void install_boundary_plan(
+  /// Install the one model-qualified hyperbolic boundary retained by a block. The parser accepts
+  /// exactly 2*Dim oriented faces; mapped periodic identifications and additive boundary
+  /// residual/JVP components belong to separately qualified providers and cannot be smuggled into
+  /// this Cartesian core.
+  POPS_EXPORT void install_hyperbolic_boundary(
       const std::string& name, const std::string& identity, int required_depth,
-      const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
-      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-      PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications);
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles, const std::string& state_identity,
+      const std::vector<std::string>& face_representations = {},
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
+  POPS_EXPORT void install_prepared_hyperbolic_boundary(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::string& state_identity, std::shared_ptr<const HyperbolicBoundary> boundary);
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
@@ -346,77 +379,93 @@ class System {
   POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
                                                const std::string& provider_slot);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
-  POPS_EXPORT void discard_boundary_plans();
-  /// Attach one explicitly qualified native boundary operation to an already installed block plan.
-  /// The LoadedComponent was authenticated by the component loader; the plan rechecks its exact
-  /// component/manifest/interface identity before preparing the typed table.
-  POPS_EXPORT void install_ghost_boundary_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_residual_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_field_boundary_jvp_component(
-      const std::string& name, PreparedBoundaryComponentSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  /// Install one exact two-sided NumericalFlux component after both endpoint blocks have been
-  /// materialized but before bind freezes the runtime.  The route is evaluated atomically by the
-  /// compiled Program's grouped RHS path; neither endpoint owns a one-sided callback.
-  POPS_EXPORT void install_interface_flux_component(
-      runtime::multiblock::AxisAlignedInterface route,
-      runtime::multiblock::PreparedInterfaceFluxSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void discard_hyperbolic_boundaries();
+  /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
+  /// block has been materialized. Interface geometry remains private to that provider; the generic
+  /// System never rebuilds a two-dimensional axis route from scalar metadata.
+  POPS_EXPORT void install_interface_provider(SystemInterfaceProvider<Dim> provider);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
   POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
                                                      int level = 0) const;
-  /// Installs a block from already-built closures (cf. add_compiled_model). The
-  /// cons/prim descriptors carry the names AND the roles (M::conservative_vars()), used
-  /// by inter-species couplings.
-  POPS_EXPORT void install_block(const std::string& name, int ncomp, const VariableSet& cons_vars,
-                                 const VariableSet& prim_vars, double gamma, BlockClosures closures,
-                                 std::function<Real(const MultiFab&)> max_speed,
-                                 std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
-                                 int substeps, bool evolve, int stride = 1);
-  /// Guarantees that the state U of block @p name carries at least @p n_ghost ghosts (width of the
-  /// spatial stencil). WENO5 reads 3 ghosts, > the 2 allocated by install_block; called by add_compiled_model
-  /// (header) with block_n_ghost(limiter) AFTER install_block, so the native compiled path
-  /// (loader .so) accepts weno5 -- SAME mechanism as add_block. No-op if U already has enough ghosts
-  /// (none/minmod/vanleer, <= 2): allocation and data bit-identical to history. POPS_EXPORT:
-  /// called by the header template add_compiled_model -> must be exported for the loader .so.
-  POPS_EXPORT void set_block_ghosts(const std::string& name, int n_ghost);
+  /// Commit one complete prepared block image. Every callback and exact-ranked storage requirement
+  /// is validated before the block registry or shared auxiliary field is mutated.
+  POPS_EXPORT void install_prepared_block(PreparedSystemBlock<Dim> block);
+
+  /// Immutable exact geometry consumed by an out-of-line generated block preparer. Returning a
+  /// value prevents a native package from retaining a reference into the facade implementation.
+  POPS_EXPORT Geometry<Dim> prepared_block_geometry() const;
+  /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
+  /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
+  POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
+  /// Immutable-address compact provider carrier captured by prepared block kernels.  It is null
+  /// exactly when the sealed graph has no provider values; callers with ``ProviderValues<0>`` must
+  /// not dereference it.  A non-null carrier has exactly ``registry.slot_count()`` components.
+  [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_block_auxiliary_storage() const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  prepared_block_provider_storage_groups() const;
+  /// AMR preparation owns the collective halo-fill phase and therefore receives the accepted group
+  /// set through this narrowly scoped mutable seam.  It may fill ghost regions only; publication
+  /// values remain owned by the System auxiliary transaction.
+  POPS_EXPORT runtime::system::AuxiliaryStorageGroups<Dim>* prepared_amr_provider_storage_groups();
+
+  /// Register one immutable, owner-qualified auxiliary producer.  A producer is either an external
+  /// input, a generated native derivation, or a field-output route.  The System does not attach any
+  /// physical meaning to an output: every carrier component is identified solely by
+  /// ``AuxiliaryComponentKey`` and receives a compact slot when the registry is sealed.
+  ///
+  /// This is an assembly/program-install operation.  The complete graph is collectively sealed
+  /// before its carrier is allocated; no producer can be added afterwards.
+  POPS_EXPORT void install_prepared_auxiliary_provider(
+      runtime::system::PreparedAuxiliaryProvider<Dim> provider);
+
+  /// Register the immutable value image required by one compiled native consumer.  Its local slots
+  /// are resolved to global compact storage at seal and never inferred from physical names.
+  POPS_EXPORT void install_auxiliary_consumer_plan(
+      runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan);
+
+  /// Commit the complete auxiliary provider graph.  Validates its dependency DAG and exact contract
+  /// locally, verifies the exact bytes collectively, then sizes the auxiliary carrier to its compact
+  /// slot count.  It is called by ``mark_bound``; generated package installers may call it earlier
+  /// when they need to stage initialization inputs.
+  POPS_EXPORT void seal_auxiliary_providers();
+
+  /// Stage one owner-qualified external input over the complete exact-ranked domain.  The value is
+  /// retained as a candidate only; it becomes visible to native consumers at the next matching
+  /// ``refresh_auxiliary`` transaction.  A component with a derived/field-output producer cannot be
+  /// uploaded through this path.
+  POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
+                                         const std::vector<double>& values);
+
+  /// Run one exact auxiliary evaluation transaction.  Due external inputs are staged, due native
+  /// providers launch in dependency order, every produced component is checked collectively for
+  /// finiteness, then the complete candidate carrier and registry generation are published together.
+  /// Any failure leaves the accepted carrier and accepted provider points unchanged.
+  POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+
+  /// Compact slot of a sealed component key and the corresponding accepted scalar field.  The key,
+  /// rather than a legacy physical label or a raw component number, is the public authority.
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
+      const runtime::system::AuxiliaryComponentKey& key) const;
+  [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
+      const runtime::system::AuxiliaryComponentKey& key) const;
+  [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
   /// @}
 
   /// Configures the shared Poisson.
   /// @param rhs    only mode: "charge_density", f = sum_s elliptic_rhs_s(u_s)
-  /// @param solver "geometric_mg" (any case, wall included) | "fft" (periodic, n = 2^k)
+  /// @param solver "cartesian_cg", the exact-ranked constant-coefficient uniform solver.
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
-  /// @param wall   "none" | "circle": conducting wall at (L/2, L/2), radius wall_radius
-  /// @param epsilon CONSTANT permittivity of the operator div(eps grad phi) = f. eps != 1 solves
-  ///                eps lap phi = f (i.e. lap phi = f/eps). For a VARIABLE permittivity eps(x),
-  ///                cf. set_epsilon_field (variable-coefficient operator, GeometricMG).
-  /// @param abs_tol ABSOLUTE floor of the stopping criterion of the GeometricMG V-cycle (same units as the
-  ///                residual). Default 0: purely relative criterion, historical behavior unchanged.
-  ///                Set > 0 (problem scale), it makes solve_fields exit without cycling OUT OF
-  ///                STEP on an already-converged state. No effect on the FFT solver (direct).
-  /// @param rel_tol RELATIVE residual stop of the GeometricMG V-cycle (residual <= max(rel_tol*r0,
-  ///                abs_tol)). Default kMGDefaultRelTol (1e-8): the historical V-cycle criterion.
-  /// @param max_cycles V-cycle cap. Default kMGDefaultMaxCycles (50).
-  /// @param min_coarse Stop coarsening below this per-axis cell count. Default kMGDefaultMinCoarse (2).
-  /// @param pre_smooth Pre-smoothing Gauss-Seidel sweeps (nu1). Default kMGDefaultPreSmooth (2).
-  /// @param post_smooth Post-smoothing Gauss-Seidel sweeps (nu2). Default kMGDefaultPostSmooth (2).
-  /// @param bottom_sweeps Coarsest-grid Gauss-Seidel sweeps (nbottom). Default kMGDefaultBottomSweeps (50).
-  ///                The GeometricMG knobs (ADC-613) default to the kMG* constants, so a call that
-  ///                omits them builds and drives the historical V-cycle bit-for-bit; they are inert
-  ///                for the FFT solver (direct, no iterative tolerance).
+  /// @param abs_tol Absolute residual floor of CartesianCG.
+  /// @param rel_tol Relative residual tolerance of CartesianCG.
+  /// @param max_iterations CartesianCG iteration cap.
   void set_poisson(const std::string& rhs = "charge_density",
-                   const std::string& solver = "geometric_mg", const std::string& bc = "auto",
-                   const std::string& wall = "none", double wall_radius = 0.0, double epsilon = 1.0,
-                   double abs_tol = 0.0, double rel_tol = static_cast<double>(kMGDefaultRelTol),
-                   int max_cycles = kMGDefaultMaxCycles, int min_coarse = kMGDefaultMinCoarse,
-                   int pre_smooth = kMGDefaultPreSmooth, int post_smooth = kMGDefaultPostSmooth,
-                   int bottom_sweeps = kMGDefaultBottomSweeps,
-                   int coarse_threshold = kMGDefaultCoarseThreshold);
+                   const std::string& solver = "cartesian_cg", const std::string& bc = "auto",
+                   double abs_tol = static_cast<double>(kCartesianCGDefaultAbsTol),
+                   double rel_tol = static_cast<double>(kCartesianCGDefaultRelTol),
+                   int max_iterations = kCartesianCGDefaultMaxIterations);
   /// Materialize one immutable provider instance from an already registered family. Provider-owned
   /// code authenticates and decodes @p options; the System core only stores the returned route.
   POPS_EXPORT std::string register_configured_field_solver_provider(
@@ -449,7 +498,7 @@ class System {
   /// Adds a native field-nullspace provider before binding. Builtins and extensions use this same
   /// registry; the System core never interprets a mathematical nullspace family name.
   POPS_EXPORT void register_field_nullspace_provider(
-      std::shared_ptr<const FieldNullspaceProvider> provider);
+      std::shared_ptr<const FieldNullspaceProvider<Dim>> provider);
   /// Select the provider for the principal field configured by set_poisson.
   void set_default_field_nullspace(const std::string& nullspace_provider_identity,
                                    const PreparedProviderOptions& options);
@@ -460,7 +509,7 @@ class System {
   POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
       const std::string& provider_slot) const;
 
-  /// Install the exact xlo/xhi/ylo/yhi field boundary residuals. ``kind`` is
+  /// Install the exact lower/upper boundary residual for every axis of this specialization. ``kind`` is
   /// periodic/dirichlet/neumann/mixed; mixed represents alpha*u + beta*du/dn = value.
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,
@@ -477,7 +526,7 @@ class System {
   /// The shared library remains loaded for the System lifetime, so the direct function pointers are
   /// stable and no registry lookup occurs in a face-cell loop.
   POPS_EXPORT void set_field_boundary_kernel(const std::string& provider_slot,
-                                             const CompiledFieldBoundaryKernel& kernel);
+                                             const CompiledFieldBoundaryKernel<Dim>& kernel);
   POPS_EXPORT void set_field_logical_timepoint(const std::string& provider_slot,
                                                const FieldLogicalTimePoint& point);
   POPS_EXPORT void set_field_boundary_parameters(const std::string& provider_slot,
@@ -492,8 +541,8 @@ class System {
                            const std::string& nullspace_provider_identity,
                            const PreparedProviderOptions& options);
 
-  /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
-  /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
+  /// Configured field (Poisson) solver token. A uniform System reports ``cartesian_cg``; the
+  /// ``geometric_mg`` token belongs to AmrSystem MG/FAC. Read by install_program for the
   /// Spec criterion-24 solver requirement check (a field operator that requires a named solver is
   /// rejected at install when the configured solver does not match) and exposed for introspection.
   std::string poisson_solver() const;
@@ -527,8 +576,7 @@ class System {
   /// reconstruction and reject diffusion, native boundary components and shared interfaces.
   /// The mode is honored by the native transport step. A mode != "none" without a transportable
   /// cartesian block raises an EXPLICIT error at the step (never a silent full transport). Unknown mode
-  /// -> error. R > 0 required; cartesian only (polar already bounds the ring by its radial
-  /// walls -> explicit error).
+  /// -> error. R > 0 required.
   ///
   /// ADC-615: @p kappa_min (small-cell volume-fraction floor), @p face_open_eps (binary face-open
   /// threshold) and @p cut_theta_min (signed-sample fraction clamp) tune the transport metrics. Each
@@ -543,78 +591,16 @@ class System {
   /// signed level set raises an explicit error (the mode alone has no geometry to apply).
   void set_geometry_mode(const std::string& mode);
 
-  /// @return the 0/1 cell-centered domain mask, ny*nx row-major (j slow, i fast). Without
+  /// @return the 0/1 cell-centered domain mask over the exact-ranked flattened layout. Without
   /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> disc_mask() const;
-
-  /// Sets a VARIABLE permittivity eps(x), n*n row-major field (> 0), at the cell CENTER.
-  /// The system Poisson operator becomes div(eps grad phi) = f, eps CARRIED BY THE OPERATOR
-  /// (harmonic face coefficient, order 2) without 1/eps scaling of the right-hand side. Only
-  /// the 'geometric_mg' solver supports it; requesting it with 'fft' (constant coefficient) raises an
-  /// error. Takes precedence over the constant permittivity of set_poisson. Call before solve_fields.
-  void set_epsilon_field(const std::vector<double>& eps);
-
-  /// Sets an ANISOTROPIC permittivity eps_x(x), eps_y(x), two n*n row-major fields (> 0), at the CENTER
-  /// of the cells. The system Poisson operator becomes div(diag(eps_x, eps_y) grad phi) = f:
-  /// faces normal to x carry eps_x, those normal to y carry eps_y (harmonic face coefficients,
-  /// order 2), CARRIED BY THE OPERATOR without 1/eps scaling of the right-hand side.
-  /// eps_x == eps_y gives back the isotropic operator div(eps grad phi). Only 'geometric_mg' supports it;
-  /// requesting it with 'fft' (constant coefficient) raises an error. Call before solve_fields.
-  void set_epsilon_anisotropic_field(const std::vector<double>& eps_x,
-                                     const std::vector<double>& eps_y);
-
-  /// Enables a REACTION term kappa(x) >= 0: the system Poisson operator goes from
-  /// div(eps grad phi) = f to div(eps grad phi) - kappa phi = f (SCREENED Poisson / Helmholtz;
-  /// kappa = 1/lambda_D^2 for Debye screening). n*n row-major field, carried by the operator
-  /// GeometricMG (diagonal kappa, restricted to coarse levels). Only 'geometric_mg' supports it
-  /// (error with 'fft'). Composable with set_epsilon_field. kappa = 0 everywhere => Poisson unchanged.
-  void set_reaction_field(const std::vector<double>& kappa);
-
-  /// Sets an out-of-plane magnetic field B_z(x, y) SHARED by the blocks, n*n row-major. Populates the
-  /// extra aux component (B_z channel) read by the models that declare it (n_aux > 3);
-  /// inert if no block reads B_z (aux channel stays at base width). B_z is static
-  /// (external to the elliptic): derive_aux does not touch it. Call after having added the block
-  /// (or before: the value is kept and applied when the aux channel widens).
-  void set_magnetic_field(const std::vector<double>& bz);
-
-  /// Designates a COMPRESSIBLE fluid block (4 var) as the source of the electron temperature T_e:
-  /// the T_e aux channel (next canonical component) is filled with T = p/rho of this block, RECOMPUTED
-  /// at each solve_fields. Has effect only if a block declares it reads T_e (n_aux > 4); otherwise stored
-  /// and inert. It is the second EXTRA aux field (after B_z), populated by DERIVATION from a
-  /// block (and not supplied by the user as B_z is).
-  void set_electron_temperature_from(const std::string& name);
 
   /// Guarantees that the SHARED aux channel has at least @p ncomp components. Called by
   /// add_compiled_model (cf. dsl_block.hpp) with aux_comps<Model> when adding a block that reads extra
   /// auxiliary fields. Reallocating preserves the ADDRESS of the System's aux (the already-installed
   /// block closures point to &aux), and re-applies B_z if it was supplied.
   /// POPS_EXPORT: called by add_compiled_model (header) -> must be exported for the loader .so.
-  POPS_EXPORT void ensure_aux_width(int ncomp);
-
-  /// Sets a NAMED aux field (ADC-70 phase 1) on the canonical component @p comp (>= kAuxNamedBase
-  /// = 5), row-major n*n (cartesian) / nr*ntheta (polar) array. The System does NOT know the
-  /// names: the FACADE (pops.System.set_aux_field) resolves name -> comp via the block's table (from
-  /// CompiledModel.aux_extra_names) and calls this. PERSISTENT STATIC field: stored (re-applied
-  /// after a channel reallocation) and populated right away if the channel is wide enough. @throws if
-  /// comp < kAuxNamedBase (components reserved for phi/grad/B_z/T_e: dedicated paths), if the size does not
-  /// match the grid, or if no block declares a field at this index (channel too narrow).
-  void set_aux_field_component(int comp, const std::vector<double>& field);
-
-  /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
-  /// @p bc_type is pops::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value
-  /// (ignored for Foextrap). Applied by solve_fields AFTER the shared aux ghost fill, overriding only
-  /// this component's PHYSICAL-face ghosts (periodic faces -- periodic domain, polar theta -- keep their
-  /// wrap). The FACADE (pops.System.set_aux_field(..., halo=pops.AuxHalo(...))) resolves name -> comp and
-  /// calls this. No policy declared -> the shared aux BC, bit-identical. @throws on a reserved/too-narrow
-  /// component or an unsupported type.
-  void set_aux_field_halo_component(int comp, int bc_type, double value);
-
-  /// Reads a NAMED aux field (component @p comp >= kAuxNamedBase): valid cells of the aux channel,
-  /// row-major n*n (cartesian) / nr*ntheta (polar). Counterpart of potential() for a named
-  /// component. Is 0 everywhere as long as no set_aux_field_component has written this component (the aux
-  /// channel is initialized to zero and solve_fields never touches components >= kAuxNamedBase).
-  std::vector<double> aux_field_component(int comp) const;
 
   /// Sets the density of a species (component 0), n*n row-major array. The other
   /// components (momentum, energy) are set to the at-rest equilibrium.
@@ -634,24 +620,12 @@ class System {
 
   /// Type-erasure of the POINTWISE (one cell) cons <-> prim conversion of a block: in/out are
   /// arrays of ncomp doubles. Installed by install_block / add_compiled_model / push_dynamic from
-  /// the block's model, consumed by set_primitive_state / get_primitive_state.
+  /// the block's model and consumed by publication and prepared-boundary validation. Primitive
+  /// field materialization exclusively consumes CellBatchRecovery below.
   using CellConvert = std::function<void(const double* in, double* out)>;
-  /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
-  /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
-  /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
-  POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                        CellConvert cons_to_prim);
-
-  /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
-  /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the
-  /// min admissible step (HasStabilityDt trait, bound dt <= dt_adm*substeps/stride, without cfl).
-  /// EMPTY functions = the block imposes no bound (historical step policy, bit-identical).
-  /// Called by add_block and by the template add_compiled_model (cf. dsl_block.hpp) with the
-  /// compiled closures of block_builder (make_source_frequency / make_stability_dt).
-  /// POPS_EXPORT: resolved by the native loader through dlopen.
-  POPS_EXPORT void set_block_dt_bounds(const std::string& name,
-                                       std::function<Real(const MultiFab&)> source_frequency,
-                                       std::function<Real(const MultiFab&)> stability_dt);
+  /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
+  using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
+  using CellBatchRecovery = UniformCellRecovery;
 
   /// Adds a GLOBAL time-step bound, evaluated ONCE per step_cfl (host):
   /// dt <= fn() when fn() > 0 and finite (otherwise the bound does not constrain this step).
@@ -712,6 +686,13 @@ class System {
   /// recorded for coupled_operators(). An empty (unchecked) contract is equivalent to add_coupled_source.
   void add_coupling_operator(const CouplingOperator& op);
 
+  /// Install one executable coupling that was prepared by an authenticated dimension-qualified
+  /// package. The operator receives the simultaneous candidate-state pack selected by Program.
+  POPS_EXPORT void install_prepared_coupling_operator(
+      const std::string& label, CouplingOperatorView view,
+      std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
+      double constant_frequency = 0.0, std::function<Real()> maximum_frequency = {});
+
   /// Read-only view of the registered coupling operators (ADC-595): label + declared conservation /
   /// frequency contracts, in registration order, so a Program or a runtime report can enumerate the
   /// couplings as typed operators instead of reading raw bytecode. A raw add_coupled_source registers an
@@ -723,8 +704,15 @@ class System {
   /// layout.  This is the native Program primitive for operator splitting: generated Programs pass
   /// their uncommitted endpoint candidates, then project and atomically commit them.  The accepted
   /// live states are therefore never a hidden coupling workspace.
-  POPS_EXPORT std::size_t apply_coupling_operators(Real dt,
-                                                   const std::vector<MultiFab*>& candidate_states);
+  POPS_EXPORT std::size_t apply_coupling_operators(
+      Real dt, const std::vector<MultiFab<Dim>*>& candidate_states);
+
+  /// Internal Program publication preflight. Validates one terminal candidate through the exact
+  /// block model's prepared conservative-to-primitive recovery before commit_many copies any block
+  /// into accepted storage. The operation is collective and read-only; refusal leaves every live
+  /// state unchanged.
+  POPS_EXPORT void validate_program_state_publication_candidate(
+      int block, const MultiFab<Dim>& candidate) const;
 
   /// Solve Poisson then derive aux = (phi, grad phi). The candidate potential and aux remain
   /// physically private until the returned one-shot outcome is consumed with Accept.
@@ -738,12 +726,12 @@ class System {
   /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(int block_idx,
-                                                                 const MultiFab& U_stage);
+                                                                 const MultiFab<Dim>& U_stage);
   /// Point-qualified stage solve used by generated implicit operators.  System has one mesh level,
   /// but the exact point remains part of the cross-target contract and is never reconstructed.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int block_idx, const MultiFab& U_stage);
+      int block_idx, const MultiFab<Dim>& U_stage);
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
   /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
   /// states of MULTIPLE blocks at once -- every coupled block reads its OWN stage state, not a single-
@@ -755,38 +743,39 @@ class System {
   /// committed group). POPS_EXPORT: resolved by a compiled program .so (ProgramContext) across the
   /// dlopen boundary. @throws std::invalid_argument if @p U_stages is not sized to n_blocks().
   [[nodiscard]] POPS_EXPORT SolveOutcome
-  solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
+  solve_fields_from_blocks(const std::vector<const MultiFab<Dim>*>& U_stages);
   /// @name Named multi-elliptic fields (ADC-428)
-  /// A SECOND elliptic solve (beyond the default Poisson) for a user-named field
-  /// (m.elliptic_field("phi2", rhs=..., aux=[...])). The named field owns its RHS (a per-block brick,
-  /// distinct from the default elliptic coupling), a DEDICATED native elliptic solver instance, and its
-  /// OWN aux output components (the model's named aux slots). The default Poisson path
-  /// (solve_fields / solve_fields_from_state) is untouched / bit-identical. POPS_EXPORT: resolved by the
-  /// generated problem.so / native loader across the dlopen boundary.
+  /// Exact-ranked API for a SECOND elliptic solve (beyond the default Poisson). Installation is
+  /// accepted only when the selected native specialization owns a dimension-qualified field-solver
+  /// provider; the facade never falls back to the historical 2-D carrier.
   /// @{
   /// Solve named @p field's elliptic problem from block @p block_idx's stage state @p U_stage and write
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
-  /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
-  /// is invalid, or the geometry is polar (cartesian only for now).
+  /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered or the block
+  /// index is invalid.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(const std::string& field,
                                                                  int block_idx,
-                                                                 const MultiFab& U_stage);
+                                                                 const MultiFab<Dim>& U_stage);
   /// Solve named @p field from the exact simultaneous stage states of all contributing blocks.
   /// @p U_stages is indexed by System block; nullptr keeps that block at its accepted live state.
   /// Unlike the historical ProgramContext route, this contract never selects or mutates a
   /// representative block.
-  [[nodiscard]] POPS_EXPORT SolveOutcome
-  solve_fields_from_blocks(const std::string& field, const std::vector<const MultiFab*>& U_stages);
-  /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
-  /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
-  /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
-  POPS_EXPORT void register_elliptic_field(const std::string& block, const std::string& field,
-                                           int phi_comp, int gx_comp, int gy_comp,
-                                           int gradient_sign);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_blocks(
+      const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
+  /// Register named @p field's exact-ranked provider outputs. ``output_keys`` contains either the
+  /// potential alone or the potential followed by one gradient component per native axis. Each key
+  /// must already be owned by a sealed ``field_output`` provider; no integer carrier slot crosses
+  /// the package boundary.
+  /// @throws std::logic_error before mutation when no exact-ranked field-solver provider is installed.
+  POPS_EXPORT void register_elliptic_field(
+      const std::string& block, const std::string& field,
+      const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
-  /// the native loader (make_poisson_rhs of the per-field brick). @throws if the block is unknown.
-  POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
-                                            std::function<void(const MultiFab&, MultiFab&)> rhs);
+  /// the native loader (make_poisson_rhs of the per-field brick). @throws before mutation if the
+  /// block is unknown or no exact-ranked field-solver provider is installed.
+  POPS_EXPORT void set_block_elliptic_field(
+      const std::string& block_name, const std::string& field,
+      std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
@@ -843,12 +832,13 @@ class System {
                                              const std::string& projection,
                                              const std::vector<std::vector<std::string>>& opcodes,
                                              const std::vector<std::vector<double>>& literals);
-  std::int64_t set_analytic_mapped_state(const std::string& name,
-                                         const std::vector<std::vector<std::string>>& opcodes,
-                                         const std::vector<std::vector<double>>& literals,
-                                         const std::vector<std::string>& input_sources);
-  std::int64_t set_analytic_gaussian_state(const std::string& name, double center_x,
-                                           double center_y, double background, double amplitude,
+  std::int64_t set_analytic_mapped_state(
+      const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
+      const std::vector<std::vector<double>>& literals,
+      const std::vector<runtime::system::AnalyticMappedInput>& inputs,
+      const std::string& consumer_qid);
+  std::int64_t set_analytic_gaussian_state(const std::string& name, const RealVector<Dim>& center,
+                                           double background, double amplitude,
                                            double inverse_width);
   int n_vars(const std::string& name) const;
   /// Variable names of a block (introspection): kind = "conservative" | "primitive".
@@ -879,7 +869,7 @@ class System {
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Set the compiled-Program macro-step cadence (ADC-411): SYSTEM-level @p substeps and @p stride
-  /// around the installed program closure (cf. SystemProgramDriver::step). @p substeps subdivides each
+  /// around the installed program closure (cf. System::step). @p substeps subdivides each
   /// effective step into @p substeps calls program_.step_(eff_dt/substeps); @p stride runs the whole
   /// program once per @p stride macro-steps with eff_dt = stride*dt (GLOBAL hold-then-catch-up, the
   /// clock still ticks every macro-step). Both must be >= 1 (throws std::invalid_argument otherwise).
@@ -887,7 +877,7 @@ class System {
   /// install_program so the generated .so ABI is untouched (the cadence is runtime metadata).
   /// NOTE: substeps > 1 is bit-exact vs native substeps ONLY for an UNCOUPLED / transport-only program
   /// (program_.step_ re-runs the whole program, solve_fields included); stride is GLOBAL (whole-system),
-  /// equal to native per-block stride only for a single-block system. See SystemProgramDriver::step.
+  /// equal to native per-block stride only for a single-block system. See System::step.
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
   /// Installed GLOBAL macro-step cadence (ADC-594): the current @c substeps / @c stride the compiled
   /// Program runs at (default 1/1 with no cadence set). Const, side-effect-free -- the structured
@@ -909,8 +899,8 @@ class System {
                                                   double accepted_time, int macro_step);
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
-  /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
-  POPS_EXPORT MultiFab& block_state(int b);
+  /// The conservative state MultiFab<Dim> of block @p b (zero-copy, non-owning reference).
+  POPS_EXPORT MultiFab<Dim>& block_state(int b);
   /// @name Compiled-Program NAME-based block binding (Spec 3 criterion 23, ADC-457)
   /// A compiled Program numbers its blocks in P.state declaration order (the .so's
   /// pops_program_block_name table); the System numbers its blocks in add_block / add_equation order
@@ -929,10 +919,10 @@ class System {
   POPS_EXPORT const std::vector<int>& program_block_map() const;
   /// @}
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
-  POPS_EXPORT void block_rhs_into(int b, MultiFab& U, MultiFab& R);
+  POPS_EXPORT void block_rhs_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
   /// Point-qualified twin used by compiled Programs and native boundary components.
   POPS_EXPORT void block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                     int b, MultiFab& U, MultiFab& R);
+                                     int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
@@ -945,33 +935,24 @@ class System {
   /// LOUD (std::runtime_error) on an incomplete internal block provider -- never a silent source leak.
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_rhs_into.
-  POPS_EXPORT void block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R);
+  POPS_EXPORT void block_neg_div_flux_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
   POPS_EXPORT void block_neg_div_flux_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& R);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
+      MultiFab<Dim>& R);
   /// Evaluate one simultaneous set of block rates at one exact StagePoint.  Sparse groups are
   /// allowed, but an installed shared interface must have either both sides present or neither.
   POPS_EXPORT void block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                    const std::vector<int>& blocks,
-                                   const std::vector<MultiFab*>& states,
-                                   const std::vector<MultiFab*>& rhs,
+                                   const std::vector<MultiFab<Dim>*>& states,
+                                   const std::vector<MultiFab<Dim>*>& rhs,
                                    const std::vector<int>& flux_only);
-  POPS_EXPORT bool block_has_boundary_linearization(int b) const;
   POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          int b, MultiFab& U, MultiFab& R, bool flux_only);
-  POPS_EXPORT void block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          int b, MultiFab& U, MultiFab& R, bool flux_only,
-                                          const PreparedGridBoundarySession& boundary);
-  POPS_EXPORT void block_boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C);
-  POPS_EXPORT void block_boundary_residual_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
-      const PreparedGridBoundarySession& boundary);
-  POPS_EXPORT void block_boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
-      const MultiFab& V, MultiFab& J);
-  POPS_EXPORT void block_boundary_jvp_into_at(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U,
-      const MultiFab& V, MultiFab& J, const PreparedGridBoundarySession& boundary);
+                                          int b, MultiFab<Dim>& U, MultiFab<Dim>& R,
+                                          bool flux_only);
+  /// Fill same-level and physical halos for one generated pointwise stencil through the block's
+  /// retained exact-ranked package.  This is a preparation seam, not a second boundary engine.
+  POPS_EXPORT void block_prepare_generated_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The
@@ -984,7 +965,7 @@ class System {
   /// LOUD (std::runtime_error) on an incomplete internal block provider -- never a silent flux leak.
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_neg_div_flux_into.
-  POPS_EXPORT void block_source_into(int b, MultiFab& U, MultiFab& R);
+  POPS_EXPORT void block_source_into(int b, MultiFab<Dim>& U, MultiFab<Dim>& R);
   /// Preflight one generated pointwise Program operator. Such kernels currently own only a
   /// Cartesian storage contract: evaluating them everywhere and zeroing inactive outputs afterwards
   /// is not valid because primitive conversion, local Newton or user expressions may already have
@@ -997,16 +978,12 @@ class System {
   /// (ProgramContext::max_wave_speed) to express its own dt bound (epic ADC-399 / ADC-417, spec s18).
   /// REUSES the block's wave-speed closure -- it does not recompute the speed. POPS_EXPORT: resolved by
   /// the generated problem.so across the dlopen boundary, like the other seam accessors.
-  POPS_EXPORT Real block_max_speed(int b, const MultiFab& U) const;
-  /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) --
-  /// the SAME hmin the native CFL uses (SystemProgramDriver::cfl_grid_h). A compiled time Program reads it
+  POPS_EXPORT Real block_max_speed(int b, const MultiFab<Dim>& U) const;
+  /// The minimum physical cell spacing across every compiled axis -- the same hmin the native CFL
+  /// uses (System::step_cfl). A compiled time Program reads it
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
-  /// Geometry facts consumed by generated metric-aware Program kernels.  These expose mathematical
-  /// mesh data only; the Program never reaches System::Impl or selects a hand-written time scheme.
-  POPS_EXPORT bool program_is_polar() const;
-  POPS_EXPORT PolarGeometry program_polar_geometry() const;
   /// A collective scalar reduction over a NAMED block's state -- the native seam the Python diagnostics
   /// driver drives to fire a declared typed measure (Norm / Integral / MinMax) each cadence tick
   /// (ADC-542). @p kind selects the reduction over the block's U: per-component
@@ -1019,11 +996,11 @@ class System {
   POPS_EXPORT double reduce_component(const std::string& block, const std::string& kind,
                                       int comp) const;
   /// A fresh scalar field co-distributed with the System mesh: block 0's BoxArray and
-  /// DistributionMapping, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
+  /// ranked ownership layout, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
   /// compiled time Program allocates for a matrix-free Krylov solve (the residual / search-direction
   /// fields owned by a KrylovWorkspace and fed through ProgramContext::laplacian); shares the block
   /// (ba, dm) so a per-cell kernel pairs it with the state and aux by local fab index.
-  POPS_EXPORT MultiFab alloc_scalar_field(int n_comp, int n_ghost);
+  POPS_EXPORT MultiFab<Dim> alloc_scalar_field(int n_comp, int n_ghost);
   /// @name Multistep history (epic ADC-399 / ADC-406a)
   /// SYSTEM-OWNED history ring buffers for multistep schemes (Adams-Bashforth and friends): a named
   /// field carried ACROSS macro-steps (e.g. the previous RHS R_{n-1}). The history lives in the System
@@ -1033,7 +1010,7 @@ class System {
   /// @{
   /// Register (idempotent) a history named @p name with maximum lag @p lag (>= 1): a ring buffer of
   /// depth @p lag + 1 (slot 0 = the CURRENT value, slot k = the value k macro-steps back after the
-  /// rotates), each slot a zero-initialized MultiFab on the shared block layout. Qualified calls bind
+  /// rotates), each slot a zero-initialized MultiFab<Dim> on the shared block layout. Qualified calls bind
   /// the exact owner plus logical state/space/clock/interpolation identities; unqualified calls retain
   /// the legacy owner=-1 contract and cannot use selective replay. @p ncomp is the slot component
   /// count: the default -1 resolves to the qualified owner's ncomp (or block 0 for a legacy ring), while an
@@ -1042,28 +1019,29 @@ class System {
   /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
   /// the current slot [0] -- the read target for lag = 1 after one rotate. @throws if @p lag < 1,
   /// @p ncomp == 0, or no block exists yet.
-  POPS_EXPORT MultiFab& register_history(const std::string& name, int lag, int ncomp = -1,
-                                         int owner = -1, const std::string& state_identity = "",
-                                         const std::string& space_identity = "",
-                                         const std::string& clock_identity = "",
-                                         const std::string& interpolation_identity = "");
+  POPS_EXPORT MultiFab<Dim>& register_history(const std::string& name, int lag, int ncomp = -1,
+                                              int owner = -1,
+                                              const std::string& state_identity = "",
+                                              const std::string& space_identity = "",
+                                              const std::string& clock_identity = "",
+                                              const std::string& interpolation_identity = "");
   /// The history slot @p lag macro-steps back (lag 0 = the current slot, lag 1 = the previous step's
   /// stored value, ...). @throws if @p name is unknown, @p lag exceeds the registered depth, or the
   /// history has not been stored yet ("history '<name>' with lag=<lag> was requested but not
   /// initialized") -- a read before the first store is a fail-loud configuration error (spec error 17).
-  POPS_EXPORT MultiFab& read_history(const std::string& name, int lag);
+  POPS_EXPORT MultiFab<Dim>& read_history(const std::string& name, int lag);
   /// Copy @p value (valid cells) into the CURRENT slot [0] of history @p name and mark it initialized.
   /// On the FIRST store the value is also broadcast into EVERY deeper slot (the cold-start fill: a
   /// multistep scheme's step 0 then reads the same value at every lag, degenerating to a one-step
   /// method -- deterministic and machine-precision reproducible). @throws if @p name is unknown. The
   /// caller is responsible for layout compatibility: the ring slots share the block's (ba, dm, ncomp),
   /// so a value built from the same block matches (lincomb is a valid-cell copy, no layout check).
-  POPS_EXPORT void store_history(const std::string& name, const MultiFab& value);
+  POPS_EXPORT void store_history(const std::string& name, const MultiFab<Dim>& value);
   /// Qualified generated-Program route: identical to the overload above, but records the exact
   /// outgoing interval of the active logical clock. A child-clock subcycle therefore owns child
   /// timestamps rather than inheriting the enclosing macro dt. @p outgoing_dt must be finite and
   /// non-negative; generated Program scopes always provide a strictly positive value.
-  POPS_EXPORT void store_history(const std::string& name, const MultiFab& value,
+  POPS_EXPORT void store_history(const std::string& name, const MultiFab<Dim>& value,
                                  double outgoing_dt);
   /// Shift every history ring buffer one step (slot k <- slot k-1, for k = depth-1 .. 1), called ONCE
   /// at the end of each macro-step (the generated step body emits ctx.rotate_histories() last). The
@@ -1085,7 +1063,8 @@ class System {
   /// Component count of the slots of history @p name (the block's ncomp). @throws if unknown.
   POPS_EXPORT int history_ncomp(const std::string& name) const;
   /// GLOBAL (collective, MPI-safe) gather of slot @p slot (0 = current, k = k macro-steps back) of
-  /// history @p name into a component-major buffer of size ncomp*ny*nx, EXACTLY like state_global
+  /// history @p name into a component-major buffer of size ncomp times the product of every exact
+  /// spatial extent, EXACTLY like state_global
   /// (every rank fills its local boxes then all_reduce_sum). All ranks MUST call it. @throws if @p name
   /// is unknown or @p slot is out of range. Reads the slot even before the first store (the checkpoint
   /// of a never-stored ring is its zero fill); the initialized flag is serialized separately.
@@ -1180,7 +1159,7 @@ class System {
   /// @{
   /// The System-owned scheduler cache (a non-owning reference; lives as long as the System). A compiled
   /// Program's cache_store_aux / cache_restore_aux / cache_should_update reach it through ProgramContext.
-  POPS_EXPORT runtime::program::CacheManager& program_cache();
+  POPS_EXPORT runtime::program::CacheManager<Dim>& program_cache();
   /// @name Scheduler-cache checkpoint/restart (Spec 3 section 30, ADC-458)
   /// SERIALIZE / RESTORE the System-owned cache across a checkpoint, mirroring the history seam: the
   /// facade (sim.checkpoint / sim.restart) gathers each VALID slot (gather_global, MPI-safe) and scatters
@@ -1199,15 +1178,18 @@ class System {
   POPS_EXPORT double program_cache_accumulated_dt(int node_id) const;
   /// The component count of slot @p node_id's cached value. @throws if absent.
   POPS_EXPORT int program_cache_ncomp(int node_id) const;
-  /// The ghost-cell width of slot @p node_id's cached value (1 for the aux, the block-state width for a
-  /// held scratch) -- serialized so restore rebuilds with the same ngrow. @throws if absent.
+  /// The uniform ghost-cell width of slot @p node_id's cached value (1 for the aux, the block-state
+  /// width for a held scratch) -- serialized so restore rebuilds with the same width on every exact
+  /// axis. @throws if absent or if an anisotropic extent cannot be represented by this checkpoint
+  /// schema.
   POPS_EXPORT int program_cache_ngrow(int node_id) const;
-  /// GLOBAL (collective, MPI-safe) gather of slot @p node_id's cached MultiFab into a component-major
-  /// buffer of size ncomp*ny*nx, EXACTLY like state_global / history_global. All ranks MUST call it.
+  /// GLOBAL (collective, MPI-safe) gather of slot @p node_id's cached MultiFab<Dim> into a component-major
+  /// buffer of size ncomp times the product of every exact spatial extent, EXACTLY like
+  /// state_global / history_global. All ranks MUST call it.
   /// @throws if @p node_id is absent.
   POPS_EXPORT std::vector<double> program_cache_global(int node_id) const;
   /// RESTORE (restart) slot @p node_id from a GLOBAL component-major buffer (same layout as
-  /// program_cache_global / set_state): allocate a value MultiFab co-distributed with block 0 (@p ncomp
+  /// program_cache_global / set_state): allocate a value MultiFab<Dim> co-distributed with block 0 (@p ncomp
   /// components), scatter the buffer into it (owner rank writes, others no-op -- MPI-safe, all ranks
   /// call it), and re-key the slot with its bookkeeping (@p name may be empty). @throws if no block
   /// exists yet (the cache value is co-distributed with block 0's storage).
@@ -1221,7 +1203,7 @@ class System {
   /// time Program reaches it through ProgramContext::apply_projection (spec op 21). REUSES the block's
   /// own projection (set at add_block time); a block without that capability is rejected.
   /// POPS_EXPORT so a generated problem.so resolves it across the dlopen boundary.
-  POPS_EXPORT void block_project(int b, MultiFab& u);
+  POPS_EXPORT void block_project(int b, MultiFab<Dim>& u);
   /// @name Compiled-Program scalar diagnostics (epic ADC-399 / ADC-414, spec op 23)
   /// A name -> Real map a compiled Program writes via P.record_scalar (ProgramContext::record_scalar),
   /// retrievable AFTER sim.step for inspection / logging. Lives in Impl (private to the _pops TU) so it
@@ -1237,6 +1219,13 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
+  /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
+  POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;
+  /// The same accepted route with selected attempt-local native reflux/projection producers.
+  POPS_EXPORT std::map<std::string, Real> selected_accepted_balance_terms(
+      const std::string& route, const std::string& block, int component,
+      const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();
@@ -1272,7 +1261,7 @@ class System {
 
   /// @name Diagnostics
   /// @{
-  int nx() const;
+  Extent<Dim> spatial_shape() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / step_cfl). Necessary
   /// for checkpoint/restart: the stride cadence (hold-then-catch-up) depends on macro_step % stride,
   /// not only on the time t (accepted-state restart). POPS_EXPORT: a scheduled (every(N)/hold) program
@@ -1286,12 +1275,6 @@ class System {
   /// preceding restore_program_cadence_window; its start and accumulated variable-dt duration cannot
   /// be inferred from the clock. @throws if macro_step < 0 or the stride-window state is invalid.
   POPS_EXPORT void set_clock(double t, int macro_step);
-  /// Extent of the SLOW axis of the field (rows of the (ny, nx) row-major array returned by density / potential
-  /// / get_state). Cartesian: ny() == nx() == n (square, UNCHANGED). Polar (ring): ny() == ntheta
-  /// (slow azimuthal axis) while nx() == nr (fast radial axis) -- with nr != ntheta the field has
-  /// nr*ntheta values, NOT nx()^2: it is this dimension that correctly sizes the numpy
-  /// array on the bindings side (without it, a (nx, nx) reshape overflows the buffer when nr != ntheta).
-  int ny() const;
   /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   int n_species() const;
@@ -1328,15 +1311,29 @@ class System {
   std::vector<double> potential_global();                             ///< phi, ny*nx global
   std::vector<double> field_potential_global(const std::string& provider_slot);
   /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
-  /// Local pieces preserve native DistributionMapping ownership and never gather.
-  std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int level) const;
-  std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
+  /// Local pieces preserve native ranked ownership and never gather.
+  std::vector<OutputPiece<Dim>> output_state_local_pieces(const std::string& name, int level) const;
+  std::vector<OutputPiece<Dim>> output_field_local_pieces(const std::string& provider_slot,
+                                                          int level);
+  /// Exact embedded-boundary geometry sidecars.  These arrays are never appended to a physical
+  /// state or field payload: each reserved name selects one scalar native field on the same
+  /// (layout, level) ownership map.  Uniform layouts expose only level zero.
+  ///
+  /// Supported names are ``pops_active`` (binary cell mask), ``pops_phi`` (signed level set), and
+  /// ``pops_kappa`` (cell volume fraction).  A System without a prepared embedded boundary fails
+  /// explicitly so a non-owning MPI rank cannot be confused with an absent sidecar.
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(const std::string& name,
+                                                                      int level) const;
   /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
   /// zero receives complete pieces and every non-root rank receives an empty vector.
-  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
-                                                    const std::string& name, int level) const;
-  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
-                                                    const std::string& provider_slot, int level);
+  std::vector<OutputPiece<Dim>> output_state_root_pieces(const ObserverMpiLane& lane,
+                                                         const std::string& name, int level) const;
+  std::vector<OutputPiece<Dim>> output_field_root_pieces(const ObserverMpiLane& lane,
+                                                         const std::string& provider_slot,
+                                                         int level);
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_root_pieces(const ObserverMpiLane& lane,
+                                                                     const std::string& name,
+                                                                     int level) const;
   /// @}
 
   /// @name LOCAL per-fab accessors -- exact native ownership inspection
@@ -1351,34 +1348,40 @@ class System {
   /// GLOBAL indices in the box). Layout of local_state IDENTICAL to state_global but
   /// relative to the local box: (c*bny + (j - jlo))*bnx + (i - ilo), component-major.
   /// @{
-  std::vector<std::array<int, 4>> local_boxes(
-      const std::string& name) const;  ///< (ilo,jlo,ihi,jhi) per local fab
+  std::vector<Box<Dim>> local_boxes(const std::string& name) const;
   std::vector<double> local_state(const std::string& name,
                                   int li) const;  ///< U of fab li, flat (ncomp*bny*bnx)
                                                   /// @}
                                                   /// @}
 
  private:
-  friend class runtime::program::ProgramContext;
-  friend class PreparedSystemLayoutTransfer;
-  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
+  friend class runtime::program::ProgramContext<Dim>;
+  friend class PreparedSystemLayoutTransfer<Dim>;
+  /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
+  /// private to ProgramContext and is deliberately absent from Python bindings.
+  POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
+                                               Real value);
+  POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
+                                                   const std::string& route, int every_n) const;
+  POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
   POPS_EXPORT SolveReport solve_fields_in_place_();
-  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(int block_idx,
+                                                            const MultiFab<Dim>& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_state_at_in_place_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int block_idx, const MultiFab& U_stage);
+      int block_idx, const MultiFab<Dim>& U_stage);
   POPS_EXPORT SolveReport
-  solve_fields_from_blocks_in_place_(const std::vector<const MultiFab*>& U_stages);
+  solve_fields_from_blocks_in_place_(const std::vector<const MultiFab<Dim>*>& U_stages);
   POPS_EXPORT SolveReport solve_fields_from_state_in_place_(const std::string& field, int block_idx,
-                                                            const MultiFab& U_stage);
+                                                            const MultiFab<Dim>& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
-      const std::string& field, const std::vector<const MultiFab*>& U_stages);
+      const std::string& field, const std::vector<const MultiFab<Dim>*>& U_stages);
   POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
-      const std::vector<const MultiFab*>& U_stages);
+      const std::vector<const MultiFab<Dim>*>& U_stages);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();
@@ -1406,17 +1409,22 @@ class System {
 /// applied, preserving cycles such as A->B->C->A without Python array materialization. The
 /// enclosing System transactions own target rollback; this object owns the native source snapshot
 /// and strict generation/attempt protocol.
+template <int Dim>
 class POPS_EXPORT PreparedSystemLayoutTransfer final {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PreparedSystemLayoutTransfer only supports dimensions 1, 2, and 3");
+
  public:
   PreparedSystemLayoutTransfer(const PreparedSystemLayoutTransfer&) = delete;
   PreparedSystemLayoutTransfer& operator=(const PreparedSystemLayoutTransfer&) = delete;
   ~PreparedSystemLayoutTransfer();
 
   static std::shared_ptr<PreparedSystemLayoutTransfer> prepare(
-      System& source, System& target, std::shared_ptr<component::LoadedComponent> component,
-      SystemLayoutTransferSpec spec, SystemLayoutTransferExecution execution);
+      System<Dim>& source, System<Dim>& target,
+      std::shared_ptr<component::LoadedComponent> component, SystemLayoutTransferSpec<Dim> spec,
+      SystemLayoutTransferExecution execution);
 
-  const SystemLayoutTransferSpec& spec() const noexcept;
+  const SystemLayoutTransferSpec<Dim>& spec() const noexcept;
   void begin_transaction(std::uint64_t generation);
   void capture(std::uint64_t generation, std::uint64_t attempt);
   SystemLayoutTransferReceipt apply(std::uint64_t generation, std::uint64_t attempt);

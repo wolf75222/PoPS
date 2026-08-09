@@ -1,7 +1,7 @@
 """System unified-install mixin (Spec-4 PR-F): the INTERNAL ``_install_compiled`` seam.
 
-``_install_compiled`` (the low-level seam that lowers to add_equation / set_poisson /
-set_magnetic_field / set_aux_field / install_program) plus its private
+``_install_compiled`` (the low-level seam that stages all native packages, seals their one global
+ProviderPack carrier, then installs blocks/fields/program) plus its private
 lowering helpers. It is NOT the public entry point (Spec 5 sec.11): authors call
 ``pops.bind(artifact, initial_state=..., params=..., aux=..., resources=..., initial_values=...)``;
 binding dispatches to the private System / AmrSystem engine and calls this seam. Mixed into
@@ -175,6 +175,7 @@ class _SystemUnifiedInstall(_System):
         source = row.get("source")
         from pops.runtime._initial_source_lowering import (
             native_binary64,
+            ranked_gaussian_center,
             validate_initial_source,
         )
 
@@ -206,13 +207,9 @@ class _SystemUnifiedInstall(_System):
                 name, "cell", "cell", "conservative_cell_average", opcodes, literals)
             return
         if route == "gaussian_field":
-            center = source.get("center", {})
-            if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
-                raise ValueError("uniform Gaussian initial source requires x/y center")
             self._s._set_analytic_gaussian_state(
                 name,
-                native_binary64(center["x"], where="uniform Gaussian center.x"),
-                native_binary64(center["y"], where="uniform Gaussian center.y"),
+                ranked_gaussian_center(source, where="uniform Gaussian"),
                 native_binary64(source["background"], where="uniform Gaussian background"),
                 native_binary64(source["amplitude"], where="uniform Gaussian amplitude"),
                 native_binary64(
@@ -259,15 +256,28 @@ class _SystemUnifiedInstall(_System):
                 bindings=params,
             )
             inputs = sorted(source["inputs"], key=lambda row: row["value_id"])
-            input_sources = [
-                "%s:%d" % (row["source"], int(row["component"]))
-                for row in inputs
-            ]
+            input_bindings = []
+            for row in inputs:
+                if row["source"] == "state":
+                    input_bindings.append({
+                        "source": "state",
+                        "component": int(row["component"]),
+                    })
+                elif row["source"] == "provider":
+                    input_bindings.append({
+                        "source": "provider",
+                        "key": dict(row["key"]),
+                    })
+                else:  # schema validation must already have rejected this branch.
+                    raise ValueError(
+                        "field-mapped analytic input has no exact state/provider source"
+                    )
             self._s._set_analytic_mapped_state(
                 name,
                 [list(opcodes) for opcodes, _ in mapped],
                 [list(literals) for _, literals in mapped],
-                input_sources,
+                input_bindings,
+                source["consumer_qid"],
             )
             return
         raise NotImplementedError("uniform initial source route %r is not native" % route)
@@ -281,11 +291,10 @@ class _SystemUnifiedInstall(_System):
         dispatches to the private System / AmrSystem engine and calls this seam. This
         method is undocumented on the public surface (it carries no ``install`` alias) and may change.
 
-        It LOWERS to the existing lower-layer calls
-        (add_equation / set_poisson / set_magnetic_field / set_aux_field /
-        install_program) -- there is NO parallel runtime (Spec section 3). The lower-layer calls stay
-        available and unchanged; this seam just sequences them in the right order so the
-        install-time validation (section 24) sees a fully-configured simulation.
+        It uses one three-phase native transaction: stage every package and its
+        routes; seal the global ProviderPack carrier; then install every block,
+        field plan and Program.  There is no per-block sealing or name-based
+        auxiliary installation path.
 
         The seam supports a compiled-Program runtime and a per-block native runtime. Both are reached
         exclusively through the public lifecycle; neither exposes a second authoring entry point.
@@ -305,9 +314,8 @@ class _SystemUnifiedInstall(_System):
             private ``Spatial`` adapter is accepted only inside the install pipeline.
         @param params complete mapping from canonical, block-qualified ParamHandle values to their
             resolved runtime values. BindSchema has already applied defaults and derived values.
-        @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
-            DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
-            declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
+        @param aux dict {ComponentKey: array}: externally supplied InputAux values.  DerivedAux and
+            field-output components have no Python upload route.
         @param field_plans complete resolve-time field installation plans. Solver, boundary,
             nullspace, hierarchy and output authority are already fixed and authenticated.
         @throws the verbatim Spec section-24 errors at bind (missing aux / field plan / block instance /
@@ -339,12 +347,8 @@ class _SystemUnifiedInstall(_System):
         self._validate_install_arguments(
             compiled, instances, params, aux, field_plans=field_plans)
 
-        # (1) Resolved field plans first: native field providers must exist before install_program
-        # authenticates the compiled Program's field requirements.
-        for field, field_plan in field_plans.items():
-            self._install_field_plan(field, field_plan, install_plan=install_plan)
-
-        # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
+        # (1) Stage every package.  Route registration happens inside each staged DSO; no block may
+        # capture provider storage until the following one global finalization.
         # lower its spatial brick and set its initial state. Every instance comes from InstallPlan and
         # carries its own detached CompiledModel; bind never consults compiled.model or a PDE builder.
         so_path = None
@@ -397,15 +401,25 @@ class _SystemUnifiedInstall(_System):
                 raise ValueError("uniform block has competing initial_state and InitialCondition")
             pending_initials.append((name, initial, source))
 
+        if self._pending_native_packages:
+            self._s._finalize_native_packages()
+            self._pending_native_packages = 0
+
+        # (2) Field plans and field method providers install only after global auxiliary routing is
+        # sealed.  They can now bind exact field/aux storage addresses without a per-block fallback.
+        for field, field_plan in field_plans.items():
+            self._install_field_plan(field, field_plan, install_plan=install_plan)
+
         # The final FieldOperator owns the solve name while its provider operators own only RHS
         # closures. Attach the resolved solve to the exact FieldSpace storage route after block
         # loaders have installed those closures; no legacy m.elliptic_field name is inferred.
         for field_plan in field_plans.values():
             self._install_field_method_runtime(field_plan, resolved_models, params)
 
-        # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before install_program.
-        for field_name, field in aux.items():
-            self._install_aux(field_name, field)
+        # (3) External InputAux values are staged only after the global registry has authenticated
+        # their exact ComponentKeys.  A derived or field-output key is rejected natively.
+        for key, field in aux.items():
+            self._install_aux(key, field)
 
         # (4) Boundary-kernel parameters are independent from model package parameters, which crossed
         # the package ABI during block installation above.
@@ -426,6 +440,11 @@ class _SystemUnifiedInstall(_System):
         # NATIVE mode (compiled=None) deliberately installs no temporal authority. The blocks are
         # inspectable spatial carriers, but step/advance fail closed until a Program is installed.
         if so_path is not None:
+            component = getattr(compiled, "program", None)
+            authored = getattr(component, "program", component)
+            from pops.runtime._program_cadence_install import install_program_cadence
+
+            install_program_cadence(self, authored)
             self.install_program(so_path)
             # (5a) HISTORY-PERSISTENCE POLICIES (ADC-626): the compiled Program records a per-ring
             # persistence policy (Dense / Interval / Revolve) on program._history_persistence. Attach the
@@ -441,8 +460,6 @@ class _SystemUnifiedInstall(_System):
             # (5b) Program carriers were emitted with neutral values. Always install the complete
             # BindSchema projection after loading, including declaration defaults.
             self._install_program_params(compiled, bind_schema, params)
-            component = getattr(compiled, "program", None)
-            authored = getattr(component, "program", component)
             self._step_strategy = getattr(authored, "_step_strategy", None)
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)
@@ -634,29 +651,9 @@ class _SystemUnifiedInstall(_System):
             params,
         )
 
-    def _install_aux(self, field_name: Any, field: Any) -> Any:
-        """Lower an aux entry: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any other name
-        -> set_aux_field on the block that declares it."""
-        if field_name == "B_z":
-            self.set_magnetic_field(field)
-            return
-        if field_name == "T_e":
-            raise ValueError(
-                "pops.bind: aux 'T_e' is DERIVED from a fluid block via "
-                "set_electron_temperature_from(block), not set as a static aux field.")
-        block = self._block_declaring_aux(field_name)
-        if block is None:
-            raise ValueError(
-                "pops.bind: aux field %r is not declared by any installed instance; add the instance "
-                "with a model declaring m.aux_field(%r)." % (field_name, field_name))
-        self.set_aux_field(block, field_name, field)
-
-    def _block_declaring_aux(self, field_name: Any) -> Any:
-        """The block whose named-aux table declares @p field_name, or None."""
-        for block, table in self._aux_field_index.items():
-            if field_name in table:
-                return block
-        return None
+    def _install_aux(self, key: Any, field: Any) -> None:
+        """Stage one exact external input; names and block-local component indices are invalid."""
+        self.stage_auxiliary_input(key, field)
 
     # Host-testable pure core (P7-b block-param routing, ADC-514 shares it with the AMR path): callable
     # as System._route_block_params without building a System. Extracted to _install_param_routing so the

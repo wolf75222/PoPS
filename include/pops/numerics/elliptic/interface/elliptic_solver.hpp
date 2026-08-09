@@ -1,37 +1,19 @@
+/// @file
+/// @brief Exact compile-time-ranked public contract for owning elliptic solver backends.
+
 #pragma once
 
-/// @file
-/// @brief EllipticSolver concept: common contract for elliptic solvers at the MultiFab level
-///        (solve D phi = f), so couplers depend on the concept and not on a concrete class.
-///
-/// Layer: `include/pops/numerics/elliptic/interface`.
-/// Role: express the "elliptic solver" dependency through a C++20 concept rather than a
-/// hard-coded GeometricMG, which prepares swapping MG for another backend (FFT wrapper, PETSc,
-/// Hypre) without touching the coupling logic.
-/// Contract: an EllipticSolver exposes rhs() -> MultiFab& (right-hand side f, written before solve),
-/// phi() -> MultiFab& (solution read after solve, kept between calls for the warm start),
-/// solve() (solves phi from rhs in place), residual() -> Real (residual norm ||D phi - f||),
-/// geom() -> const Geometry& (geometry of the solved level).
-///
-/// Invariants:
-/// - the contract is at the MultiFab level: poisson_fft.hpp (slabs + raw vectors) does NOT model it
-///   directly; PoissonFFTSolver/DistributedFFTSolver are what wrap it;
-/// - phi() is kept between calls (warm start): do NOT assume an implicit reset to zero.
-
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/layout/field_distribution.hpp>
-#include <pops/mesh/storage/field_replica_consensus.hpp>
+#include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/parallel/execution_lane.hpp>
 
-#include <algorithm>
-#include <cmath>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -41,63 +23,59 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace pops {
 
-template <class S>
-concept EllipticSolver = requires(S s) {
-  { s.rhs() } -> std::same_as<MultiFab&>;
-  { s.phi() } -> std::same_as<MultiFab&>;
-  s.solve();
-  { s.residual() } -> std::convertible_to<Real>;
-  { s.geom() } -> std::convertible_to<const Geometry&>;
+/// An owning elliptic backend publishes one immutable spatial specialization and distinct scalar
+/// RHS/solution fields.  The rank is a type property; the concept has no dynamic dimension route.
+template <class Solver>
+concept EllipticSolver = requires(Solver solver, const Solver constant_solver) {
+  { Solver::dimension } -> std::convertible_to<int>;
+  requires(Solver::dimension >= 1 && Solver::dimension <= 3);
+  typename Solver::field_type;
+  requires std::same_as<typename Solver::field_type::box_type, Box<Solver::dimension>>;
+  { solver.rhs() } -> std::same_as<typename Solver::field_type&>;
+  { solver.phi() } -> std::same_as<typename Solver::field_type&>;
+  solver.solve();
+  { constant_solver.residual() } -> std::convertible_to<Real>;
+  { constant_solver.geom() } -> std::same_as<const Geometry<Solver::dimension>&>;
 };
 
-/// Backend-neutral construction request. Representation semantics and exact box ownership are
-/// properties of the solved field, while solver-specific options stay in the injected factory. A
-/// backend may therefore use a constructor, PETSc/Hypre builder, plugin registry or another creation
-/// mechanism without changing a coupler.
+/// Complete backend-neutral construction request.  Python selects Dim once; every downstream
+/// layout, ownership coordinate, ghost extent, boundary law, and field allocation retains it.
+template <int Dim>
 struct EllipticBuildRequest {
-  Geometry geometry;
-  BoxArray boxes;
-  DistributionMapping mapping;
-  BCRec boundary;
-  ActiveRegionProvider2D active;
-  FieldDistribution distribution;
-  int rhs_ghosts{0};
-  int phi_ghosts{1};
+  static_assert(Dim >= 1 && Dim <= 3, "EllipticBuildRequest only supports dimensions 1, 2, and 3");
+
+  Geometry<Dim> geometry;
+  mesh::BoxArray<Dim> boxes;
+  mesh::Distribution<Dim> distribution;
+  Index<Dim> local_rank{};
+  PhysicalBoundaryConditions<Dim> boundary;
+  Extent<Dim> rhs_ghosts{};
+  Extent<Dim> phi_ghosts{};
+  mesh::BoxArrayValidationBudget layout_budget{};
 };
 
-/// Stable semantic identity of one materialized elliptic operator implementation.  The identity
-/// selects the numerical operator family; every resolved parameter and physical input is carried by
-/// EllipticOperatorContract rather than being hidden in this name.
 struct EllipticOperatorIdentity {
   std::string_view name;
   std::uint64_t version = 0;
 };
 
-/// Collision-free exact fingerprint of a prepared elliptic operator.
-///
-/// The fingerprint is a canonical framed byte sequence, not a lossy hash.  It authenticates the
-/// backend identity, the complete physical/materialization state and the backend options that can
-/// change the prepared map.  Factories produce the expected contract from EllipticBuildRequest;
-/// solvers independently produce the actual contract from their stored state and allocated fields.
-/// Comparing both therefore detects a factory that accepts, but silently ignores, a boundary,
-/// active-region provider, field distribution, layout, geometry, ghost contract or backend option.
+/// Collision-free canonical identity of a materialized elliptic operator.
 class EllipticOperatorContract {
  public:
   EllipticOperatorContract() = default;
 
-  [[nodiscard]] static EllipticOperatorContract make(EllipticOperatorIdentity identity,
-                                                     std::string exact_materialization,
-                                                     std::string exact_backend_options) {
+  static EllipticOperatorContract make(EllipticOperatorIdentity identity,
+                                       std::string exact_materialization,
+                                       std::string exact_backend_options) {
     if (identity.name.empty() || identity.version == 0)
       throw std::invalid_argument(
           "elliptic operator identity requires a non-empty name and positive version");
     ExactContractBuilder contract;
     contract.text("pops.elliptic.materialized-operator")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(identity.name)
         .scalar(identity.version)
         .bytes(exact_materialization)
@@ -107,8 +85,8 @@ class EllipticOperatorContract {
     return result;
   }
 
-  [[nodiscard]] bool valid() const noexcept { return !exact_fingerprint_.empty(); }
-  [[nodiscard]] std::string_view exact_fingerprint() const noexcept { return exact_fingerprint_; }
+  bool valid() const noexcept { return !exact_fingerprint_.empty(); }
+  std::string_view exact_fingerprint() const noexcept { return exact_fingerprint_; }
 
  private:
   std::string exact_fingerprint_;
@@ -121,9 +99,6 @@ struct EllipticFactoryBuildResult {
   std::exception_ptr error;
 };
 
-/// Capture every local factory failure without letting one rank skip the common failure reduction.
-/// A backend whose construction itself uses MPI must perform its own internal failure agreement and
-/// return from `build()` on every rank; no exception may escape the factory protocol.
 template <class Solver, class Builder>
   requires std::is_nothrow_move_constructible_v<Solver> && std::is_nothrow_destructible_v<Solver> &&
            std::invocable<Builder> && std::same_as<std::invoke_result_t<Builder>, Solver>
@@ -138,188 +113,180 @@ EllipticFactoryBuildResult<Solver> capture_local_elliptic_factory_build(
   return result;
 }
 
-namespace detail {
+namespace elliptic_contract_detail {
 
-inline bool elliptic_build_request_is_valid(const EllipticBuildRequest& request, int rank,
-                                            int ranks) noexcept {
-  if (!field_distribution_is_valid(request.distribution) || request.boxes.size() <= 0 ||
-      request.mapping.size() != request.boxes.size() || rank < 0 || ranks < 1 || rank >= ranks ||
-      request.rhs_ghosts != 0 || request.phi_ghosts < 0)
-    return false;
-  for (const int owner : request.mapping.ranks()) {
-    if (request.distribution == FieldDistribution::Replicated) {
-      if (owner != rank)
-        return false;
-    } else if (owner < 0 || owner >= ranks) {
-      return false;
+template <int Dim>
+void append_index(ExactContractBuilder& contract, const Index<Dim>& index) {
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(index[axis]);
+}
+
+template <int Dim>
+void append_extent(ExactContractBuilder& contract, const Extent<Dim>& extent) {
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(extent[axis]);
+}
+
+template <int Dim>
+void append_box(ExactContractBuilder& contract, const Box<Dim>& box) {
+  append_index(contract, box.lo);
+  append_index(contract, box.hi);
+}
+
+template <int Dim>
+void append_geometry(ExactContractBuilder& contract, const Geometry<Dim>& geometry) {
+  contract.text("geometry");
+  append_box(contract, geometry.domain());
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(geometry.lower()[axis]).scalar(geometry.upper()[axis]);
+}
+
+template <int Dim>
+void append_boundary(ExactContractBuilder& contract,
+                     const PhysicalBoundaryConditions<Dim>& boundary) {
+  contract.text("boundary");
+  for (int axis = 0; axis < Dim; ++axis) {
+    contract.scalar(boundary.spacing()[axis]);
+    for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+      const Face<Dim> face{axis, side};
+      const auto& topology = boundary.topology().at(face);
+      const auto& law = boundary.at(face);
+      contract.scalar(topology.kind)
+          .scalar(topology.partner.axis)
+          .scalar(topology.partner.side)
+          .scalar(law.kind)
+          .scalar(law.value)
+          .scalar(law.alpha)
+          .scalar(law.beta);
     }
   }
-  if (request.geometry.domain.empty() || !std::isfinite(request.geometry.xlo) ||
-      !std::isfinite(request.geometry.xhi) || !std::isfinite(request.geometry.ylo) ||
-      !std::isfinite(request.geometry.yhi) || request.geometry.xhi <= request.geometry.xlo ||
-      request.geometry.yhi <= request.geometry.ylo)
-    return false;
-  if (!request.boxes.tiles_exactly(request.geometry.domain))
-    return false;
-  const auto valid_boundary_type = [](BCType type) {
-    switch (type) {
-      case BCType::Periodic:
-      case BCType::Foextrap:
-      case BCType::Dirichlet:
-      case BCType::Robin:
-      case BCType::External:
-        return true;
-    }
-    return false;
-  };
-  const BCRec& boundary = request.boundary;
-  if (!valid_boundary_type(boundary.xlo) || !valid_boundary_type(boundary.xhi) ||
-      !valid_boundary_type(boundary.ylo) || !valid_boundary_type(boundary.yhi))
-    return false;
-  if ((boundary.xlo == BCType::Periodic) != (boundary.xhi == BCType::Periodic) ||
-      (boundary.ylo == BCType::Periodic) != (boundary.yhi == BCType::Periodic))
-    return false;
-  const Real values[] = {boundary.xlo_val,   boundary.xhi_val,   boundary.ylo_val,
-                         boundary.yhi_val,   boundary.xlo_alpha, boundary.xlo_beta,
-                         boundary.xhi_alpha, boundary.xhi_beta,  boundary.ylo_alpha,
-                         boundary.ylo_beta,  boundary.yhi_alpha, boundary.yhi_beta};
-  for (const Real value : values)
-    if (!std::isfinite(value))
-      return false;
-  const auto valid_robin = [](BCType type, Real alpha, Real beta) {
-    return type != BCType::Robin || alpha != Real(0) || beta != Real(0);
-  };
-  if (!valid_robin(boundary.xlo, boundary.xlo_alpha, boundary.xlo_beta) ||
-      !valid_robin(boundary.xhi, boundary.xhi_alpha, boundary.xhi_beta) ||
-      !valid_robin(boundary.ylo, boundary.ylo_alpha, boundary.ylo_beta) ||
-      !valid_robin(boundary.yhi, boundary.yhi_alpha, boundary.yhi_beta))
-    return false;
-  return true;
 }
 
-inline void append_elliptic_geometry_contract(ExactContractBuilder& contract,
-                                              const Geometry& geometry) {
-  contract.text("geometry")
-      .scalar(geometry.domain.lo[0])
-      .scalar(geometry.domain.lo[1])
-      .scalar(geometry.domain.hi[0])
-      .scalar(geometry.domain.hi[1])
-      .scalar(geometry.xlo)
-      .scalar(geometry.xhi)
-      .scalar(geometry.ylo)
-      .scalar(geometry.yhi);
+template <int Dim>
+void append_layout(ExactContractBuilder& contract, const mesh::BoxArray<Dim>& boxes) {
+  contract.sequence(boxes.boxes(), [](ExactContractBuilder& element, const Box<Dim>& box) {
+    append_box(element, box);
+  });
 }
 
-inline void append_elliptic_boundary_contract(ExactContractBuilder& contract,
-                                              const BCRec& boundary) {
-  contract.text("boundary")
-      .scalar(boundary.xlo)
-      .scalar(boundary.xhi)
-      .scalar(boundary.ylo)
-      .scalar(boundary.yhi)
-      .scalar(boundary.xlo_val)
-      .scalar(boundary.xhi_val)
-      .scalar(boundary.ylo_val)
-      .scalar(boundary.yhi_val)
-      .scalar(boundary.xlo_alpha)
-      .scalar(boundary.xlo_beta)
-      .scalar(boundary.xhi_alpha)
-      .scalar(boundary.xhi_beta)
-      .scalar(boundary.ylo_alpha)
-      .scalar(boundary.ylo_beta)
-      .scalar(boundary.yhi_alpha)
-      .scalar(boundary.yhi_beta)
-      .scalar(boundary.dx)
-      .scalar(boundary.dy);
+template <int Dim>
+void append_distribution(ExactContractBuilder& contract,
+                         const mesh::Distribution<Dim>& distribution) {
+  contract.scalar(distribution.mode());
+  append_index(contract, distribution.rank_space().origin());
+  append_extent(contract, distribution.rank_space().extent());
+  contract.sequence(
+      distribution.owners(),
+      [](ExactContractBuilder& element, const Index<Dim>& owner) { append_index(element, owner); });
 }
 
-inline void append_elliptic_field_layout_contract(ExactContractBuilder& contract,
-                                                  std::string_view role, const BoxArray& boxes,
-                                                  const DistributionMapping& mapping,
-                                                  int components, int ghosts,
-                                                  FieldDistribution distribution) {
-  std::vector<int> canonical_owners = mapping.ranks();
-  if (distribution == FieldDistribution::Replicated)
-    std::fill(canonical_owners.begin(), canonical_owners.end(), 0);
-  contract.text(role)
-      .scalar(components)
-      .scalar(ghosts)
-      .sequence(boxes.boxes(),
-                [](ExactContractBuilder& element, const Box2D& box) {
-                  element.scalar(box.lo[0]).scalar(box.lo[1]).scalar(box.hi[0]).scalar(box.hi[1]);
-                })
-      .sequence(canonical_owners);
+template <int Dim>
+void append_field_layout(ExactContractBuilder& contract, std::string_view role,
+                         const mesh::BoxArray<Dim>& boxes,
+                         const mesh::Distribution<Dim>& distribution, int components,
+                         const Extent<Dim>& ghosts) {
+  contract.text(role).scalar(components);
+  append_extent(contract, ghosts);
+  append_layout(contract, boxes);
+  append_distribution(contract, distribution);
 }
 
-inline std::string elliptic_materialization_contract(
-    const Geometry& geometry, const BCRec& boundary, const ActiveRegionProvider2D& active,
-    FieldDistribution distribution, const BoxArray& rhs_boxes,
-    const DistributionMapping& rhs_mapping, int rhs_components, int rhs_ghosts,
-    const BoxArray& phi_boxes, const DistributionMapping& phi_mapping, int phi_components,
-    int phi_ghosts) {
+template <int Dim>
+std::string materialization_contract(const Geometry<Dim>& geometry,
+                                     const PhysicalBoundaryConditions<Dim>& boundary,
+                                     const mesh::BoxArray<Dim>& rhs_boxes,
+                                     const mesh::Distribution<Dim>& rhs_distribution,
+                                     int rhs_components, const Extent<Dim>& rhs_ghosts,
+                                     const mesh::BoxArray<Dim>& phi_boxes,
+                                     const mesh::Distribution<Dim>& phi_distribution,
+                                     int phi_components, const Extent<Dim>& phi_ghosts) {
   ExactContractBuilder contract;
-  contract.text("pops.elliptic.materialization").scalar(std::uint32_t{1});
-  append_elliptic_geometry_contract(contract, geometry);
-  append_elliptic_boundary_contract(contract, boundary);
-  contract.text("active-region").optional_collective_contract(active);
-  contract.text("field-distribution").scalar(distribution);
-  append_elliptic_field_layout_contract(contract, "rhs-layout", rhs_boxes, rhs_mapping,
-                                        rhs_components, rhs_ghosts, distribution);
-  append_elliptic_field_layout_contract(contract, "phi-layout", phi_boxes, phi_mapping,
-                                        phi_components, phi_ghosts, distribution);
+  contract.text("pops.elliptic.materialization").scalar(std::uint32_t{2});
+  append_geometry(contract, geometry);
+  append_boundary(contract, boundary);
+  append_field_layout(contract, "rhs-layout", rhs_boxes, rhs_distribution, rhs_components,
+                      rhs_ghosts);
+  append_field_layout(contract, "phi-layout", phi_boxes, phi_distribution, phi_components,
+                      phi_ghosts);
   return std::move(contract).release();
 }
 
-/// Exact communicator-wide identity of every construction input. Replicated owners are normalized
-/// because every rank intentionally names itself as owner of every global box.
-inline std::string elliptic_build_request_contract(const EllipticBuildRequest& request) {
-  return elliptic_materialization_contract(request.geometry, request.boundary, request.active,
-                                           request.distribution, request.boxes, request.mapping, 1,
-                                           request.rhs_ghosts, request.boxes, request.mapping, 1,
-                                           request.phi_ghosts);
+template <int Dim>
+std::string build_request_contract(const EllipticBuildRequest<Dim>& request) {
+  ExactContractBuilder contract;
+  contract
+      .bytes(materialization_contract(request.geometry, request.boundary, request.boxes,
+                                      request.distribution, 1, request.rhs_ghosts, request.boxes,
+                                      request.distribution, 1, request.phi_ghosts))
+      .text("layout-validation-budget")
+      .scalar(request.layout_budget.boxes)
+      .scalar(request.layout_budget.overlap_pairs);
+  return std::move(contract).release();
 }
 
-inline bool elliptic_geometry_exactly_matches(const Geometry& left, const Geometry& right) {
-  ExactContractBuilder left_contract;
-  ExactContractBuilder right_contract;
-  append_elliptic_geometry_contract(left_contract, left);
-  append_elliptic_geometry_contract(right_contract, right);
-  return left_contract.view() == right_contract.view();
+template <int Dim>
+bool request_is_valid(const EllipticBuildRequest<Dim>& request, const ExecutionLane& lane) {
+  try {
+    if (request.geometry.domain().empty() || request.boxes.empty() ||
+        !request.boxes.tiles_exactly(request.geometry.domain(), request.layout_budget) ||
+        !request.distribution.matches_layout(request.boxes) ||
+        !request.distribution.rank_space().contains(request.local_rank) ||
+        request.distribution.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
+        request.distribution.rank_space().linear_rank(request.local_rank) !=
+            static_cast<std::size_t>(lane.rank()))
+      return false;
+    for (int axis = 0; axis < Dim; ++axis)
+      if (request.rhs_ghosts[axis] < 0 || request.phi_ghosts[axis] < 0)
+        return false;
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
-}  // namespace detail
+template <int Dim, class MemorySpace>
+std::string field_layout_contract(const MultiFab<Dim, MemorySpace>& field) {
+  ExactContractBuilder contract;
+  append_field_layout(contract, "field-layout", field.layout(), field.distribution(), field.ncomp(),
+                      field.ghosts());
+  return std::move(contract).release();
+}
 
-/// Generic factory-side construction of the expected exact operator contract.
-inline EllipticOperatorContract make_expected_elliptic_operator_contract(
-    EllipticOperatorIdentity identity, const EllipticBuildRequest& request,
+}  // namespace elliptic_contract_detail
+
+template <int Dim>
+EllipticOperatorContract make_expected_elliptic_operator_contract(
+    EllipticOperatorIdentity identity, const EllipticBuildRequest<Dim>& request,
     std::string exact_backend_options = {}) {
-  return EllipticOperatorContract::make(identity, detail::elliptic_build_request_contract(request),
+  return EllipticOperatorContract::make(identity,
+                                        elliptic_contract_detail::build_request_contract(request),
                                         std::move(exact_backend_options));
 }
 
-/// Generic solver-side construction of the actual exact operator contract.  Every argument is read
-/// from state owned by the materialized solver; passing the original request here would defeat the
-/// post-build check and is deliberately unnecessary.
-inline EllipticOperatorContract make_materialized_elliptic_operator_contract(
-    EllipticOperatorIdentity identity, const Geometry& geometry, const BCRec& boundary,
-    const ActiveRegionProvider2D& active, FieldDistribution distribution, const MultiFab& rhs,
-    const MultiFab& phi, std::string exact_backend_options = {}) {
+template <int Dim, class MemorySpace>
+EllipticOperatorContract make_materialized_elliptic_operator_contract(
+    EllipticOperatorIdentity identity, const Geometry<Dim>& geometry,
+    const PhysicalBoundaryConditions<Dim>& boundary, const MultiFab<Dim, MemorySpace>& rhs,
+    const MultiFab<Dim, MemorySpace>& phi, std::string exact_backend_options = {}) {
   return EllipticOperatorContract::make(
       identity,
-      detail::elliptic_materialization_contract(
-          geometry, boundary, active, distribution, rhs.box_array(), rhs.dmap(), rhs.ncomp(),
-          rhs.n_grow(), phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow()),
+      elliptic_contract_detail::materialization_contract(
+          geometry, boundary, rhs.layout(), rhs.distribution(), rhs.ncomp(), rhs.ghosts(),
+          phi.layout(), phi.distribution(), phi.ncomp(), phi.ghosts()),
       std::move(exact_backend_options));
 }
 
 template <class Solver>
+  requires EllipticSolver<Solver>
 struct DefaultEllipticFactory {
-  std::string contract{"pops.elliptic-factory.default-constructor@1"};
+  static constexpr int dimension = Solver::dimension;
+  using request_type = EllipticBuildRequest<dimension>;
 
-  [[nodiscard]] std::string_view collective_contract() const noexcept { return contract; }
+  std::string contract{"pops.elliptic-factory.exact-ranked-constructor@2"};
 
-  [[nodiscard]] EllipticOperatorContract expected_operator_contract(
-      const EllipticBuildRequest& request) const
+  std::string_view collective_contract() const noexcept { return contract; }
+
+  EllipticOperatorContract expected_operator_contract(const request_type& request) const
     requires requires {
       { Solver::expected_operator_contract(request) } -> std::same_as<EllipticOperatorContract>;
     }
@@ -327,193 +294,138 @@ struct DefaultEllipticFactory {
     return Solver::expected_operator_contract(request);
   }
 
-  [[nodiscard]] FieldDistribution materialized_distribution(
-      const EllipticBuildRequest& request) const noexcept {
-    return request.distribution;
+  bool supports(const request_type&) const noexcept {
+    return std::constructible_from<Solver, request_type>;
   }
 
-  [[nodiscard]] bool supports(const EllipticBuildRequest&) const noexcept { return true; }
-
-  EllipticFactoryBuildResult<Solver> build(EllipticBuildRequest request) const noexcept
-    requires std::constructible_from<Solver, const Geometry&, const BoxArray&,
-                                     const DistributionMapping&, const BCRec&,
-                                     ActiveRegionProvider2D, FieldDistribution>
+  EllipticFactoryBuildResult<Solver> build(request_type request) const noexcept
+    requires std::constructible_from<Solver, request_type>
   {
-    return capture_local_elliptic_factory_build<Solver>([request = std::move(request)]() mutable {
-      return Solver(request.geometry, request.boxes, request.mapping, request.boundary,
-                    std::move(request.active), request.distribution);
-    });
+    return capture_local_elliptic_factory_build<Solver>(
+        [request = std::move(request)]() mutable { return Solver(std::move(request)); });
   }
 };
 
 template <class Factory, class Solver>
-concept EllipticFactory =
-    EllipticSolver<Solver> && std::is_nothrow_move_constructible_v<Solver> &&
-    std::is_nothrow_destructible_v<Solver> && requires(const Solver& solver) {
-      { solver.field_distribution() } noexcept -> std::same_as<FieldDistribution>;
-      {
-        solver.prepared_operator_contract()
-      } noexcept -> std::same_as<const EllipticOperatorContract&>;
-    } && requires(const Factory& declaration, Factory& factory, EllipticBuildRequest request) {
-      { declaration.collective_contract() } noexcept -> std::same_as<std::string_view>;
-      { declaration.expected_operator_contract(request) } -> std::same_as<EllipticOperatorContract>;
-      {
-        declaration.materialized_distribution(request)
-      } noexcept -> std::same_as<FieldDistribution>;
-      { declaration.supports(request) } noexcept -> std::same_as<bool>;
-      {
-        factory.build(std::move(request))
-      } noexcept -> std::same_as<EllipticFactoryBuildResult<Solver>>;
-    };
+concept EllipticFactory = EllipticSolver<Solver> && std::is_nothrow_move_constructible_v<Solver> &&
+                          std::is_nothrow_destructible_v<Solver> &&
+                          requires(const Solver& solver) {
+                            {
+                              solver.prepared_operator_contract()
+                            } noexcept -> std::same_as<const EllipticOperatorContract&>;
+                          } &&
+                          requires(const Factory& declaration, Factory& factory,
+                                   EllipticBuildRequest<Solver::dimension> request) {
+                            {
+                              declaration.collective_contract()
+                            } noexcept -> std::same_as<std::string_view>;
+                            {
+                              declaration.expected_operator_contract(request)
+                            } -> std::same_as<EllipticOperatorContract>;
+                            { declaration.supports(request) } noexcept -> std::same_as<bool>;
+                            {
+                              factory.build(std::move(request))
+                            } noexcept -> std::same_as<EllipticFactoryBuildResult<Solver>>;
+                          };
 
 template <EllipticSolver Solver, class Factory>
   requires EllipticFactory<std::remove_cvref_t<Factory>, Solver>
-Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory,
+Solver make_elliptic_solver(EllipticBuildRequest<Solver::dimension> request, Factory&& factory,
                             const ExecutionLane& lane) {
-  const int rank = lane.rank();
-  const int ranks = lane.size();
-  const long raw_distribution = static_cast<long>(request.distribution);
-  const long minimum_distribution = all_reduce_min(raw_distribution, lane);
-  const long maximum_distribution = all_reduce_max(raw_distribution, lane);
   const long invalid_request =
-      all_reduce_max(detail::elliptic_build_request_is_valid(request, rank, ranks) ? 0L : 1L, lane);
-  if (minimum_distribution != maximum_distribution)
-    throw std::invalid_argument(
-        "elliptic solver field distribution differs between communicator ranks");
+      all_reduce_max(elliptic_contract_detail::request_is_valid(request, lane) ? 0L : 1L, lane);
   if (invalid_request != 0)
-    throw std::invalid_argument("elliptic solver received an invalid construction request");
+    throw std::invalid_argument("elliptic solver received an invalid exact-ranked request");
 
-  // BC metric is derived, not authored. Every backend receives and authenticates the same canonical
-  // spacing, so semantically identical requests cannot disagree because one caller left defaults.
-  request.boundary.dx = request.geometry.dx();
-  request.boundary.dy = request.geometry.dy();
   std::string request_contract;
-  long request_contract_failure_local = 0;
+  long request_contract_failure = 0;
   try {
-    request_contract = detail::elliptic_build_request_contract(request);
+    request_contract = elliptic_contract_detail::build_request_contract(request);
   } catch (...) {
-    request_contract_failure_local = 1;
+    request_contract_failure = 1;
   }
-  if (all_reduce_max(request_contract_failure_local, lane) != 0)
+  if (all_reduce_max(request_contract_failure, lane) != 0)
     throw std::runtime_error(
-        "elliptic construction-request contract failed on at least one communicator rank");
-  const bool request_agrees = all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("elliptic-build-request"), std::string_view(request_contract)}}, lane);
-  if (!request_agrees)
+        "elliptic construction-request contract failed on at least one execution-lane rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("elliptic-build-request"), std::string_view(request_contract)}}, lane))
     throw std::invalid_argument(
-        "elliptic solver construction request differs between communicator ranks");
-  const FieldDistribution requested_distribution = request.distribution;
-  std::vector<Box2D> requested_boxes;
-  std::vector<int> requested_owners;
-  Geometry requested_geometry{};
-  int requested_rhs_ghosts = 0;
-  int requested_phi_ghosts = 0;
-  long request_capture_failure_local = 0;
-  try {
-    requested_boxes = request.boxes.boxes();
-    requested_owners = request.mapping.ranks();
-    requested_geometry = request.geometry;
-    requested_rhs_ghosts = request.rhs_ghosts;
-    requested_phi_ghosts = request.phi_ghosts;
-  } catch (...) {
-    request_capture_failure_local = 1;
-  }
-  if (all_reduce_max(request_capture_failure_local, lane) != 0)
-    throw std::runtime_error(
-        "elliptic construction-request capture failed on at least one communicator rank");
-  bool local_declaration_failed = false;
+        "elliptic solver construction request differs between execution-lane ranks");
+
+  const auto requested_geometry = request.geometry;
+  const auto requested_boxes = request.boxes;
+  const auto requested_distribution = request.distribution;
+  const auto requested_local_rank = request.local_rank;
+  const auto requested_rhs_ghosts = request.rhs_ghosts;
+  const auto requested_phi_ghosts = request.phi_ghosts;
+
+  bool declaration_failed = false;
+  bool supported = false;
   std::string factory_contract;
-  EllipticOperatorContract expected_operator_contract;
-  FieldDistribution materialized_distribution = FieldDistribution::Distributed;
-  bool factory_supported = false;
+  EllipticOperatorContract expected;
   try {
     factory_contract = std::as_const(factory).collective_contract();
-    expected_operator_contract = std::as_const(factory).expected_operator_contract(request);
-    materialized_distribution = std::as_const(factory).materialized_distribution(request);
-    factory_supported = std::as_const(factory).supports(request);
+    expected = std::as_const(factory).expected_operator_contract(request);
+    supported = std::as_const(factory).supports(request);
   } catch (...) {
-    local_declaration_failed = true;
+    declaration_failed = true;
   }
-  if (all_reduce_max(local_declaration_failed ? 1L : 0L, lane) != 0)
+  if (all_reduce_max(declaration_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic factory declaration failed on at least one rank");
-  const bool factory_contract_valid =
-      !factory_contract.empty() && expected_operator_contract.valid();
-  const bool factory_agrees = all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("elliptic-factory"), std::string_view(factory_contract)},
-       {std::string_view("elliptic-expected-operator"),
-        expected_operator_contract.exact_fingerprint()}},
-      lane);
-  const bool semantic_mismatch = !factory_supported || !factory_contract_valid ||
-                                 !field_distribution_is_valid(materialized_distribution) ||
-                                 materialized_distribution != requested_distribution;
-  if (all_reduce_max(semantic_mismatch ? 1L : 0L, lane) != 0)
-    throw std::invalid_argument(
-        "elliptic factory cannot materialize the exact construction request");
-  if (!factory_agrees)
-    throw std::invalid_argument(
-        "elliptic factory implementation or options differ between communicator ranks");
+  if (all_reduce_max(!supported || factory_contract.empty() || !expected.valid() ? 1L : 0L, lane) !=
+      0)
+    throw std::invalid_argument("elliptic factory cannot materialize the exact-ranked request");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("elliptic-factory"), std::string_view(factory_contract)},
+           {std::string_view("elliptic-expected-operator"), expected.exact_fingerprint()}},
+          lane))
+    throw std::invalid_argument("elliptic factory differs between execution-lane ranks");
+
   EllipticFactoryBuildResult<Solver> build = factory.build(std::move(request));
-  const bool local_build_failed = build.error != nullptr || !build.solver.has_value();
-  if (all_reduce_max(local_build_failed ? 1L : 0L, lane) != 0)
+  if (all_reduce_max(build.error != nullptr || !build.solver.has_value() ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic factory construction failed on at least one rank");
   Solver& solver = *build.solver;
 
-  // Inspect the complete local result before entering another collective. A third-party backend is
-  // allowed to throw from ordinary accessors, but one rank must never escape while its peers enter
-  // the post-build agreement.
-  bool local_inspection_failed = false;
-  bool local_materialization_mismatch = false;
-  std::string actual_operator_contract;
-  std::string rhs_layout_contract;
-  std::string phi_layout_contract;
+  bool inspection_failed = false;
+  bool mismatch = false;
+  std::string actual_contract;
+  std::string rhs_contract;
+  std::string phi_contract;
   try {
-    MultiFab& rhs = solver.rhs();
-    MultiFab& phi = solver.phi();
-    const FieldDistribution actual_distribution = std::as_const(solver).field_distribution();
-    actual_operator_contract =
-        std::as_const(solver).prepared_operator_contract().exact_fingerprint();
-    const auto field_mismatch = [&](const MultiFab& field, int expected_ghosts) {
-      const bool distribution_layout_matches =
-          requested_distribution == FieldDistribution::Distributed ||
-          (requested_distribution == FieldDistribution::Replicated &&
-           std::all_of(field.dmap().ranks().begin(), field.dmap().ranks().end(),
-                       [rank](int owner) { return owner == rank; }));
-      return field.box_array().boxes() != requested_boxes ||
-             field.dmap().ranks() != requested_owners || field.ncomp() != 1 ||
-             field.n_grow() != expected_ghosts || !distribution_layout_matches;
+    auto& rhs = solver.rhs();
+    auto& phi = solver.phi();
+    actual_contract = solver.prepared_operator_contract().exact_fingerprint();
+    const auto field_mismatch = [&](const auto& field, const Extent<Solver::dimension>& ghosts) {
+      return field.layout() != requested_boxes || field.distribution() != requested_distribution ||
+             field.local_rank() != requested_local_rank || field.ncomp() != 1 ||
+             field.ghosts() != ghosts;
     };
-    local_materialization_mismatch =
-        actual_distribution != requested_distribution || actual_operator_contract.empty() ||
-        actual_operator_contract != expected_operator_contract.exact_fingerprint() ||
-        field_mismatch(rhs, requested_rhs_ghosts) || field_mismatch(phi, requested_phi_ghosts) ||
-        rhs.shares_storage_with(phi) ||
-        !detail::elliptic_geometry_exactly_matches(solver.geom(), requested_geometry);
-    rhs_layout_contract = detail::field_distribution_layout_contract(rhs, requested_distribution);
-    phi_layout_contract = detail::field_distribution_layout_contract(phi, requested_distribution);
+    mismatch = actual_contract != expected.exact_fingerprint() ||
+               field_mismatch(rhs, requested_rhs_ghosts) ||
+               field_mismatch(phi, requested_phi_ghosts) || rhs.shares_storage_with(phi) ||
+               solver.geom() != requested_geometry;
+    rhs_contract = elliptic_contract_detail::field_layout_contract(rhs);
+    phi_contract = elliptic_contract_detail::field_layout_contract(phi);
   } catch (...) {
-    local_inspection_failed = true;
+    inspection_failed = true;
   }
-  if (all_reduce_max(local_inspection_failed ? 1L : 0L, lane) != 0)
+  if (all_reduce_max(inspection_failed ? 1L : 0L, lane) != 0)
     throw std::runtime_error("elliptic backend inspection failed on at least one rank");
-  const bool backend_agrees = all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("elliptic-actual-operator"), std::string_view(actual_operator_contract)},
-       {std::string_view("elliptic-rhs-layout"), std::string_view(rhs_layout_contract)},
-       {std::string_view("elliptic-phi-layout"), std::string_view(phi_layout_contract)}},
-      lane);
-  if (all_reduce_max(local_materialization_mismatch ? 1L : 0L, lane) != 0)
+  if (all_reduce_max(mismatch ? 1L : 0L, lane) != 0)
     throw std::invalid_argument(
         "elliptic backend did not materialize the requested operator and field contract");
-  if (!backend_agrees)
-    throw std::invalid_argument(
-        "elliptic backend operator or field contract differs between communicator ranks");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("elliptic-actual-operator"), std::string_view(actual_contract)},
+           {std::string_view("elliptic-rhs-layout"), std::string_view(rhs_contract)},
+           {std::string_view("elliptic-phi-layout"), std::string_view(phi_contract)}},
+          lane))
+    throw std::invalid_argument("elliptic backend differs between execution-lane ranks");
   return std::move(solver);
 }
 
-/// Sequential/control-path compatibility wrapper. Prepared runtime sessions pass their private
-/// ExecutionLane explicitly so independently ordered solver construction never shares WORLD.
 template <EllipticSolver Solver, class Factory>
   requires EllipticFactory<std::remove_cvref_t<Factory>, Solver>
-Solver make_elliptic_solver(EllipticBuildRequest request, Factory&& factory) {
+Solver make_elliptic_solver(EllipticBuildRequest<Solver::dimension> request, Factory&& factory) {
   const ExecutionLane lane = ExecutionLane::world();
   return make_elliptic_solver<Solver>(std::move(request), std::forward<Factory>(factory), lane);
 }

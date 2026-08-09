@@ -128,7 +128,9 @@ def test_available_returns_availability_not_bool():
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
     assert status.status in ("yes", "no", "partial")
-    assert status.ok is True  # a plain mesh is unconditionally available.
+    # The inert annular geometry descriptor remains inspectable even though native execution is
+    # rejected later by the exact coordinate-provider resolve gate.
+    assert status.ok is True
 
 
 def test_lower_is_inert_record_and_never_raises():
@@ -146,19 +148,20 @@ def test_brick_descriptor_native_id_carried_in_lowering():
     # A native brick lowers with its real C++ symbol; a test-only unavailable route carries none.
     assert HLL().lower().to_dict()["native_id"] == "pops::HLLFlux"
     planned = BrickDescriptor(
-        "mc", "native", category="limiter", native_id="", scheme="mc", available=False)
+        "planned_limiter", "native", category="limiter", native_id="",
+        scheme="planned_limiter", available=False)
     assert planned.lower().to_dict()["native_id"] in (None, "")
     matrix = planned.capability_matrix()
     row = matrix.rows[0]
     assert row.status == "unavailable"
-    assert "requested limiter:mc" in row.error_message
+    assert "requested limiter:planned_limiter" in row.error_message
     try:
         planned.validate()
         raise AssertionError("an unavailable descriptor must reject before bind/compile")
     except ValueError as exc:
         msg = str(exc)
         assert "unsupported route" in msg
-        assert "requested limiter:mc" in msg
+        assert "requested limiter:planned_limiter" in msg
         assert "available route" in msg
         assert "alternative" in msg
 

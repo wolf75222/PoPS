@@ -9,12 +9,15 @@ import pytest
 from pops import interfaces
 from pops.external import build_source_package_manifest, load
 from pops.fields import ExternalFieldSolver
+from pops.lib.initial import Gaussian
 from pops.model import ComponentManifest
 from pops.time import FailRun, FixedDt
 from tests.python.integration._final_field_program import (
     passive_field_model,
     resolve_periodic_field_program,
+    scalar_advection_field_model,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 def _manifest(name, interface, parameters=()):
@@ -33,7 +36,7 @@ def _manifest(name, interface, parameters=()):
             "dimension": 2,
             "scalar": "float64",
             "device": "cpu",
-            "features": [],
+            "features": ["mpi"],
         }]},
         entry_points={"interface_table": "pops_component_interface_v1"},
     )
@@ -58,13 +61,22 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def _topology_source(manifest):
+def _topology_source(
+    manifest,
+    *,
+    require_multilevel=False,
+    require_distributed=False,
+    periodic_axes=3,
+):
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
+#include <string>
 
 namespace {{
 struct State {{ int prepare_count; int topology_count; }};
+std::string previous_multilevel_layout;
+std::string previous_multilevel_signature;
 
 PopsComponentStatusV1 ok() {{
   return {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
@@ -89,27 +101,80 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
       !request || !result || !request->topology.topology_recipe_identity ||
       !request->topology.source_layout_identity ||
       !request->topology.materialized_layout_identity ||
-      request->topology.dimension != 2 || request->topology.periodic_axes != 3 ||
+      request->topology.dimension != 2 ||
+      request->topology.periodic_axes != {periodic_axes} ||
       request->topology.patch_count == 0 ||
       request->local_patch_count > request->topology.patch_count) return 3;
+  bool saw_level_zero = false;
+  bool saw_level_one = false;
+  bool saw_owner_zero = false;
+  bool saw_owner_one = false;
+  std::string topology_signature;
+  for (std::size_t patch = 0; patch < request->topology.patch_count; ++patch) {{
+    const auto& metadata = request->topology.patches[patch];
+    saw_level_zero = saw_level_zero || metadata.level == 0;
+    saw_level_one = saw_level_one || metadata.level == 1;
+    saw_owner_zero = saw_owner_zero || metadata.owner_rank == 0;
+    saw_owner_one = saw_owner_one || metadata.owner_rank == 1;
+    topology_signature += std::to_string(metadata.level) + ":" +
+        std::to_string(metadata.owner_rank) + ":" + std::to_string(metadata.lower[0]) + ":" +
+        std::to_string(metadata.lower[1]) + ":" + std::to_string(metadata.upper[0]) + ":" +
+        std::to_string(metadata.upper[1]) + ";";
+  }}
+  const bool multilevel = saw_level_one;
+  if ({str(require_multilevel).lower()} && !saw_level_zero) return 6;
+  if ({str(require_distributed).lower()} &&
+      (!saw_level_zero || !saw_level_one || !saw_owner_zero || !saw_owner_one)) return 11;
+  if ({str(require_multilevel).lower()} && !previous_multilevel_signature.empty() &&
+      topology_signature != previous_multilevel_signature &&
+      previous_multilevel_layout == request->topology.materialized_layout_identity) return 10;
+  if ({str(require_multilevel).lower()}) {{
+    previous_multilevel_signature = topology_signature;
+    previous_multilevel_layout = request->topology.materialized_layout_identity;
+  }}
+  if ({str(require_multilevel).lower()} && !{str(require_distributed).lower()} &&
+      request->local_patch_count != request->topology.patch_count) return 8;
+  if ({str(require_distributed).lower()} &&
+      (request->local_patch_count == 0 ||
+       request->local_patch_count >= request->topology.patch_count)) return 8;
+  bool saw_masked_coarse_cell = false;
+  bool saw_active_fine_cell = false;
+  int local_owner = -1;
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
-    if (patch.metadata_index >= request->topology.patch_count ||
-        patch.material_representation != POPS_FIELD_MATERIAL_FULL_V1 ||
-        patch.material_coverage.data || patch.cut_cell_volume_fraction.data ||
+    const bool full = patch.material_representation == POPS_FIELD_MATERIAL_FULL_V1;
+    const bool binary =
+        patch.material_representation == POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1;
+    if (patch.metadata_index >= request->topology.patch_count || (!full && !binary) ||
+        ({str(require_multilevel).lower()} && multilevel && !binary) ||
+        (full && patch.material_coverage.data) ||
+        (binary && (!patch.material_coverage.data ||
+                    patch.material_coverage.size != patch.material_mask.size)) ||
+        patch.cut_cell_volume_fraction.data ||
         patch.material_ids.data ||
         patch.material_mask.size != patch.component_labels.size) return 4;
     const auto& metadata = request->topology.patches[patch.metadata_index];
+    if ({str(require_distributed).lower()} &&
+        (local_owner == -1 ? (local_owner = metadata.owner_rank, false)
+                           : local_owner != metadata.owner_rank)) return 12;
     if (metadata.dimension != 2 || metadata.cell_spacing[0] <= 0.0 ||
         metadata.cell_spacing[1] <= 0.0 || !metadata.layout_identity ||
         !metadata.patch_identity ||
         std::strcmp(metadata.layout_identity,
                     request->topology.source_layout_identity) != 0) return 5;
     for (std::size_t point = 0; point < patch.material_mask.size; ++point) {{
-      patch.material_mask.data[point] = 1;
-      patch.component_labels.data[point] = 1;
+      const auto active = binary ? patch.material_coverage.data[point] : 1;
+      if (active > 1) return 7;
+      saw_masked_coarse_cell =
+          saw_masked_coarse_cell || (metadata.level == 0 && active == 0);
+      saw_active_fine_cell =
+          saw_active_fine_cell || (metadata.level > 0 && active == 1);
+      patch.material_mask.data[point] = active;
+      patch.component_labels.data[point] = active == 1 ? 1 : 0;
     }}
   }}
+  if ({str(require_multilevel).lower()} && multilevel &&
+      (!saw_masked_coarse_cell || !saw_active_fine_cell)) return 9;
   static const PopsTopologyLabelV2 labels[] = {{
     {{sizeof(PopsTopologyLabelV2), 1, "material", "external-test-topology"}}
   }};
@@ -147,13 +212,21 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _solver_source(manifest, *, solution_expression="7.0"):
+def _solver_source(
+    manifest,
+    *,
+    solution_expression="7.0",
+    solve_count_statement="++state->solve_count;",
+    iterations_expression="state->solve_count",
+    extra_includes="",
+):
     expected_parameters_json = json.dumps(
         {"answer": 7}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+{extra_includes}
 
 namespace {{
 struct State {{ int prepare_count; int solve_count; }};
@@ -199,7 +272,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
       !request->boundary_contract_json ||
       std::strstr(request->boundary_contract_json, "identity") == nullptr)
     return 3;
-  ++state->solve_count;
+  {solve_count_statement}
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
     if (patch.metadata_index >= request->topology.patch_count ||
@@ -216,18 +289,18 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
     for (std::size_t j = 0; j < patch.solution.extents[1]; ++j) {{
       for (std::size_t i = 0; i < patch.solution.extents[0]; ++i) {{
         const std::size_t point = j * patch.solution.extents[0] + i;
-        if (mask[point] != 1 || labels[point] != 1) return 5;
+        if (mask[point] > 1 || labels[point] != (mask[point] == 1 ? 1 : 0)) return 5;
         const auto index = static_cast<std::ptrdiff_t>(i) *
                                patch.solution.axis_strides[0] +
                            static_cast<std::ptrdiff_t>(j) *
                                patch.solution.axis_strides[1];
-        solution[index] = {solution_expression};
+        if (mask[point] == 1) solution[index] = {solution_expression};
       }}
     }}
   }}
   report->status = POPS_SOLVE_SOLVED_V2;
   report->action = POPS_SOLVE_ACTION_NONE_V2;
-  report->iterations = state->solve_count;
+  report->iterations = {iterations_expression};
   report->relative_residual = 0.0;
   report->reference_residual_norm = 1.0;
   report->residual_norm = 0.0;
@@ -261,11 +334,56 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _nonfinite_solver_source(manifest):
+def _externally_faulted_solver_source(manifest, fault_marker):
     return _solver_source(
         manifest,
-        solution_expression="std::numeric_limits<double>::quiet_NaN()",
+        solution_expression=(
+            "std::filesystem::exists(%s) "
+            "? std::numeric_limits<double>::quiet_NaN() : 7.0"
+            % json.dumps(str(fault_marker))
+        ),
+        solve_count_statement="",
+        iterations_expression="1",
+        extra_includes="#include <filesystem>",
     )
+
+
+def _mpi_faulted_solver_source(
+    manifest,
+    *,
+    collective_fault_marker,
+    divergent_fault_marker,
+    divergent_owner=1,
+):
+    """Return one MPI component with typed collective and rank-local fault switches."""
+    source = _solver_source(
+        manifest,
+        solution_expression=(
+            "(std::filesystem::exists(%s) && request->local_patch_count != 0 && "
+            "request->topology.patches[request->local_patches[0].metadata_index].owner_rank "
+            "== %d) ? std::numeric_limits<double>::quiet_NaN() : 7.0"
+            % (json.dumps(str(divergent_fault_marker)), divergent_owner)
+        ),
+        solve_count_statement="++state->solve_count;",
+        iterations_expression="state->solve_count",
+        extra_includes="#include <filesystem>",
+    )
+    solved = "  report->status = POPS_SOLVE_SOLVED_V2;"
+    collective = f'''  if (std::filesystem::exists(
+          {json.dumps(str(collective_fault_marker))})) {{
+    report->status = POPS_SOLVE_INVALID_EVALUATION_V2;
+    report->action = POPS_SOLVE_ACTION_FAIL_RUN_V2;
+    report->iterations = state->solve_count;
+    report->relative_residual = 1.0;
+    report->reference_residual_norm = 1.0;
+    report->residual_norm = 1.0;
+    report->reason = "forced collective MPI failure";
+    return 0;
+  }}
+{solved}'''
+    if source.count(solved) != 1:
+        raise AssertionError("test FieldSolver source no longer has one solved-report seam")
+    return source.replace(solved, collective)
 
 
 def _program(state, rate, field):
@@ -274,6 +392,15 @@ def _program(state, rate, field):
     program = ForwardEuler(
         state, rate=rate, fields=field, solve_action=FailRun())
     program.step_strategy(FixedDt(1.0e-4))
+    return program
+
+
+def _moving_amr_program(state, rate, field):
+    from pops.lib.time import ForwardEuler
+
+    program = ForwardEuler(
+        state, rate=rate, fields=field, solve_action=FailRun())
+    program.step_strategy(FixedDt(8.0e-2))
     return program
 
 
@@ -299,6 +426,7 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     simulation = pops.bind(
         artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     slot, = simulation.field_provider_slots()
     before = simulation.inspect().to_dict()["instance"]["field_providers"]
@@ -340,15 +468,96 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
 
 
-def test_external_field_solver_rejects_converged_nonfinite_solution_without_publishing(
+def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path):
+    topology = _component(
+        tmp_path,
+        name="amr-topology",
+        interface=interfaces.FieldTopology,
+        source_factory=lambda manifest: _topology_source(
+            manifest, require_multilevel=True, periodic_axes=0
+        ),
+    )
+    solver = _component(
+        tmp_path,
+        name="amr-solver",
+        interface=interfaces.FieldSolver,
+        source_factory=_solver_source,
+        manifest_parameters=({"name": "answer", "kind": "runtime"},),
+        instance_parameters={"answer": 7},
+    )
+    provider = ExternalFieldSolver(
+        topology=topology,
+        solver=solver,
+        relative_tolerance=1.0e-11,
+        absolute_tolerance=0.0,
+        max_iterations=23,
+    )
+    model = scalar_advection_field_model("external-amr-field-runtime")
+    x_axis, y_axis = model.frame.axes
+    center_x, center_y = 0.25, 0.5
+    background = 0.8
+    amplitude = 4.0
+    inverse_width = 80.0
+    # A compact super-threshold region moves far enough to replace the fine layout at step 2.
+    resolved = resolve_periodic_field_program(
+        model,
+        _moving_amr_program,
+        name="external-amr-field-runtime",
+        block_name="material",
+        target="amr_system",
+        n=8,
+        regrid_every=2,
+        field_solver=provider,
+        initial_profile=Gaussian(
+            frame=model.frame,
+            center={x_axis: center_x, y_axis: center_y},
+            background=background,
+            amplitude=amplitude,
+            inverse_width=inverse_width,
+        ),
+        components=(topology, solver),
+        anchored_field=True,
+    )
+
+    threshold, = (
+        slot.handle for slot in resolved.bind_schema.runtime_slots
+        if slot.handle.local_id == "external-amr-field-runtime_refine_threshold"
+    )
+    artifact = pops.compile(resolved)
+    simulation = pops.bind(
+        artifact,
+        params={threshold: 1.2},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    slot, = simulation.field_provider_slots()
+    providers = simulation.inspect().to_dict()["instance"]["field_providers"]
+    assert providers[0]["provider_slot"] == slot
+    assert providers[0]["solver_configuration"]["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    assert simulation.n_levels() == 2
+    boxes_before = tuple(simulation.patch_boxes())
+    regrids_before = simulation.amr.explain_regrid().regrid_count
+    report = pops.run(simulation, t_end=2.4e-1, max_steps=3)
+    assert report.accepted_steps == 3
+    assert report.final_time == pytest.approx(2.4e-1)
+    assert simulation.amr.explain_regrid().regrid_count > regrids_before
+    assert tuple(simulation.patch_boxes()) != boxes_before
+
+
+def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
     tmp_path,
 ):
+    fault_marker = tmp_path / "external-field-solver-fault"
+    fault_marker.write_text("force a non-finite component result", encoding="utf-8")
     topology = _component(
         tmp_path, name="nonfinite-topology", interface=interfaces.FieldTopology,
         source_factory=_topology_source)
     solver = _component(
         tmp_path, name="nonfinite-solver", interface=interfaces.FieldSolver,
-        source_factory=_nonfinite_solver_source,
+        source_factory=lambda manifest: _externally_faulted_solver_source(
+            manifest, fault_marker
+        ),
         manifest_parameters=({"name": "answer", "kind": "runtime"},),
         instance_parameters={"answer": 7})
     provider = ExternalFieldSolver(
@@ -360,13 +569,41 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
         target="system", n=8, field_solver=provider,
         components=(topology, solver))
 
+    artifact = pops.compile(resolved)
     simulation = pops.bind(
-        pops.compile(resolved),
+        artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
+    communicator = simulation._install_plan.execution_context.communicator
+    if communicator.identity == "MPI_COMM_WORLD":
+        from pops._native_collectives import size
+
+        assert size(communicator.handle) == 1
+    assert simulation._publisher._size == 1
+    assert not simulation.consumer_graph.nodes
+    entry_runtime_fence = simulation._failed_run_effect_fence()
+    entry_publisher_fence = simulation._publisher.failed_run_effect_fence()
     slot, = simulation.field_provider_slots()
-    before = np.asarray(simulation.field_potential_global(slot)).copy()
-    assert before.size == 64 and np.all(before == 0.0)
+    accepted_before = {
+        "time": simulation.time(),
+        "macro_step": simulation.macro_step(),
+        "state": np.asarray(
+            simulation.state_global("material"), dtype=np.float64
+        ).copy(),
+        "potential": np.asarray(
+            simulation.field_potential_global(slot), dtype=np.float64
+        ).copy(),
+        "cursors": simulation.consumer_cursors.to_data(),
+        "reports": tuple(simulation._consumer_reports),
+        "temporal": json.dumps(
+            simulation._executor._temporal_restart_state.to_data(),
+            sort_keys=True,
+        ),
+        "providers": simulation.inspect().to_dict()["instance"]["field_providers"],
+    }
+    assert accepted_before["potential"].size == 64
+    assert np.all(accepted_before["potential"] == 0.0)
 
     with pytest.raises(
         RuntimeError,
@@ -374,6 +611,63 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
     ):
         pops.run(simulation, t_end=1.0e-4, max_steps=1)
 
-    after = np.asarray(simulation.field_potential_global(slot))
-    np.testing.assert_array_equal(after, before)
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    after = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    np.testing.assert_array_equal(after, accepted_before["potential"])
     assert np.all(np.isfinite(after))
+    assert simulation.time() == accepted_before["time"]
+    assert simulation.macro_step() == accepted_before["macro_step"]
+    assert simulation.consumer_cursors.to_data() == accepted_before["cursors"]
+    assert tuple(simulation._consumer_reports) == accepted_before["reports"]
+    assert json.dumps(
+        simulation._executor._temporal_restart_state.to_data(),
+        sort_keys=True,
+    ) == accepted_before["temporal"]
+    assert (
+        simulation.inspect().to_dict()["instance"]["field_providers"]
+        == accepted_before["providers"]
+    )
+    failed = simulation._executor._last_step_transaction_report
+    assert (failed.status, failed.phase, failed.action) == (
+        "failed",
+        "solve",
+        "fail_run",
+    )
+    assert failed.committed_effects == ()
+    assert failed.staged_effects
+    assert failed.rolled_back_effects == failed.staged_effects
+    failed_identity = simulation.last_run_identity
+    assert failed_identity.domain == "run"
+    assert simulation._failed_run_effect_fence() == entry_runtime_fence
+    assert simulation._publisher.failed_run_effect_fence() == entry_publisher_fence
+    assert failed_identity.token not in simulation._publisher._closed_observer_runs
+    assert failed_identity.token not in simulation._publisher._observer_run_phases
+
+    assert fault_marker.is_file()
+    fault_marker.unlink()
+    retry = pops.run(simulation, t_end=1.0e-4, max_steps=1)
+    assert retry.accepted_steps == 1
+    assert retry.run_identity == failed_identity
+    assert simulation.last_run_identity == failed_identity
+    assert simulation.time() == 1.0e-4
+    assert simulation.macro_step() == 1
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    potential = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    assert potential.size == 64
+    assert np.all(np.isfinite(potential))
+    assert np.all(potential == 0.0)
+    accepted = simulation._executor._last_step_transaction_report
+    assert (accepted.status, accepted.phase, accepted.action) == (
+        "accepted",
+        "commit",
+        "commit",
+    )
+    assert accepted.staged_effects
+    assert accepted.committed_effects == accepted.staged_effects
+    assert accepted.rolled_back_effects == ()

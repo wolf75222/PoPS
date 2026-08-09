@@ -15,7 +15,8 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
       1e6-contrast oscillating top-hat advected at u=1 (where weno5 reconstructs a negative face density),
       the floored .so run stays FINITE. The load-bearing claim (an unfloored run diverging on the same
       spike) is covered on the System path by tests/cpp/unit/numerics/test_positivity_floor.cpp;
-      refined AMR C/F ghost flooring is covered by tests/cpp/integration/amr/test_cf_interface.cpp.
+      the accepted refined AMR floor trajectory is covered by
+      tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp.
       The full refined Program trajectory is covered by
       tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp instead of depending on this
       pre-ADC-324 never-tagged seed, which is now mono-level. The floor still
@@ -151,7 +152,8 @@ def main():
         # historical "unfloored .so run blows up" assertion relied on the never-tagged 1e30 seed and is
         # not robust on the resulting coarse-only grid (neither floored nor unfloored diverges there); the
         # load-bearing property is covered on System by tests/cpp/unit/numerics/test_positivity_floor.cpp;
-        # refined AMR C/F ghost flooring is covered by tests/cpp/integration/amr/test_cf_interface.cpp.
+        # The accepted refined AMR floor trajectory is covered by
+        # tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp.
         # The complete refined Program trajectory is covered by
         # tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp. Here we keep the
         # compiled-facade contract: floor>0 is accepted (previously raised at add_equation) and the

@@ -1,249 +1,69 @@
-// Cache du schedule de halos de fill_boundary (ADC-260).
-//   - reutilisation BIT-IDENTIQUE a une reconstruction a chaque appel (cache ON == cache OFF) ;
-//   - le schedule est construit UNE fois puis reutilise sur K appels (engagement, compteur de builds) ;
-//   - il est reconstruit (invalide) quand la periodicite, le domaine, n_grow, ou la layout changent,
-//     et quand le MultiFab entier est reassigne (style regrid AMR).
-// Invariant au nombre de rangs : couvre le chemin local (np=1) comme le chemin MPI (np>1).
-
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
-#include <pops/mesh/boundary/halo_schedule.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/parallel/comm.hpp>
-#include <pops/parallel/load_balance.hpp>
 
-#include <cmath>
-#include <cstdio>
+#include "nd_multifab_test_utils.hpp"
+
+#include <array>
+#include <stdexcept>
+#include <vector>
 
 using namespace pops;
+using namespace pops::mesh;
+using namespace pops::test::nd;
 
-static int pops_run_test_fill_boundary_cache(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  const int me = my_rank(), np = n_ranks();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL[rank %d] %s\n", me, w);
-      ++fails;
-    }
-  };
+TEST(test_fill_boundary_cache, prepared_schedule_is_deterministic_and_reusable) {
+  const Box<3> domain = cube<3>(-2, 1);
+  const BoxArray<3> layout = BoxArray<3>::from_domain(domain, Extent<3>{2, 4, 4});
+  const auto distribution = Distribution<3>::replicated(layout, one_rank_space<3>());
+  HostMultiFab<3> fields(layout, distribution, Index<3>{}, 1, Extent<3>{1, 1, 1});
+  std::array<bool, 3> periodic{true, false, true};
+  const HaloScheduleBudget budget{{layout.size(), 1}, 1024, 2048, 64,
+                                  layout.size(),      4096, 4096, 4096};
 
-  const int L = 64, ng = 1, ncomp = 2;
-  const Box2D dom = Box2D::from_extents(L, L);
-  auto wrap = [&](int x) { return ((x % L) + L) % L; };
-  auto val = [&](int i, int j, int c) {
-    return double(wrap(i)) + 0.001 * double(wrap(j)) + 100.0 * c;
-  };
-  const BoxArray ba = BoxArray::from_domain(dom, 16);  // 16x16 boxes -> 4x4 = 16 boxes
-  const DistributionMapping dm = make_sfc_distribution(ba, np);
+  const auto first =
+      prepare_halo_schedule(fields, domain, BoundaryTopology<3>::axis_periodic(periodic), budget);
+  const auto second =
+      prepare_halo_schedule(fields, domain, BoundaryTopology<3>::axis_periodic(periodic), budget);
+  EXPECT_EQ(first.local_jobs(), second.local_jobs());
+  EXPECT_EQ(first.send_plans(), second.send_plans());
+  EXPECT_EQ(first.receive_plans(), second.receive_plans());
 
-  // remplit les cellules VALIDES avec la valeur periodiquement repliee (les ghosts d'un fill
-  // periodique correct doivent ensuite valoir la meme chose).
-  auto set_valid = [&](MultiFab& mf) {
-    for (int li = 0; li < mf.local_size(); ++li) {
-      Fab2D& F = mf.fab(li);
-      const Box2D b = F.box();
-      for (int c = 0; c < ncomp; ++c)
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            F(i, j, c) = val(i, j, c);
-    }
-  };
-  // nombre de cellules (valides + ghosts) != valeur repliee, reduit sur tous les rangs.
-  auto count_wrong = [&](const MultiFab& mf) {
-    long w = 0;
-    for (int li = 0; li < mf.local_size(); ++li) {
-      const Fab2D& F = mf.fab(li);
-      const Box2D g = F.box().grow(mf.n_grow());
-      for (int c = 0; c < ncomp; ++c)
-        for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-          for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-            if (std::fabs(F(i, j, c) - val(i, j, c)) > 1e-12)
-              ++w;
-    }
-    return all_reduce_sum(w);
-  };
-
-  const Periodicity per{true, true};
-  const int K = 5;
-
-  // (1)+(2) cache ON : K fills sur une layout stable. Schedule construit UNE fois, ghosts corrects.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    reset_halo_schedule_build_count();
-    for (int k = 0; k < K; ++k)
-      fill_boundary(mf, dom, per);
-    chk(count_wrong(mf) == 0, "cache_on_correct");
-    chk(halo_schedule_build_count() == 1, "cache_built_once");
-    chk(mf.halo_cache().size() == 1, "cache_one_entry");
-  }
-
-  // (1') cache ON == cache OFF (clear() force la reconstruction a chaque appel) : BIT-IDENTIQUE.
-  {
-    MultiFab a(ba, dm, ncomp, ng), b(ba, dm, ncomp, ng);
-    set_valid(a);
-    set_valid(b);
-    for (int k = 0; k < K; ++k)
-      fill_boundary(a, dom, per);  // cache reutilise
-    reset_halo_schedule_build_count();
-    for (int k = 0; k < K; ++k) {  // reconstruit a chaque appel
-      b.halo_cache().clear();
-      fill_boundary(b, dom, per);
-    }
-    chk(halo_schedule_build_count() == K, "cache_off_rebuilds_each_call");
-    long diff = 0;
-    for (int li = 0; li < a.local_size(); ++li) {
-      const Fab2D& FA = a.fab(li);
-      const Fab2D& FB = b.fab(li);
-      const Box2D g = FA.box().grow(ng);
-      for (int c = 0; c < ncomp; ++c)
-        for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-          for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-            if (FA(i, j, c) != FB(i, j, c))
-              ++diff;  // egalite EXACTE (0 ulp)
-    }
-    chk(all_reduce_sum(diff) == 0, "cache_on_equals_rebuild_bit_identical");
-  }
-
-  // (3) invalidation : une (Periodicite, domaine) differente sur le MEME mf construit un nouveau
-  // schedule ; la meme reutilisee n'en construit pas.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    reset_halo_schedule_build_count();
-    fill_boundary(mf, dom, Periodicity{true, true});  // build #1
-    fill_boundary(mf, dom, Periodicity{true, true});  // reutilise
-    chk(halo_schedule_build_count() == 1, "same_per_domain_reused");
-    fill_boundary(mf, dom, Periodicity{false, false});  // periodicite differente -> build #2
-    chk(halo_schedule_build_count() == 2, "diff_periodicity_rebuilds");
-    const Box2D dom2 = Box2D::from_extents(2 * L, 2 * L);
-    fill_boundary(mf, dom2, Periodicity{false, false});  // domaine different -> build #3
-    chk(halo_schedule_build_count() == 3, "diff_domain_rebuilds");
-    chk(mf.halo_cache().size() == 3, "three_distinct_entries");
-  }
-
-  // (3') invalidation par n_grow : un MultiFab d'une autre largeur de ghosts a son propre schedule.
-  {
-    MultiFab mf2(ba, dm, ncomp, 2);  // ng = 2
-    set_valid(mf2);
-    reset_halo_schedule_build_count();
-    fill_boundary(mf2, dom, per);
-    chk(halo_schedule_build_count() == 1, "diff_ng_builds_own_schedule");
-    chk(count_wrong(mf2) == 0, "diff_ng_correct");
-  }
-
-  // (3'') invalidation par reassignation de l'objet entier (style regrid AMR) : reassigner le
-  // MultiFab abandonne le cache, donc le prochain fill reconstruit sur la NOUVELLE layout.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    reset_halo_schedule_build_count();
-    fill_boundary(mf, dom, per);  // build pour la layout #1
-    chk(halo_schedule_build_count() == 1, "regrid_pre");
-    const BoxArray ba2 = BoxArray::from_domain(dom, 32);  // autre decoupage (2x2 = 4 boxes)
-    const DistributionMapping dm2 = make_sfc_distribution(ba2, np);
-    mf = MultiFab(ba2, dm2, ncomp, ng);  // move-assign d'un MultiFab frais (regrid)
-    set_valid(mf);
-    fill_boundary(mf, dom, per);  // cache abandonne -> reconstruction pour la layout #2
-    chk(halo_schedule_build_count() == 2, "regrid_invalidates_cache");
-    chk(count_wrong(mf) == 0, "regrid_new_layout_correct");
-  }
-
-  // (3''') copy-sharing : a MultiFab copy (the RK-stage pattern `U1 = U`) shares the cache via its
-  // shared_ptr, so filling the copy on the SAME (Periodicity, domain) reuses the schedule (no
-  // rebuild) and is correct -- the jobs carry global indices resolved against the copy's identical
-  // layout.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    fill_boundary(mf, dom, per);  // populate mf's cache
-    MultiFab cp = mf;             // copy: shares the shared_ptr cache (same layout)
-    set_valid(cp);
-    reset_halo_schedule_build_count();
-    fill_boundary(cp, dom, per);  // shared cache HIT -> no rebuild
-    chk(halo_schedule_build_count() == 0, "copy_shares_cache_no_rebuild");
-    chk(count_wrong(cp) == 0, "copy_correct");
-  }
-
-  // A begin handle is bound to one exact destination object. A failed mismatched end does not
-  // consume it; the matching end succeeds once, and a second end is rejected on every rank.
-  {
-    MultiFab a(ba, dm, ncomp, ng), b(ba, dm, ncomp, ng);
-    set_valid(a);
-    set_valid(b);
-    HaloExchange h = fill_boundary_begin(a, dom, per);
-    bool wrong_destination_rejected = false;
-    try {
-      fill_boundary_end(b, h);
-    } catch (const std::invalid_argument&) {
-      wrong_destination_rejected = true;
-    }
-    chk(wrong_destination_rejected, "handle_rejects_wrong_destination");
-    fill_boundary_end(a, h);
-    chk(count_wrong(a) == 0, "matching_handle_completes_exchange");
-    bool second_end_rejected = false;
-    try {
-      fill_boundary_end(a, h);
-    } catch (const std::logic_error&) {
-      second_end_rejected = true;
-    }
-    chk(second_end_rejected, "handle_is_single_consume");
-  }
-
-  // Dropping an active handle must drain local device copies and complete MPI requests before its
-  // destination or pooled buffers can be reused. At one rank, abandonment itself completes the
-  // entire local exchange; at several ranks it deliberately does not publish received data, so the
-  // following full exchange remains the correctness check.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    {
-      HaloExchange abandoned = fill_boundary_begin(mf, dom, per);
-      (void)abandoned;
-    }
-    if (np == 1)
-      chk(count_wrong(mf) == 0, "abandoned_serial_handle_drains_device_work");
-    fill_boundary(mf, dom, per);
-    chk(count_wrong(mf) == 0, "abandoned_handle_never_recycles_active_buffers");
-  }
-
-  // Replacing a destination between begin/end is a regrid-style layout mutation. The handle must
-  // fail before unpacking the old schedule into the new allocation; its destructor still drains MPI.
-  {
-    MultiFab mf(ba, dm, ncomp, ng);
-    set_valid(mf);
-    HaloExchange h = fill_boundary_begin(mf, dom, per);
-    device_fence();
-    const BoxArray changed_ba = BoxArray::from_domain(dom, 32);
-    const DistributionMapping changed_dm = make_sfc_distribution(changed_ba, np);
-    mf = MultiFab(changed_ba, changed_dm, ncomp, ng);
-    bool changed_layout_rejected = false;
-    try {
-      fill_boundary_end(mf, h);
-    } catch (const std::invalid_argument&) {
-      changed_layout_rejected = true;
-    }
-    chk(changed_layout_rejected, "handle_rejects_changed_layout");
-  }
-
-  const long gfails = all_reduce_sum(fails);
-  if (me == 0) {
-    if (gfails == 0)
-      std::printf("OK test_fill_boundary_cache (np=%d)\n", np);
-    else
-      std::printf("FAIL test_fill_boundary_cache : %ld checks (np=%d)\n", gfails, np);
-  }
-  comm_finalize();
-  return gfails == 0 ? 0 : 1;
+  fill_valid_encoded(fields, Real{-91});
+  fill_boundary(fields, first);
+  const auto once = snapshot(fields);
+  fill_boundary(fields, first);
+  EXPECT_EQ(snapshot(fields), once);
 }
 
-TEST(test_fill_boundary_cache, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_fill_boundary_cache, "test_fill_boundary_cache"),
-            0);
+TEST(test_fill_boundary_cache, deep_periodic_wrap_has_no_single_period_limit) {
+  const Box<1> domain{Index<1>{4}, Index<1>{5}};
+  const BoxArray<1> layout(std::vector<Box<1>>{domain});
+  const auto distribution = Distribution<1>::replicated(layout, one_rank_space<1>());
+  HostMultiFab<1> fields(layout, distribution, Index<1>{}, 1, Extent<1>{5});
+  fill_valid_encoded(fields, Real{-200});
+  const auto topology = BoundaryTopology<1>::axis_periodic(std::array<bool, 1>{true});
+  const HaloScheduleBudget budget{{1, 0}, 32, 32, 7, 1, 256, 256, 256};
+  fill_boundary(fields, domain, topology, budget);
+
+  for (int coordinate = -1; coordinate <= 10; ++coordinate) {
+    int wrapped = coordinate;
+    while (wrapped < domain.lo[0])
+      wrapped += 2;
+    while (wrapped > domain.hi[0])
+      wrapped -= 2;
+    EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<1>{coordinate}), encoded_value(Index<1>{wrapped}));
+  }
+}
+
+TEST(test_fill_boundary_cache, finite_preparation_budget_is_enforced) {
+  const Box<2> domain = cube<2>(0, 3);
+  const BoxArray<2> layout = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
+  const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
+  HostMultiFab<2> fields(layout, distribution, Index<2>{}, 1, Extent<2>{1, 1});
+  EXPECT_THROW(
+      (void)prepare_halo_schedule(
+          fields, domain, BoundaryTopology<2>::physical(),
+          HaloScheduleBudget{{layout.size(), 6}, 0, 64, 1, layout.size(), 4096, 4096, 4096}),
+      std::length_error);
 }

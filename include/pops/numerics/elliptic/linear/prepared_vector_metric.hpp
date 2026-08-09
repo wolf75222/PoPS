@@ -24,8 +24,9 @@ namespace pops {
 
 namespace detail {
 
-inline std::string prepared_vector_metric_layout_contract(
-    const MultiFab& prototype, const PreparedVectorDistribution& distribution) {
+template <int Dim>
+std::string prepared_vector_metric_layout_contract(
+    const MultiFab<Dim>& prototype, const PreparedVectorDistribution<Dim>& distribution) {
   if (!distribution.layout_matches(prototype))
     throw std::invalid_argument("prepared vector metric received an incoherent field layout");
 
@@ -34,8 +35,9 @@ inline std::string prepared_vector_metric_layout_contract(
       .scalar(std::uint32_t{1})
       .bytes(distribution.collective_contract())
       .bytes(distribution.layout_contract(prototype))
-      .scalar(static_cast<std::int32_t>(prototype.ncomp()))
-      .scalar(static_cast<std::int32_t>(prototype.n_grow()));
+      .scalar(static_cast<std::int32_t>(prototype.ncomp()));
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(static_cast<std::int32_t>(prototype.ghosts()[axis]));
   return std::move(contract).release();
 }
 
@@ -72,12 +74,12 @@ void prepared_metric_payload_noexcept(std::span<double> payload, Operation&& ope
 /// collective and is rejected structurally by the concept. The immutable source may be shared by
 /// concurrent workspace lanes, so its callbacks must also be reentrant and keep all mutable scratch
 /// in the spans supplied by the caller.
-template <class Source>
+template <int Dim, class Source>
 concept PreparedVectorMetricSource =
     std::copy_constructible<std::remove_cvref_t<Source>> &&
     requires(const std::remove_cvref_t<Source>& source, ExactContractBuilder& contract,
-             const MultiFab& left, const MultiFab& right,
-             const PreparedVectorDistribution& distribution, std::span<double> local_payload,
+             const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+             const PreparedVectorDistribution<Dim>& distribution, std::span<double> local_payload,
              std::span<const double> global_payload, std::span<double> distribution_scratch,
              const ExecutionLane& lane) {
       {
@@ -113,6 +115,7 @@ concept PreparedVectorMetricSource =
 
 /// Default physical metric. It preserves the existing all-component Euclidean arithmetic exactly,
 /// including the scale-safe norm and robust-dot fallback used at extreme exponent ranges.
+template <int Dim>
 struct EuclideanPreparedVectorMetricSource {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.vector-metric.euclidean", 1};
@@ -124,8 +127,8 @@ struct EuclideanPreparedVectorMetricSource {
     return detail::PreparedFieldAlgebra::kRobustDotPayloadWidth;
   }
 
-  Real inner_product(const MultiFab& left, const MultiFab& right,
-                     const PreparedVectorDistribution& distribution,
+  Real inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                     const PreparedVectorDistribution<Dim>& distribution,
                      std::span<double> distribution_scratch,
                      const ExecutionLane& lane) const noexcept {
     return detail::prepared_metric_value_noexcept([&] {
@@ -134,15 +137,15 @@ struct EuclideanPreparedVectorMetricSource {
     });
   }
 
-  Real norm(const MultiFab& value, const PreparedVectorDistribution& distribution,
+  Real norm(const MultiFab<Dim>& value, const PreparedVectorDistribution<Dim>& distribution,
             std::span<double> distribution_scratch, const ExecutionLane& lane) const noexcept {
     return detail::prepared_metric_value_noexcept([&] {
       return detail::PreparedFieldAlgebra::norm(value, distribution, distribution_scratch, lane);
     });
   }
 
-  Real absolute_inner_product(const MultiFab& left, const MultiFab& right,
-                              const PreparedVectorDistribution& distribution,
+  Real absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                              const PreparedVectorDistribution<Dim>& distribution,
                               std::span<double> distribution_scratch,
                               const ExecutionLane& lane) const noexcept {
     return detail::prepared_metric_value_noexcept([&] {
@@ -151,8 +154,9 @@ struct EuclideanPreparedVectorMetricSource {
     });
   }
 
-  Real nullspace_inner_product(const MultiFab& left, const MultiFab& right, Real cell_measure,
-                               const PreparedVectorDistribution& distribution,
+  Real nullspace_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                               Real cell_measure,
+                               const PreparedVectorDistribution<Dim>& distribution,
                                std::span<double> distribution_scratch,
                                const ExecutionLane& lane) const noexcept {
     return detail::prepared_metric_value_noexcept([&] {
@@ -161,9 +165,9 @@ struct EuclideanPreparedVectorMetricSource {
     });
   }
 
-  Real nullspace_absolute_inner_product(const MultiFab& left, const MultiFab& right,
+  Real nullspace_absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                         Real cell_measure,
-                                        const PreparedVectorDistribution& distribution,
+                                        const PreparedVectorDistribution<Dim>& distribution,
                                         std::span<double> distribution_scratch,
                                         const ExecutionLane& lane) const noexcept {
     return detail::prepared_metric_value_noexcept([&] {
@@ -172,12 +176,12 @@ struct EuclideanPreparedVectorMetricSource {
     });
   }
 
-  Real local_inner_product(const MultiFab& left, const MultiFab& right) const noexcept {
+  Real local_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right) const noexcept {
     return detail::prepared_metric_value_noexcept(
         [&] { return detail::PreparedFieldAlgebra::local_dot(left, right); });
   }
 
-  void local_robust_inner_product_payload(const MultiFab& left, const MultiFab& right,
+  void local_robust_inner_product_payload(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                           std::span<double> payload) const noexcept {
     detail::prepared_metric_payload_noexcept(payload, [&] {
       if (payload.size() != robust_payload_width())
@@ -197,27 +201,31 @@ struct EuclideanPreparedVectorMetricSource {
 
 /// Immutable type-erased metric bound to one exact MultiFab vector space and field distribution.
 /// Consumers dispatch only through this protocol; no solver branches on implementation names.
+template <int Dim>
 class PreparedVectorMetric {
  public:
+  static_assert(Dim >= 1 && Dim <= 3, "PreparedVectorMetric only supports dimensions 1, 2, and 3");
   PreparedVectorMetric() = default;
 
-  template <PreparedVectorMetricSource Source>
-  PreparedVectorMetric(const MultiFab& prototype, PreparedVectorDistribution distribution,
+  template <class Source>
+    requires PreparedVectorMetricSource<Dim, Source>
+  PreparedVectorMetric(const MultiFab<Dim>& prototype, PreparedVectorDistribution<Dim> distribution,
                        Source source) {
     initialize_(prototype, distribution, std::move(source));
   }
 
   [[nodiscard]] static PreparedVectorMetric euclidean(
-      const MultiFab& prototype,
-      PreparedVectorDistribution distribution = PreparedVectorDistribution::Distributed) {
-    return PreparedVectorMetric(prototype, distribution, EuclideanPreparedVectorMetricSource{});
+      const MultiFab<Dim>& prototype,
+      PreparedVectorDistribution<Dim> distribution = PreparedVectorDistribution<Dim>::Distributed) {
+    return PreparedVectorMetric(prototype, distribution,
+                                EuclideanPreparedVectorMetricSource<Dim>{});
   }
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(inner_product_);
   }
 
-  [[nodiscard]] const PreparedVectorDistribution& distribution() const noexcept {
+  [[nodiscard]] const PreparedVectorDistribution<Dim>& distribution() const noexcept {
     return distribution_;
   }
   [[nodiscard]] std::size_t robust_payload_width() const noexcept { return robust_payload_width_; }
@@ -229,82 +237,82 @@ class PreparedVectorMetric {
     return collective_contract_;
   }
 
-  [[nodiscard]] bool compatible_with(const MultiFab& prototype,
-                                     const PreparedVectorDistribution& distribution) const {
+  [[nodiscard]] bool compatible_with(const MultiFab<Dim>& prototype,
+                                     const PreparedVectorDistribution<Dim>& distribution) const {
     return static_cast<bool>(*this) && distribution == distribution_ &&
            layout_contract_ ==
                detail::prepared_vector_metric_layout_contract(prototype, distribution);
   }
 
-  Real inner_product(const MultiFab& left, const MultiFab& right,
+  Real inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                      std::span<double> distribution_scratch, const ExecutionLane& lane) const {
     require_initialized_();
     require_scratch_(distribution_scratch);
     return inner_product_(left, right, distribution_scratch, lane);
   }
-  Real inner_product(const MultiFab& left, const MultiFab& right,
+  Real inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                      std::span<double> distribution_scratch) const {
     const ExecutionLane lane = ExecutionLane::world();
     return inner_product(left, right, distribution_scratch, lane);
   }
 
-  Real norm(const MultiFab& value, std::span<double> distribution_scratch,
+  Real norm(const MultiFab<Dim>& value, std::span<double> distribution_scratch,
             const ExecutionLane& lane) const {
     require_initialized_();
     require_scratch_(distribution_scratch);
     return norm_(value, distribution_scratch, lane);
   }
-  Real norm(const MultiFab& value, std::span<double> distribution_scratch) const {
+  Real norm(const MultiFab<Dim>& value, std::span<double> distribution_scratch) const {
     const ExecutionLane lane = ExecutionLane::world();
     return norm(value, distribution_scratch, lane);
   }
 
-  Real absolute_inner_product(const MultiFab& left, const MultiFab& right,
+  Real absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                               std::span<double> distribution_scratch,
                               const ExecutionLane& lane) const {
     require_initialized_();
     require_scratch_(distribution_scratch);
     return absolute_inner_product_(left, right, distribution_scratch, lane);
   }
-  Real absolute_inner_product(const MultiFab& left, const MultiFab& right,
+  Real absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                               std::span<double> distribution_scratch) const {
     const ExecutionLane lane = ExecutionLane::world();
     return absolute_inner_product(left, right, distribution_scratch, lane);
   }
 
-  Real nullspace_inner_product(const MultiFab& left, const MultiFab& right, Real cell_measure,
-                               std::span<double> distribution_scratch,
+  Real nullspace_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                               Real cell_measure, std::span<double> distribution_scratch,
                                const ExecutionLane& lane) const {
     require_initialized_();
     require_scratch_(distribution_scratch);
     return nullspace_inner_product_(left, right, cell_measure, distribution_scratch, lane);
   }
-  Real nullspace_inner_product(const MultiFab& left, const MultiFab& right, Real cell_measure,
-                               std::span<double> distribution_scratch) const {
+  Real nullspace_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                               Real cell_measure, std::span<double> distribution_scratch) const {
     const ExecutionLane lane = ExecutionLane::world();
     return nullspace_inner_product(left, right, cell_measure, distribution_scratch, lane);
   }
 
-  Real nullspace_absolute_inner_product(const MultiFab& left, const MultiFab& right,
+  Real nullspace_absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                         Real cell_measure, std::span<double> distribution_scratch,
                                         const ExecutionLane& lane) const {
     require_initialized_();
     require_scratch_(distribution_scratch);
     return nullspace_absolute_inner_product_(left, right, cell_measure, distribution_scratch, lane);
   }
-  Real nullspace_absolute_inner_product(const MultiFab& left, const MultiFab& right,
+  Real nullspace_absolute_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                         Real cell_measure,
                                         std::span<double> distribution_scratch) const {
     const ExecutionLane lane = ExecutionLane::world();
     return nullspace_absolute_inner_product(left, right, cell_measure, distribution_scratch, lane);
   }
 
-  Real local_inner_product(const MultiFab& left, const MultiFab& right) const {
+  Real local_inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right) const {
     require_initialized_();
     return local_inner_product_(left, right);
   }
 
-  void local_robust_inner_product_payload(const MultiFab& left, const MultiFab& right,
+  void local_robust_inner_product_payload(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                           std::span<double> payload) const {
     require_initialized_();
     if (payload.size() != robust_payload_width_)
@@ -320,8 +328,9 @@ class PreparedVectorMetric {
   }
 
  private:
-  template <PreparedVectorMetricSource Source>
-  void initialize_(const MultiFab& prototype, PreparedVectorDistribution distribution,
+  template <class Source>
+    requires PreparedVectorMetricSource<Dim, Source>
+  void initialize_(const MultiFab<Dim>& prototype, PreparedVectorDistribution<Dim> distribution,
                    Source source) {
     using S = std::remove_cvref_t<Source>;
     const PreparedProviderIdentity identity = S::provider_identity();
@@ -348,37 +357,39 @@ class PreparedVectorMetric {
         .scalar(static_cast<std::uint64_t>(robust_payload_width_));
     collective_contract_ = std::move(collective).release();
 
-    inner_product_ = [source, distribution](const MultiFab& left, const MultiFab& right,
+    inner_product_ = [source, distribution](const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                             std::span<double> scratch, const ExecutionLane& lane) {
       return source.inner_product(left, right, distribution, scratch, lane);
     };
-    norm_ = [source, distribution](const MultiFab& value, std::span<double> scratch,
+    norm_ = [source, distribution](const MultiFab<Dim>& value, std::span<double> scratch,
                                    const ExecutionLane& lane) {
       return source.norm(value, distribution, scratch, lane);
     };
-    absolute_inner_product_ = [source, distribution](const MultiFab& left, const MultiFab& right,
-                                                     std::span<double> scratch,
-                                                     const ExecutionLane& lane) {
+    absolute_inner_product_ = [source, distribution](
+                                  const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                                  std::span<double> scratch, const ExecutionLane& lane) {
       return source.absolute_inner_product(left, right, distribution, scratch, lane);
     };
-    nullspace_inner_product_ = [source, distribution](const MultiFab& left, const MultiFab& right,
-                                                      Real cell_measure, std::span<double> scratch,
+    nullspace_inner_product_ = [source, distribution](const MultiFab<Dim>& left,
+                                                      const MultiFab<Dim>& right, Real cell_measure,
+                                                      std::span<double> scratch,
                                                       const ExecutionLane& lane) {
       return source.nullspace_inner_product(left, right, cell_measure, distribution, scratch, lane);
     };
-    nullspace_absolute_inner_product_ =
-        [source, distribution](const MultiFab& left, const MultiFab& right, Real cell_measure,
-                               std::span<double> scratch, const ExecutionLane& lane) {
-          return source.nullspace_absolute_inner_product(left, right, cell_measure, distribution,
-                                                         scratch, lane);
-        };
-    local_inner_product_ = [source](const MultiFab& left, const MultiFab& right) {
+    nullspace_absolute_inner_product_ = [source, distribution](
+                                            const MultiFab<Dim>& left, const MultiFab<Dim>& right,
+                                            Real cell_measure, std::span<double> scratch,
+                                            const ExecutionLane& lane) {
+      return source.nullspace_absolute_inner_product(left, right, cell_measure, distribution,
+                                                     scratch, lane);
+    };
+    local_inner_product_ = [source](const MultiFab<Dim>& left, const MultiFab<Dim>& right) {
       return source.local_inner_product(left, right);
     };
-    local_robust_inner_product_payload_ = [source](const MultiFab& left, const MultiFab& right,
-                                                   std::span<double> payload) {
-      source.local_robust_inner_product_payload(left, right, payload);
-    };
+    local_robust_inner_product_payload_ =
+        [source](const MultiFab<Dim>& left, const MultiFab<Dim>& right, std::span<double> payload) {
+          source.local_robust_inner_product_payload(left, right, payload);
+        };
     inner_product_from_global_robust_payload_ = [source](std::span<const double> payload) {
       return source.inner_product_from_global_robust_payload(payload);
     };
@@ -394,16 +405,17 @@ class PreparedVectorMetric {
       throw std::invalid_argument("prepared vector metric reduction scratch is too small");
   }
 
-  using InnerProduct = std::function<Real(const MultiFab&, const MultiFab&, std::span<double>,
-                                          const ExecutionLane&)>;
-  using LocalInnerProduct = std::function<Real(const MultiFab&, const MultiFab&)>;
-  using NullspaceInnerProduct = std::function<Real(const MultiFab&, const MultiFab&, Real,
+  using InnerProduct = std::function<Real(const MultiFab<Dim>&, const MultiFab<Dim>&,
+                                          std::span<double>, const ExecutionLane&)>;
+  using LocalInnerProduct = std::function<Real(const MultiFab<Dim>&, const MultiFab<Dim>&)>;
+  using NullspaceInnerProduct = std::function<Real(const MultiFab<Dim>&, const MultiFab<Dim>&, Real,
                                                    std::span<double>, const ExecutionLane&)>;
-  using Norm = std::function<Real(const MultiFab&, std::span<double>, const ExecutionLane&)>;
-  using RobustPayload = std::function<void(const MultiFab&, const MultiFab&, std::span<double>)>;
+  using Norm = std::function<Real(const MultiFab<Dim>&, std::span<double>, const ExecutionLane&)>;
+  using RobustPayload =
+      std::function<void(const MultiFab<Dim>&, const MultiFab<Dim>&, std::span<double>)>;
   using RobustReconstruction = std::function<Real(std::span<const double>)>;
 
-  PreparedVectorDistribution distribution_ = PreparedVectorDistribution::Distributed;
+  PreparedVectorDistribution<Dim> distribution_ = PreparedVectorDistribution<Dim>::Distributed;
   std::size_t robust_payload_width_ = 0;
   std::string layout_contract_;
   std::string collective_contract_;

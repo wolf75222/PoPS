@@ -1715,6 +1715,58 @@ def test_hdf5_is_reopened_with_native_reader_and_exact_selection(tmp_path):
     assert read_hdf5(target).output_identity == reopened.output_identity
 
 
+@pytest.mark.parametrize("shape", ((5,), (3, 4), (2, 3, 4)))
+def test_hdf5_roundtrips_exact_ranked_fields(tmp_path, shape):
+    pytest.importorskip("h5py")
+    dimension = len(shape)
+    label = "x".join(map(str, shape))
+    layout = _identity("layout-plan", "hdf5-ranked-" + label)
+    component = _identity("component-manifest", "hdf5-ranked-" + label)
+    state = _handle("hdf5-ranked-" + label)
+    key = FieldKey(state, component, layout, 0, "accepted")
+    lower = (0,) * dimension
+    values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    geometry = LevelGeometry(
+        layout,
+        "uniform",
+        0,
+        tuple(0.0 for _ in shape),
+        tuple(1.0 for _ in shape),
+        shape,
+        (lower + shape,),
+        np.zeros(shape, dtype=np.bool_),
+        np.ones(shape, dtype=np.float64),
+    )
+    field = FieldPayload(
+        key,
+        "cell",
+        "1",
+        (),
+        shape,
+        (ArrayPiece(lower, shape, values, 0, 0, False),),
+    )
+    snapshot = OutputSnapshot(
+        OutputClock.at("macro", 0.0, 0, stage="accepted"),
+        OutputProvenance(
+            _identity("resolved-plan", "hdf5-ranked-" + label),
+            _identity("bind", "hdf5-ranked-" + label),
+            _identity("run", "hdf5-ranked-" + label),
+            "accepted-step-transaction",
+        ),
+        (geometry,),
+        (field,),
+        {"case": "hdf5-ranked-" + label},
+    )
+    request = OutputRequest("hdf5-ranked", (key,), ParallelMode.SERIAL)
+    target = deterministic_target(tmp_path, label, request, snapshot, ".h5")
+    prepared = _stage_writer(HDF5Writer(), snapshot, request, target)
+    reopened = read_hdf5(prepared.temporary).require_selection(request)
+    dataset = reopened.manifest["datasets"]["fields"][key.identity.token]
+    assert reopened.manifest["arrays"][dataset]["spatial_rank"] == dimension
+    np.testing.assert_array_equal(reopened.arrays[dataset], values)
+    prepared.abort_prepare()
+
+
 def test_hdf5_reader_rejects_hidden_nested_dataset(tmp_path):
     h5py = pytest.importorskip("h5py")
     snapshot, request, _ = _snapshot()
@@ -1832,7 +1884,7 @@ def test_composite_integrals_refuses_non_cartesian_cell_measure():
         replace(geometry, cell_measure=POLAR_ANNULUS_CELL_AREA)
         for geometry in snapshot.geometries
     ))
-    with pytest.raises(NotImplementedError, match="only the native Cartesian cell-area metric"):
+    with pytest.raises(NotImplementedError, match="requires the native Cartesian cell-measure"):
         composite_integrals(snapshot, request)
 
 
@@ -2617,19 +2669,15 @@ def test_series_lock_contention_fails_explicitly_and_is_retryable(tmp_path, monk
 
 
 def test_generic_series_policy_excludes_paraview_pvd_collections():
+    import inspect
+
     assert HDF5().series is True
     assert NPZ().series is True
     assert ParaView().series is False
     assert ParaView().series_catalog() is None
-    with pytest.warns(DeprecationWarning, match="collection"):
-        enabled = ParaView(series=True)
-    assert enabled.collection is True
-    with pytest.warns(DeprecationWarning, match="collection"):
-        disabled = ParaView(series=False)
-    assert disabled.collection is False
-    with pytest.warns(DeprecationWarning, match="collection"):
-        with pytest.raises(ValueError, match="disagree"):
-            ParaView(collection=True, series=False)
+    assert "series" not in inspect.signature(ParaView).parameters
+    assert ParaView(collection=True).collection is True
+    assert ParaView(collection=False).collection is False
 
 
 def test_format_writers_publish_structural_preflight_capabilities():

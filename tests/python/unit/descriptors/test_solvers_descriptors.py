@@ -293,21 +293,23 @@ def test_fft_is_a_real_solver_with_route_constraints():
     f = elliptic.FFT()
     assert f.name == "fft"
     # A real, runtime-wired solver -- not unimplemented.
-    assert f.native_id == "pops::PoissonFFTSolver"
+    assert f.native_id == "pops::PoissonFFTSolver<2>"
     assert f.scheme == "fft"
+    assert f.options() == {}
+    assert f.to_data() == {"scheme": "fft"}
     status = f.available()
     # partial = genuine route constraints (periodic / const-coeff / power-of-two), not "no symbol".
     assert status.status == "partial"
     assert any("periodic" in m for m in status.missing)
-    assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
+    assert "pops.solvers.elliptic.CartesianCG()" in status.alternatives
     assert f.inspect()["available"] == "partial"
     # ``partial`` is not a fake or unavailable implementation: authoring validation accepts the
     # route, then prepared-field resolution proves its concrete mesh/boundary constraints.
     assert f.validate()
-    # spectral=True selects the fft_spectral token.
-    spectral = elliptic.FFT(spectral=True)
-    assert spectral.scheme == "fft_spectral"
-    assert spectral.options() == {"spectral": True}
+    # The continuous-symbol route was retired: accepting the old knob would publish a solve
+    # without a residual authenticated by the same operator.
+    with pytest.raises(TypeError):
+        elliptic.FFT(spectral=True)
 
 
 def test_fft_rejects_amr_layout_with_precise_message():
@@ -327,6 +329,30 @@ def test_fft_rejects_amr_layout_with_precise_message():
     # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
     assert elliptic.FFT().available({"layout": Uniform(cartesian_grid(n=64))}).status == "partial"
     assert elliptic.FFT().available().status == "partial"
+
+
+@pytest.mark.parametrize("dimension", (1, 3))
+def test_fft_rejects_non_two_dimensional_uniform_layout(dimension):
+    from pops.domain import CartesianDomain
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+
+    frame = CartesianDomain(
+        "fft-rank-%d" % dimension,
+        (0.0,) * dimension,
+        (1.0,) * dimension,
+    ).frame()
+    layout = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(16,) * dimension,
+        periodic=PeriodicAxes(frame.axes),
+    ))
+    status = elliptic.FFT().available({"layout": layout})
+    assert status.status == "no"
+    assert "exact two-dimensional" in status.reason
+    assert "Dim=%d" % dimension in status.reason
+    with pytest.raises(ValueError, match="exact two-dimensional"):
+        elliptic.FFT().validate({"layout": layout})
 
 
 def test_fft_available_never_raises_on_odd_context():
@@ -411,7 +437,7 @@ def test_lib_solvers_shim_is_removed():
     assert ns.CG(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert ns.Newton().available().ok is True
     assert ns.LocalNewton().scheme == "newton"
-    assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
+    assert not hasattr(solvers.preconditioners, "GeometricMG")
 
     # The custom-solver authoring / generation DSL is internal / experimental under
     # pops.codegen.solvers (criterion 19); it is NOT a public attribute of pops.solvers.
@@ -433,56 +459,6 @@ def test_install_path_has_no_bind_time_solver_token_adapter():
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
     assert not hasattr(_SystemUnifiedInstall, "_solver_token")
     assert not hasattr(_SystemUnifiedInstall, "_install_solver")
-
-
-# --- ADC-644: the wired GeometricMG preconditioner option surface -----------------------------
-def test_precond_geometric_mg_default_has_no_options():
-    # A default GeometricMG() preconditioner carries an EMPTY options dict, so the lowering returns
-    # None and the emitted V-cycle stays byte-identical to the historical single-cycle preconditioner.
-    d = preconditioners.GeometricMG()
-    assert d.category == "preconditioner"
-    assert d.scheme == "geometric_mg"
-    assert d.options == {}
-
-
-def test_precond_geometric_mg_carries_validated_shape_knobs():
-    d = preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1, post_sweeps=1, bottom_sweeps=80,
-                                    min_coarse=4)
-    assert d.options == {"n_vcycles": 3, "pre_sweeps": 1, "post_sweeps": 1, "bottom_sweeps": 80,
-                         "min_coarse": 4}
-
-
-def test_precond_geometric_mg_option_schema_matches_native_constructor_contract():
-    from pops.solvers._prepared_preconditioner_registry import (
-        prepared_preconditioner_provider_by_id,
-    )
-
-    provider = prepared_preconditioner_provider_by_id(
-        "pops.preconditioner.geometric-mg"
-    )
-    assert [
-        (option.name, option.default, option.minimum, option.maximum)
-        for option in provider.options
-    ] == [
-        ("pre_sweeps", 2, 0, (1 << 31) - 1),
-        ("post_sweeps", 2, 0, (1 << 31) - 1),
-        ("bottom_sweeps", 50, 1, (1 << 31) - 1),
-        ("min_coarse", 2, 1, (1 << 31) - 1),
-        ("n_vcycles", 1, 1, (1 << 31) - 1),
-    ]
-    assert preconditioners.GeometricMG(
-        pre_sweeps=0,
-        post_sweeps=0,
-        bottom_sweeps=1,
-        min_coarse=1,
-        n_vcycles=1,
-    ).options == {
-        "pre_sweeps": 0,
-        "post_sweeps": 0,
-        "bottom_sweeps": 1,
-        "min_coarse": 1,
-        "n_vcycles": 1,
-    }
 
 
 def test_preconditioner_provider_consumes_option_protocol_without_core_type_dispatch():
@@ -551,57 +527,6 @@ def test_preconditioner_provider_consumes_option_protocol_without_core_type_disp
     ) == ("Mode::Fast",)
     with pytest.raises(ValueError, match="mode"):
         provider.resolved_cpp_option_literals({"mode": "unknown"}, where="test")
-
-
-@pytest.mark.parametrize("kw", [{"tolerance": 1e-6}, {"max_cycles": 10}])
-def test_precond_geometric_mg_refuses_iterative_knobs(kw):
-    # A Krylov preconditioner must be a FIXED linear map; tolerance/max_cycles describe an iterative
-    # solve-to-convergence and are refused loud (never swallowed).
-    with pytest.raises(ValueError, match="FIXED linear map"):
-        preconditioners.GeometricMG(**kw)
-
-
-def test_precond_geometric_mg_refuses_unknown_kwarg():
-    with pytest.raises(TypeError, match="unknown option"):
-        preconditioners.GeometricMG(bogus=1)
-
-
-@pytest.mark.parametrize(
-    "kw",
-    [
-        {"n_vcycles": 0},
-        {"min_coarse": 0},
-        {"bottom_sweeps": 0},
-        {"pre_sweeps": -1},
-        {"post_sweeps": -1},
-    ],
-)
-def test_precond_geometric_mg_refuses_out_of_domain(kw):
-    with pytest.raises((ValueError, TypeError)):
-        preconditioners.GeometricMG(**kw)
-
-
-def test_precond_geometric_mg_refuses_bool_and_reauthenticates_mutated_options():
-    with pytest.raises(TypeError, match="pre_sweeps"):
-        preconditioners.GeometricMG(pre_sweeps=True)
-
-    from pops.time._program.solve import _lower_preconditioner
-
-    mutated = preconditioners.GeometricMG()
-    mutated.options["bottom_sweeps"] = 0
-    with pytest.raises(ValueError, match="bottom_sweeps"):
-        _lower_preconditioner(mutated)
-
-
-@pytest.mark.parametrize(
-    "name",
-    ["n_vcycles", "pre_sweeps", "post_sweeps", "bottom_sweeps", "min_coarse"],
-)
-def test_precond_geometric_mg_integer_knobs_match_native_int_capacity(name):
-    cpp_int_max = (1 << 31) - 1
-    assert preconditioners.GeometricMG(**{name: cpp_int_max}).options[name] == cpp_int_max
-    with pytest.raises(ValueError, match=name):
-        preconditioners.GeometricMG(**{name: cpp_int_max + 1})
 
 
 # --- ADC-644: DirectSmallGrid threshold is None by default (wired, not dropped) -----------------

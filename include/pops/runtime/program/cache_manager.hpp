@@ -39,53 +39,55 @@ namespace pops::runtime::program {
 
 namespace detail {
 
+template <int Dim>
 struct CacheValueCopyKernel {
-  Array4 destination;
-  ConstArray4 source;
+  FieldView<Real, Dim> destination;
+  FieldView<const Real, Dim> source;
   int components = 0;
 
-  POPS_HD void operator()(int i, int j) const {
+  POPS_HD void operator()(const Index<Dim>& index) const {
     for (int component = 0; component < components; ++component)
-      destination(i, j, component) = source(i, j, component);
+      destination(index, component) = source(index, component);
   }
 };
 
-inline bool same_cache_value_layout(const MultiFab& left, const MultiFab& right) noexcept {
-  return left.box_array().boxes() == right.box_array().boxes() &&
-         left.dmap().ranks() == right.dmap().ranks() && left.ncomp() == right.ncomp() &&
-         left.n_grow() == right.n_grow();
+template <int Dim>
+bool same_cache_value_layout(const MultiFab<Dim>& left, const MultiFab<Dim>& right) noexcept {
+  return left.layout() == right.layout() && left.distribution() == right.distribution() &&
+         left.local_rank() == right.local_rank() && left.ncomp() == right.ncomp() &&
+         left.ghosts() == right.ghosts();
 }
 
-/// Copy valid cells and ghosts into persistent storage.  Every local Fab is launched before the
-/// single fence so Kokkos device builds keep this a batched native operation.  Reallocation occurs
-/// only when the exact decomposition/component/ghost contract changes.
-inline void copy_cache_value_into(MultiFab& destination, const MultiFab& source) {
+/// Copy valid cells and ghosts into persistent storage. Kokkos performs the transfer in the field's
+/// native memory space; reallocation occurs only when the exact decomposition/component/ghost
+/// contract changes.
+template <int Dim>
+void copy_cache_value_into(MultiFab<Dim>& destination, const MultiFab<Dim>& source) {
   if (!same_cache_value_layout(destination, source))
-    destination = MultiFab(source.box_array(), source.dmap(), source.ncomp(), source.n_grow());
-  for (int local = 0; local < destination.local_size(); ++local) {
-    const int global = destination.global_index(local);
-    const int source_local = source.local_index_of(global);
-    if (source_local < 0)
+    destination = MultiFab<Dim>(source.layout(), source.distribution(), source.local_rank(),
+                                source.ncomp(), source.ghosts());
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    const std::size_t global = destination.global_index(local);
+    const std::size_t source_local = source.local_index_of(global);
+    if (source_local == MultiFab<Dim>::not_local)
       throw std::logic_error("cache value copy found inconsistent local ownership");
-    Fab2D& output = destination.fab(local);
-    const Fab2D& input = source.fab(source_local);
-    for_each_cell(output.grown_box(),
-                  CacheValueCopyKernel{output.array(), input.const_array(), source.ncomp()});
+    Kokkos::deep_copy(destination.fab(local).storage(), source.fab(source_local).storage());
   }
-  device_fence();
 }
 
 }  // namespace detail
 
 // One cached node value plus the bookkeeping the schedule needs.
+template <int Dim>
 struct CacheSlot {
-  MultiFab value;                 // the cached field/state (a deep copy of the last recompute)
+  MultiFab<Dim> value;            // the cached field/state (a deep copy of the last recompute)
   int last_update_step = -1;      // macro step at the last recompute (-1 = never)
   Real accumulated_dt = Real(0);  // for accumulate_dt: summed dt of the steps skipped since
   bool valid = false;             // false until the first store (a cold-start node is always due)
   std::string name;               // scheduled node name ("fields_from_state"); "" = "node_<id>"
 };
 
+template <int Dim>
 class CacheManager {
  public:
   // Is node `node_id` due to recompute at `macro_step`? A node never stored (cold start) is always
@@ -103,8 +105,8 @@ class CacheManager {
 
   // Store `value` as node `node_id`'s cached result computed at `macro_step`; resets accumulated_dt
   // (the held value is now fresh).
-  void store(int node_id, const MultiFab& value, int macro_step) {
-    CacheSlot& s = slots_[node_id];
+  void store(int node_id, const MultiFab<Dim>& value, int macro_step) {
+    CacheSlot<Dim>& s = slots_[node_id];
     detail::copy_cache_value_into(s.value, value);  // persistent deep copy; never aliases live data
     s.last_update_step = macro_step;
     s.accumulated_dt = Real(0);
@@ -115,18 +117,18 @@ class CacheManager {
   // "fields_from_state") so the checkpoint can name a missing node verbatim at restart. The nameless
   // store above leaves the name empty (the checkpoint then falls back to "node_<id>"); a later codegen
   // export of the operator name routes through here without changing the cached-value semantics.
-  void store(int node_id, const MultiFab& value, int macro_step, const std::string& name) {
+  void store(int node_id, const MultiFab<Dim>& value, int macro_step, const std::string& name) {
     store(node_id, value, macro_step);
     slots_[node_id].name = name;
   }
 
   // The cached value of `node_id` (must be valid: guard with is_due()==false first).
-  const MultiFab& retrieve(int node_id) const { return slots_.at(node_id).value; }
+  const MultiFab<Dim>& retrieve(int node_id) const { return slots_.at(node_id).value; }
 
   // Restore into a caller-owned resident field.  Unlike assignment from retrieve(), an exact-layout
   // destination keeps its Fab and communication-cache addresses stable across every held step.
-  void restore_into(int node_id, MultiFab& destination) const {
-    const CacheSlot& slot = slots_.at(node_id);
+  void restore_into(int node_id, MultiFab<Dim>& destination) const {
+    const CacheSlot<Dim>& slot = slots_.at(node_id);
     if (!slot.valid)
       throw std::logic_error("cannot restore an invalid Program cache slot");
     detail::copy_cache_value_into(destination, slot.value);
@@ -148,7 +150,7 @@ class CacheManager {
   // is the real sum of the skipped dt, never N * dt_current. Resets the accumulator (a fresh window
   // starts after this recompute); call once at the start of a due accumulate_dt step.
   Real effective_dt(int node_id, Real dt_now) {
-    CacheSlot& s = slots_[node_id];
+    CacheSlot<Dim>& s = slots_[node_id];
     const Real eff = dt_now + s.accumulated_dt;
     s.accumulated_dt = Real(0);
     return eff;
@@ -210,19 +212,19 @@ class CacheManager {
   // The aux is 1-ghost, but a held SCRATCH slot is allocated at the block-state width (2 ghosts), and a
   // 2-ghost-stencil consumer reads the 2nd ghost layer -- so restore MUST rebuild with the SAME ngrow,
   // not a hard-coded 1 (else a held-scratch restart under-reads its outer ghosts).
-  int ngrow_of(int node_id) const { return slots_.at(node_id).value.n_grow(); }
+  Extent<Dim> ghosts_of(int node_id) const { return slots_.at(node_id).value.ghosts(); }
 
   // The cached MultiFab of node `node_id` (the checkpoint gathers it via the System's gather_global,
   // exactly like a history slot). @throws if the slot is absent.
-  const MultiFab& value_of(int node_id) const { return slots_.at(node_id).value; }
+  const MultiFab<Dim>& value_of(int node_id) const { return slots_.at(node_id).value; }
 
   // RESTORE (restart) node `node_id` from a checkpoint: take ownership of the restored `value` (the
   // System scattered the global buffer into it), tag the bookkeeping, and mark it valid -- the inverse
   // of node_ids/value_of. `name` may be empty (defaults to "node_<id>" on read). Replaces any existing
   // slot for that id (a re-installed Program re-keys by the same ids).
-  void restore_slot(int node_id, MultiFab value, int last_update_step, Real accumulated_dt,
+  void restore_slot(int node_id, MultiFab<Dim> value, int last_update_step, Real accumulated_dt,
                     const std::string& name) {
-    CacheSlot& s = slots_[node_id];
+    CacheSlot<Dim>& s = slots_[node_id];
     s.value = std::move(value);
     s.last_update_step = last_update_step;
     s.accumulated_dt = accumulated_dt;
@@ -231,7 +233,7 @@ class CacheManager {
   }
 
  private:
-  std::map<int, CacheSlot> slots_;  // node id (IR Value.id) -> its cache slot
+  std::map<int, CacheSlot<Dim>> slots_;  // node id (IR Value.id) -> its cache slot
 };
 
 }  // namespace pops::runtime::program

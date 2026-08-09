@@ -42,6 +42,27 @@ def test_capability_report_does_not_hide_native_call_failure(monkeypatch):
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
+def test_amr_transfer_report_iterates_every_canonical_oriented_face_centering():
+    from pops.mesh._amr._transfer_contracts import (
+        CELL_CENTERED,
+        NODE_CENTERED,
+        ORIENTED_FACE_CENTERINGS,
+    )
+
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": False, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    transfer = {row.feature: row for row in report.routes}["amr:transfer_contracts"]
+    expected = "/".join((
+        CELL_CENTERED.name,
+        *(centering.name for centering in ORIENTED_FACE_CENTERINGS),
+        NODE_CENTERED.name,
+    ))
+    assert "exact dense %s contracts" % expected in transfer.limitation
+    assert "face_z" in transfer.limitation
+
+
 @pytest.mark.parametrize(
     ("supports_mpi", "expected"),
     ((False, "unavailable"), (True, "available")),
@@ -68,20 +89,213 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]
     assert weno.layout == "uniform|amr"
-    assert "ratio-2 2D AMR" in weno.limitation
+    assert "ratio-2 AMR in the compile-selected native rank" in weno.limitation
     assert "order-5" in weno.limitation
+    for feature in ("limiter:mc", "limiter:superbee"):
+        limiter = routes[feature]
+        assert limiter.status == "available"
+        assert limiter.backend == "production"
+        assert limiter.layout == "uniform|amr"
+        assert "formal_order=2" in limiter.limitation
+        assert "ghost_depth=2" in limiter.limitation
+        assert limiter.available_route == ""
+        assert limiter.alternative == ""
     amr_implicit = routes["amr:source_implicit_program"]
-    assert amr_implicit.status == "unavailable"
-    assert "no temporal fallback" in amr_implicit.limitation
+    assert amr_implicit.status == "partial"
+    assert amr_implicit.backend == "production"
+    assert amr_implicit.mpi is supports_mpi
+    assert amr_implicit.gpu is False
+    assert "prepared LocalNewton" in amr_implicit.limitation
+    assert "SolveOutcome/FailRun rollback is exact" in amr_implicit.limitation
+    assert "subcycled local solves" in amr_implicit.limitation
     assert amr_implicit.layout == "amr"
-    external_amr = routes["amr:external_field_solver_v2"]
-    assert external_amr.status == "unavailable"
-    assert external_amr.layout == "amr"
-    assert external_amr.mpi is False
-    assert "no AmrFieldSolverProvider" in external_amr.limitation
-    assert external_amr.available_route == (
-        "external FieldSolver@2 on one uniform host/serial level"
+    assert amr_implicit.available_route == (
+        "generated Program local implicit source solve with LocalNewton and a consumed "
+        "SolveOutcome on synchronous two-level 2D AMR"
     )
+    cell_local = routes["amr:cell_local_temporal_transport"]
+    assert cell_local.status == "partial"
+    assert cell_local.layout == "amr"
+    assert cell_local.backend == "production"
+    assert cell_local.mpi is False
+    assert cell_local.gpu is False
+    assert "four time-integrated face records" in cell_local.limitation
+    assert "Program.cell_local_time" in cell_local.limitation
+    assert "same-topology restart" in cell_local.limitation
+    assert "prepared physical-boundary plans" in cell_local.limitation
+    external_amr = routes["amr:external_field_solver_v2"]
+    assert external_amr.status == "available"
+    assert external_amr.layout == "amr"
+    assert external_amr.mpi is supports_mpi
+    assert external_amr.gpu is False
+    assert "ratio-2 AMR" in external_amr.limitation
+    assert "both components to declare MPI_COMM_WORLD" in external_amr.limitation
+    assert "distributed coarse level" in external_amr.limitation
+    assert external_amr.available_route == (
+        "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
+        "metadata.level, binary coarse/fine coverage, one collective solve, exact "
+        "materialization/report consensus and transactional candidate publication"
+    )
+    implicit_pair = routes["amr:shared_interface_implicit_jacvec_pair"]
+    assert implicit_pair.status == "partial"
+    assert implicit_pair.layout == "amr"
+    assert implicit_pair.backend == "production"
+    assert implicit_pair.mpi is False
+    assert implicit_pair.gpu is False
+    assert "compiles, binds and runs GMRES" in implicit_pair.limitation
+    assert "independent packed-vector carrier block" in implicit_pair.limitation
+    assert "dynamic hierarchy mutation" in implicit_pair.limitation
+    assert implicit_pair.available_route == (
+        "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
+        "JVP on a frozen two-level 2D AMR hierarchy"
+    )
+    assert "additional interfaces, MPI or GPU" in implicit_pair.alternative
+
+
+def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["boundary:prepared_transport"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one prepared 2D model-aware plan" in prepared.limitation
+    assert "typed-role slip wall" in prepared.limitation
+    assert "typed no-flux faces" in prepared.limitation
+    assert "before divergence/reflux" in prepared.limitation
+    assert "model primitive-to-conservative" in prepared.limitation
+    assert "coarse-fine ghosts under the prepared transfer authority" in prepared.limitation
+    assert "corners explicitly not required" in prepared.limitation
+
+    conversion = routes["boundary:representation_conversion"]
+    assert conversion.status == "partial"
+    assert conversion.layout == "uniform|amr"
+    assert conversion.backend == "production"
+    assert "to_conservative provider" in conversion.limitation
+    assert "recovery" in conversion.limitation
+
+    analytic = routes["boundary:analytic_xtp"]
+    assert analytic.status == "partial"
+    assert analytic.layout == "uniform|amr"
+    assert analytic.backend == "production"
+    assert "analytic ScalarExpr" in analytic.limitation
+    assert "exact logical Clock" in analytic.limitation
+    assert "state/field/input reads remain unavailable" in analytic.limitation
+    assert "axis-permuted periodic coordinates" in analytic.limitation
+
+    characteristic = routes["boundary:characteristic_no_inflow"]
+    assert characteristic.status == "partial"
+    assert characteristic.layout == "uniform|amr"
+    assert characteristic.backend == "production"
+    assert characteristic.mpi is False and characteristic.gpu is False
+    assert "m.roe_from_jacobian()" in characteristic.limitation
+    assert "sonic subspace as neutral" in characteristic.limitation
+    assert "rolls back ghosts" in characteristic.limitation
+    post_riemann = routes["boundary:post_riemann_flux"]
+    assert post_riemann.status == "partial"
+    assert post_riemann.layout == "uniform|amr"
+    assert post_riemann.backend == "production"
+    assert "outward-normal face flux" in post_riemann.limitation
+    assert "Riemann solve and divergence/reflux" in post_riemann.limitation
+    assert "2D Cartesian host-batch" in post_riemann.limitation
+    gpu_report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
+        source="test-gpu-manifest",
+    )
+    gpu_post_riemann = {
+        row.feature: row for row in gpu_report.routes
+    }["boundary:post_riemann_flux"]
+    assert gpu_post_riemann.gpu is False
+
+
+def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    typed = routes["riemann:typed_failure_outcome"]
+    assert typed.status == "partial"
+    assert typed.layout == "uniform|amr"
+    assert typed.backend == "production"
+    assert typed.mpi is True
+    assert typed.gpu is False
+    assert "one device-copyable FluxEvaluation" in typed.limitation
+    assert "requested/used/last solver identity" in typed.limitation
+    assert "single-solver routes remain explicit" in typed.limitation
+    assert "fallback counters and restart" in typed.limitation
+
+    policy = routes["riemann:prepared_recovery_policy"]
+    assert policy.status == "partial"
+    assert policy.layout == "uniform|amr"
+    assert policy.backend == "production"
+    assert policy.mpi is False
+    assert policy.gpu is False
+    assert "typed public riemann.Recovery descriptor" in policy.limitation
+    assert "Uniform and AMR Cartesian face kernels" in policy.limitation
+    assert "only typed candidate rejection" in policy.limitation
+    assert "polar geometry is refused" in policy.limitation
+    assert "GPU qualification" in policy.limitation
+    assert "riemann.Recovery(primary=Roe()" in policy.available_route
+    assert "consume rejection through the step retry/failure policy" in policy.alternative
+
+
+def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cutover():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["recovery:prepared_variable"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one block-prepared closed-form method" in prepared.limitation
+    assert "device-copyable RecoveryOutcome/RecoveryReport" in prepared.limitation
+    assert "selected and last-attempted method kinds" in prepared.limitation
+    assert "consume publication permission" in prepared.limitation
+    assert "transactional analytic initial-state materialization" in prepared.limitation
+    assert "primitive-to-conservative setup conversion" in prepared.limitation
+    assert "AMR regrid prolongation and restriction" in prepared.limitation
+    assert "AMR bootstrap commits" in prepared.limitation
+    assert "rematerialized history slots" in prepared.limitation
+    assert "physical boundary traces" in prepared.limitation
+    assert "generated Program terminal commits" in prepared.limitation
+    assert "model-local and coupled sources" in prepared.limitation
+    assert "no implicit repair or fallback" in prepared.limitation
+    assert "generation-qualified warm-start slot per local cell" in prepared.limitation
+    assert "invalidates every slot after a refused batch" in prepared.limitation
+
+    cutover = routes["recovery:complete_consumer_cutover"]
+    assert cutover.status == "unavailable"
+    assert cutover.layout == "uniform|amr"
+    assert cutover.backend == "none"
+    assert "manual in-place Program writes" in cutover.limitation
+    assert "initial and analytic materialization" not in cutover.limitation
+    assert "fallible primitive-to-conservative conversion" not in cutover.limitation
+    assert "AMR bootstrap/history transfer" not in cutover.limitation
+    assert "primitive boundary traces" not in cutover.limitation
+    assert "persistent warm starts outside the host Uniform diagnostic materializer" in cutover.limitation
+    assert "transactional analytic initial-state materialization" in cutover.available_route
+    assert "spatial face reconstruction" in cutover.available_route
+    assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
+    assert "transactional AMR regrid prolongation/restriction" in cutover.available_route
+    assert "bootstrap/history" in cutover.available_route
+    assert "physical boundary-trace publication" in cutover.available_route
+    assert "model-local and coupled-source endpoints" in cutover.available_route
+    assert "generation-qualified warm starts" in cutover.available_route
+    assert "missing in-place-write, AMR/spatial warm-start" in cutover.alternative
+    assert cutover.error_message
 
 
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
@@ -188,6 +402,39 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     assert estimate.categories["state"] == 2 * 3 * 5 * 16
 
 
+@pytest.mark.parametrize("shape", ((7,), (3, 5), (2, 3, 4)))
+def test_absolute_memory_estimate_is_rank_generic(monkeypatch, shape):
+    from math import prod
+
+    from pops.domain import CartesianDomain
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid
+
+    dimension = len(shape)
+
+    class Extension:
+        @staticmethod
+        def runtime_environment_report():
+            return {"dimension": dimension, "real_bytes": 8, "amr_refinement_ratio": 2}
+
+    domain = CartesianDomain("estimate", (0.0,) * dimension, (1.0,) * dimension)
+    grid = CartesianGrid(frame=domain.frame(), cells=shape)
+    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    monkeypatch.setattr(
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
+    estimate = inspect_compiled.build_memory_estimate(
+        _memory_artifact(), grid, layout=Uniform(grid)
+    )
+
+    cells = prod(shape)
+    ghost_cells = prod(extent + 4 for extent in shape) - cells
+    assert estimate.cells == cells
+    assert estimate.mesh_shape == shape
+    assert estimate.categories["state"] == 2 * cells * 8
+    assert estimate.categories["halo"] == ghost_cells * 2 * 8
+
+
 def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch):
     from pops.descriptors_report import CapabilitySet
     from tests.python.support.layout_plan import cartesian_grid
@@ -223,6 +470,41 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
     )
     assert estimate.layout == "amr"
     assert estimate.categories["amr_patch"] == (2**2 + 2**4) * (2 * 4 * 4 * 16)
+
+
+def test_absolute_memory_estimate_uses_spatial_rank_for_amr_refinement(monkeypatch):
+    from pops.descriptors_report import CapabilitySet
+    from pops.domain import CartesianDomain
+    from pops.mesh import CartesianGrid
+
+    class Extension:
+        @staticmethod
+        def runtime_environment_report():
+            return {"dimension": 3, "real_bytes": 8, "amr_refinement_ratio": 2}
+
+    class ThreeDimensionalAMR:
+        @staticmethod
+        def capabilities():
+            return CapabilitySet({
+                "layout": "amr",
+                "dim": 3,
+                "max_levels": 3,
+                "ratio": 2,
+                "transition_ratios": [2, 2],
+                "supports_amr": True,
+            })
+
+    domain = CartesianDomain("volume", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    mesh = CartesianGrid(frame=domain.frame(), cells=(2, 3, 4))
+    monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
+    monkeypatch.setattr(
+        inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U")
+    )
+    estimate = inspect_compiled.build_memory_estimate(
+        _memory_artifact(), mesh, layout=ThreeDimensionalAMR()
+    )
+    state = 2 * 2 * 3 * 4 * 8
+    assert estimate.categories["amr_patch"] == (2**3 + 2**6) * state
 
 
 def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypatch):

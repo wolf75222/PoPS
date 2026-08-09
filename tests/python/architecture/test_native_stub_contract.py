@@ -21,7 +21,7 @@ PUBLIC_METADATA = {
     "__version__", "__abi_version__", "__release_contract_sha256__", "__public_api_version__",
     "__semantic_ir_version__", "__normalization_version__", "__component_registry_version__",
     "__checkpoint_schema_version__", "__cxx_std__", "__cxx_compiler__", "__has_kokkos__",
-    "__kokkos_contract__",
+    "__kokkos_contract__", "__native_dimension__",
     "__has_mpi__", "__has_parallel_hdf5__", "__native_loader_contract__", "__mpi_contract__",
     "__aux_named_base__", "__aux_max_extra__",
     "__aux_base_comps__", "__aux_max_comps__", "__max_runtime_params__", "__aux_canonical__",
@@ -34,16 +34,24 @@ PUBLIC_CALLABLES = {
 }
 INTERNAL_BOOTSTRAP_TYPES = {"SystemConfig", "AmrSystemConfig", "ModelSpec", "System", "AmrSystem"}
 SYSTEM_CONFIG_FIELDS = {
-    "n": "int", "L": "float", "xlo": "float", "ylo": "float",
-    "periodicity": "tuple[bool, bool]", "geometry": "str", "nr": "int",
-    "ntheta": "int", "r_min": "float", "r_max": "float", "theta_boxes": "int",
+    "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
+    "upper": "tuple[float, ...]",
+    "periodicity": "tuple[bool, ...]",
+    "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
+    "coordinate_system": "str",
 }
 AMR_CONFIG_FIELDS = {
-    "n": "int", "ny": "int", "L": "float", "Ly": "float",
-    "xlo": "float", "ylo": "float",
+    "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
+    "upper": "tuple[float, ...]",
+    "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
+    "coordinate_system": "str",
     "regrid_every": "int", "level_count": "int",
-    "regrid_grow": "int", "regrid_margin": "int", "explicit_bootstrap": "bool",
-    "periodicity": "tuple[bool, bool]", "distribute_coarse": "bool", "coarse_max_grid": "int",
+    "transition_ratios": "tuple[tuple[int, ...], ...]",
+    "transition_buffers": "tuple[tuple[int, ...], ...]",
+    "transition_lookaheads": "tuple[tuple[int, ...], ...]",
+    "explicit_bootstrap": "bool",
+    "periodicity": "tuple[bool, ...]", "distribute_coarse": "bool",
+    "coarse_max_grid": "tuple[int, ...]",
     "cluster_min_efficiency": "float", "cluster_min_box_size": "int", "cluster_max_box_size": "int",
 }
 
@@ -77,9 +85,10 @@ def _annotated_fields(cls: ast.ClassDef) -> dict[str, str]:
 
 def _native_config_fields(path: pathlib.Path, class_name: str) -> set[str]:
     source = path.read_text(encoding="utf-8")
-    marker = 'py::class_<%s>(m, "%s")' % (class_name, class_name)
-    start = source.find(marker)
-    assert start >= 0, "cannot find %s pybind declaration in %s" % (class_name, path)
+    declaration = re.search(
+        r'py::class_<[^>]+>\(m,\s*"%s"\)' % re.escape(class_name), source)
+    assert declaration is not None, "cannot find %s pybind declaration in %s" % (class_name, path)
+    start = declaration.start()
     end = source.find(";\n\n", start)
     assert end >= 0, "cannot find end of %s pybind declaration in %s" % (class_name, path)
     return set(re.findall(r'\.def_(?:readwrite|property)\(\s*"([^"]+)"', source[start:end]))
@@ -164,7 +173,7 @@ def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():
                 "%s must consume the authenticated central native-loader manifest" % (route,))
     assert routes == {
         ("python/pops/codegen/_compile_drivers.py", "compile_native"),
-        ("python/pops/codegen/_compile_drivers.py", "compile_problem"),
+        ("python/pops/codegen/_compile_drivers.py", "_compile_problem_impl"),
         ("python/pops/external/compiler.py", "compile_component"),
     }
 

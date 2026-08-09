@@ -3,15 +3,17 @@
 ``pops.mesh`` describes the discrete domain and the objects the runtime materialises. It
 contains no physics and no solver. Layout descriptors live in :mod:`pops.layouts`.
 
-The ordinary public Cartesian path has one spelling: a :class:`CartesianGrid` over a framed
-:class:`pops.domain.Rectangle`, with periodic topology expressed by :class:`PeriodicAxes`.
-:class:`PolarMesh` remains an advanced, currently supported native annulus descriptor; it is not a
-second Cartesian authoring path. Adaptive authoring lives at :mod:`pops.amr`; ``pops.mesh._amr`` is
-an implementation package and is deliberately not re-exported here.
+The ordinary public Cartesian path has one spelling: a :class:`CartesianGrid` over a bounded
+Cartesian frame.  :class:`pops.domain.CartesianDomain` infers rank 1, 2 or 3 from its bounds;
+periodic topology is expressed by :class:`PeriodicAxes`.
+:class:`PolarMesh` remains an inert annular geometry/output descriptor; the exact-ranked native
+runtime accepts Cartesian coordinate providers only and refuses it during resolution. Adaptive
+authoring lives at :mod:`pops.amr`; ``pops.mesh._amr`` is an implementation package and is
+deliberately not re-exported here.
 
 Other descriptors:
 
-* mesh: :class:`CartesianGrid`; advanced polar mesh: :class:`PolarMesh`;
+* executable mesh: :class:`CartesianGrid`; annular geometry/output: :class:`PolarMesh`;
   aux halo :class:`AuxHalo`;
   boxes :class:`PatchBox` / :class:`BoxLayout`;
 * :mod:`pops.mesh.geometry` -- ``Disc`` / ``HalfPlane`` / ``LevelSet`` / ``EmbeddedBoundary``;
@@ -31,7 +33,8 @@ from .boxes import PatchBox, BoxLayout
 from .layout_plan import (
     LayoutHandle, LayoutMappingOperation, LayoutMappingPort, LayoutMappingProvider,
     LayoutMappingRequirement, LayoutRepresentation, LayoutSynchronization,
-    LayoutPlan, LayoutPlanBuilder, NormalizedGeometry, NormalizedGeometryProvider,
+    LayoutPlan, LayoutPlanBuilder, NativeSpatialLayout, NormalizedGeometry,
+    NormalizedGeometryProvider,
     normalize_layout_plan)
 from .layout_mapping import NativeLayoutMapping
 from . import geometry, masks, boundaries
@@ -43,7 +46,7 @@ __all__ = [
     "LayoutHandle", "LayoutMappingOperation", "LayoutMappingPort", "LayoutMappingProvider",
     "LayoutMappingRequirement", "LayoutRepresentation", "LayoutSynchronization",
     "LayoutPlan", "LayoutPlanBuilder", "NativeLayoutMapping",
-    "NormalizedGeometry", "NormalizedGeometryProvider",
+    "NativeSpatialLayout", "NormalizedGeometry", "NormalizedGeometryProvider",
     "normalize_layout_plan",
     "geometry", "masks", "boundaries",
 ]

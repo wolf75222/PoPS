@@ -1,7 +1,8 @@
-# Module Python pybind11 de la lib PoPS. L'extension compilee s'appelle `_pops`
-# et est deposee dans un PAQUET `pops/` (avec __init__.py : le sucre lisible
+# Module Python pybind11 de la lib PoPS. Chaque build produit une leaf `_pops`
+# dans `pops/_native/dimN/`; le selecteur Python la charge sous le nom logique
+# `pops._pops` apres resolution du domaine.
 # Spatial/Explicit/IMEX/System + pops.integrate). Avec PYTHONPATH = <build>/python,
-# `import pops` charge le paquet, qui importe l'extension _pops.
+# `import pops` reste pur; `pops.compile(plan)` choisit ensuite la leaf correspondant au domaine.
 #
 #   cmake -B build-py -DPOPS_BUILD_PYTHON=ON && cmake --build build-py --target _pops
 #   PYTHONPATH=build-py/python python3 -c "from pops.runtime.doctor import doctor; doctor()"
@@ -126,7 +127,23 @@ message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${POPS_NA
 
 # L'extension va dans le paquet pops/ ; on y copie aussi les sources Python du paquet.
 set(POPS_PY_PKG ${CMAKE_CURRENT_BINARY_DIR}/pops)
-set_target_properties(_pops PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${POPS_PY_PKG})
+set(POPS_PY_NATIVE_PKG ${POPS_PY_PKG}/_native/dim${POPS_NATIVE_DIM})
+set(POPS_PY_NATIVE_MANIFEST ${POPS_PY_PKG}/_native/variants.json)
+set_target_properties(_pops PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${POPS_PY_NATIVE_PKG})
+
+# Publish the leaf only after interrogating the exact linked image.  The helper authenticates its
+# compile-time dimension, ABI, backend and final bytes, then atomically merges the row into the
+# build-tree inventory.  A distribution assembler may invoke the same helper for three isolated
+# sub-builds; the runtime never guesses filenames or scans for a fallback extension.
+add_custom_command(TARGET _pops POST_BUILD
+  COMMAND "${Python_EXECUTABLE}"
+          "${CMAKE_SOURCE_DIR}/scripts/write_native_variant_manifest.py"
+          --extension "$<TARGET_FILE:_pops>"
+          --manifest "${POPS_PY_NATIVE_MANIFEST}"
+          --dimension "${POPS_NATIVE_DIM}"
+          --version "${PROJECT_VERSION}"
+  COMMENT "Authenticating PoPS native Dim=${POPS_NATIVE_DIM} variant manifest"
+  VERBATIM)
 
 # Build PIP (scikit-build-core definit SKBUILD) : la wheel embarque le paquet pur python/pops/
 # (wheel.packages du pyproject) ; ICI on n'installe QUE l'extension compilee a cote, dans
@@ -144,7 +161,8 @@ if(SKBUILD)
       "PoPS packaging preflight failed before wheel assembly:\n"
       "${_pops_packaging_preflight_stdout}${_pops_packaging_preflight_stderr}")
   endif()
-  install(TARGETS _pops LIBRARY DESTINATION pops)
+  install(TARGETS _pops LIBRARY DESTINATION pops/_native/dim${POPS_NATIVE_DIM})
+  install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)
   # External AOT packages compile against the exact headers whose signature is baked into _pops.
   # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
   pops_install_headers("pops/include")

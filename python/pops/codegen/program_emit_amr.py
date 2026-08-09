@@ -7,19 +7,72 @@ it from ``emit_cpp_program`` when ``target='amr_system'``.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
+def _require_bounded_cell_local_program(program: Any, target: Any,
+                                        hierarchy_bodies: Any) -> Any:
+    """Validate the exact Program shape consumed by the first local-time provider.
+
+    The native provider performs one transport-only forward-Euler update itself.  Accepting a
+    broader IR and then skipping its generated body would be a second, divergent temporal
+    authority, so every unsupported node is refused before source emission.
+    """
+    contract = program.cell_local_time_contract()
+    if contract is None:
+        return None
+    if target != "amr_system":
+        raise ValueError("Program.cell_local_time requires target='amr_system'")
+    if not program.cadence_contract().is_default:
+        raise ValueError(
+            "Program.cell_local_time currently requires the default Program cadence")
+    if hierarchy_bodies is not None:
+        raise ValueError(
+            "Program.cell_local_time does not support hierarchy-scoped field solves")
+    if getattr(program, "_dt_bound", None) is not None:
+        raise ValueError("Program.cell_local_time does not support a Program dt-bound body")
+    if getattr(program, "_histories", None):
+        raise ValueError("Program.cell_local_time does not support history operators")
+
+    values = tuple(program._values)
+    if len(values) != 3 or tuple(value.op for value in values) != (
+            "state", "rhs", "linear_combine"):
+        raise ValueError(
+            "Program.cell_local_time currently requires exactly one transport-only "
+            "ForwardEuler state/rhs/commit chain")
+    state, rhs, result = values
+    if tuple(rhs.inputs) != (state,) or rhs.attrs.get("flux") is not True or \
+            rhs.attrs.get("fluxes") is not None or tuple(rhs.attrs.get("sources", ())) != ():
+        raise ValueError(
+            "Program.cell_local_time currently requires one default-flux RHS without sources "
+            "or fields")
+    if tuple(result.inputs) != (state, rhs):
+        raise ValueError(
+            "Program.cell_local_time ForwardEuler result must consume its accepted state and RHS")
+    coefficients = tuple(result.attrs.get("coeffs", ()))
+    if len(coefficients) != 2 or dict(coefficients[0]) != {0: 1} or \
+            dict(coefficients[1]) != {1: 1}:
+        raise ValueError(
+            "Program.cell_local_time requires the exact update U_next = U + dt * rhs(U)")
+    commits = tuple(program._commits.items())
+    if len(commits) != 1 or commits[0][1] is not result or commits[0][0] != state.state_ref:
+        raise ValueError(
+            "Program.cell_local_time requires one exact commit to the advanced state")
+    if len(program._block_indices()) != 1:
+        raise ValueError("Program.cell_local_time currently requires exactly one Program block")
+    return contract
+
+
 def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
-                      hierarchy_bodies: Any = None) -> str:
+                      hierarchy_bodies: Any = None, provider_plan_install: str = "") -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
     ``target='amr_system'`` emits ``pops_install_program_amr``, the entry ``AmrSystem::install_program``
     resolves (it dlopens the .so, validates the ABI key + section-24 requirements, binds the blocks by
-    name, seeds the runtime params, then calls this). It asks the shared facade-to-provider factory
-    for the ``AmrSystem`` execution provider; topology-independent operations come from the one
-    ``ProgramExecutionServices`` implementation. It then installs the recursively subcycled per-level
+    name, seeds the runtime params, then calls this). It asks the exact-ranked facade-to-provider
+    factory for the ``AmrSystem<Dim>`` execution provider. It then installs the recursively subcycled per-level
     macro-step driver: the IDENTICAL lowered ``{body}`` -- the
     one ``pops_install_program`` runs on ``System`` -- wrapped in an explicit level-clock scheduler.
     Its install-time prelude is materialized once per native level, not once per hierarchy: each
@@ -38,8 +91,28 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     through the native ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved
     across the interface on a genuinely multilevel run; a coarse-only / flat Program stays
     bit-identical."""
+    cell_local_time = _require_bounded_cell_local_program(
+        program, target, hierarchy_bodies)
     if target != "amr_system":
         return ""
+    if cell_local_time is not None:
+        clock_identity = json.dumps(program.clock.qualified_id)
+        return (
+            '\n#include <pops/runtime/program/amr_program_context.hpp>\n'
+            'extern "C" void pops_install_program_amr('
+            'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
+            + provider_plan_install + ("\n" if provider_plan_install else "") +
+            '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
+            '  auto& ctx = *ctx_owner;\n'
+            f'  ctx.configure_primary_clock({clock_identity});\n'
+            '  ctx.prepare_same_level_cell_temporal_execution('
+            f'{clock_identity}, {cell_local_time.tick_denominator}, '
+            f'{cell_local_time.rung});\n'
+            '  ctx.install([ctx_owner](double dt) {\n'
+            '    ctx_owner->advance_same_level_cell_temporal(dt);\n'
+            '  }, ctx_owner);\n'
+            '}\n'
+        )
 
     def walk(values: Any) -> Any:
         for value in values:
@@ -182,7 +255,9 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '// blocks by name and seeding the runtime params. The shared factory selects the provider and\n'
         '// the wrapper installs only the parent/child clock driver: the SAME\n'
         '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
-        'extern "C" void pops_install_program_amr(pops::AmrSystem* sys) {\n'
+        'extern "C" void pops_install_program_amr('
+        'pops::AmrSystem<pops::kNativeDimension>* sys) {\n'
+        + provider_plan_install + ("\n" if provider_plan_install else "") +
         '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
         '  auto& ctx = *ctx_owner;\n'
         + transform_guard + level_resources +

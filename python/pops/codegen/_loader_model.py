@@ -26,15 +26,44 @@ class CompiledModel:
 
     def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
-                 abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
-                 hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
+                 abi_key: Any, model_hash: Any, cxx: Any, std: Any, native_dimension: Any,
+                 target: Any = "system",
+                 hllc: Any = False, roe: Any = False, provider_components: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
                  state_spaces: Any = ("U",), wave_speed_provider: Any = None,
-                 module_manifest: Any = None) -> None:
-        self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
-        self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
+                 module_manifest: Any = None,
+                 characteristic_no_inflow: Any = False,
+                 hllc_provider: Any = None, roe_provider: Any = None,
+                 roe_entropy_policy: Any = None, roe_entropy_delta: Any = None) -> None:
+        from pops.numerics.riemann.providers import RiemannProviderEvidence
+
+        riemann_evidence = RiemannProviderEvidence(
+            hllc_provider,
+            roe_provider,
+            roe_entropy_policy,
+            roe_entropy_delta,
+        )
+        if bool(hllc) != (riemann_evidence.hllc_provider is not None):
+            raise ValueError(
+                "CompiledModel hllc flag disagrees with exact HLLC provider evidence"
+            )
+        if bool(roe) != (riemann_evidence.roe_provider is not None):
+            raise ValueError(
+                "CompiledModel roe flag disagrees with exact Roe provider evidence"
+            )
+        self.has_hllc = bool(hllc)
+        self.hllc_provider = riemann_evidence.hllc_provider
+        self.has_roe = bool(roe)
+        self.roe_provider = riemann_evidence.roe_provider
+        self.roe_entropy_policy = riemann_evidence.roe_entropy_policy
+        self.roe_entropy_delta = riemann_evidence.roe_entropy_delta
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
+        self.has_characteristic_no_inflow = bool(characteristic_no_inflow)
+        if self.has_characteristic_no_inflow and self.roe_provider != "flux_jacobian_v1":
+            raise ValueError(
+                "characteristic no-inflow requires the compiled flux-Jacobian Roe provider"
+            )
         allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
         if self.has_wave_speeds:
             if wave_speed_provider not in allowed_wave_speed_providers:
@@ -48,6 +77,11 @@ class CompiledModel:
                 % (wave_speed_provider,)
             )
         self.wave_speed_provider = wave_speed_provider
+        if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
+            raise TypeError("CompiledModel native_dimension must be an exact integer")
+        if native_dimension not in (1, 2, 3):
+            raise ValueError("CompiledModel native_dimension must be 1, 2, or 3")
+        self.native_dimension = native_dimension
         self.so_path = so_path
         if backend != "production":
             raise ValueError("CompiledModel backend must be the native production route")
@@ -60,10 +94,9 @@ class CompiledModel:
         self.n_vars = int(n_vars)
         self.gamma = gamma           # None = historical default 1.4 on the System side
         self.n_aux = int(n_aux)
-        # Names of the NAMED aux fields (aux_field, ADC-70), ORDERED: component index = position
-        # AUX_NAMED_BASE + k. The System.add_equation facade builds the name -> component table per
-        # block from it, consumed by System.set_aux_field / aux_field. Empty for a model without a named field.
-        self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
+        # Ordered source-level component spellings are report-only. Exact identity,
+        # contracts, producer and storage address are all carried by ProviderPack metadata.
+        self.provider_components = list(provider_components) if provider_components else []
         # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
         # second-or-further elliptic solve the native loader wires via register_elliptic_field +
         # set_block_elliptic_field after the block is installed. The names remain detached compiled
@@ -140,8 +173,9 @@ class CompiledModel:
             "cons_roles": tuple(self.cons_roles),
             "n_vars": self.n_vars,
             "params": dict(self.params),
-            "aux_names": tuple(self.aux_extra_names),
+            "provider_components": tuple(self.provider_components),
             "n_aux": self.n_aux,
+            "native_dimension": self.native_dimension,
             "capabilities": dict(self.caps),
             "wave_speed_provider": self.wave_speed_provider,
         }
@@ -228,7 +262,7 @@ class CompiledModel:
         Uniform route lives HERE too, built from the SAME :func:`~pops.codegen.inspect_compiled.
         build_arguments` via the model-as-handle path (the handle IS its own physical model). It lists
         -- WITHOUT any bind or runtime read -- the block instance (state space / components /
-        required), the model's declared params (type / kind / required), its named aux (layout /
+        required), the model's declared generic auxiliary components (layout /
         required) and the runtime layout the artifact targets (``layout='amr'`` for this handle). It
         allocates and reads nothing."""
         from pops.codegen.inspect_compiled import build_component_arguments
@@ -270,8 +304,10 @@ class CompiledModel:
                                          if self.install_plan is not None else None))
 
     def __repr__(self) -> str:
-        return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
-                "wave_speed_provider=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
-                % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
-                   self.wave_speed_provider, self.runtime_param_names,
+        return ("CompiledModel(backend=%r, target=%r, dimension=%d, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
+                "wave_speed_provider=%r, hllc_provider=%r, roe_provider=%r, "
+                "roe_entropy_policy=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
+                % (self.backend, self.target, self.native_dimension, self.so_path, self.n_vars, self.gamma, self.n_aux,
+                   self.wave_speed_provider, self.hllc_provider, self.roe_provider,
+                   self.roe_entropy_policy, self.runtime_param_names,
                    self.abi_key or "", self.model_hash or ""))

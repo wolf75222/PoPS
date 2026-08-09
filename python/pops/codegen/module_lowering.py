@@ -20,7 +20,6 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 
 from __future__ import annotations
 
-from types import MappingProxyType
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
@@ -29,6 +28,31 @@ from .lowering_coverage import (
     LoweringCoverageRow,
     LoweringRejection,
 )
+
+_NATIVE_ROLE_ALIASES = {
+    "density": "density",
+    "energy": "energy",
+    "pressure": "pressure",
+    "temperature": "temperature",
+    "scalar": "scalar",
+}
+
+
+def _is_axis_role(value: str) -> bool:
+    family, separator, axis = value.partition(":")
+    return family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal()
+
+
+def _lower_native_role(value: Any) -> str | None:
+    from pops.physics.roles import ComponentRole, native_role_token
+
+    if isinstance(value, ComponentRole):
+        return native_role_token(value)
+    if isinstance(value, str):
+        if value in _NATIVE_ROLE_ALIASES or _is_axis_role(value):
+            return value
+        return _NATIVE_ROLE_ALIASES.get(value)
+    return None
 
 
 def _module_to_model(module: Any, state_space: Any = None) -> Any:
@@ -39,10 +63,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
 
     Imported lazily by compile_problem to avoid a top-level physics import.
     """
-    # Import the model facade + aux constants lazily here (called only at
-    # compile_problem time, not at import time).
+    # Import the model facade lazily here (called only at compile_problem
+    # time, not at import time).
     from pops.physics._facade import Model  # noqa: PLC0415
-    from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
     from pops.model.operators import OPERATOR_KINDS  # noqa: PLC0415
     coverage_rows = [LoweringCoverageRow(
         "module:%s:metadata" % module.name, "documentary")]
@@ -75,30 +98,12 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
     object.__setattr__(m, "_compile_source_module_hash", module.module_hash())
-    from pops.model.provider_pack import (  # noqa: PLC0415
-        build_operator_provider_pack,
-        build_provider_pack,
+    from pops.codegen.component_provider_packs import (  # noqa: PLC0415
+        resolve_component_provider_packs,
     )
 
-    provider_pack = build_provider_pack(module)
-    object.__setattr__(m, "_component_provider_pack", provider_pack)
-    object.__setattr__(m, "_component_provider_metadata", provider_pack.to_data())
-    operator_provider_packs = {
-        operator.name: build_operator_provider_pack(module, operator)
-        for operator in module.operator_registry()
-    }
-    object.__setattr__(m, "_component_operator_provider_packs",
-                       MappingProxyType(operator_provider_packs))
-    object.__setattr__(m, "_component_operator_provider_metadata", MappingProxyType({
-        name: pack.to_data() for name, pack in operator_provider_packs.items()
-    }))
-    flux_keys = []
-    for operator in module.operator_registry():
-        if operator.kind == "grid_operator":
-            flux_keys.extend(operator_provider_packs[operator.name])
-    flux_provider_pack = provider_pack.select(flux_keys)
-    object.__setattr__(m, "_component_flux_provider_pack", flux_provider_pack)
-    object.__setattr__(m, "_component_flux_provider_metadata", flux_provider_pack.to_data())
+    provider_packs = resolve_component_provider_packs(module)
+    m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be
@@ -112,13 +117,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     if registry.owner_path != module.owner_path:
         raise ValueError("compile_problem: Module ParamRegistry owner drift")
     object.__setattr__(m, "_param_registry", registry)
-    _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
-                  "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
-                  "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
-                  "temperature": "Temperature"}
     roles = None
     if state.roles:
-        roles = [_spec_role.get(state.roles.get(c)) for c in state.components]
+        roles = [_lower_native_role(state.roles.get(c)) for c in state.components]
         if all(r is None for r in roles):
             roles = None
     cvars = m.conservative_vars(*state.components, roles=roles)
@@ -164,10 +165,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         if previous is not None:
             return
         declared[nm] = key
-        if nm in AUX_CANONICAL:
-            m.aux(nm)
-        else:
-            m.aux_field(nm)
+        m.aux(nm)
 
     for fs in module.field_spaces().values():
         targets = ["dsl:field_space:%s" % fs.name]
@@ -180,18 +178,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         _declare_aux(a.name, "aux/%s/%s" % (a.name, a.name))
         coverage_rows.append(LoweringCoverageRow(
             "aux:%s" % a.name, "lowered", ("dsl:aux:%s" % a.name,)))
-    if module._eigenvalues is not None:
-        m.eigenvalues(
-            x=_body_for_state(module._eigenvalues["x"]),
-            y=_body_for_state(module._eigenvalues["y"]),
-        )
-        coverage_rows.append(LoweringCoverageRow(
-            "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
-    else:
-        coverage_rows.append(LoweringCoverageRow(
-            "module:%s:eigenvalues" % module.name, "documentary"))
-
-    for key in provider_pack:
+    for key in provider_packs.complete:
         key_data = key.to_data()
         stable_key = "%s/%s/%s" % (
             key_data["space_kind"], key_data["space_name"], key_data["component"])
@@ -251,12 +238,12 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     def _b_grid_operator(op: Any) -> None:
         body = _body_for_state(op.body)
         if op.name in ("flux", "flux_default"):
-            m.flux(x=body["x"], y=body["y"])
+            m.flux(**body)
         elif op.name == fallback_default:
-            m.flux(x=body["x"], y=body["y"])
-            m.flux_term(op.name, x=body["x"], y=body["y"])
+            m.flux(**body)
+            m.flux_term(op.name, **body)
         else:
-            m.flux_term(op.name, x=body["x"], y=body["y"])
+            m.flux_term(op.name, **body)
 
     def _b_local_source(op: Any) -> None:
         m.source_term(op.name, _body_for_state(op.body))
@@ -267,18 +254,18 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     def _b_field_operator(op: Any) -> None:
         outputs: tuple[Any, ...] = tuple(cast(
             Iterable[Any], getattr(op.signature.output, "components", ())))
-        if len(outputs) == 2 or len(outputs) > 3:
+        if len(outputs) > 4:
             raise ValueError(
-                "compile_problem: field_operator %r outputs must have length 1 or 3; the runtime "
-                "cannot register %d outputs yet" % (op.name, len(outputs)))
+                "compile_problem: field_operator %r outputs may contain one scalar and at most "
+                "three ranked gradients; got %d outputs" % (op.name, len(outputs)))
         if not outputs:
             raise ValueError(
                 "compile_problem: field_operator %r must declare at least one output" % op.name)
         for output in outputs:
-            # FieldSpace lowering above has already installed every output.  Canonical auxiliary
-            # names use their dedicated slots and must never be redeclared as named extras.
-            if output not in AUX_CANONICAL and output not in m._m.aux_extra_names:
-                m.aux_field(output)
+            # Every output must be an ordinary auxiliary component in the
+            # module provider pack; it carries no reserved field-name route.
+            if output not in m._m._provider_components:
+                m.aux(output)
         gradient_sign = op.lowering.get("gradient_sign", 1)
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
@@ -371,6 +358,20 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             _reject(source, "operator_lowering_failed", str(exc))
         coverage_rows.append(LoweringCoverageRow(
             source, "lowered", (builder_targets[op.kind],)))
+    # The executable DSL validates the spectrum against the already-selected
+    # physical flux axes.  A Module deliberately stores those two declarations
+    # independently, so materialize all grid operators before attaching the
+    # exact-ranked eigenvalue provider.
+    if module._eigenvalues is not None:
+        m.eigenvalues(**{
+            axis: _body_for_state(values)
+            for axis, values in module._eigenvalues.items()
+        })
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "lowered", ("dsl:eigenvalues",)))
+    else:
+        coverage_rows.append(LoweringCoverageRow(
+            "module:%s:eigenvalues" % module.name, "documentary"))
     coverage_report = LoweringCoverageReport(coverage_rows)
     object.__setattr__(m, "lowering_coverage_report", coverage_report)
     object.__setattr__(m, "_lowering_coverage_report", coverage_report)
@@ -441,6 +442,11 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
         lowering = require_compiler_lowering(model)
         if diagnostic_facade is None:
             diagnostic_facade = lowering.facade
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        lowering.bind_component_provider_packs(
+            resolve_component_provider_packs(lowering.source_module)
+        )
         states = lowering.source_module.state_spaces()
         if len(states) > 1:
             emit_model = _module_to_model(

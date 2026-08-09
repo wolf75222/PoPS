@@ -24,15 +24,23 @@ def _example():
 
 
 def _resolved_target(
-    *, hysteresis=None, conflict_policy=None, patch_layout=None, load_balance=None,
+    *,
+    hysteresis=None,
+    conflict_policy=None,
+    patch_layout=None,
+    load_balance=None,
 ):
     from pops.amr._resolution import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
 
     target = _example().build_final_case()
     authored_layout = target.layout
-    if hysteresis is not None or conflict_policy is not None \
-            or patch_layout is not None or load_balance is not None:
+    if (
+        hysteresis is not None
+        or conflict_policy is not None
+        or patch_layout is not None
+        or load_balance is not None
+    ):
         if hysteresis is None or conflict_policy is None:
             if hysteresis is not None or conflict_policy is not None:
                 raise ValueError("custom tagging requires both hysteresis and conflict_policy")
@@ -52,12 +60,8 @@ def _resolved_target(
             regrid=authored_layout.regrid,
             transfer=authored_layout.transfer,
             execution=authored_layout.execution,
-            patch_layout=(
-                authored_layout.patch_layout if patch_layout is None else patch_layout
-            ),
-            load_balance=(
-                authored_layout.load_balance if load_balance is None else load_balance
-            ),
+            patch_layout=(authored_layout.patch_layout if patch_layout is None else patch_layout),
+            load_balance=(authored_layout.load_balance if load_balance is None else load_balance),
             tagger=authored_layout.tagger,
             clustering=authored_layout.clustering,
         )
@@ -84,6 +88,12 @@ def _resolved_target(
         resolve=lambda value: value if value.is_resolved else case.resolve(value),
     )
     return target, layout, layout_plan, layout.resolve_amr_authorities(context)
+
+
+def _native_layout(layout_plan):
+    (normalized,) = layout_plan.layouts
+    assert normalized.native_spatial_layout is not None
+    return normalized.native_spatial_layout
 
 
 @pytest.mark.parametrize("value", [0, 1, "true", None, object()])
@@ -125,7 +135,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     )
 
     authored = PatchLayout(distribute_coarse=True, coarse_max_grid=7)
-    _, layout, _, authorities = _resolved_target(patch_layout=authored)
+    _, layout, layout_plan, authorities = _resolved_target(patch_layout=authored)
     public_data = {
         "schema_version": 1,
         "authority_type": "amr_patch_layout",
@@ -142,23 +152,40 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         "distribute_coarse": True,
         "coarse_max_grid": 7,
     }
-    config = amr_config_from_layout(layout, hierarchy=authorities.hierarchy)
+    config = amr_config_from_layout(
+        layout,
+        hierarchy=authorities.hierarchy,
+        native_layout=_native_layout(layout_plan),
+    )
     assert config.distribute_coarse is True
-    assert config.coarse_max_grid == 7
+    assert config.coarse_max_grid == (7, 7)
+    assert config.transition_ratios == tuple(
+        row.ratio for row in authorities.hierarchy.plan.transitions
+    )
+    assert config.transition_buffers == tuple(
+        row.buffer for row in authorities.hierarchy.plan.transitions
+    )
+    assert config.transition_lookaheads == tuple(
+        row.lookahead for row in authorities.hierarchy.plan.transitions
+    )
+    assert not hasattr(config, "regrid_margin")
+    assert not hasattr(config, "regrid_grow")
     assert config.load_balance_provider[:3] == (
         "space_filling_curve",
         layout.load_balance.load_balance_provider_data()["provider_identity"],
         "pops.amr.load-balance.space-filling-curve@1",
     )
 
-    _, automatic_layout, _, automatic = _resolved_target(
+    _, automatic_layout, automatic_plan, automatic = _resolved_target(
         patch_layout=PatchLayout(distribute_coarse=True)
     )
     automatic_config = amr_config_from_layout(
-        automatic_layout, hierarchy=automatic.hierarchy
+        automatic_layout,
+        hierarchy=automatic.hierarchy,
+        native_layout=_native_layout(automatic_plan),
     )
     assert automatic_config.distribute_coarse is True
-    assert automatic_config.coarse_max_grid == 0
+    assert automatic_config.coarse_max_grid == (0, 0)
     assert automatic.hierarchy.identity != authorities.hierarchy.identity
     assert automatic.bootstrap.hierarchy_identity == automatic.hierarchy.identity
 
@@ -178,7 +205,7 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
         "pops._bootstrap",
         SimpleNamespace(AmrSystemConfig=NativeConfigProbe),
     )
-    _, layout, _, authorities = _resolved_target()
+    _, layout, layout_plan, authorities = _resolved_target()
     frame = Rectangle("rectangular", (-2.0, 1.5), (4.0, 4.5)).frame(Cartesian2D())
     grid = CartesianGrid(
         frame=frame,
@@ -193,11 +220,25 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
         def runtime_layout_data():
             return dict(runtime_data)
 
+    from pops.mesh import NativeSpatialLayout
+
+    (normalized,) = layout_plan.layouts
+    spatial_data = grid.native_spatial_data()
+    rectangular_native = NativeSpatialLayout.from_geometry(
+        layout=normalized.handle,
+        geometry=grid.normalized_geometry(),
+        periodicity=spatial_data["periodicity"],
+        centering=spatial_data["centering"],
+        decomposition={"kind": "adaptive", "source": "rectangular-test"},
+    )
     config = amr_config_from_layout(
-        RectangularRuntimeLayout(), hierarchy=authorities.hierarchy)
-    assert (config.n, config.ny) == (30, 12)
-    assert (config.L, config.Ly) == (6.0, 3.0)
-    assert (config.xlo, config.ylo) == (-2.0, 1.5)
+        RectangularRuntimeLayout(),
+        hierarchy=authorities.hierarchy,
+        native_layout=rectangular_native,
+    )
+    assert config.shape == (30, 12)
+    assert config.lower == (-2.0, 1.5)
+    assert config.upper == (4.0, 4.5)
     assert config.periodicity == (True, False)
 
 
@@ -206,11 +247,14 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
     [
         ("SpaceFillingCurve", "space_filling_curve", True),
         ("Knapsack", "knapsack", True),
+        ("MeasuredKnapsack", "measured_knapsack", True),
         ("RoundRobin", "round_robin", False),
     ],
 )
 def test_public_load_balance_roundtrips_exact_identity(
-    policy_type, route, consumes_weights,
+    policy_type,
+    route,
+    consumes_weights,
 ):
     from pops.lib import amr as lib_amr
 
@@ -230,8 +274,62 @@ def test_public_load_balance_roundtrips_exact_identity(
     assert authorities.hierarchy.plan.load_balance.options.to_data() == {
         "provider": data,
     }
-    assert data["provider_identity"] in (
-        authorities.hierarchy.plan.load_balance.provider.local_id)
+    assert data["provider_identity"] in (authorities.hierarchy.plan.load_balance.provider.local_id)
+
+
+def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
+    from pops.lib.amr import MeasuredKnapsack
+    from pops.runtime._amr_bind_lowering import amr_config_from_layout
+
+    class NativeConfigProbe:
+        def _set_load_balance_provider(self, *values):
+            self.load_balance_provider = values
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pops._bootstrap",
+        SimpleNamespace(AmrSystemConfig=NativeConfigProbe),
+    )
+    policy = MeasuredKnapsack(
+        minimum_improvement_ppm=125_000,
+        amortization_steps=40,
+        migration_bandwidth_bytes_per_second=25_000_000_000,
+        per_patch_migration_latency_nanoseconds=2_500,
+    )
+    _, layout, layout_plan, authorities = _resolved_target(load_balance=policy)
+    config = amr_config_from_layout(
+        layout,
+        hierarchy=authorities.hierarchy,
+        native_layout=_native_layout(layout_plan),
+    )
+    assert config.load_balance_provider == (
+        "measured_knapsack",
+        policy.load_balance_provider_data()["provider_identity"],
+        "pops.amr.load-balance.measured-knapsack@1",
+        {
+            "minimum_improvement_ppm": 125_000,
+            "amortization_steps": 40,
+            "migration_bandwidth_bytes_per_second": 25_000_000_000,
+            "per_patch_migration_latency_nanoseconds": 2_500,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("minimum_improvement_ppm", True),
+        ("minimum_improvement_ppm", 1_000_000),
+        ("amortization_steps", 0),
+        ("migration_bandwidth_bytes_per_second", 0),
+        ("per_patch_migration_latency_nanoseconds", -1),
+    ],
+)
+def test_measured_knapsack_rejects_invalid_decision_policy(keyword, value):
+    from pops.lib.amr import MeasuredKnapsack
+
+    with pytest.raises((TypeError, ValueError)):
+        MeasuredKnapsack(**{keyword: value})
 
 
 def test_load_balance_extension_protocol_needs_no_core_class_branch():
@@ -251,8 +349,7 @@ def test_load_balance_extension_protocol_needs_no_core_class_branch():
                 },
                 "weight_capability": {"authenticated": True, "consumed": True},
             }
-            data["provider_identity"] = make_identity(
-                "amr-load-balance-provider", data).token
+            data["provider_identity"] = make_identity("amr-load-balance-provider", data).token
             return data
 
     policy = ExternalWeightedPolicy()
@@ -309,10 +406,8 @@ def test_load_balance_protocol_rejects_raw_float_options():
                 "options": {"target_imbalance": 1.1},
                 "weight_capability": {"authenticated": True, "consumed": True},
             }
-            canonical = {**data, "options": {
-                "target_imbalance": {"binary64": (1.1).hex()}}}
-            data["provider_identity"] = make_identity(
-                "amr-load-balance-provider", canonical).token
+            canonical = {**data, "options": {"target_imbalance": {"binary64": (1.1).hex()}}}
+            data["provider_identity"] = make_identity("amr-load-balance-provider", canonical).token
             return data
 
     target = _example().build_final_case()
@@ -432,17 +527,14 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     graph = authorities.tagging.graph.graph
     assert type(graph.refine) is GradientAbove
     assert type(graph.coarsen) is GradientBelow
-    assert graph.refine.indicator == target.authoring.case.resolve(
-        target.authoring.tracer_state
-    )
+    assert graph.refine.indicator == target.authoring.case.resolve(target.authoring.tracer_state)
     assert graph.refine.context == graph.coarsen.context
     assert graph.refine.context.layout == layout_plan.layout_for(graph.refine.indicator)
     assert graph.refine.context.discretization.kind == "discretization"
     assert graph.refine.context.stencil.kind == "stencil"
     assert graph.refine.context.lowering.route == "linear_axis_stencil_l2_v1"
     assert graph.refine.context.lowering.dimension == 2
-    assert [axis.offsets for axis in graph.refine.context.lowering.axes] == [
-        (-1, 1), (-1, 1)]
+    assert [axis.offsets for axis in graph.refine.context.lowering.axes] == [(-1, 1), (-1, 1)]
     assert authorities.initial_conditions.layout_plan_id == layout_plan.qualified_id
     assert authorities.bootstrap.tagging == authorities.tagging.graph
 
@@ -467,12 +559,11 @@ def test_gradient_tagging_fails_at_resolve_without_context_or_one_consumer_layou
     missing_layout = missing_builder.layout("only", descriptor)
     missing_builder.assign_state(missing, missing_layout)
     missing_plan = missing_builder.resolve(states=(missing,))
-    missing_context = AMRTaggingResolutionContext(
-        owner, missing_plan, numerics, case.resolve)
+    missing_context = AMRTaggingResolutionContext(owner, missing_plan, numerics, case.resolve)
     with pytest.raises(ValueError, match="has no resolved spatial discretization"):
         missing_context.resolve_gradient_magnitude(
-            field=ValueExpr(missing), scale=1, action="refine",
-            comparison="gt", threshold=threshold)
+            field=ValueExpr(missing), scale=1, action="refine", comparison="gt", threshold=threshold
+        )
 
     state = case.resolve(target.authoring.tracer_state)
     multiple_builder = LayoutPlanBuilder(owner)
@@ -480,13 +571,11 @@ def test_gradient_tagging_fails_at_resolve_without_context_or_one_consumer_layou
     multiple_builder.layout("second", descriptor)
     multiple_builder.assign_state(state, first)
     multiple_plan = multiple_builder.resolve(states=(state,))
-    multiple_context = AMRTaggingResolutionContext(
-        owner, multiple_plan, numerics, case.resolve)
-    with pytest.raises(
-            ValueError, match="requires exactly one adaptive layout authority"):
+    multiple_context = AMRTaggingResolutionContext(owner, multiple_plan, numerics, case.resolve)
+    with pytest.raises(ValueError, match="requires exactly one adaptive layout authority"):
         multiple_context.resolve_gradient_magnitude(
-            field=ValueExpr(state), scale=1, action="refine",
-            comparison="gt", threshold=threshold)
+            field=ValueExpr(state), scale=1, action="refine", comparison="gt", threshold=threshold
+        )
 
 
 def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_ratios():
@@ -499,16 +588,17 @@ def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_rati
     relation = AMRClockRelation(0, 1, 3)
     execution = AMRExecution.subcycled((relation,))
     assert relation.temporal_ratio == Fraction(3, 1)
-    assert execution.to_data()["relations"] == [{
-        "parent_level": 0,
-        "child_level": 1,
-        "temporal_ratio": {"numerator": 3, "denominator": 1},
-        "remainder_policy": "integral_only",
-    }]
+    assert execution.to_data()["relations"] == [
+        {
+            "parent_level": 0,
+            "child_level": 1,
+            "temporal_ratio": {"numerator": 3, "denominator": 1},
+            "remainder_policy": "integral_only",
+        }
+    ]
     with pytest.raises(ValueError, match="EXPLICIT_FINAL_SUBSTEP"):
         AMRClockRelation(0, 1, Fraction(3, 2))
-    remainder = AMRClockRelation(
-        0, 1, Fraction(3, 2), AMRRemainderPolicy.EXPLICIT_FINAL_SUBSTEP)
+    remainder = AMRClockRelation(0, 1, Fraction(3, 2), AMRRemainderPolicy.EXPLICIT_FINAL_SUBSTEP)
     assert remainder.temporal_ratio == Fraction(3, 2)
     with pytest.raises(ValueError, match="synchronous"):
         AMRExecution("synchronous", (relation,))
@@ -605,18 +695,28 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
                     "logical_opcodes": list(tagging_abi["logical_opcodes"]),
                     "logical_opcode_ids": list(tagging_abi["logical_opcodes"].values()),
                     "candidate_outputs": list(tagging_abi["candidate_outputs"]),
-                    "indicator_stencil_routes": list(
-                        tagging_abi["indicator_stencil_routes"]),
-                    "maximum_stencil_terms": tagging_abi[
-                        "maximum_stencil_terms"],
-                    "maximum_instruction_count": tagging_abi[
-                        "maximum_instruction_count"],
+                    "indicator_stencil_routes": list(tagging_abi["indicator_stencil_routes"]),
+                    "maximum_stencil_terms": tagging_abi["maximum_stencil_terms"],
+                    "maximum_instruction_count": tagging_abi["maximum_instruction_count"],
                     "non_finite_policy": tagging_abi["non_finite_policy"],
                     "persistent_hysteresis": tagging_abi["persistent_hysteresis"],
                     "execution_mode": "native_backend",
                     "collective_scope": "none",
                     "memory_spaces": list(tagging_abi["memory_spaces"]),
                 },
+            },
+            "reflux": {
+                "schema_version": 1,
+                "provider_type": "builtin_amr_reflux",
+                "runtime_installation": {
+                    "schema_version": 1,
+                    "protocol": "builtin",
+                },
+                "provider_id": "pops.lib.amr::flux_register_reflux",
+                "provider_identity": "test::reflux-provider",
+                "native_interface": interfaces.Reflux.to_data(),
+                "layout_identity": layout_identity,
+                "clock_identity": "test::clock",
             },
         },
     )
@@ -686,12 +786,28 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
             self.call = args
 
     native = NativeProbe()
-    flow_bootstrap_tagging(
-        native, authorities.bootstrap, params, clock_identity="case::clock")
+    flow_bootstrap_tagging(native, authorities.bootstrap, params, clock_identity="case::clock")
     assert native.call is not None
-    (subject_kinds, subject_identities, blocks, variables, field_component_indices,
-     leaf_ops, thresholds, stencil_indices, stencils, refine_ops, refine_args,
-     coarsen_ops, coarsen_args, min_cycles, equality, conflict, clock, provider) = native.call
+    (
+        subject_kinds,
+        subject_identities,
+        blocks,
+        variables,
+        field_component_indices,
+        leaf_ops,
+        thresholds,
+        stencil_indices,
+        stencils,
+        refine_ops,
+        refine_args,
+        coarsen_ops,
+        coarsen_args,
+        min_cycles,
+        equality,
+        conflict,
+        clock,
+        provider,
+    ) = native.call
     assert subject_kinds == ["state", "state"]
     assert len(subject_identities) == 2
     assert subject_identities[0] == subject_identities[1]

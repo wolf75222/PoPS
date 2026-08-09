@@ -21,6 +21,21 @@ project(PoPS
 # SKBUILD wheel consume it; every installed category enters the native header signature.
 include(cmake/PopsPublicHeaders.cmake)
 
+# One exact spatial rank is compiled into every PoPS native module and every generated artifact.
+# There is no runtime dimension switch and no fixed-rank padded representation.  The caller must
+# select the specialization explicitly, either with -DPOPS_NATIVE_DIM=N or POPS_NATIVE_DIM=N.  The
+# Python API derives that selection from its resolved domain; this knob belongs only to native builds.
+if(NOT DEFINED POPS_NATIVE_DIM AND DEFINED ENV{POPS_NATIVE_DIM})
+  set(POPS_NATIVE_DIM "$ENV{POPS_NATIVE_DIM}" CACHE STRING
+      "Compile-time PoPS spatial dimension (1, 2, or 3)")
+endif()
+if(NOT DEFINED POPS_NATIVE_DIM OR NOT "${POPS_NATIVE_DIM}" MATCHES "^[123]$")
+  message(FATAL_ERROR
+    "POPS_NATIVE_DIM must select exactly one compile-time spatial dimension: 1, 2, or 3")
+endif()
+set_property(CACHE POPS_NATIVE_DIM PROPERTY STRINGS 1 2 3)
+message(STATUS "PoPS native spatial specialization: Dim=${POPS_NATIVE_DIM}")
+
 # Backends par VARIABLE D'ENVIRONNEMENT (pattern WarpX/pyAMReX) : permet `POPS_USE_KOKKOS=ON
 # Kokkos_ROOT=$CONDA_PREFIX pip install .` sans toucher aux flags CMake (pip ne propage pas de
 # -D, mais propage l'environnement ; <Pkg>_ROOT est lu nativement par find_package). La graine
@@ -138,6 +153,7 @@ target_include_directories(pops INTERFACE
   $<INSTALL_INTERFACE:include>  # consommation via find_package(pops) installe (GNUInstallDirs vient plus tard)
 )
 target_compile_features(pops INTERFACE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops INTERFACE POPS_NATIVE_DIM=${POPS_NATIVE_DIM})
 
 # Hints libomp pour AppleClang (qui ne trouve pas libomp seul). Sous Kokkos-only il reste UN
 # consommateur : une install Kokkos batie avec Kokkos_ENABLE_OPENMP propage

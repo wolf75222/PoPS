@@ -1,659 +1,676 @@
 /// @file
-/// @brief MultiFab arithmetic (saxpy, lincomb, norm_inf, dot) over VALID cells.
-///
-/// Building blocks for integrator stages and Krylov solvers. Assumes IDENTICAL layouts
-/// (same BoxArray, same DistributionMapping). Pointwise operations -> ALIASING is safe
-/// (x or y == z allowed). norm_inf / dot go through the reducer seam (true Kokkos reduction).
-/// dot performs a COLLECTIVE all_reduce: it MUST be called on EVERY rank (including a rank with no
-/// box) under MPI, otherwise deadlock. FP NOTE: dot/sum are re-associated per tile (Kokkos::Sum,
-/// deterministic/idempotent but not bit-identical to a lexicographic sum, for all Kokkos
-/// spaces); norm_inf is exact everywhere. The kernels are device-clean NAMED FUNCTORS (nvcc cross-TU).
+/// @brief Compile-time-ranked MultiFab arithmetic over valid cells.
 
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/parallel/comm.hpp>  // all_reduce_sum: COLLECTIVE dot product (Krylov under MPI)
+#include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
 namespace pops {
 
-/// Prepared relative measure for reductions over a physical cell domain.
-///
-/// `active_cells == nullptr` denotes the full valid-cell domain.  Otherwise only cells whose mask
-/// is at least 0.5 participate.  `inverse_volume_fraction` is optional: when present, an active
-/// cell contributes with relative volume `1 / inverse_volume_fraction`; when absent every selected
-/// cell has unit relative volume.  This one data contract covers a full grid, a staircase mask and
-/// cut-cell metrics without exposing a geometry/shape type to the reduction kernels.
+/// Optional active-cell and inverse-volume-fraction metrics on the exact field layout.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 struct RelativeCellMeasure {
-  const MultiFab* active_cells = nullptr;
-  const MultiFab* inverse_volume_fraction = nullptr;
+  const MultiFab<Dim, MemorySpace>* active_cells = nullptr;
+  const MultiFab<Dim, MemorySpace>* inverse_volume_fraction = nullptr;
 };
 
-namespace detail {
-// NAMED FUNCTORS (not POPS_HD lambdas) for the MultiFab arithmetic kernels. Same recipe as
-// the block path (#64): these operations are first-instantiated from the MG V-cycle, itself pulled
-// from an external TU (native harness/loader); an extended lambda at this spot makes nvcc stumble on
-// device kernel emission (null kernel-stub -> Cuda segfault in -O Release without -g, #93). Body
-// strictly identical to the old lambdas -> bit-identical on CPU and device.
+namespace mf_arith_detail {
+
+template <int Dim>
 struct SaxpyKernel {
-  Array4 Y;
-  ConstArray4 X;
-  Real a;
-  int c;
-  POPS_HD void operator()(int i, int j) const { Y(i, j, c) += a * X(i, j, c); }
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  Real factor = 0;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, component) += factor * source(index, component);
+  }
 };
 
+template <int Dim>
 struct ActiveSaxpyKernel {
-  Array4 Y;
-  ConstArray4 X, active_cells;
-  Real a;
-  int c;
-  POPS_HD void operator()(int i, int j) const {
-    if (active_cells(i, j, 0) >= Real(0.5))
-      Y(i, j, c) += a * X(i, j, c);
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  FieldView<const Real, Dim> active{};
+  Real factor = 0;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (active(index, 0) >= Real{0.5})
+      destination(index, component) += factor * source(index, component);
   }
 };
 
+template <int Dim>
 struct ScaleKernel {
-  Array4 values;
-  Real factor;
-  int comp;
-  POPS_HD void operator()(int i, int j) const { values(i, j, comp) *= factor; }
+  FieldView<Real, Dim> values{};
+  Real factor = 0;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const { values(index, component) *= factor; }
 };
 
+template <int Dim>
 struct LincombKernel {
-  Array4 Z;
-  ConstArray4 X, Y;
-  Real a, b;
-  int c;
-  POPS_HD void operator()(int i, int j) const { Z(i, j, c) = a * X(i, j, c) + b * Y(i, j, c); }
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> left{};
+  FieldView<const Real, Dim> right{};
+  Real left_factor = 0;
+  Real right_factor = 0;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, component) =
+        left_factor * left(index, component) + right_factor * right(index, component);
+  }
 };
 
+template <int Dim>
 struct ActiveLincombKernel {
-  Array4 Z;
-  ConstArray4 X, Y, active_cells;
-  Real a, b;
-  int c;
-  POPS_HD void operator()(int i, int j) const {
-    if (active_cells(i, j, 0) >= Real(0.5))
-      Z(i, j, c) = a * X(i, j, c) + b * Y(i, j, c);
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> left{};
+  FieldView<const Real, Dim> right{};
+  FieldView<const Real, Dim> active{};
+  Real left_factor = 0;
+  Real right_factor = 0;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    if (active(index, 0) >= Real{0.5})
+      destination(index, component) =
+          left_factor * left(index, component) + right_factor * right(index, component);
   }
 };
 
-// Reducer |f(i,j,comp)| -> max, passed DIRECTLY to reduce_max_cell (no wrapping extended
-// lambda, unlike for_each_cell_reduce_max). This is the device-clean path documented
-// in for_each.hpp. Reducer signature (i, j, Real& acc); same Kokkos::Max / same sequential host
-// loop -> bit-identical to the old norm_inf for finite inputs (max and fabs without rounding).
-// NaN and either infinity are mapped to +infinity before the max reduction.  This is deliberate:
-// IEEE max reductions may otherwise ignore NaN depending on operand order, while the +infinity
-// sentinel propagates deterministically through both Kokkos::Max and the later MPI_MAX.
-struct NormInfKernel {
-  ConstArray4 a;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    const Real v = a(i, j, comp);
-    const Real av = v < 0 ? -v : v;
-    if (!(av <= std::numeric_limits<Real>::max())) {
-      acc = std::numeric_limits<Real>::infinity();
-      return;
-    }
-    if (av > acc)
-      acc = av;
-  }
-};
-
-// Reducer x(i,j,comp) * y(i,j,comp) -> sum, passed DIRECTLY to reduce_sum_cell (no wrapping
-// extended lambda). Device-clean NAMED functor (same recipe as NormInfKernel) for the Krylov
-// solver dot product, pulled from an external TU. Reducer signature (i, j, Real& acc).
-struct DotKernel {
-  ConstArray4 x, y;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const { acc += x(i, j, comp) * y(i, j, comp); }
-};
-
-struct DifferenceSqKernel {
-  ConstArray4 current, previous;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    const Real difference = current(i, j, comp) - previous(i, j, comp);
-    acc += difference * difference;
-  }
-};
-
-// Reducer f(i,j,comp) -> sum / signed max / signed min over one component. Same device-clean named
-// functor recipe as DotKernel / NormInfKernel (the compiled time Program reductions are first
-// instantiated from a generated problem.so, an external TU). MaxKernel/MinKernel are SIGNED (no fabs,
-// unlike NormInfKernel): they reduce the value itself, the contract of P.max / P.min.
+template <int Dim>
 struct SumKernel {
-  ConstArray4 a;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const { acc += a(i, j, comp); }
-};
-struct MaxKernel {
-  ConstArray4 a;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    const Real v = a(i, j, comp);
-    if (v > acc)
-      acc = v;
-  }
-};
-struct MinKernel {
-  ConstArray4 a;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    const Real v = a(i, j, comp);
-    if (v < acc)
-      acc = v;
-  }
+  FieldView<const Real, Dim> values{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const { return values(index, component); }
 };
 
-// Reducer |f(i,j,comp)| -> sum over one component -- the L1 (absolute-sum) reduction. Same
-// device-clean named functor recipe as SumKernel / NormInfKernel (first instantiated from a generated
-// problem.so, an external TU). The abs is a branch (v < 0 ? -v : v), NOT std::fabs, for bit-parity
-// with NormInfKernel above (identical magnitude rounding, none, on every backend).
+template <int Dim>
 struct AbsSumKernel {
-  ConstArray4 a;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    const Real v = a(i, j, comp);
-    acc += v < 0 ? -v : v;
+  FieldView<const Real, Dim> values{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real value = values(index, component);
+    return value < 0 ? -value : value;
   }
 };
 
-struct RelativeCellSumKernel {
-  ConstArray4 values, active_cells, inverse_volume_fraction;
-  int comp;
-  bool has_inverse_volume_fraction;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real value = values(i, j, comp);
-    acc += has_inverse_volume_fraction ? value / inverse_volume_fraction(i, j, 0) : value;
+template <int Dim>
+struct MaxKernel {
+  FieldView<const Real, Dim> values{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const { return values(index, component); }
+};
+
+template <int Dim>
+struct NegatedKernel {
+  FieldView<const Real, Dim> values{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const { return -values(index, component); }
+};
+
+template <int Dim>
+struct NormInfKernel {
+  FieldView<const Real, Dim> values{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real value = values(index, component);
+    const Real magnitude = value < 0 ? -value : value;
+    return magnitude <= std::numeric_limits<Real>::max() ? magnitude
+                                                         : std::numeric_limits<Real>::infinity();
   }
 };
 
-struct RelativeCellAbsSumKernel {
-  ConstArray4 values, active_cells, inverse_volume_fraction;
-  int comp;
-  bool has_inverse_volume_fraction;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real value = values(i, j, comp);
-    const Real magnitude = value < Real(0) ? -value : value;
-    acc += has_inverse_volume_fraction ? magnitude / inverse_volume_fraction(i, j, 0) : magnitude;
+template <int Dim>
+struct DotKernel {
+  FieldView<const Real, Dim> left{};
+  FieldView<const Real, Dim> right{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return left(index, component) * right(index, component);
   }
 };
 
-struct RelativeCellDotKernel {
-  ConstArray4 left, right, active_cells, inverse_volume_fraction;
-  int comp;
-  bool has_inverse_volume_fraction;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real product = left(i, j, comp) * right(i, j, comp);
-    acc += has_inverse_volume_fraction ? product / inverse_volume_fraction(i, j, 0) : product;
+template <int Dim>
+struct DifferenceSqKernel {
+  FieldView<const Real, Dim> current{};
+  FieldView<const Real, Dim> previous{};
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    const Real difference = current(index, component) - previous(index, component);
+    return difference * difference;
   }
 };
 
-struct RelativeCellDifferenceSqKernel {
-  ConstArray4 current, previous, active_cells, inverse_volume_fraction;
-  int comp;
-  bool has_inverse_volume_fraction;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real difference = current(i, j, comp) - previous(i, j, comp);
-    const Real square = difference * difference;
-    acc += has_inverse_volume_fraction ? square / inverse_volume_fraction(i, j, 0) : square;
+template <int Dim>
+struct MeasuredValueKernel {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> inverse{};
+  int component = 0;
+  bool absolute = false;
+  bool has_inverse = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index, 0) < Real{0.5})
+      return Real{0};
+    Real value = values(index, component);
+    if (absolute && value < 0)
+      value = -value;
+    return has_inverse ? value * inverse(index, 0) : value;
   }
 };
 
-struct RelativeCellMaxKernel {
-  ConstArray4 values, active_cells;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real value = values(i, j, comp);
-    if (value > acc)
-      acc = value;
+template <int Dim>
+struct MeasuredDotKernel {
+  FieldView<const Real, Dim> left{};
+  FieldView<const Real, Dim> right{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> inverse{};
+  int component = 0;
+  bool has_inverse = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index, 0) < Real{0.5})
+      return Real{0};
+    Real value = left(index, component) * right(index, component);
+    return has_inverse ? value * inverse(index, 0) : value;
   }
 };
 
-struct RelativeCellMinKernel {
-  ConstArray4 values, active_cells;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real value = values(i, j, comp);
-    if (value < acc)
-      acc = value;
+template <int Dim>
+struct MeasuredDifferenceSqKernel {
+  FieldView<const Real, Dim> current{};
+  FieldView<const Real, Dim> previous{};
+  FieldView<const Real, Dim> active{};
+  FieldView<const Real, Dim> inverse{};
+  int component = 0;
+  bool has_inverse = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index, 0) < Real{0.5})
+      return Real{0};
+    const Real difference = current(index, component) - previous(index, component);
+    const Real value = difference * difference;
+    return has_inverse ? value * inverse(index, 0) : value;
   }
 };
 
-struct RelativeCellNormInfKernel {
-  ConstArray4 values, active_cells;
-  int comp;
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (active_cells(i, j, 0) < Real(0.5))
-      return;
-    const Real value = values(i, j, comp);
-    const Real magnitude = value < Real(0) ? -value : value;
-    if (!(magnitude <= std::numeric_limits<Real>::max())) {
-      acc = std::numeric_limits<Real>::infinity();
-      return;
+template <int Dim>
+struct ActiveMaxKernel {
+  FieldView<const Real, Dim> values{};
+  FieldView<const Real, Dim> active{};
+  int component = 0;
+  bool negate = false;
+  bool magnitude = false;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    if (active(index, 0) < Real{0.5})
+      return std::numeric_limits<Real>::lowest();
+    Real value = values(index, component);
+    if (magnitude) {
+      value = value < 0 ? -value : value;
+      if (!(value <= std::numeric_limits<Real>::max()))
+        value = std::numeric_limits<Real>::infinity();
     }
-    if (magnitude > acc)
-      acc = magnitude;
+    return negate ? -value : value;
   }
 };
 
-inline void validate_relative_cell_measure(const MultiFab& field,
-                                           const RelativeCellMeasure& measure,
-                                           const char* operation) {
+template <int Dim, class LeftSpace, class RightSpace>
+void require_same_layout(const MultiFab<Dim, LeftSpace>& left,
+                         const MultiFab<Dim, RightSpace>& right, const char* operation,
+                         bool require_components = true) {
+  if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
+      left.local_rank() != right.local_rank() ||
+      (require_components && left.ncomp() != right.ncomp()))
+    throw std::invalid_argument(std::string(operation) +
+                                ": fields must have the same exact ND layout");
+}
+
+template <int Dim, class MemorySpace>
+void require_component(const MultiFab<Dim, MemorySpace>& field, int component,
+                       const char* operation) {
+  if (component < 0 || component >= field.ncomp())
+    throw std::out_of_range(std::string(operation) + ": component is outside the field");
+}
+
+template <int Dim, class MemorySpace>
+void require_collective_identity(const MultiFab<Dim, MemorySpace>& field, const char* operation) {
+  const std::size_t communicator_size = static_cast<std::size_t>(n_ranks());
+  if (field.rank_space().size() != communicator_size ||
+      field.rank_space().linear_rank(field.local_rank()) != static_cast<std::size_t>(my_rank()))
+    throw std::logic_error(std::string(operation) +
+                           ": ND rank space does not match the active communicator");
+  if (field.distribution().replicated() && communicator_size != 1)
+    throw std::logic_error(std::string(operation) +
+                           ": collective reduction of replicated ND storage would overcount");
+}
+
+template <int Dim, class MemorySpace>
+void validate_measure(const MultiFab<Dim, MemorySpace>& field,
+                      const RelativeCellMeasure<Dim, MemorySpace>& measure, const char* operation) {
   if (measure.active_cells == nullptr) {
     if (measure.inverse_volume_fraction != nullptr)
       throw std::invalid_argument(std::string(operation) +
-                                  ": an inverse volume fraction requires an active-cell mask");
+                                  ": inverse volume fraction requires an active-cell mask");
     return;
   }
-  const auto require_same_layout = [&](const MultiFab& metric, const char* metric_name) {
-    if (metric.ncomp() != 1 || metric.box_array().boxes() != field.box_array().boxes() ||
-        metric.dmap().ranks() != field.dmap().ranks() || metric.local_size() != field.local_size())
-      throw std::invalid_argument(std::string(operation) + ": " + metric_name +
-                                  " must be a one-component metric on the field layout");
-  };
-  require_same_layout(*measure.active_cells, "active-cell mask");
-  if (measure.inverse_volume_fraction != nullptr)
-    require_same_layout(*measure.inverse_volume_fraction, "inverse volume fraction");
-}
-}  // namespace detail
-
-/// y <- y + a x over ALL components of the valid cells. Identical layouts required.
-inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
-  const int nc = y.ncomp();
-  for (int li = 0; li < y.local_size(); ++li) {
-    Array4 Y = y.fab(li).array();
-    const ConstArray4 X = x.fab(li).const_array();
-    const Box2D b = y.fab(li).box();
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(b, detail::SaxpyKernel{Y, X, a, c});
+  require_same_layout(field, *measure.active_cells, operation, false);
+  if (measure.active_cells->ncomp() != 1)
+    throw std::invalid_argument(std::string(operation) +
+                                ": active-cell mask must have one component");
+  if (measure.inverse_volume_fraction != nullptr) {
+    require_same_layout(field, *measure.inverse_volume_fraction, operation, false);
+    if (measure.inverse_volume_fraction->ncomp() != 1)
+      throw std::invalid_argument(std::string(operation) +
+                                  ": inverse volume fraction must have one component");
   }
 }
 
-/// Active-domain twin of saxpy. Inactive target cells are not loaded or written, so their bit
-/// pattern survives every RK stage even when a mathematically neutral floating recombination would
-/// round differently.
-inline void saxpy_active(MultiFab& y, Real a, const MultiFab& x, const MultiFab& active_cells) {
-  const int nc = y.ncomp();
-  for (int li = 0; li < y.local_size(); ++li) {
-    Array4 Y = y.fab(li).array();
-    const ConstArray4 X = x.fab(li).const_array();
-    const ConstArray4 active = active_cells.fab(li).const_array();
-    const Box2D b = y.fab(li).box();
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(b, detail::ActiveSaxpyKernel{Y, X, active, a, c});
+}  // namespace mf_arith_detail
+
+template <int Dim, class MemorySpace>
+void saxpy(MultiFab<Dim, MemorySpace>& destination, Real factor,
+           const MultiFab<Dim, MemorySpace>& source) {
+  mf_arith_detail::require_same_layout(destination, source, "pops::saxpy");
+  for (std::size_t local = 0; local < destination.local_size(); ++local)
+    for (int component = 0; component < destination.ncomp(); ++component)
+      for_each_cell(destination.box(local),
+                    mf_arith_detail::SaxpyKernel<Dim>{destination.fab(local).view(),
+                                                      source.fab(local).view(), factor, component});
+}
+
+template <int Dim, class MemorySpace>
+void saxpy_active(MultiFab<Dim, MemorySpace>& destination, Real factor,
+                  const MultiFab<Dim, MemorySpace>& source,
+                  const MultiFab<Dim, MemorySpace>& active_cells) {
+  mf_arith_detail::require_same_layout(destination, source, "pops::saxpy_active");
+  mf_arith_detail::require_same_layout(destination, active_cells, "pops::saxpy_active", false);
+  if (active_cells.ncomp() != 1)
+    throw std::invalid_argument("pops::saxpy_active mask must have one component");
+  for (std::size_t local = 0; local < destination.local_size(); ++local)
+    for (int component = 0; component < destination.ncomp(); ++component)
+      for_each_cell(destination.box(local),
+                    mf_arith_detail::ActiveSaxpyKernel<Dim>{
+                        destination.fab(local).view(), source.fab(local).view(),
+                        active_cells.fab(local).view(), factor, component});
+}
+
+template <int Dim, class MemorySpace>
+void scale(MultiFab<Dim, MemorySpace>& field, Real factor) {
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    for (int component = 0; component < field.ncomp(); ++component)
+      for_each_cell(field.box(local),
+                    mf_arith_detail::ScaleKernel<Dim>{field.fab(local).view(), factor, component});
+}
+
+template <int Dim, class MemorySpace>
+void lincomb(MultiFab<Dim, MemorySpace>& destination, Real left_factor,
+             const MultiFab<Dim, MemorySpace>& left, Real right_factor,
+             const MultiFab<Dim, MemorySpace>& right) {
+  mf_arith_detail::require_same_layout(destination, left, "pops::lincomb");
+  mf_arith_detail::require_same_layout(destination, right, "pops::lincomb");
+  for (std::size_t local = 0; local < destination.local_size(); ++local)
+    for (int component = 0; component < destination.ncomp(); ++component)
+      for_each_cell(destination.box(local),
+                    mf_arith_detail::LincombKernel<Dim>{
+                        destination.fab(local).view(), left.fab(local).view(),
+                        right.fab(local).view(), left_factor, right_factor, component});
+}
+
+template <int Dim, class MemorySpace>
+void lincomb_active(MultiFab<Dim, MemorySpace>& destination, Real left_factor,
+                    const MultiFab<Dim, MemorySpace>& left, Real right_factor,
+                    const MultiFab<Dim, MemorySpace>& right,
+                    const MultiFab<Dim, MemorySpace>& active_cells) {
+  mf_arith_detail::require_same_layout(destination, left, "pops::lincomb_active");
+  mf_arith_detail::require_same_layout(destination, right, "pops::lincomb_active");
+  mf_arith_detail::require_same_layout(destination, active_cells, "pops::lincomb_active", false);
+  if (active_cells.ncomp() != 1)
+    throw std::invalid_argument("pops::lincomb_active mask must have one component");
+  for (std::size_t local = 0; local < destination.local_size(); ++local)
+    for (int component = 0; component < destination.ncomp(); ++component)
+      for_each_cell(
+          destination.box(local),
+          mf_arith_detail::ActiveLincombKernel<Dim>{
+              destination.fab(local).view(), left.fab(local).view(), right.fab(local).view(),
+              active_cells.fab(local).view(), left_factor, right_factor, component});
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_sum_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        field.box(local), mf_arith_detail::SumKernel<Dim>{field.fab(local).view(), component});
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_abs_sum_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_abs_sum_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        field.box(local), mf_arith_detail::AbsSumKernel<Dim>{field.fab(local).view(), component});
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_max_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_max_local");
+  Real result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(result, for_each_cell_reduce_max(field.box(local),
+                                                       mf_arith_detail::MaxKernel<Dim>{
+                                                           field.fab(local).view(), component}));
+  return result;
+}
+
+template <int Dim, class MemorySpace>
+Real reduce_min_local(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_min_local");
+  Real result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Real negated = for_each_cell_reduce_max(
+        field.box(local), mf_arith_detail::NegatedKernel<Dim>{field.fab(local).view(), component});
+    result = std::min(result, -negated);
   }
+  return result;
 }
 
-/// x <- factor * x over ALL components of the valid cells.
-///
-/// This is the device-resident scalar multiplication primitive. In particular, callers must use it
-/// instead of following an asynchronous assembly kernel with raw host Array4 loops: launches remain
-/// ordered in the execution space without inserting a global fence or forcing a host round-trip.
-inline void scale(MultiFab& x, Real factor) {
-  const int nc = x.ncomp();
-  for (int li = 0; li < x.local_size(); ++li) {
-    Array4 values = x.fab(li).array();
-    const Box2D valid = x.box(li);
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(valid, detail::ScaleKernel{values, factor, c});
-  }
+template <int Dim, class MemorySpace>
+Real norm_inf(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_component(field, component, "pops::norm_inf");
+  Real result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    result = std::max(result, for_each_cell_reduce_max(field.box(local),
+                                                       mf_arith_detail::NormInfKernel<Dim>{
+                                                           field.fab(local).view(), component}));
+  return result;
 }
 
-// Infinity norm over the valid cells of one component. Each local fab is
-// reduced by for_each_cell_reduce_max over |f(i,j,comp)| (true Kokkos reduction,
-// Kokkos::Max), aggregated by host max over the fabs.
-//
-// No more device_fence() up front: under Kokkos parallel_reduce is blocking and
-// absorbs the barrier. EXACT for finite data: max and fabs are without rounding and max
-// is associative/commutative in IEEE754, so bit-identical to the old norm_inf regardless of
-// backend (the reduction order changes no bit). Any non-finite sample returns +infinity instead
-// of allowing NaN to be silently ignored by a max reduction.
-/// Infinity norm max |f(.,.,comp)| over the valid cells (LOCAL, without MPI all_reduce). Exact
-/// on finite data; returns +infinity if any selected value is NaN or infinite.
-inline Real norm_inf(const MultiFab& mf, int comp = 0) {
-  Real m = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    m = std::max(m, reduce_max_cell(mf.box(li), detail::NormInfKernel{a, comp}));
-  }
-  return m;  // MPI all-reduce max later (iso-behavior, not added here)
+template <int Dim, class MemorySpace>
+Real dot_local(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+               int component = 0) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_local");
+  mf_arith_detail::require_component(left, component, "pops::dot_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local)
+    result += for_each_cell_reduce_sum(
+        left.box(local), mf_arith_detail::DotKernel<Dim>{left.fab(local).view(),
+                                                         right.fab(local).view(), component});
+  return result;
 }
 
-/// z <- a x + b y over ALL components of the valid cells. Identical layouts; aliasing safe.
-inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) {
-  const int nc = z.ncomp();
-  for (int li = 0; li < z.local_size(); ++li) {
-    Array4 Z = z.fab(li).array();
-    const ConstArray4 X = x.fab(li).const_array();
-    const ConstArray4 Y = y.fab(li).const_array();
-    const Box2D bb = z.fab(li).box();
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(bb, detail::LincombKernel{Z, X, Y, a, b, c});
-  }
+template <int Dim, class MemorySpace>
+Real dot_all_local(const MultiFab<Dim, MemorySpace>& left,
+                   const MultiFab<Dim, MemorySpace>& right) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all_local");
+  Real result = 0;
+  for (int component = 0; component < left.ncomp(); ++component)
+    result += dot_local(left, right, component);
+  return result;
 }
 
-/// Active-domain twin of lincomb. Inactive target cells remain exactly untouched.
-inline void lincomb_active(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y,
-                           const MultiFab& active_cells) {
-  const int nc = z.ncomp();
-  for (int li = 0; li < z.local_size(); ++li) {
-    Array4 Z = z.fab(li).array();
-    const ConstArray4 X = x.fab(li).const_array();
-    const ConstArray4 Y = y.fab(li).const_array();
-    const ConstArray4 active = active_cells.fab(li).const_array();
-    const Box2D bb = z.fab(li).box();
-    for (int c = 0; c < nc; ++c)
-      for_each_cell(bb, detail::ActiveLincombKernel{Z, X, Y, active, a, b, c});
-  }
+template <int Dim, class MemorySpace>
+Real difference_sum_sq_all_local(const MultiFab<Dim, MemorySpace>& current,
+                                 const MultiFab<Dim, MemorySpace>& previous) {
+  mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all_local");
+  Real result = 0;
+  for (std::size_t local = 0; local < current.local_size(); ++local)
+    for (int component = 0; component < current.ncomp(); ++component)
+      result += for_each_cell_reduce_sum(
+          current.box(local),
+          mf_arith_detail::DifferenceSqKernel<Dim>{current.fab(local).view(),
+                                                   previous.fab(local).view(), component});
+  return result;
 }
 
-// Dot product sum_cells x . y over the VALID cells of component comp, reduced over all
-// ranks (all-reduce). Building block of Krylov solvers (BiCGStab: rho, alpha, omega, betas). Each
-// local fab is reduced by reduce_sum_cell (true Kokkos reduction, Kokkos::Sum), the local fabs
-// aggregated by host sum, then all_reduce_sum aggregates the ranks.
-//
-// COLLECTIVE, MANDATORY UNDER MPI: all_reduce_sum is called on EVERY rank, including a rank
-// WITH NO box (local_size()==0, which then contributes 0 to the local sum). Without this call on all
-// ranks, MPI_Allreduce deadlocks (desynchronized collective); the Krylov solver must therefore
-// NEVER short-circuit dot() on an empty rank. In serial all_reduce_sum is the identity.
-//
-// FP NOTE (like sum()): Kokkos::Sum re-associates the sum per tile, so dot is not bit-identical
-// to a lexicographic sum (deterministic/idempotent nonetheless, all Kokkos spaces). Under MPI, the all-reduce
-// returns the SAME value to all ranks (MPI_SUM over one same set of local contributions), so the
-// Krylov stopping criterion triggers at the SAME iteration everywhere (no desynchronization).
-/// Dot product Sum_cells x.y over component comp, reduced over ALL ranks (all_reduce).
-/// COLLECTIVE, MANDATORY UNDER MPI: must be called on every rank (including empty), otherwise
-/// deadlock. FP NOTE: not bit-identical across backends under Kokkos; the all-reduce returns the same
-/// value to all ranks (no desynchronization of the Krylov stopping criterion).
-/// Rank-local component dot. This is the non-collective building block for algorithms that batch
-/// several products into one explicit vector all-reduce. Every caller must still participate in
-/// that collective, including ranks owning no box.
-inline Real dot_local(const MultiFab& x, const MultiFab& y, int comp = 0) {
-  Real s = 0;
-  for (int li = 0; li < x.local_size(); ++li) {
-    const ConstArray4 X = x.fab(li).const_array();
-    const ConstArray4 Y = y.fab(li).const_array();
-    s += reduce_sum_cell(x.box(li), detail::DotKernel{X, Y, comp});
-  }
-  return s;
+template <int Dim, class MemorySpace>
+Real reduce_sum(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_sum");
+  return static_cast<Real>(all_reduce_sum(reduce_sum_local(field, component)));
 }
 
-inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(dot_local(x, y, comp))));
+template <int Dim, class MemorySpace>
+Real reduce_abs_sum(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_abs_sum");
+  return static_cast<Real>(all_reduce_sum(reduce_abs_sum_local(field, component)));
 }
 
-/// FULL-component dot Sum_{cells, c} x(.,.,c) * y(.,.,c) over ALL components, reduced over ALL ranks
-/// (all_reduce). The vector inner product for a MULTI-component (vector / state-valued) Krylov solve:
-/// the residual / search-direction norms must cover EVERY component, not just component 0, or the loop
-/// converges on component 0 alone and leaves the others unsolved. For a single-component field this is
-/// exactly dot(x, y) (one component, component 0), so the scalar Krylov path stays BIT-IDENTICAL.
-///
-/// COLLECTIVE, MANDATORY UNDER MPI: like dot, all_reduce_sum runs on every rank (an empty rank
-/// contributes 0); the per-component local sums are summed BEFORE the single all-reduce so the
-/// reduction structure matches dot per component (same per-tile Kokkos::Sum, deterministic).
-/// Rank-local full-component dot, paired with an explicit batched collective by prepared solvers.
-inline Real dot_all_local(const MultiFab& x, const MultiFab& y) {
-  const int nc = x.ncomp();
-  Real s = 0;
-  for (int li = 0; li < x.local_size(); ++li) {
-    const ConstArray4 X = x.fab(li).const_array();
-    const ConstArray4 Y = y.fab(li).const_array();
-    const Box2D b = x.box(li);
-    for (int c = 0; c < nc; ++c)
-      s += reduce_sum_cell(b, detail::DotKernel{X, Y, c});
-  }
-  return s;
+template <int Dim, class MemorySpace>
+Real reduce_max(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_max");
+  return static_cast<Real>(all_reduce_max(reduce_max_local(field, component)));
 }
 
-inline Real dot_all(const MultiFab& x, const MultiFab& y) {
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(dot_all_local(x, y))));
+template <int Dim, class MemorySpace>
+Real reduce_min(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_min");
+  return static_cast<Real>(all_reduce_min(reduce_min_local(field, component)));
 }
 
-/// Sum of squared component-wise changes over every valid cell.  The subtraction happens before
-/// squaring, avoiding the cancellation in ||current||² + ||previous||² - 2 current.previous.
-/// COLLECTIVE under MPI; no field leaves native Kokkos storage.
-inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previous) {
-  if (current.ncomp() != previous.ncomp() ||
-      current.box_array().boxes() != previous.box_array().boxes() ||
-      current.dmap().ranks() != previous.dmap().ranks() ||
-      current.local_size() != previous.local_size())
-    throw std::invalid_argument(
-        "difference_sum_sq_all: fields must have the same component layout");
-  Real local = 0;
-  for (int li = 0; li < current.local_size(); ++li) {
-    const ConstArray4 now = current.fab(li).const_array();
-    const ConstArray4 before = previous.fab(li).const_array();
-    for (int comp = 0; comp < current.ncomp(); ++comp)
-      local += reduce_sum_cell(current.box(li), detail::DifferenceSqKernel{now, before, comp});
-  }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+template <int Dim, class MemorySpace>
+Real reduce_norm_inf(const MultiFab<Dim, MemorySpace>& field, int component = 0) {
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_norm_inf");
+  return static_cast<Real>(all_reduce_max(norm_inf(field, component)));
 }
 
-/// Sum Sum_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_sum) -- the
-/// compiled-Program P.sum / P.sum_component reduction. COLLECTIVE, MANDATORY UNDER MPI: called on every
-/// rank (an empty rank contributes 0), like dot. Same per-tile Kokkos::Sum FP guarantees as dot.
-inline Real reduce_sum(const MultiFab& mf, int comp = 0) {
-  Real s = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    s += reduce_sum_cell(mf.box(li), detail::SumKernel{a, comp});
-  }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+template <int Dim, class MemorySpace>
+Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+         int component = 0) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot");
+  mf_arith_detail::require_collective_identity(left, "pops::dot");
+  return static_cast<Real>(all_reduce_sum(dot_local(left, right, component)));
 }
 
-/// Signed maximum max_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_max)
-/// -- the compiled-Program P.max reduction (SIGNED, not the magnitude -- use norm_inf for max|f|).
-/// COLLECTIVE, MANDATORY UNDER MPI: an empty rank seeds -inf so the all_reduce_max ignores it. EXACT
-/// everywhere (max without rounding, associative/commutative).
-inline Real reduce_max(const MultiFab& mf, int comp = 0) {
-  Real m = -std::numeric_limits<Real>::infinity();
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    m = std::max(m, reduce_max_cell(mf.box(li), detail::MaxKernel{a, comp}));
-  }
-  return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
+template <int Dim, class MemorySpace>
+Real dot_all(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all");
+  mf_arith_detail::require_collective_identity(left, "pops::dot_all");
+  return static_cast<Real>(all_reduce_sum(dot_all_local(left, right)));
 }
 
-/// Signed minimum min_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_min)
-/// -- the compiled-Program P.min reduction. COLLECTIVE, MANDATORY UNDER MPI: an empty rank seeds +inf
-/// so the all_reduce_min ignores it. EXACT everywhere (min without rounding, associative/commutative).
-inline Real reduce_min(const MultiFab& mf, int comp = 0) {
-  Real m = std::numeric_limits<Real>::infinity();
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    m = std::min(m, reduce_min_cell(mf.box(li), detail::MinKernel{a, comp}));
-  }
-  return static_cast<Real>(all_reduce_min(static_cast<double>(m)));
+template <int Dim, class MemorySpace>
+Real difference_sum_sq_all(const MultiFab<Dim, MemorySpace>& current,
+                           const MultiFab<Dim, MemorySpace>& previous) {
+  mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all");
+  mf_arith_detail::require_collective_identity(current, "pops::difference_sum_sq_all");
+  return static_cast<Real>(all_reduce_sum(difference_sum_sq_all_local(current, previous)));
 }
 
-/// Absolute sum Sum_cells |f(.,.,comp)| over component comp, reduced over ALL ranks (all_reduce_sum)
-/// -- the L1 reduction (compiled-Program P.norm1 / the Norm(L1) measure). reduce_sum is SIGNED; this
-/// folds magnitudes. COLLECTIVE, MANDATORY UNDER MPI: called on every rank (an empty rank contributes
-/// 0), like dot. Same per-tile Kokkos::Sum FP guarantees as dot/reduce_sum (deterministic/idempotent,
-/// not bit-identical to a lexicographic sum across backends). Ghost exclusion is the valid-box
-/// contract: the reduction domain is mf.box(li) (the VALID box), never the grown fab box, exactly as
-/// reduce_sum excludes ghosts -- no mask needed.
-inline Real reduce_abs_sum(const MultiFab& mf, int comp = 0) {
-  Real s = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    s += reduce_sum_cell(mf.box(li), detail::AbsSumKernel{a, comp});
-  }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
-}
-
-/// Measure-aware variants used by physical-domain diagnostics and compiled Programs.  The empty
-/// measure delegates to the historical full-grid kernels, preserving their exact no-EB path.
-inline Real reduce_sum(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(field, measure, "reduce_sum(measure)");
+template <int Dim, class MemorySpace>
+Real reduce_sum(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_sum(measure)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_sum(measure)");
   if (measure.active_cells == nullptr)
-    return reduce_sum(field, comp);
-  Real local = 0;
-  for (int li = 0; li < field.local_size(); ++li) {
-    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
-                                    ? ConstArray4{}
-                                    : measure.inverse_volume_fraction->fab(li).const_array();
-    local += reduce_sum_cell(
-        field.box(li), detail::RelativeCellSumKernel{
-                           field.fab(li).const_array(), measure.active_cells->fab(li).const_array(),
-                           inverse, comp, measure.inverse_volume_fraction != nullptr});
+    return reduce_sum(field, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_sum(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result += for_each_cell_reduce_sum(
+        field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), measure.active_cells->fab(local).view(), inverse, component,
+            false, measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_sum(local_result));
 }
 
-inline Real reduce_abs_sum(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(field, measure, "reduce_abs_sum(measure)");
+template <int Dim, class MemorySpace>
+Real reduce_abs_sum(const MultiFab<Dim, MemorySpace>& field, int component,
+                    const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_abs_sum(measure)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_abs_sum(measure)");
   if (measure.active_cells == nullptr)
-    return reduce_abs_sum(field, comp);
-  Real local = 0;
-  for (int li = 0; li < field.local_size(); ++li) {
-    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
-                                    ? ConstArray4{}
-                                    : measure.inverse_volume_fraction->fab(li).const_array();
-    local += reduce_sum_cell(
-        field.box(li), detail::RelativeCellAbsSumKernel{
-                           field.fab(li).const_array(), measure.active_cells->fab(li).const_array(),
-                           inverse, comp, measure.inverse_volume_fraction != nullptr});
+    return reduce_abs_sum(field, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_abs_sum(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result += for_each_cell_reduce_sum(
+        field.box(local),
+        mf_arith_detail::MeasuredValueKernel<Dim>{
+            field.fab(local).view(), measure.active_cells->fab(local).view(), inverse, component,
+            true, measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_sum(local_result));
 }
 
-inline Real dot(const MultiFab& left, const MultiFab& right, int comp,
-                const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(left, measure, "dot(measure)");
-  if (left.box_array().boxes() != right.box_array().boxes() ||
-      left.dmap().ranks() != right.dmap().ranks() || left.local_size() != right.local_size())
-    throw std::invalid_argument("dot(measure): left and right fields must have the same layout");
+template <int Dim, class MemorySpace>
+Real dot(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+         int component, const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot(measure)");
+  mf_arith_detail::require_component(left, component, "pops::dot(measure)");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot(measure)");
   if (measure.active_cells == nullptr)
-    return dot(left, right, comp);
-  Real local = 0;
-  for (int li = 0; li < left.local_size(); ++li) {
-    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
-                                    ? ConstArray4{}
-                                    : measure.inverse_volume_fraction->fab(li).const_array();
-    local += reduce_sum_cell(
-        left.box(li),
-        detail::RelativeCellDotKernel{left.fab(li).const_array(), right.fab(li).const_array(),
-                                      measure.active_cells->fab(li).const_array(), inverse, comp,
-                                      measure.inverse_volume_fraction != nullptr});
+    return dot(left, right, component);
+  mf_arith_detail::require_collective_identity(left, "pops::dot(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    local_result += for_each_cell_reduce_sum(
+        left.box(local), mf_arith_detail::MeasuredDotKernel<Dim>{
+                             left.fab(local).view(), right.fab(local).view(),
+                             measure.active_cells->fab(local).view(), inverse, component,
+                             measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_sum(local_result));
 }
 
-inline Real dot_all(const MultiFab& left, const MultiFab& right,
-                    const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(left, measure, "dot_all(measure)");
-  if (left.ncomp() != right.ncomp() || left.box_array().boxes() != right.box_array().boxes() ||
-      left.dmap().ranks() != right.dmap().ranks() || left.local_size() != right.local_size())
-    throw std::invalid_argument(
-        "dot_all(measure): left and right fields must have the same component layout");
+template <int Dim, class MemorySpace>
+Real dot_all(const MultiFab<Dim, MemorySpace>& left, const MultiFab<Dim, MemorySpace>& right,
+             const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_same_layout(left, right, "pops::dot_all(measure)");
+  mf_arith_detail::validate_measure(left, measure, "pops::dot_all(measure)");
   if (measure.active_cells == nullptr)
     return dot_all(left, right);
-  Real local = 0;
-  for (int li = 0; li < left.local_size(); ++li) {
-    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
-                                    ? ConstArray4{}
-                                    : measure.inverse_volume_fraction->fab(li).const_array();
-    for (int comp = 0; comp < left.ncomp(); ++comp)
-      local += reduce_sum_cell(
-          left.box(li),
-          detail::RelativeCellDotKernel{left.fab(li).const_array(), right.fab(li).const_array(),
-                                        measure.active_cells->fab(li).const_array(), inverse, comp,
-                                        measure.inverse_volume_fraction != nullptr});
+  mf_arith_detail::require_collective_identity(left, "pops::dot_all(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < left.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    for (int component = 0; component < left.ncomp(); ++component)
+      local_result += for_each_cell_reduce_sum(
+          left.box(local), mf_arith_detail::MeasuredDotKernel<Dim>{
+                               left.fab(local).view(), right.fab(local).view(),
+                               measure.active_cells->fab(local).view(), inverse, component,
+                               measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_sum(local_result));
 }
 
-inline Real difference_sum_sq_all(const MultiFab& current, const MultiFab& previous,
-                                  const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(current, measure, "difference_sum_sq_all(measure)");
-  if (current.ncomp() != previous.ncomp() ||
-      current.box_array().boxes() != previous.box_array().boxes() ||
-      current.dmap().ranks() != previous.dmap().ranks() ||
-      current.local_size() != previous.local_size())
-    throw std::invalid_argument(
-        "difference_sum_sq_all(measure): fields must have the same component layout");
+template <int Dim, class MemorySpace>
+Real difference_sum_sq_all(const MultiFab<Dim, MemorySpace>& current,
+                           const MultiFab<Dim, MemorySpace>& previous,
+                           const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_same_layout(current, previous, "pops::difference_sum_sq_all(measure)");
+  mf_arith_detail::validate_measure(current, measure, "pops::difference_sum_sq_all(measure)");
   if (measure.active_cells == nullptr)
     return difference_sum_sq_all(current, previous);
-  Real local = 0;
-  for (int li = 0; li < current.local_size(); ++li) {
-    const ConstArray4 inverse = measure.inverse_volume_fraction == nullptr
-                                    ? ConstArray4{}
-                                    : measure.inverse_volume_fraction->fab(li).const_array();
-    for (int comp = 0; comp < current.ncomp(); ++comp)
-      local += reduce_sum_cell(current.box(li),
-                               detail::RelativeCellDifferenceSqKernel{
-                                   current.fab(li).const_array(), previous.fab(li).const_array(),
-                                   measure.active_cells->fab(li).const_array(), inverse, comp,
-                                   measure.inverse_volume_fraction != nullptr});
+  mf_arith_detail::require_collective_identity(current, "pops::difference_sum_sq_all(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < current.local_size(); ++local) {
+    const FieldView<const Real, Dim> inverse =
+        measure.inverse_volume_fraction == nullptr
+            ? FieldView<const Real, Dim>{}
+            : measure.inverse_volume_fraction->fab(local).view();
+    for (int component = 0; component < current.ncomp(); ++component)
+      local_result += for_each_cell_reduce_sum(
+          current.box(local), mf_arith_detail::MeasuredDifferenceSqKernel<Dim>{
+                                  current.fab(local).view(), previous.fab(local).view(),
+                                  measure.active_cells->fab(local).view(), inverse, component,
+                                  measure.inverse_volume_fraction != nullptr});
   }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(local)));
+  return static_cast<Real>(all_reduce_sum(local_result));
 }
 
-inline Real reduce_max(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(field, measure, "reduce_max(measure)");
+template <int Dim, class MemorySpace>
+Real reduce_max(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_max(measure)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_max(measure)");
   if (measure.active_cells == nullptr)
-    return reduce_max(field, comp);
-  Real local = -std::numeric_limits<Real>::infinity();
-  for (int li = 0; li < field.local_size(); ++li)
-    local = std::max(
-        local,
-        reduce_max_cell(field.box(li), detail::RelativeCellMaxKernel{
-                                           field.fab(li).const_array(),
-                                           measure.active_cells->fab(li).const_array(), comp}));
-  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
+    return reduce_max(field, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_max(measure)");
+  Real local_result = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    local_result = std::max(
+        local_result,
+        for_each_cell_reduce_max(
+            field.box(local), mf_arith_detail::ActiveMaxKernel<Dim>{
+                                  field.fab(local).view(), measure.active_cells->fab(local).view(),
+                                  component, false, false}));
+  return static_cast<Real>(all_reduce_max(local_result));
 }
 
-inline Real reduce_min(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(field, measure, "reduce_min(measure)");
+template <int Dim, class MemorySpace>
+Real reduce_min(const MultiFab<Dim, MemorySpace>& field, int component,
+                const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_min(measure)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_min(measure)");
   if (measure.active_cells == nullptr)
-    return reduce_min(field, comp);
-  Real local = std::numeric_limits<Real>::infinity();
-  for (int li = 0; li < field.local_size(); ++li)
-    local = std::min(
-        local,
-        reduce_min_cell(field.box(li), detail::RelativeCellMinKernel{
-                                           field.fab(li).const_array(),
-                                           measure.active_cells->fab(li).const_array(), comp}));
-  return static_cast<Real>(all_reduce_min(static_cast<double>(local)));
+    return reduce_min(field, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_min(measure)");
+  Real local_result = std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Real negated = for_each_cell_reduce_max(
+        field.box(local), mf_arith_detail::ActiveMaxKernel<Dim>{
+                              field.fab(local).view(), measure.active_cells->fab(local).view(),
+                              component, true, false});
+    local_result = std::min(local_result, -negated);
+  }
+  return static_cast<Real>(all_reduce_min(local_result));
 }
 
-inline Real reduce_norm_inf(const MultiFab& field, int comp, const RelativeCellMeasure& measure) {
-  detail::validate_relative_cell_measure(field, measure, "reduce_norm_inf(measure)");
+template <int Dim, class MemorySpace>
+Real reduce_norm_inf(const MultiFab<Dim, MemorySpace>& field, int component,
+                     const RelativeCellMeasure<Dim, MemorySpace>& measure) {
+  mf_arith_detail::require_component(field, component, "pops::reduce_norm_inf(measure)");
+  mf_arith_detail::validate_measure(field, measure, "pops::reduce_norm_inf(measure)");
   if (measure.active_cells == nullptr)
-    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field, comp))));
-  Real local = 0;
-  for (int li = 0; li < field.local_size(); ++li)
-    local = std::max(
-        local,
-        reduce_max_cell(field.box(li), detail::RelativeCellNormInfKernel{
-                                           field.fab(li).const_array(),
-                                           measure.active_cells->fab(li).const_array(), comp}));
-  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
+    return reduce_norm_inf(field, component);
+  mf_arith_detail::require_collective_identity(field, "pops::reduce_norm_inf(measure)");
+  Real local_result = 0;
+  for (std::size_t local = 0; local < field.local_size(); ++local)
+    local_result = std::max(
+        local_result,
+        for_each_cell_reduce_max(
+            field.box(local), mf_arith_detail::ActiveMaxKernel<Dim>{
+                                  field.fab(local).view(), measure.active_cells->fab(local).view(),
+                                  component, false, true}));
+  return static_cast<Real>(all_reduce_max(local_result));
 }
 
 }  // namespace pops

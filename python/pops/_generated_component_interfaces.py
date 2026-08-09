@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '5c67c081cf1808138583ed00856e6601c12384ae28e9c0f8cc7b8ce004c3b0f6'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'adbb3693dc17eff5aa7b78415df35f011dfd2c64fc26eb9a98200923e52c47ea'
+NATIVE_COMPONENT_CATALOG_SHA256 = '06e90f38d927e8543e9020d9b2ce1a4f6722630d5c65f347cc9a175cc31f7746'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '27ac54a69188657111717e78b90d2b75c06fdb971ed6b70e96fe68be5de78ad2'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -72,6 +72,14 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'hot_path': True,
   'facets': ('stencil', 'lowering'),
   'operations': ('apply',)},
+ {'id': 6,
+  'name': 'reflux',
+  'uri': 'pops://interfaces/reflux',
+  'version': 1,
+  'cpp_table': 'PopsRefluxApiV1',
+  'hot_path': True,
+  'facets': ('stencil', 'lowering', 'effects'),
+  'operations': ('apply_interface_batch',)},
  {'id': 7,
   'name': 'field_solver',
   'uri': 'pops://interfaces/field-solver',
@@ -95,13 +103,22 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'cpp_table': 'PopsFieldTopologyApiV2',
   'hot_path': False,
   'facets': ('provider', 'report'),
-  'operations': ('prepare_topology',)})
+  'operations': ('prepare_topology',)},
+ {'id': 10,
+  'name': 'boundary_flux',
+  'uri': 'pops://interfaces/boundary-flux',
+  'version': 1,
+  'cpp_table': 'PopsBoundaryFluxApiV1',
+  'hot_path': True,
+  'facets': ('provider', 'lowering', 'fallible_evaluation'),
+  'operations': ('transform_faces',)})
 NATIVE_COMPONENT_INTERFACE_BY_NAME = {row['name']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_INTERFACE_BY_URI = {row['uri']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES = {'boundary_provider': ('ghost_boundary', 'apply_region_batch'),
  'corner_resolver': ('ghost_boundary', 'apply_region_batch'),
  'numerical_closure': ('ghost_boundary', 'apply_region_batch'),
  'conservative_flux': ('numerical_flux', 'evaluate_faces'),
+ 'boundary_flux_provider': ('boundary_flux', 'transform_faces'),
  'residual_operator': ('field_boundary_closure', 'residual'),
  'linearization_operator': ('field_boundary_closure', 'jvp')}
 

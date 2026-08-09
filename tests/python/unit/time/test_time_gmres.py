@@ -26,8 +26,8 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
     Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
     fakes the engine.
 
-The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
-tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
+The non-symmetric C++ guard and workspace ownership are pinned by the prepared Krylov unit suites;
+the Python witness validates the same authored operator through generated code.
 """
 from tests.python.support.requirements import require_native_or_skip
 from fractions import Fraction
@@ -111,13 +111,12 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     def apply(P, out, x):
         lap = P.scalar_field("lap")
         P.laplacian(lap, x)
-        # y-flux of the advection divergence (d/dy of 0 == 0). ncomp=2: ProgramContext::divergence
-        # reads the x-flux at component 0 and the y-flux at component 1 (the cx=0/cy=1 convention for
-        # the aliased gradient buffer), so the fy operand MUST carry a component 1 -- a 1-component
-        # field would read out of bounds and corrupt the advection term.
-        zero = P.scalar_field("zero", ncomp=2)
+        # Compose the exact spatial vector (in, 0): no aliased x/y scalar convention and no padded
+        # axis. Resolve authenticates its two components against this tutorial's 2D domain.
+        zero = P.scalar_field("zero")
+        advection_flux = P.vector_field(x, zero, name="advection_flux")
         dxdir = P.scalar_field("dxdir")
-        P.divergence(dxdir, x, zero)        # dxdir = d(in)/dx (centered)
+        P.divergence(dxdir, advection_flux)  # dxdir = d(in)/dx (centered)
         return x - alpha * lap + beta * dxdir  # out = in - alpha*Lap(in) + beta*d(in)/dx
 
     P.set_apply(A, apply)
@@ -143,17 +142,17 @@ def _helmholtz(P, x):
 def test_gmres_codegen(t):
     src = emit_cpp_program(_spd_program(t, method="gmres"))
     for frag in (
-        "pops::PreparedAffineOperatorSessionFactory make_apply_A",
-        "pops::ApplyFn apply =",
-        "pops::PreparedAffineOperatorSessionCallbacks",
-        "pops::PreparedAffineOperatorProvider::trusted_extension",
+        "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> make_apply_A",
+        "pops::ApplyFn<pops::kNativeDimension> apply =",
+        "pops::PreparedAffineOperatorSessionCallbacks<pops::kNativeDimension>",
+        "pops::PreparedAffineOperatorProvider<"
+        "pops::kNativeDimension>::trusted_extension",
         "pops::PreparedOperatorConcurrency::Independent",
         "ctx.laplacian",
-        "std::make_shared<pops::PreparedAffineLinearProblem>",
-        "pops::PreparedLinearPreconditioner::identity()",
-        "ctx.authenticated_program_apply_token",
+        "std::make_shared<pops::PreparedAffineLinearProblem<pops::kNativeDimension>>",
+        "pops::PreparedLinearPreconditioner<pops::kNativeDimension>::identity()",
         "ctx.program_resource_vector_distribution()",
-        "std::make_shared<pops::KrylovWorkspace>",
+        "std::make_shared<pops::KrylovWorkspace<pops::kNativeDimension>>",
         "->prepare(*operator_snapshot",
         "->bind(*prepared_problem",
         "ctx.solve_prepared_linear",
@@ -164,13 +163,15 @@ def test_gmres_codegen(t):
 
 def test_gmres_restart_default_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=30))
-    assert "pops::gmres_krylov_method(30)" in src and "ctx.solve_prepared_linear" in src, \
+    assert ("pops::gmres_krylov_method<pops::kNativeDimension>(30)" in src
+            and "ctx.solve_prepared_linear" in src), \
         "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=12))
-    assert "pops::gmres_krylov_method(12)" in src and "ctx.solve_prepared_linear" in src, \
+    assert ("pops::gmres_krylov_method<pops::kNativeDimension>(12)" in src
+            and "ctx.solve_prepared_linear" in src), \
         "an overridden restart must lower\n%s" % src
 
 
@@ -232,7 +233,9 @@ def test_arbitrary_stencil_depth_is_authenticated_and_lowered(t):
     assert solve.attrs["krylov_footprint"]["input_ghosts"] == 3
     source = emit_cpp_program(program)
     assert "ctx.alloc_scalar_field(1, 3)" in source
-    assert "const pops::KrylovFootprint" in source and "{1, 3, false}" in source
+    assert "const pops::KrylovFootprint<pops::kNativeDimension>" in source
+    assert "ghosts[axis] = 3" in source
+    assert "{1, krylov_input_ghosts" in source and ", false};" in source
 
 
 def test_stencil_depth_validation_and_inferred_minimum(t):
@@ -419,8 +422,7 @@ def _passive_model(name):
     from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
+    m.primitive_vars(rho)
     m.conservative_from([rho])
     m.flux(x=[0.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])

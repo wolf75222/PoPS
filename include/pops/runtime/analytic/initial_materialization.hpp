@@ -1,17 +1,20 @@
 /// @file
-/// @brief Native cell-centred materialization of validated analytic programs.
+/// @brief Compile-time-ranked native materialization of validated analytic programs.
 
 #pragma once
 
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/analytic/expression.hpp>
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -68,261 +71,296 @@ POPS_HD inline Real gauss_weight(int index) {
                                   : Real(0.652145154862546142626936050778000593);
 }
 
+template <int Dim>
 struct AnalyticCellAverage {
   AnalyticProgramView program;
-  Real xlo, ylo, dx, dy;
+  Geometry<Dim> geometry;
 
-  POPS_HD Real operator()(int i, int j) const {
-    const Real x_center = xlo + (static_cast<Real>(i) + Real(0.5)) * dx;
-    const Real y_center = ylo + (static_cast<Real>(j) + Real(0.5)) * dy;
-    Real average = Real(0);
-    for (int qy = 0; qy < 4; ++qy)
-      for (int qx = 0; qx < 4; ++qx)
-        average += gauss_weight(qx) * gauss_weight(qy) *
-                   program.eval(x_center + Real(0.5) * dx * gauss_node(qx),
-                                y_center + Real(0.5) * dy * gauss_node(qy));
-    return Real(0.25) * average;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    constexpr int sample_count = 1 << (2 * Dim);  // 4^Dim tensor quadrature points.
+    constexpr Real normalization = Real(1) / static_cast<Real>(1 << Dim);
+    const RealVector<Dim> center = geometry.cell_center(index);
+    Real integral = Real(0);
+    for (int sample = 0; sample < sample_count; ++sample) {
+      int encoded = sample;
+      Real weight = Real(1);
+      RealVector<Dim> point = center;
+      for (int axis = 0; axis < Dim; ++axis) {
+        const int quadrature_index = encoded & 3;
+        encoded >>= 2;
+        weight *= gauss_weight(quadrature_index);
+        point[axis] += Real(0.5) * geometry.spacing(axis) * gauss_node(quadrature_index);
+      }
+      integral += weight * program.eval(point);
+    }
+    return normalization * integral;
   }
 };
 
+template <int Dim>
 struct AnalyticInitialKernel {
-  Array4 values;
+  FieldView<Real, Dim> values;
   int component;
-  AnalyticCellAverage average;
+  AnalyticCellAverage<Dim> average;
 
-  POPS_HD void operator()(int i, int j) const { values(i, j, component) = average(i, j); }
-};
-
-struct AnalyticInitialFiniteKernel {
-  AnalyticCellAverage average;
-
-  POPS_HD Real operator()(int i, int j) const {
-    return Kokkos::isfinite(average(i, j)) ? Real(0) : Real(1);
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    values(index, component) = average(index);
   }
 };
 
-struct AnalyticInputBinding {
-  int source = 0;  // 0 = current state, 1 = aux
+template <int Dim>
+struct AnalyticInitialFiniteKernel {
+  AnalyticCellAverage<Dim> average;
+
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return Kokkos::isfinite(average(index)) ? Real(0) : Real(1);
+  }
+};
+
+template <int Dim, class MemorySpace>
+struct AnalyticMappedInputField {
+  const MultiFab<Dim, MemorySpace>* field = nullptr;
   int component = 0;
 };
 
+template <int Dim>
+struct AnalyticMappedInputPatch {
+  static_assert(std::is_trivially_copyable_v<FieldView<const Real, Dim>>,
+                "mapped analytic input views must be device-copyable");
+
+  FieldView<const Real, Dim> fields[kAnalyticMaxStack]{};
+  int components[kAnalyticMaxStack]{};
+  int count = 0;
+
+  POPS_HD Real operator()(const Index<Dim>& index, int slot) const {
+    return fields[slot](index, components[slot]);
+  }
+};
+
+template <int Dim>
 struct AnalyticMappedInitialKernel {
-  ConstArray4 state;
-  ConstArray4 aux;
-  Array4 values;
+  AnalyticMappedInputPatch<Dim> inputs;
+  FieldView<Real, Dim> values;
   int component;
   AnalyticProgramView program;
-  const AnalyticInputBinding* bindings;
-  int binding_count;
-  Real xlo, ylo, dx, dy;
+  Geometry<Dim> geometry;
 
-  POPS_HD void operator()(int i, int j) const {
+  POPS_HD void operator()(const Index<Dim>& index) const {
     Real inputs[kAnalyticMaxStack];
-    for (int slot = 0; slot < binding_count; ++slot) {
-      const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] =
-          binding.source == 0 ? state(i, j, binding.component) : aux(i, j, binding.component);
-    }
-    const Real x_center = xlo + (static_cast<Real>(i) + Real(0.5)) * dx;
-    const Real y_center = ylo + (static_cast<Real>(j) + Real(0.5)) * dy;
-    const AnalyticEvaluation result =
-        program.eval_checked(x_center, y_center, inputs, static_cast<std::uint8_t>(binding_count));
-    values(i, j, component) = result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
+    for (int slot = 0; slot < this->inputs.count; ++slot)
+      inputs[slot] = this->inputs(index, slot);
+    const AnalyticEvaluation result = program.eval_checked(
+        index, geometry, inputs, static_cast<std::uint8_t>(this->inputs.count));
+    values(index, component) = result.valid ? result.value : std::numeric_limits<Real>::quiet_NaN();
   }
 };
 
+template <int Dim>
 struct AnalyticMappedInitialFiniteKernel {
-  ConstArray4 state;
-  ConstArray4 aux;
+  AnalyticMappedInputPatch<Dim> inputs;
   AnalyticProgramView program;
-  const AnalyticInputBinding* bindings;
-  int binding_count;
-  Real xlo, ylo, dx, dy;
+  Geometry<Dim> geometry;
 
-  POPS_HD Real operator()(int i, int j) const {
+  POPS_HD Real operator()(const Index<Dim>& index) const {
     Real inputs[kAnalyticMaxStack];
-    for (int slot = 0; slot < binding_count; ++slot) {
-      const AnalyticInputBinding binding = bindings[slot];
-      inputs[slot] =
-          binding.source == 0 ? state(i, j, binding.component) : aux(i, j, binding.component);
-    }
-    const Real x_center = xlo + (static_cast<Real>(i) + Real(0.5)) * dx;
-    const Real y_center = ylo + (static_cast<Real>(j) + Real(0.5)) * dy;
-    const AnalyticEvaluation result =
-        program.eval_checked(x_center, y_center, inputs, static_cast<std::uint8_t>(binding_count));
-    return result.valid ? Real(0) : Real(1);
+    for (int slot = 0; slot < this->inputs.count; ++slot)
+      inputs[slot] = this->inputs(index, slot);
+    return program.eval_checked(index, geometry, inputs,
+                                static_cast<std::uint8_t>(this->inputs.count))
+                   .valid
+               ? Real(0)
+               : Real(1);
   }
 };
 
+template <int Dim>
 struct GaussianCellAverage {
-  Real xlo, ylo, dx, dy, center_x, center_y, background, amplitude, inverse_width;
+  Geometry<Dim> geometry;
+  RealVector<Dim> center;
+  Real background;
+  Real amplitude;
+  Real inverse_width;
 
-  POPS_HD Real operator()(int i, int j) const {
+  POPS_HD Real operator()(const Index<Dim>& index) const {
     const Real root = Kokkos::sqrt(inverse_width);
-    const Real ax = root * (xlo + static_cast<Real>(i) * dx - center_x);
-    const Real bx = root * (xlo + static_cast<Real>(i + 1) * dx - center_x);
-    const Real ay = root * (ylo + static_cast<Real>(j) * dy - center_y);
-    const Real by = root * (ylo + static_cast<Real>(j + 1) * dy - center_y);
-    const Real scale_x =
-        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dx);
-    const Real scale_y =
-        Kokkos::sqrt(Real(3.141592653589793238462643383279502884)) / (Real(2) * root * dy);
-    return background + amplitude * scale_x * (Kokkos::erf(bx) - Kokkos::erf(ax)) * scale_y *
-                            (Kokkos::erf(by) - Kokkos::erf(ay));
+    const Real pi = Real(3.141592653589793238462643383279502884);
+    Real average = Real(1);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real spacing = geometry.spacing(axis);
+      const Real lower = root * (geometry.face_coordinate(axis, index[axis]) - center[axis]);
+      const Real upper = root * (geometry.face_coordinate(axis, index[axis] + 1) - center[axis]);
+      const Real scale = Kokkos::sqrt(pi) / (Real(2) * root * spacing);
+      average *= scale * (Kokkos::erf(upper) - Kokkos::erf(lower));
+    }
+    return background + amplitude * average;
   }
 };
 
+template <int Dim>
 struct GaussianCellAverageKernel {
-  Array4 values;
-  GaussianCellAverage average;
+  FieldView<Real, Dim> values;
+  GaussianCellAverage<Dim> average;
 
-  POPS_HD void operator()(int i, int j) const { values(i, j, 0) = average(i, j); }
+  POPS_HD void operator()(const Index<Dim>& index) const { values(index, 0) = average(index); }
 };
 
+template <int Dim>
 struct GaussianCellAverageFiniteKernel {
-  GaussianCellAverage average;
+  GaussianCellAverage<Dim> average;
 
-  POPS_HD Real operator()(int i, int j) const {
-    return Kokkos::isfinite(average(i, j)) ? Real(0) : Real(1);
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return Kokkos::isfinite(average(index)) ? Real(0) : Real(1);
   }
 };
+
+template <int Dim, class MemorySpace>
+long invalid_materialization_target(const MultiFab<Dim, MemorySpace>& values,
+                                    const Geometry<Dim>& geometry,
+                                    const std::vector<AnalyticProgram>& programs) {
+  bool invalid = programs.size() != static_cast<std::size_t>(values.ncomp());
+  for (const AnalyticProgram& program : programs)
+    invalid = invalid || program.required_dimension() > Dim;
+  for (std::size_t local = 0; local < values.local_size(); ++local)
+    invalid = invalid || !geometry.domain().contains(values.box(local));
+  return all_reduce_sum(invalid ? 1L : 0L);
+}
+
+template <int Dim>
+std::int64_t checked_layout_cell_count(const mesh::BoxArray<Dim>& layout) {
+  std::int64_t total = 0;
+  for (const Box<Dim>& box : layout.boxes()) {
+    std::int64_t cells = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t length = box.length(axis);
+      if (length <= 0 || cells > std::numeric_limits<std::int64_t>::max() / length)
+        throw std::overflow_error("analytic materialization cell count exceeds int64_t");
+      cells *= length;
+    }
+    if (total > std::numeric_limits<std::int64_t>::max() - cells)
+      throw std::overflow_error("analytic materialization cell count exceeds int64_t");
+    total += cells;
+  }
+  return total;
+}
 
 }  // namespace detail
 
-/// Project each expression to a cell average with deterministic tensor Gauss--Legendre quadrature.
-inline std::int64_t materialize_cell_average(MultiFab& values, Real xlo, Real ylo, Real dx, Real dy,
-                                             const std::vector<AnalyticProgram>& programs) {
-  const long invalid_target = all_reduce_sum(
-      !(dx > Real(0)) || !(dy > Real(0)) || !std::isfinite(static_cast<double>(xlo)) ||
-              !std::isfinite(static_cast<double>(ylo)) ||
-              programs.size() != static_cast<std::size_t>(values.ncomp())
-          ? 1L
-          : 0L);
-  if (invalid_target != 0)
+/// Project each expression to cell averages with one Dim-generic tensor Gauss--Legendre algorithm.
+template <int Dim, class MemorySpace>
+std::int64_t materialize_cell_average(MultiFab<Dim, MemorySpace>& values,
+                                      const Geometry<Dim>& geometry,
+                                      const std::vector<AnalyticProgram>& programs) {
+  if (detail::invalid_materialization_target(values, geometry, programs) != 0)
     throw std::invalid_argument("analytic initial materialization target/profile mismatch");
   long invalid_local = 0;
-  for (int local = 0; local < values.local_size(); ++local) {
-    const Box2D valid = values.box(local);
-    for (int component = 0; component < values.ncomp(); ++component) {
+  for (std::size_t local = 0; local < values.local_size(); ++local)
+    for (int component = 0; component < values.ncomp(); ++component)
       invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          valid, detail::AnalyticInitialFiniteKernel{
-                     {programs[static_cast<std::size_t>(component)].view(), xlo, ylo, dx, dy}}));
-    }
-  }
+          values.box(local),
+          detail::AnalyticInitialFiniteKernel<Dim>{
+              {programs[static_cast<std::size_t>(component)].view(), geometry}}));
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
     throw std::runtime_error("analytic initial expression produced non-finite cell values (count=" +
-                             std::to_string(static_cast<std::int64_t>(invalid)) + ")");
-  for (int local = 0; local < values.local_size(); ++local) {
-    const Box2D valid = values.box(local);
+                             std::to_string(invalid) + ")");
+  for (std::size_t local = 0; local < values.local_size(); ++local)
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(valid,
-                    detail::AnalyticInitialKernel{
-                        values.fab(local).array(),
+      for_each_cell(values.box(local),
+                    detail::AnalyticInitialKernel<Dim>{
+                        values.fab(local).view(),
                         component,
-                        {programs[static_cast<std::size_t>(component)].view(), xlo, ylo, dx, dy}});
-  }
-  // AnalyticProgramView borrows device pointers from @p programs. The caller owns those programs as
-  // setup-time locals, so projection kernels must finish before this function permits destruction.
-  // This is a real asynchronous-device lifetime barrier, not a host fallback.
+                        {programs[static_cast<std::size_t>(component)].view(), geometry}});
   device_fence();
-  return values.box_array().num_cells() * values.ncomp();
+  return detail::checked_layout_cell_count(values.layout()) * values.ncomp();
 }
 
-inline std::int64_t materialize_discrete_mapped_state(
-    MultiFab& values, const MultiFab& seed, const MultiFab& aux, Real xlo, Real ylo, Real dx,
-    Real dy, const std::vector<AnalyticProgram>& programs,
-    const std::vector<detail::AnalyticInputBinding>& bindings) {
-  const long invalid_target = all_reduce_sum(
-      !(dx > Real(0)) || !(dy > Real(0)) || !std::isfinite(static_cast<double>(xlo)) ||
-              !std::isfinite(static_cast<double>(ylo)) ||
-              programs.size() != static_cast<std::size_t>(values.ncomp()) || bindings.empty() ||
-              bindings.size() > kAnalyticMaxStack || values.local_size() != seed.local_size() ||
-              values.local_size() != aux.local_size() || seed.ncomp() != values.ncomp()
-          ? 1L
-          : 0L);
-  if (invalid_target != 0)
+/// Evaluate mapped analytic state at cell centers using ranked native field views.
+template <int Dim, class MemorySpace>
+std::int64_t materialize_discrete_mapped_state(
+    MultiFab<Dim, MemorySpace>& values, const Geometry<Dim>& geometry,
+    const std::vector<AnalyticProgram>& programs,
+    const std::vector<detail::AnalyticMappedInputField<Dim, MemorySpace>>& inputs) {
+  bool target_invalid = detail::invalid_materialization_target(values, geometry, programs) != 0;
+  target_invalid = target_invalid || inputs.size() > kAnalyticMaxStack;
+  for (const auto& input : inputs)
+    target_invalid =
+        target_invalid || input.field == nullptr || input.component < 0 ||
+        (input.field != nullptr && input.component >= input.field->ncomp()) ||
+        (input.field != nullptr && input.field->layout() != values.layout()) ||
+        (input.field != nullptr && input.field->distribution() != values.distribution()) ||
+        (input.field != nullptr && input.field->local_rank() != values.local_rank()) ||
+        (input.field != nullptr && input.field->local_size() != values.local_size());
+  if (all_reduce_sum(target_invalid ? 1L : 0L) != 0)
     throw std::invalid_argument("analytic mapped initial state target/profile mismatch");
-  for (const auto& binding : bindings) {
-    const long invalid_binding =
-        all_reduce_sum((binding.source != 0 && binding.source != 1) || binding.component < 0 ||
-                               (binding.source == 0 && binding.component >= seed.ncomp()) ||
-                               (binding.source == 1 && binding.component >= aux.ncomp())
-                           ? 1L
-                           : 0L);
-    if (invalid_binding != 0)
-      throw std::invalid_argument("analytic mapped initial state input binding is invalid");
-  }
-  using BindingStorage =
-      std::vector<detail::AnalyticInputBinding, fab_allocator<detail::AnalyticInputBinding>>;
-  BindingStorage device_bindings(bindings.begin(), bindings.end());
   long invalid_local = 0;
-  for (int local = 0; local < values.local_size(); ++local) {
-    const Box2D valid = values.box(local);
-    const ConstArray4 state_view = seed.fab(local).const_array();
-    const ConstArray4 aux_view = aux.fab(local).const_array();
-    for (int component = 0; component < values.ncomp(); ++component) {
-      invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-          valid,
-          detail::AnalyticMappedInitialFiniteKernel{
-              state_view, aux_view, programs[static_cast<std::size_t>(component)].view(),
-              device_bindings.data(), static_cast<int>(device_bindings.size()), xlo, ylo, dx, dy}));
+  for (std::size_t local = 0; local < values.local_size(); ++local) {
+    detail::AnalyticMappedInputPatch<Dim> patch_inputs{};
+    patch_inputs.count = static_cast<int>(inputs.size());
+    for (std::size_t slot = 0; slot < inputs.size(); ++slot) {
+      patch_inputs.fields[slot] = inputs[slot].field->fab(local).view();
+      patch_inputs.components[slot] = inputs[slot].component;
     }
+    for (int component = 0; component < values.ncomp(); ++component)
+      invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+          values.box(local),
+          detail::AnalyticMappedInitialFiniteKernel<Dim>{
+              patch_inputs, programs[static_cast<std::size_t>(component)].view(), geometry}));
   }
   const long invalid = all_reduce_sum(invalid_local);
   if (invalid != 0)
     throw std::runtime_error(
         "analytic mapped initial expression produced non-finite cell values (count=" +
-        std::to_string(static_cast<std::int64_t>(invalid)) + ")");
-  for (int local = 0; local < values.local_size(); ++local) {
-    const Box2D valid = values.box(local);
-    const ConstArray4 state_view = seed.fab(local).const_array();
-    const ConstArray4 aux_view = aux.fab(local).const_array();
-    Array4 output = values.fab(local).array();
+        std::to_string(invalid) + ")");
+  for (std::size_t local = 0; local < values.local_size(); ++local) {
+    detail::AnalyticMappedInputPatch<Dim> patch_inputs{};
+    patch_inputs.count = static_cast<int>(inputs.size());
+    for (std::size_t slot = 0; slot < inputs.size(); ++slot) {
+      patch_inputs.fields[slot] = inputs[slot].field->fab(local).view();
+      patch_inputs.components[slot] = inputs[slot].component;
+    }
+    const auto output = values.fab(local).view();
     for (int component = 0; component < values.ncomp(); ++component)
-      for_each_cell(
-          valid, detail::AnalyticMappedInitialKernel{
-                     state_view, aux_view, output, component,
-                     programs[static_cast<std::size_t>(component)].view(), device_bindings.data(),
-                     static_cast<int>(device_bindings.size()), xlo, ylo, dx, dy});
+      for_each_cell(values.box(local),
+                    detail::AnalyticMappedInitialKernel<Dim>{
+                        patch_inputs, output, component,
+                        programs[static_cast<std::size_t>(component)].view(), geometry});
   }
   device_fence();
-  return values.box_array().num_cells() * values.ncomp();
+  return detail::checked_layout_cell_count(values.layout()) * values.ncomp();
 }
 
-inline std::int64_t materialize_gaussian_cell_average(MultiFab& values, Real xlo, Real ylo, Real dx,
-                                                      Real dy, Real center_x, Real center_y,
-                                                      Real background, Real amplitude,
-                                                      Real inverse_width) {
-  const long invalid_arguments = all_reduce_sum(
-      values.ncomp() != 1 || !(dx > Real(0)) || !(dy > Real(0)) ||
-              !std::isfinite(static_cast<double>(xlo)) ||
-              !std::isfinite(static_cast<double>(ylo)) || !(inverse_width > Real(0)) ||
-              !std::isfinite(static_cast<double>(center_x)) ||
-              !std::isfinite(static_cast<double>(center_y)) ||
-              !std::isfinite(static_cast<double>(background)) ||
-              !std::isfinite(static_cast<double>(amplitude)) ||
-              !std::isfinite(static_cast<double>(inverse_width))
-          ? 1L
-          : 0L);
-  if (invalid_arguments != 0)
+/// Materialize a separable Gaussian cell average in the selected compile-time rank.
+template <int Dim, class MemorySpace>
+std::int64_t materialize_gaussian_cell_average(MultiFab<Dim, MemorySpace>& values,
+                                               const Geometry<Dim>& geometry,
+                                               const RealVector<Dim>& center, Real background,
+                                               Real amplitude, Real inverse_width) {
+  bool invalid = values.ncomp() != 1 || !(inverse_width > Real(0)) ||
+                 !std::isfinite(static_cast<double>(background)) ||
+                 !std::isfinite(static_cast<double>(amplitude)) ||
+                 !std::isfinite(static_cast<double>(inverse_width));
+  for (int axis = 0; axis < Dim; ++axis)
+    invalid = invalid || !std::isfinite(center[axis]);
+  for (std::size_t local = 0; local < values.local_size(); ++local)
+    invalid = invalid || !geometry.domain().contains(values.box(local));
+  if (all_reduce_sum(invalid ? 1L : 0L) != 0)
     throw std::invalid_argument("analytic Gaussian initial profile is invalid");
-  const detail::GaussianCellAverage average{xlo,      ylo,        dx,        dy,           center_x,
-                                            center_y, background, amplitude, inverse_width};
+
+  const detail::GaussianCellAverage<Dim> average{geometry, center, background, amplitude,
+                                                 inverse_width};
   long invalid_local = 0;
-  for (int local = 0; local < values.local_size(); ++local)
+  for (std::size_t local = 0; local < values.local_size(); ++local)
     invalid_local += static_cast<long>(for_each_cell_reduce_sum(
-        values.box(local), detail::GaussianCellAverageFiniteKernel{average}));
-  const long invalid = all_reduce_sum(invalid_local);
-  if (invalid != 0)
+        values.box(local), detail::GaussianCellAverageFiniteKernel<Dim>{average}));
+  const long non_finite = all_reduce_sum(invalid_local);
+  if (non_finite != 0)
     throw std::runtime_error("analytic Gaussian profile produced non-finite cell averages (count=" +
-                             std::to_string(invalid) + ")");
-  for (int local = 0; local < values.local_size(); ++local)
+                             std::to_string(non_finite) + ")");
+  for (std::size_t local = 0; local < values.local_size(); ++local)
     for_each_cell(values.box(local),
-                  detail::GaussianCellAverageKernel{values.fab(local).array(), average});
-  // Give every one-shot initializer the same completion contract on asynchronous Kokkos devices.
+                  detail::GaussianCellAverageKernel<Dim>{values.fab(local).view(), average});
   device_fence();
-  return values.box_array().num_cells();
+  return detail::checked_layout_cell_count(values.layout());
 }
 
 }  // namespace pops::analytic

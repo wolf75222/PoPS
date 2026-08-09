@@ -233,6 +233,24 @@ def resolve_layout(problem: Any, layout: Any, *, providers: Any = None) \
             plan, (ResolvedRuntimeLayout(plan.layouts[0].handle, runtime_descriptor),)))
 
 
+def resolve_native_spatial_layouts(plan: Any) -> Mapping[str, Any]:
+    """Select the current production spatial specialization before artifact creation."""
+    from pops.codegen._native_spatial_layout import (
+        NativeSpatialLayoutError,
+        native_spatial_layouts,
+    )
+
+    try:
+        return native_spatial_layouts(plan)
+    except NativeSpatialLayoutError as exc:
+        _refuse_runtime(
+            plan,
+            gate=exc.code,
+            message=str(exc),
+            details=exc.to_data(),
+        )
+
+
 def _select_runtime_providers(plan: Any, providers: Any) -> Any:
     if providers is None:
         return None
@@ -372,7 +390,13 @@ def layout_lowering_coverage(plan: Any, *, rejected_gate: str | None = None) -> 
     return LoweringCoverageReport(rows)
 
 
-def _refuse_runtime(plan: Any, *, gate: str, message: str) -> NoReturn:
+def _refuse_runtime(
+    plan: Any,
+    *,
+    gate: str,
+    message: str,
+    details: Mapping[str, Any] | None = None,
+) -> NoReturn:
     coverage = layout_lowering_coverage(plan, rejected_gate=gate)
     evidence = {
         "gate": gate,
@@ -381,12 +405,15 @@ def _refuse_runtime(plan: Any, *, gate: str, message: str) -> NoReturn:
         "resources": list(plan.resource_requirements()),
         "lowering_coverage": coverage.to_data(),
     }
+    if details is not None:
+        evidence["refusal"] = dict(details)
     raise LayoutCapabilityError(message, evidence=evidence, coverage_report=coverage)
 
 
 __all__ = [
     "LayoutCapabilityError", "ResolvedLayoutAuthority", "ResolvedRuntimeLayout",
     "ResolvedRuntimeLayouts", "layout_lowering_coverage",
-    "materialized_layout_subjects", "resolve_layout", "validate_layout",
+    "materialized_layout_subjects", "resolve_layout", "resolve_native_spatial_layouts",
+    "validate_layout",
     "validate_layout_mapping_components", "validate_program_layout_reads",
 ]

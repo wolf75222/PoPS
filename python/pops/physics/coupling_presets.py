@@ -103,23 +103,23 @@ def collision_preset(a: Any, b: Any, rate: Any, name: str = "collision") -> Any:
     matching ``ub += dt*F``) and ``-expr`` on @p a (which LOSES, matching ``ua -= dt*F``), so the two
     legs share the SAME subtree with opposite sign -- conservative by construction.
 
-    Returns a :class:`ContractedCoupling` (source + declared ``conserved=['momentum_x','momentum_y']``).
+    Returns a :class:`ContractedCoupling` (source + declared ``conserved=['momentum:0','momentum:1']``).
     """
     src = CoupledSource(name)
-    mxa = src.block(a).role("MomentumX")
-    mya = src.block(a).role("MomentumY")
-    da = src.block(a).role("Density")
-    mxb = src.block(b).role("MomentumX")
-    myb = src.block(b).role("MomentumY")
-    db = src.block(b).role("Density")
+    mxa = src.block(a).role("momentum:0")
+    mya = src.block(a).role("momentum:1")
+    da = src.block(a).role("density")
+    mxb = src.block(b).role("momentum:0")
+    myb = src.block(b).role("momentum:1")
+    db = src.block(b).role("density")
     k = src.param("k_collision", rate)
     fx = k * ((mxa / da) - (mxb / db))  # F_x = k (u_xa - u_xb); C++ grouping preserved
     fy = k * ((mya / da) - (myb / db))  # F_y = k (u_ya - u_yb)
     # b GAINS +F (ub += dt*F), a LOSES -F (ua -= dt*F): add_pair(block_a=b, block_b=a) emits +expr on b
     # and -expr on a -- the exact signs of the C++ helper.
-    src.add_pair(b, a, role="momentum_x", expr=fx)
-    src.add_pair(b, a, role="momentum_y", expr=fy)
-    return ContractedCoupling(src, conserved=["momentum_x", "momentum_y"])
+    src.add_pair(b, a, role="momentum:0", expr=fx)
+    src.add_pair(b, a, role="momentum:1", expr=fy)
+    return ContractedCoupling(src, conserved=["momentum:0", "momentum:1"])
 
 
 def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: Any,
@@ -137,14 +137,14 @@ def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: An
     Returns a :class:`ContractedCoupling` (source + declared ``conserved=['energy']``).
     """
     src = CoupledSource(name)
-    ea = src.block(a).role("Energy")
-    mxa = src.block(a).role("MomentumX")
-    mya = src.block(a).role("MomentumY")
-    da = src.block(a).role("Density")
-    eb = src.block(b).role("Energy")
-    mxb = src.block(b).role("MomentumX")
-    myb = src.block(b).role("MomentumY")
-    db = src.block(b).role("Density")
+    ea = src.block(a).role("energy")
+    mxa = src.block(a).role("momentum:0")
+    mya = src.block(a).role("momentum:1")
+    da = src.block(a).role("density")
+    eb = src.block(b).role("energy")
+    mxb = src.block(b).role("momentum:0")
+    myb = src.block(b).role("momentum:1")
+    db = src.block(b).role("density")
     k = src.param("k_thermal", rate)
     ga = exact_physics_scalar(gamma_a, where="thermal_exchange_preset.gamma_a")
     gb = exact_physics_scalar(gamma_b, where="thermal_exchange_preset.gamma_b")

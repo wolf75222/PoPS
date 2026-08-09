@@ -1,5 +1,5 @@
 /// @file
-/// @brief Exact 2D periodic topology values shared by lowering and native halo execution.
+/// @brief Exact compile-time-ranked periodic topology values.
 
 #pragma once
 
@@ -23,56 +23,86 @@ constexpr bool same_periodicity(Periodicity left, Periodicity right) noexcept {
 
 /// One signed/permuted identification between two oriented Cartesian faces.
 ///
-/// Face ordinals are xlo=0, xhi=1, ylo=2, yhi=3. For each source axis ``a``,
-/// ``permutation[a]`` is its target axis and ``signs[a]`` is the signed orientation of that
-/// coordinate. Translation is derived from the two endpoint faces and the execution domain; it is
+/// Face ordinals are axis-major: axis 0 lower/upper, axis 1 lower/upper, and so on. For each source
+/// axis ``a``, ``permutation[a]`` is its target axis and ``signs[a]`` is the signed orientation of
+/// that coordinate. Translation is derived from the endpoints and the execution domain; it is
 /// deliberately absent from this topology-only value.
-struct PeriodicIdentification2D {
+template <int Dim>
+struct PeriodicIdentification {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PeriodicIdentification only supports dimensions 1, 2, and 3");
+
   int source_face = -1;
   int target_face = -1;
-  std::array<int, 2> permutation{{0, 1}};
-  std::array<int, 2> signs{{1, 1}};
+  std::array<int, Dim> permutation = [] {
+    std::array<int, Dim> result{};
+    for (int axis = 0; axis < Dim; ++axis)
+      result[static_cast<std::size_t>(axis)] = axis;
+    return result;
+  }();
+  std::array<int, Dim> signs = [] {
+    std::array<int, Dim> result{};
+    result.fill(1);
+    return result;
+  }();
 
-  bool operator==(const PeriodicIdentification2D&) const = default;
+  bool operator==(const PeriodicIdentification&) const = default;
 
   bool is_translation_identity() const noexcept {
-    return permutation == std::array<int, 2>{{0, 1}} && signs == std::array<int, 2>{{1, 1}};
+    for (int axis = 0; axis < Dim; ++axis)
+      if (permutation[static_cast<std::size_t>(axis)] != axis ||
+          signs[static_cast<std::size_t>(axis)] != 1)
+        return false;
+    return true;
   }
 
   void validate() const {
-    if (source_face < 0 || source_face >= 4 || target_face < 0 || target_face >= 4 ||
+    if (source_face < 0 || source_face >= 2 * Dim || target_face < 0 || target_face >= 2 * Dim ||
         source_face == target_face)
       throw std::invalid_argument(
-          "PeriodicIdentification2D requires two distinct xlo/xhi/ylo/yhi endpoints");
-    if (!((permutation[0] == 0 && permutation[1] == 1) ||
-          (permutation[0] == 1 && permutation[1] == 0)))
-      throw std::invalid_argument(
-          "PeriodicIdentification2D permutation must be the exact 2D axis permutation");
-    if ((signs[0] != -1 && signs[0] != 1) || (signs[1] != -1 && signs[1] != 1))
-      throw std::invalid_argument(
-          "PeriodicIdentification2D signs must contain one -1/+1 per source axis");
+          "PeriodicIdentification requires two distinct ranked face endpoints");
+    std::array<bool, Dim> assigned{};
+    for (int source_axis = 0; source_axis < Dim; ++source_axis) {
+      const int target_axis = permutation[static_cast<std::size_t>(source_axis)];
+      if (target_axis < 0 || target_axis >= Dim || assigned[static_cast<std::size_t>(target_axis)])
+        throw std::invalid_argument(
+            "PeriodicIdentification permutation must be an exact ranked axis permutation");
+      assigned[static_cast<std::size_t>(target_axis)] = true;
+      if (signs[static_cast<std::size_t>(source_axis)] != -1 &&
+          signs[static_cast<std::size_t>(source_axis)] != 1)
+        throw std::invalid_argument(
+            "PeriodicIdentification signs must contain one -1/+1 per source axis");
+    }
     const int source_axis = source_face / 2;
     const int target_axis = target_face / 2;
     if (permutation[static_cast<std::size_t>(source_axis)] != target_axis)
       throw std::invalid_argument(
-          "PeriodicIdentification2D source normal does not map to the target normal");
+          "PeriodicIdentification source normal does not map to the target normal");
     const int source_outward = source_face % 2 == 0 ? -1 : 1;
     const int target_outward = target_face % 2 == 0 ? -1 : 1;
     const int required_normal_sign = -source_outward * target_outward;
     if (signs[static_cast<std::size_t>(source_axis)] != required_normal_sign)
       throw std::invalid_argument(
-          "PeriodicIdentification2D normal sign does not map source interior to target exterior");
+          "PeriodicIdentification normal sign does not map source interior to target exterior");
   }
 };
 
-/// Binding-friendly exact row decoder: source, target, permutation[0:2], signs[0:2].
-inline std::vector<PeriodicIdentification2D> decode_periodic_identification_rows(
-    const std::vector<std::array<int, 6>>& rows) {
-  std::vector<PeriodicIdentification2D> result;
+/// Exact row decoder: source, target, permutation[0:Dim], signs[0:Dim].
+template <int Dim>
+inline std::vector<PeriodicIdentification<Dim>> decode_periodic_identification_rows(
+    const std::vector<std::array<int, 2 + 2 * Dim>>& rows) {
+  std::vector<PeriodicIdentification<Dim>> result;
   result.reserve(rows.size());
   for (const auto& row : rows) {
-    PeriodicIdentification2D identification{row[0], row[1], std::array<int, 2>{{row[2], row[3]}},
-                                            std::array<int, 2>{{row[4], row[5]}}};
+    PeriodicIdentification<Dim> identification;
+    identification.source_face = row[0];
+    identification.target_face = row[1];
+    for (int axis = 0; axis < Dim; ++axis) {
+      identification.permutation[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + axis)];
+      identification.signs[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + Dim + axis)];
+    }
     identification.validate();
     result.push_back(identification);
   }

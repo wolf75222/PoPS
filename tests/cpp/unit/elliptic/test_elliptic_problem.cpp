@@ -1,199 +1,282 @@
-// Identite NUMERIQUE EXACTE des types nommes de include/pops/elliptic :
-// EllipticProblem et FieldPostProcess sont des descripteurs structurels qui
-// NOMMENT des valeurs et conventions deja codees, sans changer une seule
-// operation flottante. Le test prouve la bit-identite par operator== strict
-// (pas une tolerance) : il echouerait au moindre ecart de dernier bit.
-//
-//   (A) EllipticProblem : GeometricMG construit via le constructeur BCRec et via
-//       la fabrique make_elliptic_solver(EllipticProblem) sur le MEME cas
-//       manufacture donne phi identique cellule par cellule. homogeneous_bc d'un
-//       probleme egale homogeneous(problem.bc).
-//   (B) FieldPostProcess : la boucle de reference recopiee de
-//       detail::coupler_grad_phi egale field_postprocess(GradSign::Plus) bit a
-//       bit. Le cas GradSign::Minus egale -reference (convention two_fluid).
-//   (C) garde-fou eps : EllipticProblem{}.eps vaut exactement 1.
-
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
 
-#include <cmath>
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
-using namespace pops;
-static constexpr double kPi = 3.14159265358979323846;
-static constexpr int kN = 64;
-
 namespace {
-double fr(const Geometry& geom, int i, int j) {
-  return std::sin(2 * kPi * geom.x_cell(i)) * std::sin(2 * kPi * geom.y_cell(j));
+
+using pops::BoundarySide;
+using pops::BoundaryTopology;
+using pops::Box;
+using pops::CellIndex;
+using pops::EllipticBuildRequest;
+using pops::EllipticOperatorContract;
+using pops::EllipticOperatorIdentity;
+using pops::EllipticProblem;
+using pops::ExecutionLane;
+using pops::Extent;
+using pops::Face;
+using pops::FieldPostProcess;
+using pops::FieldView;
+using pops::Geometry;
+using pops::Index;
+using pops::MultiFab;
+using pops::PhysicalBoundaryConditions;
+using pops::PhysicalBoundaryFace;
+using pops::PhysicalBoundaryKind;
+using pops::Real;
+using pops::RealVector;
+using pops::mesh::BoxArray;
+using pops::mesh::Distribution;
+using pops::mesh::RankSpace;
+
+template <int Dim>
+Index<Dim> filled_index(int value) {
+  Index<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
+
+template <int Dim>
+Extent<Dim> filled_extent(std::int64_t value) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+RealVector<Dim> filled_real(Real value) {
+  RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+template <int Dim>
+EllipticBuildRequest<Dim> build_request(const ExecutionLane& lane) {
+  const Box<Dim> domain{filled_index<Dim>(0), filled_index<Dim>(5)};
+  const BoxArray<Dim> boxes(std::vector<Box<Dim>>{domain});
+  Extent<Dim> rank_extents = filled_extent<Dim>(1);
+  rank_extents[0] = lane.size();
+  Index<Dim> local_rank{};
+  local_rank[0] = lane.rank();
+  const Distribution<Dim> distribution =
+      Distribution<Dim>::replicated(boxes, RankSpace<Dim>{Index<Dim>{}, rank_extents});
+  std::array<PhysicalBoundaryFace, PhysicalBoundaryConditions<Dim>::face_count> faces{};
+  faces.fill(PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(3)});
+  const Geometry<Dim> geometry =
+      Geometry<Dim>::from_bounds(domain, filled_real<Dim>(Real(-1)), filled_real<Dim>(Real(2)));
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {geometry,
+          boxes,
+          distribution,
+          local_rank,
+          PhysicalBoundaryConditions<Dim>{BoundaryTopology<Dim>::physical(), faces, spacing},
+          Extent<Dim>{},
+          filled_extent<Dim>(1),
+          {1, 0}};
+}
+
+template <int Dim>
+class ExactProblemSolver {
+ public:
+  static constexpr int dimension = Dim;
+  using field_type = MultiFab<Dim>;
+  using request_type = EllipticBuildRequest<Dim>;
+
+  explicit ExactProblemSolver(request_type request)
+      : geometry_(request.geometry),
+        boundary_(request.boundary),
+        rhs_(request.boxes, request.distribution, request.local_rank, 1, request.rhs_ghosts),
+        phi_(request.boxes, request.distribution, request.local_rank, 1, request.phi_ghosts),
+        contract_(expected_operator_contract(request)) {}
+
+  ExactProblemSolver(const ExactProblemSolver&) = delete;
+  ExactProblemSolver& operator=(const ExactProblemSolver&) = delete;
+  ExactProblemSolver(ExactProblemSolver&&) noexcept = default;
+  ExactProblemSolver& operator=(ExactProblemSolver&&) noexcept = default;
+  ~ExactProblemSolver() noexcept = default;
+
+  static EllipticOperatorContract expected_operator_contract(const request_type& request) {
+    return pops::make_expected_elliptic_operator_contract(
+        EllipticOperatorIdentity{"pops.test.elliptic-problem.exact", 1}, request);
+  }
+
+  field_type& rhs() noexcept { return rhs_; }
+  field_type& phi() noexcept { return phi_; }
+  void solve() noexcept { residual_ = Real(0); }
+  Real residual() const noexcept { return residual_; }
+  const Geometry<Dim>& geom() const noexcept { return geometry_; }
+  const PhysicalBoundaryConditions<Dim>& boundary() const noexcept { return boundary_; }
+  const EllipticOperatorContract& prepared_operator_contract() const noexcept { return contract_; }
+
+ private:
+  Geometry<Dim> geometry_;
+  PhysicalBoundaryConditions<Dim> boundary_;
+  field_type rhs_;
+  field_type phi_;
+  EllipticOperatorContract contract_;
+  Real residual_ = Real(1);
+};
+
+static_assert(pops::EllipticSolver<ExactProblemSolver<1>>);
+static_assert(pops::EllipticSolver<ExactProblemSolver<2>>);
+static_assert(pops::EllipticSolver<ExactProblemSolver<3>>);
+
+template <int Dim>
+void expect_exact_problem_factory() {
+  const ExecutionLane lane = ExecutionLane::world();
+  auto request = build_request<Dim>(lane);
+  const Geometry<Dim> geometry = request.geometry;
+  const auto boundary = request.boundary;
+  ExactProblemSolver<Dim> solver = pops::make_elliptic_solver<ExactProblemSolver<Dim>>(
+      EllipticProblem<Dim>{std::move(request), Real(1)}, lane);
+  EXPECT_EQ(solver.geom(), geometry);
+  EXPECT_EQ(solver.boundary(), boundary);
+  EXPECT_EQ(solver.phi().ghosts(), filled_extent<Dim>(1));
+}
+
+template <int Dim>
+void expect_homogeneous_boundary() {
+  const ExecutionLane lane = ExecutionLane::world();
+  EllipticProblem<Dim> problem{build_request<Dim>(lane), Real(1)};
+  const auto homogeneous = pops::homogeneous_bc(problem);
+  EXPECT_EQ(homogeneous.topology(), problem.build.boundary.topology());
+  EXPECT_EQ(homogeneous.spacing(), problem.build.boundary.spacing());
+  for (int axis = 0; axis < Dim; ++axis) {
+    for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+      const Face<Dim> face{axis, side};
+      EXPECT_EQ(homogeneous.at(face).kind, problem.build.boundary.at(face).kind);
+      EXPECT_EQ(homogeneous.at(face).value, Real(0));
+      EXPECT_EQ(homogeneous.at(face).alpha, problem.build.boundary.at(face).alpha);
+      EXPECT_EQ(homogeneous.at(face).beta, problem.build.boundary.at(face).beta);
+    }
+  }
+}
+
+template <int Dim>
+struct PolynomialPotential {
+  FieldView<Real, Dim> value{};
+
+  POPS_HD void operator()(const CellIndex<Dim>& cell) const {
+    Real result = Real(7);
+    for (int axis = 0; axis < Dim; ++axis)
+      result += Real(axis + 1) * Real(cell[axis] * cell[axis]);
+    value(cell, 0) = result;
+  }
+};
+
+template <int Dim>
+struct PostprocessError {
+  FieldView<const Real, Dim> result{};
+  Geometry<Dim> geometry;
+  Real sign = Real(1);
+  int gradient_component = 0;
+  bool stores_potential = false;
+
+  POPS_HD Real operator()(const CellIndex<Dim>& cell) const {
+    Real error = Real(0);
+    if (stores_potential) {
+      Real expected = Real(7);
+      for (int axis = 0; axis < Dim; ++axis)
+        expected += Real(axis + 1) * Real(cell[axis] * cell[axis]);
+      const Real difference = result(cell, 0) - expected;
+      error = difference < Real(0) ? -difference : difference;
+    }
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real expected = sign * Real(2 * (axis + 1) * cell[axis]) / geometry.spacing(axis);
+      const Real difference = result(cell, gradient_component + axis) - expected;
+      const Real magnitude = difference < Real(0) ? -difference : difference;
+      error = error < magnitude ? magnitude : error;
+    }
+    return error;
+  }
+};
+
+template <int Dim>
+void expect_postprocess() {
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto request = build_request<Dim>(lane);
+  MultiFab<Dim> potential(request.boxes, request.distribution, request.local_rank, 1,
+                          filled_extent<Dim>(1));
+  for (std::size_t local = 0; local < potential.local_size(); ++local)
+    pops::for_each_cell(potential.fab(local).grown_box(),
+                        PolynomialPotential<Dim>{potential.fab(local).view()});
+
+  MultiFab<Dim> plus(request.boxes, request.distribution, request.local_rank, Dim + 1,
+                     Extent<Dim>{});
+  pops::field_postprocess(request.geometry, potential, plus,
+                          FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
+  Real plus_error = Real(0);
+  for (std::size_t local = 0; local < plus.local_size(); ++local)
+    plus_error =
+        std::max(plus_error,
+                 pops::for_each_cell_reduce_max(
+                     plus.box(local), PostprocessError<Dim>{std::as_const(plus.fab(local)).view(),
+                                                            request.geometry, Real(1), 1, true}));
+  EXPECT_EQ(plus_error, Real(0));
+
+  MultiFab<Dim> minus(request.boxes, request.distribution, request.local_rank, Dim, Extent<Dim>{});
+  pops::field_postprocess(request.geometry, potential, minus,
+                          FieldPostProcess{FieldPostProcess::GradSign::Minus, false});
+  Real minus_error = Real(0);
+  for (std::size_t local = 0; local < minus.local_size(); ++local)
+    minus_error = std::max(
+        minus_error,
+        pops::for_each_cell_reduce_max(
+            minus.box(local), PostprocessError<Dim>{std::as_const(minus.fab(local)).view(),
+                                                    request.geometry, Real(-1), 0, false}));
+  EXPECT_EQ(minus_error, Real(0));
+}
+
 }  // namespace
 
-// Fixture : geometrie/layout partages (lecture seule, construits une fois) par les sections
-// independantes ci-dessous.
-class EllipticProblemTest : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    dom_ = new Box2D(Box2D::from_extents(kN, kN));
-    geom_ = new Geometry{*dom_, 0.0, 1.0, 0.0, 1.0};
-    ba_ = new BoxArray(std::vector<Box2D>{*dom_});
-    dm_ = new DistributionMapping(1, 1);
-    bc_ = new BCRec();  // periodique
-  }
-  static void TearDownTestSuite() {
-    delete dom_;
-    delete geom_;
-    delete ba_;
-    delete dm_;
-    delete bc_;
-    dom_ = nullptr;
-    geom_ = nullptr;
-    ba_ = nullptr;
-    dm_ = nullptr;
-    bc_ = nullptr;
-  }
-
-  static Box2D* dom_;
-  static Geometry* geom_;
-  static BoxArray* ba_;
-  static DistributionMapping* dm_;
-  static BCRec* bc_;
-};
-Box2D* EllipticProblemTest::dom_ = nullptr;
-Geometry* EllipticProblemTest::geom_ = nullptr;
-BoxArray* EllipticProblemTest::ba_ = nullptr;
-DistributionMapping* EllipticProblemTest::dm_ = nullptr;
-BCRec* EllipticProblemTest::bc_ = nullptr;
-
-// (C) garde-fou eps : etat implicite actuel du stencil.
-TEST_F(EllipticProblemTest, default_eps_is_one) {
-  EXPECT_TRUE(EllipticProblem{}.eps == Real(1)) << "eps_implicite_vaut_1";
+TEST(test_elliptic_problem, exact_factory_materializes_one_two_and_three_dimensions) {
+  expect_exact_problem_factory<1>();
+  expect_exact_problem_factory<2>();
+  expect_exact_problem_factory<3>();
 }
 
-// (C bis) eps != 1 n'est pas supporte (stencil a coefficient constant) :
-// make_elliptic_solver doit LANCER plutot que de l'ignorer en silence.
-TEST_F(EllipticProblemTest, eps_not_one_throws) {
-  EllipticProblem prob_eps2{Real(2), *bc_, false};
-  EXPECT_THROW(
-      { GeometricMG bad = make_elliptic_solver<GeometricMG>(*geom_, *ba_, prob_eps2); },
-      std::invalid_argument)
-      << "eps_different_de_1_lance";
+TEST(test_elliptic_problem, unsupported_coefficient_fails_closed) {
+  const ExecutionLane lane = ExecutionLane::world();
+  EXPECT_THROW((void)pops::make_elliptic_solver<ExactProblemSolver<3>>(
+                   EllipticProblem<3>{build_request<3>(lane), Real(2)}, lane),
+               std::invalid_argument);
 }
 
-// homogeneous_bc(probleme) == homogeneous(probleme.bc), champ par champ.
-TEST_F(EllipticProblemTest, homogeneous_bc_matches_homogeneous_of_bc) {
-  BCRec mixed;
-  mixed.xlo = BCType::Dirichlet;
-  mixed.xlo_val = 3.0;
-  mixed.yhi = BCType::Foextrap;
-  EllipticProblem prob{Real(1), mixed, false};
-  BCRec h0 = homogeneous(prob.bc);
-  BCRec h1 = homogeneous_bc(prob);
-  EXPECT_TRUE(h0.xlo == h1.xlo && h0.xhi == h1.xhi && h0.ylo == h1.ylo && h0.yhi == h1.yhi)
-      << "homogeneous_bc_meme_types";
-  EXPECT_TRUE(h0.xlo_val == h1.xlo_val && h0.xhi_val == h1.xhi_val && h0.ylo_val == h1.ylo_val &&
-              h0.yhi_val == h1.yhi_val)
-      << "homogeneous_bc_meme_valeurs";
+TEST(test_elliptic_problem, homogeneous_boundary_retains_every_exact_ranked_law) {
+  expect_homogeneous_boundary<1>();
+  expect_homogeneous_boundary<2>();
+  expect_homogeneous_boundary<3>();
 }
 
-// (A) EllipticProblem : constructeur BCRec vs fabrique EllipticProblem -> phi bit-identique.
-TEST_F(EllipticProblemTest, factory_matches_bcrec_constructor_bit_identical) {
-  auto solve_into = [&](auto& solver) {
-    Array4 f = solver.rhs().fab(0).array();
-    const Box2D v = solver.rhs().box(0);
-    for_each_cell(v, [=, geom = *geom_] POPS_HD(int i, int j) { f(i, j) = fr(geom, i, j); });
-    solver.phi().set_val(0.0);
-    solver.solve();
-  };
-
-  GeometricMG mg_ref(*geom_, *ba_, *bc_);
-  EllipticProblem prob{Real(1), *bc_, true};  // nullspace_const : etiquette
-  GeometricMG mg_named = make_elliptic_solver<GeometricMG>(*geom_, *ba_, prob);
-  solve_into(mg_ref);
-  solve_into(mg_named);
-
-  // memes BCRec -> meme suite d'operations -> memes bits.
-  bool phi_bit_eq = true;
-  const ConstArray4 pr = mg_ref.phi().fab(0).const_array();
-  const ConstArray4 pn = mg_named.phi().fab(0).const_array();
-  for (int j = 0; j < kN; ++j)
-    for (int i = 0; i < kN; ++i)
-      if (pr(i, j) != pn(i, j))
-        phi_bit_eq = false;
-  EXPECT_TRUE(phi_bit_eq) << "EllipticProblem_phi_bit_identique";
+TEST(test_elliptic_problem, one_axis_generic_postprocess_executes_in_one_two_and_three_dimensions) {
+  expect_postprocess<1>();
+  expect_postprocess<2>();
+  expect_postprocess<3>();
 }
 
-// (B) FieldPostProcess : reference recopiee vs field_postprocess (Plus et Minus).
-TEST_F(EllipticProblemTest, field_postprocess_matches_reference_loop_bit_identical) {
-  // phi connu (1 ghost) periodique.
-  MultiFab phi(*ba_, *dm_, 1, 1);
-  {
-    Array4 p = phi.fab(0).array();
-    const Box2D v = phi.box(0);
-    for_each_cell(v, [=, geom = *geom_] POPS_HD(int i, int j) { p(i, j) = fr(geom, i, j); });
-    fill_ghosts(phi, *dom_, *bc_);
-  }
-  const Real cx = Real(1) / (2 * geom_->dx());
-  const Real cy = Real(1) / (2 * geom_->dy());
-
-  // reference : recopie exacte de detail::coupler_grad_phi.
-  MultiFab ref(*ba_, *dm_, 3, 1);
-  {
-    const ConstArray4 p = phi.fab(0).const_array();
-    Array4 a = ref.fab(0).array();
-    const Box2D v = ref.box(0);
-    for_each_cell(v, [=] POPS_HD(int i, int j) {
-      a(i, j, 0) = p(i, j);
-      a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) * cx;
-      a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) * cy;
-    });
-  }
-
-  // nomme : GradSign::Plus, store_phi=true.
-  MultiFab plus(*ba_, *dm_, 3, 1);
-  field_postprocess(phi, plus, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
-
-  bool plus_bit_eq = true;
-  {
-    const ConstArray4 ar = ref.fab(0).const_array();
-    const ConstArray4 ap = plus.fab(0).const_array();
-    const Box2D v = ref.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        for (int c = 0; c < 3; ++c)
-          if (ar(i, j, c) != ap(i, j, c))
-            plus_bit_eq = false;
-  }
-  EXPECT_TRUE(plus_bit_eq) << "FieldPostProcess_Plus_bit_identique";
-
-  // GradSign::Minus, store_phi=false : 2 composantes E = -grad phi (two_fluid).
-  // chaque composante vaut -ref de la composante de gradient correspondante.
-  MultiFab minus(*ba_, *dm_, 2, 1);
-  field_postprocess(phi, minus, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Minus, false});
-
-  bool minus_bit_eq = true;
-  {
-    const ConstArray4 ar = ref.fab(0).const_array();
-    const ConstArray4 am = minus.fab(0).const_array();
-    const Box2D v = minus.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        if (am(i, j, 0) != -ar(i, j, 1))
-          minus_bit_eq = false;
-        if (am(i, j, 1) != -ar(i, j, 2))
-          minus_bit_eq = false;
-      }
-  }
-  EXPECT_TRUE(minus_bit_eq) << "FieldPostProcess_Minus_egale_moins_grad";
+TEST(test_elliptic_problem, postprocess_rejects_missing_axis_ghosts) {
+  const ExecutionLane lane = ExecutionLane::world();
+  const auto request = build_request<2>(lane);
+  MultiFab<2> potential(request.boxes, request.distribution, request.local_rank, 1, Extent<2>{});
+  MultiFab<2> output(request.boxes, request.distribution, request.local_rank, 3, Extent<2>{});
+  EXPECT_THROW(pops::field_postprocess(request.geometry, potential, output, FieldPostProcess{}),
+               std::invalid_argument);
 }

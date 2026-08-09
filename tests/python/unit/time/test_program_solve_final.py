@@ -240,22 +240,6 @@ def test_constant_nullspace_cg_requires_spd_on_the_complement_and_is_scalar_only
         )
 
 
-def test_constant_nullspace_refuses_uncertified_geometric_mg_preconditioner():
-    program, operator, rhs = _matrix_free()
-    with pytest.raises(NotImplementedError, match="no explicit public certificate"):
-        program.solve(
-            LinearProblem(
-                operator, rhs,
-                properties=LinearOperatorProperties.symmetric_operator(),
-                nullspace=ConstantNullspace(), gauge=MeanValueGauge(0)),
-            solver=GMRES(
-                max_iter=4,
-                restart=2,
-                preconditioner=preconditioners.GeometricMG(),
-            ),
-        )
-
-
 def test_dense_lu_is_executable_only_for_local_linear_problem():
     program, operator, rhs = _matrix_free()
     with pytest.raises((TypeError, ValueError), match="LocalLinear"):
@@ -272,8 +256,8 @@ def test_final_catalogs_do_not_publish_unavailable_placeholders():
     assert not hasattr(fields, "Helmholtz")
     assert not hasattr(fields, "EllipticSolve")
     assert not hasattr(projections, "bound_preserving")
-    assert not hasattr(limiters, "MC")
-    assert not hasattr(limiters, "Superbee")
+    assert hasattr(limiters, "MC")
+    assert hasattr(limiters, "Superbee")
     assert not hasattr(preconditioners, "Jacobi")
     assert not hasattr(preconditioners, "BlockJacobi")
     assert not hasattr(solvers, "Schur")

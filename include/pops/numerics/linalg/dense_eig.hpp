@@ -730,6 +730,55 @@ POPS_HD inline bool roe_entropy_fix_apply_certified_real(const Real (&A)[N][N], 
 
 }  // namespace detail
 
+/// Apply the strictly incoming spectral projector of an outward-normal flux Jacobian.
+///
+/// ``out = P_in jump`` with ``P_in = R diag(lambda < 0) R^-1``.  The model supplies the complete
+/// Cartesian flux Jacobian and ``outward_sign`` orients it; this helper contains no Euler layout or
+/// component convention.  A scale-relative shifted matrix-sign separates negative modes while
+/// treating the numerical sonic subspace as neutral.  Complex/non-converged spectra and invalid
+/// orientation fail explicitly, leaving ``out`` untouched.
+template <int N>
+POPS_HD inline bool characteristic_incoming_apply(const Real (&flux_jacobian)[N][N],
+                                                  const Real (&jump)[N], Real (&out)[N],
+                                                  int outward_sign, int max_iter = 80,
+                                                  Real tol = Real(1e-13),
+                                                  Real im_tol = kEigStrictImagTol,
+                                                  int max_iter_per_eig = 100) {
+  static_assert(N >= 1 && N <= 16, "characteristic_incoming_apply: 1 <= N <= 16");
+  if (outward_sign != -1 && outward_sign != 1)
+    return false;
+  Real oriented[N][N];
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j)
+      oriented[i][j] = static_cast<Real>(outward_sign) * flux_jacobian[i][j];
+  if (real_spectrum(oriented, im_tol, max_iter_per_eig) != Spectrum::kReal)
+    return false;
+  const Real scale = detail::mat_norm_inf(oriented);
+  if (!(scale <= std::numeric_limits<Real>::max()))
+    return false;
+  if (scale == Real(0)) {
+    for (int i = 0; i < N; ++i)
+      out[i] = Real(0);
+    return true;
+  }
+  const Real cutoff = Real(64) * std::numeric_limits<Real>::epsilon() * scale;
+  if (!(cutoff > Real(0)) || !(cutoff <= std::numeric_limits<Real>::max()))
+    return false;
+  Real plus_jump[N], minus_jump[N], candidate[N];
+  if (!detail::shifted_sign_actions(oriented, jump, cutoff, plus_jump, minus_jump, max_iter, tol))
+    return false;
+  (void)minus_jump;
+  for (int i = 0; i < N; ++i) {
+    candidate[i] = detail::safe_average(jump[i], -plus_jump[i]);
+    if (!(candidate[i] <= std::numeric_limits<Real>::max()) ||
+        !(candidate[i] >= -std::numeric_limits<Real>::max()))
+      return false;
+  }
+  for (int i = 0; i < N; ++i)
+    out[i] = candidate[i];
+  return true;
+}
+
 /// Roe matrix-absolute-value applied to a state jump: out = |A| dU, with |A| the SPECTRAL absolute
 /// value A * sign(A). sign(A) is computed by the determinant-free, infinity-norm-SCALED Newton
 /// matrix-sign iteration S_{k+1} = 1/2 (mu S_k + 1/mu S_k^-1), mu = sqrt(||S^-1||/||S||), which

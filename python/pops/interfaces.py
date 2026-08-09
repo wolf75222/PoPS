@@ -21,6 +21,9 @@ from pops._generated_component_interfaces import (
 
 _TABLE_ENTRY_POINT = "interface_table"
 _TABLE_SYMBOL = "pops_component_interface_v1"
+_NATIVE_DIMENSIONS = (1, 2, 3)
+_HOST_DEVICE = "cpu"
+_TAGGER_DEVICES = frozenset({_HOST_DEVICE, "cuda", "hip", "sycl", "openmptarget"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,22 +127,54 @@ class ComponentInterface:
             raise ValueError(
                 "component %r must export %s" % (manifest.component_id, _TABLE_SYMBOL))
 
-    def resolve_native_target(self, component: Any) -> dict[str, Any]:
-        """Select one exact POD target; ambiguity is refused before compilation."""
+    def native_target_variants(self, component: Any) -> tuple[dict[str, Any], ...]:
+        """Return the supported ranked POD variants without selecting a domain dimension."""
         from pops.external._package_data import ComponentPackageError
 
         variants = tuple(component.component_manifest.target["variants"])
-        devices = {"cpu"}
-        if self.name == "tagger" and self.version >= 2:
-            devices.update({"cuda", "hip", "sycl", "openmptarget"})
-        supported = [dict(row) for row in variants
-                     if row["dimension"] == 2 and row["scalar"] == "float64"
-                     and row["device"] in devices]
-        if len(supported) != 1:
+        devices = _TAGGER_DEVICES if self.name == "tagger" and self.version >= 2 \
+            else frozenset({_HOST_DEVICE})
+        supported = tuple(
+            dict(row) for row in variants
+            if row["dimension"] in _NATIVE_DIMENSIONS
+            and row["scalar"] == "float64"
+            and row["device"] in devices
+        )
+        if not supported:
             raise ComponentPackageError(
                 "target", "component.target",
-                "native component interface requires one exact supported 2D float64 target "
-                "variant")
+                "native component interface requires at least one supported float64 target "
+                "variant with dimension 1, 2, or 3")
+        return supported
+
+    def resolve_native_target(
+        self,
+        component: Any,
+        *,
+        dimension: Any,
+        device: Any = None,
+    ) -> dict[str, Any]:
+        """Resolve one exact ranked POD target; compilation never guesses a dimension."""
+        from pops.external._package_data import ComponentPackageError
+
+        if type(dimension) is not int:
+            raise TypeError("native component target dimension must be an exact integer")
+        if dimension not in _NATIVE_DIMENSIONS:
+            raise ValueError("native component target dimension must be 1, 2, or 3")
+        if device is not None and (not isinstance(device, str) or not device):
+            raise TypeError("native component target device must be non-empty text or None")
+        normalized_device = _HOST_DEVICE if device in ("host", _HOST_DEVICE) else device
+        supported = [
+            row for row in self.native_target_variants(component)
+            if row["dimension"] == dimension
+            and (normalized_device is None or row["device"] == normalized_device)
+        ]
+        if len(supported) != 1:
+            device_label = "" if normalized_device is None else " %s" % normalized_device
+            raise ComponentPackageError(
+                "target", "component.target",
+                "native component interface requires one exact supported Dim=%d float64%s "
+                "target variant" % (dimension, device_label))
         return supported[0]
 
 
@@ -170,6 +205,7 @@ FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
 Clustering = resolve("clustering")
 Transfer = resolve("transfer")
+Reflux = resolve("reflux")
 FieldSolver = resolve("field_solver")
 Writer = resolve("writer")
 FieldTopology = resolve("field_topology")
@@ -177,6 +213,6 @@ FieldTopology = resolve("field_topology")
 
 __all__ = [
     "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
-    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer",
+    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
     "FieldSolver", "Writer", "FieldTopology",
 ]

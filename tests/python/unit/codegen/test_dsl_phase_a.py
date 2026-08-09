@@ -138,7 +138,8 @@ def pure_python_checks():
                          cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
                          prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
                          n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
-                         abi_key="", model_hash="h", cxx="c++", std="c++20")
+                         abi_key="", model_hash="h", cxx="c++", std="c++20",
+                         native_dimension=2)
     # WENO5 est accepte par le package natif : il passe la garde Python et echoue seulement au dlopen
     # du package factice.
     expect_raises(RuntimeError, lambda: sys.add_equation("g", fake,

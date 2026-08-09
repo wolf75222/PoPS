@@ -5,6 +5,16 @@
 
 include(CMakeFindDependencyMacro)
 
+set(pops_NATIVE_DIM "@POPS_NATIVE_DIM@")
+if(DEFINED POPS_NATIVE_DIM AND NOT "${POPS_NATIVE_DIM}" STREQUAL "${pops_NATIVE_DIM}")
+  set(pops_FOUND FALSE)
+  set(pops_NOT_FOUND_MESSAGE
+    "PoPS spatial specialization mismatch: package Dim=${pops_NATIVE_DIM}, "
+    "consumer requested Dim=${POPS_NATIVE_DIM}")
+  return()
+endif()
+set(POPS_NATIVE_DIM "${pops_NATIVE_DIM}")
+
 # A package configured with the native collective HDF5 backend exports HDF5::HDF5 and MPI_C
 # transitively. Enable C only for that exact installed feature; serial and MPI-only consumers remain
 # CXX-only.

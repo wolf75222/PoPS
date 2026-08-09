@@ -232,7 +232,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "authenticated accepted-state v7" in str(rep)
+    assert "authenticated accepted-state v8" in str(rep)
     assert "bit-identical v5" not in str(rep)
 
 
@@ -321,6 +321,7 @@ def test_compiled_model_has_no_competing_layout_inspector():
         model_hash="h",
         cxx="c++",
         std="23",
+        native_dimension=2,
         target="amr_system",
     )
     assert not hasattr(cm, "inspect_amr")
@@ -347,6 +348,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         model_hash="h",
         cxx="c++",
         std="23",
+        native_dimension=2,
         target="amr_system",
     )
     from pops.codegen._compiled_model_identity import compiled_model_identity

@@ -5,6 +5,7 @@ Low-level engine adapters use one cycle-safe import point for native model, sche
 boundary descriptor values. This private module provides that point; :mod:`pops.runtime` never
 re-exports it.
 """
+
 from __future__ import annotations
 
 from pops._bootstrap import abi_key  # noqa: F401
@@ -17,7 +18,6 @@ from pops.runtime._bricks_model import (  # noqa: F401
     DivEpsGrad,
     ElectricFieldFromPotential,
     EllipticModel,
-    EllipticSolver,
     ExB,
     FluidState,
     GravityCoupling,

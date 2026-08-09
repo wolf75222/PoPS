@@ -78,7 +78,9 @@ def _uniform_initial_sources(plan: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _require_supported_execution_context(plan: Any) -> None:
+def _require_supported_execution_context(
+    plan: Any, native_facts: dict[str, Any] | None = None
+) -> None:
     """Refuse every resource the native engines cannot consume before constructing one."""
     from pops._platform_contracts import ExecutionContext
 
@@ -89,7 +91,7 @@ def _require_supported_execution_context(plan: Any) -> None:
         raise NotImplementedError(
             "native RuntimeInstance providers require exact float64"
         )
-    facts = _native_runtime_facts()
+    facts = _native_runtime_facts() if native_facts is None else native_facts
     expected_device = facts.get("kokkos_device")
     expected_memory = facts.get("field_memory_space")
     expected_backend = facts.get("kokkos_backend")
@@ -150,6 +152,67 @@ def _require_supported_execution_context(plan: Any) -> None:
         )
 
 
+def _require_runtime_determinism(
+    plan: Any, runtime_plan: Any, native_facts: dict[str, Any]
+) -> None:
+    """Consume the plan's determinism guarantee against current native facts."""
+    context = plan.execution_context
+    communication = runtime_plan.communication
+    planned = runtime_plan.determinism.assumptions
+    provider_facts = {
+        "rank_count": native_facts.get("mpi_ranks"),
+        "device": native_facts.get("kokkos_device"),
+        "communicator": native_facts.get("communicator"),
+        "execution_backend": native_facts.get("kokkos_backend"),
+        "shared_space": native_facts.get("kokkos_shared_space"),
+        "stream_identity": native_facts.get("kokkos_stream"),
+        "reduction_order": [
+            row.identity.token for row in communication.collectives
+        ],
+        "reduction_strategy": [
+            "%s:%s" % (row.operation, row.strategy)
+            for row in communication.collectives
+        ],
+    }
+    actual = {}
+    for name in planned:
+        if name in provider_facts:
+            actual[name] = provider_facts[name]
+            continue
+        proof = context.backend.capabilities.get(name)
+        actual[name] = (
+            None
+            if proof is None or not proof.known
+            else proof.require("runtime.%s" % name)
+        )
+    runtime_plan.determinism.require_assumptions(actual)
+
+
+def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
+    """Require the exact call/layout projection consumed by one native engine."""
+    layout_plan = plan.artifact.layout_plan
+    if len(layout_plan.layouts) != 1:
+        raise ValueError("single-layout native provider requires exactly one resolved layout")
+    layout_id = layout_plan.layouts[0].handle.qualified_id
+    assignments = {
+        row.subject.local_id: (row.subject_id, row.layout.qualified_id)
+        for row in layout_plan.assignments
+        if row.subject_kind == "block"
+    }
+    expected_calls = tuple(assignments[block.name] for block in plan.artifact.blocks)
+    actual_calls = tuple((row.block_id, row.layout_id) for row in runtime_plan.calls)
+    if actual_calls != expected_calls:
+        raise ValueError(
+            "RuntimePlanBundle calls differ from the single-layout InstallPlan projection"
+        )
+    if runtime_plan.communication.transfers:
+        raise ValueError("single-layout native provider cannot consume layout Transfers")
+    if runtime_plan.resources.mapping_provider_ids:
+        raise ValueError("single-layout native provider cannot consume mapping providers")
+    if any(row.layout_id != layout_id for row in runtime_plan.communication.halos):
+        raise ValueError("RuntimePlanBundle halo differs from the installed single layout")
+
+
 class _UniformNativeProvider(RuntimeExecutorProvider):
     def supports(self, install_plan: Any) -> bool:
         return _adaptive(install_plan) is False
@@ -163,6 +226,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
 
             return install_multi_layout_uniform(plan, runtime_plan)
 
+        _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         from pops.runtime._runtime_mesh_lowering import (
             install_uniform_embedded_boundary,
@@ -170,10 +234,17 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         )
         from pops.runtime._system import System
 
-        config = system_config_from_layout(plan.layout)
-        engine = System(config)
-        cast(Any, engine)._execution_context = plan.execution_context
         normalized_layout, = plan.artifact.layout_plan.layouts
+        config = system_config_from_layout(normalized_layout.native_spatial_layout)
+        engine = System(config)
+        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+
+        install_checkpoint_spatial_contract(
+            engine,
+            normalized_layout.native_spatial_layout,
+            transition_ratios=normalized_layout.transition_ratios,
+        )
+        cast(Any, engine)._execution_context = plan.execution_context
         install_uniform_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
@@ -198,8 +269,8 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         return _adaptive(install_plan) is True
 
     def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
-        del runtime_plan
         plan = require_install_plan(install_plan)
+        _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         if plan.initial_condition_plan is None or plan.bootstrap_plan is None:
             raise ValueError(
@@ -212,7 +283,19 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         artifact = plan.artifact
         assert artifact.program is not None, \
             "resolved single-layout AMR artifact lost its compiled Program"
-        engine = AmrSystem(amr_config_from_layout(plan.layout, hierarchy=plan.resolved_hierarchy))
+        normalized_layout, = artifact.layout_plan.layouts
+        engine = AmrSystem(amr_config_from_layout(
+            plan.layout,
+            hierarchy=plan.resolved_hierarchy,
+            native_layout=normalized_layout.native_spatial_layout,
+        ))
+        from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
+
+        install_checkpoint_spatial_contract(
+            engine,
+            normalized_layout.native_spatial_layout,
+            transition_ratios=normalized_layout.transition_ratios,
+        )
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
@@ -279,7 +362,9 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
-    _require_supported_execution_context(plan)
+    native_facts = _native_runtime_facts()
+    _require_runtime_determinism(plan, runtime_plan, native_facts)
+    _require_supported_execution_context(plan, native_facts)
     matches = tuple(provider for provider in _PROVIDERS if provider.supports(plan))
     if len(matches) != 1:
         raise ValueError(

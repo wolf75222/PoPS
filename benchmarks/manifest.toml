@@ -23,21 +23,21 @@ comparison = "paired ABBA: saxpy_then_fill_boundary over lincomb_then_fill_bound
 records = ["saxpy_then_fill_boundary", "lincomb_then_fill_boundary", "saxpy_over_lincomb"]
 
 [case.defaults]
-n = 1024
+n = 128
 tile = 128
 components = 4
 ghost_width = 1
 
 [[case]]
-id = "tensor_krylov"
-implementation = "real PoPS prepared generic BiCGStab with a persistent GeometricMG preconditioner"
+id = "scalar_mg"
+implementation = "real exact-ranked PoPS GeometricMG with a manufactured Dirichlet solution"
 comparison = "none"
-records = ["bicgstab_geometric_mg"]
+records = ["geometric_multigrid"]
 
 [case.defaults]
-n = 128
-tile = 64
-max_iters = 300
+n = 64
+tile = 32
+max_cycles = 100
 rel_tol = 1e-9
 abs_tol = 0.0
 
@@ -63,3 +63,37 @@ requires_real_device = true
 requires_distinct_device_per_rank = true
 job_script = "benchmarks/romeo/adc700_program_cutover.sbatch"
 submit_script = "benchmarks/romeo/submit_adc700_program_cutover.sh"
+
+[campaigns.adc757_heterogeneous_numerics]
+routine_ci = false
+source = "benchmarks/adc757"
+report_schema = "pops.adc757.heterogeneous-numerics.v1"
+verifier = "benchmarks/adc757/verify.py"
+requires_real_device = true
+requires_distinct_device_per_rank = true
+minimum_mpi_ranks = 2
+minimum_streams = 2
+requires_stream_overlap = true
+requires_restart_rollback_and_ledger_parity = true
+requires_exact_installed_wheels = true
+requires_pops_doctor = true
+runtime_scenario = "adc757_amr_advection_runtime_v1"
+runtime_modes = ["serial", "threaded", "gpu", "gpu_mpi"]
+required_runtime_authorities = ["cell_local_time", "amr_rebalance_migration"]
+scenarios = ["prepared_local_time", "cost_aware_load_balance"]
+metrics = [
+  "time_to_solution_seconds",
+  "throughput_cell_updates_per_second",
+  "memory_traffic_bytes",
+  "kernel_launches",
+  "task_count",
+  "communication_bytes",
+  "communication_seconds",
+  "fallback_count",
+  "useful_work_cell_updates",
+  "imbalance_ratio",
+  "migration_bytes",
+  "migration_seconds",
+]
+job_script = "benchmarks/romeo/adc757_heterogeneous_numerics.sbatch"
+submit_script = "benchmarks/romeo/submit_adc757_heterogeneous_numerics.sh"

@@ -37,21 +37,45 @@ from pops.mesh.boundaries import (
     InterfaceSide,
     InterfaceTraceOperation,
     MultiBlockInterface,
+    NumericalFlux,
     NumericalClosure,
     PeriodicGhost,
     PeriodicIdentification,
     PeriodicOrientation,
     PhysicalGhost,
+    PostRiemannFlux,
     RepresentationFlow,
     SameLevelHaloMPI,
     SignDependence,
     SonicPolicy,
+    TangentialTransform,
 )
 from pops.model import Handle, OwnerKind, OwnerPath
 
 
 SHARED = OwnerPath.shared("ghost.fixtures")
 CASE = OwnerPath.case("main")
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_interface_mapping_identity_has_exact_rank(dimension):
+    mapping = InterfaceAffineMapping.identity(
+        _h("identity_%dd" % dimension, "interface_mapping"), dimension)
+    tangent_count = dimension - 1
+    assert mapping.dimension == dimension
+    assert mapping.right_tangent_for_left == tuple(range(tangent_count))
+    assert mapping.right_tangent_sign == (1,) * tangent_count
+    assert mapping.right_tangent_offset == (0.0,) * tangent_count
+
+
+def test_three_dimensional_tangential_transform_is_a_real_permutation():
+    transform = TangentialTransform((1, 0), (-1, 1), (2.5, -3.0))
+    assert transform.dimension == 3
+    assert transform.to_data() == {
+        "right_tangent_for_left": [1, 0],
+        "right_tangent_sign": [-1, 1],
+        "right_tangent_offset": [2.5, -3.0],
+    }
 
 
 class _ExecutableBoundaryAuthority:
@@ -350,6 +374,16 @@ def _physical_provider(boundary, name):
         dependencies=_none_dependencies())
 
 
+def _post_riemann_provider(boundary, name):
+    state = _h("U", "state", OwnerPath.model("transport"))
+    representation = _h("conservative", "representation")
+    return PostRiemannFlux(
+        handle=_h(name, "boundary_flux_provider", CASE),
+        output=NumericalFlux(boundary, state, representation),
+        dependencies=_none_dependencies(),
+    )
+
+
 def _interface(
         topology, *, trace_provider="limiter.none",
         trace_operation=InterfaceTraceOperation.CELL_AVERAGE, required_depth=1):
@@ -378,7 +412,7 @@ def _interface(
         _h("coupling", "multiblock_interface", CASE), left, right,
         _h("shared_flux", "conservative_flux", CASE),
         InterfacePermutation(_h("axis_permutation", "interface_permutation"), (0,)),
-        InterfaceAffineMapping(_h("geometry_map", "interface_mapping")))
+        InterfaceAffineMapping.identity(_h("geometry_map", "interface_mapping"), 2))
 
 
 def test_all_explicit_producer_protocols_and_shared_interface_flux():
@@ -430,13 +464,54 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
             _h("bad", "multiblock_interface", CASE), interface.left, same_direction,
             _h("bad_flux", "conservative_flux", CASE),
             InterfacePermutation(_h("bad_permutation", "interface_permutation"), (0,)),
-            InterfaceAffineMapping(_h("bad_mapping", "interface_mapping")))
+            InterfaceAffineMapping.identity(_h("bad_mapping", "interface_mapping"), 2))
 
     wrong_region = _region("wrong_wall", boundary=topology.physical[1])
     with pytest.raises(ValueError, match="physical ghost provider does not cover"):
         GhostProducerRegistry(physical).resolve(
             topology, _coverage(wrong_region), (wrong_region,),
             (GhostProduction(wrong_region, physical),))
+
+
+def test_physical_ghost_composes_trace_then_exact_post_riemann_flux_provider():
+    topology = _topology()
+    boundary = topology.physical[0]
+    trace = _physical_provider(boundary, "wall_trace")
+    flux = _post_riemann_provider(boundary, "wall_flux")
+    producer = PhysicalGhost(
+        handle=_producer_handle("physical_flux"),
+        protocol=_protocol("physical"),
+        provider=trace,
+        flux_provider=flux,
+    )
+
+    assert set(producer.boundary_providers) == {trace, flux}
+    region = _region("physical_flux", boundary=boundary)
+    plan = GhostProducerRegistry(producer).resolve(
+        topology,
+        _coverage(region),
+        (region,),
+        (GhostProduction(region, producer),),
+        execution_authority=_ExecutableBoundaryAuthority(),
+    )
+    with pytest.raises(NotImplementedError, match="BoundaryFlux components"):
+        plan.compile_boundary_data()
+
+    other_face = next(row for row in topology.physical if row != boundary)
+    with pytest.raises(ValueError, match="same exact face"):
+        PhysicalGhost(
+            handle=_producer_handle("wrong_face"),
+            protocol=_protocol("physical"),
+            provider=trace,
+            flux_provider=_post_riemann_provider(other_face, "other_flux"),
+        )
+    with pytest.raises(TypeError, match="PostRiemannFlux"):
+        PhysicalGhost(
+            handle=_producer_handle("wrong_law"),
+            protocol=_protocol("physical"),
+            provider=trace,
+            flux_provider=_physical_provider(boundary, "second_trace"),
+        )
 
 
 @pytest.mark.parametrize(

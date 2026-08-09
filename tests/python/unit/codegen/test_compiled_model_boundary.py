@@ -32,6 +32,9 @@ class _SourceModel:
     def check(self):
         return None
 
+    def __pops_bind_component_provider_packs__(self, packs):
+        self.provider_packs = packs
+
     def __pops_native_loader_source__(
             self, *, name=None, target="system", hoist_reciprocals=False):
         return "// compiled-model-boundary fixture\n"
@@ -74,6 +77,7 @@ def _compiled(*, target="system", model_hash="structural:source", identity=None)
         model_hash=model_hash,
         cxx="c++",
         std="c++23",
+        native_dimension=2,
         target=target,
         definition_identity=identity,
     )
@@ -153,7 +157,7 @@ def test_subclass_slot_cannot_hide_an_authoring_builder():
     hidden = HiddenLoader(
         base.so_path, base.backend, base.cons_names, base.cons_roles, base.prim_names,
         base.n_vars, base.gamma, base.n_aux, base.params, base.caps,
-        base.abi_key, base.model_hash, base.cxx, base.std,
+        base.abi_key, base.model_hash, base.cxx, base.std, base.native_dimension,
         definition_identity=base.definition_identity,
     )
     hidden.hidden = source
@@ -199,6 +203,7 @@ def test_subclass_noop_seal_cannot_bypass_canonical_boundary():
     loader = NoOpSealLoader(
         "<noop-seal>", "production", ("u",), ("Scalar",), ("u",),
         1, None, 0, {}, {"cpu": True}, "abi", source._model_hash(), "c++", "c++23",
+        2,
         definition_identity=model_compile_identity(source),
     )
     object.__setattr__(loader, "armed", True)

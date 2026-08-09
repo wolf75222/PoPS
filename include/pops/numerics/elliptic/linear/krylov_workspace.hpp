@@ -3,6 +3,7 @@
 /// @file
 /// @brief Persistent storage for prepared affine Krylov solves.
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/numerics/elliptic/linear/krylov_method_provider.hpp>
 #include <pops/numerics/elliptic/linear/scaled_scalar.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
@@ -27,13 +28,15 @@ namespace detail {
 struct KrylovWorkspaceAccess;
 }
 
+template <int Dim>
 struct KrylovControls {
-  PreparedKrylovMethod method{};
+  PreparedKrylovMethod<Dim> method{};
   Real rel_tol = Real(1e-8);
   Real abs_tol = Real(0);
   int max_iterations = 1;
 };
 
+template <int Dim>
 class KrylovWorkspace {
  public:
   static int max_batched_basis_extent() {
@@ -44,10 +47,11 @@ class KrylovWorkspace {
     return max_krylov_batched_basis_extent(robust_payload_width);
   }
 
-  KrylovWorkspace(
-      const MultiFab& prototype, PreparedKrylovMethod method, KrylovFootprint footprint,
-      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed,
-      PreparedVectorMetric metric = {})
+  KrylovWorkspace(const MultiFab<Dim>& prototype, PreparedKrylovMethod<Dim> method,
+                  KrylovFootprint<Dim> footprint,
+                  PreparedVectorDistribution<Dim> vector_distribution =
+                      PreparedVectorDistribution<Dim>::Distributed,
+                  PreparedVectorMetric<Dim> metric = {})
       : KrylovWorkspace(ExecutionCommunicator::world(), "pops.krylov-workspace", prototype,
                         std::move(method), footprint, std::move(vector_distribution),
                         std::move(metric)) {}
@@ -55,18 +59,19 @@ class KrylovWorkspace {
   /// Materialize one independent solve workspace on an authenticated communicator. Distinct
   /// workspaces own distinct duplicated lanes; `lane_identity` names the logical workspace in the
   /// parent's canonical materialization order and is never inferred from a process-local address.
-  KrylovWorkspace(
-      const ExecutionCommunicator& execution_communicator, std::string_view lane_identity,
-      const MultiFab& prototype, PreparedKrylovMethod method, KrylovFootprint footprint,
-      PreparedVectorDistribution vector_distribution = PreparedVectorDistribution::Distributed,
-      PreparedVectorMetric metric = {})
+  KrylovWorkspace(const ExecutionCommunicator& execution_communicator,
+                  std::string_view lane_identity, const MultiFab<Dim>& prototype,
+                  PreparedKrylovMethod<Dim> method, KrylovFootprint<Dim> footprint,
+                  PreparedVectorDistribution<Dim> vector_distribution =
+                      PreparedVectorDistribution<Dim>::Distributed,
+                  PreparedVectorMetric<Dim> metric = {})
       : method_(std::move(method)),
         footprint_(footprint),
         vector_distribution_(std::move(vector_distribution)),
         metric_(std::move(metric)),
         lane_(ExecutionLane::duplicate_collectively(execution_communicator, lane_identity)) {
     const long footprint_failure_local =
-        footprint_.components != prototype.ncomp() || footprint_.input_ghosts != prototype.n_grow()
+        footprint_.components != prototype.ncomp() || footprint_.input_ghosts != prototype.ghosts()
             ? 1L
             : 0L;
     if (all_reduce_max(footprint_failure_local, lane_) != 0)
@@ -81,7 +86,7 @@ class KrylovWorkspace {
       vector_distribution_layout_valid_ =
           detail::field_distribution_layout_matches(prototype, vector_distribution_);
       if (!metric_)
-        metric_ = PreparedVectorMetric::euclidean(prototype, vector_distribution_);
+        metric_ = PreparedVectorMetric<Dim>::euclidean(prototype, vector_distribution_);
       if (!metric_.compatible_with(prototype, vector_distribution_))
         vector_space_failure_local = 1;
     } catch (...) {
@@ -95,8 +100,8 @@ class KrylovWorkspace {
     detail::fingerprint_mix(distribution_fingerprint_, vector_distribution_.collective_contract());
     long provider_failure_local = 0;
     try {
-      requirements_ = method_.workspace_requirements(
-          KrylovWorkspaceRequest{footprint_, vector_distribution_, metric_.robust_payload_width()});
+      requirements_ = method_.workspace_requirements(KrylovWorkspaceRequest<Dim>{
+          footprint_, vector_distribution_, metric_.robust_payload_width()});
     } catch (...) {
       provider_failure_local = 1;
     }
@@ -129,17 +134,11 @@ class KrylovWorkspace {
                                            char{0});
       fields_.reserve(requirements_.field_count);
       for (std::size_t index = 0; index < requirements_.field_count; ++index)
-        fields_.emplace_back(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
-                             footprint_.input_ghosts);
-      // One private communication cache per workspace. Fields inside this workspace execute
-      // sequentially and may share that cache; another workspace never sees it.
-      fields_.front().detach_communication_caches();
-      fields_.front().halo_cache();
-      for (std::size_t index = 1; index < fields_.size(); ++index)
-        fields_[index].share_halo_cache_from(fields_.front());
-      publication_candidate_.emplace(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+        fields_.emplace_back(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                             prototype.ncomp(), footprint_.input_ghosts);
+      publication_candidate_.emplace(prototype.layout(), prototype.distribution(),
+                                     prototype.local_rank(), prototype.ncomp(),
                                      footprint_.input_ghosts);
-      publication_candidate_->share_halo_cache_from(fields_.front());
       real_values_.assign(requirements_.real_count, Real(0));
       scaled_values_.assign(requirements_.scaled_scalar_count, detail::ScaledScalar::zero());
       collective_values_.assign(requirements_.collective_value_count, 0.0);
@@ -150,9 +149,9 @@ class KrylovWorkspace {
       metric_reduction_data_.assign(metric_.reduction_scratch_value_count(), 0.0);
       state_words_.assign(requirements_.state_word_count, std::uint64_t{0});
       if (footprint_.preconditioned) {
-        preconditioner_constant_.emplace(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+        preconditioner_constant_.emplace(prototype.layout(), prototype.distribution(),
+                                         prototype.local_rank(), prototype.ncomp(),
                                          footprint_.input_ghosts);
-        preconditioner_constant_->share_halo_cache_from(fields_.front());
       }
     } catch (...) {
       materialization_failure_local = 1;
@@ -174,20 +173,20 @@ class KrylovWorkspace {
     }
     allocation_count_ = requirements_.field_count + (footprint_.preconditioned ? 1u : 0u) + 1u;
   }
-  static std::size_t required_fields(const PreparedKrylovMethod& method,
-                                     const KrylovWorkspaceRequest& request) {
+  static std::size_t required_fields(const PreparedKrylovMethod<Dim>& method,
+                                     const KrylovWorkspaceRequest<Dim>& request) {
     return method.workspace_requirements(request).field_count;
   }
 
-  void bind(const PreparedAffineLinearProblem& problem) {
+  void bind(const PreparedAffineLinearProblem<Dim>& problem) {
     const bool workspace_reserved = try_reserve_mutation_();
     WorkspaceMutationReservation workspace_reservation(workspace_reserved ? this : nullptr);
-    const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_use(problem);
+    const bool problem_reserved = detail::PreparedProblemAccess<Dim>::try_reserve_use(problem);
     ProblemUseReservation problem_reservation(problem_reserved ? &problem : nullptr);
     const detail::PreparedProblemControlConsensus reservation_consensus =
         detail::coordinate_prepared_problem_control(
             detail::PreparedProblemControlOperation::BindWorkspace, workspace_reserved,
-            problem_reserved, detail::PreparedProblemAccess::preparation_lane(problem));
+            problem_reserved, detail::PreparedProblemAccess<Dim>::preparation_lane(problem));
     if (!reservation_consensus.operation_agrees)
       throw std::logic_error(
           "prepared Krylov control operations differ across communicator ranks; prepare, bind, "
@@ -200,11 +199,12 @@ class KrylovWorkspace {
           "KrylovWorkspace cannot be rebound while its prepared problem is mutating or in "
           "exclusive use");
     detail::KrylovCollectivePayload payload;
-    long local_failure = detail::PreparedProblemAccess::append_collective_state(problem, payload);
+    long local_failure =
+        detail::PreparedProblemAccess<Dim>::append_collective_state(problem, payload);
     append_collective_state_(payload);
     if (local_failure == 0) {
       try {
-        if (!detail::PreparedProblemAccess::preparation_lane(problem).congruent_with(lane_))
+        if (!detail::PreparedProblemAccess<Dim>::preparation_lane(problem).congruent_with(lane_))
           local_failure = 10;
       } catch (...) {
         // MPI_Comm_compare is fallible. Convert a rank-local MPI error into the same workspace-lane
@@ -219,7 +219,7 @@ class KrylovWorkspace {
          problem.vector_distribution() != vector_distribution_))
       local_failure = 4;
     if (local_failure == 0 &&
-        (detail::PreparedProblemAccess::metric_fingerprint(problem) != metric_fingerprint_ ||
+        (detail::PreparedProblemAccess<Dim>::metric_fingerprint(problem) != metric_fingerprint_ ||
          problem.metric().collective_contract() != metric_.collective_contract()))
       local_failure = 9;
     if (local_failure == 0 && problem.has_preconditioner() != footprint_.preconditioned)
@@ -231,9 +231,9 @@ class KrylovWorkspace {
       throw std::logic_error("KrylovWorkspace bind contract differs across communicator ranks");
 
     const detail::PreparedProviderSourceIdentity operator_source_identity =
-        detail::PreparedProblemAccess::operator_source_identity(problem);
+        detail::PreparedProblemAccess<Dim>::operator_source_identity(problem);
     const detail::PreparedProviderSourceIdentity preconditioner_source_identity =
-        detail::PreparedProblemAccess::preconditioner_source_identity(problem);
+        detail::PreparedProblemAccess<Dim>::preconditioner_source_identity(problem);
     const bool can_reuse_sessions_local =
         operator_session_ && operator_source_identity_ == operator_source_identity &&
         (!problem.has_preconditioner() ||
@@ -244,11 +244,11 @@ class KrylovWorkspace {
     // rematerializes its private sessions from the already-consensual semantic provider contract.
     const bool reuse_sessions = all_reduce_min(can_reuse_sessions_local ? 1L : 0L, lane_) != 0;
 
-    PreparedAffineOperatorSession candidate_operator_session;
-    PreparedLinearPreconditionerSession candidate_preconditioner_session;
+    PreparedAffineOperatorSession<Dim> candidate_operator_session;
+    PreparedLinearPreconditionerSession<Dim> candidate_preconditioner_session;
     long gauge_materialization_failure_local = 0;
     try {
-      gauge_coefficients_.assign(detail::PreparedProblemAccess::nullspace_basis_count(problem),
+      gauge_coefficients_.assign(detail::PreparedProblemAccess<Dim>::nullspace_basis_count(problem),
                                  0.0);
     } catch (...) {
       gauge_materialization_failure_local = 1;
@@ -264,7 +264,7 @@ class KrylovWorkspace {
       long operator_materialization_failure_local = 0;
       try {
         candidate_operator_session =
-            detail::PreparedProblemAccess::make_operator_session(problem, lane_);
+            detail::PreparedProblemAccess<Dim>::make_operator_session(problem, lane_);
       } catch (...) {
         operator_materialization_failure_local = 1;
       }
@@ -279,7 +279,7 @@ class KrylovWorkspace {
         long preconditioner_materialization_failure_local = 0;
         try {
           candidate_preconditioner_session =
-              detail::PreparedProblemAccess::make_preconditioner_session(problem, lane_);
+              detail::PreparedProblemAccess<Dim>::make_preconditioner_session(problem, lane_);
         } catch (...) {
           preconditioner_materialization_failure_local = 1;
         }
@@ -292,9 +292,9 @@ class KrylovWorkspace {
       }
     }
 
-    PreparedAffineOperatorSession& operator_session =
+    PreparedAffineOperatorSession<Dim>& operator_session =
         reuse_sessions ? operator_session_ : candidate_operator_session;
-    PreparedLinearPreconditionerSession& preconditioner_session =
+    PreparedLinearPreconditionerSession<Dim>& preconditioner_session =
         reuse_sessions ? preconditioner_session_ : candidate_preconditioner_session;
 
     std::size_t operator_session_allocation_count = 0;
@@ -303,8 +303,8 @@ class KrylovWorkspace {
     try {
       operator_session.reset_apply_status();
       operator_session.prepare();
-      MultiFab& zero = field(0);
-      MultiFab& operator_probe = field(1);
+      MultiFab<Dim>& zero = field(0);
+      MultiFab<Dim>& operator_probe = field(1);
       detail::PreparedFieldAlgebra::zero(zero);
       detail::PreparedFieldAlgebra::zero(operator_probe);
     } catch (...) {
@@ -321,8 +321,8 @@ class KrylovWorkspace {
     // same callback trace, then agree on that status before any exact-value collective is entered.
     // In particular, never turn a local failure into an exception inside a larger try block whose
     // peers may already have advanced to the next provider or collective callback.
-    MultiFab& zero = field(0);
-    MultiFab& operator_probe = field(1);
+    MultiFab<Dim>& zero = field(0);
+    MultiFab<Dim>& operator_probe = field(1);
     const PreparedApplyResult operator_probe_status = operator_session.apply(operator_probe, zero);
     if (all_reduce_max(prepared_apply_succeeded(operator_probe_status) ? 0L : 1L, lane_) != 0) {
       invalidate_bound_state_();
@@ -441,16 +441,17 @@ class KrylovWorkspace {
                                           : detail::PreparedProviderSourceIdentity{};
     operator_session_allocation_count_ = operator_session_allocation_count;
     preconditioner_session_allocation_count_ = preconditioner_session_allocation_count;
-    snapshot_ = detail::PreparedProblemAccess::stored_snapshot(problem);
+    snapshot_ = detail::PreparedProblemAccess<Dim>::stored_snapshot(problem);
   }
 
-  void require_bound(const PreparedAffineLinearProblem& problem,
-                     const KrylovControls& controls) const {
+  void require_bound(const PreparedAffineLinearProblem<Dim>& problem,
+                     const KrylovControls<Dim>& controls) const {
     detail::KrylovCollectivePayload payload;
-    long local_failure = detail::PreparedProblemAccess::append_collective_state(problem, payload);
+    long local_failure =
+        detail::PreparedProblemAccess<Dim>::append_collective_state(problem, payload);
     append_collective_state_(payload);
     append_controls_(payload, controls);
-    const auto& problem_snapshot = detail::PreparedProblemAccess::stored_snapshot(problem);
+    const auto& problem_snapshot = detail::PreparedProblemAccess<Dim>::stored_snapshot(problem);
     if (local_failure == 0 && (!snapshot_ || !problem_snapshot || *snapshot_ != *problem_snapshot))
       local_failure = 6;
     if (local_failure == 0 && !(controls.method == method_))
@@ -462,10 +463,12 @@ class KrylovWorkspace {
       throw std::logic_error("KrylovWorkspace bound contract differs across communicator ranks");
   }
 
-  const PreparedKrylovMethod& method() const { return method_; }
-  const PreparedVectorDistribution& vector_distribution() const { return vector_distribution_; }
-  const PreparedVectorMetric& metric() const { return metric_; }
-  const KrylovFootprint& footprint() const { return footprint_; }
+  const PreparedKrylovMethod<Dim>& method() const { return method_; }
+  const PreparedVectorDistribution<Dim>& vector_distribution() const {
+    return vector_distribution_;
+  }
+  const PreparedVectorMetric<Dim>& metric() const { return metric_; }
+  const KrylovFootprint<Dim>& footprint() const { return footprint_; }
   /// Number of persistent MultiFab work vectors (not heap-allocation events), including storage
   /// owned by the currently bound operator and preconditioner sessions.  Provider sessions report
   /// their real private storage through the prepared-session protocol; zero means no MultiFab
@@ -484,7 +487,7 @@ class KrylovWorkspace {
 
  private:
   friend struct detail::KrylovWorkspaceAccess;
-  friend class PreparedKrylovSolveContext;
+  friend class PreparedKrylovSolveContext<Dim>;
 
   enum class ReservationState : std::uint8_t {
     Idle,
@@ -509,28 +512,28 @@ class KrylovWorkspace {
 
   class ProblemUseReservation final {
    public:
-    explicit ProblemUseReservation(const PreparedAffineLinearProblem* problem) noexcept
+    explicit ProblemUseReservation(const PreparedAffineLinearProblem<Dim>* problem) noexcept
         : problem_(problem) {}
     ProblemUseReservation(const ProblemUseReservation&) = delete;
     ProblemUseReservation& operator=(const ProblemUseReservation&) = delete;
     ~ProblemUseReservation() {
       if (problem_ != nullptr)
-        detail::PreparedProblemAccess::release_use(*problem_);
+        detail::PreparedProblemAccess<Dim>::release_use(*problem_);
     }
 
    private:
-    const PreparedAffineLinearProblem* problem_ = nullptr;
+    const PreparedAffineLinearProblem<Dim>* problem_ = nullptr;
   };
 
   static void append_footprint_(detail::KrylovCollectivePayload& payload,
-                                const KrylovFootprint& footprint) noexcept {
+                                const KrylovFootprint<Dim>& footprint) noexcept {
     payload.append(footprint.components);
     payload.append(footprint.input_ghosts);
     payload.append(static_cast<std::uint8_t>(footprint.preconditioned));
   }
 
   static void append_controls_(detail::KrylovCollectivePayload& payload,
-                               const KrylovControls& controls) noexcept {
+                               const KrylovControls<Dim>& controls) noexcept {
     payload.append(controls.method.fingerprint());
     payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
     payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
@@ -606,12 +609,12 @@ class KrylovWorkspace {
   // Work storage is deliberately not a public extension seam. Replacing even one iso-layout field
   // could discard its warmed halo/MPI buffers and reintroduce allocation inside an iteration; all
   // algorithms reach these stable slots through the private detail access object instead.
-  MultiFab& field(std::size_t index) {
+  MultiFab<Dim>& field(std::size_t index) {
     if (index >= fields_.size())
       throw std::out_of_range("KrylovWorkspace field index");
     return fields_[index];
   }
-  const MultiFab& field(std::size_t index) const {
+  const MultiFab<Dim>& field(std::size_t index) const {
     if (index >= fields_.size())
       throw std::out_of_range("KrylovWorkspace field index");
     return fields_[index];
@@ -629,10 +632,12 @@ class KrylovWorkspace {
   double* metric_reduction_data() { return metric_reduction_data_.data(); }
   std::size_t metric_reduction_size() const { return metric_reduction_data_.size(); }
   std::span<double> gauge_coefficients() { return gauge_coefficients_; }
-  PreparedLinearPreconditionerSession& preconditioner_session() { return preconditioner_session_; }
-  PreparedAffineOperatorSession& operator_session() { return operator_session_; }
+  PreparedLinearPreconditionerSession<Dim>& preconditioner_session() {
+    return preconditioner_session_;
+  }
+  PreparedAffineOperatorSession<Dim>& operator_session() { return operator_session_; }
   const ExecutionLane& execution_lane() const { return lane_; }
-  const MultiFab& preconditioner_constant() const {
+  const MultiFab<Dim>& preconditioner_constant() const {
     if (!preconditioner_constant_)
       throw std::logic_error("KrylovWorkspace has no prepared preconditioner constant");
     return *preconditioner_constant_;
@@ -640,13 +645,13 @@ class KrylovWorkspace {
   const KrylovWorkspaceRequirements& requirements() const { return requirements_; }
   std::size_t metric_robust_payload_width() const { return metric_.robust_payload_width(); }
 
-  MultiFab& publication_candidate_field_() {
+  MultiFab<Dim>& publication_candidate_field_() {
     if (!publication_candidate_)
       throw std::logic_error("KrylovWorkspace has no publication candidate");
     return *publication_candidate_;
   }
-  void arm_publication_(const PreparedAffineLinearProblem& problem,
-                        MultiFab& destination) noexcept {
+  void arm_publication_(const PreparedAffineLinearProblem<Dim>& problem,
+                        MultiFab<Dim>& destination) noexcept {
     publication_problem_ = &problem;
     publication_destination_ = &destination;
     publication_active_ = true;
@@ -659,19 +664,19 @@ class KrylovWorkspace {
   void validate_publication_() const {
     if (!publication_active_ || publication_destination_ == nullptr || !publication_candidate_ ||
         !PureFieldAlgebra::same_vector_space(*publication_destination_, *publication_candidate_) ||
-        publication_destination_->n_grow() != publication_candidate_->n_grow() ||
+        publication_destination_->ghosts() != publication_candidate_->ghosts() ||
         publication_destination_->local_size() != publication_candidate_->local_size())
       throw std::invalid_argument(
           "prepared Krylov publication destination layout changed before Accept");
   }
   void release_publication_() noexcept {
-    const PreparedAffineLinearProblem* problem = publication_problem_;
+    const PreparedAffineLinearProblem<Dim>* problem = publication_problem_;
     publication_problem_ = nullptr;
     publication_destination_ = nullptr;
     publication_active_ = false;
     release_solve_();
     if (problem != nullptr)
-      detail::PreparedProblemAccess::release_use(*problem);
+      detail::PreparedProblemAccess<Dim>::release_use(*problem);
   }
 
   bool provider_report_agrees_(const SolveReport& report) {
@@ -758,15 +763,15 @@ class KrylovWorkspace {
     collective.phase_truncated = select_max(local.phase_truncated ? 1L : 0L) != 0;
     return collective;
   }
-  void republish_provider_apply_failure_(MultiFab& out) const noexcept {
+  void republish_provider_apply_failure_(MultiFab<Dim>& out) const noexcept {
     if (!provider_apply_succeeded_())
       out.set_val(std::numeric_limits<Real>::quiet_NaN());
   }
 
   void invalidate_bound_state_() noexcept {
     snapshot_.reset();
-    operator_session_ = PreparedAffineOperatorSession{};
-    preconditioner_session_ = PreparedLinearPreconditionerSession{};
+    operator_session_ = PreparedAffineOperatorSession<Dim>{};
+    preconditioner_session_ = PreparedLinearPreconditionerSession<Dim>{};
     operator_source_identity_ = detail::PreparedProviderSourceIdentity{};
     preconditioner_source_identity_ = detail::PreparedProviderSourceIdentity{};
     operator_session_allocation_count_ = 0;
@@ -774,16 +779,17 @@ class KrylovWorkspace {
     provider_apply_result_ = PreparedApplyResult::success();
   }
 
-  PreparedKrylovMethod method_;
-  KrylovFootprint footprint_;
+  PreparedKrylovMethod<Dim> method_;
+  KrylovFootprint<Dim> footprint_;
   KrylovWorkspaceRequirements requirements_{};
   OperatorFingerprint layout_{};
-  PreparedVectorDistribution vector_distribution_ = PreparedVectorDistribution::Distributed;
+  PreparedVectorDistribution<Dim> vector_distribution_ =
+      PreparedVectorDistribution<Dim>::Distributed;
   OperatorFingerprint distribution_fingerprint_{};
-  PreparedVectorMetric metric_;
+  PreparedVectorMetric<Dim> metric_;
   OperatorFingerprint metric_fingerprint_{};
   bool vector_distribution_layout_valid_ = true;
-  std::vector<MultiFab> fields_;
+  std::vector<MultiFab<Dim>> fields_;
   std::size_t allocation_count_ = 0;
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
   std::vector<Real> real_values_;
@@ -795,17 +801,17 @@ class KrylovWorkspace {
   std::vector<std::uint64_t> state_words_;
   std::vector<double> gauge_coefficients_;
   ExecutionLane lane_;
-  PreparedAffineOperatorSession operator_session_{};
-  PreparedLinearPreconditionerSession preconditioner_session_{};
+  PreparedAffineOperatorSession<Dim> operator_session_{};
+  PreparedLinearPreconditionerSession<Dim> preconditioner_session_{};
   detail::PreparedProviderSourceIdentity operator_source_identity_{};
   detail::PreparedProviderSourceIdentity preconditioner_source_identity_{};
   std::size_t operator_session_allocation_count_ = 0;
   std::size_t preconditioner_session_allocation_count_ = 0;
   PreparedApplyResult provider_apply_result_{};
-  std::optional<MultiFab> preconditioner_constant_{};
-  std::optional<MultiFab> publication_candidate_{};
-  MultiFab* publication_destination_ = nullptr;
-  const PreparedAffineLinearProblem* publication_problem_ = nullptr;
+  std::optional<MultiFab<Dim>> preconditioner_constant_{};
+  std::optional<MultiFab<Dim>> publication_candidate_{};
+  MultiFab<Dim>* publication_destination_ = nullptr;
+  const PreparedAffineLinearProblem<Dim>* publication_problem_ = nullptr;
   bool publication_active_ = false;
   ExactSolveReportConsensusScratch provider_report_consensus_{};
   std::atomic<ReservationState> reservation_state_{ReservationState::Idle};

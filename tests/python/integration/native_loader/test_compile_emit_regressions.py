@@ -1,9 +1,17 @@
 """Focused source-emission regressions for the production native loaders."""
 
+from __future__ import annotations
+
+import pytest
+
 from pops.codegen import Production
 from pops.codegen._compile_emit import _BACKEND_CAPS, compiled_capability_flags
 from pops.params import RuntimeParam
 from pops.physics._facade import Model
+from pops.physics._model import HyperbolicModel
+
+
+_AXES = ("x", "y", "z")
 
 
 def _runtime_elliptic_model() -> Model:
@@ -18,6 +26,57 @@ def _runtime_elliptic_model() -> Model:
     model.aux_field("psi")
     model.elliptic_field("psi", rhs=scale * rho, aux=["psi"])
     return model
+
+
+def _ranked_scalar_model(dimension: int) -> HyperbolicModel:
+    """One authored model whose emitted C++ rank is exactly ``dimension``."""
+    model = HyperbolicModel("ranked_loader_%d" % dimension)
+    (state,) = model.conservative_vars("state")
+    axes = _AXES[:dimension]
+    model.set_flux(
+        **{axis: [(ordinal + 1) * state] for ordinal, axis in enumerate(axes)}
+    )
+    model.set_eigenvalues(
+        **{
+            axis: [ordinal + 1 + 0 * state]
+            for ordinal, axis in enumerate(axes)
+        }
+    )
+    model.set_primitive_state(state)
+    model.set_conservative_from([state])
+    return model
+
+
+def _assert_exact_native_loader(loader: str, *, target: str, dimension: int) -> None:
+    assert "static constexpr int dimension = %d;" % dimension in loader
+    assert (
+        "static_assert(ProdModel::dimension == pops::kNativeDimension" in loader
+    ) == (target == "system")
+    assert "pops::add_compiled_model<pops::kNativeDimension>" in loader
+    assert "void* sys" in loader  # the stable C ABI is erased only at its boundary
+
+    if target == "system":
+        assert "using NativeSystem = pops::System<pops::kNativeDimension>;" in loader
+        assert "reinterpret_cast<NativeSystem*>(sys)" in loader
+        assert "pops::PreparedSystemBlock<pops::kNativeDimension>" in loader
+        assert "prepare_exact_system_block(" in loader
+        assert "pops::CompiledSystemBlockPreparation<" in loader
+        assert "pops::System*" not in loader
+        assert "pops::AmrSystem*" not in loader
+    else:
+        assert (
+            "using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;"
+            in loader
+        )
+        assert "reinterpret_cast<NativeAmrSystem*>(sys)" in loader
+        assert "pops::AmrSystem*" not in loader
+        assert "pops::System*" not in loader
+
+    # Rank selection belongs to the artifact and its C++ specialization.  The loader must not
+    # rediscover it dynamically or keep one branch per physical rank.
+    assert "switch (dimension)" not in loader
+    assert "if (dimension ==" not in loader
+    assert "if constexpr (ProdModel::dimension" not in loader
 
 
 def _assert_bound_elliptic_closures(loader: str) -> None:
@@ -61,7 +120,7 @@ def test_uniform_loader_builds_elliptic_closures_before_moving_bound_model() -> 
         name="RuntimeEllipticGen", target="system"
     )
     _assert_bound_elliptic_closures(loader)
-    assert "pops::System*" in loader
+    _assert_exact_native_loader(loader, target="system", dimension=2)
 
 
 def test_amr_loader_builds_elliptic_closures_before_moving_bound_model() -> None:
@@ -69,7 +128,24 @@ def test_amr_loader_builds_elliptic_closures_before_moving_bound_model() -> None
         name="RuntimeEllipticGen", target="amr_system"
     )
     _assert_bound_elliptic_closures(loader)
-    assert "pops::AmrSystem*" in loader
+    _assert_exact_native_loader(loader, target="amr_system", dimension=2)
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_generated_loader_retains_the_exact_authored_rank(
+    dimension: int, target: str
+) -> None:
+    loader = _ranked_scalar_model(dimension).emit_cpp_native_loader(
+        name="RankedLoader%d" % dimension,
+        target=target,
+    )
+
+    _assert_exact_native_loader(loader, target=target, dimension=dimension)
+    for other_dimension in {1, 2, 3} - {dimension}:
+        assert (
+            "static constexpr int dimension = %d;" % other_dimension not in loader
+        )
 
 
 def test_backend_capabilities_keep_feature_flags_and_route_tier() -> None:

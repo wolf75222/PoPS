@@ -15,7 +15,7 @@ The sub-packages form a directed acyclic dependency stack:
     mesh      -> analytic, domain, frames, identity, model, params
     amr       -> _ir, identity, mesh, model, time
     layouts   -> amr, mesh
-    boundary  -> _ir, domain, identity, model, representations
+    boundary  -> _ir, analytic, domain, identity, model, representations
     numerics  -> identity, model, params
     linalg    -> (nothing)                       (Spec 5: abstract algebra descriptors)
     solvers   -> identity                        (typed solver descriptor sink)
@@ -63,7 +63,7 @@ ALLOWED = {
     "mesh": {"analytic", "domain", "frames", "identity", "model", "params"},
     "amr": {"_ir", "identity", "mesh", "model", "time"},
     "layouts": {"amr", "mesh"},
-    "boundary": {"_ir", "domain", "identity", "model", "representations"},
+    "boundary": {"_ir", "analytic", "domain", "identity", "model", "representations"},
     "numerics": {"identity", "model", "params"},
     "solvers": {"identity"},
     "fields": {"_ir", "identity", "model", "time"},
@@ -79,18 +79,20 @@ ALLOWED = {
 }
 LAYERS = set(ALLOWED)
 
-NATIVE_IMPORT_PHASE_OWNERS = {
-    "pops._bootstrap": "package-bootstrap",
-    "pops._native_collectives": "runtime-collective-call",
-    "pops._paraview_python_bootstrap": "paraview-neutral-host-bootstrap",
-    "pops._platform_contracts": "platform-contract-resolution",
-    "pops.codegen._compiled_artifact": "compiled-artifact-sealing",
-    "pops.codegen.toolchain": "runtime-compiler-probe",
-    "pops.external.artifacts": "external-artifact-authentication",
-    "pops.external.compiler": "external-component-compilation",
-    "pops.output._writers.hdf5": "collective-output-write",
-    "pops.runtime_environment": "runtime-environment-resolution",
-}
+NATIVE_SELECTOR_CONSUMERS = frozenset({
+    "pops._native_collectives",
+    "pops._paraview_python_bootstrap",
+    "pops._platform_contracts",
+    "pops.codegen._compiled_artifact",
+    "pops.external.artifacts",
+    "pops.external.compiler",
+    "pops.output._writers.hdf5",
+    "pops.runtime._platform_manifest",
+    "pops.runtime._runtime_authorities",
+    "pops.runtime._threading",
+    "pops.runtime.doctor",
+    "pops.runtime.fallbacks",
+})
 
 
 def _layer_of(modname):
@@ -167,21 +169,32 @@ def _native_import_lines(tree):
             yield node.lineno
 
 
-def test_native_extension_loads_have_explicit_phase_owners_at_every_scope():
+def test_no_module_bypasses_the_native_selector_with_a_direct_extension_import():
     violations = []
-    observed_declared_owners = set()
     for path in _source_paths():
         module = _module_name(path)
         lines = tuple(_native_import_lines(ast.parse(path.read_text(), str(path))))
-        allowed = module == "pops.runtime" or module.startswith("pops.runtime.") \
-            or module in NATIVE_IMPORT_PHASE_OWNERS
-        if lines and module in NATIVE_IMPORT_PHASE_OWNERS:
-            observed_declared_owners.add(module)
-        if lines and not allowed:
+        if lines:
             violations.append("%s:%s" % (module, ",".join(map(str, lines))))
-    assert not violations, "unowned native-extension load(s): " + ", ".join(violations)
-    stale = sorted(set(NATIVE_IMPORT_PHASE_OWNERS) - observed_declared_owners)
-    assert not stale, "native phase-owner declaration(s) without a native load: " + ", ".join(stale)
+    assert not violations, (
+        "direct native-extension load bypasses pops._native_selector: " + ", ".join(violations)
+    )
+
+
+def test_native_consumers_import_the_process_selector_explicitly():
+    observed = set()
+    for path in _source_paths():
+        module = _module_name(path)
+        tree = ast.parse(path.read_text(), str(path))
+        if any(
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == "pops._native_selector"
+            for node in ast.walk(tree)
+        ):
+            observed.add(module)
+    missing = sorted(NATIVE_SELECTOR_CONSUMERS - observed)
+    assert not missing, "native consumer(s) bypass or lost the process selector: " + ", ".join(missing)
 
 
 def _build_edges():

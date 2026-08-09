@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops._cartesian_axes import canonical_axis_mapping
+
 from .. import math as _bm
 from .._ir import _wrap
 from .board_handles import (FieldHandle, FluxHandle,
@@ -60,7 +62,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
-        "roe_from_jacobian",
+        "roe_from_jacobian", "recovery_admissibility",
     })
 
     def __init__(self, name: Any, *, frame: Any = None) -> None:
@@ -515,6 +517,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._dsl._invalidate_authoring_views()
         self._invalidate_authoring_views()
 
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare physical constraints for native primitive-recovery candidates.
+
+        Each keyword names a component of the model's primitive coordinate system and maps it to a
+        symbolic Boolean expression over that coordinate system.  The single-state native route
+        compiles these predicates into the prepared recovery plan; multi-state recovery policies
+        require a species-qualified provider and are therefore rejected here.
+        """
+        if self._multi_module is not None:
+            raise ValueError(
+                "recovery_admissibility requires a single-state model; multi-species policies "
+                "must be supplied by a species-qualified recovery provider"
+            )
+        self._dsl.recovery_admissibility(
+            **{name: self._to_expr(predicate) for name, predicate in constraints.items()}
+        )
+        self._invalidate_authoring_views()
+
     def scalar(self, name: Any, expr: Any) -> Any:
         """Define a named derived scalar (e.g. pressure, sound speed)."""
         value = self._dsl.primitive(require_name(name, "scalar name"), expr)
@@ -536,12 +556,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return self._dsl.value(parameter)
 
     def aux(self, name: Any) -> Any:
-        """Declare an auxiliary field read by the model (e.g. an imposed ``B_z``)."""
+        """Declare one ordinary auxiliary field read by the model."""
         name = require_name(name, "aux field name")
-        canonical = {"phi", "grad_x", "grad_y", "B_z", "T_e"}
-        if name in canonical:
-            return self._dsl.aux(name)
-        return self._dsl.aux_field(name)
+        return self._dsl.aux(name)
 
     def field(self, name: Any, *, components: Any = None) -> Any:
         """Declare a solved scalar or a multi-component field space.
@@ -572,9 +589,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         operator is attached, a scalar ``model.field(name)`` is a one-component
         field space.  Once exactly one field operator materializes that unknown,
         the operator outputs become the storage components: a ``FieldOutput``
-        contributes one scalar and a ``GradientOutput`` contributes its two
-        Cartesian components.  The derivation is structural and applies to any
-        model; no physics-family or field-name branch participates.
+        contributes one scalar and a ``GradientOutput`` contributes one component
+        per ranked Cartesian axis.  The derivation is structural and applies to
+        any model; no physics-family or dimensional branch participates.
         """
         if self._multi_module is not None:
             return self._multi_module.field_spaces()
@@ -598,7 +615,12 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     if isinstance(output, FieldOutput):
                         values.append(output.name)
                     elif isinstance(output, GradientOutput):
-                        values.extend((output.name + "_x", output.name + "_y"))
+                        values.extend(
+                            output.name + "_" + axis_name
+                            for axis_name in self._ranked_frame_axes(
+                                where="field %r GradientOutput" % name
+                            )
+                        )
                     else:
                         raise TypeError(
                             "field %r output %s has no solved-field storage protocol"
@@ -623,7 +645,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if set(components) != set(frame.axes):
             raise ValueError("vector components must name every typed frame axis exactly once")
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (self, "_fields")):
+        with atomic_attrs((hyp, "_provider_components"), (self, "_fields")):
             h = VectorHandle(
                 name,
                 frame=frame,
@@ -638,9 +660,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
              waves: Any = None) -> Any:
         """Declare the physical flux and (optionally) its characteristic speeds.
 
-        ``components`` and ``waves`` are keyed by typed axes, never direction strings.  The current
-        native route supports Cartesian2D; the public mapping contract extends without another
-        method when more dimensions are installed.
+        ``components`` and ``waves`` are keyed by typed axes, never direction strings. Their count
+        follows the inferred frame rank and every lowering stage iterates the same canonical axes.
         """
         name = require_name(name, "flux name")
         self._require_state_handle(state, "flux", optional=False)
@@ -655,28 +676,41 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if self._multi_module is None and self._fluxes:
             raise ValueError("flux %r cannot replace already declared physical flux %r"
                              % (name, next(iter(self._fluxes))))
-        axes = {axis.name: axis for axis in frame.axes}
-        if set(axes) != {"x", "y"}:
-            raise ValueError("the installed native flux route requires an exact Cartesian2D frame")
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame.axes}, where="flux frame"
+        )
         h = FluxHandle(name, is_default=True, owner=self.owner_path)
-        x_values = normalize_sequence(
-            components[axes["x"]], "flux x expressions", nonempty=True)
-        y_values = normalize_sequence(
-            components[axes["y"]], "flux y expressions", nonempty=True)
+        axis_values = {
+            axis_name: normalize_sequence(
+                components[axis], "flux %s expressions" % axis_name, nonempty=True
+            )
+            for axis_name, axis in axes.items()
+        }
         expected = len(state.components) if self._multi_module is not None else self._dsl._m.n_vars
-        if len(x_values) != expected or len(y_values) != expected:
-            raise ValueError("flux(%r) needs %d expression(s) per direction; got %d/%d"
-                             % (name, expected, len(x_values), len(y_values)))
+        wrong = {axis: len(values) for axis, values in axis_values.items()
+                 if len(values) != expected}
+        if wrong:
+            raise ValueError(
+                "flux(%r) needs %d expression(s) on every ranked axis; got %r"
+                % (name, expected, wrong)
+            )
         wave_values = None
         if waves is not None:
             if not isinstance(waves, Mapping) or set(waves) != set(frame.axes):
                 raise TypeError("flux waves must map every typed frame axis exactly once")
-            wave_values = (
-                normalize_sequence(waves[axes["x"]], "flux x waves", nonempty=True),
-                normalize_sequence(waves[axes["y"]], "flux y waves", nonempty=True))
-            if len(wave_values[0]) != expected or len(wave_values[1]) != expected:
-                raise ValueError("flux(%r) needs %d wave(s) per direction; got %d/%d"
-                                 % (name, expected, len(wave_values[0]), len(wave_values[1])))
+            wave_values = {
+                axis_name: normalize_sequence(
+                    waves[axis], "flux %s waves" % axis_name, nonempty=True
+                )
+                for axis_name, axis in axes.items()
+            }
+            wrong = {axis: len(values) for axis, values in wave_values.items()
+                     if len(values) != expected}
+            if wrong:
+                raise ValueError(
+                    "flux(%r) needs %d wave(s) on every ranked axis; got %r"
+                    % (name, expected, wrong)
+                )
         if self._multi_module is not None:
             from pops.model import Rate, Signature
 
@@ -695,15 +729,13 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     name=route,
                     kind="grid_operator",
                     signature=Signature((state.space,), Rate(state.space)),
-                    expr={
-                        "x": [self._to_expr(value) for value in x_values],
-                        "y": [self._to_expr(value) for value in y_values],
-                    },
+                    expr={axis: [self._to_expr(value) for value in values]
+                          for axis, values in axis_values.items()},
                 )
                 if wave_values is not None:
                     proposed = {
-                        "x": tuple(self._to_expr(value) for value in wave_values[0]),
-                        "y": tuple(self._to_expr(value) for value in wave_values[1]),
+                        axis: tuple(self._to_expr(value) for value in values)
+                        for axis, values in wave_values.items()
                     }
                     existing = module._eigenvalues
                     if existing is not None and repr(existing) != repr(proposed):
@@ -719,15 +751,18 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 return h
 
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
+        with atomic_attrs((hyp, "_provider_components"), (hyp, "_flux"),
                           (hyp, "_eig"), (self, "_fluxes")):
-            x_exprs = [_wrap(self._to_expr(value)) for value in x_values]
-            y_exprs = [_wrap(self._to_expr(value)) for value in y_values]
-            self._dsl.flux(x_exprs, y_exprs)
+            expressions = {
+                axis: [_wrap(self._to_expr(value)) for value in values]
+                for axis, values in axis_values.items()
+            }
+            self._dsl.flux(**expressions)
             if wave_values is not None:
-                self._dsl.eigenvalues(
-                    [_wrap(self._to_expr(value)) for value in wave_values[0]],
-                    [_wrap(self._to_expr(value)) for value in wave_values[1]])
+                self._dsl.eigenvalues(**{
+                    axis: [_wrap(self._to_expr(value)) for value in values]
+                    for axis, values in wave_values.items()
+                })
             self._fluxes[name] = h
         return h
 
@@ -742,20 +777,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError(
                 "flux_value does not implicitly select a species flux; inspect the compiled "
                 "multi-state operator instead")
-        axes = None if self._frame is None else self._frame.axes
-        if not isinstance(axes, tuple) or axis not in axes:
+        frame_axes = None if self._frame is None else self._frame.axes
+        if not isinstance(frame_axes, tuple) or axis not in frame_axes:
             raise ValueError("flux_value axis must be one of the Model frame's typed axes")
-        # The native formula backend has canonical Cartesian directions 0=x and 1=y.  Frame axis
-        # iteration order is presentation data, not a direction selector: a valid typed frame may
-        # expose ``(y, x)`` while its flux mapping is still keyed by axis identity.  Resolve by the
-        # same canonical axis name used by ``flux()`` so host oracles cannot silently swap physics.
-        directions = {"x": 0, "y": 1}
-        name = getattr(axis, "name", None)
-        if name not in directions:
-            raise ValueError(
-                "flux_value requires an installed Cartesian x/y axis identity")
+        axes = canonical_axis_mapping(
+            {candidate.name: candidate for candidate in frame_axes},
+            where="flux_value frame",
+        )
+        directions = {candidate: index for index, candidate in enumerate(axes.values())}
         return self._dsl.eval_flux(
-            state, {} if aux is None else aux, directions[name])
+            state, {} if aux is None else aux, directions[axis])
 
     def projection(self, expressions: Any) -> None:
         """Install one native pointwise state projection expression per component."""
@@ -834,17 +865,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if not isinstance(values, Mapping) or set(values) != set(frame.axes):
             raise TypeError(
                 "wave_speeds values must map every typed frame axis exactly once")
-        axes = {axis.name: axis for axis in frame.axes}
-        if set(axes) != {"x", "y"}:
-            raise ValueError(
-                "the installed native wave-speed route requires an exact Cartesian2D frame")
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame.axes}, where="wave_speeds frame"
+        )
 
         from pops.model import Handle
 
         converted = {}
-        for name in ("x", "y"):
+        for name, axis in axes.items():
             pair = normalize_sequence(
-                values[axes[name]], "wave_speeds %s signed pair" % name, nonempty=True)
+                values[axis], "wave_speeds %s signed pair" % name, nonempty=True)
             if len(pair) != 2:
                 raise ValueError(
                     "wave_speeds %s axis requires exactly (s_min, s_max); got %d value(s)"
@@ -864,33 +894,32 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
         hyp = self._dsl._m
         with atomic_attrs((hyp, "_wave_speeds")):
-            self._dsl.wave_speeds(x=converted["x"], y=converted["y"])
+            self._dsl.wave_speeds(**converted)
         self._invalidate_authoring_views()
 
     def wave_speeds_from_jacobian(
         self,
-        x: Any = None,
-        y: Any = None,
+        *,
         eig: str = "numeric",
         blocks: Any = None,
         fd_eps: Any = None,
         eig_max_iter: Any = None,
         im_tol: Any = None,
+        **jacobians: Any,
     ) -> None:
         """Install generic signed wave speeds from the full flux Jacobian."""
         self._dsl.wave_speeds_from_jacobian(
-            x=x,
-            y=y,
             eig=eig,
             blocks=blocks,
             fd_eps=fd_eps,
             eig_max_iter=eig_max_iter,
             im_tol=im_tol,
+            **jacobians,
         )
         self._invalidate_authoring_views()
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
-        """Install the generic dense-Jacobian Roe provider, with an optional Harten fix."""
+        """Install dense-Jacobian Roe with a typed Harten/NoEntropyFix policy."""
         self._dsl.roe_from_jacobian(entropy_fix=entropy_fix)
         self._invalidate_authoring_views()
 
@@ -931,7 +960,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._invalidate_authoring_views()
             return h
         hyp = self._dsl._m
-        with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"),
+        with atomic_attrs((hyp, "_provider_components"),
                           (hyp, "_source_terms"), (hyp, "_source"), (self, "_sources")):
             self._dsl.source_term(
                 reg, [_wrap(self._to_expr(expression)) for expression in values])
@@ -990,7 +1019,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 require_name(input_name, "operator input")
             hyp = self._dsl._m
             with atomic_attrs(
-                    (hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_linear_sources"),
+                    (hyp, "_provider_components"), (hyp, "_linear_sources"),
                     (self, "_operators"), (self, "_operator_inputs")):
                 self._dsl.linear_source(
                     reg, [[_wrap(self._to_expr(e)) for e in row] for row in obj.matrix])
@@ -1162,17 +1191,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             compiled = pops.compile(resolved)
 
         ``pops.compile`` captures the operator-first Module and validates ONCE internally; ``lower``
-        (and its ``to_module`` alias) stay ADVANCED / inspection-only. Identical to :pyattr:`module`."""
+        stays ADVANCED / inspection-only and is identical to :pyattr:`module`."""
         return self.module
-
-    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). ADVANCED / inspection only
-    # (ADC-557): the standard case.block(model=m) -> pops.compile flow captures the Module itself;
-    # neither is REQUIRED (pops.compile does the lowering once, internally).
-    to_module = lower
 
     # --- introspection ---
 
     # --- internals ---
+    def _ranked_frame_axes(self, *, where: str) -> tuple[str, ...]:
+        """Return the one canonical axis prefix carried by this model's typed frame."""
+        frame_axes = None if self._frame is None else getattr(self._frame, "axes", None)
+        if not isinstance(frame_axes, tuple):
+            raise ValueError(
+                "%s requires a bounded Cartesian frame so its dimension is unambiguous" % where
+            )
+        axes = canonical_axis_mapping(
+            {axis.name: axis for axis in frame_axes}, where=where + " frame"
+        )
+        return tuple(axes)
+
     def _to_expr(self, node: Any) -> Any:
         """Resolve a board node to an :mod:`pops.dsl` expression in this model's context."""
         if isinstance(node, _bm.Partial):
@@ -1185,26 +1221,30 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     "gradient field handle %r belongs to another physics model"
                     % (field.name,))
             aux_name = self._gradient_aux(field.name, node.axis)
-            expr = self._dsl.aux(aux_name)
+            expr = self.aux(aux_name)
             if node.scale != 1.0:
                 expr = node.scale * expr
             return expr
         if isinstance(node, _bm.Gradient):
-            raise TypeError("a gradient is a vector; use grad(field).x / .y")
+            raise TypeError("a gradient is a vector; select one of the model frame axes")
         if isinstance(node, _bm.Laplacian):
             raise TypeError("a laplacian only appears as a field-solve operator")
         return node  # already a dsl Expr / Var / number
 
-    @staticmethod
-    def _gradient_aux(field_name: Any, axis: Any) -> Any:
-        """Canonical gradient aux name of ``field_name`` along ``axis`` (0=x, 1=y)."""
+    def _gradient_aux(self, field_name: Any, axis: Any) -> Any:
+        """Return the ordinary, field-qualified output name along one ranked axis.
+
+        No unknown has a privileged spelling: ``potential`` and ``phi`` use
+        the same ``<field>_grad_<axis>`` rule as every other field.
+        """
         field_name = require_name(field_name, "gradient field name")
-        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1):
-            raise ValueError("gradient axis must be integer 0 (x) or 1 (y); got %r" % (axis,))
-        if field_name == "phi":
-            return "grad_x" if axis == 0 else "grad_y"
-        # generic fields keep a <field>_grad_x / _grad_y convention
-        return "%s_grad_%s" % (field_name, "x" if axis == 0 else "y")
+        axes = self._ranked_frame_axes(where="gradient")
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(len(axes)):
+            raise ValueError(
+                "gradient axis must belong to the model's ranked frame; got %r" % (axis,)
+            )
+        axis_name = axes[axis]
+        return "%s_grad_%s" % (field_name, axis_name)
 
     def _require_state_handle(self, handle: Any, where: str, *, optional: bool = False) -> Any:
         """Validate an ``on=`` state without accepting a same-named foreign handle."""

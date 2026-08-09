@@ -28,6 +28,8 @@ from pops.output.data import (
     ArrayPiece,
     DiagnosticKey,
     DiagnosticPayload,
+    EMBEDDED_BOUNDARY_ARRAY_NAMES,
+    EmbeddedBoundaryPayload,
     FieldKey,
     FieldPayload,
     LevelGeometry,
@@ -136,6 +138,33 @@ def _frame(*, unselected_offset: float = 0.0, macro_step: int = 11) -> ObserverF
         "J",
         {"storage": 4.5, "flux": -4.625, "source": 0.0},
     )
+    sidecar_values = {
+        "pops_active": (1.0, 0.0),
+        "pops_phi": (-0.5, 0.75),
+        "pops_kappa": (0.25, 0.0),
+    }
+    sidecar_pieces = {}
+    for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+        first, second = sidecar_values[name]
+        sidecar_pieces[name] = (
+            ArrayPiece(
+                (0, 0),
+                (2, 3),
+                np.full((1, 2, 3), first, dtype=np.float64),
+                0,
+                0,
+                False,
+            ),
+            ArrayPiece(
+                (2, 0),
+                (3, 3),
+                np.full((1, 1, 3), second, dtype=np.float64),
+                1,
+                0,
+                False,
+            ),
+        )
+    embedded_boundary = EmbeddedBoundaryPayload(layout, 0, (3, 3), sidecar_pieces)
     snapshot = OutputSnapshot(
         OutputClock.at(
             "macro",
@@ -159,6 +188,7 @@ def _frame(*, unselected_offset: float = 0.0, macro_step: int = 11) -> ObserverF
         (selected, unselected),
         {"case": "durable-archive", "restart": False, "schema": 1},
         diagnostics=(diagnostic,),
+        embedded_boundaries=(embedded_boundary,),
         _native_composite_integrals=(
             _NativeCompositeIntegral(_field_family_identity(selected_key), (0,), 12.5),
         ),
@@ -182,6 +212,7 @@ def _assert_complete_frame_equal(actual: ObserverFrame, expected: ObserverFrame)
     assert len(actual.snapshot.geometries) == len(expected.snapshot.geometries)
     assert len(actual.snapshot.fields) == len(expected.snapshot.fields)
     assert len(actual.snapshot.diagnostics) == len(expected.snapshot.diagnostics)
+    assert len(actual.snapshot.embedded_boundaries) == len(expected.snapshot.embedded_boundaries)
 
     for left, right in zip(actual.snapshot.geometries, expected.snapshot.geometries, strict=True):
         assert left.to_data() == right.to_data()
@@ -197,6 +228,16 @@ def _assert_complete_frame_equal(actual: ObserverFrame, expected: ObserverFrame)
         for left_piece, right_piece in zip(left.pieces, right.pieces, strict=True):
             np.testing.assert_array_equal(left_piece.values, right_piece.values)
             assert not left_piece.values.flags.writeable
+    for left, right in zip(
+        actual.snapshot.embedded_boundaries,
+        expected.snapshot.embedded_boundaries,
+        strict=True,
+    ):
+        assert left.to_data() == right.to_data()
+        for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+            for left_piece, right_piece in zip(left.pieces(name), right.pieces(name), strict=True):
+                np.testing.assert_array_equal(left_piece.values, right_piece.values)
+                assert not left_piece.values.flags.writeable
     assert [item.to_data() for item in actual.snapshot.diagnostics] == [
         item.to_data() for item in expected.snapshot.diagnostics
     ]

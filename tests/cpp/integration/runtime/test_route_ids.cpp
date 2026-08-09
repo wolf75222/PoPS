@@ -101,9 +101,6 @@ TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
   EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(kPoissonRhsRoutes, [](const std::string& t) {
     return parse_poisson_rhs_route(t);
   })) << "poisson_rhs round-trip";
-  EXPECT_TRUE(table_round_trip<WallRouteId>(kWallRoutes, [](const std::string& t) {
-    return parse_wall_route(t);
-  })) << "wall round-trip";
 }
 
 TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
@@ -123,16 +120,16 @@ TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
   {
     const std::string m = throw_message([] { parse_field_solver_route("amg"); });
     EXPECT_TRUE(contains(m, "field_solver") && contains(m, "amg") &&
-                contains(m, "geometric_mg|fft|fft_spectral|polar") &&
+                contains(m, "geometric_mg|fft|polar|cartesian_cg") &&
                 contains(m, "never fall back to a default"))
         << "field_solver 'amg' refuse (famille, token, set valide, no-default)";
   }
   {
-    const std::string m = throw_message([] { parse_limiter_route("superbee"); });
-    EXPECT_TRUE(contains(m, "limiter") && contains(m, "superbee") &&
-                contains(m, "none|minmod|vanleer|weno5") &&
+    const std::string m = throw_message([] { parse_limiter_route("koren"); });
+    EXPECT_TRUE(contains(m, "limiter") && contains(m, "koren") &&
+                contains(m, "none|minmod|vanleer|weno5|mc|superbee") &&
                 contains(m, "never fall back to a default"))
-        << "limiter 'superbee' refuse (famille, token, set valide, no-default)";
+        << "limiter 'koren' refuse (famille, token, set valide, no-default)";
   }
   {
     const std::string m = throw_message([] { parse_transport_route("upwind"); });
@@ -173,13 +170,13 @@ TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
 
 TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
   const std::string signature = route_registry_signature();
-  EXPECT_TRUE(signature.rfind("v2:", 0) == 0) << signature;
-  EXPECT_TRUE(signature.size() == 67) << "v2: plus complete sha256 catalog digest";
+  EXPECT_TRUE(signature.rfind("v4:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.size() == 67) << "v3: plus complete sha256 catalog digest";
   EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
               std::string::npos);
   EXPECT_TRUE(throw_message([&] {
                 verify_route_manifest(
-                    "v2:0000000000000000000000000000000000000000000000000000000000000000", "test");
+                    "v3:0000000000000000000000000000000000000000000000000000000000000000", "test");
               }).find("mismatch") != std::string::npos);
   EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
 }
@@ -191,11 +188,21 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
   EXPECT_TRUE(std::string(route_info(RiemannRouteId::kRoe).native_entry) == "pops::RoeFlux" &&
               contains(route_info(RiemannRouteId::kRoe).requirements, "roe_dissipation"))
       << "route_info(kRoe) : one generic Roe provider route";
+  const auto& recovery = route_info(RiemannRouteId::kRoeHllRusanovRecovery);
+  bool recovery_polar_ok = true;
+  for (const RiemannTag& tag : kRiemanns)
+    if (std::string(tag.name) == recovery.token)
+      recovery_polar_ok = tag.polar_ok;
+  EXPECT_TRUE(std::string(recovery.token) == "roe_hll_rusanov_recovery" &&
+              contains(recovery.native_entry, "PreparedRiemannRecoveryPolicy") &&
+              contains(recovery.requirements, "wave_speeds") &&
+              contains(recovery.requirements, "roe_dissipation") && !recovery_polar_ok)
+      << "route_info(kRoeHllRusanovRecovery): exact fixed Cartesian/AMR policy";
   EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).native_entry) == "pops::SSPRK3" &&
               std::string(route_info(TimeRouteId::kSsprk3).limitations).empty())
       << "route_info(kSsprk3) : native production sans limitation obsolete";
   EXPECT_TRUE(std::string(route_info(TimeRouteId::kForwardEuler).native_entry) ==
-                  "pops::ForwardEuler" &&
+                  "pops::ForwardEuler<pops::kNativeDimension>" &&
               std::string(route_info(TimeRouteId::kForwardEuler).limitations) ==
                   "validation use, never default")
       << "route_info(kForwardEuler) : route native reservee a la validation";

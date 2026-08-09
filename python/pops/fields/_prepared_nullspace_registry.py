@@ -317,7 +317,9 @@ class PreparedNullspaceProvider:
         if (emission.plan is not None) != self.singular:
             raise ValueError("prepared nullspace emission disagrees with its singular capability")
         if emission.plan is None:
-            return "pops::PreparedNullspacePolicy::nonsingular()"
+            return (
+                "pops::PreparedNullspacePolicy<pops::kNativeDimension>::nonsingular()"
+            )
         plan_name = "krylov_nullspace_plan%d" % node.id
         prelude.append("auto %s = %s;" % (plan_name, emission.plan))
         prelude.append(
@@ -330,7 +332,8 @@ class PreparedNullspaceProvider:
         )
         prelude.append("ctx.configure_program_resource_field_nullspace(%s);" % plan_name)
         return (
-            "pops::PreparedNullspacePolicy::preserving(std::move(%s), "
+            "pops::PreparedNullspacePolicy<pops::kNativeDimension>::preserving("
+            "std::move(%s), "
             "ctx.program_resource_field_level())" % plan_name
         )
 
@@ -527,7 +530,8 @@ def _emit_constant(
 
     gauge = contracts.gauge
     expression = (
-        "[&]() { auto plan = pops::constant_mean_zero_nullspace(%s, "
+        "[&]() { auto plan = "
+        "pops::constant_mean_zero_nullspace<pops::kNativeDimension>(%s, "
         "\"authored constant-basis prepared provider\"); "
         "plan.gauges.front().value = static_cast<pops::Real>(%s); return plan; }()"
         % (json.dumps(plan_identity, ensure_ascii=True), scalar_cpp(gauge["value"]))

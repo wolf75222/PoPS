@@ -196,6 +196,16 @@ class Uniform(MeshDescriptor):
     def normalized_geometry(self) -> NormalizedGeometry:
         return _delegated_geometry(self.mesh, where="Uniform.mesh")
 
+    def native_spatial_data(self) -> dict[str, Any]:
+        projection = getattr(self.mesh, "native_spatial_data", None)
+        if not callable(projection):
+            raise TypeError(
+                "Uniform.mesh must implement native_spatial_data() for production lowering")
+        first, second = projection(), projection()
+        if not isinstance(first, dict) or first != second:
+            raise TypeError("Uniform.mesh native_spatial_data() must be one deterministic dict")
+        return first
+
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet({
             "layout": "uniform",
@@ -276,7 +286,7 @@ class Uniform(MeshDescriptor):
 
         return _layout_inspect_dict(
             self,
-            native_features=("layout:Uniform", "layout:AMR", "mesh:2d_storage_arithmetic"),
+            native_features=("layout:Uniform", "layout:AMR", "mesh:nd_storage_arithmetic"),
             amr_report=_layout_amr_report(self),
         )
 
@@ -396,6 +406,7 @@ class AMR(MeshDescriptor):
         load_balance: Any = None,
         tagger: Any = None,
         clustering: Any = None,
+        reflux: Any = None,
     ) -> None:
         # Structural snapshots consume ``options()``.  Keeping authorities private prevents the
         # generic snapshotter from recursively treating Schedule implementation helpers as public
@@ -407,15 +418,22 @@ class AMR(MeshDescriptor):
         self._transfer = transfer
         self._execution = execution
         self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
-        if load_balance is None or tagger is None or clustering is None:
-            from pops.lib.amr import BergerRigoutsos, SpaceFillingCurve, SymbolicTagger
+        if load_balance is None or tagger is None or clustering is None or reflux is None:
+            from pops.lib.amr import (
+                BergerRigoutsos,
+                FluxRegisterReflux,
+                SpaceFillingCurve,
+                SymbolicTagger,
+            )
 
             load_balance = SpaceFillingCurve() if load_balance is None else load_balance
             tagger = SymbolicTagger() if tagger is None else tagger
             clustering = BergerRigoutsos() if clustering is None else clustering
+            reflux = FluxRegisterReflux() if reflux is None else reflux
         self._load_balance = load_balance
         self._tagger = tagger
         self._clustering = clustering
+        self._reflux = reflux
 
     @property
     def grid(self) -> Any:
@@ -457,6 +475,10 @@ class AMR(MeshDescriptor):
     def clustering(self) -> Any:
         return self._clustering
 
+    @property
+    def reflux(self) -> Any:
+        return self._reflux
+
     def _validate_authorities(self) -> None:
         if type(self.regrid) is not AMRRegrid:
             raise TypeError("AMR.regrid must be an exact AMRRegrid authority")
@@ -470,6 +492,7 @@ class AMR(MeshDescriptor):
         _load_balance_data(self.load_balance)
         _provider_data(self.tagger, "tagger")
         _provider_data(self.clustering, "clustering")
+        _provider_data(self.reflux, "reflux")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
                 raise TypeError("AMR.grid must implement %s()" % method)
@@ -518,6 +541,7 @@ class AMR(MeshDescriptor):
             "load_balance": _load_balance_data(self.load_balance),
             "tagger": self.tagger.inspect(),
             "clustering": self.clustering.inspect(),
+            "reflux": self.reflux.inspect(),
         }
 
     def _summary(self) -> str:
@@ -569,6 +593,7 @@ class AMR(MeshDescriptor):
             load_balance=self.load_balance,
             tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
+            reflux=self.reflux.resolve_references(resolved),
         )
 
     def resolve_amr_authorities(self, context: Any) -> Any:
@@ -585,6 +610,7 @@ class AMR(MeshDescriptor):
             load_balance=self.load_balance,
             tagger=self.tagger,
             clustering=self.clustering,
+            reflux=self.reflux,
             context=context,
         )
 
@@ -603,12 +629,35 @@ class AMR(MeshDescriptor):
     def normalized_geometry(self) -> NormalizedGeometry:
         return _delegated_geometry(self.grid, where="AMR.grid")
 
+    def native_spatial_data(self) -> dict[str, Any]:
+        """Capture exact base topology and adaptive decomposition policies."""
+        projection = getattr(self.grid, "native_spatial_data", None)
+        if not callable(projection):
+            raise TypeError(
+                "AMR.grid must implement native_spatial_data() for production lowering")
+        first, second = projection(), projection()
+        if not isinstance(first, dict) or first != second:
+            raise TypeError("AMR.grid native_spatial_data() must be one deterministic dict")
+        data = dict(first)
+        required = {"schema_version", "periodicity", "centering", "decomposition"}
+        if set(data) != required or data["schema_version"] != 1:
+            raise TypeError("AMR.grid native_spatial_data() uses an unsupported schema")
+        data["decomposition"] = {
+            "schema_version": 1,
+            "kind": "adaptive",
+            "base_domain": data["decomposition"],
+            "hierarchy": _authority_data(self.hierarchy, "hierarchy"),
+            "patch_layout": _patch_layout_data(self.patch_layout),
+            "load_balance": _load_balance_data(self.load_balance),
+        }
+        return data
+
     def inspect(self) -> dict[str, Any]:
         from pops._capabilities_inspect import _layout_amr_report
 
         return _layout_inspect_dict(
             self,
-            native_features=("layout:AMR", "amr:refinement_ratio", "mesh:2d_storage_arithmetic"),
+            native_features=("layout:AMR", "amr:refinement_ratio", "mesh:nd_storage_arithmetic"),
             amr_report=_layout_amr_report(self),
         )
 

@@ -6,26 +6,29 @@
 ///     F = -nu grad U is added to the hyperbolic flux when present (face_flux.hpp,
 ///     cartesian_operator.hpp).
 ///   - SourceFreeModel<M>: adapter that zeroes the source (explicit IMEX half-step).
-///   - load_state<Model>: reads the conservative state from an Array4 (POPS_HD).
-///   - load_aux<NComp>: reads the auxiliary (phi, grad, extra fields) (POPS_HD).
+///   - load_state<Model>: reads the conservative state from a ranked FieldView (POPS_HD).
+///   - load_provider_values<N>: reads one exact compact provider pack from resolved storage.
 ///
 /// This module carries no grid loop: every entry is POINTWISE (POPS_HD) or a compile-time
-/// model adapter. It is the bottom of the spatial/ dependency DAG (depends only on core/).
+/// model adapter. It is the bottom of the spatial/ dependency DAG and depends only on the core
+/// contracts plus the non-owning ranked field descriptor.
 
 #pragma once
 
-#include <pops/core/model/physical_model.hpp>  // aux_comps, HasPrimitiveVars: optional primitive reconstruction
+#include <pops/core/model/physical_model.hpp>  // provider_count, HasPrimitiveVars
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableSet: SourceFreeModel::conservative_vars forwarding
-#include <pops/mesh/storage/fab2d.hpp>  // ConstArray4: load_state / load_aux read path
+#include <pops/mesh/storage/field_view.hpp>
 
 #include <concepts>
+#include <array>
+#include <cassert>
 
 namespace pops {
 
-// aux_comps<Model>() (aux channel width of a model) now lives in the contract header
-// pops/core/physical_model.hpp (included above) so that CompositeModel can propagate it.
+// provider_count<Model>() lives in the contract header so CompositeModel can propagate the exact
+// compact consumer width without depending on a storage layout.
 
 /// DiffusiveModel: optional concept for models with isotropic scalar diffusion.
 ///
@@ -49,15 +52,21 @@ concept DiffusiveModel = requires(const M m) {
 template <class M>
 struct SourceFreeModel {
   using State = typename M::State;
-  using Aux = typename M::Aux;
   static constexpr int n_vars = M::n_vars;
-  static constexpr int n_aux = aux_comps<M>();  // transparent to the wrapped model's aux width
+  static constexpr int n_providers = provider_count_for<M, kNativeDimension>();
   M m;
-  POPS_HD State flux(const State& u, const Aux& a, int dir) const { return m.flux(u, a, dir); }
-  POPS_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
-    return m.max_wave_speed(u, a, dir);
+  template <class Providers>
+  POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
+    return m.flux(u, providers, dir);
   }
-  POPS_HD State source(const State&, const Aux&) const { return State{}; }
+  template <class Providers>
+  POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {
+    return m.max_wave_speed(u, providers, dir);
+  }
+  template <class Providers>
+  POPS_HD State source(const State&, const Providers&) const {
+    return State{};
+  }
   POPS_HD Real elliptic_rhs(const State& u) const { return m.elliptic_rhs(u); }
   // SourceFreeModel does not expose the primitive variables: the explicit IMEX half-step that
   // uses it therefore reconstructs in conservative variables (the direct explicit path itself
@@ -69,12 +78,14 @@ struct SourceFreeModel {
   {
     return m.pressure(u);
   }
-  POPS_HD void wave_speeds(const State& u, const Aux& a, int dir, Real& smin, Real& smax) const
-    requires requires(const M& mm, const State& s, const Aux& aa, int d, Real& lo, Real& hi) {
-      mm.wave_speeds(s, aa, d, lo, hi);
+  template <class Providers>
+  POPS_HD void wave_speeds(const State& u, const Providers& providers, int dir, Real& smin,
+                           Real& smax) const
+    requires requires(const M& mm, const State& s, const Providers& p, int d, Real& lo, Real& hi) {
+      mm.wave_speeds(s, p, d, lo, hi);
     }
   {
-    m.wave_speeds(u, a, dir, smin, smax);
+    m.wave_speeds(u, providers, dir, smin, smax);
   }
   // Roe / HLLC CAPABILITIES (HasRoeDissipation / HasHLLCStructure): forwarded ONLY if M exposes
   // them (requires clause), exactly like pressure / wave_speeds above and like composite.hpp.
@@ -93,12 +104,14 @@ struct SourceFreeModel {
   {
     return m.hllc_star_state(u, p, s, sStar, dir);
   }
-  POPS_HD State roe_dissipation(const State& ul, const Aux& al, const State& ur, const Aux& ar,
+  template <class LeftProviders, class RightProviders>
+  POPS_HD State roe_dissipation(const State& ul, const LeftProviders& left_providers,
+                                const State& ur, const RightProviders& right_providers,
                                 int dir) const
-    requires requires(const M& mm, const State a_, const Aux x_, const State b_, const Aux y_,
-                      int d) { mm.roe_dissipation(a_, x_, b_, y_, d); }
+    requires requires(const M& mm, const State a_, const LeftProviders& x_, const State b_,
+                      const RightProviders& y_, int d) { mm.roe_dissipation(a_, x_, b_, y_, d); }
   {
-    return m.roe_dissipation(ul, al, ur, ar, dir);
+    return m.roe_dissipation(ul, left_providers, ur, right_providers, dir);
   }
   // Forward the VariableSet introspection (HOST): lets positivity_comp resolve the Density role
   // through the explicit IMEX half-step. Conditional (requires), like pressure / wave_speeds.
@@ -109,52 +122,53 @@ struct SourceFreeModel {
   }
 };
 
-/// load_state<Model>: reads Model::n_vars scalars at (i,j) from an Array4.
+/// Read Model::n_vars conservative components at one compile-time-ranked cell.
 ///
 /// Returns a StateVec<n_vars> initialized from components 0..n_vars-1 of the channel.
 /// POPS_HD, zero allocation. Does NOT read components beyond n_vars.
-template <class Model>
-POPS_HD inline typename Model::State load_state(const ConstArray4& a, int i, int j) {
+template <class Model, int Dim>
+POPS_HD inline typename Model::State load_state(const FieldView<const Real, Dim>& field,
+                                                const Index<Dim>& index) {
   typename Model::State u;
-  for (int c = 0; c < Model::n_vars; ++c)
-    u[c] = a(i, j, c);
+  for (int component = 0; component < Model::n_vars; ++component)
+    u[component] = field(index, component);
   return u;
 }
 
-/// load_aux<NComp>: reads NComp components of the auxiliary from an Array4 at (i,j).
+/// Device-copyable indirection from a consumer's compact slots to accepted provider storage.
 ///
-/// The first 3 components (phi, grad_x, grad_y) are the base contract.
-/// Components >= 3 (B_z, T_e...) are read only if NComp > their canonical index
-/// (if constexpr guard -> zero codegen for NComp = kAuxBaseComps = 3: bit-identical).
-/// The extra fields are governed by POPS_AUX_FIELDS (state.hpp): adding a field =>
-/// 1 line in POPS_AUX_FIELDS, not in this path. POPS_HD.
-//
-// The extra fields are loaded from the SINGLE SOURCE POPS_AUX_FIELDS (state.hpp): each
-// X(name, idx) generates `if constexpr (NComp > idx) x.name = a(i,j,idx);`, exactly the
-// sequence written by hand before. Adding an extra field => 1 line in POPS_AUX_FIELDS is
-// enough for this device read path to cover it (and the host marshaling, generated from the
-// same table). NComp = kAuxBaseComps: all guards are false -> bit-identical.
-template <int NComp = kAuxBaseComps>
-POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
-  static_assert(NComp >= kAuxBaseComps, "provider pack is missing required base aux fields");
-  static_assert(NComp <= kAuxMaxComps, "provider pack exceeds capacity; never clamp it");
-  Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
-#define POPS_AUX_LOAD(name, idx) \
-  if constexpr (NComp > (idx))   \
-    x.name = a(i, j, idx);
-  POPS_AUX_FIELDS(POPS_AUX_LOAD)
-#undef POPS_AUX_LOAD
-  // NAMED aux fields (ADC-70 phase 1): components from kAuxNamedBase (= 5). Loaded
-  // ONLY if the model declares n_aux > kAuxNamedBase (otherwise if constexpr false -> no codegen,
-  // NComp = kAuxBaseComps stays strictly bit-identical). The bound n_extra is known at
-  // compile time (NComp template): the loop is unrolled after the capacity assertion above --
-  // never clamped and never an out-of-bounds access on the C array, device-clean.
-  if constexpr (NComp > kAuxNamedBase) {
-    constexpr int n_extra = NComp - kAuxNamedBase;
-    for (int k = 0; k < n_extra; ++k)
-      x.extra[k] = a(i, j, kAuxNamedBase + k);
+/// Every local slot carries its resolved field view and component.  The host resolves each
+/// qualified `{storage_group, component}` address once from the immutable consumer plan: two
+/// consumers can read the same producer in different local slots, and a consumer may read values
+/// from different compatible groups without encoding a process-global field prefix.
+template <int Dim, int Count>
+struct ProviderStorageView {
+  static_assert(Count >= 0, "provider value count cannot be negative");
+
+  std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Count)> storage{};
+  std::array<int, static_cast<std::size_t>(Count)> storage_components{};
+
+  POPS_HD Real operator()(const Index<Dim>& index, int consumer_slot) const {
+    assert(consumer_slot >= 0 && consumer_slot < Count);
+    const std::size_t slot = static_cast<std::size_t>(consumer_slot);
+    return storage[slot](index, storage_components[slot]);
   }
-  return x;
+};
+
+/// Read exactly `Count` resolved provider slots at one cell.
+///
+/// The caller has already selected this consumer's storage view from the immutable provider plan.
+/// Therefore this routine knows neither names nor physical meaning: slot ``i`` is copied to the
+/// same compact pack position ``i``.  `Count == 0` has no storage argument/dereference path in its
+/// callers and returns a valid empty POD.
+template <int Count, int Dim, class Storage>
+POPS_HD inline ProviderValues<Count> load_provider_values(const Storage& storage,
+                                                          const Index<Dim>& index) {
+  static_assert(Count >= 0, "provider value count cannot be negative");
+  ProviderValues<Count> result{};
+  for (int slot = 0; slot < Count; ++slot)
+    result[slot] = storage(index, slot);
+  return result;
 }
 
 }  // namespace pops

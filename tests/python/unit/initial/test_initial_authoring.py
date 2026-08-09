@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.analytic import angle, between, coordinates, param, radius, sin, where
+from pops.analytic import angle, between, coordinates, input as analytic_input, param, radius, sin, where
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import (
@@ -13,7 +13,7 @@ from pops.initial import (
     InitialConditionSource,
 )
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Analytic, BindArray, Constant, Gaussian
+from pops.lib.initial import Analytic, BindArray, Constant, FieldMappedAnalytic, Gaussian
 from pops.layouts import Uniform
 from pops.mesh import LayoutPlanBuilder
 from pops.mesh import CartesianGrid
@@ -39,6 +39,7 @@ from pops.mesh._amr import (
 )
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 from pops.model import Handle
+from pops.model.provider_pack import ComponentKey
 from pops.params import ConstParam, Positive, RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
@@ -371,6 +372,34 @@ def test_analytic_profile_is_frame_bound_ordered_and_callback_free():
         Analytic(frame=frame, components=(other_x,))
     with pytest.raises(TypeError, match="ScalarExpr"):
         Analytic(frame=frame, components=(lambda x: x,))
+
+
+def test_field_mapped_analytic_uses_exact_provider_keys_not_raw_aux_slots() -> None:
+    _case_value, frame, _state, _resolved_state, _threshold = _case()
+    provider = ComponentKey(
+        "model/electrons", "field", "electrostatic", "electric_x"
+    )
+    profile = FieldMappedAnalytic(
+        frame=frame,
+        seed_components=(analytic_input(0, "density"),),
+        components=(analytic_input(0, "density") + analytic_input(1, "electric_x"),),
+        inputs={0: ("state", 0), 1: ("provider", provider)},
+        consumer_qid="case/initial/tracer/U",
+    )
+
+    assert profile.initial_source_options()["consumer_qid"] == "case/initial/tracer/U"
+    assert profile.initial_source_options()["inputs"] == [
+        {"value_id": 0, "source": "state", "component": 0},
+        {"value_id": 1, "source": "provider", "key": provider.to_data()},
+    ]
+    with pytest.raises(ValueError, match="'state' or 'provider'"):
+        FieldMappedAnalytic(
+            frame=frame,
+            seed_components=(analytic_input(0, "density"),),
+            components=(analytic_input(0, "density") + analytic_input(1, "electric_x"),),
+            inputs={0: ("state", 0), 1: ("aux", 4)},
+            consumer_qid="case/initial/tracer/U",
+        )
 
 
 def test_analytic_profile_recaptures_resolved_parameter_references() -> None:

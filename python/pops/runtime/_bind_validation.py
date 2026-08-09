@@ -4,6 +4,7 @@ The gates validate state, parameters, aux fields and artifact/runtime compatibil
 loading. ABI keys are compared component-wise.  The typed bind phase fails closed when artifact
 metadata or runtime facts are unavailable: absence is not permission to try the native loader.
 """
+
 from __future__ import annotations
 
 import re
@@ -90,8 +91,7 @@ def _precision_dtype_names(precision: Any) -> Any:
     return table.get(str(precision or "double").lower(), ("float64",))
 
 
-def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
-                           initial_state: Any) -> Any:
+def validate_initial_state(manifest: Any, arguments: Any, layout: Any, initial_state: Any) -> Any:
     """Refuse state whose name, shape, dtype, components or ghosts mismatch metadata.
 
     Uniform consumes full conservative states. AMR accepts only the resolved typed
@@ -105,8 +105,10 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
     instances = dict(getattr(arguments, "instances", {}) or {})
     declared = set(instances)
     for name in sorted(set(initial_state) - declared):
-        lines.append("initial state for unknown block %r; the artifact declares block(s) %s"
-                     % (name, sorted(declared) or "(none)"))
+        lines.append(
+            "initial state for unknown block %r; the artifact declares block(s) %s"
+            % (name, sorted(declared) or "(none)")
+        )
     ghost_depth_by_block = getattr(manifest, "ghost_depth_by_block", None)
     if ghost_depth_by_block is None:
         ghost_depth_by_block = {}
@@ -147,25 +149,32 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
     return lines
 
 
-def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh: Any, ghost: Any,
-                             accepted_dtypes: Any) -> Any:
+def _check_one_initial_state(
+    lines: Any, name: Any, array: Any, spec: Any, mesh: Any, ghost: Any, accepted_dtypes: Any
+) -> Any:
     """Append the shape / dtype / component refusals for ONE block's supplied @p array."""
     components = int(spec.get("components", 0) or 0)
     shape = _shape_of(array)
     if shape is None:
-        lines.append("initial state for block %r is not an array (no .shape); pass a numpy array of "
-                     "shape (%s, ny, nx)" % (name, components or "n_components"))
+        lines.append(
+            "initial state for block %r is not an array (no .shape); pass a numpy array of "
+            "shape (%s, *reversed(cells))" % (name, components or "n_components")
+        )
         return
     if mesh is not None and ghost is not None:
         expected = _expected_shapes(components, mesh, ghost)
         if shape not in expected:
-            lines.append("initial state for block %r has shape %s; expected one of %s "
-                         "(cells=(nx=%d, ny=%d), %d component(s), ghost depth %d)"
-                         % (name, shape, sorted(expected), mesh[0], mesh[1], components, ghost))
+            lines.append(
+                "initial state for block %r has shape %s; expected one of %s "
+                "(native cells=%s, %d component(s), ghost depth %d)"
+                % (name, shape, sorted(expected), tuple(mesh), components, ghost)
+            )
     dtype = _dtype_name(array)
     if dtype is not None and dtype not in accepted_dtypes:
-        lines.append("initial state for block %r has dtype %r; the artifact's declared precision "
-                     "expects %s" % (name, dtype, " or ".join(accepted_dtypes)))
+        lines.append(
+            "initial state for block %r has dtype %r; the artifact's declared precision "
+            "expects %s" % (name, dtype, " or ".join(accepted_dtypes))
+        )
 
 
 def validate_bound_initial_values(
@@ -205,17 +214,13 @@ def validate_bound_initial_values(
             continue
         components = int(spec.get("components", 0) or 0)
         shape = _shape_of(array)
-        nx, ny = mesh
-        expected = {(components, ny, nx)} if components > 0 else set()
+        expected = {(components, *reversed(mesh))} if components > 0 else set()
         if shape is None:
-            lines.append(
-                "typed initial value for block %r is not an array (no .shape)" % name
-            )
+            lines.append("typed initial value for block %r is not an array (no .shape)" % name)
         elif shape not in expected:
             lines.append(
                 "typed initial value for block %r has shape %s; BindArray requires the complete "
-                "state with shape %s"
-                % (name, shape, sorted(expected))
+                "state with shape %s" % (name, shape, sorted(expected))
             )
         dtype = _dtype_name(array)
         if dtype is not None and dtype not in accepted_dtypes:
@@ -227,22 +232,22 @@ def validate_bound_initial_values(
 
 
 def _expected_shapes(components: Any, mesh: Any, ghost: Any) -> Any:
-    """Accepted (..., ny, nx) shapes for valid cells or one complete ghost ring."""
-    nx, ny = (int(value) for value in mesh)
-    valid = (ny, nx)
-    haloed = (ny + 2 * int(ghost), nx + 2 * int(ghost))
+    """Accepted component-major NumPy shapes for one exact compile-time spatial rank."""
+    native_cells = tuple(int(value) for value in mesh)
+    valid = tuple(reversed(native_cells))
+    haloed = tuple(value + 2 * int(ghost) for value in valid)
     shapes = set()
     for grid in (valid, haloed):
         if components and components > 1:
             shapes.add((components,) + grid)
         else:
             shapes.add((1,) + grid)
-            shapes.add(grid)  # a single-component block may be a bare (ny, nx) array
+            shapes.add(grid)  # a single-component block may be one bare ranked array
     return shapes
 
 
 def _layout_mesh(layout: Any) -> Any:
-    """The exact 2D cell counts ``(nx, ny)``, or ``None`` when no mesh is available."""
+    """The exact native-order ranked cell counts, or ``None`` when unavailable."""
     if layout is None:
         return None
     if _layout_kind(layout) == "amr":
@@ -253,23 +258,23 @@ def _layout_mesh(layout: Any) -> Any:
         if not isinstance(data, dict):
             return None
         cells = data.get("grid", {}).get("cells")
-        if not isinstance(cells, (list, tuple)) or len(cells) != 2:
+        if not isinstance(cells, (list, tuple)) or len(cells) not in (1, 2, 3):
             return None
-        return int(cells[0]), int(cells[1])
+        return tuple(int(value) for value in cells)
     mesh = getattr(layout, "mesh", None)
     cells = getattr(mesh, "cells", None)
     if isinstance(cells, (tuple, list)):
-        if len(cells) != 2:
+        if len(cells) not in (1, 2, 3):
             return None
-        return int(cells[0]), int(cells[1])
+        return tuple(int(value) for value in cells)
     n = getattr(mesh, "n", None)
     if n is None:
         return None
     if isinstance(n, (tuple, list)):
-        if len(n) != 2:
+        if len(n) not in (1, 2, 3):
             return None
-        return int(n[0]), int(n[1])
-    return int(n), int(n)
+        return tuple(int(value) for value in n)
+    return (int(n),)
 
 
 def _layout_for_block(layout: Any, block_name: str) -> Any:
@@ -342,22 +347,34 @@ def validate_bind_manifest(manifest: Any, runtime_facts: Any) -> Any:
     # ABI key: the manifest MUST carry one; a fresh artifact always does. An absent key is unverifiable.
     manifest_abi = getattr(manifest, "abi_key", None)
     if not manifest_abi:
-        lines.append("the compiled manifest carries no abi_key; the artifact is ABI-unverifiable and "
-                     "cannot be bound (rebuild it so its manifest stamps the ABI key)")
+        lines.append(
+            "the compiled manifest carries no abi_key; the artifact is ABI-unverifiable and "
+            "cannot be bound (rebuild it so its manifest stamps the ABI key)"
+        )
     else:
         _compare_abi(lines, manifest_abi, facts.get("abi_key"))
     _compare_str(lines, "precision", getattr(manifest, "precision", None), facts.get("precision"))
     _compare_communicator(lines, getattr(manifest, "communicator", None), facts.get("communicator"))
     return lines
+
+
 def validate_layout_runtime_requirements(arguments: Any, runtime_facts: Any) -> Any:
     """Refuse target requirements from Arguments, independently of manifest capabilities."""
     layout_runtime = getattr(arguments, "layout_runtime", None) or {}
     facts = runtime_facts or {}
     lines = []
-    _compare_feature(lines, "requires_mpi", layout_runtime.get("requires_mpi"), facts.get("supports_mpi"), "MPI")
-    _compare_feature(lines, "requires_gpu", layout_runtime.get("requires_gpu"),
-                     facts.get("supports_gpu"), "GPU / Kokkos device")
+    _compare_feature(
+        lines, "requires_mpi", layout_runtime.get("requires_mpi"), facts.get("supports_mpi"), "MPI"
+    )
+    _compare_feature(
+        lines,
+        "requires_gpu",
+        layout_runtime.get("requires_gpu"),
+        facts.get("supports_gpu"),
+        "GPU / Kokkos device",
+    )
     return lines
+
 
 def _compare_abi(lines: Any, manifest_abi: Any, runtime_abi: Any) -> Any:
     """Compare the two abi keys COMPONENT-WISE (like-with-like), never as raw strings.
@@ -373,15 +390,19 @@ def _compare_abi(lines: Any, manifest_abi: Any, runtime_abi: Any) -> Any:
     m_headers, m_std = _abi_components(manifest_abi)
     r_headers, r_std = _abi_components(runtime_abi)
     if m_headers and r_headers and m_headers != r_headers:
-        lines.append("ABI mismatch: the artifact was built against headers signature %r but the "
-                     "loaded pops runtime reports %r (artifact abi_key %r vs runtime %r); rebuild "
-                     "the artifact against this runtime"
-                     % (m_headers, r_headers, manifest_abi, runtime_abi))
+        lines.append(
+            "ABI mismatch: the artifact was built against headers signature %r but the "
+            "loaded pops runtime reports %r (artifact abi_key %r vs runtime %r); rebuild "
+            "the artifact against this runtime" % (m_headers, r_headers, manifest_abi, runtime_abi)
+        )
         return  # the headers anchor already adjudicated; do not stack a redundant std line
     if m_std and r_std and m_std != r_std:
-        lines.append("C++ standard mismatch: the artifact was built for std %s but the loaded pops "
-                     "runtime reports %s (artifact abi_key %r vs runtime %r); rebuild the artifact "
-                     "against this runtime" % (m_std, r_std, manifest_abi, runtime_abi))
+        lines.append(
+            "C++ standard mismatch: the artifact was built for std %s but the loaded pops "
+            "runtime reports %s (artifact abi_key %r vs runtime %r); rebuild the artifact "
+            "against this runtime" % (m_std, r_std, manifest_abi, runtime_abi)
+        )
+
 
 def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -> Any:
     """Directional communicator check: refuse only what the artifact NEEDS and the runtime LACKS.
@@ -401,19 +422,25 @@ def _compare_communicator(lines: Any, manifest_value: Any, runtime_value: Any) -
     if needed == "serial":
         return  # a serial artifact binds anywhere; a more-capable runtime is never a mismatch
     if needed != provided:
-        lines.append("communicator mismatch: the artifact requires communicator=%r but the loaded "
-                     "pops runtime provides %r; bind under a matching runtime or rebuild the "
-                     "artifact" % (manifest_value, runtime_value))
+        lines.append(
+            "communicator mismatch: the artifact requires communicator=%r but the loaded "
+            "pops runtime provides %r; bind under a matching runtime or rebuild the "
+            "artifact" % (manifest_value, runtime_value)
+        )
 
-def _compare_feature(lines: Any, field: Any, manifest_value: Any, runtime_value: Any,
-                     human: Any) -> Any:
+
+def _compare_feature(
+    lines: Any, field: Any, manifest_value: Any, runtime_value: Any, human: Any
+) -> Any:
     """Refuse only a required feature the runtime lacks; unknowns are not adjudicable."""
     if manifest_value is None or runtime_value is None:
         return  # honest-unknown on either side: not adjudicable, not a fallback
     if bool(manifest_value) and not bool(runtime_value):
-        lines.append("%s support mismatch: the artifact requires %s=True but the loaded pops runtime "
-                     "reports %s=False; bind under a matching runtime or rebuild the artifact"
-                     % (human, field, field))
+        lines.append(
+            "%s support mismatch: the artifact requires %s=True but the loaded pops runtime "
+            "reports %s=False; bind under a matching runtime or rebuild the artifact"
+            % (human, field, field)
+        )
 
 
 def _compare_str(lines: Any, field: Any, manifest_value: Any, runtime_value: Any) -> Any:
@@ -426,18 +453,19 @@ def _compare_str(lines: Any, field: Any, manifest_value: Any, runtime_value: Any
     if _is_unknown_token(manifest_value) or _is_unknown_token(runtime_value):
         return  # honest-unknown token: skipped exactly like None
     if str(manifest_value) != str(runtime_value):
-        lines.append("%s mismatch: the artifact declares %s=%r but the loaded pops runtime reports "
-                     "%r; bind under a matching runtime or rebuild the artifact"
-                     % (field, field, manifest_value, runtime_value))
+        lines.append(
+            "%s mismatch: the artifact declares %s=%r but the loaded pops runtime reports "
+            "%r; bind under a matching runtime or rebuild the artifact"
+            % (field, field, manifest_value, runtime_value)
+        )
 
 
 def operator_required_aux(manifest: Any) -> Any:
     """The aux fields a lowered OPERATOR requires, unioned from the module manifest (gate a / G1).
 
-    An aux a lowered operator reads must be supplied even when the model's ``aux_extra_names`` omits
-    it. The manifest's ``aux_required`` already unions the model-declared aux; a richer manifest that
-    records per-operator aux requirements (``operators`` -> ``aux``) widens the set. Returns a sorted
-    list of aux names the artifact requires at bind (a superset feeding the missing-argument check).
+    The manifest must carry exact ProviderPack input identities. This helper
+    only aggregates metadata; native installation verifies ComponentKey,
+    contract and producer kind.
     """
     required = set(getattr(manifest, "aux_required", None) or [])
     operators = getattr(manifest, "operators", None) or []
@@ -449,18 +477,20 @@ def operator_required_aux(manifest: Any) -> Any:
     return sorted(required)
 
 
-def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ()) -> Any:
+def validate_operator_aux(manifest: Any, aux: Any, provided_field_outputs: Any = ()) -> Any:
     """Refuse an aux a lowered operator requires but the bind omits (ADC-537 gate a / G1).
 
-    Unions the operator-required aux (:func:`operator_required_aux`) and refuses each name neither
-    supplied via ``pops.bind(aux=...)`` nor already declared on the sim. Returns one line per missing
-    required aux (empty list = ok)."""
+    Unions the operator-required routes and refuses each identity neither
+    supplied via ``pops.bind(aux={ComponentKey(...): ...})`` nor produced by a
+    resolved field plan. Returns one line per missing required route."""
     lines = []
-    supplied = set(aux or {}) | set(provided_named_aux or ())
+    supplied = set(aux or {}) | set(provided_field_outputs or ())
     for name in operator_required_aux(manifest):
         if name not in supplied:
-            lines.append("aux field %r is required by a lowered operator but was not supplied; pass "
-                         "pops.bind(aux={%r: <array>})" % (name, name))
+            lines.append(
+                "auxiliary route %r is required by a lowered operator but was not supplied; pass "
+                "pops.bind(aux={ComponentKey(...): <array>})" % name
+            )
     return lines
 
 
@@ -476,17 +506,16 @@ def field_plan_produced_aux(field_plans: Any) -> tuple[str, ...]:
     produced = set()
     for name, registration in (field_plans or {}).items():
         native_options = getattr(registration, "native_options", None)
-        route = (
-            native_options.get("output_route")
-            if isinstance(native_options, Mapping)
-            else None
-        )
+        route = native_options.get("output_route") if isinstance(native_options, Mapping) else None
         components = route.get("components") if isinstance(route, Mapping) else None
-        if not isinstance(components, (tuple, list)) or not components or any(
-                not isinstance(component, str) or not component for component in components):
+        if (
+            not isinstance(components, (tuple, list))
+            or not components
+            or any(not isinstance(component, str) or not component for component in components)
+        ):
             raise TypeError(
-                "pops.bind: resolved field plan %r has no exact native output components"
-                % name)
+                "pops.bind: resolved field plan %r has no exact native output components" % name
+            )
         produced.update(components)
     return tuple(sorted(produced))
 
@@ -512,8 +541,10 @@ def loaded_runtime_facts() -> Any:
 
     env = runtime_environment_report()
     if not isinstance(env, Mapping):
-        raise TypeError("pops.bind: runtime_environment_report() must return a mapping, got %s"
-                        % type(env).__name__)
+        raise TypeError(
+            "pops.bind: runtime_environment_report() must return a mapping, got %s"
+            % type(env).__name__
+        )
     facts = {
         "abi_key": abi_key(),
         "precision": env.get("precision"),
@@ -527,21 +558,28 @@ def loaded_runtime_facts() -> Any:
 
 def _require_runtime_facts(facts: Any) -> None:
     from collections.abc import Mapping
+
     if not isinstance(facts, Mapping):
         raise TypeError("pops.bind: runtime capability facts must be a mapping")
     required = ("abi_key", "precision", "communicator", "supports_mpi", "supports_gpu")
     missing = [name for name in required if name not in facts or facts[name] is None]
     if missing:
-        raise ValueError("pops.bind: loaded runtime cannot provide required identity/capability "
-                         "fact(s) %s; refusing to load the artifact" % missing)
+        raise ValueError(
+            "pops.bind: loaded runtime cannot provide required identity/capability "
+            "fact(s) %s; refusing to load the artifact" % missing
+        )
     for name in ("abi_key", "precision", "communicator"):
         if _is_unknown_token(facts[name]):
-            raise ValueError("pops.bind: loaded runtime reports %s=%r; a typed bind requires an "
-                             "exact fact" % (name, facts[name]))
+            raise ValueError(
+                "pops.bind: loaded runtime reports %s=%r; a typed bind requires an "
+                "exact fact" % (name, facts[name])
+            )
     for name in ("supports_mpi", "supports_gpu"):
         if not isinstance(facts[name], bool):
-            raise TypeError("pops.bind: loaded runtime fact %s must be bool, got %s"
-                            % (name, type(facts[name]).__name__))
+            raise TypeError(
+                "pops.bind: loaded runtime fact %s must be bool, got %s"
+                % (name, type(facts[name]).__name__)
+            )
 
 
 def aggregate_bind_refusals(groups: Any) -> Any:
@@ -555,12 +593,14 @@ def aggregate_bind_refusals(groups: Any) -> Any:
             flat.append("[%s] %s" % (label, line))
     if not flat:
         return None
-    return ("pops.bind: %d refusal(s) before the native artifact is loaded:\n  "
-            % len(flat)) + "\n  ".join(flat)
+    return (
+        "pops.bind: %d refusal(s) before the native artifact is loaded:\n  " % len(flat)
+    ) + "\n  ".join(flat)
 
 
-def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: Any,
-                              provided_aux: Any) -> Any:
+def collect_missing_arguments(
+    args: Any, provided_blocks: Any, provided_params: Any, provided_aux: Any
+) -> Any:
     """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
 
     Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what ``pops.bind`` supplies and
@@ -569,28 +609,30 @@ def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: 
     the SAME contract.
 
     Only entries whose ``required`` flag is true are enforced. ``provided_*`` are the supplied sets
-    (block names, parameter identities and aux names); a block already added on the engine counts as
+    (block names, parameter identities and exact auxiliary keys); a block already added on the engine counts as
     provided. Field solver providers are resolved into ``field_plans`` before bind and therefore are
     not arguments. Each line names exactly what is missing and the matching ``pops.bind`` keyword."""
     missing = []
     for name, spec in sorted(getattr(args, "instances", {}).items()):
         if spec.get("required") and name not in provided_blocks:
-            missing.append("instance %r (a state block the program advances); supply its initial "
-                           "state via pops.bind(initial_state={%r: <array>})" % (name, name))
+            missing.append(
+                "instance %r (a state block the program advances); supply its initial "
+                "state via pops.bind(initial_state={%r: <array>})" % (name, name)
+            )
     for name, spec in sorted(getattr(args, "params", {}).items()):
         if spec.get("required") and name not in provided_params:
             missing.append(
-                "runtime param %r; pass pops.bind(params={block[param_handle]: <value>})"
-                % name
+                "runtime param %r; pass pops.bind(params={block[param_handle]: <value>})" % name
             )
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
-            missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
+            missing.append("auxiliary input %r; pass pops.bind(aux={ComponentKey(...): <array>})" % name)
     return missing
 
 
-def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any, *,
-                               field_plans: Any = None) -> Any:
+def validate_install_arguments(
+    sim: Any, compiled: Any, instances: Any, params: Any, aux: Any, *, field_plans: Any = None
+) -> Any:
     """Reject missing declared inputs and unreadable metadata before native mutation."""
     if compiled is None:
         return
@@ -605,24 +647,31 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
     if not callable(block_names):
         raise TypeError("pops.bind: runtime engine must expose callable block_names()")
     provided_blocks |= set(cast(Iterable[Any], block_names()))
-    # Named aux already declared on the sim (B_z has no queryable trace, so it must come via aux=).
-    provided_named_aux = set()
-    for table in getattr(sim, "_aux_field_index", {}).values():
-        provided_named_aux |= set(table)
-    provided_param_ids = {
-        getattr(handle, "qualified_id", handle) for handle in params
-    }
+    provided_param_ids = {getattr(handle, "qualified_id", handle) for handle in params}
     missing = collect_missing_arguments(
-        args, provided_blocks, provided_param_ids,
-        set(aux) | provided_named_aux | set(field_plan_produced_aux(field_plans)))
+        args,
+        provided_blocks,
+        provided_param_ids,
+        set(aux) | set(field_plan_produced_aux(field_plans)),
+    )
     if missing:
-        raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
-                         + "\n  ".join(missing))
+        raise ValueError(
+            "pops.bind: the compiled artifact is missing required argument(s):\n  "
+            + "\n  ".join(missing)
+        )
 
 
-def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: Any, *,
-                   initial_values: Any = None, platform_manifest: Any = None,
-                   execution_context: Any = None) -> Any:
+def run_bind_gates(
+    compiled: Any,
+    layout: Any,
+    initial: Any,
+    params: Any,
+    aux: Any,
+    *,
+    initial_values: Any = None,
+    platform_manifest: Any = None,
+    execution_context: Any = None,
+) -> Any:
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
     The ``pops.bind`` front-door check (called from :mod:`pops.codegen.orchestration` BEFORE the
@@ -636,41 +685,65 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
     manifest_fn = getattr(compiled, "manifest", None)
     arguments_fn = getattr(compiled, "arguments", None)
     if not callable(manifest_fn) or not callable(arguments_fn):
-        raise TypeError("pops.bind: compiled artifact must expose callable manifest() and "
-                        "arguments() metadata")
+        raise TypeError(
+            "pops.bind: compiled artifact must expose callable manifest() and arguments() metadata"
+        )
     manifest = manifest_fn()
     arguments = arguments_fn()
     if manifest is None or arguments is None:
-        raise ValueError("pops.bind: compiled artifact returned incomplete manifest/arguments metadata")
+        raise ValueError(
+            "pops.bind: compiled artifact returned incomplete manifest/arguments metadata"
+        )
     runtime_facts = loaded_runtime_facts()
     from pops.runtime._platform_validation import validate_platform_bind
+
     groups = []
     platform_fields = dict(initial or {})
-    platform_fields.update({
-        getattr(handle, "qualified_id", str(handle)): value
-        for handle, value in (initial_values or {}).items()
-    })
+    platform_fields.update(
+        {
+            getattr(handle, "qualified_id", str(handle)): value
+            for handle, value in (initial_values or {}).items()
+        }
+    )
     if platform_manifest is not None or execution_context is not None:
-        groups.append(("platform-execution-field-view", validate_platform_bind(
-            platform_manifest, execution_context, platform_fields, layout)))
+        groups.append(
+            (
+                "platform-execution-field-view",
+                validate_platform_bind(
+                    platform_manifest, execution_context, platform_fields, compiled.plan
+                ),
+            )
+        )
     groups += [
-        ("aux-required-by-operator", validate_operator_aux(
-            manifest, aux, provided_named_aux=field_produced_aux(compiled))),
+        (
+            "aux-required-by-operator",
+            validate_operator_aux(manifest, aux, provided_field_outputs=field_produced_aux(compiled)),
+        ),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
-        ("initial-values", validate_bound_initial_values(
-            manifest, arguments, layout, initial_values)),
+        (
+            "initial-values",
+            validate_bound_initial_values(manifest, arguments, layout, initial_values),
+        ),
     ]
     message = aggregate_bind_refusals(groups)
     if message is not None:
         raise ValueError(message)
 
 
-__all__ = ["validate_initial_state", "validate_bound_initial_values",
-           "validate_runtime_param_domains", "validate_bind_manifest",
-           "validate_operator_aux", "operator_required_aux", "field_plan_produced_aux",
-           "field_produced_aux",
-           "loaded_runtime_facts",
-           "aggregate_bind_refusals", "run_bind_gates",
-           "collect_missing_arguments", "validate_install_arguments"]
+__all__ = [
+    "validate_initial_state",
+    "validate_bound_initial_values",
+    "validate_runtime_param_domains",
+    "validate_bind_manifest",
+    "validate_operator_aux",
+    "operator_required_aux",
+    "field_plan_produced_aux",
+    "field_produced_aux",
+    "loaded_runtime_facts",
+    "aggregate_bind_refusals",
+    "run_bind_gates",
+    "collect_missing_arguments",
+    "validate_install_arguments",
+]

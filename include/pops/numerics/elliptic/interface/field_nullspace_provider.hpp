@@ -116,7 +116,11 @@ inline FieldNullspaceOperatorFacts make_field_nullspace_operator_facts(
 
 /// Materialized topology facts for exactly one solver vector space. Borrowed layouts remain owned
 /// by the caller; label and coverage fields are shared immutable prepared resources.
+template <int Dim>
 struct FieldNullspaceTopologyFacts {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "FieldNullspaceTopologyFacts only supports dimensions 1, 2, and 3");
+
   std::string identity;
   std::string exact_layout_contract;
   int first_level = 0;
@@ -125,23 +129,24 @@ struct FieldNullspaceTopologyFacts {
   /// providers that need a constant connected-mode basis must then consume an explicit component
   /// partition instead. This opaque contract avoids a closed connectivity enum.
   std::string connected_component_contract;
-  std::vector<const MultiFab*> layouts;
-  std::vector<std::shared_ptr<const MultiFab>> component_labels;
+  std::vector<const MultiFab<Dim>*> layouts;
+  std::vector<std::shared_ptr<const MultiFab<Dim>>> component_labels;
   std::vector<std::string> component_label_contracts;
   std::vector<FieldConnectedComponent> connected_components;
-  std::vector<std::shared_ptr<const MultiFab>> coverage;
+  std::vector<std::shared_ptr<const MultiFab<Dim>>> coverage;
   std::vector<std::string> coverage_contracts;
   std::vector<Real> cell_measure;
   /// One vector-distribution provider per active layout, in the same order. Storage families are
   /// not a closed capability vocabulary; each provider authenticates layouts and reductions
   /// through its own exact contract.
-  std::vector<PreparedVectorDistribution> level_distributions;
+  std::vector<PreparedVectorDistribution<Dim>> level_distributions;
 };
 
+template <int Dim>
 struct FieldNullspaceProviderRequest {
   std::string plan_identity;
   FieldNullspaceOperatorFacts operator_facts;
-  FieldNullspaceTopologyFacts topology;
+  FieldNullspaceTopologyFacts<Dim> topology;
   PreparedProviderOptions options;
 };
 
@@ -161,13 +166,15 @@ struct FieldNullspaceProviderSelection {
   }
 };
 
+template <int Dim>
 struct PreparedFieldNullspace {
   std::string provider_identity;
   std::uint64_t provider_version = 0;
   std::string exact_prepared_contract;
-  FieldNullspacePlan plan;
+  FieldNullspacePlan<Dim> plan;
 };
 
+template <int Dim>
 class FieldNullspaceProvider {
  public:
   virtual ~FieldNullspaceProvider() = default;
@@ -178,16 +185,17 @@ class FieldNullspaceProvider {
   [[nodiscard]] virtual bool accepts_options(
       const PreparedProviderOptions& options) const noexcept = 0;
   [[nodiscard]] virtual PreparedProviderSupport supports(
-      const FieldNullspaceProviderRequest& request) const noexcept = 0;
+      const FieldNullspaceProviderRequest<Dim>& request) const noexcept = 0;
   [[nodiscard]] virtual std::string expected_prepared_contract(
-      const FieldNullspaceProviderRequest& request) const = 0;
-  [[nodiscard]] virtual PreparedFieldNullspace prepare(
-      const FieldNullspaceProviderRequest& request) const = 0;
+      const FieldNullspaceProviderRequest<Dim>& request) const = 0;
+  [[nodiscard]] virtual PreparedFieldNullspace<Dim> prepare(
+      const FieldNullspaceProviderRequest<Dim>& request) const = 0;
 };
 
+template <int Dim>
 class FieldNullspaceProviderRegistry {
  public:
-  void add(std::shared_ptr<const FieldNullspaceProvider> provider) {
+  void add(std::shared_ptr<const FieldNullspaceProvider<Dim>> provider) {
     if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
         provider->collective_contract().empty())
       throw std::invalid_argument("field-nullspace provider requires exact identities");
@@ -196,7 +204,7 @@ class FieldNullspaceProviderRegistry {
       throw std::invalid_argument("duplicate field-nullspace provider identity '" + identity + "'");
   }
 
-  [[nodiscard]] std::shared_ptr<const FieldNullspaceProvider> resolve(
+  [[nodiscard]] std::shared_ptr<const FieldNullspaceProvider<Dim>> resolve(
       std::string_view identity) const {
     const auto found = providers_.find(std::string(identity));
     if (found == providers_.end())
@@ -206,7 +214,7 @@ class FieldNullspaceProviderRegistry {
   }
 
  private:
-  std::map<std::string, std::shared_ptr<const FieldNullspaceProvider>> providers_;
+  std::map<std::string, std::shared_ptr<const FieldNullspaceProvider<Dim>>> providers_;
 };
 
 }  // namespace pops

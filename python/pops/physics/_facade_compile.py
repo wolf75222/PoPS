@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .aux import aux_total_n_aux, roles_for
+from .aux import roles_for
 if TYPE_CHECKING:
     from ._model_contract import _FacadeModel
 else:
@@ -40,11 +40,27 @@ class _FacadeCompileMixin(_FacadeModel):
             facade=self,
         )
 
+    def __pops_bind_component_provider_packs__(self, packs: Any) -> None:
+        """Bind the exact Module provider resolution to both native-emitter carriers."""
+        from pops.codegen.component_provider_packs import ComponentProviderPacks
+
+        if type(packs) is not ComponentProviderPacks:
+            raise TypeError(
+                "compiler provider-pack binding requires exact ComponentProviderPacks"
+            )
+        packs.attach(self)
+        packs.attach(self._m)
+
     def __pops_native_loader_source__(
         self, *, name: Any = None, target: str = "system",
         hoist_reciprocals: bool = False,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
         return self._m.emit_cpp_native_loader(
             name=name, target=target, hoist_reciprocals=hoist_reciprocals)
 
@@ -53,6 +69,11 @@ class _FacadeCompileMixin(_FacadeModel):
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
         and to trace the run. Delegates to the shared computation HyperbolicModel._model_hash, passing it
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
         return self._m._model_hash(params=self.params)
 
     def compile(self, so_path: Any = None, include: Any = None, backend: Any = "production",
@@ -89,6 +110,7 @@ class _FacadeCompileMixin(_FacadeModel):
         import os
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
         from pops.codegen.toolchain import (loader_cxx_std,
+                                            loader_native_dimension,
                                             _native_kokkos_compiler,
                                             _native_feature_key, pops_include)
         from pops.codegen.cache import (
@@ -100,15 +122,32 @@ class _FacadeCompileMixin(_FacadeModel):
         )
         from pops.codegen.abi import _abi_key_python
         from pops.codegen._compile_emit import compiled_capability_flags
+        from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen._backends import lower_backend
+        from pops.numerics.riemann.providers import authoring_provider_evidence
         from pops.numerics.riemann.waves import provider_of
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
 
         m = self._m
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
+        model_dimension = len(m._flux)
+        if model_dimension not in (1, 2, 3):
+            raise ValueError("compile: model has no exact 1D/2D/3D physical flux rank")
+        native_dimension = loader_native_dimension()
+        if native_dimension != model_dimension:
+            raise ValueError(
+                "model physical rank %d does not match the loaded native specialization %d"
+                % (model_dimension, native_dimension)
+            )
+        riemann_evidence = authoring_provider_evidence(self)
         wave_speed_provider = provider_of(self)
         eff_std = std if std is not None else loader_cxx_std()
         eff_cxx = _native_kokkos_compiler(cxx)
@@ -142,6 +181,10 @@ class _FacadeCompileMixin(_FacadeModel):
                 "wave_speed_provider": (
                     "none" if wave_speed_provider is None else wave_speed_provider.kind
                 ),
+                "hllc_provider": riemann_evidence.hllc_provider or "none",
+                "roe_provider": riemann_evidence.roe_provider or "none",
+                "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
+                "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
             },
             flags=[_platform_cache_key(), *_dsl_optflags(),
                    "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
@@ -171,14 +214,19 @@ class _FacadeCompileMixin(_FacadeModel):
         cm: Any = CompiledModel(
             so_path=out_path, backend=backend, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
-            n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),
+            n_vars=m.n_vars, gamma=m.gamma, n_aux=m._total_n_aux(),
             params=self.params, caps=compiled_capability_flags(backend),
             abi_key=abi_key, model_hash=model_hash,
             definition_identity=model_compile_identity(self),
-            cxx=eff_cxx, std=eff_std, hllc=m._hllc,
-            roe=(m._roe or getattr(m, '_roe_rows', None) is not None
-                 or getattr(m, '_roe_jacobian', None) is not None),
-            aux_extra_names=m.aux_extra_names,
+            cxx=eff_cxx, std=eff_std, native_dimension=native_dimension,
+            hllc=riemann_evidence.hllc_provider is not None,
+            roe=riemann_evidence.roe_provider is not None,
+            hllc_provider=riemann_evidence.hllc_provider,
+            roe_provider=riemann_evidence.roe_provider,
+            roe_entropy_policy=riemann_evidence.roe_entropy_policy,
+            roe_entropy_delta=riemann_evidence.roe_entropy_delta,
+            characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
+            provider_components=m._provider_components,
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(
                 None if wave_speed_provider is None else wave_speed_provider.kind

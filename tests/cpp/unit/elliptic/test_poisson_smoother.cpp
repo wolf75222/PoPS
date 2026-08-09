@@ -1,70 +1,137 @@
-// Lisseur Gauss-Seidel red-black sur une solution manufacturee Dirichlet :
-//   phi = sin(pi x) sin(pi y) sur [0,1]^2 (nulle au bord),
-//   lap(phi) = -2 pi^2 phi  ->  on resout lap(phi) = f avec f = -2 pi^2 phi.
-// On verifie que le residu chute fortement et que la solution converge vers la
-// solution exacte a O(dx^2).
-
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/parallel/comm.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
-using namespace pops;
+namespace {
 
-static constexpr double kPi = 3.14159265358979323846;
+constexpr int kDim = pops::kNativeDimension;
+using Solver = pops::elliptic::mg::GeometricMG<kDim>;
 
-static double phi_exact(double x, double y) {
-  return std::sin(kPi * x) * std::sin(kPi * y);
+template <class Ranked, class Value>
+Ranked filled(Value value) {
+  Ranked result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-TEST(test_poisson_smoother, Runs) {
-  const int n = 16;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba = BoxArray::from_domain(dom, n);
-  DistributionMapping dm(ba.size(), n_ranks());
+pops::Index<kDim> index_from_ordinal(const pops::Box<kDim>& box, std::size_t ordinal) {
+  pops::Index<kDim> result{};
+  for (int axis = 0; axis < kDim; ++axis) {
+    const std::size_t length = static_cast<std::size_t>(box.length(axis));
+    result[axis] = box.lo[axis] + static_cast<int>(ordinal % length);
+    ordinal /= length;
+  }
+  return result;
+}
 
-  MultiFab phi(ba, dm, 1, 1), f(ba, dm, 1, 0), res(ba, dm, 1, 0);
+std::size_t storage_ordinal(const pops::Box<kDim>& box, const pops::Index<kDim>& index) {
+  std::size_t result = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < kDim; ++axis) {
+    result += static_cast<std::size_t>(index[axis] - box.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(box.length(axis));
+  }
+  return result;
+}
 
-  // second membre f = -2 pi^2 sin(pi x) sin(pi y)
-  Array4 af = f.fab(0).array();
-  for_each_cell(dom, [af, geom](int i, int j) {
-    af(i, j, 0) = -2 * kPi * kPi * phi_exact(geom.x_cell(i), geom.y_cell(j));
-  });
+pops::EllipticBuildRequest<kDim> request(int cells) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{}, filled<pops::Index<kDim>>(cells - 1)};
+  const auto geometry = pops::Geometry<kDim>::from_bounds(
+      domain, pops::RealVector<kDim>{}, filled<pops::RealVector<kDim>>(pops::Real(1)));
+  const pops::mesh::BoxArray<kDim> layout(std::vector<pops::Box<kDim>>{domain});
+  pops::Extent<kDim> rank_extent = filled<pops::Extent<kDim>>(std::int64_t{1});
+  rank_extent[0] = pops::n_ranks();
+  pops::Index<kDim> local_rank{};
+  local_rank[0] = pops::my_rank();
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{}, rank_extent};
+  const auto distribution = pops::mesh::Distribution<kDim>::replicated(layout, ranks);
+  std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  faces.fill(pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)});
+  pops::RealVector<kDim> spacing{};
+  for (int axis = 0; axis < kDim; ++axis)
+    spacing[axis] = geometry.spacing(axis);
+  return {geometry,
+          layout,
+          distribution,
+          local_rank,
+          pops::PhysicalBoundaryConditions<kDim>{pops::BoundaryTopology<kDim>::physical(), faces,
+                                                 spacing},
+          pops::Extent<kDim>{},
+          filled<pops::Extent<kDim>>(std::int64_t{1}),
+          {layout.size(), 0}};
+}
 
-  phi.set_val(0.0);  // initial nul (ghosts compris)
+pops::Real exact(const pops::Geometry<kDim>& geometry, const pops::Index<kDim>& index) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  pops::Real result = pops::Real(1);
+  for (int axis = 0; axis < kDim; ++axis)
+    result *= std::sin(pi * geometry.cell_coordinate(axis, index[axis]));
+  return result;
+}
 
-  BCRec bc;  // Dirichlet 0 sur les 4 faces
-  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-
-  poisson_residual(phi, f, geom, bc, res);
-  const Real r0 = norm_inf(res);
-
-  gs_smooth(phi, f, geom, bc, 800);
-
-  poisson_residual(phi, f, geom, bc, res);
-  const Real rN = norm_inf(res);
-  EXPECT_TRUE(rN / r0 < 1e-4) << "residual_reduced (r0=" << r0 << " rN=" << rN << ")";
-
-  // erreur vs solution exacte (au noeud du laplacien discret) : O(dx^2)
-  Real err = 0;
-  const Fab2D& p = phi.fab(0);
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-      Real e = std::fabs(p(i, j, 0) - phi_exact(geom.x_cell(i), geom.y_cell(j)));
-      err = std::max(err, e);
+void fill_rhs(Solver& solver) {
+  const pops::Real pi = std::acos(pops::Real(-1));
+  const pops::Real eigenvalue = static_cast<pops::Real>(kDim) * pi * pi;
+  for (std::size_t local = 0; local < solver.rhs().local_size(); ++local) {
+    auto& fab = solver.rhs().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      host(storage_ordinal(fab.grown_box(), index)) = eigenvalue * exact(solver.geom(), index);
     }
-  EXPECT_TRUE(err < 0.02) << "solution_accurate (err=" << err << ")";
+    fab.copy_from_host(host);
+  }
+}
 
-  std::printf("OK test_poisson_smoother (r0=%.3e rN=%.3e err=%.3e)\n", r0, rN, err);
+double maximum_error(const Solver& solver) {
+  double result = 0;
+  for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
+    const auto& fab = solver.phi().fab(local);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
+         ++ordinal) {
+      const auto index = index_from_ordinal(fab.box(), ordinal);
+      result = std::max(result,
+                        std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) -
+                                                     exact(solver.geom(), index))));
+    }
+  }
+  return pops::all_reduce_max(result);
+}
+
+}  // namespace
+
+TEST(test_poisson_smoother,
+     prepared_multigrid_smoothing_reduces_the_residual_and_recovers_the_exact_mode) {
+  pops::elliptic::mg::GeometricMultigridOptions options;
+  options.relative_tolerance = pops::Real(1e-10);
+  options.absolute_tolerance = pops::Real(1e-12);
+  options.maximum_cycles = 100;
+  options.bottom_sweeps = 60;
+  Solver solver(request(16), options);
+  solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
+                           pops::PreparedVectorDistribution<kDim>::replicated());
+  fill_rhs(solver);
+  solver.phi().set_val(pops::Real(0));
+
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_GT(report.reference_residual_norm, pops::Real(0));
+  EXPECT_LT(report.residual_norm, pops::Real(1e-8) * report.reference_residual_norm);
+  EXPECT_LT(maximum_error(solver), 0.03);
 }

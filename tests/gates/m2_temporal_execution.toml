@@ -276,3 +276,43 @@ polarity = "refusal"
 kind = "pytest"
 target = "transaction"
 nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "schedule"
+nodeid = "tests/python/unit/time/test_multirate_history_contract.py::test_history_interpolation_is_an_explicit_cross_clock_provider"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "schedule"
+nodeid = "tests/python/unit/time/test_multirate_history_contract.py::test_cross_clock_extension_without_provider_is_rejected"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/unit/codegen/test_checkpoint_migration.py::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary"

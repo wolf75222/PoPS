@@ -86,8 +86,15 @@ inline std::string brick_catalog_json() {
     append_catalog_json_string(result, entry.native_entry);
     result += ",\"parameters\":";
     result += entry.parameters_json;
-    result += ",\"n_vars\":";
-    result += std::to_string(entry.n_vars);
+    result += ",\"n_vars_by_dimension\":[";
+    for (std::size_t dimension = 0; dimension < entry.n_vars_by_dimension.size(); ++dimension) {
+      if (dimension != 0)
+        result += ',';
+      result += std::to_string(entry.n_vars_by_dimension[dimension]);
+    }
+    result += "]";
+    result += ",\"min_vars\":";
+    result += std::to_string(entry.min_vars);
     result += ",\"polar_ok\":";
     result += boolean(entry.polar_ok);
     result += ",\"requirements\":";

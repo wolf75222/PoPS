@@ -17,8 +17,11 @@
 
 #include <pops/runtime/program/cache_manager.hpp>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <cmath>
@@ -27,16 +30,33 @@
 #include <vector>
 
 using namespace pops;
-using pops::runtime::program::CacheManager;
-using pops::runtime::program::CacheSlot;
 
 namespace {
 
-MultiFab make_mf(double fill, int ncomp = 1, int ngrow = 1) {
-  Box2D dom = Box2D::from_extents(8, 8);
-  BoxArray ba = BoxArray::from_domain(dom, 4);
-  DistributionMapping dm(ba.size(), n_ranks());
-  MultiFab mf(ba, dm, ncomp, ngrow);
+constexpr int kDim = kNativeDimension;
+using Field = MultiFab<kDim>;
+using NativeCacheManager = runtime::program::CacheManager<kDim>;
+
+Extent<kDim> filled_extent(std::int64_t value) {
+  Extent<kDim> result{};
+  for (int axis = 0; axis < kDim; ++axis)
+    result[axis] = value;
+  return result;
+}
+
+std::size_t valid_cell_count() {
+  std::size_t result = 1;
+  for (int axis = 0; axis < kDim; ++axis)
+    result *= 8;
+  return result;
+}
+
+Field make_mf(double fill, int ncomp = 1, int ngrow = 1) {
+  const Box<kDim> domain = Box<kDim>::from_extents(filled_extent(8));
+  const mesh::BoxArray<kDim> layout = mesh::BoxArray<kDim>::from_domain(domain, filled_extent(4));
+  const mesh::RankSpace<kDim> ranks(Index<kDim>{}, filled_extent(1));
+  const auto distribution = mesh::Distribution<kDim>::replicated(layout, ranks);
+  Field mf(layout, distribution, Index<kDim>{}, ncomp, filled_extent(ngrow));
   mf.set_val(fill);
   return mf;
 }
@@ -50,13 +70,12 @@ struct SerializedSlot {
   int last_update_step = -1;
   double accumulated_dt = 0.0;
   int ncomp = 0;
-  int ngrow =
-      1;  // the cached value's ghost width (1 = aux; 2 = a held scratch); restore rebuilds with it
-  MultiFab value = make_mf(0.0);  // stands in for the gathered global buffer
+  Extent<kDim> ghosts = filled_extent(1);
+  Field value = make_mf(0.0);  // stands in for the gathered global buffer
 };
 
 // Serialize every VALID slot the way sim.checkpoint does (program_cache_nodes -> per-node accessors).
-std::vector<SerializedSlot> serialize(const CacheManager& c) {
+std::vector<SerializedSlot> serialize(const NativeCacheManager& c) {
   std::vector<SerializedSlot> out;
   for (int id : c.node_ids()) {
     SerializedSlot s;
@@ -65,7 +84,7 @@ std::vector<SerializedSlot> serialize(const CacheManager& c) {
     s.last_update_step = c.last_update_step(id);
     s.accumulated_dt = static_cast<double>(c.accumulated_dt_of(id));
     s.ncomp = c.ncomp_of(id);
-    s.ngrow = c.ngrow_of(id);  // serialized so restore rebuilds with the same ghost width
+    s.ghosts = c.ghosts_of(id);
     s.value =
         c.value_of(id);  // a real checkpoint gathers this to a global buffer; here a deep copy
     out.push_back(std::move(s));
@@ -75,7 +94,7 @@ std::vector<SerializedSlot> serialize(const CacheManager& c) {
 
 // Restore the serialized slots into a fresh CacheManager the way sim.restart does (restore_program_cache
 // -> CacheManager::restore_slot).
-void deserialize(CacheManager& c, const std::vector<SerializedSlot>& slots) {
+void deserialize(NativeCacheManager& c, const std::vector<SerializedSlot>& slots) {
   for (const SerializedSlot& s : slots) {
     c.restore_slot(s.node_id, s.value, s.last_update_step, static_cast<Real>(s.accumulated_dt),
                    s.name);
@@ -85,7 +104,7 @@ void deserialize(CacheManager& c, const std::vector<SerializedSlot>& slots) {
 }  // namespace
 
 TEST(CheckpointCache, FullRoundTripSerializesAndDeserializesToEqualState) {
-  CacheManager src;
+  NativeCacheManager src;
   // a named held field solve (the aux cache), stamped at step 30, no accumulator
   src.store(5, make_mf(2.0), 30, "fields_from_state");
   // a nameless held scratch (2 comps), stamped at step 12, with an accumulated dt window
@@ -97,24 +116,26 @@ TEST(CheckpointCache, FullRoundTripSerializesAndDeserializesToEqualState) {
   src.store(9, make_mf(4.0, /*ncomp=*/1, /*ngrow=*/2), 7);
 
   // the ngrow accessor distinguishes the aux (1) from a held scratch (2) -- the value restore needs it
-  EXPECT_TRUE(src.ngrow_of(5) == 1) << "aux_slot_ngrow_is_1";
-  EXPECT_TRUE(src.ngrow_of(9) == 2) << "held_scratch_slot_ngrow_is_2";
+  EXPECT_EQ(src.ghosts_of(5), filled_extent(1)) << "aux_slot_ghosts_are_1";
+  EXPECT_EQ(src.ghosts_of(9), filled_extent(2)) << "held_scratch_slot_ghosts_are_2";
 
   const std::vector<SerializedSlot> blob = serialize(src);
   ASSERT_TRUE(blob.size() == 3) << "serialize_three_valid_slots";
 
-  CacheManager dst;
+  NativeCacheManager dst;
   deserialize(dst, blob);
 
   // node ids + count preserved
   EXPECT_TRUE(dst.node_ids().size() == 3) << "restore_node_count";
   EXPECT_TRUE(dst.has(5) && dst.has(8) && dst.has(9)) << "restore_node_ids";
   // the held-scratch slot's ghost width round-trips (serialized ngrow rebuilds the right width)
-  EXPECT_TRUE(dst.retrieve(9).n_grow() == 2) << "restore_value9_ngrow_preserved";
-  // values bit-equal (valid-cell sum: 2.0 over 64 cells; 3.0 over 64 cells x 2 comps)
-  EXPECT_TRUE(std::fabs(sum(dst.retrieve(5)) - 2.0 * 64) < 1e-12) << "restore_value5_bit_equal";
+  EXPECT_EQ(dst.retrieve(9).ghosts(), filled_extent(2)) << "restore_value9_ghosts_preserved";
+  // Values are bit-equal over the exact native-rank valid-cell count.
+  EXPECT_TRUE(std::fabs(reduce_sum_local(dst.retrieve(5)) - 2.0 * valid_cell_count()) < 1e-12)
+      << "restore_value5_bit_equal";
   EXPECT_TRUE(dst.retrieve(8).ncomp() == 2) << "restore_value8_ncomp";
-  EXPECT_TRUE(std::fabs(sum(dst.retrieve(8)) - 3.0 * 64) < 1e-12) << "restore_value8_bit_equal";
+  EXPECT_TRUE(std::fabs(reduce_sum_local(dst.retrieve(8)) - 3.0 * valid_cell_count()) < 1e-12)
+      << "restore_value8_bit_equal";
   // bookkeeping preserved
   EXPECT_TRUE(dst.last_update_step(5) == 30) << "restore_last_update5";
   EXPECT_TRUE(dst.last_update_step(8) == 12) << "restore_last_update8";
@@ -130,7 +151,7 @@ TEST(CheckpointCache, FullRoundTripSerializesAndDeserializesToEqualState) {
 }
 
 TEST(CheckpointCache, OnlyValidSlotsSerializeColdAccumulatorSkipped) {
-  CacheManager src;
+  NativeCacheManager src;
   src.store(1, make_mf(1.0), 0, "held");  // valid
   src.accumulate_dt(2, 0.5);              // a cold node: an accumulator but no stored value yet
   EXPECT_TRUE(!src.valid(2)) << "cold_accum_node_invalid";
@@ -141,7 +162,7 @@ TEST(CheckpointCache, OnlyValidSlotsSerializeColdAccumulatorSkipped) {
 TEST(CheckpointCache, VerbatimRestartErrorMessages) {
   // The messages are RAISED by the sim.restart facade; this pins the exact strings, building the
   // missing-cache one from the CacheManager name accessor (the verbatim spec message names the node).
-  CacheManager src;
+  NativeCacheManager src;
   src.store(5, make_mf(1.0), 0, "fields_from_state");
 
   // the hash-mismatch message (raised on a different installed_program_hash)

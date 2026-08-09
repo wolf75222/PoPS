@@ -20,6 +20,7 @@ from pops.amr import (
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
+    PatchLayout,
     Tag,
 )
 from pops.domain import Rectangle
@@ -33,7 +34,7 @@ from pops.fields import (
     GradientOutput,
     MeanValueGauge,
 )
-from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet, Periodic
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.math import ValueExpr
@@ -189,6 +190,9 @@ def resolve_periodic_field_program(
     cxx: str | None = None,
     include: str | None = None,
     strict_restart: bool = False,
+    anchored_field: bool = False,
+    patch_layout: PatchLayout | None = None,
+    clustering: Any = None,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -217,11 +221,14 @@ def resolve_periodic_field_program(
         FieldDiscretization(
             method=CellCenteredSecondOrder(),
             boundaries=(
-                BoundaryCondition(AllPhysicalBoundaries(), Periodic()),
+                BoundaryCondition(
+                    AllPhysicalBoundaries(),
+                    Dirichlet(0.0) if anchored_field else Periodic(),
+                ),
             ),
             solver=GeometricMG() if field_solver is None else field_solver,
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0.0),
+            nullspace=None if anchored_field else ConstantNullspace(),
+            gauge=None if anchored_field else MeanValueGauge(0.0),
             hierarchy_policy=(
                 CompositeHierarchySolve() if target == "amr_system" else None
             ),
@@ -290,6 +297,8 @@ def resolve_periodic_field_program(
             ),
             transfer=transfer,
             execution=AMRExecution.synchronous(),
+            patch_layout=PatchLayout() if patch_layout is None else patch_layout,
+            clustering=clustering,
         )
     native_options: dict[str, Any] = {}
     if cxx is not None or include is not None:

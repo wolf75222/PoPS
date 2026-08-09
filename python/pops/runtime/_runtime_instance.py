@@ -29,7 +29,12 @@ from ._consumer_planning import next_consumer_deadline, plan_accepted_side_effec
 from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
-from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot, _layout_identity
+from ._runtime_consumers import (
+    RuntimeConsumerPublisher,
+    RuntimeOutputSnapshot,
+    _layout_identity,
+    _native_cartesian_geometry,
+)
 from ._runtime_executor import install_runtime_executor
 from ._runtime_planning import build_runtime_plans
 from .run_report import RunReport
@@ -433,6 +438,15 @@ class RuntimeInstance:
         registry = getattr(self, "_consumer_recoveries", {})
         return tuple(registry[key].record for key in sorted(registry))
 
+    def _failed_run_effect_fence(self) -> tuple[Any, ...]:
+        """Snapshot every RuntimeInstance-owned authority that can outlive a failed run."""
+        return (
+            self._consumer_cursors,
+            self._consumer_reports,
+            tuple(getattr(self, "_consumer_finalize_pending", ())),
+            self.consumer_recoveries,
+        )
+
     @property
     def post_commit_reports(self) -> tuple[Any, ...]:
         """Post-commit delivery reports retained across completed runs."""
@@ -618,13 +632,8 @@ class RuntimeInstance:
             raise NotImplementedError("uniform runtime provider does not expose reduce_component")
         if selected_levels not in {(), (0,)}:
             raise ValueError("uniform integral accepts only level 0")
-        from pops.mesh._layout_plan_contracts import (
-            CARTESIAN_CELL_AREA,
-            NormalizedGeometry,
-        )
-
         geometry = layout.geometry
-        if type(geometry) is not NormalizedGeometry or geometry.cell_measure != CARTESIAN_CELL_AREA:
+        if not _native_cartesian_geometry(geometry):
             raise NotImplementedError("uniform integral requires the native Cartesian cell measure")
         measure = 1.0
         for length, cells in zip(geometry.lengths, geometry.cells, strict=True):
@@ -669,11 +678,16 @@ class RuntimeInstance:
             )
         return provider(block, box_index)
 
-    def nx(self) -> int:
-        return int(self._executor.nx())
-
-    def ny(self) -> int:
-        return int(self._executor.ny())
+    def spatial_shape(self) -> tuple[int, ...]:
+        provider: Any = getattr(self._executor, "spatial_shape", None)
+        if not callable(provider):
+            raise NotImplementedError("runtime provider does not expose its exact spatial shape")
+        shape = tuple(provider())
+        if len(shape) not in (1, 2, 3) or any(
+            type(value) is not int or value < 1 for value in shape
+        ):
+            raise TypeError("native runtime spatial shape must contain exact positive integers")
+        return shape
 
     def n_levels(self) -> int:
         provider: Any = getattr(self._executor, "n_levels", None)
@@ -698,8 +712,8 @@ class RuntimeInstance:
     def patch_boxes(self) -> Any:
         return self._executor.patch_boxes()
 
-    def patch_rectangles(self) -> Any:
-        return self._executor.patch_rectangles()
+    def patch_bounds(self) -> Any:
+        return self._executor.patch_bounds()
 
     def block_level_state(self, block: str, level: int) -> Any:
         return self._executor.block_level_state(block, level)
@@ -737,6 +751,18 @@ class RuntimeInstance:
     def program_report(self) -> Any:
         return self._executor.program_report()
 
+    def program_accepted_state(self) -> bytes:
+        """Return the exact accepted AMR Program state owned by the native executor."""
+        provider = getattr(self._executor, "program_accepted_state", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "this runtime provider does not expose accepted AMR Program state"
+            )
+        state = provider()
+        if type(state) is not bytes:
+            raise TypeError("native accepted AMR Program state must be exact bytes")
+        return state
+
     @property
     def amr(self) -> Any:
         """Read-only AMR hierarchy/report view supplied by an adaptive executor."""
@@ -757,6 +783,16 @@ class RuntimeInstance:
                 "artifact_identity": self._install_plan.artifact.artifact_identity.to_data(),
                 "plan_identity": self._install_plan.artifact.plan.plan_identity.to_data(),
                 "layout_plan": self._layout_plan.inspect(),
+                "resolved_dimension": self._install_plan.artifact.resolved_dimension,
+                "supported_dimensions": list(
+                    self._install_plan.artifact.platform_manifest.capabilities[
+                        "supported_dimensions"
+                    ].require("artifact.platform.supported_dimensions")
+                ),
+                "native_spatial_layouts": {
+                    layout_id: row.to_data()
+                    for layout_id, row in self._install_plan.artifact.native_layouts.items()
+                },
                 "execution_context": self._execution_context.to_data(),
                 "runtime_plan": self._runtime_plan.to_data(),
                 "installed_components": [
@@ -1415,6 +1451,9 @@ class RuntimeInstance:
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
                 "with Program.step_strategy(...)"
             )
+        require_observer_world = getattr(self._publisher, "require_observer_world_available", None)
+        if callable(require_observer_world):
+            require_observer_world()
         from pops.runtime._step_strategy import (
             prepare_step_controller,
             resolve_run_strategy,
@@ -1430,6 +1469,16 @@ class RuntimeInstance:
         self._step_transaction_methods()
         entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
         entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
+        entry_consumer_fence = self._failed_run_effect_fence()
+        publisher_fence = getattr(self._publisher, "failed_run_effect_fence", None)
+        entry_publisher_fence = None
+        if callable(publisher_fence):
+            try:
+                entry_publisher_fence = publisher_fence()
+            except BaseException:
+                # Reopening is an optimization for an effect-free failed invocation.  If its
+                # proof cannot be captured, retain the deterministic identity fail-closed.
+                entry_publisher_fence = None
         previous_root, self._output_root = self._output_root, output_dir
         steps = 0
         rejected_steps = 0
@@ -1488,18 +1537,81 @@ class RuntimeInstance:
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
                     f"requested t_end={t_end!r}"
                 )
-            if steps == 0:
-                self._fire_consumers(at_end=True)
+            # A zero-step run has no accepted final occurrence. Its start consumers were already
+            # fired above; do not fabricate an AtEnd/Always/When/Every transaction at that same
+            # native state.
             close_live = getattr(self._publisher, "close_live_visualizations", None)
             if callable(close_live):
                 close_live(manifest.run_identity)
         except BaseException as error:
-            if manifest is not None:
+            seal_observer_loss = getattr(self._publisher, "seal_observer_collective_loss", None)
+            observer_world_lost = bool(callable(seal_observer_loss) and seal_observer_loss(error))
+            if observer_world_lost:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "post-commit cleanup was skipped because MPI_COMM_WORLD lost its "
+                        "collective proof"
+                    )
+                local_seal = getattr(
+                    self._publisher, "seal_observer_workers_after_world_loss", None
+                )
+                if callable(local_seal):
+                    try:
+                        sealed = local_seal(error)
+                        if type(sealed) is not tuple or any(
+                            type(message) is not str or not message for message in sealed
+                        ):
+                            raise TypeError(
+                                "local post-commit worker sealing must return a tuple of "
+                                "non-empty diagnostics"
+                            )
+                        local_seal_failures = cast(tuple[str, ...], sealed)
+                    except BaseException as caught:
+                        local_seal_failures = (
+                            "local post-commit worker sealing failed: %s" % caught,
+                        )
+                    if local_seal_failures and callable(add_note):
+                        add_note("; ".join(local_seal_failures))
+            # Prove restoration of the complete run-entry authority before a consumer-free serial
+            # invocation is allowed to reuse its deterministic identity.  Cleanup still runs when
+            # restoration fails, but the identity remains sealed fail-closed.
+            entry_restored = False
+            if steps == 0:
+                restore_error = None
+                try:
+                    restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
+                    if callable(restore_temporal):
+                        restore_temporal(entry_temporal)
+                    elif hasattr(native, "_temporal_restart_state"):
+                        native._temporal_restart_state = entry_temporal
+                    if hasattr(native, "_step_controller"):
+                        native._step_controller = entry_controller
+                    entry_restored = True
+                except BaseException as caught:
+                    restore_error = caught
+                add_note = getattr(error, "add_note", None)
+                if restore_error is not None and callable(add_note):
+                    add_note("run-entry temporal rollback also failed: %s" % restore_error)
+            if manifest is not None and not observer_world_lost:
                 close_live = getattr(self._publisher, "close_live_visualizations", None)
+                close_failed_run = getattr(self._publisher, "close_failed_run_consumers", None)
                 if callable(close_live):
                     before = len(self.post_commit_diagnostics)
                     try:
-                        close_live(manifest.run_identity, raise_on_failure=False)
+                        if steps == 0 and callable(close_failed_run):
+                            close_failed_run(
+                                manifest.run_identity,
+                                release_identity=(
+                                    entry_restored
+                                    and self._failed_run_effect_fence() == entry_consumer_fence
+                                    and not self._consumer_finalize_pending
+                                    and not self.consumer_recoveries
+                                ),
+                                entry_effect_fence=entry_publisher_fence,
+                            )
+                        else:
+                            close_live(manifest.run_identity, raise_on_failure=False)
                     except BaseException as close_error:
                         add_note = getattr(error, "add_note", None)
                         if callable(add_note):
@@ -1512,25 +1624,6 @@ class RuntimeInstance:
                                 "post-commit consumer delivery diagnostics: %s"
                                 % "; ".join(after[before:])
                             )
-            # ``begin_run`` binds controller/strategy state before the first native transaction.
-            # If no macro-step commits, the complete failed call leaves the temporal authority at
-            # its entry boundary.  After one or more accepted steps, each later failed transaction
-            # already restores the last accepted boundary and that progress must be retained.
-            if steps == 0:
-                restore_error = None
-                try:
-                    restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
-                    if callable(restore_temporal):
-                        restore_temporal(entry_temporal)
-                    elif hasattr(native, "_temporal_restart_state"):
-                        native._temporal_restart_state = entry_temporal
-                    if hasattr(native, "_step_controller"):
-                        native._step_controller = entry_controller
-                except BaseException as caught:
-                    restore_error = caught
-                add_note = getattr(error, "add_note", None)
-                if restore_error is not None and callable(add_note):
-                    add_note("run-entry temporal rollback also failed: %s" % restore_error)
             if console_session is not None:
                 from pops.runtime._console_run import safe_console_failed
 
@@ -1563,16 +1656,37 @@ class RuntimeInstance:
             safe_console_completed(console_session, report)
         return report
 
-    def _checkpoint_payload(self, path: Any) -> str:
+    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> Any:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
             consensus,
-            root_value,
+            root_attempt,
+        )
+        from pops.output._restart_provider import (
+            _CheckpointPayloadProof,
+            _CheckpointTransportFailure,
+            _CheckpointTransactionReceipt,
+            _raise_cleanup_failures,
         )
 
         topology = checkpoint_topology(self)
         expected = canonical_checkpoint_path(path)
+        receipt_error = None
+        try:
+            if type(transaction_receipt) is not _CheckpointTransactionReceipt:
+                raise RuntimeError(
+                    "RuntimeInstance checkpoint capture requires an authenticated private "
+                    "transaction receipt; the path-only native ABI cannot prove creator ownership"
+                )
+            if expected != transaction_receipt.staging_path:
+                raise RuntimeError("checkpoint staging path differs from its transaction receipt")
+            if topology.rank == 0 and not transaction_receipt.has_root_descriptor:
+                raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
+        except BaseException as error:
+            receipt_error = error
+        consensus(topology, "private transaction receipt", error=receipt_error)
+
         target = None
         capture_error = None
         try:
@@ -1584,14 +1698,32 @@ class RuntimeInstance:
                 )
         except BaseException as error:
             capture_error = error
-        rows = consensus(
-            topology,
-            "native capture",
-            error=capture_error,
-            value=None if target is None else str(target),
-        )
+        try:
+            rows = consensus(
+                topology,
+                "native capture",
+                error=capture_error,
+                value=None if target is None else str(target),
+            )
+        except BaseException as error:
+            # Consensus may itself be the failed transport.  Never enter another collective from
+            # this state; only rank zero owns descriptors and compensates locally.
+            if topology.rank == 0:
+                try:
+                    transaction_receipt.cleanup_owned()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise
         if any(row["value"] != str(expected) for row in rows):
-            raise RuntimeError("native checkpoint ranks returned different staged paths")
+            error = RuntimeError("native checkpoint ranks returned different staged paths")
+            if topology.rank == 0:
+                try:
+                    transaction_receipt.cleanup_owned()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error
 
         import numpy as np
         from ._checkpoint_manifest import (
@@ -1601,22 +1733,54 @@ class RuntimeInstance:
             seal_checkpoint_payload,
         )
 
-        def seal_root() -> str:
-            if not expected.is_file():
-                raise RuntimeError("native checkpoint did not create the shared staged file")
-            with np.load(expected, allow_pickle=False) as stored:
-                old_manifest = json.loads(str(stored[MANIFEST_KEY]))
-                runtime_kind = old_manifest.get("runtime_kind")
-                if not isinstance(runtime_kind, str) or not runtime_kind:
-                    raise ValueError("native checkpoint manifest lacks its runtime kind")
-                # Authenticate every native byte before replacing its envelope with the
-                # RuntimeInstance consumer/cursor authority.
-                authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
-                payload = {
-                    name: np.asarray(stored[name]).copy()
-                    for name in stored.files
-                    if name not in {MANIFEST_KEY, IDENTITY_KEY}
-                }
+        entries: dict[str, Any] = {
+            "expected": None,
+            "temporary": None,
+            "candidate": None,
+            "proof": None,
+        }
+
+        def inspect_entry(entry: Any) -> None:
+            with os.fdopen(entry.duplicate(), "rb") as stream:
+                # ``dup`` retains the same open-file description and therefore the writer's
+                # current offset.  Rewind the retained authority before every authenticated read.
+                stream.seek(0)
+                self._inspect_checkpoint_payload(stream.read())
+
+        def seal_root() -> dict[str, Any]:
+            initial = transaction_receipt.take_native_entry()
+            entries["expected"] = initial
+            candidate = transaction_receipt.open_candidate_at(initial.name)
+            entries["candidate"] = candidate
+            try:
+                with os.fdopen(candidate.duplicate(), "rb") as stream:
+                    with np.load(stream, allow_pickle=False) as stored:
+                        old_manifest = json.loads(str(stored[MANIFEST_KEY]))
+                        runtime_kind = old_manifest.get("runtime_kind")
+                        if not isinstance(runtime_kind, str) or not runtime_kind:
+                            raise ValueError("native checkpoint manifest lacks its runtime kind")
+                        # Creator ownership is granted only after the native bytes authenticate.
+                        # The retained fd prevents a path swap from changing the inspected payload.
+                        authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+                        payload = {
+                            name: np.asarray(stored[name]).copy()
+                            for name in stored.files
+                            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+                        }
+                # Keep the candidate fd open across the path comparison.  Only a valid payload
+                # written into the inode created by ``created_at`` can retain that authority.
+                # A provider that swaps the directory entry is rejected instead of granting
+                # ownership to an inode reacquired by path after capture.
+                transaction_receipt.authenticate_entry_at(candidate)
+                if candidate.owner != initial.owner:
+                    raise RuntimeError("native checkpoint replaced its created-at staging inode")
+                transaction_receipt.authenticate_entry_at(initial)
+            except BaseException:
+                raise
+            else:
+                entries["candidate"] = None
+                candidate.close()
+
             payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
             cursors = self._checkpoint_cursor_override or self._consumer_cursors
             payload["runtime_consumer_cursors"] = np.asarray(
@@ -1630,22 +1794,151 @@ class RuntimeInstance:
                 )
             )
             seal_checkpoint_payload(self, payload, runtime_kind=runtime_kind)
-            temporary = expected.with_name(expected.name + ".runtime-instance.tmp")
+            temporary = transaction_receipt.create_unique_at(suffix=".runtime-instance.tmp")
+            entries["temporary"] = temporary
+            with os.fdopen(temporary.duplicate(), "wb") as stream:
+                np.savez_compressed(stream, **payload)
+            transaction_receipt.authenticate_entry_at(temporary)
+            # Validate the completed reseal before detaching the authenticated native entry.
+            inspect_entry(temporary)
+
+            native = entries["expected"]
+            entries["expected"] = None
+            transaction_receipt.quarantine_entry_at(native, phase="runtime envelope replacement")
             try:
-                with open(temporary, "wb") as stream:
-                    np.savez_compressed(stream, **payload)
-                os.replace(temporary, expected)
-            finally:
-                temporary.unlink(missing_ok=True)
+                resealed = transaction_receipt.rename_no_replace_at(
+                    temporary, transaction_receipt._NATIVE_NAME
+                )
+            except FileExistsError as error:
+                # Even an entry already hard-linked to the temporary inode was not created by
+                # this rename.  Never infer directory-entry ownership merely from inode equality.
+                raise FileExistsError(
+                    "runtime checkpoint staging path appeared during envelope publication: %s"
+                    % expected
+                ) from error
+            proof = _CheckpointPayloadProof(transaction_receipt, resealed)
+            entries["proof"] = proof
+            entries["temporary"] = None
             # A staged checkpoint is not publishable until its final envelope has been read back
             # and authenticated by the same strict path used during restart.
-            self._inspect_checkpoint_file(expected)
-            return str(expected)
+            inspect_entry(resealed)
+            return proof.to_data()
 
-        sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
-        if sealed != expected:
-            raise RuntimeError("rank zero sealed a different checkpoint staging path")
-        return str(expected)
+        def cleanup_root() -> None:
+            failures = []
+            for key, phase in (
+                ("temporary", "failed runtime envelope temporary cleanup"),
+                ("expected", "failed runtime envelope staging cleanup"),
+            ):
+                entry = entries[key]
+                entries[key] = None
+                if entry is None:
+                    continue
+                try:
+                    transaction_receipt.quarantine_entry_at(entry, phase=phase)
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            candidate = entries["candidate"]
+            entries["candidate"] = None
+            if candidate is not None:
+                try:
+                    candidate.close()
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            proof = entries["proof"]
+            entries["proof"] = None
+            if proof is not None:
+                try:
+                    transaction_receipt.quarantine_entry_at(
+                        proof.entry,
+                        phase="failed runtime envelope handoff cleanup",
+                    )
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            try:
+                transaction_receipt.cleanup_empty()
+            except BaseException as cleanup_error:
+                failures.append(cleanup_error)
+            _raise_cleanup_failures("runtime checkpoint cleanup failed", failures)
+
+        attempt = root_attempt(topology, "runtime envelope sealing", seal_root)
+        if attempt.transport_error is not None:
+            error = _CheckpointTransportFailure(
+                "checkpoint transport failed during runtime envelope sealing: %s"
+                % attempt.transport_error
+            )
+            if attempt.producer_error is not None:
+                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error from attempt.transport_error
+        if attempt.producer_error is not None:
+            error = attempt.producer_error
+            cleanup_attempt = root_attempt(
+                topology,
+                "runtime envelope staging cleanup",
+                cleanup_root,
+            )
+            cleanup_errors = tuple(
+                item
+                for item in (
+                    cleanup_attempt.producer_error,
+                    cleanup_attempt.transport_error,
+                )
+                if item is not None
+            )
+            if cleanup_errors:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "failed runtime checkpoint staging cleanup: "
+                        + "; ".join(str(item) for item in cleanup_errors)
+                    )
+            raise error
+
+        proof_error = None
+        proof = None
+        try:
+            if topology.rank == 0:
+                proof = entries["proof"]
+                if type(proof) is not _CheckpointPayloadProof:
+                    raise RuntimeError("rank zero lost its exact checkpoint payload proof")
+                if proof.to_data() != attempt.value:
+                    raise RuntimeError("rank-zero payload proof differs from its broadcast")
+            else:
+                proof = _CheckpointPayloadProof.observed(transaction_receipt, attempt.value)
+        except BaseException as error:
+            proof_error = error
+        try:
+            consensus(
+                topology,
+                "runtime envelope payload proof",
+                error=proof_error,
+                value=attempt.value,
+            )
+        except BaseException as error:
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise
+        if proof is None:
+            error = RuntimeError("checkpoint payload proof validation returned no proof")
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error
+        if topology.rank == 0:
+            entries["proof"] = None
+        return proof
 
     def _restart_operation(self) -> Any:
         from pops.output._restart_provider import RestartAuthority
@@ -1666,7 +1959,7 @@ class RuntimeInstance:
             snapshot = operation.snapshot(self, target.parent)
             operation.validate_snapshot(snapshot)
             try:
-                return str(operation.write(snapshot, target))
+                produced = str(operation.write(snapshot, target))
             except BaseException as error:
                 discard = getattr(snapshot, "discard", None)
                 if callable(discard):
@@ -1677,6 +1970,10 @@ class RuntimeInstance:
                         if callable(add_note):
                             add_note("checkpoint staging cleanup also failed: %s" % cleanup_error)
                 raise
+            finalize = getattr(snapshot, "finalize", None)
+            if callable(finalize):
+                finalize()
+            return produced
         finally:
             self._retry_consumer_finalizers()
 
@@ -1699,10 +1996,6 @@ class RuntimeInstance:
         if cursors.to_data() != dict(cursor_data):
             raise ValueError("restart consumer cursor rows are not canonical")
         return cursors
-
-    def _inspect_checkpoint_file(self, path: Any) -> ConsumerCursorSet:
-        """Rank-zero-only complete authentication; performs no native mutation."""
-        return self._inspect_checkpoint_payload(Path(path).read_bytes())
 
     def _inspect_checkpoint_payload(self, payload: bytes) -> ConsumerCursorSet:
         """Authenticate exact in-memory bytes on rank zero without native mutation."""

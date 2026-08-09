@@ -8,8 +8,10 @@
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <algorithm>  // std::find, std::sort (resolve_implicit_components)
+#include <array>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 /// @file
@@ -53,6 +55,37 @@ static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),
 static_assert(IsothermalFlux::n_vars == transport_n_vars_ct("isothermal"),
               "registry n_vars drift: isothermal");
 
+struct MagneticSourceFactory {
+  template <int Dim>
+  static MagneticLorentzForceND<Dim> make(const ModelSpec& model) {
+    return MagneticLorentzForceND<Dim>{Real(model.qom)};
+  }
+};
+
+struct PotentialMagneticSourceFactory {
+  template <int Dim>
+  static CompositeSource<PotentialForceND<Dim>, MagneticLorentzForceND<Dim>> make(
+      const ModelSpec& model) {
+    return {PotentialForceND<Dim>{Real(model.qom)}, MagneticLorentzForceND<Dim>{Real(model.qom)}};
+  }
+};
+
+/// Dispatch one provider that requires the x-y plane.  The overload is selected by the immutable
+/// native specialization; no run-time dimension branch exists and the unsupported 1D provider type
+/// is never constructed.
+template <class Factory, int Dim, class Visitor>
+  requires(Dim >= 2)
+POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&& visitor) {
+  visitor(Factory::template make<Dim>(model));
+}
+
+template <class Factory, int Dim, class Visitor>
+  requires(Dim < 2)
+[[noreturn]] POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&&) {
+  throw std::runtime_error("source '" + model.source.get() +
+                           "' invalid here (requires one momentum per native axis, or 'none')");
+}
+
 /// Builds the transport brick and calls v(transport). The tag is validated ONCE against the registry
 /// (the historical rejection message stays byte-identical, single-sourced by validate_transport) and
 /// then parsed into the typed TransportRouteId (route_ids.hpp): the switch selects the brick by the
@@ -77,8 +110,9 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
                            "' valid in registry but not routed (add the dispatch case)");
 }
 
-/// Builds the source brick and calls v(source). Fluid sources (force) require
-/// >= 3 variables: on a scalar transport (exb), only "none" is valid.
+/// Builds one exact-ranked source brick and calls v(source). Gradient forces require density plus
+/// one momentum component per native axis. The B_z Lorentz capability additionally requires the
+/// explicit x-y plane and is therefore unavailable in a 1D specialization.
 ///   - "none": NoSource (neutral);
 ///   - "potential": PotentialForce (q/m) rho E (electrostatic);
 ///   - "gravity": GravityForce rho g;
@@ -88,12 +122,13 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 ///                                    = electrostatic + Lorentz summed (the full magnetized force in a
 ///                                    polar setup, with no centrifugal workaround needed).
 /// qom (q/m, sign included) is shared by the two charged forces (same species). The magnetized bricks
-/// declare n_aux = 4 -> CompositeModel propagates the aux width up to the system (B_z channel).
+/// declare `n_aux = AuxComponentLayout<Dim>::b_z + 1`, so CompositeModel propagates the ranked
+/// B_z slot.
 /// The source tag is parsed ONCE into the typed SourceRouteId (route_ids.hpp) once it is a KNOWN
 /// source (is_source): parse_source_route resolves the alias spellings (lorentz -> kMagneticLorentz,
 /// potential_lorentz -> kPotentialMagneticLorentz), so the switch carries ONE case per canonical
-/// brick -- the duplicated alias branches disappear. The `if constexpr (NV >= 3)` gate stays EXACTLY:
-/// on a scalar transport only kNone is reachable; every fluid case lives inside the gate. An unknown
+/// brick -- the duplicated alias branches disappear. The compile-time gate is derived from the
+/// immutable native rank: on a scalar transport only kNone is reachable. An unknown
 /// source tag OR a fluid source on a scalar transport falls through to the historical "invalid here"
 /// throw, BYTE-IDENTICAL (dispatch_source has no separate validate_source; this throw is the shared
 /// rejection for both, so the parse is gated behind is_source to keep it that way).
@@ -103,7 +138,7 @@ POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
     const SourceRouteId route = parse_source_route(m.source);
     if (route == SourceRouteId::kNone)
       return v(NoSource{});
-    if constexpr (NV >= 3) {
+    if constexpr (NV == kNativeDimension + 1 || NV == kNativeDimension + 2) {
       switch (route) {
         case SourceRouteId::kNone:
           break;  // handled above (any transport); kept for switch completeness
@@ -112,15 +147,14 @@ POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
         case SourceRouteId::kGravity:
           return v(GravityForce{});
         case SourceRouteId::kMagneticLorentz:
-          return v(MagneticLorentzForce{Real(m.qom)});
+          return dispatch_planar_source<MagneticSourceFactory, kNativeDimension>(m, v);
         case SourceRouteId::kPotentialMagneticLorentz:
-          return v(CompositeSource<PotentialForce, MagneticLorentzForce>{
-              PotentialForce{Real(m.qom)}, MagneticLorentzForce{Real(m.qom)}});
+          return dispatch_planar_source<PotentialMagneticSourceFactory, kNativeDimension>(m, v);
       }
     }
   }
   throw std::runtime_error("source '" + m.source.get() +
-                           "' invalid here (requires a fluid transport >= 3 variables, or 'none')");
+                           "' invalid here (requires one momentum per native axis, or 'none')");
 }
 
 /// Builds the elliptic right-hand-side brick and calls v(elliptic). Like dispatch_transport: the tag
@@ -146,7 +180,8 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 }
 
 /// AUTOMATIC resolution by ROLES (audit sec.5): fills the component indices of a SOURCE or ELLIPTIC
-/// brick (c_rho / c_mx / c_my / c_E) from the conservative descriptor @p cons of the TRANSPORT.
+/// brick (`c_rho`, one exact-ranked momentum component per native axis, and optional `c_E`) from the
+/// conservative descriptor @p cons of the TRANSPORT.
 /// This is a TRANSPARENT resolution, with no new user parameter: the native bricks adapt to the
 /// transport layout (density/momentum/energy located by their ROLE and not by a hard-coded index).
 /// Every index required by the selected brick is resolved exactly. A brick may expose the small
@@ -155,26 +190,33 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// required role raises during assembly; canonical component defaults are never executable authority.
 ///
 /// Member detection via `requires` (if constexpr): the bricks have HETEROGENEOUS index sets
-/// (PotentialForce/GravityForce: rho/mx/my/E; MagneticLorentzForce: mx/my only;
+/// (PotentialForce/GravityForce: rho/momentum_components[Dim]/E;
+/// MagneticLorentzForce: momentum_components[Dim];
 /// ChargeDensity/Background/GravityCoupling: rho; NoSource: none); only the EXISTING members
 /// are touched. CompositeSource<A,B> has no indices of its own: we recurse into its two sub-bricks.
 ///
-/// BIT-IDENTICAL for the NATIVE transports: Euler (rho=0, m_x=1, m_y=2, E=3), Isothermal
-/// (rho=0, m_x=1, m_y=2) and ExB (density=0) declare CANONICAL roles -> the resolved indices ==
-/// the brick defaults -> no value changes. Resolved AT CONSTRUCTION (host, std::string); never on device.
+/// A native transport must expose density, one momentum role per compiled axis, and energy exactly
+/// when its ranked state carries it. Resolved AT CONSTRUCTION (host, std::string); never on device.
 template <class Brick>
 POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
+  if constexpr (requires { Brick::dimension; })
+    validate_variable_semantics<Brick::dimension>(cons, "bind_variable_roles",
+                                                  "model conservative state");
   if constexpr (requires { brk.c_rho; }) {
     brk.c_rho = require_role_index(cons, VariableRole::Density, "bind_variable_roles",
                                    "model conservative state");
   }
-  if constexpr (requires { brk.c_mx; }) {
-    brk.c_mx = require_role_index(cons, VariableRole::MomentumX, "bind_variable_roles",
-                                  "model conservative state");
-  }
-  if constexpr (requires { brk.c_my; }) {
-    brk.c_my = require_role_index(cons, VariableRole::MomentumY, "bind_variable_roles",
-                                  "model conservative state");
+  if constexpr (requires { brk.momentum_components; }) {
+    using Components = std::remove_cvref_t<decltype(brk.momentum_components)>;
+    static_assert(
+        requires { Brick::dimension; },
+        "a source with momentum components must declare its spatial dimension");
+    static_assert(Components::dimension == Brick::dimension,
+                  "source momentum-component rank must equal the source spatial dimension");
+    for (int axis = 0; axis < Brick::dimension; ++axis)
+      brk.momentum_components[axis] =
+          require_role_index(cons, VariableRole::momentum(axis),
+                             "bind_variable_roles", "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
     if constexpr (requires { Brick::requires_energy_role(cons.size); }) {
@@ -209,6 +251,8 @@ POPS_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
     // Transport roles (host): used to resolve the indices of the source / elliptic bricks before
     // freezing the composite. Native transport -> canonical roles -> resolved indices == defaults.
     const VariableSet cons = TR::conservative_vars();
+    validate_variable_semantics<kNativeDimension>(cons, "dispatch_model",
+                                                   "model conservative state");
     dispatch_source<TR::n_vars>(m, [&](auto src) {
       dispatch_elliptic(m, [&](auto ell) {
         bind_variable_roles(src,
@@ -232,6 +276,8 @@ POPS_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
 template <class TR, class Visitor>
 POPS_COLD_FN void dispatch_model_for(const ModelSpec& m, TR tr, Visitor&& visitor) {
   const VariableSet cons = TR::conservative_vars();
+  validate_variable_semantics<kNativeDimension>(cons, "dispatch_model_for",
+                                                 "model conservative state");
   dispatch_source<TR::n_vars>(m, [&](auto src) {
     dispatch_elliptic(m, [&](auto ell) {
       bind_variable_roles(src, cons);

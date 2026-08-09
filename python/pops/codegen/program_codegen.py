@@ -46,7 +46,6 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _prepared_native_component_includes,
     ProgramValue,
     _apply_in_arg,
-    _aux_comp,
     _cell_locals,
     _coeff_cpp,
     _has_runtime_param,
@@ -117,6 +116,60 @@ def emit_cpp_program(
     *,
     model_graph: Any = None,
     field_plans: Any = None,
+    balance_due_contract: Any = None,
+) -> str:
+    """Lower the public low-level Program route without privileged resolve evidence."""
+    return _emit_cpp_program_impl(
+        program,
+        model=model,
+        target=target,
+        model_graph=model_graph,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=False,
+    )
+
+
+def _emit_resolved_cpp_program(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
+    shared_interface_codegen_evidence: Any,
+) -> str:
+    """Lower the private resolve-authenticated shared-interface route."""
+    from pops.codegen._shared_interface_evidence import (
+        _ResolvedSharedInterfaceCodegenEvidence,
+    )
+
+    if type(shared_interface_codegen_evidence) is not _ResolvedSharedInterfaceCodegenEvidence:
+        raise TypeError(
+            "resolved shared-interface lowering requires exact nominal codegen evidence"
+        )
+    shared_interface_codegen_evidence.require(program, target=target)
+    return _emit_cpp_program_impl(
+        program,
+        model=model,
+        target=target,
+        model_graph=model_graph,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=True,
+    )
+
+
+def _emit_cpp_program_impl(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
+    has_shared_interface_implicit_jacvec: bool,
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
@@ -144,7 +197,8 @@ def emit_cpp_program(
     the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
     order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
     binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
-    System blocks (``sim.add_equation`` / ``sim.add_block``) may be added in ANY order -- a Program
+    System blocks (through the private ``sim.add_equation`` install seam) may be added in ANY
+    order -- a Program
     block whose name has no instantiated System block fails loud (``Program requires block instance
     '<name>', but simulation did not instantiate it``). A block declared but never committed is a
     READ-ONLY block (allowed; e.g. a passive field whose charge couples the others through the shared
@@ -202,10 +256,30 @@ def emit_cpp_program(
     authority = model_graph if model_graph is not None else model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
+    if type(has_shared_interface_implicit_jacvec) is not bool:
+        raise TypeError(
+            "emit_cpp_program shared-interface implicit-JVP evidence must be an exact bool"
+        )
+    from pops._balance_due_contract import BalanceDueContract
+    if balance_due_contract is None:
+        balance_due_contract = BalanceDueContract.from_consumer_graph(None)
+    if type(balance_due_contract) is not BalanceDueContract:
+        raise TypeError(
+            "emit_cpp_program balance_due_contract must be an exact BalanceDueContract"
+        )
     program.validate()
     _check_lowerable(program, authority, field_plans or {}, target=target)
+    from pops.codegen.program_emit_kernels import ProgramProviderPlans
+
+    provider_plans = ProgramProviderPlans()
     prelude, body, operator_authorities = _emit_body(
-        program, authority, target=target, field_plans=field_plans or {}
+        program,
+        authority,
+        target=target,
+        field_plans=field_plans or {},
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+        provider_plans=provider_plans,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -230,7 +304,8 @@ def emit_cpp_program(
         model_helpers=_emit_program_model_helpers(program, authority),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
-        system_install=_emit_system_install(target, prelude, body),
+        system_install=_emit_system_install(
+            target, prelude, body, provider_plans.cpp_install(target)),
         prepared_native_component_includes=_prepared_native_component_includes(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
@@ -238,9 +313,18 @@ def emit_cpp_program(
             target,
             prelude,
             body,
-            _emit_amr_hierarchy_bodies(program, authority, field_plans or {})
+            _emit_amr_hierarchy_bodies(
+                program,
+                authority,
+                field_plans or {},
+                has_shared_interface_implicit_jacvec=(
+                    has_shared_interface_implicit_jacvec
+                ),
+                provider_plans=provider_plans,
+            )
             if target == "amr_system"
             else None,
+            provider_plans.cpp_install(target),
         ),
     )
 
@@ -306,7 +390,7 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
-def _emit_system_install(target: str, prelude: str, body: str) -> str:
+def _emit_system_install(target: str, prelude: str, body: str, provider_plan_install: str) -> str:
     """Emit only the install entry matching the artifact's declared runtime target.
 
     An AMR artifact may contain hierarchy-only providers. Emitting the uniform entry as well would
@@ -318,7 +402,8 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
     if target != "system":
         return ""
     return (
-        'extern "C" void pops_install_program(pops::System* sys) {\n'
+        'extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) {\n'
+        + provider_plan_install + ("\n" if provider_plan_install else "") +
         "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
         "  auto& ctx = *ctx_owner;\n" + prelude + "\n"
         "  ctx.install([=](double dt) {\n"
@@ -334,10 +419,10 @@ def _emit_dt_bound_entry(target: str, body: str) -> str:
     """Emit one allocation-free facade-typed dt-bound ABI."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
-        facade = "pops::AmrSystem"
+        facade = "pops::AmrSystem<pops::kNativeDimension>"
     else:
         symbol = "pops_program_dt_bound"
-        facade = "pops::System"
+        facade = "pops::System<pops::kNativeDimension>"
     return (
         f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
         "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"
@@ -461,7 +546,7 @@ def _check_lowerable(
 # (consumed by apply / solve_local_linear, which read the model coefficients), so it lowers to
 # nothing -- always allowed, model or not. 'reduce' / 'compare' / 'while' are the ADC-404a control
 # flow / reduction ops (lowered inline via pops::dot; no model needed). 'matrix_free_operator' /
-# 'scalar_field' / 'laplacian' / 'gradient' / 'divergence' / 'solve_linear' are the ADC-405 / ADC-412
+# 'scalar_field' / 'vector_field' / 'laplacian' / 'gradient' / 'divergence' / 'solve_linear' are the ADC-405 / ADC-412
 # matrix-free Krylov ops (the operator declaration carries an apply sub-block; solve_linear lowers to
 # pops::*_solve; divergence is the centered FV divergence of a gradient field).
 

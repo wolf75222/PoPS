@@ -10,9 +10,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>  // Kokkos_Core under POPS_HAS_KOKKOS (kokkos_is_initialized)
 #include <pops/diagnostics/fallback_diagnostics.hpp>
+#include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
 #include <pops/runtime/config/runtime_params.hpp>          // kMaxRuntimeParams (ADC-618 hard_limit)
@@ -22,6 +22,9 @@
 #include <pops/runtime/system.hpp>
 
 #include <cstring>
+#include <cstdint>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>  // std::tuple: argument of AmrSystem.set_hierarchy (patch_boxes boxes) (ADC-65)
@@ -31,60 +34,303 @@
 namespace py = pybind11;
 using namespace pops;
 
-inline py::tuple periodicity_to_python(const Periodicity& value) {
-  return py::make_tuple(value.x, value.y);
+template <int Dim>
+py::tuple ranked_periodicity_to_python(const std::array<bool, Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[static_cast<std::size_t>(axis)];
+  return result;
 }
 
-inline Periodicity periodicity_from_python(const py::handle& value, const char* owner) {
-  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != 2)
+template <int Dim>
+std::array<bool, Dim> ranked_periodicity_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
     throw py::type_error(std::string(owner) +
-                         ".periodicity must be an exact (x: bool, y: bool) tuple");
+                         ".periodicity must be an exact tuple matching the native dimension");
   const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
-  if (!PyBool_Check(tuple[0].ptr()) || !PyBool_Check(tuple[1].ptr()))
-    throw py::type_error(std::string(owner) + ".periodicity entries must be exact bool values");
-  return Periodicity{tuple[0].ptr() == Py_True, tuple[1].ptr() == Py_True};
+  std::array<bool, Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (!PyBool_Check(tuple[axis].ptr()))
+      throw py::type_error(std::string(owner) + ".periodicity entries must be exact bool values");
+    result[static_cast<std::size_t>(axis)] = tuple[axis].ptr() == Py_True;
+  }
+  return result;
 }
 
-// field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
-// with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
-// (UNCHANGED), but nr x ntheta in polar where nr != ntheta. A square reshape (n, n) would allocate nx^2
-// slots for ny*nx values -> memcpy overflows the numpy buffer (heap overflow, crash at teardown). We
-// CHECK buffer size == source size before the memcpy (explicit guard).
-inline py::array_t<double> to_2d(const std::vector<double>& v, int rows, int cols) {
-  py::array_t<double> a({rows, cols});
-  if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("pops (bindings): field size (" + std::to_string(v.size()) +
-                             ") != rows*cols (" + std::to_string(rows) + "*" +
-                             std::to_string(cols) + "); inconsistent 2D reshape");
-  std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
-  return a;
+template <int Dim>
+py::tuple ranked_extent_to_python(const Extent<Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[axis];
+  return result;
 }
-// state (ncomp*ny*nx, component-major order, j slow / i fast) -> numpy array (ncomp, ny, nx).
-// Same guard as to_2d: rows = ny, cols = nx (square in Cartesian, nr x ntheta in polar).
-inline py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int rows, int cols) {
-  py::array_t<double> a({ncomp, rows, cols});
-  if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("pops (bindings): state size (" + std::to_string(v.size()) +
-                             ") != ncomp*rows*cols (" + std::to_string(ncomp) + "*" +
-                             std::to_string(rows) + "*" + std::to_string(cols) +
-                             "); inconsistent 3D reshape");
-  std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
-  return a;
+
+template <int Dim>
+Extent<Dim> ranked_extent_from_python(const py::handle& value, const char* owner,
+                                      bool allow_zero = false) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
+    throw py::type_error(std::string(owner) +
+                         " must be an exact tuple matching the native dimension");
+  const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (!PyLong_CheckExact(tuple[axis].ptr()) || PyBool_Check(tuple[axis].ptr()))
+      throw py::type_error(std::string(owner) + " entries must be exact integers");
+    const std::int64_t component = py::cast<std::int64_t>(tuple[axis]);
+    if (component < (allow_zero ? 0 : 1))
+      throw py::value_error(std::string(owner) + (allow_zero
+                                                      ? " entries must be non-negative"
+                                                      : " entries must be strictly positive"));
+    result[axis] = component;
+  }
+  return result;
 }
-inline py::tuple output_pieces_to_python(const std::vector<OutputPiece>& pieces) {
+
+template <int Dim>
+py::tuple ranked_extents_to_python(const std::vector<Extent<Dim>>& values) {
+  py::tuple result(values.size());
+  for (std::size_t index = 0; index < values.size(); ++index)
+    result[index] = ranked_extent_to_python(values[index]);
+  return result;
+}
+
+template <int Dim>
+std::vector<Extent<Dim>> ranked_extents_from_python(const py::handle& value, const char* owner,
+                                                    std::int64_t minimum) {
+  if (!PyTuple_CheckExact(value.ptr()) && !PyList_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an ordered sequence of ranked tuples");
+  const py::sequence rows = py::reinterpret_borrow<py::sequence>(value);
+  std::vector<Extent<Dim>> result;
+  result.reserve(rows.size());
+  for (std::size_t row_index = 0; row_index < static_cast<std::size_t>(rows.size()); ++row_index) {
+    const py::handle row = rows[static_cast<py::ssize_t>(row_index)];
+    if (!PyTuple_CheckExact(row.ptr()) || py::len(row) != Dim)
+      throw py::type_error(std::string(owner) + " rows must be exact native-rank tuples");
+    const py::tuple components = py::reinterpret_borrow<py::tuple>(row);
+    Extent<Dim> extent{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!PyLong_CheckExact(components[axis].ptr()) || PyBool_Check(components[axis].ptr()))
+        throw py::type_error(std::string(owner) + " entries must be exact integers");
+      const std::int64_t component = py::cast<std::int64_t>(components[axis]);
+      if (component < minimum)
+        throw py::value_error(std::string(owner) +
+                              " entries must be >= " + std::to_string(minimum));
+      extent[axis] = component;
+    }
+    result.push_back(extent);
+  }
+  return result;
+}
+
+template <int Dim>
+py::tuple ranked_real_vector_to_python(const RealVector<Dim>& value) {
+  py::tuple result(Dim);
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value[axis];
+  return result;
+}
+
+template <int Dim>
+RealVector<Dim> ranked_real_vector_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()) || py::len(value) != Dim)
+    throw py::type_error(std::string(owner) +
+                         " must be an exact tuple matching the native dimension");
+  const py::tuple tuple = py::reinterpret_borrow<py::tuple>(value);
+  RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (PyBool_Check(tuple[axis].ptr()) ||
+        (!PyFloat_CheckExact(tuple[axis].ptr()) && !PyLong_CheckExact(tuple[axis].ptr())))
+      throw py::type_error(std::string(owner) + " entries must be exact real scalars");
+    result[axis] = py::cast<double>(tuple[axis]);
+    if (!std::isfinite(result[axis]))
+      throw py::value_error(std::string(owner) + " entries must be finite");
+  }
+  return result;
+}
+
+/// Validate the retired mapped-periodicity compatibility payload at the native boundary. Ordinary
+/// axis translations are carried exclusively by the 2*Dim face table. A non-empty table therefore
+/// proves that the request needs a separately capability-qualified mapped-topology provider.
+template <int Dim>
+void reject_unqualified_periodic_identifications(const std::vector<std::vector<int>>& rows,
+                                                 const char* owner) {
+  for (const auto& row : rows) {
+    if (row.size() != static_cast<std::size_t>(2 + 2 * Dim))
+      throw py::value_error(std::string(owner) +
+                            " periodic identification row must contain 2+2*Dim integers");
+    PeriodicIdentification<Dim> identification;
+    identification.source_face = row[0];
+    identification.target_face = row[1];
+    for (int axis = 0; axis < Dim; ++axis) {
+      identification.permutation[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + axis)];
+      identification.signs[static_cast<std::size_t>(axis)] =
+          row[static_cast<std::size_t>(2 + Dim + axis)];
+    }
+    identification.validate();
+  }
+  if (!rows.empty())
+    throw py::value_error(std::string(owner) +
+                          " requires a capability-qualified mapped-topology provider");
+}
+
+template <int Dim>
+py::tuple ranked_boxes_to_python(const std::vector<Box<Dim>>& boxes) {
+  py::tuple result(boxes.size());
+  for (std::size_t index = 0; index < boxes.size(); ++index) {
+    py::tuple lower(Dim), upper(Dim);
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower[axis] = boxes[index].lo[axis];
+      upper[axis] = boxes[index].hi[axis] + 1;
+    }
+    result[index] = py::make_tuple(std::move(lower), std::move(upper));
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<Box<Dim>> ranked_boxes_from_python(const py::handle& value, const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an exact tuple of ranked boxes");
+  const py::tuple rows = py::reinterpret_borrow<py::tuple>(value);
+  std::vector<Box<Dim>> result;
+  result.reserve(rows.size());
+  for (const py::handle row_handle : rows) {
+    if (!PyTuple_CheckExact(row_handle.ptr()) || py::len(row_handle) != 2)
+      throw py::type_error(std::string(owner) + " rows must contain lower and upper tuples");
+    const py::tuple row = py::reinterpret_borrow<py::tuple>(row_handle);
+    if (!PyTuple_CheckExact(row[0].ptr()) || !PyTuple_CheckExact(row[1].ptr()) ||
+        py::len(row[0]) != Dim || py::len(row[1]) != Dim)
+      throw py::type_error(std::string(owner) + " bounds must match the native dimension");
+    const py::tuple lower = py::reinterpret_borrow<py::tuple>(row[0]);
+    const py::tuple upper = py::reinterpret_borrow<py::tuple>(row[1]);
+    Box<Dim> box;
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (!PyLong_CheckExact(lower[axis].ptr()) || PyBool_Check(lower[axis].ptr()) ||
+          !PyLong_CheckExact(upper[axis].ptr()) || PyBool_Check(upper[axis].ptr()))
+        throw py::type_error(std::string(owner) + " bounds must contain exact integers");
+      const int low = py::cast<int>(lower[axis]);
+      const std::int64_t high_exclusive = py::cast<std::int64_t>(upper[axis]);
+      if (high_exclusive <= low || high_exclusive - 1 > std::numeric_limits<int>::max())
+        throw py::value_error(std::string(owner) + " contains an empty or overflowing box");
+      box.lo[axis] = low;
+      box.hi[axis] = static_cast<int>(high_exclusive - 1);
+    }
+    result.push_back(box);
+  }
+  return result;
+}
+
+template <int Dim>
+py::tuple ranked_amr_patches_to_python(const std::vector<AmrPatch<Dim>>& patches) {
+  py::tuple result(patches.size());
+  for (std::size_t index = 0; index < patches.size(); ++index) {
+    py::tuple lower(Dim), upper(Dim);
+    for (int axis = 0; axis < Dim; ++axis) {
+      lower[axis] = patches[index].box.lo[axis];
+      upper[axis] = patches[index].box.hi[axis] + 1;
+    }
+    result[index] = py::make_tuple(patches[index].level, std::move(lower), std::move(upper));
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<AmrPatch<Dim>> ranked_amr_patches_from_python(const py::handle& value,
+                                                          const char* owner) {
+  if (!PyTuple_CheckExact(value.ptr()))
+    throw py::type_error(std::string(owner) + " must be an exact tuple of AMR patches");
+  const py::tuple rows = py::reinterpret_borrow<py::tuple>(value);
+  std::vector<AmrPatch<Dim>> result;
+  result.reserve(rows.size());
+  for (const py::handle row_handle : rows) {
+    if (!PyTuple_CheckExact(row_handle.ptr()) || py::len(row_handle) != 3)
+      throw py::type_error(std::string(owner) + " rows must contain level, lower and upper");
+    const py::tuple row = py::reinterpret_borrow<py::tuple>(row_handle);
+    if (!PyLong_CheckExact(row[0].ptr()) || PyBool_Check(row[0].ptr()))
+      throw py::type_error(std::string(owner) + " levels must be exact integers");
+    const int level = py::cast<int>(row[0]);
+    if (level < 0)
+      throw py::value_error(std::string(owner) + " levels must be non-negative");
+    const py::tuple bounds = py::make_tuple(py::make_tuple(row[1], row[2]));
+    std::vector<Box<Dim>> boxes = ranked_boxes_from_python<Dim>(bounds, owner);
+    result.push_back(AmrPatch<Dim>{level, boxes.front()});
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<py::ssize_t> ranked_numpy_shape(const Extent<Dim>& native_shape) {
+  std::vector<py::ssize_t> result(static_cast<std::size_t>(Dim));
+  for (int numpy_axis = 0; numpy_axis < Dim; ++numpy_axis) {
+    const std::int64_t cells = native_shape[Dim - 1 - numpy_axis];
+    if (cells < 1 || cells > std::numeric_limits<py::ssize_t>::max())
+      throw std::overflow_error(
+          "pops (bindings): native spatial extent is outside the NumPy shape range");
+    result[static_cast<std::size_t>(numpy_axis)] = static_cast<py::ssize_t>(cells);
+  }
+  return result;
+}
+
+/// Copy one exact ranked, axis-zero-contiguous native field to NumPy. NumPy presents the native
+/// axes in reverse order so its final axis remains contiguous; the rank itself comes from the
+/// compiled System specialization and is never inferred from the incoming value buffer.
+template <int Dim>
+py::array_t<double> to_ranked_field(const std::vector<double>& values,
+                                    const Extent<Dim>& native_shape) {
+  py::array_t<double> result(ranked_numpy_shape(native_shape));
+  if (static_cast<std::size_t>(result.size()) != values.size())
+    throw std::runtime_error(
+        "pops (bindings): field element count does not match the exact native spatial shape");
+  std::memcpy(result.mutable_data(), values.data(), values.size() * sizeof(double));
+  return result;
+}
+
+/// Component-major counterpart of to_ranked_field. The leading component axis is retained and the
+/// spatial axes alone are reversed for NumPy, yielding (ncomp, nz, ny, nx) for a 3D build.
+template <int Dim>
+py::array_t<double> to_ranked_state(const std::vector<double>& values, int ncomp,
+                                    const Extent<Dim>& native_shape) {
+  if (ncomp < 1)
+    throw std::invalid_argument("pops (bindings): state component count must be positive");
+  std::vector<py::ssize_t> shape = ranked_numpy_shape(native_shape);
+  shape.insert(shape.begin(), static_cast<py::ssize_t>(ncomp));
+  py::array_t<double> result(shape);
+  if (static_cast<std::size_t>(result.size()) != values.size())
+    throw std::runtime_error(
+        "pops (bindings): state element count does not match components times native shape");
+  std::memcpy(result.mutable_data(), values.data(), values.size() * sizeof(double));
+  return result;
+}
+template <int Dim>
+inline py::tuple output_pieces_to_python(const std::vector<OutputPiece<Dim>>& pieces) {
   py::tuple result(pieces.size());
   for (std::size_t index = 0; index < pieces.size(); ++index) {
-    const OutputPiece& piece = pieces[index];
-    const int nx = piece.box.ihi - piece.box.ilo + 1;
-    const int ny = piece.box.jhi - piece.box.jlo + 1;
-    if (piece.ncomp < 1 || nx < 1 || ny < 1 ||
-        piece.values.size() != static_cast<std::size_t>(piece.ncomp) *
-                                   static_cast<std::size_t>(ny) * static_cast<std::size_t>(nx))
+    const OutputPiece<Dim>& piece = pieces[index];
+    const std::int64_t cells = piece.box.numPts();
+    if (piece.level < 0 || piece.ncomp < 1 || cells < 1 ||
+        static_cast<std::uint64_t>(cells) >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(piece.ncomp) ||
+        piece.values.size() !=
+            static_cast<std::size_t>(piece.ncomp) * static_cast<std::size_t>(cells))
       throw std::runtime_error("native output piece has an inconsistent compact shape");
+    std::vector<py::ssize_t> value_shape(static_cast<std::size_t>(Dim + 1));
+    value_shape[0] = static_cast<py::ssize_t>(piece.ncomp);
+    py::tuple lower(static_cast<py::ssize_t>(Dim));
+    py::tuple upper(static_cast<py::ssize_t>(Dim));
+    for (int array_axis = 0; array_axis < Dim; ++array_axis) {
+      const int native_axis = Dim - 1 - array_axis;
+      value_shape[static_cast<std::size_t>(array_axis + 1)] =
+          static_cast<py::ssize_t>(piece.box.length(native_axis));
+      lower[static_cast<py::ssize_t>(array_axis)] = piece.box.lo[native_axis];
+      upper[static_cast<py::ssize_t>(array_axis)] = piece.box.hi[native_axis] + 1;
+    }
+    py::array_t<double> values(value_shape);
+    std::memcpy(values.mutable_data(), piece.values.data(), piece.values.size() * sizeof(double));
     py::dict row;
-    row["lower"] = py::make_tuple(piece.box.jlo, piece.box.ilo);
-    row["upper"] = py::make_tuple(piece.box.jhi + 1, piece.box.ihi + 1);
-    row["values"] = to_3d(piece.values, piece.ncomp, ny, nx);
+    row["lower"] = std::move(lower);
+    row["upper"] = std::move(upper);
+    row["values"] = std::move(values);
     row["global_box_index"] = piece.global_box_index;
     row["owner_rank"] = piece.owner_rank;
     row["replicated"] = piece.replicated;
@@ -141,6 +387,11 @@ inline py::dict numerical_defaults_report_to_dict() {
   krylov["schur_polar_max_iters"] = kSchurKrylovPolarMaxIters;
   krylov["breakdown_tiny"] = static_cast<double>(kKrylovBreakdownTiny);
 
+  py::dict cartesian_cg;
+  cartesian_cg["rel_tol"] = static_cast<double>(kCartesianCGDefaultRelTol);
+  cartesian_cg["abs_tol"] = static_cast<double>(kCartesianCGDefaultAbsTol);
+  cartesian_cg["max_iterations"] = kCartesianCGDefaultMaxIterations;
+
   py::dict mg;
   mg["rel_tol"] = static_cast<double>(kMGDefaultRelTol);
   mg["max_cycles"] = kMGDefaultMaxCycles;
@@ -161,7 +412,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   fac["coarse_cycles"] = kFACInitialCoarseMaxCycles;
 
   py::dict fft;
-  fft["spectral_default"] = kFFTDefaultSpectral;
   fft["zero_mean_gauge"] = kFFTZeroMeanGauge;
   fft["direct_dft_fallback"] = kFFTDirectDftFallback;
 
@@ -180,7 +430,7 @@ inline py::dict numerical_defaults_report_to_dict() {
 
   py::dict amr;
   amr["max_levels"] = kAmrDefaultMaxLevels;
-  amr["refinement_ratio"] = kAmrRefRatio;
+  amr["refinement_ratio"] = AmrSystemConfig<kNativeDimension>{}.transition_ratios.front()[0];
   amr["refinement_disabled_threshold"] = static_cast<double>(kAmrRefinementDisabledThreshold);
   amr["phi_refinement_disabled_threshold"] =
       static_cast<double>(kAmrPhiRefinementDisabledThreshold);
@@ -233,6 +483,9 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kPolarTensorKrylovDefaultMaxIters", "public_knob");
   klass("kSchurKrylovPolarMaxIters", "public_knob");
   klass("kKrylovBreakdownTiny", "internal_default");
+  klass("kCartesianCGDefaultRelTol", "public_knob");
+  klass("kCartesianCGDefaultAbsTol", "public_knob");
+  klass("kCartesianCGDefaultMaxIterations", "public_knob");
   klass("kMGDefaultRelTol", "public_knob");
   klass("kMGDefaultMaxCycles", "public_knob");
   klass("kMGDefaultAbsTol", "public_knob");
@@ -248,7 +501,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kFACInitialCoarseRelTol", "public_knob");
   klass("kFACInitialCoarseAbsTol", "public_knob");
   klass("kFACInitialCoarseMaxCycles", "public_knob");
-  klass("kFFTDefaultSpectral", "public_knob");
   klass("kFFTZeroMeanGauge", "internal_default");
   klass("kFFTDirectDftFallback", "diagnostic_only");
   klass("kEbCutFractionFloor", "public_knob");
@@ -285,6 +537,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   out["source"] = "pops.runtime.numerical_defaults";
   out["newton"] = newton;
   out["krylov"] = krylov;
+  out["cartesian_cg"] = cartesian_cg;
   out["mg"] = mg;
   out["fac"] = fac;
   out["fft"] = fft;
@@ -385,12 +638,14 @@ inline py::dict effective_poisson_options_to_dict(const EffectivePoissonOptions&
   py::dict d;
   d["rhs"] = p.rhs;
   d["solver"] = p.solver;
+  d["solver_option_schema"] = p.solver_option_schema;
   d["bc"] = p.bc;
   d["wall"] = p.wall;
   d["wall_radius"] = p.wall_radius;
   d["epsilon"] = p.epsilon;
   d["rel_tol"] = p.rel_tol;  // ADC-613: effective GeometricMG V-cycle knobs
   d["abs_tol"] = p.abs_tol;
+  d["max_iterations"] = p.max_iterations;
   d["max_cycles"] = p.max_cycles;
   d["min_coarse"] = p.min_coarse;
   d["pre_smooth"] = p.pre_smooth;
@@ -412,6 +667,9 @@ inline py::dict effective_eb_options_to_dict(const EffectiveEbOptions& e) {
   d["kappa_min"] = e.kappa_min;
   d["face_open_eps"] = e.face_open_eps;
   d["cut_theta_min"] = e.cut_theta_min;
+  d["semantic_digest"] = e.semantic_digest;
+  d["materialization_digest"] = e.materialization_digest;
+  d["generation"] = e.generation;
   return d;
 }
 
@@ -454,8 +712,8 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
   d["blocks"] = blocks;
   d["poisson"] = effective_poisson_options_to_dict(report.poisson);
   py::dict topology;
-  topology["periodic_x"] = report.topology.periodic_x;
-  topology["periodic_y"] = report.topology.periodic_y;
+  topology["dimension"] = report.topology.dimension;
+  topology["periodicity"] = py::cast(report.topology.periodicity);
   d["topology"] = std::move(topology);
   d["eb"] = effective_eb_options_to_dict(report.eb);  // ADC-615
   if (report.has_amr)

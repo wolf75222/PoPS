@@ -1,8 +1,8 @@
-# Builds a PREBUILT macOS arm64 / CPython 3.12 wheel of the `_pops` module so end users can
-# `pip install adc_cpp-*.whl` in seconds with no local toolchain (the from-source `pip install .`
-# recompiles the heavy Kokkos module). The wheel is self-contained: Kokkos is built Serial + STATIC
-# + PIC and linked into `_pops.*.so`, and cibuildwheel runs delocate-wheel to bundle any remaining
-# dynamic dependency. Kokkos stays ON and mandatory (adc_cpp is Kokkos-only).
+# Builds one PREBUILT macOS arm64 / CPython 3.12 PoPS wheel containing the exact native variants
+# Dim=1, Dim=2 and Dim=3. Each leaf comes from its own explicit compile-time CMake configuration;
+# after cibuildwheel repairs/signs those three mono-Dim wheels, a deterministic assembler combines
+# the final bytes, regenerates variants.json and RECORD, then loads every leaf in a fresh process.
+# Kokkos is built Serial + STATIC + PIC and linked into every `_pops.*.so`.
 #
 # Release tags invoke this as a reusable workflow from release.yml.  That caller then installs this
 # exact artifact for the complete release gate before it is allowed to create a GitHub Release.  A
@@ -87,12 +87,15 @@ jobs:
       # -O3 compiles fit the ~7 GB / 3-vCPU runner; the original pool=1 OOM guard (for the old monolithic
       # system.cpp / amr_system.cpp) made the serial build ~1 h here. MACOSX_DEPLOYMENT_TARGET=11.0 keeps
       # the wheel installable on older macOS than the runner SDK.
-      - name: Build wheel (cibuildwheel)
+      - name: Build and assemble exact Dim=1/2/3 wheel (cibuildwheel)
         env:
           CIBW_BUILD: cp312-macosx_arm64
           CIBW_ARCHS_MACOS: arm64
-          CIBW_CONFIG_SETTINGS: cmake.define.POPS_HEAVY_MODULE_TU_POOL=2
           MACOSX_DEPLOYMENT_TARGET: '11.0'
+          # Keep repair explicit: the assembler accepts only these final repaired/ad-hoc-signed
+          # Mach-O bytes and recomputes both the native manifest hashes and wheel RECORD from them.
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
           # Builds Kokkos ONLY on a cache miss (the install dir is restored above otherwise). The clone
           # is retried (a transient network blip must not waste a multi-hour build) and its checkout is
           # asserted against the pinned commit of tag 4.4.01 (detects a re-pointed tag -- supply chain).
@@ -135,11 +138,47 @@ jobs:
             CCACHE_NOHASHDIR=1
             CCACHE_COMPILERCHECK=content
             CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines
-          # Smoke-test the built wheel in cibuildwheel's isolated venv: it must import self-contained
-          # (this is the real self-containment check; doctor() is skipped here as the bare venv has no
-          # compiler/Kokkos and would print noisy but harmless FAIL lines).
-          CIBW_TEST_COMMAND: 'python -c "import pops; print(pops.__version__)"'
-        run: python -m cibuildwheel --output-dir wheelhouse
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          variant_wheels=()
+          for dim in 1 2 3; do
+            output_dir="$PWD/wheel-leaves/dim${dim}"
+            mkdir -p "$output_dir"
+            # delocate may rewrite/sign the Mach-O after CMake emitted the mono-Dim manifest. In the
+            # disposable test venv, resolve only the manifest-declared leaf, explicitly sign it,
+            # regenerate its row by loading those exact bytes, recheck signature+hash, then import.
+            # The assembler independently proves the untouched repaired wheel archive afterwards.
+            CIBW_CONFIG_SETTINGS="cmake.define.POPS_NATIVE_DIM=${dim} cmake.define.POPS_HEAVY_MODULE_TU_POOL=2" \
+            CIBW_TEST_COMMAND="native_leaf=\"\$(python -c 'import importlib.util,json,sys; from pathlib import Path,PurePosixPath; sys.path.insert(0, \"{project}/scripts\"); from write_native_variant_manifest import validate_manifest_payload; spec=importlib.util.find_spec(\"pops\"); assert spec is not None; roots=tuple(spec.submodule_search_locations or ()); assert len(roots)==1; manifest=Path(roots[0])/\"_native\"/\"variants.json\"; rows=validate_manifest_payload(json.loads(manifest.read_text()), expected_dimensions=(${dim},)); leaf=manifest.parent.joinpath(*PurePosixPath(rows[0][\"path\"]).parts); assert leaf.is_file() and not leaf.is_symlink(); print(leaf.resolve())')\" && \
+              native_manifest=\"\$(dirname \"\$(dirname \"\$native_leaf\")\")/variants.json\" && \
+              codesign --force --sign - \"\$native_leaf\" && \
+              python {project}/scripts/write_native_variant_manifest.py --extension \"\$native_leaf\" --manifest \"\$native_manifest\" --dimension ${dim} --version \"\$(python -c 'import importlib.metadata; print(importlib.metadata.version(\"pops\"))')\" && \
+              python {project}/scripts/codesign_pops_extensions.py --expect-dim ${dim} && \
+              python {project}/scripts/verify_installed_native.py --expect-dim ${dim} --expect-serial" \
+              python -m cibuildwheel --output-dir "$output_dir"
+            built=("$output_dir"/pops-*.whl)
+            test "${#built[@]}" -eq 1
+            variant_wheels[$dim]="${built[0]}"
+          done
+
+          wheel_name="$(basename "${variant_wheels[1]}")"
+          for dim in 2 3; do
+            test "$(basename "${variant_wheels[$dim]}")" = "$wheel_name"
+          done
+          mkdir -p "$PWD/wheelhouse"
+          python scripts/assemble_native_variant_wheel.py \
+            --variant "1=${variant_wheels[1]}" \
+            --variant "2=${variant_wheels[2]}" \
+            --variant "3=${variant_wheels[3]}" \
+            --output "$PWD/wheelhouse/$wheel_name" \
+            --python "$(command -v python)" \
+            --expect-mpi off \
+            --expect-kokkos on \
+            --signature-policy adhoc
+          assembled=("$PWD"/wheelhouse/pops-*.whl)
+          test "${#assembled[@]}" -eq 1
 
       - name: ccache stats (wheel)
         if: always()

@@ -94,7 +94,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         "route_family_native_interfaces", "route_family_interfaces",
         "route_component_defaults", "route_families",
     }, "component catalog")
-    if data["catalog_schema_version"] != 1:
+    if data["catalog_schema_version"] != 2:
         raise CatalogError("unsupported component catalog schema_version")
     for name in (
         "component_manifest_schema_version", "route_registry_version",
@@ -431,7 +431,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             metadata_fields = {
                 "riemann": {"needs_wave_speeds", "needs_hllc_struct", "needs_roe_diss", "polar_ok"},
                 "limiter": {"n_ghost", "formal_order", "muscl_compatible"},
-                "transport": {"n_vars", "polar_ok", "parameters", "summary"},
+                "transport": {"n_vars_by_dimension", "polar_ok", "parameters", "summary"},
                 "source": {"min_vars", "parameters", "summary"},
                 "elliptic": {"parameters", "summary"},
             }.get(name, set())
@@ -445,6 +445,20 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                     or route["metadata"][key] < 1
                 ):
                     raise CatalogError(f"{name}.{token}.metadata.{key} must be an integer >= 1")
+            if "n_vars_by_dimension" in route["metadata"]:
+                counts = route["metadata"]["n_vars_by_dimension"]
+                if (
+                    not isinstance(counts, list)
+                    or len(counts) != 3
+                    or any(
+                        isinstance(count, bool) or not isinstance(count, int) or count < 1
+                        for count in counts
+                    )
+                ):
+                    raise CatalogError(
+                        f"{name}.{token}.metadata.n_vars_by_dimension must contain "
+                        "three positive integer counts for dimensions 1, 2, and 3"
+                    )
             for key in (
                 "polar_ok", "needs_wave_speeds", "needs_hllc_struct", "needs_roe_diss",
                 "muscl_compatible",
@@ -533,7 +547,9 @@ def _render_routes(catalog: dict[str, Any], digest: str,
                     "route_index": row["wire_id"],
                     "native_entry": row["native_entry"],
                     "parameters": tuple(meta["parameters"]),
-                    "n_vars": meta.get("n_vars", meta.get("min_vars", -1)),
+                    "n_vars_by_dimension": tuple(meta["n_vars_by_dimension"])
+                    if "n_vars_by_dimension" in meta else (),
+                    "min_vars": meta.get("min_vars", -1),
                     "polar_ok": bool(meta.get("polar_ok", False)),
                     "requirements": tuple(row["requirements"]),
                     "limitations": tuple(row["limitations"]),
@@ -647,6 +663,22 @@ def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
     table_name_rows = "\n".join(
         "    case POPS_NATIVE_INTERFACE_%s_V%d: return \"%s\";"
         % (row["name"].upper(), row["version"], row["cpp_table"])
+        for row in catalog["native_interface_abis"]
+    )
+    table_complete_rows = "\n".join(
+        """    case POPS_NATIVE_INTERFACE_%s_V%d: {
+      if (table_size < sizeof(%s)) return false;
+      const auto* api = static_cast<const %s*>(table);
+      return %s;
+    }"""
+        % (
+            row["name"].upper(),
+            row["version"],
+            row["cpp_table"],
+            row["cpp_table"],
+            " && ".join("api->%s != nullptr" % operation
+                        for operation in row["operations"]),
+        )
         for row in catalog["native_interface_abis"]
     )
     return f'''#pragma once
@@ -925,6 +957,35 @@ typedef struct PopsGhostBoundaryApiV1 {{
   PopsApplyRegionBatchFnV1 apply_region_batch;
 }} PopsGhostBoundaryApiV1;
 
+typedef struct PopsBoundaryFluxRequestV1 {{
+  uint32_t struct_size;
+  const char* provider_identity;
+  const char* state_identity;
+  PopsConstFieldViewV1 base_outward_normal_flux;
+  PopsConstFieldViewV1 coordinates;
+  PopsConstFieldViewV1 outward_normals;
+  const double* face_measures;
+  PopsBoundaryRegionV1 region;
+  size_t dependency_count;
+  const PopsQualifiedConstFieldV1* dependencies;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsBoundaryFluxRequestV1;
+typedef struct PopsBoundaryFluxResultV1 {{
+  uint32_t struct_size;
+  PopsFieldViewV1 outward_normal_flux;
+  PopsComponentActionV1* actions;
+  PopsComponentStatusV1 status;
+}} PopsBoundaryFluxResultV1;
+typedef int32_t (*PopsTransformBoundaryFacesFnV1)(
+    void*, const PopsBoundaryFluxRequestV1*, PopsBoundaryFluxResultV1*);
+typedef struct PopsBoundaryFluxApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsTransformBoundaryFacesFnV1 transform_faces;
+}} PopsBoundaryFluxApiV1;
+
 typedef struct PopsFieldBoundaryRequestV1 {{
   uint32_t struct_size;
   const char* closure_identity;
@@ -1080,6 +1141,41 @@ typedef struct PopsTransferApiV1 {{
   PopsComponentTableHeaderV1 header;
   PopsTransferApplyFnV1 apply;
 }} PopsTransferApiV1;
+
+// Reflux providers are patch-local numerical kernels only. PoPS retains sole ownership of the
+// time-integrated flux ledger, interface topology, MPI reduction, transaction and state update.
+// Each face contains coarse/fine fluxes already integrated in time and averaged onto the same
+// coarse face. The provider writes, but never applies, side*(fine-coarse)/dx into `correction`.
+typedef enum PopsRefluxFaceSideV1 {{
+  POPS_REFLUX_FACE_LOW_V1 = -1,
+  POPS_REFLUX_FACE_HIGH_V1 = 1
+}} PopsRefluxFaceSideV1;
+typedef struct PopsRefluxFaceV1 {{
+  uint32_t struct_size;
+  const char* interface_identity;
+  int32_t axis;
+  PopsRefluxFaceSideV1 side;
+  double inverse_coarse_cell_spacing;
+  PopsConstFieldViewV1 coarse_integrated_flux;
+  PopsConstFieldViewV1 fine_integrated_flux;
+  PopsFieldViewV1 correction;
+}} PopsRefluxFaceV1;
+typedef struct PopsRefluxRequestV1 {{
+  uint32_t struct_size;
+  const char* transition_identity;
+  int32_t parent_level;
+  int32_t child_level;
+  size_t face_count;
+  const PopsRefluxFaceV1* faces;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsRefluxRequestV1;
+typedef int32_t (*PopsRefluxApplyInterfaceBatchFnV1)(
+    void*, const PopsRefluxRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsRefluxApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsRefluxApplyInterfaceBatchFnV1 apply_interface_batch;
+}} PopsRefluxApiV1;
 
 typedef struct PopsFieldPatchMetadataV1 {{
   uint32_t struct_size;
@@ -1364,6 +1460,15 @@ inline constexpr const char* generated_native_interface_table_name(
   }}
   return nullptr;
 }}
+inline bool generated_native_interface_table_is_complete(
+    PopsNativeInterfaceIdV1 id, const void* table, size_t table_size) noexcept {{
+  if (table == nullptr)
+    return false;
+  switch (id) {{
+{table_complete_rows}
+  }}
+  return false;
+}}
 }}  // namespace pops::component
 #endif
 // clang-format on
@@ -1383,6 +1488,7 @@ def _render_pybind_invokers(catalog: dict[str, Any], digest: str) -> str:
     source = r'''// Generated by scripts/generate_component_catalog.py from catalog @DIGEST@; DO NOT EDIT.
 // This file is the sole Python/native request marshaller. init_component_loader.cpp only registers it.
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pybind11/numpy.h>
@@ -1415,25 +1521,37 @@ Array required_array(const py::handle value, const char* where) {
 inline PopsConstFieldViewV1 writer_field_view(
     const DoubleArray& values, const std::string& layout_identity,
     const std::string& patch_identity, const char* where) {
-  if (values.ndim() != 2 && values.ndim() != 3)
-    throw py::value_error(std::string(where) +
-                          " must have shape (ny,nx) or (components,ny,nx)");
-  const auto components = values.ndim() == 3
+  if (values.ndim() != kNativeDimension && values.ndim() != kNativeDimension + 1)
+    throw py::value_error(std::string(where) + " must have native spatial rank " +
+                          std::to_string(kNativeDimension) +
+                          " with at most one leading component axis");
+  const auto spatial_offset = values.ndim() - kNativeDimension;
+  const auto components = spatial_offset == 1
                               ? static_cast<std::size_t>(values.shape(0))
                               : 1u;
-  const auto ny = static_cast<std::size_t>(values.shape(values.ndim() - 2));
-  const auto nx = static_cast<std::size_t>(values.shape(values.ndim() - 1));
-  if (components == 0 || ny == 0 || nx == 0)
+  if (components == 0)
     throw py::value_error(std::string(where) + " must be non-empty");
   const auto item = static_cast<py::ssize_t>(sizeof(double));
-  return {sizeof(PopsConstFieldViewV1), values.data(), 2, {ny, nx, 1},
-          {values.strides(values.ndim() - 2) / item,
-           values.strides(values.ndim() - 1) / item, 0},
-          components, values.ndim() == 3 ? values.strides(0) / item : 1,
-          POPS_FIELD_CENTERING_CELL_V1, 0, {0, 0, 0}, {0, 0, 0},
-          POPS_SCALAR_FLOAT64_V1, POPS_MEMORY_SPACE_HOST_V1,
-          layout_identity.c_str(), patch_identity.c_str(),
-          POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+  PopsConstFieldViewV1 result{};
+  result.struct_size = sizeof(PopsConstFieldViewV1);
+  result.data = values.data();
+  result.dimension = kNativeDimension;
+  for (int axis = 0; axis < kNativeDimension; ++axis) {
+    const auto value_axis = spatial_offset + axis;
+    if (values.shape(value_axis) <= 0)
+      throw py::value_error(std::string(where) + " must be non-empty");
+    result.extents[axis] = static_cast<std::size_t>(values.shape(value_axis));
+    result.axis_strides[axis] = values.strides(value_axis) / item;
+  }
+  result.component_count = components;
+  result.component_stride = spatial_offset == 1 ? values.strides(0) / item : 1;
+  result.centering = POPS_FIELD_CENTERING_CELL_V1;
+  result.scalar_type = POPS_SCALAR_FLOAT64_V1;
+  result.memory_space = POPS_MEMORY_SPACE_HOST_V1;
+  result.layout_identity = layout_identity.c_str();
+  result.patch_identity = patch_identity.c_str();
+  result.ownership = POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1;
+  return result;
 }
 
 struct ExecutionStorage {
@@ -1517,9 +1635,10 @@ struct WriterGeometryStorage {
         cell_volumes(required_array<DoubleArray>(row["cell_volumes"],
                                                  "Writer cell_volumes")) {
     const auto dimension = py::cast<std::int32_t>(row["dimension"]);
-    if (dimension < 1 || dimension > 3 || origin.size() != dimension ||
+    if (dimension != kNativeDimension || origin.size() != dimension ||
         spacing.size() != dimension || cell_shape.size() != dimension)
-      throw py::value_error("Writer geometry has inconsistent dimensioned axes");
+      throw py::value_error(
+          "Writer geometry differs from the compiled native spatial specialization");
     const auto raw_boxes = py::cast<py::list>(row["boxes"]);
     lower.reserve(raw_boxes.size());
     upper.reserve(raw_boxes.size());
@@ -1595,8 +1714,9 @@ struct WriterFieldStorage {
         component_names(py::cast<std::vector<std::string>>(row["component_names"])),
         global_shape(py::cast<std::vector<std::size_t>>(row["global_shape"])) {
     const auto dimension = py::cast<std::int32_t>(row["dimension"]);
-    if (dimension < 1 || dimension > 3 || global_shape.size() != dimension)
-      throw py::value_error("Writer field has inconsistent dimensioned shape");
+    if (dimension != kNativeDimension || global_shape.size() != dimension)
+      throw py::value_error(
+          "Writer field differs from the compiled native spatial specialization");
     const auto raw_pieces = py::cast<py::list>(row["pieces"]);
     piece_storage.reserve(raw_pieces.size());
     pieces.reserve(raw_pieces.size());
@@ -1757,20 +1877,20 @@ struct TransferFieldStorage {
     const auto extents = py::cast<std::array<std::size_t, 3>>(row["extents"]);
     const auto ghost_lower = py::cast<std::array<std::size_t, 3>>(row["ghost_lower"]);
     const auto ghost_upper = py::cast<std::array<std::size_t, 3>>(row["ghost_upper"]);
-    if (dimension < 1 || dimension > 3 || values.ndim() != dimension + 1 ||
+    if (dimension != kNativeDimension || values.ndim() != kNativeDimension + 1 ||
         values.shape(0) <= 0)
-      throw py::value_error("Transfer array rank differs from its field dimension");
+      throw py::value_error(
+          "Transfer array differs from the compiled native spatial specialization");
     std::array<std::ptrdiff_t, 3> strides{0, 0, 0};
     const auto item = static_cast<py::ssize_t>(sizeof(double));
-    for (std::int32_t axis = 0; axis < 3; ++axis) {
-      if (axis < dimension) {
-        if (extents[axis] != static_cast<std::size_t>(values.shape(axis + 1)))
-          throw py::value_error("Transfer array shape differs from declared extents");
-        strides[axis] = values.strides(axis + 1) / item;
-      } else if (extents[axis] != 1 || ghost_lower[axis] != 0 || ghost_upper[axis] != 0) {
-        throw py::value_error("Transfer descriptor carries inactive-axis metadata");
-      }
+    for (std::int32_t axis = 0; axis < kNativeDimension; ++axis) {
+      if (extents[axis] != static_cast<std::size_t>(values.shape(axis + 1)))
+        throw py::value_error("Transfer array shape differs from declared extents");
+      strides[axis] = values.strides(axis + 1) / item;
     }
+    for (std::int32_t axis = kNativeDimension; axis < 3; ++axis)
+      if (extents[axis] != 1 || ghost_lower[axis] != 0 || ghost_upper[axis] != 0)
+        throw py::value_error("Transfer descriptor carries inactive-axis metadata");
     const_value = {
         sizeof(PopsConstFieldViewV1), values.data(), dimension,
         {extents[0], extents[1], extents[2]}, {strides[0], strides[1], strides[2]},
@@ -1868,9 +1988,11 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
         "",
         "// Generated by scripts/generate_component_catalog.py; DO NOT EDIT.",
         "// clang-format off",
+        "#include <array>",
         "#include <cstddef>",
         "#include <cstdint>",
         "#include <string_view>",
+        "#include <pops/core/foundation/native_dimension.hpp>",
         "",
         "namespace pops {",
         "",
@@ -1965,14 +2087,18 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
 
     transport = by_name["transport"]
     out.extend((
-        "struct TransportTag { const char* name; int n_vars; bool polar_ok; const char* summary; };",
+        "struct TransportTag {",
+        "  const char* name; std::array<int, 3> n_vars_by_dimension;",
+        "  bool polar_ok; const char* summary;",
+        "};",
         "inline constexpr TransportTag kTransports[] = {",
     ))
     for row in transport["routes"]:
         m = row["metadata"]
         polar = "true" if m["polar_ok"] else "false"
         out.append(
-            f"  {{{_cpp_string(row['token'])}, {m['n_vars']}, {polar}, "
+            f"  {{{_cpp_string(row['token'])}, "
+            f"{{{{{', '.join(str(value) for value in m['n_vars_by_dimension'])}}}}}, {polar}, "
             f"{_cpp_string(m['summary'])}}},"
         )
     out.extend(("};", ""))
@@ -1999,7 +2125,8 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
     out.extend((
         "struct BrickCatalogEntry {",
         "  const char* id; const char* category; int route_index; const char* native_entry;",
-        "  const char* parameters; const char* parameters_json; int n_vars; bool polar_ok;",
+        "  const char* parameters; const char* parameters_json;",
+        "  std::array<int, 3> n_vars_by_dimension; int min_vars; bool polar_ok;",
         "  const char* requirements; const char* requirements_json;",
         "  const char* limitations; const char* limitations_json; const char* summary;",
         "};",
@@ -2008,13 +2135,14 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
     for category in ("transport", "source", "elliptic"):
         for row in by_name[category]["routes"]:
             metadata = row["metadata"]
-            n_vars = metadata.get("n_vars", metadata.get("min_vars", -1))
+            n_vars_by_dimension = metadata.get("n_vars_by_dimension", [-1, -1, -1])
+            min_vars = metadata.get("min_vars", -1)
             polar = "true" if metadata.get("polar_ok", False) else "false"
             values = (
                 row["token"], category, row["wire_id"], row["native_entry"],
                 ",".join(metadata["parameters"]),
                 json.dumps(metadata["parameters"], ensure_ascii=True, separators=(",", ":")),
-                n_vars, polar,
+                n_vars_by_dimension, min_vars, polar,
                 ",".join(row["requirements"]),
                 json.dumps(row["requirements"], ensure_ascii=True, separators=(",", ":")),
                 ",".join(row["limitations"]),
@@ -2024,8 +2152,9 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
             out.append(
                 f"  {{{_cpp_string(values[0])}, {_cpp_string(values[1])}, {values[2]}, "
                 f"{_cpp_string(values[3])}, {_cpp_string(values[4])}, {_cpp_string(values[5])}, "
-                f"{values[6]}, {values[7]}, {_cpp_string(values[8])}, {_cpp_string(values[9])}, "
-                f"{_cpp_string(values[10])}, {_cpp_string(values[11])}, {_cpp_string(values[12])}}},"
+                f"{{{{{', '.join(str(value) for value in values[6])}}}}}, {values[7]}, {values[8]}, "
+                f"{_cpp_string(values[9])}, {_cpp_string(values[10])}, "
+                f"{_cpp_string(values[11])}, {_cpp_string(values[12])}, {_cpp_string(values[13])}}},"
             )
     out.extend(("};", ""))
 

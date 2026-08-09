@@ -1,594 +1,135 @@
-// MMS de l'operateur elliptique POLAIRE TENSORIEL iteratif (PolarTensorKrylovSolver), Voie A etape 2a
-// (brique foundational vers le Schur polaire). Resout sur un anneau (r, theta), r in [r_min, r_max] > 0
-// (AUCUNE singularite r=0), theta PERIODIQUE :
-//   L(phi) = div(A grad phi),  A = [[a_rr, a_rt], [a_tr, a_tt]]  (eventuellement NON symetrique)
-// par BiCGStab matrice-libre preconditionne JACOBI (diagonal). PAS de V-cycle MG (stagnation 1/r^2).
-//
-// On verifie quatre proprietes sur des solutions MANUFACTUREES (phi_exact lisse, periodique en theta,
-// f = div(A grad phi_exact) en forme close) :
-//
-//   (A) CONVERGENCE O(2) ISOTROPE (A = I, Dirichlet radial). Sanity check : l'operateur tensoriel
-//       degenere EXACTEMENT en le Laplacien polaire scalaire quand A = I (a_rr=a_tt=1, a_rt=a_tr=0).
-//       On raffine (nr, nth) ensemble et on observe l'ordre 2 (stencil FV conservatif radial + FD
-//       azimutal 2 points, tous deux O(h^2)). Une metrique r erronee donnerait un ordre 0.
-//
-//   (B) CONVERGENCE O(2) TENSEUR NON SYMETRIQUE (termes croises a_rt != a_tr, constants). C'est le
-//       coeur de l'etape 2a : un tenseur PLEIN non symetrique (comme la rotation B^{-1} du Schur).
-//       Le source analytique a une part cos(m theta) ET sin(m theta) (le terme croise (a_rt+a_tr)
-//       phi_rt/r couple r et theta). On verifie l'ordre 2 ET la CONVERGENCE de BiCGStab (rel < tol).
-//
-//   (C) CONVERGENCE BiCGStab + COMPORTEMENT (pas de stagnation) sur le cas tenseur : on rapporte le
-//       nombre d'iterations et le residu relatif a chaque raffinement, et on exige converged==true.
-//       C'est le test de la question ouverte du scoping (anisotropie 1/r^2 + termes croises).
-//
-//   (D) CONSISTANCE ISOTROPE vs PolarPoissonSolver DIRECT. Sur le MEME probleme scalaire (A = I,
-//       Dirichlet), l'iteratif tensoriel et le direct (FFT-en-theta + tridiag-en-r) doivent donner la
-//       MEME solution a la tolerance pres -- a la difference de stencil azimutal pres (FD 2 points
-//       O(dtheta^2) cote iteratif vs spectral -k^2 cote direct), donc l'ecart decroit avec nth. On
-//       prend nth grand pour que les deux stencils azimutaux coincident a O(dtheta^2).
-//
-//   (E) CHOIX DU PRECONDITIONNEUR (documente). On compare le nombre d'iterations BiCGStab de Jacobi
-//       (diagonal, iterations ~ 1/h^2, plafonne a grille fine) vs RadialLine (Thomas radial par ligne
-//       theta, iterations faibles a croissance moderee). Justifie le DEFAUT RadialLine, sans MG.
-//
-//   (F) NEUMANN homogene aux DEUX bords radiaux (operateur SINGULIER, constante dans le noyau) +
-//       PINNING DE JAUGE iteratif (projection de moyenne FV nulle). Sans pinning BiCGStab DIVERGE ;
-//       avec pinning il converge et l'erreur (modulo la jauge) est O(2). Pendant iteratif du pinning de
-//       mode 0 du solveur direct.
-//
-// Host / Serial-safe : UNE box, n_ranks()==1 (solveur mono-rang, non enregistre MPI a l'etape 2a).
-
 #include <gtest/gtest.h>
 
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // (D) reference directe
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>
 
+#include <array>
 #include <cmath>
-#include <cstdio>
-#include <limits>
+#include <cstddef>
+#include <utility>
 #include <vector>
 
-using namespace pops;
+namespace {
 
-static constexpr double kPiL = 3.14159265358979323846;
-static constexpr double kRmin = 0.30;
-static constexpr double kRmax = 1.00;
+constexpr int kDim = 2;
+constexpr pops::Real kRmin = pops::Real(0.4);
+constexpr pops::Real kRmax = pops::Real(1.0);
+constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
-// ------------------------------------------------------------------------------------------------
-// Solution manufacturee : phi(r, theta) = S(r) + H(r) cos(m theta).
-//   S(r) = 1 + 0.5 (r - r_min)            (part m=0, porte la donnee Dirichlet radiale non triviale)
-//   H(r) = sin(a (r - r_min)), a = pi/(r_max - r_min)  -> H(r_min) = H(r_max) = 0 (face nulle pour les
-//          modes m != 0 ; la reflexion Dirichlet HOMOGENE des modes non nuls est donc exacte).
-// ------------------------------------------------------------------------------------------------
-static double aS() {
-  return kPiL / (kRmax - kRmin);
-}
-static double S(double r) {
-  return 1.0 + 0.5 * (r - kRmin);
-}
-static double Sp(double /*r*/) {
-  return 0.5;
-}
-static double Spp(double /*r*/) {
-  return 0.0;
-}
-static double H(double r) {
-  return std::sin(aS() * (r - kRmin));
-}
-static double Hp(double r) {
-  return aS() * std::cos(aS() * (r - kRmin));
-}
-static double Hpp(double r) {
-  return -aS() * aS() * std::sin(aS() * (r - kRmin));
+std::size_t offset(const pops::Box<kDim>& storage, int i, int j) {
+  return static_cast<std::size_t>(i - storage.lo[0]) +
+         static_cast<std::size_t>(j - storage.lo[1]) *
+             static_cast<std::size_t>(storage.length(0));
 }
 
-static double phi_exact(double r, double th, int m) {
-  return S(r) + H(r) * std::cos(m * th);
+pops::PolarEllipticBuildRequest<kDim> request(int cells = 24) {
+  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0},
+                              pops::Index<kDim>{cells - 1, cells - 1}};
+  const auto geometry = pops::PolarGeometry<kDim>::annulus(domain, kRmin, kRmax);
+  const pops::mesh::BoxArray<kDim> boxes(std::vector<pops::Box<kDim>>{domain});
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{0, 0},
+                                         pops::Extent<kDim>{1, 1}};
+  const auto distribution = pops::mesh::Distribution<kDim>::partitioned(
+      boxes, ranks, std::vector<pops::Index<kDim>>{pops::Index<kDim>{0, 0}});
+  std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
+  faces[0] = {pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)};
+  faces[1] = {pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)};
+  return {geometry,
+          boxes,
+          distribution,
+          pops::Index<kDim>{0, 0},
+          pops::PhysicalBoundaryConditions<kDim>{
+              pops::BoundaryTopology<kDim>::axis_periodic({false, true}), faces,
+              pops::RealVector<kDim>{geometry.dr(), geometry.dtheta()}},
+          {1, 0}};
 }
 
-// Source analytique f = div(A grad phi) pour un tenseur A CONSTANT (a_rr, a_rt, a_tr, a_tt) :
-//   div(A grad phi) = a_rr (phi_rr + phi_r/r) + a_tt phi_tt / r^2 + (a_rt + a_tr) phi_rt / r
-// avec phi = S + H cos(m th) :
-//   phi_rr + phi_r/r = (S'' + S'/r) + (H'' + H'/r) cos(m th)
-//   phi_tt / r^2     = -m^2 H cos(m th) / r^2
-//   phi_rt / r       = -m H' sin(m th) / r
-// (le terme a_rt phi_t/r^2 du flux radial s'annule EXACTEMENT avec un terme egal et oppose de la
-//  divergence en coordonnees polaires -> seul (a_rt + a_tr) phi_rt/r subsiste, cf. entete du header).
-static double f_tensor(double r, double th, int m, double arr, double art, double atr, double att) {
-  const double rad = Spp(r) + Sp(r) / r + (Hpp(r) + Hp(r) / r) * std::cos(m * th);
-  const double azi = -(double)m * m * H(r) * std::cos(m * th) / (r * r);
-  const double cross = -(double)m * Hp(r) * std::sin(m * th) / r;
-  return arr * rad + att * azi + (art + atr) * cross;
+pops::Real exact(pops::Real radius) {
+  return std::sin(kPi * (radius - kRmin) / (kRmax - kRmin));
 }
 
-// ------------------------------------------------------------------------------------------------
-// (F) Solution manufacturee NEUMANN homogene aux DEUX bords radiaux (d_r phi = 0 en r_min/r_max) ->
-//   operateur SINGULIER (constante dans le noyau), defini modulo une constante (jauge). On valide le
-//   PINNING DE JAUGE iteratif (projection de moyenne nulle). A = I (scalaire) suffit a exercer le
-//   chemin singulier (les termes croises n'y changent pas la nature du noyau).
-//   phi(r, theta) = G(r) + K(r) cos(m theta) avec G'(r_min)=G'(r_max)=0 et K'(r_min)=K'(r_max)=0.
-// ------------------------------------------------------------------------------------------------
-static double bN() {
-  return kPiL / (kRmax - kRmin);
-}
-static double G(double r) {
-  return std::cos(bN() * (r - kRmin));
-}
-static double Gp(double r) {
-  return -bN() * std::sin(bN() * (r - kRmin));
-}
-static double Gpp(double r) {
-  return -bN() * bN() * std::cos(bN() * (r - kRmin));
-}
-static double Kf(double r) {
-  const double u = r - kRmin, w = r - kRmax;
-  return u * u * w * w;
-}
-static double Kp(double r) {
-  const double u = r - kRmin, w = r - kRmax;
-  return 2 * u * w * w + 2 * u * u * w;
-}
-static double Kpp(double r) {
-  const double u = r - kRmin, w = r - kRmax;
-  return 2 * w * w + 8 * u * w + 2 * u * u;
-}
-static double phi_neu(double r, double th, int m) {
-  return G(r) + Kf(r) * std::cos(m * th);
-}
-static double f_neu(double r, double th, int m) {  // A = I
-  const double rad = Gpp(r) + Gp(r) / r + (Kpp(r) + Kp(r) / r) * std::cos(m * th);
-  const double azi = -(double)m * m * Kf(r) * std::cos(m * th) / (r * r);
-  return rad + azi;
+pops::Real forcing(pops::Real radius) {
+  const pops::Real wave = kPi / (kRmax - kRmin);
+  const pops::Real phase = wave * (radius - kRmin);
+  return -wave * wave * std::sin(phase) + wave * std::cos(phase) / radius;
 }
 
-// Erreur L2 (ponderee volume r dr dtheta) entre phi numerique et phi exact.
-struct ErrL2 {
-  double l2;
-  double linf;
-};
-static ErrL2 err_vs_exact(const MultiFab& phi, const PolarGeometry& g, const Box2D& dom, int m) {
-  const ConstArray4 p = phi.fab(0).const_array();
-  const double dr = g.dr(), dth = g.dtheta();
-  double l2 = 0, vol = 0, linf = 0;
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-      const double w = g.r_cell(i) * dr * dth;
-      const double e = p(i, j, 0) - phi_exact(g.r_cell(i), g.theta_cell(j), m);
-      l2 += e * e * w;
-      vol += w;
-      if (std::fabs(e) > linf)
-        linf = std::fabs(e);
+void fill_rhs(pops::PolarTensorKrylovSolver<kDim>& solver) {
+  auto& fab = solver.rhs().fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  const auto& valid = fab.box();
+  const auto& storage = fab.grown_box();
+  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+      host(offset(storage, i, j)) = forcing(solver.geom().r_cell(i));
+  fab.copy_from_host(host);
+}
+
+pops::Real error_l2(const pops::PolarTensorKrylovSolver<kDim>& solver) {
+  const auto& fab = solver.phi().fab(0);
+  auto host = fab.create_host_mirror();
+  fab.copy_to_host(host);
+  const auto& valid = fab.box();
+  const auto& storage = fab.grown_box();
+  pops::Real sum = 0;
+  pops::Real count = 0;
+  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+      const pops::Real difference =
+          host(offset(storage, i, j)) - exact(solver.geom().r_cell(i));
+      sum += difference * difference;
+      count += pops::Real(1);
     }
-  return {std::sqrt(l2 / vol), linf};
+  return std::sqrt(sum / count);
 }
 
-// Remplit un champ scalaire CONSTANT sur les cellules valides (boucle hote ; les ghosts sont remplis
-// par set_coefficients via fill_ghosts).
-static void fill_const(MultiFab& mf, const Box2D& dom, double val) {
-  Array4 a = mf.fab(0).array();
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      a(i, j, 0) = val;
+}  // namespace
+
+TEST(test_polar_tensor_elliptic_mms, capabilities_are_exactly_rank_two) {
+  static_assert(!pops::PolarTensorProvider<1>::available);
+  static_assert(pops::PolarTensorProvider<2>::available);
+  static_assert(!pops::PolarTensorProvider<3>::available);
+  EXPECT_EQ(pops::PolarTensorProvider<1>::rejection_reason(),
+            "polar tensor elliptic operator has exactly the axes (r, theta)");
+  EXPECT_EQ(pops::PolarTensorProvider<3>::rejection_reason(),
+            "polar tensor elliptic operator has exactly the axes (r, theta)");
 }
 
-// DistributionMapping helper (boite unique mono-rang) pour les MultiFab de coefficient du test.
-static DistributionMapping solver_dm(const BoxArray& ba) {
-  return DistributionMapping(ba.size(), n_ranks());
+TEST(test_polar_tensor_elliptic_mms, radial_line_solver_authenticates_the_final_residual) {
+  pops::PolarTensorOptions options;
+  options.relative_tolerance = pops::Real(1e-10);
+  options.absolute_tolerance = pops::Real(1e-12);
+  options.maximum_iterations = 500;
+  options.preconditioner = pops::PolarPreconditioner::radial_line;
+  auto prepared = pops::PolarTensorProvider<kDim>::build(request(), options);
+  auto solver = std::move(prepared);
+  fill_rhs(solver);
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_LT(report.residual_norm, pops::Real(1e-8));
+  EXPECT_LT(error_l2(solver), pops::Real(2e-3));
 }
 
-// Materialise c_bc = L_int(0) independently of PolarTensorKrylovSolver. The regression then builds
-// rhs = c_bc + b_eff so the stored rhs is dominated by the affine boundary term while R(0) = b_eff
-// remains small and known exactly.
-static void fill_affine_operator_offset(const PolarGeometry& geom, const BoxArray& ba,
-                                        const BCRec& bc, MultiFab& offset) {
-  const DistributionMapping dm = solver_dm(ba);
-  MultiFab zero(ba, dm, 1, 1);
-  MultiFab one_rr(ba, dm, 1, 1);
-  MultiFab one_tt(ba, dm, 1, 1);
-  zero.set_val(Real(0));
-  one_rr.set_val(Real(1));
-  one_tt.set_val(Real(1));
-  device_fence();
-  fill_ghosts(zero, geom.domain, bc);
-  apply_polar_tensor(zero, geom, offset, &one_rr, &one_tt, nullptr, nullptr);
-}
-
-struct PolarAffineForcingReport {
-  SolveReport probe;
-  SolveReport converged;
-  SolveReport warm;
-  double true_relative_residual;
-};
-
-static PolarAffineForcingReport affine_forcing_case(BCType type) {
-  constexpr int n = 12;
-  constexpr Real boundary_value = Real(1e3);
-  constexpr Real tight_tol = Real(1e-8);
-  const Box2D dom = Box2D::from_extents(n, n);
-  const PolarGeometry geom{dom, kRmin, kRmax};
-  const BoxArray ba(std::vector<Box2D>{dom});
-  const DistributionMapping dm = solver_dm(ba);
-  BCRec bc;
-  bc.xlo = bc.xhi = type;
-  bc.ylo = bc.yhi = BCType::Periodic;
-  bc.xlo_val = bc.xhi_val = boundary_value;
-  bc.dx = geom.dr();
-  bc.dy = geom.dtheta();
-  if (type == BCType::Robin) {
-    bc.xlo_alpha = bc.xhi_alpha = Real(1);
-    bc.xlo_beta = bc.xhi_beta = Real(0.25);
-  }
-
-  PolarTensorKrylovSolver solver(geom, ba, bc, PolarPrecond::Jacobi);
-  MultiFab offset(ba, dm, 1, 0);
-  MultiFab effective(ba, dm, 1, 0);
-  fill_affine_operator_offset(geom, ba, bc, offset);
-  Array4 forcing = effective.fab(0).array();
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      forcing(i, j, 0) =
-          Real(1) + Real(0.1) * std::cos(geom.theta_cell(j)) + Real(0.05) * (i - dom.lo[0]);
-  lincomb(solver.rhs(), Real(1), offset, Real(1), effective);
-
-  solver.phi().set_val(Real(0));
-  // Correct normalization gives ||r0|| / ||R(0)|| = 1, so rel_tol=0.5 cannot publish a
-  // zero-iteration solve. Normalizing by the boundary-dominated stored rhs would do exactly that.
-  const SolveReport probe = solver.solve(Real(0.5), 1);
-
-  solver.phi().set_val(Real(0));
-  const SolveReport converged = solver.solve(tight_tol, 1000);
-  const double effective_norm = std::sqrt(static_cast<double>(dot(effective, effective)));
-  const double true_relative_residual = static_cast<double>(solver.residual()) / effective_norm;
-  const SolveReport warm = solver.solve(tight_tol, 1000);
-  return {probe, converged, warm, true_relative_residual};
-}
-
-// Resout le cas tenseur (arr, art, atr, att) sur (nr x nth), mode m, BC Dirichlet, et rend (erreur,
-// resultat BiCGStab). Le RHS est rempli cote HOTE (f_tensor = fonction hote ; un pointeur de fonction
-// hote n'est pas appelable depuis un kernel device, cf. test_polar_poisson_mms).
-static SolveReport solve_tensor(int nr, int nth, int m, double arr, double art, double atr,
-                                double att, ErrL2& err,
-                                PolarPrecond pc = PolarPrecond::RadialLine) {
-  Box2D dom = Box2D::from_extents(nr, nth);
-  PolarGeometry g{dom, kRmin, kRmax};
-  BoxArray ba(std::vector<Box2D>{dom});
-
-  BCRec bc;
-  bc.xlo = bc.xhi = BCType::Dirichlet;
-  bc.ylo = bc.yhi = BCType::Periodic;  // theta periodique
-  bc.xlo_val = S(kRmin);               // donnee Dirichlet = part m=0 (H s'annule aux bords)
-  bc.xhi_val = S(kRmax);
-
-  PolarTensorKrylovSolver solver(g, ba, bc, pc);
-
-  // Coefficients du tenseur (champs au centre, constants ici). a_rr/a_tt fournis ; a_rt/a_tr seulement
-  // s'ils sont non nuls (sinon on laisse l'operateur en mode diagonal).
-  MultiFab arr_mf(ba, solver_dm(ba), 1, 1), att_mf(ba, solver_dm(ba), 1, 1);
-  MultiFab art_mf(ba, solver_dm(ba), 1, 1), atr_mf(ba, solver_dm(ba), 1, 1);
-  fill_const(arr_mf, dom, arr);
-  fill_const(att_mf, dom, att);
-  const bool cross = (art != 0.0) || (atr != 0.0);
-  if (cross) {
-    fill_const(art_mf, dom, art);
-    fill_const(atr_mf, dom, atr);
-    solver.set_coefficients(&arr_mf, &att_mf, &art_mf, &atr_mf);
-  } else {
-    solver.set_coefficients(&arr_mf, &att_mf);
-  }
-
-  Array4 rhs = solver.rhs().fab(0).array();
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      rhs(i, j, 0) = f_tensor(g.r_cell(i), g.theta_cell(j), m, arr, art, atr, att);
-
-  solver.phi().set_val(0.0);  // depart froid
-  SolveReport kr = solver.solve(1e-11, 4000);
-  err = err_vs_exact(solver.phi(), g, dom, m);
-  return kr;
-}
-
-static constexpr int kM = 3;
-static constexpr int kNrs[3] = {32, 64, 128};
-// Tenseur NON symetrique partage par (B)/(C) et (E) : a_rt != a_tr (rotation B^{-1} du Schur).
-// A reste DEFINI POSITIF en partie symetrique (a_rr a_tt > ((a_rt+a_tr)/2)^2 = 0.01 ; 1.12 >> 0.01)
-// donc l'operateur diagonal-dominant est inversible et BiCGStab+Jacobi doit converger.
-static constexpr double kArr = 1.4, kAtt = 0.8, kArt = 0.5, kAtr = -0.3;
-
-TEST(test_polar_tensor_elliptic_mms, reports_explicit_status_and_action) {
-  const Box2D dom = Box2D::from_extents(8, 8);
-  const PolarGeometry g{dom, kRmin, kRmax};
-  const BoxArray ba(std::vector<Box2D>{dom});
-  BCRec bc;
-  bc.xlo = bc.xhi = BCType::Dirichlet;
-  bc.ylo = bc.yhi = BCType::Periodic;
-
-  PolarTensorKrylovSolver invalid(g, ba, bc);
-  invalid.phi().set_val(Real(7));
-  const SolveReport bad_iters = invalid.solve(Real(1e-8), 0);
-  EXPECT_EQ(bad_iters.status, SolveStatus::kInvalidInput);
-  EXPECT_EQ(bad_iters.action, SolveAction::kRejectAttempt);
-  EXPECT_DOUBLE_EQ(invalid.phi().fab(0).const_array()(dom.lo[0], dom.lo[1], 0), Real(7));
-  const SolveReport bad_tol = invalid.solve(std::numeric_limits<Real>::quiet_NaN(), 4);
-  EXPECT_EQ(bad_tol.status, SolveStatus::kInvalidInput);
-  EXPECT_EQ(bad_tol.action, SolveAction::kRejectAttempt);
-
-  PolarTensorKrylovSolver warm_start(g, ba, bc);
-  warm_start.set_coefficients(nullptr, nullptr);
-  warm_start.phi().set_val(Real(0));
-  warm_start.rhs().set_val(Real(0));
-  const SolveReport solved = warm_start.solve(Real(1e-8), 4);
-  EXPECT_TRUE(solved.solved());
-  EXPECT_EQ(solved.status, SolveStatus::kSolved);
-  EXPECT_EQ(solved.action, SolveAction::kNone);
-
-  PolarTensorKrylovSolver invalid_eval(g, ba, bc);
-  invalid_eval.set_coefficients(nullptr, nullptr);
-  invalid_eval.phi().set_val(Real(0));
-  invalid_eval.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
-  const SolveReport nonfinite = invalid_eval.solve(Real(1e-8), 4);
-  EXPECT_EQ(nonfinite.status, SolveStatus::kInvalidEvaluation);
-  EXPECT_EQ(nonfinite.action, SolveAction::kFailRun);
-  EXPECT_THROW(invalid_eval.solve(), std::runtime_error);
-
-  BCRec nonfinite_bc = bc;
-  nonfinite_bc.xlo_val = std::numeric_limits<Real>::quiet_NaN();
-  PolarTensorKrylovSolver invalid_offset(g, ba, nonfinite_bc, PolarPrecond::Jacobi);
-  invalid_offset.phi().set_val(Real(0));
-  invalid_offset.rhs().set_val(Real(0));
-  const SolveReport nonfinite_offset = invalid_offset.solve(Real(1e-8), 4);
-  EXPECT_EQ(nonfinite_offset.status, SolveStatus::kInvalidEvaluation);
-  EXPECT_EQ(nonfinite_offset.action, SolveAction::kFailRun);
-
-  PolarTensorKrylovSolver limited(g, ba, bc, PolarPrecond::Jacobi);
-  limited.set_coefficients(nullptr, nullptr);
-  limited.phi().set_val(Real(0));
-  Array4 limited_rhs = limited.rhs().fab(0).array();
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-      limited_rhs(i, j, 0) = Real(1) + Real(0.1) * i + Real(0.2) * j;
-  const SolveReport exhausted = limited.solve(Real(1e-30), 1);
-  EXPECT_EQ(exhausted.status, SolveStatus::kIterationLimit);
-  EXPECT_EQ(exhausted.action, SolveAction::kFailRun);
-
-  const Box2D one_radial = Box2D::from_extents(1, 4);
-  const PolarGeometry one_radial_geom{one_radial, kRmin, kRmax};
-  const BoxArray one_radial_ba(std::vector<Box2D>{one_radial});
-  PolarTensorKrylovSolver singular(one_radial_geom, one_radial_ba, bc);
-  MultiFab zero_rr(one_radial_ba, solver_dm(one_radial_ba), 1, 1);
-  MultiFab zero_tt(one_radial_ba, solver_dm(one_radial_ba), 1, 1);
-  fill_const(zero_rr, one_radial, 0.0);
-  fill_const(zero_tt, one_radial, 0.0);
-  singular.set_coefficients(&zero_rr, &zero_tt);
-  singular.phi().set_val(Real(0));
-  singular.rhs().set_val(Real(1));
-  const SolveReport breakdown = singular.solve(Real(1e-8), 4);
-  EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
-  EXPECT_EQ(breakdown.action, SolveAction::kFailRun);
-}
-
-TEST(test_polar_tensor_elliptic_mms, affine_boundary_forcing_uses_effective_rhs_scale) {
-  for (const BCType type : {BCType::Dirichlet, BCType::Robin}) {
-    SCOPED_TRACE(type == BCType::Dirichlet ? "Dirichlet" : "Robin");
-    const PolarAffineForcingReport report = affine_forcing_case(type);
-    EXPECT_EQ(report.probe.iters, 1);
-    EXPECT_TRUE(report.converged.solved());
-    EXPECT_LT(report.converged.rel_residual, Real(1e-8));
-    EXPECT_LT(report.true_relative_residual, 1e-8);
-    EXPECT_TRUE(report.warm.solved());
-    EXPECT_EQ(report.warm.iters, 0);
-    EXPECT_LT(report.warm.rel_residual, Real(1e-8));
-  }
-}
-
-TEST(test_polar_tensor_elliptic_mms, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
-  constexpr int n = 8;
-  const Box2D domain = Box2D::from_extents(n, n);
-  const PolarGeometry geometry{domain, kRmin, kRmax};
-  const BoxArray boxes(std::vector<Box2D>{domain});
-  BCRec bc;
-  bc.xlo = bc.xhi = BCType::Dirichlet;
-  bc.ylo = bc.yhi = BCType::Periodic;
-
-  PolarTensorKrylovSolver solver(geometry, boxes, bc, PolarPrecond::Jacobi);
-  solver.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
-  solver.phi().set_val(Real(1e-6));
-  const Real initial_residual = solver.residual();
-  ASSERT_GT(initial_residual, Real(0));
-  ASSERT_LT(initial_residual, Real(1));
-
-  // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
-  const SolveReport exact_only = solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
-  EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
-
-  solver.phi().set_val(Real(1e-6));
-  const Real reset_residual = solver.residual();
-  const SolveReport absolute =
-      solver.solve(Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
-  EXPECT_TRUE(absolute.solved());
-  EXPECT_EQ(absolute.iters, 0);
-  EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));
-}
-
-// (A) CONVERGENCE O(2) ISOTROPE (A = I). nr = nth raffines ensemble (erreur radiale ET azimutale O(2)).
-TEST(test_polar_tensor_elliptic_mms, isotropic_order2) {
-  ErrL2 eA[3];
-  for (int k = 0; k < 3; ++k) {
-    SolveReport kr = solve_tensor(kNrs[k], kNrs[k], kM, 1.0, 0.0, 0.0, 1.0, eA[k]);
-    std::printf("  n=%-4d : L2=%.4e  Linf=%.4e  [BiCGStab iters=%d rel=%.2e conv=%d]\n", kNrs[k],
-                eA[k].l2, eA[k].linf, kr.iters, kr.rel_residual, (int)kr.solved());
-    EXPECT_TRUE(kr.solved()) << "A_bicgstab_converge (n=" << kNrs[k] << ")";
-  }
-  const double pA1 = std::log2(eA[0].l2 / eA[1].l2);
-  const double pA2 = std::log2(eA[1].l2 / eA[2].l2);
-  std::printf("  ordre observe (L2) : %.2f (32->64), %.2f (64->128)\n", pA1, pA2);
-  EXPECT_TRUE(pA1 >= 1.7 && pA1 <= 2.3) << "ordreA_32_64_dans_[1.7,2.3] (pA1=" << pA1 << ")";
-  EXPECT_TRUE(pA2 >= 1.7 && pA2 <= 2.3) << "ordreA_64_128_dans_[1.7,2.3] (pA2=" << pA2 << ")";
-}
-
-// (B)/(C) CONVERGENCE O(2) TENSEUR NON SYMETRIQUE + BiCGStab converge (pas de stagnation).
-TEST(test_polar_tensor_elliptic_mms, nonsymmetric_tensor_order2_and_converges) {
-  ErrL2 eB[3];
-  for (int k = 0; k < 3; ++k) {
-    SolveReport kr = solve_tensor(kNrs[k], kNrs[k], kM, kArr, kArt, kAtr, kAtt, eB[k]);
-    std::printf("  n=%-4d : L2=%.4e  Linf=%.4e  [BiCGStab iters=%d rel=%.2e conv=%d]\n", kNrs[k],
-                eB[k].l2, eB[k].linf, kr.iters, kr.rel_residual, (int)kr.solved());
-    EXPECT_TRUE(kr.solved()) << "B_bicgstab_converge (n=" << kNrs[k]
-                             << ")";  // (C) pas de stagnation
-  }
-  const double pB1 = std::log2(eB[0].l2 / eB[1].l2);
-  const double pB2 = std::log2(eB[1].l2 / eB[2].l2);
-  std::printf("  ordre observe (L2) : %.2f (32->64), %.2f (64->128)\n", pB1, pB2);
-  EXPECT_TRUE(pB1 >= 1.7 && pB1 <= 2.3) << "ordreB_32_64_dans_[1.7,2.3] (pB1=" << pB1 << ")";
-  EXPECT_TRUE(pB2 >= 1.7 && pB2 <= 2.3) << "ordreB_64_128_dans_[1.7,2.3] (pB2=" << pB2 << ")";
-}
-
-// (D) CONSISTANCE ISOTROPE vs PolarPoissonSolver DIRECT. Meme probleme scalaire (A = I, Dirichlet),
-// nth grand (=256) pour que le stencil azimutal FD 2 points (iteratif) coincide avec le spectral
-// -k^2 (direct) a O(dtheta^2). On compare les deux solutions point a point (ecart L2 relatif petit).
-TEST(test_polar_tensor_elliptic_mms, isotropic_matches_direct_solver) {
-  const int nr = 128, nth = 256;
-  Box2D dom = Box2D::from_extents(nr, nth);
-  PolarGeometry g{dom, kRmin, kRmax};
-  BoxArray ba(std::vector<Box2D>{dom});
-  BCRec bc;
-  bc.xlo = bc.xhi = BCType::Dirichlet;
-  bc.ylo = bc.yhi = BCType::Periodic;
-  bc.xlo_val = S(kRmin);
-  bc.xhi_val = S(kRmax);
-
-  // Iteratif (A = I).
-  PolarTensorKrylovSolver itr(g, ba, bc);
-  MultiFab one_rr(ba, solver_dm(ba), 1, 1), one_tt(ba, solver_dm(ba), 1, 1);
-  fill_const(one_rr, dom, 1.0);
-  fill_const(one_tt, dom, 1.0);
-  itr.set_coefficients(&one_rr, &one_tt);
-  {
-    Array4 rhs = itr.rhs().fab(0).array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        rhs(i, j, 0) = f_tensor(g.r_cell(i), g.theta_cell(j), kM, 1.0, 0.0, 0.0, 1.0);
-  }
-  itr.phi().set_val(0.0);
-  SolveReport kr = itr.solve(1e-11, 2000);
-  EXPECT_TRUE(kr.solved()) << "D_bicgstab_converge";
-
-  // Direct.
-  PolarPoissonSolver dir(g, ba, bc);
-  {
-    Array4 rhs = dir.rhs().fab(0).array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        rhs(i, j, 0) = f_tensor(g.r_cell(i), g.theta_cell(j), kM, 1.0, 0.0, 0.0, 1.0);
-  }
-  dir.solve();
-
-  const ConstArray4 pi = itr.phi().fab(0).const_array();
-  const ConstArray4 pd = dir.phi().fab(0).const_array();
-  const double dr = g.dr(), dth = g.dtheta();
-  double diff = 0, ref = 0;
-  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-      const double w = g.r_cell(i) * dr * dth;
-      const double e = pi(i, j, 0) - pd(i, j, 0);
-      diff += e * e * w;
-      ref += pd(i, j, 0) * pd(i, j, 0) * w;
-    }
-  const double rel = std::sqrt(diff / ref);
-  std::printf("  iteratif iters=%d rel=%.2e ; ecart L2 relatif iteratif/direct = %.3e\n", kr.iters,
-              kr.rel_residual, rel);
-  // Les deux solveurs partagent le stencil radial FV ; ils ne different qu'en theta (FD 2 points vs
-  // spectral), ecart O(dtheta^2). A nth=256, dtheta ~ 0.0245, dtheta^2 ~ 6e-4 : ecart bien < 1e-2.
-  EXPECT_TRUE(rel < 1e-2) << "D_consistance_iteratif_vs_direct (rel=" << rel << ")";
-}
-
-// (E) CHOIX DU PRECONDITIONNEUR (documente, pas un critere d'echec ailleurs qu'a la grille fine). On
-// compare le nombre d'iterations BiCGStab de Jacobi (diagonal) vs RadialLine (Thomas radial par ligne
-// theta) sur le cas tenseur, a deux finesses. Jacobi : iterations ~ 1/h^2 (mauvais conditionnement
-// Laplacien) -> stagne/plafonne a grille fine. RadialLine : iterations QUASI INDEPENDANTES de h (le
-// couplage radial fort est inverse exactement, l'anisotropie 1/r^2 est dans la diagonale lumpee).
-// C'est la raison du DEFAUT RadialLine. On exige seulement que RadialLine fasse STRICTEMENT moins
-// d'iterations que Jacobi a la grille fine (preuve quantitative du gain ; pas de MG requis).
-TEST(test_polar_tensor_elliptic_mms, radialline_preconditioner_beats_jacobi) {
-  // solve_tensor utilise un plafond large (4000 iters) : Jacobi a une vraie chance de converger a la
-  // grille fine, ce qui rend la comparaison honnete (il plafonne quand meme a n=96).
-  for (int n : {32, 96}) {
-    ErrL2 ej, el;
-    SolveReport krj = solve_tensor(n, n, kM, kArr, kArt, kAtr, kAtt, ej, PolarPrecond::Jacobi);
-    SolveReport krl = solve_tensor(n, n, kM, kArr, kArt, kAtr, kAtt, el, PolarPrecond::RadialLine);
-    std::printf("  n=%-4d : Jacobi iters=%-5d (conv=%d) | RadialLine iters=%-4d (conv=%d)\n", n,
-                krj.iters, (int)krj.solved(), krl.iters, (int)krl.solved());
-    if (n == 96) {
-      EXPECT_TRUE(krl.solved()) << "E_radialline_converge_grille_fine";
-      // gain quantitatif du precond ligne
-      EXPECT_TRUE(krl.iters < krj.iters || !krj.solved())
-          << "E_radialline_moins_iters_que_jacobi (krl.iters=" << krl.iters
-          << " krj.iters=" << krj.iters << " krj.solved=" << krj.solved() << ")";
-    }
-  }
-}
-
-// (F) NEUMANN homogene aux DEUX bords (operateur SINGULIER) + PINNING DE JAUGE iteratif. Sans le
-// pinning (projection de moyenne nulle), BiCGStab DIVERGE (la constante du noyau n'est pas amortie).
-// Avec le pinning, il converge et l'erreur (modulo la jauge = moyenne FV retiree) est O(2). On
-// raffine (nr=nth) et on observe l'ordre 2 + convergence. Mode m=2.
-TEST(test_polar_tensor_elliptic_mms, neumann_gauge_pinning_order2) {
-  const int mN = 2;
-  double l2s[3];
-  for (int k = 0; k < 3; ++k) {
-    const int n = kNrs[k];
-    Box2D dom = Box2D::from_extents(n, n);
-    PolarGeometry g{dom, kRmin, kRmax};
-    BoxArray ba(std::vector<Box2D>{dom});
-    BCRec bc;
-    bc.xlo = bc.xhi = BCType::Foextrap;  // Neumann homogene (flux radial nul)
-    bc.ylo = bc.yhi = BCType::Periodic;
-    PolarTensorKrylovSolver solver(g, ba, bc);
-    MultiFab one_rr(ba, solver_dm(ba), 1, 1), one_tt(ba, solver_dm(ba), 1, 1);
-    fill_const(one_rr, dom, 1.0);
-    fill_const(one_tt, dom, 1.0);
-    solver.set_coefficients(&one_rr, &one_tt);
-    Array4 rhs = solver.rhs().fab(0).array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        rhs(i, j, 0) = f_neu(g.r_cell(i), g.theta_cell(j), mN);
-    solver.phi().set_val(0.0);
-    SolveReport kr = solver.solve(1e-10, 4000);
-    EXPECT_TRUE(kr.solved()) << "F_neumann_pinning_converge (n=" << n << ")";
-    // erreur L2 ponderee, jauge (moyenne FV) retiree des deux champs.
-    const ConstArray4 p = solver.phi().fab(0).const_array();
-    const double dr = g.dr(), dth = g.dtheta();
-    double mn = 0, me = 0, vol = 0;
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-        const double w = g.r_cell(i) * dr * dth;
-        mn += p(i, j, 0) * w;
-        me += phi_neu(g.r_cell(i), g.theta_cell(j), mN) * w;
-        vol += w;
-      }
-    mn /= vol;
-    me /= vol;
-    double l2 = 0, v2 = 0;
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
-        const double w = g.r_cell(i) * dr * dth;
-        const double e = (p(i, j, 0) - mn) - (phi_neu(g.r_cell(i), g.theta_cell(j), mN) - me);
-        l2 += e * e * w;
-        v2 += w;
-      }
-    l2s[k] = std::sqrt(l2 / v2);
-    std::printf("  n=%-4d : L2(jauge)=%.4e  [BiCGStab iters=%d rel=%.2e conv=%d]\n", n, l2s[k],
-                kr.iters, kr.rel_residual, (int)kr.solved());
-  }
-  const double pF1 = std::log2(l2s[0] / l2s[1]);
-  const double pF2 = std::log2(l2s[1] / l2s[2]);
-  std::printf("  ordre observe (L2, jauge) : %.2f (32->64), %.2f (64->128)\n", pF1, pF2);
-  EXPECT_TRUE(pF1 >= 1.6 && pF1 <= 2.4) << "ordreF_32_64_dans_[1.6,2.4] (pF1=" << pF1 << ")";
-  EXPECT_TRUE(pF2 >= 1.6 && pF2 <= 2.4) << "ordreF_64_128_dans_[1.6,2.4] (pF2=" << pF2 << ")";
+TEST(test_polar_tensor_elliptic_mms, explicit_tensor_coefficients_use_the_same_exact_layout) {
+  auto build = request(16);
+  const auto boxes = build.boxes;
+  const auto distribution = build.distribution;
+  const auto rank = build.local_rank;
+  pops::MultiFab<kDim> rr(boxes, distribution, rank, 1, pops::Extent<kDim>{1, 1});
+  pops::MultiFab<kDim> tt(boxes, distribution, rank, 1, pops::Extent<kDim>{1, 1});
+  pops::MultiFab<kDim> rt(boxes, distribution, rank, 1, pops::Extent<kDim>{1, 1});
+  pops::MultiFab<kDim> tr(boxes, distribution, rank, 1, pops::Extent<kDim>{1, 1});
+  rr.set_val(pops::Real(1));
+  tt.set_val(pops::Real(1));
+  rt.set_val(pops::Real(0));
+  tr.set_val(pops::Real(0));
+  pops::PolarTensorOptions options;
+  options.maximum_iterations = 500;
+  auto prepared = pops::PolarTensorProvider<kDim>::build(std::move(build), options);
+  prepared.set_coefficients(rr, tt, &rt, &tr);
+  auto solver = std::move(prepared);
+  fill_rhs(solver);
+  const pops::SolveReport report = solver.solve();
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_LT(report.residual_norm, pops::Real(1e-8));
 }

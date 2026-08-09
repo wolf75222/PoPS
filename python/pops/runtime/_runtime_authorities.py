@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
-def _boundary_face_ordinal(value: Any, *, where: str) -> int:
+def _boundary_face_ordinal(value: Any, *, dimension: int, where: str) -> int:
     if not isinstance(value, dict):
         raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
     orientation = value.get("orientation")
@@ -21,9 +21,9 @@ def _boundary_face_ordinal(value: Any, *, where: str) -> int:
     axis = orientation["axis"]
     side = orientation["side"]
     outward_sign = orientation["outward_sign"]
-    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1) \
+    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in range(dimension) \
             or side not in {"lower", "upper"}:
-        raise ValueError("%s is not one 2D Cartesian face" % where)
+        raise ValueError("%s is not one rank-%d Cartesian face" % (where, dimension))
     expected_sign = -1 if side == "lower" else 1
     if isinstance(outward_sign, bool) or not isinstance(outward_sign, int) \
             or outward_sign != expected_sign:
@@ -31,13 +31,17 @@ def _boundary_face_ordinal(value: Any, *, where: str) -> int:
     return 2 * axis + (0 if side == "lower" else 1)
 
 
-def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -> list[list[int]]:
+def _periodic_identification_rows(
+    data: dict[str, Any], face_types: list[str], *, dimension: int,
+) -> list[list[int]]:
     raw = data.get("periodic_identifications", [])
     if not isinstance(raw, list):
         raise TypeError("prepared periodic_identifications must be a list")
     rows = []
     claimed = set()
     mapped = 0
+    if dimension not in (1, 2, 3) or len(face_types) != 2 * dimension:
+        raise ValueError("prepared face table must contain exactly 2*Dim rows")
     required = {
         "source", "target", "source_face", "target_face", "permutation", "signs",
     }
@@ -48,21 +52,27 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         target_face = row["target_face"]
         if isinstance(source_face, bool) or not isinstance(source_face, int) \
                 or isinstance(target_face, bool) or not isinstance(target_face, int) \
-                or source_face not in range(4) or target_face not in range(4) \
+                or source_face not in range(2 * dimension) \
+                or target_face not in range(2 * dimension) \
                 or source_face == target_face:
-            raise ValueError("prepared periodic endpoints must be distinct face ordinals 0..3")
+            raise ValueError(
+                "prepared periodic endpoints must be distinct rank-%d face ordinals" % dimension
+            )
         if _boundary_face_ordinal(
-                row["source"], where="periodic[%d].source" % index) != source_face \
+                row["source"], dimension=dimension,
+                where="periodic[%d].source" % index) != source_face \
                 or _boundary_face_ordinal(
-                    row["target"], where="periodic[%d].target" % index) != target_face:
+                    row["target"], dimension=dimension,
+                    where="periodic[%d].target" % index) != target_face:
             raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
         permutation = row["permutation"]
         signs = row["signs"]
         if not isinstance(permutation, list) or any(
                 isinstance(value, bool) or not isinstance(value, int)
-                for value in permutation) or sorted(permutation) != [0, 1]:
-            raise ValueError("prepared periodic permutation must be the exact 2D permutation")
-        if not isinstance(signs, list) or len(signs) != 2 \
+                for value in permutation) or sorted(permutation) != list(range(dimension)):
+            raise ValueError(
+                "prepared periodic permutation must be the exact ranked permutation")
+        if not isinstance(signs, list) or len(signs) != dimension \
                 or any(isinstance(value, bool) or not isinstance(value, int)
                        or value not in (-1, 1) for value in signs):
             raise ValueError("prepared periodic signs must contain one -1/+1 per source axis")
@@ -79,16 +89,18 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
         if claimed & endpoints:
             raise ValueError("one prepared face belongs to multiple periodic identifications")
         claimed.update(endpoints)
-        if permutation != [0, 1] or signs != [1, 1]:
+        is_mapped = permutation != list(range(dimension)) or signs != [1] * dimension
+        if is_mapped:
             mapped += 1
-        rows.append([
-            source_face, target_face,
-            int(permutation[0]), int(permutation[1]), int(signs[0]), int(signs[1]),
-        ])
+            rows.append([
+                source_face, target_face,
+                *(int(value) for value in permutation),
+                *(int(value) for value in signs),
+            ])
     periodic_faces = {
         ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
     }
-    if raw and claimed != periodic_faces:
+    if not claimed.issubset(periodic_faces):
         raise ValueError(
             "prepared periodic face types differ from explicit identification endpoints")
     if mapped and len(rows) != 1:
@@ -99,7 +111,11 @@ def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -
 
 
 def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
-    compiled_by_name = {row.name: row for row in install_plan.artifact.blocks}
+    artifact = install_plan.artifact
+    dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(dimension, bool) or dimension not in (1, 2, 3):
+        raise TypeError("runtime boundary installation requires one exact resolved dimension")
+    compiled_by_name = {row.name: row for row in artifact.blocks}
     reports = {}
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_boundary_plan", None)
@@ -109,6 +125,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     execution_data = component_execution_data(install_plan.execution_context)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
+        "transform_faces": getattr(native, "_install_boundary_flux_component", None),
         "residual": getattr(native, "_install_field_boundary_residual_component", None),
         "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
     }
@@ -154,20 +171,109 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise TypeError("compiled block lacks an authenticated positive n_vars")
         faces = first.get("faces")
-        if not isinstance(faces, list) or len(faces) != 4 \
-                or [row.get("ordinal") for row in faces] != [0, 1, 2, 3]:
-            raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
+        expected_faces = list(range(2 * dimension))
+        if not isinstance(faces, list) or len(faces) != 2 * dimension \
+                or [row.get("ordinal") for row in faces] != expected_faces:
+            raise ValueError(
+                "prepared boundary plan must contain canonical axis-major rows for dimension %d"
+                % dimension)
         types = [row.get("type") for row in faces]
-        if any(value not in {"periodic", "foextrap", "dirichlet", "external"}
+        if any(value not in {
+                "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external",
+                "characteristic_no_inflow"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        if "characteristic_no_inflow" in types and not bool(
+                getattr(component, "has_characteristic_no_inflow", False)):
+            raise NotImplementedError(
+                "characteristic no-inflow requires a compiled model prepared with "
+                "m.roe_from_jacobian(); no component-wise or Euler-specific fallback exists"
+            )
+        representations = [row.get("representation", "conservative") for row in faces]
+        converter_identities = [row.get("converter") for row in faces]
+        for face, (face_type, representation, converter) in enumerate(zip(
+                types, representations, converter_identities, strict=True)):
+            if representation == "conservative":
+                if converter is not None:
+                    raise ValueError(
+                        "prepared conservative boundary face must not carry a converter")
+            elif representation == "primitive":
+                if face_type != "dirichlet" or not isinstance(converter, str) or not converter:
+                    raise ValueError(
+                        "prepared primitive boundary face %d requires an exact fixed-state "
+                        "converter identity" % face)
+            else:
+                raise NotImplementedError(
+                    "prepared boundary selected unavailable representation %r" % representation)
+            if face_type == "characteristic_no_inflow" and representation != "conservative":
+                raise NotImplementedError(
+                    "characteristic no-inflow requires a conservative reference state"
+                )
+        face_identities = [row.get("producer") for row in faces]
+        if any(not isinstance(value, str) or not value for value in face_identities):
+            raise TypeError(
+                "prepared boundary faces require non-empty owner-qualified producer identities")
+        component_roles = getattr(component, "cons_roles", None)
+        if not isinstance(component_roles, (list, tuple)) \
+                or len(component_roles) != ncomp \
+                or any(not isinstance(role, str) or not role for role in component_roles):
+            raise TypeError(
+                "compiled block must expose one authenticated physical role per component")
         values = []
+        analytic_opcodes = []
+        analytic_literals = []
+        analytic_clocks = []
+        plan_clocks = set()
         for comp in range(ncomp):
             for row in faces:
                 row_values = row.get("values")
                 if not isinstance(row_values, list) or len(row_values) != ncomp:
                     raise ValueError("prepared boundary face values must exactly cover every component")
                 values.append(float(row_values[comp]))
+        for face, row in enumerate(faces):
+            programs = row.get("analytic_programs", [])
+            clock = row.get("analytic_clock")
+            if not isinstance(programs, list) or len(programs) not in (0, ncomp):
+                raise ValueError(
+                    "prepared boundary analytic programs must be empty or cover every component"
+                )
+            if programs and (types[face] != "dirichlet" or representations[face] != "conservative"):
+                raise NotImplementedError(
+                    "prepared analytic boundary programs require conservative fixed-state inflow"
+                )
+            if clock is not None and (not isinstance(clock, str) or not clock or not programs):
+                raise TypeError(
+                    "prepared boundary analytic Clock must be non-empty text on an analytic face"
+                )
+            analytic_clocks.append("" if clock is None else clock)
+            if clock is not None:
+                plan_clocks.add(clock)
+            for component in range(ncomp):
+                if not programs:
+                    analytic_opcodes.append([])
+                    analytic_literals.append([])
+                    continue
+                program = programs[component]
+                if not isinstance(program, dict) or set(program) != {"opcodes", "literals"}:
+                    raise TypeError(
+                        "prepared boundary analytic program must contain opcodes and literals"
+                    )
+                opcodes = program["opcodes"]
+                literals = program["literals"]
+                if (
+                    not isinstance(opcodes, list)
+                    or not opcodes
+                    or any(not isinstance(opcode, str) or not opcode for opcode in opcodes)
+                    or not isinstance(literals, list)
+                    or len(literals) != len(opcodes)
+                ):
+                    raise ValueError(
+                        "prepared boundary analytic opcode/literal rows must be non-empty and aligned"
+                    )
+                analytic_opcodes.append(opcodes)
+                analytic_literals.append([float(value) for value in literals])
+        if len(plan_clocks) > 1:
+            raise ValueError("prepared analytic boundary plan cannot mix several logical Clocks")
         boundary_state_identity = _canonical_qualified_id(
             first.get("state"), where="prepared boundary state")
         if boundary_state_identity != state_identity:
@@ -175,17 +281,24 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         required_depth = first.get("required_depth")
         if isinstance(required_depth, bool) or not isinstance(required_depth, int):
             raise TypeError("prepared boundary required_depth must be an exact integer")
-        periodic_identifications = _periodic_identification_rows(first, types)
+        periodic_identifications = _periodic_identification_rows(
+            first, types, dimension=dimension)
         base_arguments = (
             block.name,
             str(first.get("identity")),
             required_depth,
             types,
             values,
-            ncomp,
+            face_identities,
+            list(component_roles),
             list(first.get("omitted_interface_faces", [])),
             state_identity,
             periodic_identifications,
+            representations,
+            ["" if value is None else value for value in converter_identities],
+            analytic_opcodes,
+            analytic_literals,
+            analytic_clocks,
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
@@ -252,6 +365,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             if operation in {"residual", "jvp"} and len(row["outputs"]) != 1:
                 raise NotImplementedError(
                     "native boundary residual/JVP currently requires one exact mutable output")
+            if operation == "transform_faces" and (
+                    len(row["outputs"]) != 1 or
+                    row["outputs"][0] != row["state_identity"] or row["directions"]):
+                raise NotImplementedError(
+                    "native post-Riemann boundary flux requires one exact state output and no "
+                    "JVP direction table")
             component_jobs.append((
                 install_component,
                 block.name,
@@ -373,12 +492,67 @@ def _materialized_shared_interface_levels(native: Any, hierarchy: Any) -> tuple[
     return tuple(range(materialized))
 
 
+def _requires_shared_interface_implicit_jacvec_pair(install_plan: Any) -> bool:
+    """Read the authenticated compiled-Program requirement, retaining old explicit artifacts."""
+    capabilities = install_plan.artifact.plan.capabilities
+    if not isinstance(capabilities, Mapping):
+        raise TypeError("compiled shared-interface capabilities must be a mapping")
+    evidence = capabilities.get("shared_interfaces")
+    if evidence is None:
+        # Artifacts predating the implicit pair route could contain only explicit shared rates.
+        return False
+    if not isinstance(evidence, Mapping) or set(evidence) != {"implicit_jacvec_pair"}:
+        raise TypeError("compiled shared-interface capability evidence is not canonical")
+    required = evidence["implicit_jacvec_pair"]
+    if type(required) is not bool:
+        raise TypeError("compiled shared-interface implicit-JVP requirement must be an exact bool")
+    return required
+
+
+def _validate_shared_interface_implicit_execution_envelope(
+    execution_data: dict[str, Any], rank_count: int
+) -> None:
+    """Authenticate the narrow native pair envelope without mutating runtime state."""
+    if type(rank_count) is not int or rank_count < 1:
+        raise RuntimeError("native shared-interface rank count must be a positive integer")
+    device = execution_data.get("device_identity")
+    memory_space = execution_data.get("memory_space")
+    if device not in ("host", "cpu") or memory_space != 1:
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
+            "managed-memory execution is refused until its paired packing and residual "
+            "evaluation have a native portability proof")
+    communicator = execution_data.get("communicator_identity")
+    if communicator != "serial" or rank_count != 1:
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
+            "refused until its pair admission and local packing have a collective deadlock proof")
+
+
+def _validate_shared_interface_implicit_execution_before_install(
+    install_plan: Any,
+) -> None:
+    """Refuse an unsupported compiled pair before Program or interface installation mutates AMR."""
+    if not _requires_shared_interface_implicit_jacvec_pair(install_plan):
+        return
+    from pops.runtime._component_execution_context import component_execution_data
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=True)
+    _validate_shared_interface_implicit_execution_envelope(
+        component_execution_data(install_plan.execution_context),
+        _pops.n_ranks(),
+    )
+
+
 def _validate_refined_shared_interface_execution(
     levels: tuple[int, ...],
     execution_data: dict[str, Any],
     rank_count: int,
     *,
     dynamic_regrid: bool = False,
+    implicit_jacvec_pair: bool = False,
+    complete_bind: bool = False,
 ) -> None:
     """Require one contiguous materialized prefix on the selected communicator.
 
@@ -392,6 +566,17 @@ def _validate_refined_shared_interface_execution(
         raise RuntimeError("native shared-interface rank count must be a positive integer")
     if type(dynamic_regrid) is not bool:
         raise TypeError("shared-interface dynamic_regrid must be an exact bool")
+    if type(implicit_jacvec_pair) is not bool or type(complete_bind) is not bool:
+        raise TypeError(
+            "shared-interface implicit-JVP and complete-bind contracts must be exact bools")
+    if implicit_jacvec_pair:
+        _validate_shared_interface_implicit_execution_envelope(
+            execution_data, rank_count
+        )
+    if implicit_jacvec_pair and complete_bind and levels != (0, 1):
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "
+            "at bind")
     communicator = execution_data.get("communicator_identity")
     if communicator == "serial":
         if rank_count != 1:
@@ -488,6 +673,7 @@ def finalize_runtime_authorities(
         raise ValueError("native block registry contains duplicate names")
     block_indices = {name: index for index, name in enumerate(block_names)}
     execution_data = component_execution_data(install_plan.execution_context)
+    implicit_jacvec_pair = _requires_shared_interface_implicit_jacvec_pair(install_plan)
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     levels = (0,)
     if adaptive == {True}:
@@ -504,10 +690,17 @@ def finalize_runtime_authorities(
                 "prefix; dynamic regrid requires at least two configured levels and the complete "
                 "prefix active at bind")
         levels = _materialized_shared_interface_levels(native, hierarchy)
-        from pops import _pops
+        from pops._native_selector import selected_native_module
 
+        _pops = selected_native_module(required=True)
         _validate_refined_shared_interface_execution(
-            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_refined)
+            levels,
+            execution_data,
+            _pops.n_ranks(),
+            dynamic_regrid=dynamic_refined,
+            implicit_jacvec_pair=implicit_jacvec_pair,
+            complete_bind=complete,
+        )
         if complete and dynamic_refined and levels != tuple(range(hierarchy.level_count)):
             raise NotImplementedError(
                 "dynamic shared interfaces require the complete configured prefix materialized "
@@ -648,8 +841,10 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
     """Install every AMR provider through its authority-carried runtime protocol."""
 
     providers = install_plan.amr_providers
-    if not isinstance(providers, Mapping) or tuple(providers) != ("clustering", "tagger"):
-        raise ValueError("adaptive runtime requires exact clustering and tagger providers")
+    if not isinstance(providers, Mapping) \
+            or tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError(
+            "adaptive runtime requires exact clustering, tagger and reflux providers")
     native = getattr(engine, "_s", None)
     from pops.amr.providers import prepare_amr_provider_installation
     from pops.runtime._component_execution_context import component_execution_data

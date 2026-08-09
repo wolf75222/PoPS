@@ -65,6 +65,8 @@ def _compiled(*, wave_speeds=True, wave_speed_provider="explicit_pair", n_vars=2
         cons_names=cons, cons_roles=["custom"] * n_vars, prim_names=[], n_vars=n_vars, gamma=1.4,
         n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="mh",
         cxx="c++", std="c++23", wave_speeds=wave_speeds, hllc=hllc,
+        native_dimension=2,
+        hllc_provider="fluid_roles_v1" if hllc else None,
         wave_speed_provider=(wave_speed_provider if wave_speeds else None), target="system")
     return c
 

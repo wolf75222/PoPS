@@ -25,6 +25,7 @@ from pops.runtime._step_strategy import (
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
 from pops.time import Clock, ErrorControlledDt, FixedDt, TimePoint
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -372,7 +373,11 @@ def _bind_uniform_artifact(artifact):
 
     n = 4
     initial = np.ones((1, n, n), dtype=np.float64)
-    return pops.bind(artifact, initial_state={"blk": initial})
+    return pops.bind(
+        artifact,
+        initial_state={"blk": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
 
 def _bound_uniform_runtime(native_cxx, *, attempt_policy):
@@ -1149,6 +1154,8 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
         {
             "t": np.array(0.0, dtype=np.float64),
             "macro_step": np.array(0, dtype=np.int64),
+            "pops_spatial_contract": np.array("{}"),
+            "pops_embedded_boundary_contract": np.array("{}"),
             "program_hash": np.array("ab" * 32),
             "history_names": np.array([], dtype="U1"),
             "cache_nodes": np.array([], dtype=np.int64),

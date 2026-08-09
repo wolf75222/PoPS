@@ -369,8 +369,10 @@ class InstalledComponent:
         if self.native_handle is not None:
             return self
         try:
-            from pops import _pops
-        except ImportError as exc:
+            from pops._native_selector import selected_native_module
+
+            _pops = selected_native_module(required=True)
+        except RuntimeError as exc:
             raise RuntimeError(
                 "installed component loading requires the matching PoPS native module") from exc
         from pops.codegen._native_host import ensure_native_host_global

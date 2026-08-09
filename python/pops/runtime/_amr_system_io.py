@@ -56,8 +56,6 @@ class _AmrSystemIO(_AmrSystem):
             self,
             self._s,
             path,
-            (self._L, self._Ly),
-            (self._xlo, self._ylo),
             self._regrid_every,
             getattr(self, "_history_persistence", None) or {},
         )
@@ -101,8 +99,6 @@ class _AmrSystemIO(_AmrSystem):
                 self,
                 self._s,
                 data,
-                (self._L, self._Ly),
-                (self._xlo, self._ylo),
                 bit_identical=bit_identical,
                 hierarchy_mode=selected_hierarchy_mode,
                 hierarchy_identity=hierarchy_identity,

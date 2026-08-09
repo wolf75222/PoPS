@@ -25,6 +25,7 @@ unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python
 """
 from pops.codegen.program_codegen import _check_schedules_lowerable
 from pops.codegen.program_codegen import emit_cpp_program
+import pytest
 import sys
 from types import SimpleNamespace
 
@@ -119,7 +120,7 @@ def test_every_due_test_carries_period():
     cpp = _emit_field(lambda clock: _every(clock, 7, adctime.Hold()))
     assert "ctx.schedule_is_due(17, 7," in cpp
     assert "ctx.schedule_decision(17, ctx.schedule_is_due(17, 7," in cpp
-    assert ", true))" in cpp
+    assert ", false))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
@@ -128,7 +129,7 @@ def test_on_start_lowers_to_domain_start():
     cpp = _emit_field(lambda clock: _at_start(clock, adctime.Hold()))
     assert "ctx.schedule_at_start(" in cpp
     assert "ctx.schedule_decision(17, ctx.schedule_at_start(" in cpp
-    assert ", true))" in cpp
+    assert ", false))" in cpp
     assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
@@ -260,25 +261,21 @@ def test_amr_flux_weight_is_proved_before_artifact_creation():
 
 
 # --- policies on a FIELD-SOLVE node (output = aux) --------------------------
-def test_field_hold_stores_and_restores_aux():
+def test_field_hold_refuses_raw_provider_storage_cache():
     cpp = _emit_field(lambda clock: _every(clock, 10, adctime.Hold()))
-    assert "ctx.schedule_decision(17," in cpp and ", true))" in cpp
-    assert "ctx.cache_store_aux(" in cpp
-    assert "ctx.cache_restore_aux(" in cpp
-
-
-def test_field_zero_emits_aux_set_val_else():
-    cpp = _emit_field(lambda clock: _every(clock, 4, adctime.Zero()))
     assert "ctx.schedule_decision(17," in cpp and ", false))" in cpp
-    assert "} else {" in cpp
-    assert "ctx.aux().set_val(static_cast<pops::Real>(0));" in cpp
+    assert "cache_store_aux" not in cpp
+    assert "cache_restore_aux" not in cpp
 
 
-def test_field_accumulate_dt_reads_effective_dt():
-    cpp = _emit_field(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
-    assert "ctx.cache_effective_dt(" in cpp     # the due step reads the summed skipped dt
-    assert "ctx.cache_accumulate_dt(" in cpp    # the skip step accumulates the real dt
-    assert "ctx.cache_store_aux(" in cpp
+def test_field_zero_refuses_raw_provider_storage_mutation():
+    with pytest.raises(NotImplementedError, match="ProviderPack freshness"):
+        _emit_field(lambda clock: _every(clock, 4, adctime.Zero()))
+
+
+def test_field_accumulate_dt_refuses_raw_provider_storage_cache():
+    with pytest.raises(NotImplementedError, match="ProviderPack freshness"):
+        _emit_field(lambda clock: _every(clock, 7, adctime.AccumulateDt()))
 
 
 def test_field_skip_runs_only_when_due():
@@ -311,7 +308,7 @@ def test_scratch_hold_caches_named_scratch():
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
-    decl_idx = cpp.index("pops::MultiFab& r")
+    decl_idx = cpp.index("MultiFab<pops::kNativeDimension>& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 
@@ -333,7 +330,7 @@ def test_scratch_accumulate_dt_uses_scratch_cache():
 def test_scratch_decl_hoisted_for_skip():
     # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
     cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
-    decl_idx = cpp.index("pops::MultiFab& r")
+    decl_idx = cpp.index("MultiFab<pops::kNativeDimension>& r")
     guard_idx = cpp.index("if (ctx.schedule_decision(")
     assert decl_idx < guard_idx
 

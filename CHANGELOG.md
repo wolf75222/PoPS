@@ -18,11 +18,95 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Uniform checkpoint payload v7 and AMR payload v8 persist one release-versioned rank-generic
+  spatial authority. Shape, bounds, periodicity, patch boxes and AMR refinement ratios carry exactly
+  `Dim` components; restart authenticates the resolved 1D/2D/3D specialization before native
+  allocation or mutation, with no scalar `nx`/`ny` compatibility route. Uniform v7 additionally
+  authenticates the semantic embedded-boundary expression, mode and thresholds independently of
+  MPI rank ownership and local materialization before any restart mutation.
+- Spatial providers now publish one exact dimension/geometry/operation matrix. The prepared local
+  periodic Cartesian residual executes compile-time 1D and 3D metrics, reconstruction, Riemann
+  fluxes and conservative divergence, while the Box2D/MultiFab runtime still refuses non-2D binds
+  and embedded/polar characteristic or boundary-linearization routes without metric providers.
+- Characteristic no-inflow ghost production is transactional even without a separate primitive
+  trace-recovery provider: a partially written halo is restored when collective preflight refuses.
+- `Program.cadence(substeps=..., stride=...)` now authors the native global cadence as immutable,
+  identity-bearing Program data and installs it before the Uniform or AMR runtime freezes.
+- `AsyncScientificOutput` now accepts fields, diagnostics, or both on one exact schedule. Diagnostic
+  reductions, including the five-term `Balance` ledger, are captured transactionally before the
+  accepted snapshot is detached; the asynchronous worker receives only immutable arrays and
+  scalars. Sparse Balance cadences elide off-cadence reductions, publish an exact zero ledger for
+  held Program strides, and replay accepted state without reopening the native mailbox.
+- ParaView output now has one collection-authoring keyword: `collection`. The deprecated
+  `ParaView(series=...)` compatibility route is deleted instead of being retained beside the
+  canonical PVD collection contract.
+- Release codesign now preserves an existing valid ad-hoc signature and refuses publication when
+  post-install signing changes the retained wheel's native bytes, so the published wheel and the
+  runtime exercised by conformance and final examples are byte-identical.
+- Final release evidence now authenticates one exact runtime acceptance and one exact qualification
+  Pytest node for each normative example inside the all-pass installed-wheel JUnit lane. Missing,
+  renamed, skipped, xfailed, mocked, duplicated, or unattested example proofs fail before release
+  publication.
+- Canonical authoring now keeps one explicit projection/construction route: use
+  `pops.physics.Model.lower()` for advanced Module inspection and
+  `MomentModel.build()` for recorded moment specifications. The duplicate facade aliases were
+  removed instead of deprecated.
+- The final HyQMOM15 executable now checks realizability and the conserved `M00`
+  particle number for rejected, accepted, restored, and continued runtime snapshots. Its JSON
+  evidence reports the measured integral and maximum relative drift against the documented
+  `1e-10` acceptance threshold. It now authors the six fifth-order relations through a public
+  `@closure(4)` value and authenticates that every typed provisional store belongs to the rejected
+  Program transaction, without adding a HyQMOM-specific native route.
+- The final scalar-advection acceptance now authenticates the public AMR regrid counters and strict
+  checkpoint capability. A pre-existing refined patch layout is no longer sufficient: the accepted
+  run and both continuation paths must complete the same topology-changing regrid windows, and
+  restart must preserve `regrid_count` and `topology_epoch` exactly.
+- Private uniform and AMR Python runtime wrappers no longer expose `add_block`; native-brick and
+  compiled-package installation share the existing type-dispatched `add_equation` seam used below
+  `pops.bind`, while public authoring remains `Case.block(...)`.
+- Type-erased variable-recovery reports now retain the selected and last-attempted method kinds.
+  Runtime failures name the actual recovery route instead of exposing only a plan-local integer,
+  while rejected outcomes keep the selected method explicitly unknown.
+- Capability reports now distinguish the delivered typed Riemann rejection path from an unavailable
+  prepared recovery policy. Rusanov, HLL, HLLC, and Roe advertise their common device-copyable
+  `FluxEvaluation` and transactional rejection, while ordered fallback chains,
+  requested-versus-used solver diagnostics, counters, and restart metadata fail closed instead of
+  being inferred from the selected solver.
+- Variable-recovery capability reports now separate the delivered prepared closed-form consumers
+  from the complete ADC-755 deletion gate. System materialization and every production face route
+  advertise typed publication control, while the remaining source, AMR-transfer, boundary,
+  inverse-conversion, cache/restart, backend, and performance families fail closed as an unavailable
+  complete-consumer cutover.
+- ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
+  plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
+  vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
+  fail-closed capabilities until their model-aware component and hierarchy contracts are available.
+- ADC-749 now makes numerical resolution the fail-closed acceptance boundary for built-in transport
+  descriptors. Characteristic closures without a prepared eigenstructure, forged representation
+  converters, unsupported analytic dependencies, and mixed logical clocks can no longer survive as
+  inert metadata and fail only during compile or bind.
+- Boundary provider identities now retain an immutable typed law such as inflow, ghost formula,
+  directional transport, or no-flux. Resolution no longer has to infer semantics from a handle name
+  or output port. The typed `BoundaryFlux` ABI now transforms outward-normal face flux after the
+  Riemann solve and before divergence/reflux on prepared 2D Cartesian host batches; device-native,
+  embedded/cut-cell and high-level convenience routes remain explicitly unavailable.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
   rational stage weight, geometry and duration before publishing the image; rejected restart or
   Program attempts leave the previous accepted report byte-exact.
+- The final release gate now proves an external source component against the exact installed wheel:
+  its isolated AOT lane clears the checkout-owned `POPS_INCLUDE`, requires the wheel-owned signed
+  header tree and native Kokkos extension, compiles/installs/loads the component, and retains one
+  exact no-skip/no-xfail JUnit result whose node ID and command are reauthenticated by preflight.
+- External AMR `Reflux` components now use the normalized public provider route from
+  `AMR(..., reflux=...)` through resolve, compiled provenance and transactional native
+  installation; the builtin flux-register kernel follows the same reported contract.
+- Generated physical-flux bricks now make their qualified provider requirements executable native
+  ABI evidence: the binder validates every row at compile time and reads only its declared storage
+  slots instead of scanning the model's complete auxiliary width. Physical laws consume that exact
+  pack directly through compile-time provider reads; `PhysicalFluxView` no longer reconstructs a
+  process-wide `Aux` value.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one
@@ -45,7 +129,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   sealing, so a divergent tagging payload fails collectively without a partial file; external
   Tagger components remain fail-closed for non-zero hysteresis.
 - Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
-  Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
+  Migration requires a complete authenticated current-v7 authority plus a reviewed mapping that pins
   both artifacts, all lifecycle/ABI/Program identities, every block/component/history
   correspondence, and every missing metadata class inherited from the authority. The first route is
   deliberately limited to same-grid/same-clock, Dense fully stored histories and empty
@@ -123,6 +207,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   native ABI, and checkpoint envelopes independently in one generated Python/C++ release contract;
   declares the exact source/wheel matrix; and adds a fail-closed release preflight requiring exact
   tag, installed native identity, clean tree, generated products, and authenticated final-gate evidence.
+  The retained wheel filename and its internal `WHEEL` record must also identify exactly the promised
+  native macOS/arm64/cp312 lane; Python/ABI, platform, purelib, build-tag, or metadata drift is refused.
 - ADC-633 Compiled condensed-implicit time Program (std.condensed_schur, theta=1) on the AMR hierarchy: the condensed operators run per level through AmrProgramContext::grid_context / assembly_target / assembly_source (matrix-free coefficiented apply, reconstruct, energy), so a flat hierarchy is bit-identical to the uniform Program (the emitted matrix-free BiCGStab runs on level 0 through ctx.solve_linear_matfree) and a refined hierarchy solves the tensor elliptic by the composite FAC (CompositeFacPoisson in amr_condensed_elliptic.hpp), matching the native source-stage route; the vestigial AMR deferral stubs are removed and the Spec 6 sec.20 clean_schur_program.amr.mono cell flips to green.
 - ADC-640 One spatial-reconstruction dispatch generator (include/pops/runtime/builders/scheme_dispatch.hpp): dispatch_limiter binds a typed LimiterRouteId to its compile-time reconstruction policy behind an X-macro plus a count-lock static_assert, so the 17 hand-written limiter ladders across the System, polar, AMR multi-block, AMR compiled and external-brick builders collapse to one dispatch_limiter call each. A forgotten limiter is now a build error (the -Werror-free tree could only warn on a missing switch arm). Same template instantiations, bit-identical.
 - ADC-637 condensed_schur gained a generic lowering route: the electrostatic-Lorentz linearization J = [[0, B_z], [-B_z, 0]] is authored in the DSL (pops.lib.physics.author_electrostatic_lorentz, an m.local_linear_map on the momentum subset) and the macro (route="generic") lowers the condensed tensor coefficient A = I + c*rho*(I - theta*dt*J)^-1, the fused RHS and the velocity reconstruction through the closed-form block_inverse codegen, with no coupling/schur vocabulary. Bit-identical to the retiring hand-written Schur brick over a multi-step trajectory at theta == 1 and theta == 0.5 (golden, np.array_equal): the coefficient tensor reuses block_inverse<2> (== LorentzEliminator's binv entries) and the flux/reconstruct vector applies reuse a new factored block_apply_inverse intrinsic reproducing apply_Binv's operation order. The brick route stays the default until it is retired.

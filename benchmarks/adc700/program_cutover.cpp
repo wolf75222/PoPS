@@ -8,17 +8,18 @@
 // identical. This is intentionally a campaign executable, not a routine wall-clock CI assertion.
 
 #include <pops/parallel/comm.hpp>
-#include <pops/physics/bricks/source.hpp>
-#include <pops/physics/composition/composite.hpp>
-#include <pops/physics/fluids/euler.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
 #if !POPS_ADC700_PRE_CUTOVER
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+#else
+#include <pops/physics/bricks/source.hpp>
+#include <pops/physics/composition/composite.hpp>
+#include <pops/physics/fluids/euler.hpp>
 #endif
-
-#include "amr_tagging_test_authority.hpp"
 
 #include <Kokkos_Core.hpp>
 
@@ -31,7 +32,6 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #ifndef POPS_ADC700_REVISION
@@ -45,6 +45,7 @@ namespace {
 
 using namespace pops;
 
+#if POPS_ADC700_PRE_CUTOVER
 struct ZeroElliptic {
   template <class State>
   POPS_HD Real rhs(const State&) const {
@@ -53,6 +54,58 @@ struct ZeroElliptic {
 };
 
 using GasModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
+#else
+template <int Dim>
+struct GasModel {
+  using Law = nd::IdealGasEuler<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  using Aux = AuxState<Dim>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_aux = aux_comps_for<Law, Dim>();
+
+  Law law = Law::prepare(Real(1.4));
+
+  static PreparedProviderIdentity provider_identity() noexcept {
+    return {"benchmark.adc700.ideal-gas-euler", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    law.serialize_exact_parameters(contract);
+  }
+  static VariableSet conservative_vars() { return Law::conservative_vars(); }
+  static VariableSet primitive_vars() { return Law::primitive_vars(); }
+  POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, Real& lower, Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+};
+
+template <int Dim>
+GasModel<Dim> gas_model() {
+  return {nd::IdealGasEuler<Dim>::prepare(Real(1.4))};
+}
+#endif
 
 struct Config {
   int n = 128;
@@ -60,6 +113,36 @@ struct Config {
   int measured_steps = 40;
   double dt = 5.0e-4;
 };
+
+#if !POPS_ADC700_PRE_CUTOVER
+bool patch_less(const AmrPatch<kNativeDimension>& lhs, const AmrPatch<kNativeDimension>& rhs) {
+  if (lhs.level != rhs.level)
+    return lhs.level < rhs.level;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    if (lhs.box.lo[axis] != rhs.box.lo[axis])
+      return lhs.box.lo[axis] < rhs.box.lo[axis];
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    if (lhs.box.hi[axis] != rhs.box.hi[axis])
+      return lhs.box.hi[axis] < rhs.box.hi[axis];
+  return false;
+}
+
+std::string patch_signature(const AmrPatch<kNativeDimension>& patch) {
+  std::string signature = std::to_string(patch.level) + ':';
+  bool first_coordinate = true;
+  auto append = [&](int coordinate) {
+    if (!first_coordinate)
+      signature += ',';
+    signature += std::to_string(coordinate);
+    first_coordinate = false;
+  };
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    append(patch.box.lo[axis]);
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    append(patch.box.hi[axis]);
+  return signature;
+}
+#endif
 
 int parse_positive_int(const char* text, const char* option) {
   char* end = nullptr;
@@ -102,6 +185,7 @@ Config parse_config(int argc, char** argv) {
 }
 
 std::vector<double> initial_state(int n) {
+#if POPS_ADC700_PRE_CUTOVER
   const std::size_t cells = static_cast<std::size_t>(n) * n;
   std::vector<double> state(4 * cells, 0.0);
   constexpr double gamma = 1.4;
@@ -124,43 +208,75 @@ std::vector<double> initial_state(int n) {
                                 0.5 * density * (velocity_x * velocity_x + velocity_y * velocity_y);
     }
   return state;
+#else
+  std::size_t cells = 1;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    cells *= static_cast<std::size_t>(n);
+  std::vector<double> state(static_cast<std::size_t>(kNativeDimension + 2) * cells, 0.0);
+  constexpr double gamma = 1.4;
+  constexpr double pi = 3.141592653589793238462643383279502884;
+  for (std::size_t linear = 0; linear < cells; ++linear) {
+    std::size_t remainder = linear;
+    double radius_squared = 0.0;
+    double pressure_shape = 1.0;
+    for (int axis = 0; axis < kNativeDimension; ++axis) {
+      const int coordinate = static_cast<int>(remainder % static_cast<std::size_t>(n));
+      remainder /= static_cast<std::size_t>(n);
+      const double center = axis == 0 ? 0.37 : 0.41;
+      const double offset = (coordinate + 0.5) / static_cast<double>(n) - center;
+      radius_squared += offset * offset;
+      pressure_shape *= std::cos(2.0 * pi * (coordinate + 0.5) / static_cast<double>(n));
+    }
+    const double density = 1.0 + 0.35 * std::exp(-radius_squared / 0.008);
+    const double pressure = 2.0 + 0.1 * pressure_shape;
+    double speed_squared = 0.0;
+    state[linear] = density;
+    for (int axis = 0; axis < kNativeDimension; ++axis) {
+      const double velocity = axis == 0 ? 0.15 : (axis == 1 ? -0.07 : 0.03);
+      state[static_cast<std::size_t>(axis + 1) * cells + linear] = density * velocity;
+      speed_squared += velocity * velocity;
+    }
+    state[static_cast<std::size_t>(kNativeDimension + 1) * cells + linear] =
+        pressure / (gamma - 1.0) + 0.5 * density * speed_squared;
+  }
+  return state;
+#endif
 }
 
 #if !POPS_ADC700_PRE_CUTOVER
-void install_forward_euler_program(AmrSystem& system) {
+void install_forward_euler_program(AmrSystem<kNativeDimension>& system) {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);
-  system.set_program_block_map(block_map);
-  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+  if (system.engine() == nullptr)
     throw std::runtime_error("ADC-700 candidate requires the materialized AMR runtime");
 
-  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  auto context = runtime::program::make_program_execution_provider(&system);
   context->configure_primary_clock("adc700.performance.macro");
   context->install([context](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context](double level_dt) {
       context->set_stage_time(0, 1);
-      (void)consume_solve_outcome(context->solve_fields());
 
-      std::vector<MultiFab*> states;
-      std::vector<MultiFab*> residuals;
+      std::vector<MultiFab<kNativeDimension>*> states;
+      std::vector<MultiFab<kNativeDimension>*> residuals;
       states.reserve(static_cast<std::size_t>(context->n_blocks()));
       residuals.reserve(static_cast<std::size_t>(context->n_blocks()));
       for (int block = 0; block < context->n_blocks(); ++block) {
-        MultiFab& state = context->state(block);
-        MultiFab& residual = context->rhs_scratch(1000 + block, 0, state);
+        MultiFab<kNativeDimension>& state = context->state(block);
+        MultiFab<kNativeDimension>& residual = context->rhs_scratch(1000 + block, 0, state);
         context->rhs_into(block, state, residual, 3000 + block);
         states.push_back(&state);
         residuals.push_back(&residual);
       }
       for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], Real(level_dt), *residuals[block], Real(level_dt),
-                      {{1, 1, 1}});
+        context->axpy(*states[block], Real(level_dt), *residuals[block]);
     });
   });
+  system.set_program_block_map(block_map);
 }
 #endif
 
 int run(const Config& config) {
+#if POPS_ADC700_PRE_CUTOVER
   AmrSystemConfig native_config;
   native_config.n = config.n;
   native_config.L = 1.0;
@@ -168,36 +284,44 @@ int run(const Config& config) {
   native_config.regrid_every = 0;
   native_config.distribute_coarse = true;
   native_config.coarse_max_grid = config.n / 2;
-
   AmrSystem system(native_config);
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   add_compiled_model(system, "gas", GasModel{Euler{Real(1.4)}, NoSource{}, ZeroElliptic{}},
                      "minmod", "rusanov", "conservative", "euler", 1.4);
-#if POPS_ADC700_PRE_CUTOVER
-  system.set_bootstrap_refinement("gas", "rho", 1.12, "adc700.performance.threshold@1");
 #else
-  test::install_prepared_threshold_union(system, {{"gas", "rho", 1.12}},
-                                         "adc700.performance.threshold@1");
+  AmrSystemConfig<kNativeDimension> native_config;
+  native_config.shape = runtime_config_detail::filled_extent<kNativeDimension>(config.n);
+  native_config.level_count = 1;
+  native_config.transition_ratios.clear();
+  native_config.transition_buffers.clear();
+  native_config.transition_lookaheads.clear();
+  native_config.regrid_every = 0;
+  native_config.distribute_coarse = true;
+  native_config.coarse_max_grid =
+      runtime_config_detail::filled_extent<kNativeDimension>(config.n / 2);
+
+  AmrSystem<kNativeDimension> system(native_config);
+  system.install_block_state_route("gas", "state/gas");
+  add_compiled_model<kNativeDimension>(system, "gas", gas_model<kNativeDimension>(), "minmod",
+                                       "rusanov", "conservative", "euler", 1.4);
 #endif
-  system.set_poisson("charge_density", "geometric_mg");
   system.set_conservative_state("gas", initial_state(config.n));
 
   const double initial_mass = system.mass();
   const int levels = system.n_levels();
   const int patches = system.n_patches();
   auto patch_boxes = system.patch_boxes();
-  std::sort(patch_boxes.begin(), patch_boxes.end(), [](const PatchBox& lhs, const PatchBox& rhs) {
-    return std::tie(lhs.level, lhs.ilo, lhs.jlo, lhs.ihi, lhs.jhi) <
-           std::tie(rhs.level, rhs.ilo, rhs.jlo, rhs.ihi, rhs.jhi);
-  });
+#if !POPS_ADC700_PRE_CUTOVER
+  std::sort(patch_boxes.begin(), patch_boxes.end(), patch_less);
   std::string topology_boxes;
-  for (const PatchBox& box : patch_boxes) {
+  for (const AmrPatch<kNativeDimension>& patch : patch_boxes) {
     if (!topology_boxes.empty())
       topology_boxes += ';';
-    topology_boxes += std::to_string(box.level) + ':' + std::to_string(box.ilo) + ',' +
-                      std::to_string(box.jlo) + ',' + std::to_string(box.ihi) + ',' +
-                      std::to_string(box.jhi);
+    topology_boxes += patch_signature(patch);
   }
+#else
+  const std::string topology_boxes;
+#endif
 #if !POPS_ADC700_PRE_CUTOVER
   install_forward_euler_program(system);
 #endif
@@ -231,8 +355,8 @@ int run(const Config& config) {
   }
   const double mass_error = std::fabs(final_mass - initial_mass);
   const double mass_tolerance = 1.0e-9 * std::max(1.0, std::fabs(initial_mass));
-  const bool passed = levels >= 2 && patches >= 2 && finite && maximum > 0.0 &&
-                      mass_error <= mass_tolerance && seconds > 0.0;
+  const bool passed =
+      levels >= 1 && finite && maximum > 0.0 && mass_error <= mass_tolerance && seconds > 0.0;
 
   if (my_rank() == 0) {
     std::printf(

@@ -2,6 +2,7 @@
 
 It delegates existing numerics and imports codegen lazily to preserve the Spec-4 import graph.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,7 +11,6 @@ from pops._ir import Var  # noqa: F401  -- primitive_vars self-reference check
 from pops._ir.ops import left, right  # noqa: F401  -- Model.left / Model.right sugar
 
 from ._modelpkg import model as _model
-from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
 from ._model import HyperbolicModel
 from ._facade_compile import _FacadeCompileMixin
 from ._freeze import PhysicsFreezable
@@ -23,35 +23,71 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     ``eval_flux`` and exposes the compiled model through the lazy codegen mixin.
     """
 
-    _physics_mutators = frozenset({
-        "conservative_vars", "primitive", "primitive_vars", "aux", "aux_field",
-        "conservative_from", "flux", "flux_term", "eigenvalues", "wave_speeds",
-        "wave_speeds_from_jacobian", "stability_speed", "stability_dt", "source",
-        "source_term", "linear_source", "rate_operator", "rate", "field_solve",
-        "local_linear_map", "local_transform", "source_frequency", "source_jacobian", "projection",
-        "implicit_source", "enable_hllc", "set_riemann_hooks", "enable_roe",
-        "roe_dissipation", "roe_from_jacobian", "elliptic_rhs", "elliptic_field",
-        "gamma",
-    })
+    _physics_mutators = frozenset(
+        {
+            "conservative_vars",
+            "primitive",
+            "primitive_vars",
+            "recovery_admissibility",
+            "aux",
+            "conservative_from",
+            "flux",
+            "flux_term",
+            "eigenvalues",
+            "wave_speeds",
+            "wave_speeds_from_jacobian",
+            "stability_speed",
+            "stability_dt",
+            "source",
+            "source_term",
+            "linear_source",
+            "rate_operator",
+            "rate",
+            "field_solve",
+            "local_linear_map",
+            "local_transform",
+            "source_frequency",
+            "source_jacobian",
+            "projection",
+            "implicit_source",
+            "enable_hllc",
+            "set_riemann_hooks",
+            "enable_roe",
+            "roe_dissipation",
+            "roe_from_jacobian",
+            "elliptic_rhs",
+            "elliptic_field",
+            "gamma",
+        }
+    )
 
     def __init__(self, name: Any) -> None:
         self._init_physics_freeze()
         self._m = HyperbolicModel(name)
         self._param_registry = _model.ParamRegistry(
-            owner=self._m.owner_path, mutation_guard=self._guard_mutable)
+            owner=self._m.owner_path, mutation_guard=self._guard_mutable
+        )
         self._module_cache = None
 
-    def _invalidate_authoring_views(self) -> None: self._module_cache = None
+    def _invalidate_authoring_views(self) -> None:
+        self._module_cache = None
+
     @property
-    def name(self) -> Any: return self._m.name
+    def name(self) -> Any:
+        return self._m.name
+
     @property
-    def owner_path(self) -> Any: return self._m.owner_path
-    def declaration_index(self) -> Any: return self.module.declaration_index()
+    def owner_path(self) -> Any:
+        return self._m.owner_path
+
+    def declaration_index(self) -> Any:
+        return self.module.declaration_index()
 
     @property
     def capabilities(self) -> Any:
         """Typed capability handles; missing capabilities fail explicitly on access."""
         from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: keep facade lean
+
         return _CapabilityHandles(self)
 
     # --- variable declaration (direct delegation to HyperbolicModel) ---
@@ -71,8 +107,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         Keyword and positional forms are exclusive; keyword insertion order defines the layout.
         """
         if named and vars:
-            raise ValueError("primitive_vars: mixing positional form and named kwargs "
-                             "(choose one; kwargs define AND order the primitives)")
+            raise ValueError(
+                "primitive_vars: mixing positional form and named kwargs "
+                "(choose one; kwargs define AND order the primitives)"
+            )
         if named:
             # kwargs: define each primitive, then fix the layout in insertion order.
             # A primitive is NOT (re)defined if the kwarg is the Var of the SAME name -- otherwise the codegen
@@ -94,35 +132,37 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.set_primitive_state(*vars, roles=roles)
         return None
 
-    def aux(self, name: Any) -> Any:
-        """CANONICAL auxiliary field (must be a key of AUX_CANONICAL: phi/grad_x/grad_y/B_z/T_e)."""
-        return self._m.aux(name)
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare fail-closed physical constraints for primitive recovery candidates.
 
-    def aux_field(self, name: Any) -> Any:
-        """NAMED auxiliary field (ADC-70 phase 1) provided by a block via System.set_aux_field(block, name,
-        array). name is ARBITRARY (identifier); the k-th call reserves the aux channel component
-        AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k)). At most AUX_NAMED_MAX per model.
-        Returns a Var usable in flux / source / eigenvalues. Delegates to HyperbolicModel.aux_field."""
-        return self._m.aux_field(name)
+        Each keyword names one component of the primitive layout and maps it to a symbolic Boolean
+        expression over primitive variables.  Example: ``rho=rho > 0, p=p > 0``.  Finite candidates
+        that violate a declared predicate are rejected by the native prepared recovery chain before
+        any solution or warm-start publication.
+        """
+        self._m.recovery_admissibility(**constraints)
+
+    def aux(self, name: Any) -> Any:
+        """Declare one ordinary auxiliary input/output field."""
+        return self._m.aux(name)
 
     def conservative_from(self, exprs: Any) -> None:
         """Inverse prim -> cons (the DSL cannot invert symbolically)."""
         self._m.set_conservative_from(exprs)
 
     # --- flux: symbolic DECLARATOR vs numpy EVALUATOR (DISTINCT names, settled decision) ---
-    def flux(self, x: Any, y: Any) -> None:
-        """Symbolic DECLARATOR of the physical flux (delegates to set_flux). x/y: lists of Expr, one
-        per conservative component. DO NOT confuse with the numpy evaluator eval_flux."""
-        self._m.set_flux(x, y)
+    def flux(self, **directions: Any) -> None:
+        """Declare one physical-flux vector on every inferred Cartesian axis."""
+        self._m.set_flux(**directions)
 
-    def flux_term(self, name: Any, x: Any, y: Any) -> None:
+    def flux_term(self, name: Any, **directions: Any) -> None:
         """NAMED physical flux F_name(U, primitives, aux, params): exactly n_cons expressions per
         direction (delegates to HyperbolicModel.flux_term). Opt-in -- emitted only when a compiled time
         Program selects it (ctx.rhs(..., fluxes=[name, ...])), never folded into the historical -div F.
         name='default' is the backward-compatible alias of m.flux(...): ctx.rhs(fluxes=['default']) is
         byte-identical to the historical flux-only RHS. A Program requesting several named fluxes
         assembles -div of their SUM."""
-        self._m.flux_term(name, x, y)
+        self._m.flux_term(name, **directions)
 
     def eval_flux(self, U: Any, aux: Any, dir: Any) -> Any:
         """numpy EVALUATOR of the physical flux (debug / host proto; delegates to HyperbolicModel.flux).
@@ -136,23 +176,30 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         collision) against an oracle without compiling."""
         return self._m.source_value(U, aux)
 
-    def eigenvalues(self, x: Any, y: Any) -> None:
-        """Eigenvalues (characteristic speeds) per direction (delegates to set_eigenvalues)."""
-        self._m.set_eigenvalues(x, y)
+    def eigenvalues(self, **directions: Any) -> None:
+        """Declare characteristic speeds on every inferred Cartesian axis."""
+        self._m.set_eigenvalues(**directions)
 
-    def wave_speeds(self, x: Any, y: Any) -> None:
+    def wave_speeds(self, **directions: Any) -> None:
         """Explicit SIGNED wave speeds per direction: x = (smin_x, smax_x), y = (smin_y,
         smax_y). Emits ``wave_speeds(U, aux, dir, smin, smax)`` on the brick WITHOUT requiring a
         primitive 'p': riemann='hll' becomes available for a model without pressure (moment
         system, isothermal...). Takes priority over the historical path (eigenvalues + 'p'); if
         eigenvalues is not declared, max_wave_speed (Rusanov / CFL) derives from ``max(|smin|, |smax|)``.
         Delegates to set_wave_speeds; cf. HyperbolicModel.set_wave_speeds."""
-        self._m.set_wave_speeds(x, y)
+        self._m.set_wave_speeds(**directions)
         self._invalidate_authoring_views()
 
-    def wave_speeds_from_jacobian(self, x: Any = None, y: Any = None, eig: str = "numeric",
-                                  blocks: Any = None, fd_eps: Any = None,
-                                  eig_max_iter: Any = None, im_tol: Any = None) -> None:
+    def wave_speeds_from_jacobian(
+        self,
+        *,
+        eig: str = "numeric",
+        blocks: Any = None,
+        fd_eps: Any = None,
+        eig_max_iter: Any = None,
+        im_tol: Any = None,
+        **jacobians: Any,
+    ) -> None:
         """EXACT signed wave speeds from the eigenvalues of the flux jacobian (delegates to
         set_wave_speeds_from_jacobian, see its full contract): x/y = dF/dU as Expr (None =
         AUTODIFF of the declared flux via flux_jacobian); eig = 'numeric' | 'fd' (finite differences
@@ -163,8 +210,14 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         per-eigenvalue iteration cap and the relative imaginary-part tolerance. ``im_tol=None`` uses
         the strict native machine-roundoff floor, ``im_tol=0`` requests exact-zero classification,
         and every explicit non-negative value participates in the compile cache key."""
-        self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps,
-                                              eig_max_iter=eig_max_iter, im_tol=im_tol)
+        self._m.set_wave_speeds_from_jacobian(
+            eig=eig,
+            blocks=blocks,
+            fd_eps=fd_eps,
+            eig_max_iter=eig_max_iter,
+            im_tol=im_tol,
+            **jacobians,
+        )
         self._invalidate_authoring_views()
 
     def eval_wave_speeds(self, U: Any, aux: Any, dir: Any) -> Any:
@@ -209,8 +262,9 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         which a Program can pass to ``P.call`` in place of the string name."""
         return self._m.linear_source(name, matrix)
 
-    def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
-                      fluxes: Any = None) -> Any:
+    def rate_operator(
+        self, name: Any, *, flux: bool = True, sources: Any = ("default",), fluxes: Any = None
+    ) -> Any:
         """NAMED composite rate operator R_name = -div F + sum(sources) (Spec 2, operator-first):
         a Program-side alias for ctx.rhs(flux=, sources=, fluxes=) so a model-free Program can call
         P.call(name, U[, fields]) instead of P.rhs(...). Delegates to HyperbolicModel.rate_operator.
@@ -237,12 +291,15 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         the operator was already registered by the underlying declarer; this only enriches the handle.
         """
         from pops.model import OperatorHandle
+
         op = self._m.operator_registry().get(name)
         return OperatorHandle(
-            op.name, kind=op.kind, owner=self._m.owner_path, signature=op.signature)
+            op.name, kind=op.kind, owner=self._m.owner_path, signature=op.signature
+        )
 
-    def rate(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
-             fluxes: Any = None) -> Any:
+    def rate(
+        self, name: Any, *, flux: bool = True, sources: Any = ("default",), fluxes: Any = None
+    ) -> Any:
         """Declare a RATE operator ``R: (U, Fields) -> Rate(U)`` (ADC-559): the mathematical spelling of
         :meth:`rate_operator`. ``R = -div F + sum(sources)``; the returned inspectable handle carries
         the derived ``Signature`` and ``category == "rate"``. Funnels into the ONE typed registry (no
@@ -252,7 +309,12 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         return self._typed_handle(name)
 
     def field_solve(
-        self, name: Any, rhs: Any, *, operator: str = "poisson", aux: Any = None,
+        self,
+        name: Any,
+        rhs: Any,
+        *,
+        operator: str = "poisson",
+        aux: Any = None,
         gradient_sign: int = 1,
     ) -> Any:
         """Declare a FIELD-SOLVE operator ``F: U -> Fields`` (ADC-559): the mathematical spelling of
@@ -262,8 +324,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         ``FieldDiscretization`` supply the runtime route; the model declaration itself chooses no
         numerical solver.
         """
-        self._m.elliptic_field(
-            name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign)
+        self._m.elliptic_field(name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign)
         return self._typed_handle(name)
 
     def local_linear_map(self, name: Any, matrix: Any) -> Any:
@@ -288,7 +349,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         return self._typed_handle(name)
 
     def local_transform_value(
-        self, name: Any, state: Any, aux: Any = None,
+        self,
+        name: Any,
+        state: Any,
+        aux: Any = None,
     ) -> Any:
         """Evaluate one declared local transform once through its host oracle."""
         return self._m.local_transform_value(name, state, aux)
@@ -340,31 +404,30 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.set_riemann_hooks(**forms)
         return self
 
-    def enable_roe(self) -> None:
+    def enable_roe(self, *, entropy_fix: Any = None) -> None:
         """Emits the ROE capability (roe_dissipation = ``|A_roe| dU`` generated from the ROLES +
         primitive 'p'): riemann='roe' becomes available for this model EVEN outside 4-variable
         Euler (without Energy: c = sqrt(p/rho) averaged Roe-style; components outside the fluid
-        roles = passive scalars on the entropy wave). Delegates to HyperbolicModel.enable_roe."""
-        self._m.enable_roe()
+        roles = passive scalars on the entropy wave). ``entropy_fix`` is a typed
+        ``riemann.Harten(delta)`` or ``riemann.NoEntropyFix()`` policy. Delegates to
+        HyperbolicModel.enable_roe."""
+        self._m.enable_roe(entropy_fix=entropy_fix)
 
-    def roe_dissipation(self, x: Any, y: Any) -> None:
-        """Roe dissipation PROVIDED by the user (outside the fluid roles): n_vars expressions per
-        direction (x=, y=), written with m.left(...)/m.right(...) (or dsl.left/right) of the two states,
-        emitted as the C++ hook roe_dissipation(UL, AL, UR, AR, dir). During the 'provided' mode of enable_roe
-        (a single provider: supplying both together raises). The helper m.flux_jacobian assists the writing.
-        Delegates to HyperbolicModel.roe_dissipation (cf. its doc)."""
-        self._m.roe_dissipation(x, y)
+    def roe_dissipation(self, **directions: Any) -> None:
+        """Declare one provided Roe action on every inferred Cartesian axis."""
+        self._m.roe_dissipation(**directions)
 
     def flux_jacobian(self, dir: Any) -> Any:
         """Flux Jacobian A = dF_dir/dU (an n_vars x n_vars matrix of Expr, A[i][j]=d(F_i)/d(U_j)),
         auto-derived from the fluxes declared via dsl.diff (expanded primitives). HELPER for building
-        m.roe_dissipation, emits nothing. @p dir: 0/'x' or 1/'y'. Delegates to HyperbolicModel."""
+        m.roe_dissipation, emits nothing. ``dir`` is a typed ranked name or ordinal."""
         return self._m.flux_jacobian(dir)
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
         """Generic moment Roe: emits roe_dissipation = ``|A| (UR-UL)`` with A the flux Jacobian at
-        Uavg = 1/2(UL+UR). ``entropy_fix=delta`` selects the generic Harten spectral function
-        ``Phi_delta(A)``; ``None`` uses the matrix absolute value with a real-singular zero-mode
+        Uavg = 1/2(UL+UR). ``entropy_fix=riemann.Harten(delta)`` selects the generic Harten
+        spectral function ``Phi_delta(A)``; ``riemann.NoEntropyFix()`` (or the omitted default)
+        uses the matrix absolute value with a real-singular zero-mode
         projector. Both refuse complex/non-converged spectra and never substitute Rusanov.
         Roles-free (no Density/Momentum, no 'p'): makes riemann='roe'
         available for a moment hierarchy. Exclusive with enable_roe / roe_dissipation.
@@ -385,15 +448,25 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.set_elliptic_rhs(e)
 
     def elliptic_field(
-        self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None,
-        *, gradient_sign: int = 1,
+        self,
+        name: Any,
+        rhs: Any,
+        operator: str = "poisson",
+        aux: Any = None,
+        *,
+        gradient_sign: int = 1,
+        dimension: int | None = None,
     ) -> None:
-        """NAMED elliptic field: an elliptic solve operator(field) = rhs(U) populating the named @p aux
-        fields (default ['phi', 'grad_x', 'grad_y']); delegates to HyperbolicModel.elliptic_field. The
-        IR, validation and hash feed the case-owned callable field route. Solver and boundary choices
-        remain in ``FieldDiscretization`` rather than this physics declaration."""
+        """Named elliptic field with explicit ordinary output names in ``aux``.
+
+        The solve is ``operator(field) = rhs(U)``; the first output is the
+        solved scalar and optional remaining outputs are its ranked gradient.
+        No potential or gradient spelling is reserved.  Solver and boundary
+        choices remain in ``FieldDiscretization`` rather than this declaration.
+        """
         self._m.elliptic_field(
-            name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign)
+            name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign, dimension=dimension
+        )
 
     def gamma(self, value: Any) -> None:
         """Adiabatic index (EOS), carried by POPS_EXPORT_BLOCK_GAMMA (delegates to set_gamma)."""
@@ -447,27 +520,47 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """Checks the dependencies (referenced variables are declared). Raises ValueError otherwise."""
         return self._m.check()
 
-    def check_model(self, samples: Any = None, n_samples: int = 64, seed: int = 0, aux: Any = None,
-                    rtol: float = 1e-8, atol: float = 1e-10, raise_on_error: bool = True,
-                    jac_rtol: float = 1e-3, jac_atol: float = 1e-9) -> Any:
+    def check_model(
+        self,
+        samples: Any = None,
+        n_samples: int = 64,
+        seed: int = 0,
+        aux: Any = None,
+        rtol: float = 1e-8,
+        atol: float = 1e-10,
+        raise_on_error: bool = True,
+        jac_rtol: float = 1e-3,
+        jac_atol: float = 1e-9,
+    ) -> Any:
         """Generic NUMERICAL verification of the model (finite flux/source/elliptic, real and finite
         eigenvalues, wave_speeds/max_wave_speed consistency, non-circular bounding of the spectrum by
         the dense Jacobian, cons<->prim round-trip, positivity of Density/'p') on sample states.
         Delegates to HyperbolicModel.check_model (cf. its doc). To be called BEFORE compile(); the
         runtime counterpart of an installed block is System.check_model."""
-        return self._m.check_model(samples=samples, n_samples=n_samples, seed=seed, aux=aux,
-                                   rtol=rtol, atol=atol, raise_on_error=raise_on_error,
-                                   jac_rtol=jac_rtol, jac_atol=jac_atol)
+        return self._m.check_model(
+            samples=samples,
+            n_samples=n_samples,
+            seed=seed,
+            aux=aux,
+            rtol=rtol,
+            atol=atol,
+            raise_on_error=raise_on_error,
+            jac_rtol=jac_rtol,
+            jac_atol=jac_atol,
+        )
 
     # --- introspection (read-only, delegated to the backing model) ---
     @property
-    def cons_names(self) -> Any: return self._m.cons_names
+    def cons_names(self) -> Any:
+        return self._m.cons_names
 
     @property
-    def prim_state(self) -> Any: return self._m.prim_state
+    def prim_state(self) -> Any:
+        return self._m.prim_state
 
     @property
-    def n_vars(self) -> Any: return self._m.n_vars
+    def n_vars(self) -> Any:
+        return self._m.n_vars
 
     def state_space(self, name: str = "U") -> Any:
         """Typed pops.model.StateSpace view of the conservative state (Spec 2).
@@ -498,13 +591,28 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         mod = _model.Module(self.name, owner=self._m.owner_path)
         st = self._m.state_space()
         mod.state_space(
-            st.name, st.components, roles=st.roles, layout=st.layout, storage=st.storage,
-            representation=st.representation, centering=st.centering, units=st.units,
-            frame=st.frame, clock=st.clock)
+            st.name,
+            st.components,
+            roles=st.roles,
+            layout=st.layout,
+            storage=st.storage,
+            representation=st.representation,
+            centering=st.centering,
+            units=st.units,
+            frame=st.frame,
+            clock=st.clock,
+        )
         fs = self._m.field_space()
         mod.field_space(
-            fs.name, fs.components, layout=fs.layout, representation=fs.representation,
-            centering=fs.centering, units=fs.units, frame=fs.frame, clock=fs.clock)
+            fs.name,
+            fs.components,
+            layout=fs.layout,
+            representation=fs.representation,
+            centering=fs.centering,
+            units=fs.units,
+            frame=fs.frame,
+            clock=fs.clock,
+        )
         # ``module`` is a typed view of this exact model definition, not another
         # declaration owner. Share the one registry so handles never acquire a
         # parallel authority with merely equal-looking IDs.
@@ -518,6 +626,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
             mod.set_wave_speed_provider("pressure_derived")
         self._module_cache = mod
         return mod
+
     # --- operator introspection (Spec 2, S2-5) ---
     def list_operators(self) -> Any:
         """Names of the typed operators this model exposes (registration order)."""

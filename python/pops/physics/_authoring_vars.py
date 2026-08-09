@@ -2,8 +2,8 @@
 
 Split out of the monolithic :class:`~pops.physics._model.HyperbolicModel` so no
 single file exceeds the Spec-4 500-line bound. The mixin holds only methods; the
-instance attributes they touch (``cons_names`` / ``prim_defs`` / ``aux_names``
-/ ``aux_extra_names`` / ``prim_state`` / ``cons_from`` / ``prim_roles``) are
+instance attributes they touch (``cons_names`` / ``prim_defs`` / ``_provider_components``
+/ ``prim_state`` / ``cons_from`` / ``prim_roles``) are
 created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics._model`).
 
 Imports only :mod:`pops._ir` and the package-level aux constants: this layer is
@@ -15,12 +15,25 @@ from typing import TYPE_CHECKING, Any
 
 from pops._ir import Var, _wrap
 
-from .aux import AUX_CANONICAL, AUX_NAMED_MAX, aux_total_n_aux
-
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
 else:
     _HyperbolicModel = object
+
+
+def _require_provider_component_name(value: Any, *, where: str = "provider") -> str:
+    """Validate one source-level component spelling used as a generated C++ local.
+
+    Identity and storage are resolved exclusively by the ProviderPack.  This
+    small authoring check only prevents an invalid formula local from reaching
+    the C++ compiler.
+    """
+    if not isinstance(value, str) or not value.isidentifier():
+        raise ValueError(
+            "%s name must be a valid identifier (letters/digits/_, without a leading digit)"
+            % where
+        )
+    return value
 
 
 class _VariablesMixin(_HyperbolicModel):
@@ -46,63 +59,109 @@ class _VariablesMixin(_HyperbolicModel):
         return Var(name, "prim")
 
     def aux(self, name: Any) -> Any:
-        """CANONICAL auxiliary field (e.g. grad_x, grad_y, B_z, T_e) provided at execution. The name
-        MUST be a key of AUX_CANONICAL. For an arbitrary NAMED field, see aux_field.
+        """Declare one ordinary auxiliary input/output by local identifier.
 
-        IDEMPOTENT: declaring the SAME canonical aux twice (e.g. the model declares ``B_z`` and
-        ``author_electrostatic_lorentz`` also reads it) reserves the channel ONCE. Re-appending would
-        emit the per-cell binding ``const pops::Real B_z = a.B_z;`` twice in one kernel scope (a C++
-        redefinition), so the second declaration returns the Var without re-registering."""
-        if name not in self.aux_names:
-            self.aux_names.append(name)
-        return Var(name, "aux")
-
-    def aux_field(self, name: Any) -> Any:
-        """NAMED auxiliary field (ADC-70 phase 1) provided at execution per block via
-        System.set_aux_field(bloc, name, array). Unlike aux(...) (CANONICAL components
-        phi/grad/B_z/T_e), name is ARBITRARY: the k-th call reserves component
-        AUX_NAMED_BASE + k of the aux channel (read in C++ via aux.extra_field(k)). Returns a Var
-        usable in flux / source / eigenvalues / elliptic_rhs like any other aux variable.
-
-        At most AUX_NAMED_MAX named fields per model (FIXED bound on the C++ side, Aux POD). A name already
-        canonical (B_z, T_e, phi...) is REJECTED: those fields have their dedicated paths (aux('B_z') +
-        set_magnetic_field, etc.); a duplicate named name is also rejected."""
-        # The name becomes a C++ LOCAL in the generated formula (cf. _aux_locals_lines) AND the key of the
-        # facade table: it must be a valid C++ identifier (letters/digits/_, not a
-        # leading digit). Explicit rejection rather than a .so that does not compile.
-        if not (isinstance(name, str) and name.isidentifier()):
-            raise ValueError("aux_field(%r): invalid name (C++ identifier expected: "
-                             "letters/digits/_, without a leading digit)" % (name,))
-        if name in AUX_CANONICAL:
-            raise ValueError(
-                "aux_field('%s') : '%s' is a CANONICAL aux field; use aux('%s') (and the "
-                "dedicated path, e.g. set_magnetic_field for B_z, set_electron_temperature_from "
-                "for T_e)" % (name, name, name))
-        if name in self.aux_extra_names:
-            raise ValueError("aux_field('%s') : field already declared" % name)
-        if len(self.aux_extra_names) >= AUX_NAMED_MAX:
-            raise ValueError("aux_field('%s') : at most %d named aux fields per model "
-                             "(kAuxMaxExtra bound on the C++ side)" % (name, AUX_NAMED_MAX))
-        self.aux_extra_names.append(name)
+        The compiler resolves its owner, space, contract and compact native
+        slot from the canonical ``ProviderPack``; no spelling has a reserved
+        physical meaning.
+        """
+        name = _require_provider_component_name(name, where="provider")
+        if name not in self._provider_components:
+            self._provider_components.append(name)
+            self._invalidate_authoring_views()
         return Var(name, "aux")
 
     def _aux_locals_lines(self) -> Any:
-        """C++ locals for the aux fields read in a formula: canonical '<n>' <- a.<n> ;
-        named '<n>' <- a.extra_field(k) (k = position in aux_extra_names). The local name is
-        IDENTICAL to the one the Expr emits (Var.to_cpp), so the formula references it directly."""
-        lines = ["    const pops::Real %s = a.%s;" % (n, n) for n in self.aux_names]
-        lines += ["    const pops::Real %s = a.extra_field(%d);" % (n, k)
-                  for k, n in enumerate(self.aux_extra_names)]
-        return lines
+        """C++ locals read through exact compact provider-pack slots."""
+        from pops._ir.visitors import _dependencies
+
+        used = _dependencies(self._source or ())
+        return [
+            "    const pops::Real %s = a.template flux_provider<%d>();"
+            % (name, self._consumer_provider_slot("source_default", name))
+            for name in self._provider_components if name in used
+        ]
+
+    def _flux_provider_locals_lines(self) -> Any:
+        """C++ locals read from the exact physical-flux provider protocol.
+
+        This emits no global auxiliary storage access. ``BoundFluxProviders<Model>`` implements
+        ``flux_provider<ConsumerSlot>()`` over the exact physical-flux consumer plan, so generated
+        physical laws keep one formula while the finite-volume route consumes only its resolved pack.
+        """
+        from pops._ir.visitors import _dependencies
+
+        expressions = [
+            *[expr for values in self._flux.values() for expr in values],
+            *[expr for values in self._eig.values() for expr in values],
+        ]
+        if self._wave_speeds is not None:
+            expressions.extend(
+                expr for values in self._wave_speeds.values() for expr in values
+            )
+        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
+            expressions.extend(
+                expr
+                for matrix in self._ws_jacobian["rows"].values()
+                for row in matrix
+                for expr in row
+            )
+        used = _dependencies(expressions)
+        return [
+            "    const pops::Real %s = a.template flux_provider<%d>();"
+            % (name, self._physical_flux_consumer_slot(name))
+            for name in self._provider_components if name in used
+        ]
 
     def _reads_aux(self) -> bool:
-        """True if a formula reads an aux field (canonical or named): drives the naming of the Aux
-        parameter ('a' vs anonymous) so as not to trigger an unused-parameter warning."""
-        return bool(self.aux_names) or bool(self.aux_extra_names)
+        """True if a formula reads an auxiliary provider."""
+        return bool(self._provider_components)
 
     def _total_n_aux(self) -> Any:
-        """TOTAL width of the model's aux channel (canonical + named fields)."""
-        return aux_total_n_aux(self.aux_names, self.aux_extra_names)
+        """Total width of the resolved compact provider-pack channel."""
+        pack = getattr(self, "_auxiliary_provider_pack", None)
+        if pack is None:
+            raise ValueError(
+                "auxiliary ProviderPack is absent; compile through the canonical Module authority"
+            )
+        return len(pack)
+
+    def _physical_flux_consumer_slot(self, name: Any) -> int:
+        """Return a physical-flux *consumer* slot, never a carrier slot."""
+        plan = getattr(self, "_component_flux_consumer_plan", None)
+        if plan is None:
+            raise ValueError(
+                "physical-flux consumer plan is absent; compile through Module"
+            )
+        checked = _require_provider_component_name(name, where="provider")
+        matches = [
+            row for row in plan if row["key"]["component"] == checked
+        ]
+        if len(matches) != 1:
+            detail = "absent" if not matches else "ambiguous"
+            raise ValueError(
+                "auxiliary component %r is %s from the physical-flux consumer plan"
+                % (checked, detail)
+            )
+        return matches[0]["consumer_slot"]
+
+    def _consumer_provider_slot(self, consumer: Any, name: Any) -> int:
+        """Return a named operator's local provider slot."""
+        plans = getattr(self, "_component_operator_consumer_plans", None)
+        if plans is None:
+            raise ValueError("auxiliary consumer plans are absent; compile through Module")
+        plan = plans.get(consumer)
+        if plan is None:
+            raise ValueError("auxiliary consumer plan %r is absent" % consumer)
+        checked = _require_provider_component_name(name, where="provider")
+        matches = [row for row in plan if row["key"]["component"] == checked]
+        if len(matches) != 1:
+            detail = "absent" if not matches else "ambiguous"
+            raise ValueError(
+                "auxiliary component %r is %s from consumer plan %r"
+                % (checked, detail, consumer)
+            )
+        return matches[0]["consumer_slot"]
 
     def set_primitive_state(self, *vars_or_names: Any, roles: Any = None) -> None:
         """Declares the ORDERED layout of the primitive state (Prim): component names, in order.

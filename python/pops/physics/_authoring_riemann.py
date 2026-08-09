@@ -1,7 +1,7 @@
 """Authoring mixin: Riemann capabilities (HLLC, Roe) and hook overrides.
 
 Methods only; the touched attributes (``_hllc`` / ``_roe`` / ``_roe_rows`` /
-``_roe_jacobian`` / ``_riemann_hook_forms``) are created by
+``_roe_jacobian`` / ``_roe_entropy_policy`` / ``_riemann_hook_forms``) are created by
 ``HyperbolicModel.__init__``. ``roe_from_jacobian`` reuses ``flux_jacobian``
 (provided by the flux mixin) on ``self``. Codegen-free and ``_pops``-free at
 module scope: ``_roe_validate`` (a pure marker validator) is imported LAZILY
@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING, Any
 
 from pops._ir import Expr, _wrap  # noqa: F401  -- _wrap in roe_dissipation, Expr in hook checks
 
+from pops._cartesian_axes import canonical_axis_mapping
 from pops._dense_spectral import DENSE_SPECTRAL
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
 else:
     _HyperbolicModel = object
-
 
 class _RiemannMixin(_HyperbolicModel):
     """HLLC / Roe capability emission and arbitrary-formula hook overrides."""
@@ -33,12 +33,13 @@ class _RiemannMixin(_HyperbolicModel):
 
     def enable_hllc(self) -> Any:
         """Emits the HLLC CAPABILITY (audit wave 3): ``contact_speed`` (Toro) + ``hllc_star_state``
-        GENERATED from the block's ROLES (Density / MomentumX / MomentumY, Energy optional) and the
+        GENERATED from the block's ROLES (Density / MomentumX[/Y[/Z]], Energy optional) and the
         primitive 'p' -- the core's contact-resolving HLLC solver (C++ trait HasHLLCStructure)
         then becomes available for THIS model, EVEN outside 4-variable Euler (3-var isothermal,
         moments with passive scalars: any component without a particular role is advected
         passively in the star state, Us[c] = fac*U[c]/rho). REQUIRES: roles Density/MomentumX/
-        MomentumY declared + primitive 'p' (explicit error at emission otherwise)."""
+        momentum role of every ranked Cartesian axis + primitive 'p' (explicit error at emission
+        otherwise)."""
         self._hllc = True
         return self
 
@@ -69,23 +70,27 @@ class _RiemannMixin(_HyperbolicModel):
             self._riemann_hook_forms[name] = form
         return self
 
-    def enable_roe(self) -> None:
+    def enable_roe(self, *, entropy_fix: Any = None) -> None:
         """Emits the ROE CAPABILITY (audit balance, GENERICITY_2026-06.md point 11):
-        ``roe_dissipation(UL, AL, UR, AR, dir)`` = ``|A_roe| (UR - UL)`` GENERATED from the block's
+        ``roe_dissipation<Axis>(UL, AL, UR, AR)`` = ``|A_roe| (UR - UL)`` GENERATED from the block's
         ROLES -- the core's Roe-like solver (C++ trait HasRoeDissipation, F = 1/2(FL+FR) - 1/2 d)
         becomes available for THIS model, EVEN outside 4-variable Euler:
 
-        - roles Density/MomentumX/MomentumY + Energy: ideal-gas Roe algebra, exact
+        - roles Density/MomentumX[/MomentumY[/MomentumZ]] + Energy: ideal-gas Roe algebra, exact
           TRANSCRIPTION of the canonical C++ path (sqrt(rho)-weighted averages, gamma-1 deduced from
-          ``p/(E - 1/2 rho |v|^2)``, Harten entropy fix on the acoustic waves);
-        - roles Density/MomentumX/MomentumY WITHOUT Energy (isothermal / pseudo-pressure): same
+          ``p/(E - 1/2 rho |v|^2)``, with the selected typed entropy policy on the acoustic waves);
+        - the same ranked density/momentum roles WITHOUT Energy (isothermal / pseudo-pressure): same
           decomposition without the energy row, LOCAL sound speed c = sqrt(p/rho) Roe-averaged
           (standard generalization outside ideal gas);
         - any component OUTSIDE the fluid roles is treated as a PASSIVE SCALAR carried by the
           entropy wave (row identical to the tangential momentum, phi = q/rho).
 
-        REQUIRES: roles Density/MomentumX/MomentumY declared + primitive 'p' (explicit error at
-        emission otherwise). Without a call: nothing emitted, riemann='roe' stays Euler-4-var-only.
+        REQUIRES: Density plus the momentum role of every ranked Cartesian axis and primitive 'p'
+        (explicit error at emission otherwise). Without a call: nothing emitted.
+
+        ``entropy_fix`` is a typed ``riemann.Harten(delta)`` or
+        ``riemann.NoEntropyFix()`` policy.  Omitting it retains the historical Harten delta 0.1;
+        bare numeric values are refused so the compiled provider never hides a magic scalar.
 
         EXCLUSIVE with m.roe_dissipation: the capability from the roles and the dissipation PROVIDED by
         the user are two providers of the SAME roe_dissipation hook -- declaring both
@@ -96,12 +101,19 @@ class _RiemannMixin(_HyperbolicModel):
         if self._roe_jacobian is not None:
             raise ValueError("enable_roe : roe_from_jacobian() already declared -- one single provider "
                              "of the roe_dissipation hook")
+        from pops.numerics.riemann.providers import Harten, require_entropy_policy
+
+        self._roe_entropy_policy = require_entropy_policy(
+            entropy_fix,
+            default=Harten(),
+            where="enable_roe.entropy_fix",
+        )
         self._roe = True
 
-    def roe_dissipation(self, x: Any, y: Any) -> None:
+    def roe_dissipation(self, **directions: Any) -> None:
         """Roe dissipation PROVIDED by the user (outside the fluid-role families): n_vars
         expressions per direction (rows d_i), emitted as the C++ hook
-        ``roe_dissipation(UL, AL, UR, AR, dir)`` = d (HasRoeDissipation trait; the core does
+        ``roe_dissipation<Axis>(UL, AL, UR, AR)`` = d (HasRoeDissipation trait; the core does
         F = 1/2(FL+FR) - 1/2 d, cf. RoeFlux). It is the 'provided' counterpart of m.enable_roe (generated
         from the ROLES): here the user writes THEIR eigenstructure -- same spirit as
         m.source_jacobian (provided, not invented). The helper m.flux_jacobian(dir) (A = dF/dU
@@ -112,8 +124,7 @@ class _RiemannMixin(_HyperbolicModel):
         (left(sqrt(rho))*left(u) + right(sqrt(rho))*right(u)) / (left(sqrt(rho)) + right(sqrt(rho))).
         A BARE variable (without a marker) raises at declaration (undetermined state).
 
-        @p x, @p y : lists of n_vars expressions (rows for dir=0 and dir=1). TWO EXPLICIT sets
-        (no role mapping here): at dir=0 the normal component is the x axis, at dir=1 the y axis.
+        Axis rows are an exact canonical x[/y[/z]] map matching ``set_flux``.
 
         Guards: length n_vars per direction; each variable under left/right; conflict with
         enable_roe (one single provider of the hook) -> error. WITHOUT a call: nothing emitted (bit-identical).
@@ -124,20 +135,36 @@ class _RiemannMixin(_HyperbolicModel):
         if self._roe_jacobian is not None:
             raise ValueError("roe_dissipation : roe_from_jacobian() already declared -- one single "
                              "provider of the roe_dissipation hook")
-        rx, ry = list(x), list(y)
-        if len(rx) != self.n_vars or len(ry) != self.n_vars:
-            raise ValueError("roe_dissipation : %d expressions expected per direction (got x=%d, "
-                             "y=%d)" % (self.n_vars, len(rx), len(ry)))
+        rows = {
+            axis: [_wrap(expression) for expression in expressions]
+            for axis, expressions in canonical_axis_mapping(
+                directions, where="roe_dissipation"
+            ).items()
+        }
+        axes = tuple(self._flux)
+        if not axes or tuple(rows) != axes:
+            raise ValueError(
+                "roe_dissipation axis set must exactly match set_flux %s" % (axes,)
+            )
+        wrong = {
+            axis: len(expressions)
+            for axis, expressions in rows.items()
+            if len(expressions) != self.n_vars
+        }
+        if wrong:
+            raise ValueError(
+                "roe_dissipation : %d expressions expected on every ranked axis; got %r"
+                % (self.n_vars, wrong)
+            )
         from pops.codegen.cpp_writer import _roe_validate  # lazy: keep physics codegen-free at import
-        rows = {"x": [_wrap(e) for e in rx], "y": [_wrap(e) for e in ry]}
-        for key in ("x", "y"):
+        for key in rows:
             for e in rows[key]:
                 _roe_validate(e, False)  # rejects any variable outside a left()/right() marker
         self._roe_rows = rows
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
-        """Generic moment Roe: emit the hook ``roe_dissipation(UL, AL, UR, AR, dir)`` =
-        ``|A| (UR - UL)`` with ``A = dF_dir/dU`` the flux Jacobian (m.flux_jacobian, autodiff)
+        """Generic moment Roe: emit ``roe_dissipation<Axis>(UL, AL, UR, AR)`` =
+        ``|A| (UR - UL)`` with ``A = dF_Axis/dU`` the flux Jacobian (m.flux_jacobian, autodiff)
         evaluated at the ARITHMETIC MEAN interface state ``Uavg = 1/2 (UL + UR)``, and ``|A|`` via
         the matrix-sign kernel ``pops::roe_abs_apply`` (dense_eig.hpp): for a real-diagonalizable A
         this is ``R |Lambda| R^-1`` exactly. ``entropy_fix`` optionally selects the Harten spectral
@@ -146,8 +173,10 @@ class _RiemannMixin(_HyperbolicModel):
           Phi_delta(lambda) = |lambda|                              if |lambda| >= delta
                             = 0.5 * (lambda^2 / delta + delta)       otherwise
 
-        ``delta`` is an exact, finite, strictly-positive authoring scalar and participates in the
-        compiled-model identity.  This configured path handles a zero eigenvalue natively; a
+        The option is typed: pass ``riemann.Harten(delta)`` or
+        ``riemann.NoEntropyFix()``. ``delta`` is an exact, finite, strictly-positive authoring
+        scalar and participates in the compiled-model identity.  This configured path handles a
+        zero eigenvalue natively; a
         complex or non-converged spectrum is refused by the generated native residual instead of
         being silently replaced by another Riemann solver.  Without ``entropy_fix``, the native
         matrix absolute value uses a scale-relative zero-mode projector for a singular real
@@ -178,18 +207,22 @@ class _RiemannMixin(_HyperbolicModel):
                 "spectral provider whose declared capacity covers this state."
             ),
         )
-        selected_entropy_fix = None
-        if entropy_fix is not None:
-            from ._scalars import exact_physics_scalar, native_real
-            selected_entropy_fix = exact_physics_scalar(
-                entropy_fix, where="roe_from_jacobian.entropy_fix", positive=True)
-            lowered = native_real(
-                selected_entropy_fix, where="roe_from_jacobian.entropy_fix")
-            if not lowered > 0.0:
-                raise OverflowError(
-                    "roe_from_jacobian.entropy_fix underflows the positive pops::Real range")
+        from pops.numerics.riemann.providers import (
+            ENTROPY_HARTEN,
+            NoEntropyFix,
+            require_entropy_policy,
+        )
+
+        policy = require_entropy_policy(
+            entropy_fix,
+            default=NoEntropyFix(),
+            where="roe_from_jacobian.entropy_fix",
+        )
+        selected_entropy_fix = policy.delta if policy.kind == ENTROPY_HARTEN else None
+        self._roe_entropy_policy = policy
+        if not self._flux:
+            raise ValueError("roe_from_jacobian requires set_flux(...) first")
         self._roe_jacobian = {
-            "x": self.flux_jacobian(0),
-            "y": self.flux_jacobian(1),
+            **{axis: self.flux_jacobian(axis) for axis in self._flux},
             "entropy_fix": selected_entropy_fix,
         }

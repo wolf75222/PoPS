@@ -13,15 +13,34 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from pops._geometry_contracts import (
+    CARTESIAN_1D_COORDINATES,
     CARTESIAN_2D_COORDINATES,
-    CARTESIAN_CELL_AREA as _CARTESIAN_CELL_AREA,
+    CARTESIAN_3D_COORDINATES,
+    CARTESIAN_CELL_MEASURES_BY_DIMENSION,
+    POLAR_ANNULUS_2D_COORDINATES,
+    POLAR_ANNULUS_CELL_AREA,
 )
 from pops.identity import Identity, make_identity
 from pops.model import Handle
 
 
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
+EMBEDDED_BOUNDARY_ARRAY_NAMES = (
+    "pops_active",
+    "pops_phi",
+    "pops_kappa",
+)
 _NATIVE_GEOMETRY_ARRAYS = object()
+_CARTESIAN_COORDINATES = {
+    1: CARTESIAN_1D_COORDINATES,
+    2: CARTESIAN_2D_COORDINATES,
+    3: CARTESIAN_3D_COORDINATES,
+}
+_CARTESIAN_CELL_MEASURES = {
+    dimension: measure
+    for dimension, measure in enumerate(CARTESIAN_CELL_MEASURES_BY_DIMENSION, start=1)
+}
+_CARTESIAN_AXIS_NAMES = ("x", "y", "z")
 
 
 def _box_slices(lower: tuple[int, ...], upper: tuple[int, ...]) -> tuple[slice, ...]:
@@ -207,9 +226,9 @@ class LevelGeometry:
     boxes: tuple[tuple[int, ...], ...]
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
-    coordinate_system: str = CARTESIAN_2D_COORDINATES
-    cell_measure: str = _CARTESIAN_CELL_AREA
-    axis_names: tuple[str, ...] = ("x", "y")
+    coordinate_system: str | None = None
+    cell_measure: str | None = None
+    axis_names: tuple[str, ...] = ()
     valid_cells: Any = field(init=False, repr=False, compare=False)
     _native_valid_cells: InitVar[Any] = None
     _native_arrays: InitVar[Any] = None
@@ -225,10 +244,6 @@ class LevelGeometry:
             self.layout_identity, "layout_identity"))
         if self.layout_kind not in {"uniform", "amr"}:
             raise ValueError("layout_kind must be exactly 'uniform' or 'amr'")
-        for name in ("coordinate_system", "cell_measure"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.startswith("pops://") or "@" not in value:
-                raise ValueError("geometry %s must be a versioned pops:// URI" % name)
         if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
             raise ValueError("geometry level must be an integer >= 0")
         shape = tuple(self.cell_shape)
@@ -237,11 +252,33 @@ class LevelGeometry:
                 for item in shape):
             raise ValueError(
                 "cell_shape must have spatial rank 1, 2, or 3 and positive integer extents")
-        if native and len(shape) != 2:
-            raise ValueError("native LevelGeometry authority is currently exactly two-dimensional")
         object.__setattr__(self, "cell_shape", shape)
         dimension = len(shape)
+        coordinate_system = self.coordinate_system
+        if coordinate_system is None:
+            coordinate_system = _CARTESIAN_COORDINATES[dimension]
+        if not isinstance(coordinate_system, str) \
+                or not coordinate_system.startswith("pops://") or "@" not in coordinate_system:
+            raise ValueError("geometry coordinate_system must be a versioned pops:// URI")
+        object.__setattr__(self, "coordinate_system", coordinate_system)
+        cell_measure = self.cell_measure
+        if cell_measure is None:
+            if coordinate_system == _CARTESIAN_COORDINATES[dimension]:
+                cell_measure = _CARTESIAN_CELL_MEASURES[dimension]
+            elif coordinate_system == POLAR_ANNULUS_2D_COORDINATES and dimension == 2:
+                cell_measure = POLAR_ANNULUS_CELL_AREA
+            else:
+                raise ValueError(
+                    "geometry cell_measure must be explicit for coordinate system %s"
+                    % coordinate_system
+                )
+        if not isinstance(cell_measure, str) \
+                or not cell_measure.startswith("pops://") or "@" not in cell_measure:
+            raise ValueError("geometry cell_measure must be a versioned pops:// URI")
+        object.__setattr__(self, "cell_measure", cell_measure)
         axis_names = tuple(self.axis_names)
+        if not axis_names:
+            axis_names = _CARTESIAN_AXIS_NAMES[:dimension]
         if len(axis_names) != dimension or any(
                 not isinstance(item, str) or not item for item in axis_names) \
                 or len(set(axis_names)) != dimension:
@@ -317,6 +354,12 @@ class LevelGeometry:
     @property
     def key(self) -> tuple[str, int]:
         return self.layout_identity.token, self.level
+
+    @property
+    def spatial_rank(self) -> int:
+        """Return the immutable rank inferred from the authoritative cell shape."""
+
+        return len(self.cell_shape)
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -465,6 +508,141 @@ class ArrayPiece:
             "owner_rank": self.owner_rank,
             "replicated": self.replicated,
             "array": array_evidence(self.values),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddedBoundaryPayload:
+    """Exact geometry sidecar for one selected ``(layout, level)``.
+
+    Embedded-boundary arrays are intentionally not scientific ``FieldPayload`` values: they have
+    reserved names, no user Handle, and describe the mesh on which physical fields live.  Keeping
+    them separate prevents accidental concatenation with conservative variables while still
+    carrying the exact per-patch MPI ownership needed by VTK, Catalyst, and durable observers.
+    """
+
+    layout_identity: Identity
+    level: int
+    global_shape: tuple[int, ...]
+    arrays: Mapping[str, tuple[ArrayPiece, ...]]
+    dtype: str = "<f8"
+
+    def __post_init__(self) -> None:
+        import numpy as np
+
+        object.__setattr__(
+            self,
+            "layout_identity",
+            _identity(self.layout_identity, "embedded-boundary layout_identity"),
+        )
+        if isinstance(self.level, bool) or type(self.level) is not int or self.level < 0:
+            raise ValueError("embedded-boundary level must be an integer >= 0")
+        shape = tuple(self.global_shape)
+        if len(shape) not in (1, 2, 3) or any(
+            isinstance(item, bool) or type(item) is not int or item < 1 for item in shape
+        ):
+            raise ValueError("embedded-boundary global_shape must have spatial rank 1, 2, or 3")
+        object.__setattr__(self, "global_shape", shape)
+        dtype = np.dtype(self.dtype).str
+        if dtype != np.dtype(np.float64).str:
+            raise TypeError("embedded-boundary sidecars require exact float64 arrays")
+        object.__setattr__(self, "dtype", dtype)
+        if not isinstance(self.arrays, Mapping) or set(self.arrays) != set(
+            EMBEDDED_BOUNDARY_ARRAY_NAMES
+        ):
+            raise TypeError(
+                "embedded-boundary sidecar arrays must be exactly %s"
+                % (EMBEDDED_BOUNDARY_ARRAY_NAMES,)
+            )
+        normalized: dict[str, tuple[ArrayPiece, ...]] = {}
+        ownership: tuple[tuple[Any, ...], ...] | None = None
+        for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+            pieces = tuple(self.arrays[name])
+            if any(type(piece) is not ArrayPiece for piece in pieces):
+                raise TypeError(
+                    "embedded-boundary %s pieces must be exact ArrayPiece values" % name
+                )
+            metadata = []
+            for piece in pieces:
+                if len(piece.lower) != len(shape) or any(
+                    high > extent for high, extent in zip(piece.upper, shape, strict=True)
+                ):
+                    raise ValueError(
+                        "embedded-boundary piece lies outside its exact ranked geometry"
+                    )
+                if (
+                    piece.values.dtype.str != dtype
+                    or piece.values.ndim != len(shape) + 1
+                    or piece.values.shape[0] != 1
+                ):
+                    raise ValueError("embedded-boundary pieces must contain one float64 component")
+                values = piece.values[0]
+                if not np.all(np.isfinite(values)):
+                    raise ValueError("embedded-boundary sidecar arrays must contain finite values")
+                if name == "pops_active" and not np.all((values == 0.0) | (values == 1.0)):
+                    raise ValueError("pops_active must be an exact binary cell mask")
+                if name == "pops_kappa" and not np.all((values >= 0.0) & (values <= 1.0)):
+                    raise ValueError("pops_kappa must lie in the closed interval [0, 1]")
+                metadata.append(
+                    (
+                        piece.lower,
+                        piece.upper,
+                        piece.global_box_index,
+                        piece.owner_rank,
+                        piece.replicated,
+                    )
+                )
+            for index, left in enumerate(pieces):
+                for right in pieces[index + 1 :]:
+                    if all(
+                        left_lo < right_hi and right_lo < left_hi
+                        for left_lo, left_hi, right_lo, right_hi in zip(
+                            left.lower,
+                            left.upper,
+                            right.lower,
+                            right.upper,
+                            strict=True,
+                        )
+                    ):
+                        raise ValueError("embedded-boundary array pieces overlap")
+            box_indices = [piece.global_box_index for piece in pieces]
+            if len(box_indices) != len(set(box_indices)):
+                raise ValueError(
+                    "embedded-boundary array contains duplicate global_box_index values"
+                )
+            current = tuple(metadata)
+            if ownership is None:
+                ownership = current
+            elif current != ownership:
+                raise ValueError(
+                    "embedded-boundary arrays disagree on patch bounds or MPI ownership"
+                )
+            normalized[name] = pieces
+        object.__setattr__(self, "arrays", MappingProxyType(normalized))
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return self.layout_identity.token, self.level
+
+    @property
+    def identity(self) -> Identity:
+        return make_identity("output-embedded-boundary", self.to_data())
+
+    def pieces(self, name: str) -> tuple[ArrayPiece, ...]:
+        if name not in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+            raise KeyError("unknown embedded-boundary sidecar array %r" % name)
+        return self.arrays[name]
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "layout_identity": self.layout_identity.token,
+            "level": self.level,
+            "global_shape": list(self.global_shape),
+            "dtype": self.dtype,
+            "arrays": {
+                name: [piece.to_data() for piece in self.arrays[name]]
+                for name in EMBEDDED_BOUNDARY_ARRAY_NAMES
+            },
         }
 
 
@@ -718,6 +896,7 @@ class OutputSnapshot:
     fields: tuple[FieldPayload, ...]
     metadata: Any = field(default_factory=dict)
     diagnostics: tuple[DiagnosticPayload, ...] = ()
+    embedded_boundaries: tuple[EmbeddedBoundaryPayload, ...] = ()
     _native_composite_integrals: tuple[_NativeCompositeIntegral, ...] = field(
         default=(), repr=False, compare=False)
 
@@ -760,6 +939,28 @@ class OutputSnapshot:
         object.__setattr__(self, "metadata", MappingProxyType(dict(sorted(self.metadata.items()))))
         object.__setattr__(self, "diagnostics", tuple(
             diagnostic_map[token] for token in sorted(diagnostic_map)))
+        embedded = tuple(self.embedded_boundaries)
+        if any(type(item) is not EmbeddedBoundaryPayload for item in embedded):
+            raise TypeError("output snapshot embedded boundaries must be exact sidecar payloads")
+        embedded_map = {item.key: item for item in embedded}
+        if len(embedded_map) != len(embedded):
+            raise ValueError("output snapshot embedded-boundary layout/level keys must be unique")
+        for item in embedded:
+            geometry = geometry_map.get(item.key)
+            if geometry is None:
+                raise ValueError("embedded-boundary sidecar has no exact layout/level geometry")
+            if item.global_shape != geometry.cell_shape:
+                raise ValueError("embedded-boundary sidecar shape differs from its exact geometry")
+            for name in EMBEDDED_BOUNDARY_ARRAY_NAMES:
+                for piece in item.pieces(name):
+                    if piece.global_box_index >= len(geometry.boxes) or (
+                        piece.lower + piece.upper != geometry.boxes[piece.global_box_index]
+                    ):
+                        raise ValueError(
+                            "embedded-boundary sidecar piece differs from its indexed geometry box"
+                        )
+        object.__setattr__(self, "embedded_boundaries", tuple(
+            embedded_map[key] for key in sorted(embedded_map)))
         native_integrals = tuple(self._native_composite_integrals)
         if any(type(item) is not _NativeCompositeIntegral for item in native_integrals):
             raise TypeError(
@@ -803,6 +1004,15 @@ class OutputSnapshot:
                 ) from None
         return tuple(result)
 
+    def embedded_boundary(
+        self, layout_identity: Identity, level: int,
+    ) -> EmbeddedBoundaryPayload | None:
+        token = _identity(layout_identity, "embedded-boundary lookup layout_identity").token
+        for value in self.embedded_boundaries:
+            if value.key == (token, level):
+                return value
+        return None
+
     def to_data(self, request: OutputRequest) -> dict[str, Any]:
         fields = self.select(request)
         geometries = {self.geometry(field.key).key: self.geometry(field.key) for field in fields}
@@ -810,18 +1020,21 @@ class OutputSnapshot:
                               for item in self.select_diagnostics(request)}
         geometries.update({item.key: item for item in self.geometries
                            if item.layout_identity.token in diagnostic_layouts})
+        embedded = tuple(item for item in self.embedded_boundaries if item.key in geometries)
         return {
             "clock": self.clock.to_data(), "provenance": self.provenance.to_data(),
             "selection": request.publication_data(),
             "geometries": [item.to_data() for item in sorted(geometries.values(), key=lambda x: x.key)],
             "fields": [item.to_data() for item in fields],
+            "embedded_boundaries": [item.to_data() for item in embedded],
             "diagnostics": [item.to_data() for item in self.select_diagnostics(request)],
             "metadata": dict(self.metadata),
         }
 
 
 __all__ = [
-    "ArrayPiece", "DiagnosticKey", "DiagnosticPayload", "FieldKey", "FieldPayload",
+    "ArrayPiece", "DiagnosticKey", "DiagnosticPayload", "EmbeddedBoundaryPayload",
+    "EMBEDDED_BOUNDARY_ARRAY_NAMES", "FieldKey", "FieldPayload",
     "LevelGeometry", "OutputClock",
     "OutputProvenance", "OutputRequest", "OutputSnapshot", "array_evidence",
 ]

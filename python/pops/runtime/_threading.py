@@ -25,6 +25,13 @@ _first_system_built = False
 _THREADS_ENV_VAR = "POPS_THREADS"
 
 
+def _selected_native_module() -> Any:
+    """Return native state only when the resolved lifecycle already selected it."""
+    from pops._native_selector import selected_native_module
+
+    return selected_native_module(required=False)
+
+
 def _threads_from_env() -> Any:
     """Resolve a positive thread count from ``POPS_THREADS``, or None when unset/unusable.
 
@@ -46,8 +53,12 @@ def _threads_from_env() -> Any:
 def has_kokkos() -> Any:
     """True if _pops was compiled with Kokkos, False if it was built without Kokkos.
 
-    None if the module is too old to expose the info (attribute __has_kokkos__ absent)."""
-    from pops import _pops
+    ``None`` when no dimension has been selected yet or the selected module is too old to expose
+    ``__has_kokkos__``.  Inspection never chooses a native specialization.
+    """
+    _pops = _selected_native_module()
+    if _pops is None:
+        return None
     return getattr(_pops, "__has_kokkos__", None)
 
 
@@ -77,8 +88,12 @@ def set_threads(n: Any = None) -> None:
     # Source of truth : the REAL state of the Kokkos runtime (covers ALL lazy init paths --
     # System, AmrSystem, DSL .so, direct use of _pops). The Python flag stays the fallback for
     # an old module without the binding.
-    from pops import _pops
-    _kokkos_started = getattr(_pops, "kokkos_is_initialized", lambda: _first_system_built)()
+    _pops = _selected_native_module()
+    _kokkos_started = (
+        _first_system_built
+        if _pops is None
+        else getattr(_pops, "kokkos_is_initialized", lambda: _first_system_built)()
+    )
     if _kokkos_started or _first_system_built:
         warnings.warn(
             "pops.set_threads() was called after native initialization; the request has no effect",

@@ -11,13 +11,15 @@ from typing import Any
 
 _ATOMIC = (type(None), bool, int, float, complex, str, bytes, Decimal, Fraction, Enum)
 _SEQUENCE_FIELDS = (
-    "cons_names", "cons_roles", "prim_names", "aux_extra_names", "elliptic_field_names",
+    "cons_names", "cons_roles", "prim_names", "provider_components", "elliptic_field_names",
     "state_spaces",
 )
 _SCALAR_FIELDS = (
-    "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target",
-    "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
-    "wave_speed_provider",
+    "has_hllc", "has_roe", "has_wave_speeds", "has_characteristic_no_inflow",
+    "so_path", "backend", "target",
+    "n_vars", "gamma", "n_aux", "native_dimension", "abi_key", "model_hash", "cxx", "std",
+    "wave_speed_provider", "hllc_provider", "roe_provider", "roe_entropy_policy",
+    "roe_entropy_delta",
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",
@@ -64,6 +66,11 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
                 "CompiledModel.%s contains non-data value %s" % (name, type(value).__name__))
     for name in _SEQUENCE_FIELDS:
         _string_tuple(_core_value(compiled, name), name)
+    native_dimension = _core_value(compiled, "native_dimension")
+    if isinstance(native_dimension, bool) or not isinstance(native_dimension, int):
+        raise TypeError("CompiledModel.native_dimension must be an exact integer")
+    if native_dimension not in (1, 2, 3):
+        raise ValueError("CompiledModel.native_dimension must be 1, 2, or 3")
     has_wave_speeds = _core_value(compiled, "has_wave_speeds")
     wave_speed_provider = _core_value(compiled, "wave_speed_provider")
     allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
@@ -75,6 +82,9 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
         raise ValueError(
             "CompiledModel without wave speeds cannot retain wave_speed_provider"
         )
+    from pops.numerics.riemann.providers import compiled_provider_evidence
+
+    compiled_provider_evidence(compiled)
     _data_mapping(_core_value(compiled, "caps"), where="caps")
     identity = _core_value(compiled, "definition_identity")
     if identity is not None:

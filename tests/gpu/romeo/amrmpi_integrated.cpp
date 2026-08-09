@@ -40,14 +40,7 @@
 using namespace pops;
 using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
 
-struct ZeroElliptic {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-
-using MagneticModel = CompositeModel<Euler, MagneticLorentzForce, ZeroElliptic>;
+using MagneticModel = CompositeModel<Euler, MagneticLorentzForce, NoElliptic>;
 
 static void install_forward_euler_program(AmrSystem& system) {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
@@ -142,7 +135,7 @@ static int run_bz_program_probe(int n) {
     system.set_temporal_relations({2}, {1}, {"integral_only"});
     add_compiled_model(
         system, "magnetic",
-        MagneticModel{Euler{Real(1.4)}, MagneticLorentzForce{Real(1)}, ZeroElliptic{}}, "none",
+        MagneticModel{Euler{Real(1.4)}, MagneticLorentzForce{Real(1)}, NoElliptic{}}, "none",
         "rusanov", "conservative", "euler", /*gamma=*/1.4);
     test::install_prepared_threshold_union(system, {{"magnetic", "rho", 1.2}});
     system.set_conservative_state("magnetic", state);

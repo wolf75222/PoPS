@@ -31,6 +31,8 @@ def build_force_model():
     """
     m = HyperbolicModel("force")
     rho, rho_u, rho_v, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
+    zeros = [0.0 * value for value in (rho, rho_u, rho_v, E)]
+    m.set_flux(x=zeros, y=zeros)
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
     m.set_source([
@@ -64,7 +66,7 @@ int main() {
   for (int k=0;k<ns;++k){
     pops::StateVec<4> u{}; for(int i=0;i<4;++i) u[i]=S[k][i];
     for (int j=0;j<ng;++j){
-      pops::Aux a{}; a.grad_x = G[j][0]; a.grad_y = G[j][1];
+      pops::Aux a{}; a.gradient<0>() = G[j][0]; a.gradient<1>() = G[j][1];
       auto sg = gen.apply(u, a);
       auto sr = ref.apply(u, a);
       for(int i=0;i<4;++i) upd(sg[i], sr[i]);
@@ -83,7 +85,8 @@ def main():
     # (1) forme de la brique (sans compilateur)
     assert "struct GenForce {" in struct
     for token in ("apply(const pops::StateVec<4>&", "const pops::Aux& a",
-                  "const pops::Real grad_x = a.grad_x;", "const pops::Real grad_y = a.grad_y;",
+                  "const pops::Real grad_x = a.template flux_provider<1>();",
+                  "const pops::Real grad_y = a.template flux_provider<2>();",
                   "pops::StateVec<4> S{};"):
         assert token in struct, "membre attendu absent : %s" % token
     print("OK  emit_cpp_source : struct genere (%d lignes)" % struct.count("\n"))
@@ -101,7 +104,10 @@ def main():
         with open(cpp, "w") as f:
             f.write(prog)
         # le coeur pops est header-only et propre en C++20 ; -I include suffit.
-        subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
+        subprocess.run([
+            cxx, "-std=c++20", "-O2", "-DPOPS_NATIVE_DIM=2",
+            "-I", INCLUDE, cpp, "-o", exe,
+        ], check=True)
         out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 
     maxdiff = float(out.strip())

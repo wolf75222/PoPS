@@ -139,6 +139,47 @@ inline std::size_t field_point_count(const View& view) {
   return result;
 }
 
+template <class View, class AxisExtent, class AxisOrigin>
+inline std::ptrdiff_t ranked_field_value_offset(const View& view, std::size_t point,
+                                                std::size_t component, AxisExtent axis_extent,
+                                                AxisOrigin axis_origin, const char* where) {
+  if (view.dimension < 1 || view.dimension > 3 || component >= view.component_count ||
+      view.component_stride <= 0)
+    throw std::invalid_argument(std::string(where) + " has an invalid rank or component");
+
+  std::size_t point_count = 1;
+  for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+    const std::size_t extent = axis_extent(axis);
+    const std::size_t origin = axis_origin(axis);
+    if (extent == 0 || origin > view.extents[axis] || extent > view.extents[axis] - origin ||
+        extent > std::numeric_limits<std::size_t>::max() / point_count)
+      throw std::invalid_argument(std::string(where) + " has invalid ranked extents");
+    point_count *= extent;
+  }
+  if (point >= point_count)
+    throw std::invalid_argument(std::string(where) + " point lies outside its ranked domain");
+
+  const std::size_t maximum = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+  std::size_t remaining = point;
+  std::size_t offset = 0;
+  for (std::int32_t axis = 0; axis < view.dimension; ++axis) {
+    const std::size_t extent = axis_extent(axis);
+    const std::size_t coordinate = remaining % extent;
+    remaining /= extent;
+    const std::size_t storage_index = coordinate + axis_origin(axis);
+    const auto stride = static_cast<std::size_t>(view.axis_strides[axis]);
+    if (view.axis_strides[axis] <= 0 || storage_index > maximum / stride ||
+        storage_index * stride > maximum - offset)
+      throw std::invalid_argument(std::string(where) + " strides overflow");
+    offset += storage_index * stride;
+  }
+  const auto component_stride = static_cast<std::size_t>(view.component_stride);
+  if (component > maximum / component_stride || component * component_stride > maximum - offset)
+    throw std::invalid_argument(std::string(where) + " component stride overflows");
+  offset += component * component_stride;
+  return static_cast<std::ptrdiff_t>(offset);
+}
+
 template <class View>
 inline std::size_t field_interior_point_count(const View& view) {
   std::size_t result = 1;
@@ -194,12 +235,65 @@ inline void validate_field_view(const View& view, const char* where) {
   (void)field_point_count(view);
 }
 
+template <int Dim, class View>
+inline void validate_exact_field_view(const View& view, const char* where) {
+  static_assert(Dim >= 1 && Dim <= 3, "native field views support dimensions 1, 2, and 3");
+  if (view.struct_size < sizeof(View) || view.data == nullptr ||
+      view.dimension != static_cast<std::uint32_t>(Dim) || view.component_count == 0 ||
+      view.component_stride <= 0 || !component_text(view.layout_identity) ||
+      !component_text(view.patch_identity) ||
+      (view.scalar_type != POPS_SCALAR_FLOAT32_V1 && view.scalar_type != POPS_SCALAR_FLOAT64_V1) ||
+      (view.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
+       view.memory_space != POPS_MEMORY_SPACE_DEVICE_V1 &&
+       view.memory_space != POPS_MEMORY_SPACE_MANAGED_V1) ||
+      (view.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 &&
+       view.ownership != POPS_FIELD_OWNERSHIP_COMPONENT_BORROWED_V1 &&
+       view.ownership != POPS_FIELD_OWNERSHIP_COMPONENT_OWNED_V1))
+    throw std::invalid_argument(std::string(where) +
+                                " disagrees with the compiled field dimension");
+
+  constexpr auto active_axes = (1u << static_cast<unsigned>(Dim)) - 1u;
+  if ((view.centering == POPS_FIELD_CENTERING_FACE_V1 &&
+       (view.centering_axes == 0 || (view.centering_axes & (view.centering_axes - 1u)) != 0)) ||
+      (view.centering == POPS_FIELD_CENTERING_EDGE_V1 && view.centering_axes == 0) ||
+      ((view.centering == POPS_FIELD_CENTERING_CELL_V1 ||
+        view.centering == POPS_FIELD_CENTERING_NODE_V1) &&
+       view.centering_axes != 0) ||
+      view.centering < POPS_FIELD_CENTERING_CELL_V1 ||
+      view.centering > POPS_FIELD_CENTERING_EDGE_V1 || (view.centering_axes & ~active_axes) != 0)
+    throw std::invalid_argument(std::string(where) + " has invalid centering axes");
+
+  for (std::int32_t axis = 0; axis < Dim; ++axis)
+    if (view.extents[axis] == 0 || view.axis_strides[axis] <= 0 ||
+        view.ghost_lower[axis] >= view.extents[axis] ||
+        view.ghost_upper[axis] >= view.extents[axis] - view.ghost_lower[axis])
+      throw std::invalid_argument(std::string(where) +
+                                  " has invalid extent, stride or ghost widths");
+  for (std::int32_t axis = Dim; axis < 3; ++axis)
+    if (view.extents[axis] != 1 || view.axis_strides[axis] != 0 || view.ghost_lower[axis] != 0 ||
+        view.ghost_upper[axis] != 0)
+      throw std::invalid_argument(std::string(where) + " carries hidden inactive-axis metadata");
+
+  std::size_t points = 1;
+  for (std::int32_t axis = 0; axis < Dim; ++axis) {
+    if (view.extents[axis] > std::numeric_limits<std::size_t>::max() / points)
+      throw std::invalid_argument("native field view extents overflow");
+    points *= view.extents[axis];
+  }
+  (void)points;
+}
+
 template <class View>
 inline void validate_backend_field_view(const View& view, const char* where) {
   validate_field_view(view, where);
-  if (view.dimension != 2)
+  if (view.scalar_type != POPS_SCALAR_FLOAT64_V1)
     throw std::invalid_argument(std::string(where) +
-                                " is not representable by the current 2D backend");
+                                " scalar type differs from the current binary64 backend");
+}
+
+template <int Dim, class View>
+inline void validate_backend_field_view(const View& view, const char* where) {
+  validate_exact_field_view<Dim>(view, where);
   if (view.scalar_type != POPS_SCALAR_FLOAT64_V1)
     throw std::invalid_argument(std::string(where) +
                                 " scalar type differs from the current binary64 backend");
@@ -240,6 +334,14 @@ template <class View>
 inline void validate_execution_field(const PopsExecutionContextV1& context, const View& view,
                                      const char* where) {
   validate_backend_field_view(view, where);
+  if (view.memory_space != context.memory_space || view.scalar_type != context.scalar_type)
+    throw std::invalid_argument(std::string(where) + " disagrees with its execution context");
+}
+
+template <int Dim, class View>
+inline void validate_execution_field(const PopsExecutionContextV1& context, const View& view,
+                                     const char* where) {
+  validate_backend_field_view<Dim>(view, where);
   if (view.memory_space != context.memory_space || view.scalar_type != context.scalar_type)
     throw std::invalid_argument(std::string(where) + " disagrees with its execution context");
 }
@@ -333,6 +435,26 @@ inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
   return api.evaluate_faces(state, &request, &result);
 }
 
+template <int Dim>
+inline int evaluate_faces(const PopsNumericalFluxApiV1& api, void* state,
+                          const PopsNumericalFluxRequestV1& request,
+                          PopsNumericalFluxResultV1& result) {
+  static_assert(Dim >= 1 && Dim <= 3, "NumericalFlux supports dimensions 1, 2, and 3");
+  require_operation(api.evaluate_faces != nullptr, "evaluate_faces");
+  validate_execution_context(request.execution);
+  validate_logical_time(request.logical_time);
+  validate_execution_field<Dim>(request.execution, request.left, "numerical flux left");
+  validate_execution_field<Dim>(request.execution, request.right, "numerical flux right");
+  validate_execution_field<Dim>(request.execution, request.normals, "numerical flux normals");
+  validate_execution_field<Dim>(request.execution, result.normal_flux, "numerical flux output");
+  if (!same_field_domain(request.left, request.right) ||
+      !same_field_domain(request.left, result.normal_flux) ||
+      !same_spatial_domain(request.left, request.normals) ||
+      request.normals.component_count != static_cast<std::size_t>(Dim))
+    throw std::invalid_argument("numerical flux field descriptors disagree");
+  return api.evaluate_faces(state, &request, &result);
+}
+
 inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
                                 const PopsGhostBoundaryRequestV1& request,
                                 PopsComponentStatusV1& status) {
@@ -358,6 +480,74 @@ inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
                              "ghost boundary dependency");
   validate_scalars(request.parameters, request.parameter_count, "ghost boundary parameters");
   return api.apply_region_batch(state, &request, &status);
+}
+
+inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state,
+                                   const PopsBoundaryFluxRequestV1& request,
+                                   PopsBoundaryFluxResultV1& result) {
+  require_operation(api.transform_faces != nullptr, "transform_faces");
+  validate_execution_context(request.execution);
+  validate_logical_time(request.logical_time);
+  validate_boundary_region(request.region);
+  if (request.struct_size < sizeof(PopsBoundaryFluxRequestV1) ||
+      result.struct_size < sizeof(PopsBoundaryFluxResultV1) ||
+      !component_text(request.provider_identity) || !component_text(request.state_identity) ||
+      request.face_measures == nullptr || result.actions == nullptr ||
+      request.region.kind != POPS_BOUNDARY_FACE_V1 || request.region.codimension != 1 ||
+      request.region.axis_count != 1)
+    throw std::invalid_argument("boundary flux transformation request is incomplete");
+  validate_execution_field(request.execution, request.base_outward_normal_flux,
+                           "boundary base outward flux");
+  validate_execution_field(request.execution, request.coordinates, "boundary flux coordinates");
+  validate_execution_field(request.execution, request.outward_normals, "boundary outward normals");
+  validate_execution_field(request.execution, result.outward_normal_flux,
+                           "boundary transformed outward flux");
+  if (!same_field_domain(request.base_outward_normal_flux, result.outward_normal_flux) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.coordinates) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.outward_normals) ||
+      request.coordinates.component_count != static_cast<std::size_t>(request.region.dimension) ||
+      request.outward_normals.component_count != static_cast<std::size_t>(request.region.dimension))
+    throw std::invalid_argument("boundary flux field descriptors disagree");
+  const std::uint32_t normal_axis = 1u << static_cast<unsigned>(request.region.axes[0]);
+  if (request.base_outward_normal_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+      request.base_outward_normal_flux.centering_axes != normal_axis)
+    throw std::invalid_argument(
+        "boundary base outward flux is not centered on its authenticated face axis");
+  const std::size_t point_count = field_point_count(request.base_outward_normal_flux);
+  const auto* coordinates = static_cast<const double*>(request.coordinates.data);
+  const auto* normals = static_cast<const double*>(request.outward_normals.data);
+  for (std::size_t point = 0; point < point_count; ++point)
+    if (!std::isfinite(request.face_measures[point]) || request.face_measures[point] <= 0.0)
+      throw std::invalid_argument("boundary flux face measure is not positive and finite");
+  for (std::size_t point = 0; point < point_count; ++point)
+    for (std::size_t component = 0; component < request.coordinates.component_count; ++component) {
+      const auto coordinate_offset = ranked_field_value_offset(
+          request.coordinates, point, component,
+          [&](std::int32_t axis) { return request.coordinates.extents[axis]; },
+          [](std::int32_t) { return std::size_t{0}; }, "boundary flux coordinates");
+      const auto normal_offset = ranked_field_value_offset(
+          request.outward_normals, point, component,
+          [&](std::int32_t axis) { return request.outward_normals.extents[axis]; },
+          [](std::int32_t) { return std::size_t{0}; }, "boundary outward normals");
+      const double expected = component == static_cast<std::size_t>(request.region.axes[0])
+                                  ? static_cast<double>(request.region.sides[0])
+                                  : 0.0;
+      if (!std::isfinite(coordinates[coordinate_offset]) ||
+          !std::isfinite(normals[normal_offset]) || normals[normal_offset] != expected)
+        throw std::invalid_argument(
+            "boundary flux coordinates or outward normal disagree with the oriented face");
+    }
+  validate_const_fields(request.dependencies, request.dependency_count,
+                        "boundary flux dependencies");
+  for (std::size_t index = 0; index < request.dependency_count; ++index) {
+    validate_execution_field(request.execution, request.dependencies[index].values,
+                             "boundary flux dependency");
+    if (!same_spatial_domain(request.base_outward_normal_flux, request.dependencies[index].values))
+      throw std::invalid_argument(
+          "boundary flux dependency does not cover the transformed face points");
+  }
+  validate_scalars(request.parameters, request.parameter_count, "boundary flux parameters");
+  return api.transform_faces(state, &request, &result);
 }
 
 inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, void* state,
@@ -594,6 +784,86 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
       throw std::invalid_argument("transfer refinement ratio must be positive");
   }
   return api.apply(state, &request, &status);
+}
+
+template <class Left, class Right>
+inline bool same_reflux_face_shape(const Left& left, const Right& right) {
+  if (left.dimension != right.dimension || left.component_count != right.component_count ||
+      left.scalar_type != right.scalar_type || left.memory_space != right.memory_space)
+    return false;
+  for (std::int32_t axis = 0; axis < 3; ++axis)
+    if (left.extents[axis] != right.extents[axis] ||
+        left.ghost_lower[axis] != right.ghost_lower[axis] ||
+        left.ghost_upper[axis] != right.ghost_upper[axis])
+      return false;
+  return true;
+}
+
+inline int apply_reflux_interface_batch(const PopsRefluxApiV1& api, void* state,
+                                        const PopsRefluxRequestV1& request,
+                                        PopsComponentStatusV1& status) {
+  require_operation(api.apply_interface_batch != nullptr, "apply_interface_batch");
+  if (request.struct_size < sizeof(PopsRefluxRequestV1) ||
+      !component_text(request.transition_identity) || request.parent_level < 0 ||
+      request.child_level != request.parent_level + 1 || request.face_count == 0 ||
+      request.faces == nullptr || request.logical_time.level != request.parent_level)
+    throw std::invalid_argument("reflux request is incomplete");
+  validate_logical_time(request.logical_time);
+  validate_noncollective_execution_context(request.execution);
+
+  std::unordered_set<std::string> identities;
+  std::int32_t batch_dimension = 0;
+  for (std::size_t index = 0; index < request.face_count; ++index) {
+    const auto& face = request.faces[index];
+    if (face.struct_size < sizeof(PopsRefluxFaceV1) || !component_text(face.interface_identity) ||
+        !identities.insert(face.interface_identity).second || face.axis < 0 ||
+        (face.side != POPS_REFLUX_FACE_LOW_V1 && face.side != POPS_REFLUX_FACE_HIGH_V1) ||
+        !std::isfinite(face.inverse_coarse_cell_spacing) || face.inverse_coarse_cell_spacing <= 0.0)
+      throw std::invalid_argument("reflux face descriptor is incomplete");
+
+    validate_execution_field(request.execution, face.coarse_integrated_flux,
+                             "reflux coarse integrated flux");
+    validate_execution_field(request.execution, face.fine_integrated_flux,
+                             "reflux fine integrated flux");
+    validate_execution_field(request.execution, face.correction, "reflux correction");
+    const std::int32_t face_dimension = face.coarse_integrated_flux.dimension;
+    if (face.axis >= face_dimension || (batch_dimension != 0 && face_dimension != batch_dimension))
+      throw std::invalid_argument("reflux face axis or batch dimension is inconsistent");
+    batch_dimension = face_dimension;
+    const auto centering_axis = 1u << static_cast<unsigned>(face.axis);
+    if (face.coarse_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.fine_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.coarse_integrated_flux.centering_axes != centering_axis ||
+        face.fine_integrated_flux.centering_axes != centering_axis ||
+        face.correction.centering != POPS_FIELD_CENTERING_CELL_V1 ||
+        face.correction.centering_axes != 0 ||
+        face.coarse_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.fine_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.correction.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.fine_integrated_flux) ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.correction) ||
+        face.coarse_integrated_flux.extents[face.axis] != 1 ||
+        std::string(face.coarse_integrated_flux.layout_identity) !=
+            face.correction.layout_identity ||
+        std::string(face.coarse_integrated_flux.patch_identity) != face.correction.patch_identity)
+      throw std::invalid_argument(
+          "reflux face fluxes and correction disagree on shape, centering or ownership");
+    for (std::int32_t axis = 0; axis < face.coarse_integrated_flux.dimension; ++axis)
+      if (face.coarse_integrated_flux.ghost_lower[axis] != 0 ||
+          face.coarse_integrated_flux.ghost_upper[axis] != 0)
+        throw std::invalid_argument("reflux face views cannot carry ghost cells");
+  }
+
+  status = unwritten_component_status();
+  const int code = api.apply_interface_batch(state, &request, &status);
+  if (!component_status_is_well_formed(status))
+    throw std::runtime_error("native Reflux component returned an invalid status");
+  if ((code == 0) != (status.code == 0) ||
+      (code == 0 && status.action != POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && status.action == POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && !component_text(status.reason)))
+    throw std::runtime_error("native Reflux component returned an inconsistent outcome");
+  return code;
 }
 
 inline std::string writer_geometry_key(const char* layout, std::int32_t level) {
@@ -1055,9 +1325,9 @@ inline void validate_field_view_matches_patch(const PopsFieldViewV1& view,
   validate_field_view_matches_patch(read_only, patch, what);
 }
 
-inline void validate_topology_material_input(const FieldTopologyPatchInputV2& input,
-                                             const PopsFieldPatchMetadataV1& metadata,
-                                             const PopsExecutionContextV1& execution) {
+inline bool validate_topology_material_shape(const FieldTopologyPatchInputV2& input,
+                                             const PopsFieldPatchMetadataV1& metadata) {
+  validate_field_patch_metadata(metadata, metadata.global_patch_index);
   const auto points = field_patch_point_count(metadata);
   const bool has_coverage =
       input.material_coverage.data != nullptr || input.material_coverage.size != 0;
@@ -1071,8 +1341,8 @@ inline void validate_topology_material_input(const FieldTopologyPatchInputV2& in
                   input.material_ids.data == nullptr || input.material_ids.size != points))
     throw std::invalid_argument("field topology material ids do not match patch bounds");
   if (has_fraction) {
-    validate_execution_field(execution, input.cut_cell_volume_fraction,
-                             "field topology cut-cell volume fraction");
+    validate_backend_field_view(input.cut_cell_volume_fraction,
+                                "field topology cut-cell volume fraction");
     validate_field_view_matches_patch(input.cut_cell_volume_fraction, metadata,
                                       "field topology cut-cell volume fraction");
     if (input.cut_cell_volume_fraction.component_count != 1)
@@ -1104,10 +1374,20 @@ inline void validate_topology_material_input(const FieldTopologyPatchInputV2& in
     default:
       throw std::invalid_argument("field topology material representation is unknown");
   }
+  return has_fraction;
+}
+
+inline void validate_topology_material_input(const FieldTopologyPatchInputV2& input,
+                                             const PopsFieldPatchMetadataV1& metadata,
+                                             const PopsExecutionContextV1& execution) {
+  if (validate_topology_material_shape(input, metadata))
+    validate_execution_field(execution, input.cut_cell_volume_fraction,
+                             "field topology cut-cell volume fraction");
 }
 
 inline std::vector<std::uint8_t> expected_topology_material_mask(
     const FieldTopologyPatchInputV2& input, const PopsFieldPatchMetadataV1& metadata) {
+  (void)validate_topology_material_shape(input, metadata);
   const std::size_t points = field_patch_point_count(metadata);
   std::vector<std::uint8_t> expected(points, 0);
   auto require_binary = [](std::uint8_t value, const char* what) {
@@ -1122,18 +1402,10 @@ inline std::vector<std::uint8_t> expected_topology_material_mask(
     return static_cast<const double*>(input.cut_cell_volume_fraction.data);
   };
   auto fraction_at = [&](const double* values, std::size_t point) {
-    const std::size_t nx = field_patch_axis_extent(metadata, 0);
-    const std::size_t i = point % nx;
-    const std::size_t j = point / nx;
     const auto& view = input.cut_cell_volume_fraction;
-    const std::size_t x = i + view.ghost_lower[0];
-    const std::size_t y = j + view.ghost_lower[1];
-    const auto maximum = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
-    const auto sx = static_cast<std::size_t>(view.axis_strides[0]);
-    const auto sy = static_cast<std::size_t>(view.axis_strides[1]);
-    if (x > maximum / sx || y > maximum / sy || x * sx > maximum - y * sy)
-      throw std::invalid_argument("cut-cell topology fraction strides overflow");
-    const std::ptrdiff_t offset = static_cast<std::ptrdiff_t>(x * sx + y * sy);
+    const std::ptrdiff_t offset = ranked_field_value_offset(
+        view, point, 0, [&](std::int32_t axis) { return field_patch_axis_extent(metadata, axis); },
+        [&](std::int32_t axis) { return view.ghost_lower[axis]; }, "cut-cell topology fraction");
     const double value = values[offset];
     if (!std::isfinite(value) || value < 0.0 || value > 1.0)
       throw std::invalid_argument("cut-cell topology fractions must be finite values in [0, 1]");

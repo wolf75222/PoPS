@@ -1,7 +1,6 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/mesh/storage/multifab.hpp>
 
 /// @file
 /// @brief Asymptotic-preserving IMEX (implicit-explicit) integrator: imex_euler_step, order-1
@@ -16,15 +15,16 @@
 ///           the known term (linear relaxation: analytic; full Lorentz: local Newton).
 ///
 /// Invariants:
-/// - integrator agnostic of the model: Texpl/Simpl are callables (MultiFab&, Real)->void;
+/// - integrator agnostic of model, rank, and storage: Texpl/Simpl consume the same exact state;
 /// - the order is enforced -- explicit THEN implicit; no state held by the integrator.
 
 namespace pops {
 
-template <class TransportStep, class ImplicitSourceSolve>
-void imex_euler_step(MultiFab& U, Real dt, TransportStep Texpl, ImplicitSourceSolve Simpl) {
-  Texpl(U, dt);  // explicit: U becomes the known term U^n + dt T(U^n)
-  Simpl(U, dt);  // implicit: solves U = known + dt S(U) (stiff source) in place
+template <class State, class TransportStep, class ImplicitSourceSolve>
+void imex_euler_step(State& state, Real dt, TransportStep transport,
+                     ImplicitSourceSolve implicit_source) {
+  transport(state, dt);        // explicit: state becomes U^n + dt T(U^n)
+  implicit_source(state, dt);  // implicit: solve U = known + dt S(U) in place
 }
 
 }  // namespace pops

@@ -153,9 +153,9 @@ def _scan_constant_values() -> dict:
     return values
 
 
-# Report (section, key) -> the scanned constant whose value it must equal. The unscanned
-# kAmrRefRatio (amr.refinement_ratio, defined in
-# amr/hierarchy/refinement_ratio.hpp), and runtime counters (diagnostics.*) are intentionally omitted.
+# Report (section, key) -> the scanned constant whose value it must equal. Compile-time-ranked AMR
+# ratios are authenticated values rather than one scalar numeric default; runtime counters
+# (diagnostics.*) are also intentionally omitted.
 _REPORT_VALUE_TO_CONSTANT = {
     ("newton", "max_iters"): "kNewtonDefaultMaxIters",
     ("newton", "rel_tol"): "kNewtonDefaultRelTol",
@@ -181,7 +181,6 @@ _REPORT_VALUE_TO_CONSTANT = {
     ("fac", "coarse_rel_tol"): "kFACInitialCoarseRelTol",
     ("fac", "coarse_abs_tol"): "kFACInitialCoarseAbsTol",
     ("fac", "coarse_cycles"): "kFACInitialCoarseMaxCycles",
-    ("fft", "spectral_default"): "kFFTDefaultSpectral",
     ("fft", "zero_mean_gauge"): "kFFTZeroMeanGauge",
     ("fft", "direct_dft_fallback"): "kFFTDirectDftFallback",
     ("eb", "cut_fraction_floor"): "kEbCutFractionFloor",

@@ -125,6 +125,7 @@ def check_native_loads_without_abi_error(expected_std, cxx):
             model_hash=e._model_hash(),
             cxx=cxx,
             std=expected_std,
+            native_dimension=2,
             wave_speeds=True,
             wave_speed_provider="pressure_derived",
         )

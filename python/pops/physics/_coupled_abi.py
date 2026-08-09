@@ -5,25 +5,26 @@ from typing import Any
 
 
 ROLE_TO_CANONICAL = {
-    "Density": "density",
-    "MomentumX": "momentum_x",
-    "MomentumY": "momentum_y",
-    "MomentumZ": "momentum_z",
-    "Energy": "energy",
-    "VelocityX": "velocity_x",
-    "VelocityY": "velocity_y",
-    "VelocityZ": "velocity_z",
-    "Pressure": "pressure",
-    "Temperature": "temperature",
-    "Scalar": "scalar",
+    "density": "density",
+    "energy": "energy",
+    "pressure": "pressure",
+    "temperature": "temperature",
+    "scalar": "scalar",
 }
+
+
+def _axis_role(role: Any) -> bool:
+    if not isinstance(role, str):
+        return False
+    family, separator, axis = role.partition(":")
+    return family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal()
 
 
 def role_canonical(role: Any) -> Any:
     """Canonical lowercase role accepted by the native boundary."""
     if role in ROLE_TO_CANONICAL:
         return ROLE_TO_CANONICAL[role]
-    if role in ROLE_TO_CANONICAL.values():
+    if _axis_role(role):
         return role
     raise ValueError(
         "CoupledSource: unknown role %r (roles: %s)"

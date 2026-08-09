@@ -3,7 +3,8 @@
 
 The final consumer build remains the single build, link, and test authority.  These lanes only
 populate ccache with object files compiled from the same configured Ninja graph, compiler, flags,
-and source revision.  Splitting the large System and AMR template seams across runners shortens a
+and source revision.  Splitting the large System and exact-ranked AMR runtime across runners
+shortens a
 genuinely cold Python, C++, or instrumented quality build without weakening its compile contract or
 reusing linked binaries.
 """
@@ -19,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 
-LANES = ("system", "amr-base", "amr-block-base", "amr-compressible")
+LANES = ("system", "amr-runtime", "amr-fields")
 
 
 def _runtime_objects(ninja_targets: str) -> list[str]:
@@ -47,12 +48,10 @@ def partition_runtime_objects(ninja_targets: str) -> dict[str, list[str]]:
     lanes = {lane: [] for lane in LANES}
     for target in _runtime_objects(ninja_targets):
         if target.startswith("src/CMakeFiles/pops_runtime_amr.dir/"):
-            if "/generated_seams/amr/block/base/" in target:
-                lanes["amr-block-base"].append(target)
-            elif "/compressible/" in target:
-                lanes["amr-compressible"].append(target)
+            if target.endswith("/runtime/amr/amr_system.cpp.o"):
+                lanes["amr-runtime"].append(target)
             else:
-                lanes["amr-base"].append(target)
+                lanes["amr-fields"].append(target)
         else:
             lanes["system"].append(target)
 

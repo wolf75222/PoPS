@@ -146,7 +146,7 @@ class DomainBoundary:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
-            "boundary_type": "rectangle_face",
+            "boundary_type": "cartesian_face",
             "domain_geometry_id": self.domain_geometry_id,
             "name": self.name,
             "axis": self.axis.to_dict(),
@@ -170,7 +170,7 @@ class DomainBoundary:
         if not isinstance(data, Mapping) or set(data) != required:
             raise TypeError("DomainBoundary data has an unsupported shape")
         if data["schema_version"] != _SCHEMA_VERSION \
-                or data["boundary_type"] != "rectangle_face":
+                or data["boundary_type"] != "cartesian_face":
             raise ValueError("DomainBoundary data uses an unsupported schema")
         try:
             side = BoundarySide(data["side"])

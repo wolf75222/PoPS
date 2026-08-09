@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Any
 from weakref import ref
 
+from pops._cartesian_axes import canonical_axis_mapping
+
 from ._module_freeze import ModuleFreezable
 from .operators import Operator, validate_operator_signature
 from .handles import Handle, OperatorHandle, ParamHandle, StateHandle
@@ -36,6 +38,11 @@ class Module(ModuleFreezable):
         self._state_spaces = {}
         self._field_spaces = {}
         self._aux = {}
+        # Exact producer descriptors keyed by their registry-issued AuxSpace
+        # handle.  Declaration and production are deliberately separate: a
+        # bare aux declaration is an external input, while a derived route is
+        # explicit and can be validated as a dependency graph before codegen.
+        self._aux_producers = {}
         self._state_handles = {}
         self._field_handles = {}
         self._aux_handles = {}
@@ -144,6 +151,34 @@ class Module(ModuleFreezable):
     def aux_fields(self, **kinds: Any) -> Any:
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
         return {k: self.aux_field(k, v) for k, v in kinds.items()}
+
+    def aux_provider(self, producer: Any) -> Handle:
+        """Register the one typed producer of one declared auxiliary component.
+
+        ``producer`` is :class:`pops.fields.InputAux` or
+        :class:`pops.fields.DerivedAux`.  It carries a registry-issued target
+        handle, never a name or a slot; ProviderPack later resolves the exact
+        owner-qualified component and native storage address.
+        """
+        from pops.fields.aux import DerivedAux, InputAux
+
+        if not isinstance(producer, (InputAux, DerivedAux)):
+            raise TypeError("Module.aux_provider requires InputAux or DerivedAux")
+        self._guard_mutable("register an auxiliary provider")
+        target = self.aux_handle(producer.target)
+        if target != producer.target:
+            raise ValueError(
+                "auxiliary producer target %s is not the registry-issued Module handle"
+                % producer.target.qualified_id
+            )
+        previous = self._aux_producers.get(target.local_id)
+        if previous is not None:
+            raise ValueError(
+                "auxiliary component %r already has producer %s; a component has one producer"
+                % (target.local_id, type(previous).__name__)
+            )
+        self._aux_producers[target.local_id] = producer
+        return target
 
     # --- operators ---
     def operator(self, name: Any = None, signature: Any = None, kind: Any = None,
@@ -312,16 +347,19 @@ class Module(ModuleFreezable):
             "sources": tuple(contract["sources"]),
         }
 
-    def eigenvalues(self, x: Any, y: Any) -> Any:
+    def eigenvalues(self, **directions: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
         IR expressions over the state. Carried so a pure Module is a self-contained, compilable model
         (lowered to ``dsl.Model.eigenvalues``)."""
         self._guard_mutable("declare eigenvalues")
-        x_values, y_values = tuple(x), tuple(y)
-        self._eigenvalues = {"x": x_values, "y": y_values}
+        values = canonical_axis_mapping(directions, where="Module.eigenvalues")
+        self._eigenvalues = {
+            axis: tuple(expressions) for axis, expressions in values.items()
+        }
         # An inspection result is deliberately detached.  Mutating a value returned during
         # authoring must never rewrite the Module behind its public setter.
-        return {"x": list(x_values), "y": list(y_values)}
+        return {axis: list(expressions)
+                for axis, expressions in self._eigenvalues.items()}
 
     def set_wave_speed_provider(self, kind: Any) -> str:
         """Record the one detached source kind that emits signed wave speeds.
@@ -586,6 +624,15 @@ class Module(ModuleFreezable):
 
     def aux(self) -> Any:
         return dict(self._aux)
+
+    def aux_providers(self) -> Any:
+        """Return the explicitly registered typed auxiliary producers by local target.
+
+        The returned mapping is detached; it does not expose the Module's
+        mutable registry.  Omitted components mean the standard explicit
+        external-input route at ProviderPack resolution.
+        """
+        return dict(self._aux_producers)
 
     def list_state_spaces(self) -> Any:
         """Names of the declared state spaces."""

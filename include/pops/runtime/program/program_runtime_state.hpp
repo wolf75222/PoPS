@@ -20,10 +20,11 @@
 //     and the held-node scheduler cache through the checkpoint; the AMR runtime defers both (its
 //     history / cache seams are not wired), so these stay EMPTY on AMR. Keeping the storage here (one
 //     struct) means an AMR history/cache seam later plugs into the SAME fields, never a fork.
-// WHO OWNS STEPPING: the cadence fields (step_ / substeps_ / stride_ / dt_bound_) are READ by the
-// driver, but the cadence LOOP lives at the call site, not here -- SystemProgramDriver::run_program_cadence
-// on the uniform side, AmrSystem::Impl::run_program_cadence_ on the AMR side. This struct only STORES
-// the cadence; it never advances the clock (no Impl / grid dependency leaks in).
+// WHO OWNS STEPPING: this state owns the one topology-independent cadence LOOP as well as its fields
+// (step_ / substeps_ / stride_ / dt_bound_). Uniform and AMR lend it only their accepted
+// `(physical_time, macro_step)` cursor by reference; no Impl, grid or hierarchy dependency crosses
+// this boundary. Exact-ranked ProgramContext<Dim> remains the sole implementation of operations
+// invoked by the installed step closure, while runtime drivers merely enter this shared dispatcher.
 //
 // GRID BOUNDARY. The self-contained logic (cadence guards, diagnostics, block params, history-ring
 // introspection + rotate, cache passthrough) lives HERE as methods with Program-subsystem-worded
@@ -36,17 +37,22 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>          // Real
-#include <pops/mesh/storage/multifab.hpp>          // MultiFab (history ring element)
+#include <pops/core/foundation/types.hpp>  // Real
+#include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/profiler.hpp>       // Profiler (per-node / per-brick timing)
@@ -60,10 +66,13 @@ namespace pops::runtime::program {
 /// is allocated by the owning runtime (it needs the shared block layout), so this struct holds only
 /// storage plus cheap, grid-free bookkeeping and the O(1) rotate. Grid-touching register/read/store/
 /// restore bodies live in the runtime and reach these maps directly. Empty by default.
+template <int Dim>
 struct HistoryManager {
-  std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
-  std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
-  std::map<std::string, bool> initialized;                 // name -> stored at least once
+  static_assert(Dim >= 1 && Dim <= 3, "HistoryManager only supports dimensions 1, 2, and 3");
+
+  std::map<std::string, std::vector<MultiFab<Dim>>> histories;  // name -> ring (newest at [0])
+  std::map<std::string, int> depth;                             // name -> ring length (max lag + 1)
+  std::map<std::string, bool> initialized;                      // name -> stored at least once
   /// Number of authentic accepted stores currently represented by logical ring slots. The first
   /// store cold-fills deeper slots with copies for multistep evaluation, but advances this count by
   /// one only. Saturates at depth; selective checkpoint replay is valid only at full depth.
@@ -141,13 +150,65 @@ struct HistoryManager {
   }
 };
 
+/// Attempt-local native balance evidence emitted by one exact runtime operator.
+///
+/// The coordinate deliberately remains independent of a user-facing BalanceLedger route: native
+/// operators know their qualified runtime block, hierarchy level and conservative component, while
+/// the route-to-quantity selector is a separate planning authority. Keeping both identities
+/// separate prevents a reflux correction from being silently relabelled as a complete balance.
+struct AutomaticBalanceKey {
+  int runtime_block = -1;
+  int level = -1;
+  int component = -1;
+  std::string term;
+
+  friend bool operator<(const AutomaticBalanceKey& left, const AutomaticBalanceKey& right) {
+    if (left.runtime_block != right.runtime_block)
+      return left.runtime_block < right.runtime_block;
+    if (left.level != right.level)
+      return left.level < right.level;
+    if (left.component != right.component)
+      return left.component < right.component;
+    return left.term < right.term;
+  }
+};
+
+/// Exact-ranked Program-owned field-boundary overlay. Generated installers write one attempt-local
+/// stage; the Uniform loader commits it only after validating the complete registry. The durable
+/// baseline remains distinct so replacing A(dynamic) by B(no export) cannot retain A's DSO-owned
+/// function pointers.
+template <int Dim>
+struct ArtifactFieldBoundaryAuthority {
+  std::optional<CompiledFieldBoundaryKernel<Dim>> kernel;
+  std::optional<FieldLogicalTimePoint> point;
+  std::vector<Real> parameters;
+};
+
+template <int Dim>
+using ArtifactFieldBoundaryAuthorityRegistry =
+    std::map<std::string, ArtifactFieldBoundaryAuthority<Dim>>;
+
+template <int Dim>
+struct ArtifactFieldBoundaryStage {
+  ArtifactFieldBoundaryAuthorityRegistry<Dim> authorities;
+  std::set<std::string> kernel_slots;
+  std::set<std::string> point_slots;
+  std::set<std::string> parameter_slots;
+};
+
 /// The compiled time-Program runtime state, extracted from the System / AmrSystem god-object (ADC-594).
 ///
 /// A plain aggregate: the owning Impl embeds ONE instance and routes every Program seam through it. The
 /// self-contained (grid-free) logic is exposed as methods with Program-subsystem-worded errors; the
 /// grid-touching history / cache bodies delegate their STORAGE to hist_ / cache_ from the runtime. See
 /// the file header for the shared Uniform/AMR contract (which fields each runtime uses).
+template <int Dim>
 struct ProgramRuntimeState {
+  static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
+  /// Static field-boundary authoring image captured before the first successful artifact overlay.
+  std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> artifact_field_boundary_baseline_;
+  /// Candidate sink active only while pops_install_field_boundaries executes.
+  std::optional<ArtifactFieldBoundaryStage<Dim>> artifact_field_boundary_stage_;
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
   /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
   /// before mutation.
@@ -195,6 +256,9 @@ struct ProgramRuntimeState {
   /// essential at large physical times: reconstructing it as `accepted_time - accumulated_dt` loses
   /// low bits before the Program starts. Zero is the canonical inactive image.
   double cadence_window_start_time_ = 0.0;
+  /// Transient non-reentrancy lease for the one shared cadence dispatcher. It is neither checkpoint
+  /// state nor accepted scientific state and is always released by RAII on success or failure.
+  bool cadence_dispatch_active_ = false;
   /// A strict checkpoint restore stages, but does not yet install, one authenticated window. The
   /// subsequent set_clock must present the exact accepted (time, macro-step) pair that validated the
   /// staged image; only that call commits the window. A mismatch discards the staged transaction and
@@ -207,7 +271,8 @@ struct ProgramRuntimeState {
   double cadence_clock_restore_accepted_time_ = 0.0;
   int cadence_clock_restore_macro_step_ = 0;
   /// LAST accepted numerical interval handed to step_ (ADC-626). Set by the driver right before each
-  /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
+  /// program_.step_(h) call (dispatch_cadence_step, shared by both runtimes and their explicit/CFL
+  /// entry points), so the runtime's
   /// pre-commit store_history can tag its state sample with the outgoing interval that advances it
   /// toward the next accepted sample (HistoryManager::slot_dt). A plain data field only assigned by
   /// the template (never a new method it instantiates) -> the mock System. Default 0 -> no program
@@ -265,6 +330,35 @@ struct ProgramRuntimeState {
   /// COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414): name -> last value recorded via P.record_scalar.
   /// Lives here (not the .so) so it outlives the step closure and Python can read it. Used by BOTH.
   std::map<std::string, Real> diagnostics_;
+  /// Reserved balance records for the current native attempt only. Unlike diagnostics_, this
+  /// mailbox is cleared before every public step and is never checkpointed. Accepted balance
+  /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
+  /// cannot silently reuse the preceding step.
+  std::map<std::string, Real> step_balance_terms_;
+  /// Native operator contributions captured only for a due Balance attempt. These values are keyed
+  /// by their physical runtime coordinate instead of a user ledger route and are therefore not read
+  /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
+  /// so rejection cannot leak automatic evidence into a retry.
+  std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+  /// Monotone attempt-local decision emitted by generated code before any Program operator runs.
+  /// It is the OR of the exact ConsumerGraph-derived route decisions for this public step. Keeping
+  /// this separate from step_balance_terms_ lets projection operators execute before their later
+  /// Program.record_balance sinks without losing due automatic evidence.
+  bool automatic_balance_due_ = false;
+  /// Attempt-local outer accepted-step target used by ConsumerGraph-fused balance guards. Program
+  /// substeps temporarily publish their window-start macro step through the facade, so generated
+  /// balance code must not infer the public target from `macro_step()+1`.
+  bool balance_due_window_active_ = false;
+  int balance_due_target_step_ = 0;
+  /// Selective checkpoint reconstruction re-executes scientific Program code without accepting a
+  /// public step. Balance evidence is therefore compiled off for that replay: it must neither query
+  /// a nonexistent public-step due window nor populate the current accepted-attempt mailbox.
+  bool balance_replay_active_ = false;
+  /// A stride-held public step executes no Program work, so its exact discrete balance is the
+  /// additive identity for every route. These transient flags distinguish that valid zero from a
+  /// due Program that failed to publish all five terms; neither flag is checkpoint state.
+  bool balance_step_completed_ = false;
+  bool balance_program_was_due_ = false;
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
@@ -282,10 +376,10 @@ struct ProgramRuntimeState {
   Profiler profiler_;
   /// SCHEDULER VALUE CACHE (ADC-458), UNIFORM ONLY. The held-node cache (every(N).hold / accumulate_dt)
   /// keyed by IR node id; the uniform checkpoint serializes it. Empty on AMR (cache seam not wired).
-  CacheManager cache_;
+  CacheManager<Dim> cache_;
   /// MULTISTEP HISTORY (ADC-406a), UNIFORM ONLY. Ring buffers for multistep schemes; the uniform
   /// checkpoint serializes them. Empty on AMR (history seam not wired).
-  HistoryManager hist_;
+  HistoryManager<Dim> hist_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
 
@@ -303,8 +397,8 @@ struct ProgramRuntimeState {
     std::vector<int> block_map;
     std::map<int, RuntimeParams> block_params;
     std::map<std::string, Real> diagnostics;
-    CacheManager cache;
-    HistoryManager history;
+    CacheManager<Dim> cache;
+    HistoryManager<Dim> history;
     bool artifact_backed = false;
   };
 
@@ -377,7 +471,7 @@ struct ProgramRuntimeState {
   void reset_artifact_candidate_state() {
     diagnostics_.clear();
     cache_.clear();
-    hist_ = HistoryManager{};
+    hist_ = HistoryManager<Dim>{};
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
@@ -654,6 +748,66 @@ struct ProgramRuntimeState {
     }
   }
 
+  /// Execute one accepted facade step through the single Uniform/AMR cadence dispatcher.
+  ///
+  /// The owning runtime lends its exact accepted cursor by reference. The dispatcher publishes each
+  /// numerical substep's start coordinate while invoking the installed Program, restores the entry
+  /// cursor after every failure, commits the held/due cadence image once, then advances the public
+  /// cursor exactly once. Grid and hierarchy work remain inside the installed provider closure.
+  void dispatch_cadence_step(double& physical_time_cursor, int& macro_step_cursor, double dt,
+                             const std::string& runtime) {
+    if (cadence_dispatch_active_)
+      throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
+    if (!step_)
+      throw std::logic_error(
+          runtime + " Program cadence dispatch requires an installed whole-system Program");
+
+    cadence_dispatch_active_ = true;
+    struct CadenceDispatchLease {
+      bool& active;
+      ~CadenceDispatchLease() { active = false; }
+    } dispatch_lease{cadence_dispatch_active_};
+
+    const double accepted_time = physical_time_cursor;
+    const int accepted_macro_step = macro_step_cursor;
+    const PreparedCadenceStep cadence =
+        prepare_cadence_step(accepted_time, accepted_macro_step, dt, runtime);
+    if (accepted_macro_step == std::numeric_limits<int>::max())
+      throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
+
+    try {
+      if (cadence.due) {
+        validate_cadence_partition(cadence, substeps_, runtime);
+        const int held_before_due = cadence.window_steps - 1;
+        if (accepted_macro_step < held_before_due)
+          throw std::logic_error(runtime + " Program cadence window starts before macro-step zero");
+        const int window_start_macro_step = accepted_macro_step - held_before_due;
+        run_balance_due_window(accepted_macro_step, runtime, [&] {
+          for (int substep = 0; substep < substeps_; ++substep) {
+            const PreparedCadenceSubstep partition =
+                prepare_cadence_substep(cadence, substep, substeps_, runtime);
+            physical_time_cursor = partition.start;
+            macro_step_cursor = window_start_macro_step;
+            last_dt_ = static_cast<Real>(partition.dt);
+            step_(partition.dt);
+            physical_time_cursor = partition.end;
+          }
+        });
+        physical_time_cursor = accepted_time;
+        macro_step_cursor = accepted_macro_step;
+      }
+
+      commit_cadence_step(cadence, runtime);
+      physical_time_cursor = cadence.window_end;
+      complete_balance_step(cadence.due);
+      ++macro_step_cursor;
+    } catch (...) {
+      physical_time_cursor = accepted_time;
+      macro_step_cursor = accepted_macro_step;
+      throw;
+    }
+  }
+
   /// Stage an authenticated checkpoint window for one exact set_clock transaction. The accepted
   /// window is not mutated until the matching clock pair is consumed, and no historical duration is
   /// guessed.
@@ -735,9 +889,124 @@ struct ProgramRuntimeState {
           " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
-  /// Record a compiled-Program scalar diagnostic (ADC-414): the installed Program writes named scalars
-  /// via P.record_scalar; Python reads them after the step. Idempotent (last write wins).
-  void record_diagnostic(const std::string& name, Real value) { diagnostics_[name] = value; }
+  static bool has_reserved_balance_namespace(const std::string& name) noexcept {
+    return name.rfind("pops.balance-term", 0) == 0;
+  }
+
+  static void require_balance_route(const std::string& route, const std::string& runtime) {
+    static constexpr std::string_view kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
+    if (route.size() != kRoutePrefix.size() + 64 ||
+        route.compare(0, kRoutePrefix.size(), kRoutePrefix.data(), kRoutePrefix.size()) != 0 ||
+        !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(kRoutePrefix.size()), route.end(),
+                     [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-ledger-route identity");
+  }
+
+  static void require_balance_due_contract(const std::string& contract,
+                                           const std::string& runtime) {
+    static constexpr std::string_view kContractPrefix = "pops.balance-due-contract.v1:sha256:";
+    if (contract.size() != kContractPrefix.size() + 64 ||
+        contract.compare(0, kContractPrefix.size(), kContractPrefix.data(),
+                         kContractPrefix.size()) != 0 ||
+        !std::all_of(contract.begin() + static_cast<std::ptrdiff_t>(kContractPrefix.size()),
+                     contract.end(), [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-due-contract identity");
+  }
+
+  static void require_balance_term(const std::string& term, const std::string& runtime) {
+    static constexpr std::array<std::string_view, 5> kTerms{
+        "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
+    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
+      throw std::invalid_argument(runtime + " requires one canonical five-term balance name");
+  }
+
+  static void require_automatic_balance_term(const std::string& term, const std::string& runtime) {
+    static constexpr std::array<std::string_view, 4> kTerms{"outward_boundary_flux", "sources",
+                                                            "reflux", "projection"};
+    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
+      throw std::invalid_argument(runtime +
+                                  " requires one native operator balance contribution name");
+  }
+
+  /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
+  /// step with last-write-wins semantics. The balance namespace has a separate typed sink.
+  void record_diagnostic(const std::string& name, Real value) {
+    if (has_reserved_balance_namespace(name))
+      throw std::invalid_argument(
+          "ProgramRuntimeState::record_diagnostic: pops.balance-term is a reserved namespace");
+    diagnostics_[name] = value;
+  }
+
+  /// Record one validated Program.record_balance term. Not exposed through the Python runtime
+  /// facade: only generated ProgramContext code reaches this sink.
+  void record_balance_term(const std::string& route, const std::string& term, Real value,
+                           const std::string& runtime) {
+    require_balance_route(route, runtime + "::record_balance_term");
+    require_balance_term(term, runtime + "::record_balance_term");
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument(runtime + "::record_balance_term requires a finite value");
+    const std::string name = "pops.balance-term.v1:" + route + ":" + term;
+    // A Program cadence may invoke the compiled body several times inside one public macro-step.
+    // Terms are signed, time-integrated increments and therefore accumulate across invocations.
+    auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
+    if (!inserted)
+      entry->second += value;
+  }
+
+  /// Whether generated code proved that at least one Balance route is due in this attempt.
+  ///
+  /// The exact ConsumerGraph-derived decision is emitted before any Program operator, so both an
+  /// in-body projection and post-body reflux observe the same cadence without a second scheduler.
+  [[nodiscard]] bool automatic_balance_capture_due() const noexcept {
+    return !balance_replay_active_ && automatic_balance_due_;
+  }
+
+  /// Publish one generated ConsumerGraph due decision before Program operators execute.
+  ///
+  /// Several compiled Program invocations may share one outer accepted-step window. The marker is
+  /// therefore monotone inside an attempt and is reset only at attempt entry. Static-false routes
+  /// emit no call, so a run without Balance consumers retains no generated hot-path branch.
+  void note_automatic_balance_capture_due(bool due, const std::string& runtime) {
+    if (balance_replay_active_) {
+      if (due)
+        throw std::logic_error(runtime +
+                               "::note_automatic_balance_capture_due cannot enable replay capture");
+      return;
+    }
+    if (!balance_due_window_active_)
+      throw std::logic_error(
+          runtime + "::note_automatic_balance_capture_due requires an active public-step window");
+    automatic_balance_due_ = automatic_balance_due_ || due;
+  }
+
+  /// Accumulate one signed, metric-integrated native operator contribution.
+  ///
+  /// This is intentionally not accepted_balance_terms(): automatic evidence remains qualified by
+  /// block/level/component until a resolved quantity selector proves which BalanceLedger route owns
+  /// it. The separation is fail-closed and lets boundary/source/projection producers join the same
+  /// mailbox later without fabricating missing terms.
+  void record_automatic_balance_term(int runtime_block, int level, int component,
+                                     const std::string& term, Real value,
+                                     const std::string& runtime) {
+    if (!automatic_balance_capture_due())
+      throw std::logic_error(runtime +
+                             "::record_automatic_balance_term requires a due authored balance");
+    if (runtime_block < 0 || level < 0 || component < 0)
+      throw std::invalid_argument(
+          runtime + "::record_automatic_balance_term requires non-negative coordinates");
+    require_automatic_balance_term(term, runtime + "::record_automatic_balance_term");
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument(runtime +
+                                  "::record_automatic_balance_term requires a finite value");
+    auto [entry, inserted] = automatic_balance_terms_.try_emplace(
+        AutomaticBalanceKey{runtime_block, level, component, term}, value);
+    if (!inserted)
+      entry->second += value;
+  }
 
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
   /// Program subsystem setter in the message (not a generic getter). @throws std::out_of_range.
@@ -753,7 +1022,198 @@ struct ProgramRuntimeState {
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
   std::map<std::string, Real> diagnostics() const { return diagnostics_; }
 
-  void begin_step_projection_report() { step_projections_.clear(); }
+  void begin_step_projection_report() {
+    step_projections_.clear();
+    step_balance_terms_.clear();
+    automatic_balance_terms_.clear();
+    automatic_balance_due_ = false;
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
+    balance_step_completed_ = false;
+    balance_program_was_due_ = false;
+  }
+
+  void complete_balance_step(bool program_was_due) noexcept {
+    balance_step_completed_ = true;
+    balance_program_was_due_ = program_was_due;
+  }
+
+  /// Return exactly the five native Program scalars recorded for one typed balance route during the
+  /// current attempt. The facade separately proves that an external accepted-step transaction is
+  /// active. No zero, stale value, or array-derived Python fallback is permitted.
+  std::map<std::string, Real> accepted_balance_terms(const std::string& route,
+                                                     const std::string& runtime) const {
+    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
+                                                       "sources", "reflux", "projection"};
+    require_balance_route(route, runtime + "::_accepted_balance_terms");
+    std::map<std::string, Real> result;
+    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
+      for (const char* term : kTerms)
+        result.emplace(term, Real(0));
+      return result;
+    }
+    for (const char* term : kTerms) {
+      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
+      const auto found = step_balance_terms_.find(record);
+      if (found == step_balance_terms_.end())
+        throw std::runtime_error(
+            runtime + "::_accepted_balance_terms: current native attempt omitted term '" + term +
+            "'; Program.record_balance must publish all five terms");
+      if (!std::isfinite(static_cast<double>(found->second)))
+        throw std::runtime_error(
+            runtime +
+            "::_accepted_balance_terms: current native attempt produced non-finite term '" + term +
+            "'");
+      result.emplace(term, found->second);
+    }
+    return result;
+  }
+
+  /// Resolve one public Balance route against exact native operator coordinates.
+  ///
+  /// Explicit Program records remain authoritative for every term not listed in @p automatic_terms.
+  /// Reflux and projection may instead be selected from the attempt-local native mailbox. The
+  /// selector is complete and owner-qualified: one runtime block, one conservative component and
+  /// the full active contiguous hierarchy. A selected producer must have published every expected
+  /// coordinate; missing evidence and duplicate Program/native authority fail instead of becoming
+  /// zero or reusing a stale value.
+  std::map<std::string, Real> selected_accepted_balance_terms(
+      const std::string& route, int runtime_block, int component, const std::vector<int>& levels,
+      const std::vector<std::string>& automatic_terms, const std::string& runtime) const {
+    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
+                                                       "sources", "reflux", "projection"};
+    require_balance_route(route, runtime + "::_selected_accepted_balance_terms");
+    if (runtime_block < 0 || component < 0)
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires non-negative coordinates");
+    if (levels.empty() || levels.front() < 0 ||
+        std::adjacent_find(levels.begin(), levels.end(),
+                           [](int left, int right) { return right != left + 1; }) != levels.end())
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires a non-empty contiguous hierarchy");
+    if (!std::is_sorted(automatic_terms.begin(), automatic_terms.end()) ||
+        std::adjacent_find(automatic_terms.begin(), automatic_terms.end()) != automatic_terms.end())
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires sorted unique automatic terms");
+    for (const std::string& term : automatic_terms)
+      if (term != "reflux" && term != "projection")
+        throw std::invalid_argument(
+            runtime + "::_selected_accepted_balance_terms has no native producer for '" + term +
+            "'");
+
+    std::map<std::string, Real> result;
+    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
+      for (const char* term : kTerms)
+        result.emplace(term, Real(0));
+      return result;
+    }
+    for (const char* term_value : kTerms) {
+      const std::string term = term_value;
+      const bool automatic =
+          std::binary_search(automatic_terms.begin(), automatic_terms.end(), term);
+      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
+      const auto authored = step_balance_terms_.find(record);
+      if (!automatic) {
+        if (authored == step_balance_terms_.end())
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: current native attempt omitted term '" + term +
+              "'; Program.record_balance must publish every non-automatic term");
+        if (!std::isfinite(static_cast<double>(authored->second)))
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: current native attempt produced "
+              "non-finite term '" +
+              term + "'");
+        result.emplace(term, authored->second);
+        continue;
+      }
+      if (authored != step_balance_terms_.end())
+        throw std::runtime_error(runtime + "::_selected_accepted_balance_terms: term '" + term +
+                                 "' has both Program and native producer authority");
+
+      Real value = Real(0);
+      const std::size_t expected = term == "reflux" ? levels.size() - 1 : levels.size();
+      for (std::size_t index = 0; index < expected; ++index) {
+        const AutomaticBalanceKey key{runtime_block, levels[index], component, term};
+        const auto found = automatic_balance_terms_.find(key);
+        if (found == automatic_balance_terms_.end())
+          throw std::runtime_error(
+              runtime + "::_selected_accepted_balance_terms: native producer omitted term '" +
+              term + "' at level " + std::to_string(levels[index]));
+        if (!std::isfinite(static_cast<double>(found->second)))
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: native producer returned non-finite "
+              "term '" +
+              term + "'");
+        value += found->second;
+      }
+      if (!std::isfinite(static_cast<double>(value)))
+        throw std::runtime_error(
+            runtime + "::_selected_accepted_balance_terms: native term accumulation overflowed");
+      result.emplace(term, value);
+    }
+    return result;
+  }
+
+  void begin_balance_due_window(int accepted_macro_step, const std::string& runtime) {
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " balance due window is already active");
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " cannot enter a public-step window during balance replay");
+    if (accepted_macro_step < 0 || accepted_macro_step == std::numeric_limits<int>::max())
+      throw std::overflow_error(runtime + " balance due target step is not representable");
+    balance_due_target_step_ = accepted_macro_step + 1;
+    balance_due_window_active_ = true;
+  }
+
+  void end_balance_due_window() noexcept {
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
+  }
+
+  template <class Body>
+  void run_balance_due_window(int accepted_macro_step, const std::string& runtime, Body&& body) {
+    begin_balance_due_window(accepted_macro_step, runtime);
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      end_balance_due_window();
+      throw;
+    }
+    end_balance_due_window();
+  }
+
+  template <class Body>
+  void run_balance_replay(const std::string& runtime, Body&& body) {
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " balance replay is already active");
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " cannot enter balance replay inside a public-step window");
+    balance_replay_active_ = true;
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      balance_replay_active_ = false;
+      throw;
+    }
+    balance_replay_active_ = false;
+  }
+
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route, int every_n,
+                               const std::string& runtime) const {
+    require_balance_due_contract(contract, runtime + "::balance_consumer_is_due");
+    require_balance_route(route, runtime + "::balance_consumer_is_due");
+    if (every_n <= 0)
+      throw std::invalid_argument(runtime + "::balance_consumer_is_due requires a positive period");
+    if (balance_replay_active_)
+      return false;
+    if (!balance_due_window_active_ || balance_due_target_step_ <= 0)
+      throw std::logic_error(runtime +
+                             "::balance_consumer_is_due requires an active public-step window");
+    return balance_due_target_step_ % every_n == 0;
+  }
 
   void note_step_projection(const std::string& name) {
     if (name.empty())

@@ -2,6 +2,7 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <cstdint>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -34,6 +35,12 @@ inline constexpr int kPolarTensorKrylovDefaultMaxIters = 400;
 inline constexpr int kSchurKrylovPolarMaxIters = 600;
 inline constexpr Real kKrylovBreakdownTiny = Real(1e-300);
 
+// Exact-ranked constant-coefficient Cartesian conjugate-gradient defaults. These belong to the
+// uniform System backend and are intentionally distinct from geometric multigrid V-cycle knobs.
+inline constexpr Real kCartesianCGDefaultRelTol = Real(1e-10);
+inline constexpr Real kCartesianCGDefaultAbsTol = Real(0);
+inline constexpr int kCartesianCGDefaultMaxIterations = 2000;
+
 // Geometric multigrid defaults.
 inline constexpr Real kMGDefaultRelTol = Real(1e-8);
 inline constexpr int kMGDefaultMaxCycles = 50;
@@ -57,7 +64,6 @@ inline constexpr Real kFACInitialCoarseAbsTol = Real(0);
 inline constexpr int kFACInitialCoarseMaxCycles = 100;
 
 // FFT Poisson route facts.
-inline constexpr bool kFFTDefaultSpectral = false;
 inline constexpr bool kFFTZeroMeanGauge = true;
 inline constexpr bool kFFTDirectDftFallback = true;
 
@@ -172,7 +178,8 @@ struct EffectiveBlockOptions {
 
 struct EffectivePoissonOptions {
   std::string rhs = "charge_density";
-  std::string solver = "geometric_mg";
+  std::string solver = "cartesian_cg";
+  std::string solver_option_schema = "pops.system.cartesian-cg-options@1";
   std::string bc = "auto";
   std::string wall = "none";
   double wall_radius = 0.0;
@@ -181,6 +188,7 @@ struct EffectivePoissonOptions {
   // reports (and runs) the historical V-cycle. Populated from the resolved GeometricMgOptions.
   double rel_tol = static_cast<double>(kMGDefaultRelTol);
   double abs_tol = static_cast<double>(kMGDefaultAbsTol);
+  int max_iterations = kCartesianCGDefaultMaxIterations;
   int max_cycles = kMGDefaultMaxCycles;
   int min_coarse = kMGDefaultMinCoarse;
   int pre_smooth = kMGDefaultPreSmooth;
@@ -226,11 +234,14 @@ struct EffectiveEbOptions {
   double kappa_min = static_cast<double>(kEbKappaMin);
   double face_open_eps = static_cast<double>(kEbFaceOpenEps);
   double cut_theta_min = static_cast<double>(kEbCutFractionFloor);
+  std::string semantic_digest;
+  std::string materialization_digest;
+  std::uint64_t generation = 0;
 };
 
-struct EffectiveCartesianTopology {
-  bool periodic_x = false;
-  bool periodic_y = false;
+struct EffectiveSpatialTopology {
+  int dimension = 0;
+  std::vector<bool> periodicity;
 };
 
 struct EffectiveOptionsReport {
@@ -238,7 +249,7 @@ struct EffectiveOptionsReport {
   std::string runtime;
   std::vector<EffectiveBlockOptions> blocks;
   EffectivePoissonOptions poisson;
-  EffectiveCartesianTopology topology;
+  EffectiveSpatialTopology topology;
   bool has_amr = false;
   EffectiveRefinementOptions amr_refinement;
   EffectiveEbOptions eb;  ///< ADC-615: effective cut-cell / EB thresholds.

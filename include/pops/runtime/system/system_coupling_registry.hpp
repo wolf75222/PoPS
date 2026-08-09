@@ -1,8 +1,8 @@
 #pragma once
 
-#include <pops/core/foundation/types.hpp>                   // Real
-#include <pops/coupling/source/coupled_source_program.hpp>  // CsProgram (per-cell frequency bytecode)
+#include <pops/core/foundation/types.hpp>              // Real
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperatorView (inspect metadata)
+#include <pops/mesh/storage/multifab.hpp>
 
 #include <cstddef>
 #include <functional>
@@ -18,18 +18,14 @@
 /// bounds they impose".
 ///
 /// STEPPER VISIBILITY: `dt_bounds`, `coupled_freqs` and `coupled_freq_exprs` are read by
-/// SystemProgramDriver for `step_cfl`; `operators` are consumed only by explicit Program lowering. Impl
-/// re-exposes the bound collections under their exact
-/// historical names via REFERENCE ALIASES (couplings / dt_bounds_ / coupled_freqs_ /
-/// coupled_freq_exprs_). `coupled_operators` is METADATA ONLY -> accessed registry-direct.
+/// `System<Dim>::step_cfl`; `operators` are consumed only by explicit Program lowering.
+/// `coupled_operators` is metadata only and is inspected directly from the registry.
 ///
 /// OWNERSHIP CONTRACT: every field is FROZEN AT BIND (populated only by the structural setters
 /// add_coupled_source / add_coupling_operator / add_dt_bound, refused once bound) and READ during run
 /// by the stepper. Nothing here is checkpointed (re-declared by replaying the composition).
 
 namespace pops {
-
-class MultiFab;
 
 namespace runtime {
 namespace system {
@@ -50,43 +46,41 @@ struct CoupledFreq {
   double mu;
 };
 
-/// PER-CELL frequency of a coupled source (CoupledSource.frequency with an Expr): a bytecode program
-/// mu(U) evaluated per cell at EVERY step (MAX reduction, global all_reduce_max), bound
-/// dt <= cfl / max(mu). The inputs REUSE the resolve() resolution of the input registers (sidx,
-/// comp); the constants match the source. Stored only AFTER full validation.
-struct CoupledFreqExpr {
+/// Prepared exact-ranked reduction of a state-dependent coupling frequency. The provider captures
+/// its authenticated fields and returns the collective maximum; the generic registry never stores
+/// one provider's bytecode or array view.
+struct PreparedCoupledFrequency {
   std::string label;
-  CsProgram prog;
-  struct In {
-    int sidx, comp;
-  };
-  std::vector<In> ins;  // (species, component) of the inputs (same as the source; resolved once)
-  int n_in = 0;
-  std::vector<Real> kconsts;  // constants loaded into r[n_in ..] (same as the source)
+  std::function<Real()> maximum_frequency;
 };
 
 /// One executable coupling receives the complete, System-indexed state pack selected by the
 /// Program.  Keeping the state pack explicit lets a Program apply an operator-split source to its
 /// uncommitted endpoint candidates and publish the whole group only after coupling and projection
 /// succeed; no operator has to borrow or mutate the accepted live states.
-using PreparedCouplingOperator = std::function<void(Real, const std::vector<MultiFab*>&)>;
+template <int Dim>
+using PreparedCouplingOperator = std::function<void(Real, const std::vector<MultiFab<Dim>*>&)>;
 
 /// Prepared registry of the couplings and the step bounds they impose.
+template <int Dim>
 struct SystemCouplingRegistry {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "SystemCouplingRegistry only supports dimensions 1, 2, and 3");
+
   /// Inter-species coupled sources applied by an explicit Program node after transport.  Each
   /// operator consumes the exact simultaneous candidate-state pack supplied by that Program.
-  std::vector<PreparedCouplingOperator> operators;
+  std::vector<PreparedCouplingOperator<Dim>> operators;
   /// GLOBAL host dt bounds (add_dt_bound). Read by the stepper.
   std::vector<GlobalDtBound> dt_bounds;
   /// constant coupled-source frequency bounds. Read by the stepper.
   std::vector<CoupledFreq> coupled_freqs;
   /// per-cell coupled-source frequency bounds. Read by the stepper.
-  std::vector<CoupledFreqExpr> coupled_freq_exprs;
+  std::vector<PreparedCoupledFrequency> coupled_frequencies;
   /// TYPED coupling-operator inspect views (label + declared conservation / frequency contracts), in
   /// registration order. METADATA ONLY: never read by the stepper.
   std::vector<CouplingOperatorView> coupled_operators;
 
-  std::size_t apply(Real dt, const std::vector<MultiFab*>& states) const {
+  std::size_t apply(Real dt, const std::vector<MultiFab<Dim>*>& states) const {
     for (const auto& op : operators)
       op(dt, states);
     return operators.size();

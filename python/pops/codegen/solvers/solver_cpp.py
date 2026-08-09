@@ -35,12 +35,16 @@ def generate_solver_cpp(solver_brick: Any, func: Any = None) -> str:
     The emitted signature is::
 
         template <class Op>
-        pops::SolveReport <name>_solve(const Op& A, pops::MultiFab& x,
-                                      const pops::MultiFab& b);
+        pops::SolveReport <name>_solve(
+            const Op& A,
+            pops::MultiFab<pops::kNativeDimension>& x,
+            const pops::MultiFab<pops::kNativeDimension>& b);
 
     The operator ``A`` is a value-typed TEMPLATE parameter (a callable
-    ``void(pops::MultiFab&, const pops::MultiFab&)``, the same shape ``pops::ApplyFn`` and the
-    native Krylov loops take), so it inlines at the call site -- there is NO ``std::function``
+    ``void(pops::MultiFab<pops::kNativeDimension>&,
+    const pops::MultiFab<pops::kNativeDimension>&)``, the same shape
+    ``pops::ApplyFn<pops::kNativeDimension>`` and the native Krylov loops take), so it inlines at
+    the call site -- there is NO ``std::function``
     in the kernel, NO Python callback in the loop, NO heap allocation inside the loop (the
     scratch fields are allocated ONCE before it), and NO per-cell string lookup (criterion
     24.9). The DSL path is for CUSTOM solvers; a DSL solver that maps onto a native scheme
@@ -58,9 +62,10 @@ class _SolverCppLowering:
     (``state`` / ``linear_source`` / ``reduce`` (norm2/dot) / ``apply`` / ``linear_combine`` /
     ``scalar_op`` / ``compare`` / ``logical_and`` / ``while``) but emits a free function that
     is NOT bound to a ProgramContext / model: the matrix-free operator is the template
-    parameter ``A`` and the vector operands are bare ``pops::MultiFab`` scratch fields combined
-    with the shared ``pops::dot`` / ``pops::saxpy`` / ``pops::lincomb`` primitives. It is a
-    self-contained codegen path that does not perturb the shared time/dsl codegen."""
+    parameter ``A`` and the vector operands are exact-ranked
+    ``pops::MultiFab<pops::kNativeDimension>`` scratch fields combined with the shared
+    ``pops::dot`` / ``pops::saxpy`` / ``pops::lincomb`` primitives. It is a self-contained codegen
+    path that does not perturb the shared time/dsl codegen."""
 
     def __init__(self, ir: Any, func: Any) -> None:
         self._ir = ir
@@ -351,7 +356,9 @@ class _SolverCppLowering:
         if fixed == "x":
             return "x"
         tok = "v%d" % v.id
-        self._scratch.append("pops::MultiFab %s(b.box_array(), b.dmap(), b.ncomp(), 1);" % tok)
+        self._scratch.append(
+            "pops::MultiFab<pops::kNativeDimension> %s("
+            "b.layout(), b.distribution(), b.local_rank(), b.ncomp(), pops_scratch_ghosts);" % tok)
         return tok
 
     def _first_state_id(self) -> Any:
@@ -400,11 +407,16 @@ _SOLVER_CPP_TEMPLATE = '''\
 // Do not edit by hand. A CUSTOM solver authored in the @pops.codegen.solvers.solver IR-DSL, lowered to a
 // self-contained C++ kernel that drives the solve entirely in C++ via the SHARED matrix-free
 // HPC primitives (pops::dot / pops::saxpy / pops::lincomb). The matrix-free operator A is a
-// value-typed TEMPLATE parameter (a callable void(MultiFab&, const MultiFab&), the same shape
-// the native Krylov loops take), so it INLINES at the call site: no type-erased indirection in
-// the kernel, no Python callback in the loop, no heap allocation inside the loop (the scratch
-// fields below are allocated once, before it), and no per-cell name dispatch (criterion 24.9).
-#include <pops/mesh/storage/multifab.hpp>                     // pops::MultiFab
+// value-typed TEMPLATE parameter (the same callable signature as
+// pops::ApplyFn<pops::kNativeDimension>:
+// void(pops::MultiFab<pops::kNativeDimension>&,
+//      const pops::MultiFab<pops::kNativeDimension>&)), so it INLINES at the call site: no
+// type-erased indirection in the kernel, no Python callback in the loop, no heap allocation inside
+// the loop (the scratch fields below are allocated once, before it), and no per-cell name dispatch
+// (criterion 24.9).
+#include <pops/core/foundation/native_dimension.hpp>         // pops::kNativeDimension
+#include <pops/mesh/index/extent.hpp>                         // pops::Extent<Dim>
+#include <pops/mesh/storage/multifab.hpp>                     // pops::MultiFab<pops::kNativeDimension>
 #include <pops/mesh/storage/mf_arith.hpp>                     // pops::dot / pops::saxpy / pops::lincomb
 #include <pops/numerics/elliptic/linear/solve_report.hpp>    // pops::SolveReport
 #include <pops/core/foundation/types.hpp>                     // pops::Real
@@ -413,14 +425,25 @@ _SOLVER_CPP_TEMPLATE = '''\
 // The custom solver kernel: solve A x = b, writing the solution into x (warm-started from x).
 // Returns the iteration count / final relative residual in a pops::SolveReport.
 template <class Op>
-inline pops::SolveReport {func}_solve(const Op& A, pops::MultiFab& x, const pops::MultiFab& b) {{
+inline pops::SolveReport {func}_solve(
+    const Op& A,
+    pops::MultiFab<pops::kNativeDimension>& x,
+    const pops::MultiFab<pops::kNativeDimension>& b) {{
   int pops_iters = 0;  // convergence-loop counter (0 for a loop-free solver)
   bool pops_converged = false;
+  const pops::Extent<pops::kNativeDimension> pops_scratch_ghosts = [] {{
+    pops::Extent<pops::kNativeDimension> ghosts{{}};
+    for (int axis = 0; axis < pops::kNativeDimension; ++axis) {{
+      ghosts[axis] = 1;
+    }}
+    return ghosts;
+  }}();
 {scratch}
 {body}
   // Final relative residual ||b - A x|| / ||b|| over the SAME shared primitives (a diagnostic, once,
   // after the loop): A(x) into a scratch, r = b - A x, then the global L2 norms via pops::dot.
-  pops::MultiFab pops_resid(b.box_array(), b.dmap(), b.ncomp(), 1);
+  pops::MultiFab<pops::kNativeDimension> pops_resid(
+      b.layout(), b.distribution(), b.local_rank(), b.ncomp(), pops_scratch_ghosts);
   A(pops_resid, x);
   pops::lincomb(pops_resid, static_cast<pops::Real>(1), b, static_cast<pops::Real>(-1), pops_resid);
   const pops::Real pops_bnorm = std::sqrt(pops::dot(b, b));

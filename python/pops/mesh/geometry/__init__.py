@@ -1,9 +1,8 @@
-"""Typed embedded-geometry and wall descriptors.
+"""Typed embedded-geometry descriptors.
 
 Every embedded transport boundary lowers through the same :class:`LevelSet` contract and a typed
-:class:`~pops.mesh.masks.TransportMask`. :class:`Disc` and :class:`NoWall` also remain the typed
-selectors consumed by the current elliptic wall seam. Native tokens are lowering details and are
-never accepted as public authoring input.
+:class:`~pops.mesh.masks.TransportMask`. Field and transport geometry share that one implicit-surface
+authority; no separate wall-token route exists.
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from pops.analytic import (
     maximum,
     minimum,
 )
-from pops.frames import Cartesian2D
+from pops.frames import Cartesian
 from pops.params.use_sites import ParamUse, resolve_param_use
 
 
@@ -51,15 +50,23 @@ def _geometry_coordinates(values: Any, *, where: str) -> tuple[float, ...]:
     )
 
 
-def _cartesian_coordinates(frame: Any) -> tuple[ScalarExpr, ScalarExpr]:
-    """Return analytic coordinates after authenticating a Cartesian authoring frame."""
+def _cartesian_coordinates(frame: Any) -> tuple[ScalarExpr, ...]:
+    """Return every coordinate after authenticating the inferred Cartesian rank."""
     coordinate_system = getattr(frame, "coordinates", frame)
-    if not isinstance(coordinate_system, Cartesian2D):
-        raise TypeError("level-set geometry requires a typed Cartesian2D frame")
+    if not isinstance(coordinate_system, Cartesian):
+        raise TypeError("level-set geometry requires a typed Cartesian frame")
     return coordinates(frame)
 
 
-def _frame_center(frame: Any) -> tuple[float, float]:
+def _planar_coordinates(frame: Any, *, where: str) -> tuple[ScalarExpr, ScalarExpr]:
+    """Authenticate a provider whose geometry is intrinsically planar."""
+    values = _cartesian_coordinates(frame)
+    if len(values) != 2:
+        raise TypeError("%s requires a two-dimensional Cartesian frame" % where)
+    return values[0], values[1]
+
+
+def _frame_center(frame: Any) -> tuple[float, ...]:
     lower = getattr(frame, "lower", None)
     upper = getattr(frame, "upper", None)
     if lower is None or upper is None:
@@ -68,12 +75,13 @@ def _frame_center(frame: Any) -> tuple[float, float]:
         )
     checked_lower = _geometry_coordinates(lower, where="Disc.level_set(frame.lower)")
     checked_upper = _geometry_coordinates(upper, where="Disc.level_set(frame.upper)")
-    if len(checked_lower) != 2 or len(checked_upper) != 2:
-        raise ValueError("Disc.level_set frame bounds must contain exactly two coordinates")
+    coordinate_count = len(_cartesian_coordinates(frame))
+    if len(checked_lower) != coordinate_count or len(checked_upper) != coordinate_count:
+        raise ValueError("Disc.level_set frame bounds must match the Cartesian rank")
     if any(high <= low for low, high in zip(checked_lower, checked_upper, strict=True)):
         raise ValueError("Disc.level_set frame upper bounds must be greater than lower bounds")
     return tuple((low + high) * 0.5 for low, high in zip(
-        checked_lower, checked_upper, strict=True))  # type: ignore[return-value]
+        checked_lower, checked_upper, strict=True))
 
 
 class _GeometryPreviewSurface:
@@ -164,42 +172,22 @@ class Geometry(_GeometryPreviewSurface, MeshDescriptor):
             "pops.mesh.geometry.LevelSet" % self.name
         )
 
-    def lower_wall(self) -> Any:
-        """Lower this geometry to the native Poisson wall tokens ``(wall, wall_radius)``.
-
-        Only a disc and a no-wall are wired to the native conducting-wall predicate; the base
-        geometry is NOT a Poisson wall. Raising keeps a clear message rather than silently
-        emitting an inert wall; subclasses that ARE a wall override this.
-        """
-        raise TypeError(
-            "%s cannot be used as a Poisson wall; wall= requires "
-            "pops.mesh.geometry.Disc or NoWall"
-            % self.name)
-
-
 class NoWall(Geometry):
     """No conducting wall: the elliptic solve sees the full Cartesian domain."""
 
     def capabilities(self) -> Any:
-        return CapabilitySet({"provides": "level_set", "wall": False})
+        return CapabilitySet({"provides": "level_set"})
 
     def level_set(self, frame: Any) -> LevelSet:
         """Return the all-active level set after authenticating the Cartesian frame."""
         _cartesian_coordinates(frame)
         return LevelSet(constant(-1.0))
 
-    def lower_wall(self) -> Any:
-        """Lower to the private native no-wall representation."""
-        return ("none", 0.0)
-
-
 class Disc(Geometry):
-    """A disc geometry and the centered circular-wall selector.
+    """A disc embedded geometry.
 
-    ``center=None`` means the center of the owning domain and is the only form supported by the
-    current elliptic wall provider. An explicit center remains valid embedded-geometry metadata but
-    :meth:`lower_wall` rejects it instead of silently discarding it. Transport uses this same
-    geometry through ``EmbeddedBoundary(Disc(...), transport, boundary_flux)``.
+    ``center=None`` means the center of the owning Cartesian domain. The same level-set authority
+    drives transport masks and field geometry; there is no separate Poisson-wall token route.
     """
 
     def __init__(self, center: Any = None, radius: Any = 0.5) -> None:
@@ -220,17 +208,9 @@ class Disc(Geometry):
         return ((center[0] - margin, center[1] - margin),
                 (center[0] + margin, center[1] + margin))
 
-    def lower_wall(self) -> Any:
-        """Lower to the native conducting-wall tokens ``("circle", radius)``."""
-        if self.center is not None:
-            raise ValueError(
-                "Disc used as a Poisson wall must use center=None (the owning domain center); "
-                "an explicit center is not supported by the native wall provider")
-        return ("circle", self.radius)
-
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this disc to ``frame`` with the convention ``phi < 0`` inside."""
-        x_value, y_value = _cartesian_coordinates(frame)
+        x_value, y_value = _planar_coordinates(frame, where="Disc.level_set(frame)")
         center = self.center if self.center is not None else _frame_center(frame)
         cx, cy = center
         return LevelSet(hypot(x_value - cx, y_value - cy) - self.radius)
@@ -256,7 +236,7 @@ class HalfPlane(Geometry):
 
     def level_set(self, frame: Any) -> LevelSet:
         """Bind this half-plane to ``frame``; the side opposite the normal is active."""
-        x_value, y_value = _cartesian_coordinates(frame)
+        x_value, y_value = _planar_coordinates(frame, where="HalfPlane.level_set(frame)")
         px, py = self.point
         nx, ny = self.normal
         return LevelSet((x_value - px) * nx + (y_value - py) * ny)

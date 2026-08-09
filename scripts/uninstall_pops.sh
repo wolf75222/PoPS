@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Uninstall the Python module `pops` and, by default, the whole `pops` conda env -- the inverse of
 # scripts/setup_env.sh (creates the env, pins the toolchain, persists the POPS_* vars) and
-# scripts/build_python.sh (pip-installs the module, leaves a build/cp3*/ wheel cache). A bare run is a
+# scripts/build_python.sh (pip-installs one Dim=N leaf, leaves build/cp3*-dimN caches). A bare run is a
 # FULL teardown: it removes the in-tree build artifacts AND deletes the conda env (its pinned CC/CXX and
 # POPS_INCLUDE / POPS_KOKKOS_ROOT / CMAKE_PREFIX_PATH / POPS_CACHE_DIR go with it). Recreate later with
-# `bash scripts/setup_env.sh && bash scripts/build_python.sh`.
+# `bash scripts/setup_env.sh && bash scripts/build_python.sh --dim N`.
 #
 #   bash scripts/uninstall_pops.sh             # full teardown: artifacts + module + conda env `pops`
 #   bash scripts/uninstall_pops.sh --keep-env  # keep env + toolchain; only `pip uninstall pops` + artifacts
@@ -12,7 +12,8 @@
 #   bash scripts/uninstall_pops.sh --yes       # do not prompt before deleting the env (CI / scripted)
 #   POPS_ENV_NAME=myenv bash scripts/uninstall_pops.sh   # target a non-default env name
 #
-# In-tree artifacts removed on EVERY run: build/cp3*/ (scikit-build wheel cache), .pops_cache (compiled
+# In-tree artifacts removed on EVERY run: build/cp3*-dim*/ (all specialization wheel caches),
+# .pops_cache (compiled
 # DSL .so cache), *.egg-info. The C++ preset build/ root and ~/.cache/adc-ccache are kept unless asked.
 #
 # NOT `set -u`: the conda shell hook references unset variables.
@@ -40,13 +41,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- in-tree build artifacts (no conda needed) ------------------------------------------------------
-# scikit-build-core caches under build/<wheel_tag>/ (build/cp312-...); remove ONLY those tag dirs, never
-# the C++ preset build/ root (its CMakeCache.txt sits at build/).
+# scikit-build-core caches under build/<wheel_tag>-dimN. The broad cp3* tag prefix deliberately removes
+# every native specialization (and any legacy tag cache), never the C++ preset build/ root itself.
 shopt -s nullglob
 removed=0
 for d in "$HERE"/build/cp3*/; do rm -rf "$d"; removed=1; done
-[[ $removed -eq 1 ]] && echo "removed scikit-build wheel cache (build/cp3*/)" \
-                     || echo "no scikit-build wheel cache (build/cp3*/) to remove"
+[[ $removed -eq 1 ]] && echo "removed all scikit-build native-variant caches (build/cp3*)" \
+                     || echo "no scikit-build native-variant cache (build/cp3*) to remove"
 if [[ -d "$HERE/.pops_cache" ]]; then rm -rf "$HERE/.pops_cache"; echo "removed DSL cache (.pops_cache)"; fi
 egg=0
 for e in "$HERE"/*.egg-info "$HERE"/python/*.egg-info; do rm -rf "$e"; egg=1; done
@@ -82,7 +83,7 @@ if [[ $KEEP_ENV -eq 1 ]]; then
   echo "--- pip uninstall pops from '$ENV_NAME' (env kept) ---"
   conda run -n "$ENV_NAME" python -m pip uninstall -y pops \
     || echo "note: 'pops' was not pip-installed in '$ENV_NAME'."
-  echo "Done. Env + toolchain + pinned POPS_* vars kept. Reinstall: bash scripts/build_python.sh"
+  echo "Done. Env + toolchain kept. Reinstall: bash scripts/build_python.sh --dim 1|2|3"
   exit 0
 fi
 
@@ -104,4 +105,4 @@ echo "--- conda env remove -n $ENV_NAME ---"
 conda env remove -n "$ENV_NAME" -y
 echo ""
 echo "env '$ENV_NAME' removed (module, toolchain and pinned POPS_* vars gone)."
-echo "Recreate with: bash scripts/setup_env.sh && bash scripts/build_python.sh"
+echo "Recreate with: bash scripts/setup_env.sh && bash scripts/build_python.sh --dim 1|2|3"

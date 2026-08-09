@@ -58,6 +58,15 @@ inline runtime::field::PreparedFieldSolverSpec field_solver_spec_from_python(
   spec.relative_tolerance = relative_tolerance;
   spec.absolute_tolerance = absolute_tolerance;
   spec.max_iterations = max_iterations;
+  const auto declares_mpi = [](const py::dict& binding) {
+    if (!binding.contains("declared_execution"))
+      throw std::invalid_argument("field component binding has no execution declaration");
+    const py::dict execution = py::cast<py::dict>(binding["declared_execution"]);
+    if (!execution.contains("host") || !execution.contains("mpi") || !execution.contains("gpu"))
+      throw std::invalid_argument("field component execution declaration is incomplete");
+    return py::cast<bool>(execution["mpi"]);
+  };
+  spec.component_pair_declares_mpi = declares_mpi(topology) && declares_mpi(solver);
   spec.execution = make_component_execution_context(execution_data);
   return spec;
 }
@@ -144,14 +153,6 @@ inline PreparedBoundaryComponentSpec boundary_component_spec_from_python(
       target_json, make_component_execution_context(execution_data));
 }
 
-inline runtime::multiblock::InterfaceAxis interface_axis(int axis) {
-  if (axis == 0)
-    return runtime::multiblock::InterfaceAxis::X;
-  if (axis == 1)
-    return runtime::multiblock::InterfaceAxis::Y;
-  throw std::invalid_argument("native shared interface requires a 2-D axis (0 or 1)");
-}
-
 inline runtime::multiblock::InterfaceSide interface_side(const std::string& side) {
   if (side == "lower")
     return runtime::multiblock::InterfaceSide::Low;
@@ -169,8 +170,11 @@ inline runtime::multiblock::InterfaceTraceOperation interface_trace_operation(
   throw std::invalid_argument("native shared interface trace operation is not canonical");
 }
 
-inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
+template <int Dim>
+inline runtime::multiblock::AxisAlignedInterface<Dim> interface_route_from_python(
     const py::dict& row, std::size_t left_block, std::size_t right_block, int level) {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "interface_route_from_python only supports dimensions 1, 2, and 3");
   const py::dict handle = py::cast<py::dict>(row["handle"]);
   const py::dict left = py::cast<py::dict>(row["left"]);
   const py::dict right = py::cast<py::dict>(row["right"]);
@@ -179,25 +183,36 @@ inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
   const py::dict permutation = py::cast<py::dict>(row["permutation"]);
   const py::dict mapping = py::cast<py::dict>(row["mapping"]);
   const py::dict mapping_handle = py::cast<py::dict>(mapping["handle"]);
-  const std::string tangential = py::cast<std::string>(mapping["tangential_orientation"]);
-  runtime::multiblock::TangentialOrientation orientation;
-  if (tangential == "aligned")
-    orientation = runtime::multiblock::TangentialOrientation::Aligned;
-  else if (tangential == "reversed")
-    orientation = runtime::multiblock::TangentialOrientation::Reversed;
-  else
-    throw std::invalid_argument(
-        "native shared interface tangential orientation must be aligned or reversed");
-  runtime::multiblock::AxisAlignedInterface route;
+  runtime::multiblock::AxisAlignedInterface<Dim> route;
   route.identity = py::cast<std::string>(handle["qualified_id"]);
   route.left_block = left_block;
   route.right_block = right_block;
   route.level = level;
-  route.left_axis = interface_axis(py::cast<int>(left_orientation["axis"]));
-  route.right_axis = interface_axis(py::cast<int>(right_orientation["axis"]));
+  route.left_axis = py::cast<int>(left_orientation["axis"]);
+  route.right_axis = py::cast<int>(right_orientation["axis"]);
+  if (route.left_axis < 0 || route.left_axis >= Dim || route.right_axis < 0 ||
+      route.right_axis >= Dim)
+    throw std::invalid_argument(
+        "native shared interface axis is outside the exact compiled dimension");
   route.left_side = interface_side(py::cast<std::string>(left_orientation["side"]));
   route.right_side = interface_side(py::cast<std::string>(right_orientation["side"]));
-  route.tangential_orientation = orientation;
+  const std::vector<int> tangent_permutation =
+      py::cast<std::vector<int>>(mapping["right_tangent_for_left"]);
+  const std::vector<int> tangent_sign = py::cast<std::vector<int>>(mapping["right_tangent_sign"]);
+  const std::vector<double> tangent_offset =
+      py::cast<std::vector<double>>(mapping["right_tangent_offset"]);
+  if (tangent_permutation.size() != static_cast<std::size_t>(Dim - 1) ||
+      tangent_sign.size() != static_cast<std::size_t>(Dim - 1) ||
+      tangent_offset.size() != static_cast<std::size_t>(Dim - 1))
+    throw std::invalid_argument(
+        "native shared interface tangent transform does not match the exact dimension");
+  for (int tangent = 0; tangent < Dim - 1; ++tangent) {
+    route.tangential_transform.right_tangent_for_left[tangent] =
+        tangent_permutation[static_cast<std::size_t>(tangent)];
+    route.tangential_transform.sign[tangent] = tangent_sign[static_cast<std::size_t>(tangent)];
+    route.tangential_transform.offset[tangent] =
+        static_cast<Real>(tangent_offset[static_cast<std::size_t>(tangent)]);
+  }
   route.right_component_for_left =
       py::cast<std::vector<int>>(permutation["right_component_for_left"]);
   const py::dict left_projection = py::cast<py::dict>(left["projection"]);
@@ -215,22 +230,21 @@ inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
   route.affine_mapping_identity = py::cast<std::string>(mapping_handle["qualified_id"]);
   route.right_normal_translation =
       static_cast<Real>(py::cast<double>(mapping["right_normal_translation"]));
-  route.right_tangential_scale =
-      static_cast<Real>(py::cast<double>(mapping["right_tangential_scale"]));
-  route.right_tangential_offset =
-      static_cast<Real>(py::cast<double>(mapping["right_tangential_offset"]));
   return route;
 }
 
-inline runtime::multiblock::PreparedInterfaceFluxSpec interface_flux_spec_from_python(
+template <int Dim>
+inline runtime::multiblock::PreparedInterfaceFluxSpec<Dim> interface_flux_spec_from_python(
     const py::dict& interface, const py::dict& binding, const std::string& parameters_json,
     const std::string& target_json, const py::dict& execution_data) {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "interface_flux_spec_from_python only supports dimensions 1, 2, and 3");
   const py::dict handle = py::cast<py::dict>(interface["handle"]);
   const std::string identity = py::cast<std::string>(handle["qualified_id"]);
   if (py::cast<std::string>(binding["operation"]) != "evaluate_faces")
     throw std::invalid_argument(
         "shared conservative flux requires the typed NumericalFlux evaluate_faces operation");
-  runtime::multiblock::PreparedInterfaceFluxSpec spec;
+  runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec;
   spec.interface_identity = identity;
   spec.component_id = py::cast<std::string>(binding["component_id"]);
   spec.manifest_identity = py::cast<std::string>(binding["component_manifest_identity"]);

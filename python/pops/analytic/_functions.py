@@ -15,6 +15,7 @@ from ._model import (
     constant,
     parameter,
     _program_input,
+    _time,
 )
 
 
@@ -36,6 +37,12 @@ def input(value_id: Any, component: Any) -> ScalarExpr:
     return _program_input(value_id, component)
 
 
+def time(clock: Any) -> ScalarExpr:
+    """Read physical time from one exact logical ``Clock`` at native evaluation."""
+
+    return _time(clock)
+
+
 def x(frame: Any) -> ScalarExpr:
     """Return the typed x coordinate of ``frame``."""
 
@@ -54,46 +61,74 @@ def y(frame: Any) -> ScalarExpr:
     return _coordinate(frame, axis)
 
 
-def coordinates(frame: Any) -> tuple[ScalarExpr, ScalarExpr]:
-    """Return ``(x, y)`` bound to the same typed two-dimensional frame."""
+def z(frame: Any) -> ScalarExpr:
+    """Return the typed z coordinate of a three-dimensional ``frame``."""
 
-    return (x(frame), y(frame))
+    axis = getattr(frame, "z", None)
+    if axis is None:
+        raise TypeError("z(frame) requires a frame exposing a typed z axis")
+    return _coordinate(frame, axis)
+
+
+def coordinates(frame: Any) -> tuple[ScalarExpr, ...]:
+    """Return every typed coordinate of a rank-1/2/3 frame in canonical axis order."""
+
+    axes = getattr(frame, "axes", None)
+    if not isinstance(axes, tuple) or len(axes) not in (1, 2, 3):
+        raise TypeError("coordinates(frame) requires a typed rank-1/2/3 Cartesian frame")
+    return tuple(_coordinate(frame, axis) for axis in axes)
+
+
+def _coordinate_center(frame: Any, center: Any) -> tuple[Any, ...]:
+    axes = getattr(frame, "axes", None)
+    if not isinstance(axes, tuple) or len(axes) not in (1, 2, 3):
+        raise TypeError("analytic coordinates require a typed rank-1/2/3 frame")
+    if center is None:
+        return (0.0,) * len(axes)
+    if isinstance(center, Mapping):
+        if set(center) != set(axes):
+            raise ValueError("analytic center must map every frame axis exactly once")
+        return tuple(center[axis] for axis in axes)
+    if isinstance(center, (str, bytes)):
+        raise TypeError("analytic center must be a coordinate sequence")
+    try:
+        values = tuple(center)
+    except TypeError as exc:
+        raise TypeError("analytic center must be a coordinate sequence") from exc
+    if len(values) != len(axes):
+        raise ValueError(
+            "analytic center must contain exactly %s components"
+            % {1: "one", 2: "two", 3: "three"}[len(axes)]
+        )
+    return values
+
 
 
 def _polar_center(frame: Any, center: Any) -> tuple[Any, Any]:
     axes = getattr(frame, "axes", None)
     if not isinstance(axes, tuple) or len(axes) != 2:
         raise TypeError("analytic polar coordinates require a typed two-dimensional frame")
-    if center is None:
-        return (0.0, 0.0)
-    if isinstance(center, Mapping):
-        if set(center) != set(axes):
-            raise ValueError("analytic polar center must map every frame axis exactly once")
-        return (center[axes[0]], center[axes[1]])
-    if isinstance(center, (str, bytes)):
-        raise TypeError("analytic polar center must be a two-component coordinate")
-    try:
-        values = tuple(center)
-    except TypeError as exc:
-        raise TypeError(
-            "analytic polar center must be a two-component coordinate") from exc
-    if len(values) != 2:
-        raise ValueError("analytic polar center must contain exactly two components")
+    values = _coordinate_center(frame, center)
     return values[0], values[1]
 
 
 def radius(frame: Any, *, center: Any = None) -> ScalarExpr:
-    """Return the radial coordinate around ``center`` (the origin by default)."""
+    """Return the rank-generic Euclidean radius around ``center``."""
 
-    x_value, y_value = coordinates(frame)
-    center_x, center_y = _polar_center(frame, center)
-    return hypot(x_value - center_x, y_value - center_y)
+    values = coordinates(frame)
+    center_values = _coordinate_center(frame, center)
+    return norm(tuple(
+        value - origin for value, origin in zip(values, center_values, strict=True)
+    ))
 
 
 def angle(frame: Any, *, center: Any = None) -> ScalarExpr:
     """Return the quadrant-aware polar angle around ``center``."""
 
-    x_value, y_value = coordinates(frame)
+    values = coordinates(frame)
+    if len(values) != 2:
+        raise TypeError("angle(frame) requires a typed two-dimensional frame")
+    x_value, y_value = values
     center_x, center_y = _polar_center(frame, center)
     return atan2(y_value - center_y, x_value - center_x)
 
@@ -210,6 +245,7 @@ __all__ = [
     "radius",
     "sin",
     "sqrt",
+    "time",
     "where",
     "x",
     "y",

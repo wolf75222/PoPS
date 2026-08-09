@@ -69,7 +69,7 @@ target_compile_definitions(pops_benchmark_support PRIVATE
 add_executable(pops_benchmark
   src/main.cpp
   src/arith_halo_case.cpp
-  src/tensor_krylov_case.cpp)
+  src/scalar_mg_case.cpp)
 target_compile_features(pops_benchmark PRIVATE cxx_std_20)
 target_link_libraries(pops_benchmark PRIVATE pops_benchmark_support)
 

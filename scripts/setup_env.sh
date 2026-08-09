@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Create (or update) the conda env `pops` AND pin the best toolchain for the platform in it.
 #
-#   bash scripts/setup_env.sh            # CPU install (default)
-#   bash scripts/setup_env.sh --cuda     # allow the CUDA Kokkos variant (NVIDIA host)
+#   bash scripts/setup_env.sh                    # CPU environment (default), no native import
+#   bash scripts/setup_env.sh --dim 2            # also diagnose an existing exact Dim=2 install
+#   bash scripts/setup_env.sh --cuda --dim 3     # CUDA environment + existing Dim=3 diagnosis
 #   conda activate pops
-#   pip install . -v
+#   POPS_NATIVE_DIM=2 pip install . -v
 #
 # Why this script rather than `conda env create` alone: environment.yml cannot make a PER-PLATFORM
 # choice, yet the right compiler is not the same everywhere --
@@ -40,17 +41,34 @@ fi
 
 # --- arguments --------------------------------------------------------------------------------------
 POPS_WITH_CUDA=0
+CALLER_NATIVE_DIM="${POPS_NATIVE_DIM-}"
+CLI_NATIVE_DIM=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cpu)  POPS_WITH_CUDA=0 ;;
     --cuda) POPS_WITH_CUDA=1 ;;
+    --dim)
+      shift
+      [[ $# -gt 0 ]] || { echo "--dim requires 1, 2, or 3" >&2; exit 2; }
+      CLI_NATIVE_DIM="$1"
+      ;;
     -h|--help)
       sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) echo "unknown argument: $1 (use --cpu | --cuda | --help)" >&2; exit 2 ;;
+    *) echo "unknown argument: $1 (use --cpu | --cuda | --dim N | --help)" >&2; exit 2 ;;
   esac
   shift
 done
+if [[ -n "$CLI_NATIVE_DIM" && -n "$CALLER_NATIVE_DIM" \
+      && "$CLI_NATIVE_DIM" != "$CALLER_NATIVE_DIM" ]]; then
+  echo "conflicting native dimensions: --dim=$CLI_NATIVE_DIM but POPS_NATIVE_DIM=$CALLER_NATIVE_DIM" >&2
+  exit 2
+fi
+NATIVE_DIM="${CLI_NATIVE_DIM:-$CALLER_NATIVE_DIM}"
+case "$NATIVE_DIM" in
+  1|2|3|"") ;;
+  *) echo "invalid native dimension '$NATIVE_DIM': expected exactly 1, 2, or 3" >&2; exit 2 ;;
+esac
 
 # --- conda present? otherwise guide the bootstrap (no silent install) -------------------------------
 if ! pops_load_conda; then
@@ -216,11 +234,11 @@ echo "env vars pinned: PoPS/Kokkos discovery plus platform compiler wrappers "\
 echo ""
 echo "Env ready. Next, in one command (sizes the heavy-TU pool, exports the discovery vars + ccache,"
 echo "installs, then runs pops.runtime.doctor.doctor()):"
-echo "    bash scripts/build_python.sh"
+echo "    bash scripts/build_python.sh --dim 1|2|3"
 echo ""
 echo "Or by hand:"
 echo "    conda activate $ENV_NAME"
-echo "    pip install . -v          # builds the Kokkos module (Kokkos is ON and mandatory)"
+echo "    POPS_NATIVE_DIM=2 pip install . -v  # choose the exact compile-time specialization"
 echo ""
 # ADC-338: after the ADC-335 split, a conservative size-1 Ninja pool
 # (POPS_HEAVY_MODULE_TU_POOL, the memory-constrained default) still serializes the module leaves. On a
@@ -229,29 +247,32 @@ echo ""
 # scripts/build_python.sh sizes this automatically (cores capped by RAM); the manual knob:
 _ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 echo "Manual heavy-TU pool (build_python.sh does this for you):"
-echo "    pip install . -v -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=$_ncpu      # or CMake: -DPOPS_HEAVY_MODULE_TU_POOL=$_ncpu"
+echo "    POPS_NATIVE_DIM=2 pip install . -v -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=$_ncpu"
 echo "    (leave it at the default 1 on memory-constrained machines -- it is the OOM guard.)"
 echo ""
-# ADC-647: a previous wheel install may already exist. On Darwin, authenticate the exact extension
-# a clean native import will resolve before the probe below can load it. The top-level package is
-# intentionally lazy, so `import pops` alone cannot distinguish a healthy extension from a stale MPI
-# or HDF5 ABI. A missing package is normal during first-time setup; a present package with a
-# missing/bad extension is not.
-conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-  python "$HERE/scripts/codesign_pops_extensions.py" --if-present
-if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-    python "$HERE/scripts/verify_installed_native.py" >/dev/null 2>&1; then
-echo "--- pops.runtime.doctor.doctor() ---"
+# ADC-647: setup never guesses a native dimension. If the caller explicitly names one, authenticate
+# and select only that manifest leaf before doctor. Without an expectation, keep setup pure and leave
+# native diagnosis to build_python.sh --dim N.
+if [[ -n "$NATIVE_DIM" ]]; then
   conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-python -c "from pops.runtime.doctor import doctor; doctor()" || true
-elif conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
-    python -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('pops') else 1)"; then
-  echo "An existing pops install no longer loads after the environment update."
-  echo "Its native MPI/HDF5 dependencies may have changed; rebuild that extension now:"
-  echo "    bash scripts/build_python.sh          # add --mpi for the distributed backend"
+    python "$HERE/scripts/codesign_pops_extensions.py" \
+      --if-present --expect-dim "$NATIVE_DIM"
+  if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+      python "$HERE/scripts/verify_installed_native.py" \
+        --expect-dim "$NATIVE_DIM" >/dev/null 2>&1; then
+    echo "--- pops.runtime.doctor.doctor() (Dim=$NATIVE_DIM) ---"
+    conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+      python -c "from pops._native_selector import select_native_dimension; select_native_dimension($NATIVE_DIM); from pops.runtime.doctor import doctor; doctor()" || true
+  elif conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+      python -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('pops') else 1)"; then
+    echo "An existing pops install does not authenticate its requested Dim=$NATIVE_DIM leaf."
+    echo "Its manifest or native MPI/HDF5 dependencies may have changed; rebuild it now:"
+    echo "    bash scripts/build_python.sh --dim $NATIVE_DIM  # add --mpi for distributed"
+  else
+    echo "pops is not installed in '$ENV_NAME' yet. Build the requested specialization:"
+    echo "    bash scripts/build_python.sh --dim $NATIVE_DIM"
+  fi
 else
-  echo "pops is not installed in '$ENV_NAME' yet. Install it, then check the environment:"
-  echo "    conda activate $ENV_NAME"
-  echo "    pip install . -v"
-echo "    python -c 'from pops.runtime.doctor import doctor; doctor()'"
+  echo "Native diagnosis skipped: no dimension was requested."
+  echo "Build and verify one explicitly: bash scripts/build_python.sh --dim 1|2|3"
 fi

@@ -26,6 +26,7 @@ from pops.mesh._amr import (
     RegridSchedule,
     ResolvedHierarchy,
     lower_native_hierarchy,
+    prepared_hierarchy_native_provider,
     resolve_hierarchy,
 )
 from pops.model import Handle, OwnerPath
@@ -154,9 +155,11 @@ def test_native_hierarchy_lowering_dispatches_to_an_opaque_provider_route() -> N
         observed.append(hierarchy)
         return PreparedHierarchyNativeLowering(
             authority,
+            hierarchy.plan.dimension,
             hierarchy.plan.level_count,
-            nesting_buffer=2,
-            nesting_lookahead=2,
+            tuple(row.ratio for row in hierarchy.plan.transitions),
+            tuple(row.buffer for row in hierarchy.plan.transitions),
+            tuple(row.lookahead for row in hierarchy.plan.transitions),
         )
 
     provider = register_prepared_hierarchy_native_provider(
@@ -177,6 +180,51 @@ def test_native_hierarchy_lowering_dispatches_to_an_opaque_provider_route() -> N
     assert observed == [resolved, resolved]
     assert lowered.provider == provider.authority()
     assert lowered.level_count == resolved.plan.level_count
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_shared_native_hierarchy_preserves_every_ranked_transition(dimension: int) -> None:
+    clock = _clock("ranked-native-%d" % dimension)
+    first_ratio = tuple(2 + axis for axis in range(dimension))
+    second_ratio = tuple(3 + axis for axis in range(dimension))
+    first_buffer = tuple(2 + axis for axis in range(dimension))
+    second_buffer = tuple(3 + axis for axis in range(dimension))
+    transitions = (
+        LevelTransition(0, 1, first_ratio, first_buffer, 2),
+        LevelTransition(1, 2, second_ratio, second_buffer, 3),
+    )
+    plan = _plan(
+        transitions=transitions,
+        nesting=_nesting(dimension),
+        clock=clock,
+    )
+    native_provider = prepared_hierarchy_native_provider("shared_n_level")
+    capabilities = replace(
+        _provider(dimensions=(1, 2, 3), anisotropic=True),
+        options=CanonicalOptions({
+            "native_route": "shared_n_level",
+            "native_provider": native_provider.authority(),
+        }),
+    )
+
+    lowered = lower_native_hierarchy(
+        resolve_hierarchy(plan, capabilities, _context(clock))
+    )
+
+    assert lowered.dimension == dimension
+    assert lowered.level_count == 3
+    assert lowered.transition_ratios == (first_ratio, second_ratio)
+    assert lowered.transition_buffers == (first_buffer, second_buffer)
+    assert lowered.transition_lookaheads == (2, 3)
+    assert lowered.to_data() == {
+        "schema_version": 2,
+        "provider": native_provider.authority(),
+        "dimension": dimension,
+        "level_count": 3,
+        "transition_ratios": [list(first_ratio), list(second_ratio)],
+        "transition_buffers": [list(first_buffer), list(second_buffer)],
+        "transition_lookaheads": [2, 3],
+    }
 
 
 def test_transition_fields_change_identity_or_are_rejected() -> None:

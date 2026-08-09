@@ -21,11 +21,6 @@ from pops.native_components import PreparedNativeComponent
 
 
 _PROVIDER_SCHEMA_VERSION = 6
-_GEOMETRIC_MG_SCRATCH_NOTE = (
-    "geometric MG hierarchy ~4/3 of the fine grid (geometric V-cycle hierarchy)"
-)
-
-
 def _plain_authority_data(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {key: _plain_authority_data(item) for key, item in value.items()}
@@ -498,7 +493,9 @@ class PreparedPreconditionerProvider:
                 "capability" % self.scheme
             )
         if emission.make_session is None:
-            return "pops::PreparedLinearPreconditioner::identity()"
+            return (
+                "pops::PreparedLinearPreconditioner<pops::kNativeDimension>::identity()"
+            )
 
         options = node.attrs.get("preconditioner_options")
         prepared_options = self.prepare_options(
@@ -526,7 +523,8 @@ class PreparedPreconditionerProvider:
         byte_literal = "".join("\\x%02x" % value for value in exact_parameters)
         implementation = json.dumps(self.emitter_id, ensure_ascii=True)
         provider_expression = (
-            "pops::PreparedLinearPreconditionerProvider::trusted_extension("
+            "pops::PreparedLinearPreconditionerProvider<"
+            "pops::kNativeDimension>::trusted_extension("
             "pops::PreparedProviderIdentity{%s, %dull}, "
             "std::string(\"%s\", std::size_t{%d}), %s)"
             % (
@@ -537,7 +535,8 @@ class PreparedPreconditionerProvider:
                 emission.make_session,
             )
         )
-        return "pops::PreparedLinearPreconditioner(*%s, %s, %s)" % (
+        return "pops::PreparedLinearPreconditioner<pops::kNativeDimension>(" \
+               "*%s, %s, %s)" % (
             prototype,
             provider_expression,
             vector_distribution_expr,
@@ -644,115 +643,8 @@ def _emit_identity(
     return PreparedPreconditionerNativeEmission.identity()
 
 
-def _emit_geometric_mg(
-    node: Any,
-    prelude: Any,
-    prototype: str,
-    vector_distribution_expr: str,
-    provider: PreparedPreconditionerProvider,
-) -> PreparedPreconditionerNativeEmission:
-    name = "make_precond_mg_session%d" % node.id
-    options = provider.prepare_options(
-        node.attrs.get("preconditioner_options"),
-        where="GeometricMG preconditioner options",
-    )
-    if options != node.attrs.get("preconditioner_options"):
-        raise ValueError("GeometricMG preconditioner options are not canonical")
-    constructor_arguments = ", ".join(
-        option.emit_cpp_literal(options[option.name]) for option in provider.options
-    )
-    prelude.append(
-        "pops::PreparedLinearPreconditionerSessionFactory %s = "
-        "[ctx_owner, %s, vector_distribution = %s]("
-        "const pops::ExecutionLane& lane) {"
-        % (name, prototype, vector_distribution_expr)
-    )
-    prelude.append(
-        "  auto state = std::make_shared<"
-        "pops::runtime::program::GeometricMgPreconditioner>(%s);"
-        % constructor_arguments
-    )
-    distribution_argument = (
-        ", vector_distribution"
-        + ", ctx.program_resource_field_storage_distribution()"
-    )
-    prelude.append("  return pops::PreparedLinearPreconditionerSessionCallbacks{")
-    prelude.append(
-        "      [ctx_owner, state, %s, vector_distribution, execution_lane = &lane]() {"
-        % prototype
-    )
-    prelude.append("  auto& ctx = *ctx_owner;")
-    prelude.append(
-        "  state->prepare(ctx, *%s, *execution_lane%s);"
-        % (prototype, distribution_argument)
-    )
-    prelude.append("      },")
-    prelude.append(
-        "      [ctx_owner, state, execution_lane = &lane]("
-        "pops::MultiFab& out, const pops::MultiFab& in) {"
-    )
-    prelude.append("  auto& ctx = *ctx_owner;")
-    prelude.append("  state->apply(ctx, out, in, *execution_lane);")
-    prelude.append("      },")
-    prelude.append("      [state]() { return state->persistent_field_count(); }};")
-    prelude.append("};")
-    return PreparedPreconditionerNativeEmission(name)
-
-
 def _validate_identity_use(_use: PreparedPreconditionerUse, _where: str) -> None:
     return None
-
-
-_GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS = ("left", "right")
-
-
-def _require_supported_method_preconditioning_placement(
-    use: PreparedPreconditionerUse,
-    where: str,
-    *,
-    preconditioner: str,
-    supported: tuple[str, ...],
-) -> None:
-    capabilities = use.method_provider.get("capabilities")
-    placement = (
-        capabilities.get("preconditioning_placement")
-        if isinstance(capabilities, Mapping)
-        else None
-    )
-    if type(placement) is not str or placement not in supported:
-        choices = " or ".join(repr(item) for item in supported)
-        raise ValueError(
-            "%s: %s requires an authenticated method preconditioning placement in (%s); got %r"
-            % (where, preconditioner, choices, placement)
-        )
-
-
-def _validate_geometric_mg_use(use: PreparedPreconditionerUse, where: str) -> None:
-    _require_supported_method_preconditioning_placement(
-        use,
-        where,
-        preconditioner="geometric multigrid",
-        supported=_GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS,
-    )
-    if use.components != 1:
-        raise ValueError(
-            "%s: geometric multigrid preconditioning is scalar-only; got %d components"
-            % (where, use.components)
-        )
-    nullspace_provider = use.nullspace_contract.get("provider")
-    if not isinstance(nullspace_provider, Mapping) or type(
-        nullspace_provider.get("singular")
-    ) is not bool:
-        raise ValueError(
-            "%s: prepared nullspace contract has no authenticated provider capability"
-            % where
-        )
-    if nullspace_provider["singular"]:
-        raise NotImplementedError(
-            "%s: geometric multigrid has no explicit public certificate for singular "
-            "nullspace contract %r"
-            % (where, dict(use.nullspace_contract))
-        )
 
 
 _IDENTITY_USE_POLICY = PreparedPreconditionerUsePolicy(
@@ -760,18 +652,6 @@ _IDENTITY_USE_POLICY = PreparedPreconditionerUsePolicy(
     1,
     {"method_capability": "any", "components": "any", "nullspace_contracts": "any-certified"},
     _validate_identity_use,
-)
-_GEOMETRIC_MG_USE_POLICY = PreparedPreconditionerUsePolicy(
-    "pops.prepared-preconditioner.geometric-mg-use",
-    2,
-    {
-        "supported_method_preconditioning_placements": (
-            _GEOMETRIC_MG_METHOD_PRECONDITIONING_PLACEMENTS
-        ),
-        "components": {"minimum": 1, "maximum": 1},
-        "nullspace_contracts": "registered nonsingular providers",
-    },
-    _validate_geometric_mg_use,
 )
 
 
@@ -797,45 +677,6 @@ _IDENTITY_PROVIDER = register_prepared_preconditioner_provider(
         ),
     )
 )
-_GEOMETRIC_MG_PROVIDER = register_prepared_preconditioner_provider(
-    PreparedPreconditionerProvider(
-        provider_id="pops.preconditioner.geometric-mg",
-        interface_version=1,
-        options_schema="pops.preconditioner.geometric-mg.options@1",
-        scheme="geometric_mg",
-        descriptor_name="geometric_mg",
-        display_name="preconditioners.GeometricMG()",
-        native_id="pops::GeometricMG",
-        validator_id="pops.prepared-preconditioner.geometric-mg.validate@1",
-        planner_id="pops.prepared-preconditioner.geometric-mg.plan@1",
-        emitter_id="pops.prepared-preconditioner.geometric-mg@1",
-        preconditioned=True,
-        prepared_buffers=2,
-        use_policy=_GEOMETRIC_MG_USE_POLICY,
-        options=(
-            PreparedPreconditionerIntOption("pre_sweeps", default=2, minimum=0),
-            PreparedPreconditionerIntOption("post_sweeps", default=2, minimum=0),
-            PreparedPreconditionerIntOption("bottom_sweeps", default=50, minimum=1),
-            PreparedPreconditionerIntOption("min_coarse", default=2, minimum=1),
-            PreparedPreconditionerIntOption("n_vcycles", default=1, minimum=1),
-        ),
-        emitter=_emit_geometric_mg,
-        native_component=PreparedNativeComponent.pops_builtin(
-            "pops.prepared-preconditioner.geometric-mg",
-            entry_headers=("pops/runtime/program/coeff_elliptic_ops.hpp",),
-        ),
-        scratch_resources=(
-            PreparedPreconditionerScratchResource(
-                kind="multigrid_preconditioner",
-                buffers=1,
-                exact=False,
-                note=_GEOMETRIC_MG_SCRATCH_NOTE,
-            ),
-        ),
-    )
-)
-
-
 def prepared_preconditioner_providers() -> tuple[PreparedPreconditionerProvider, ...]:
     """Return a stable snapshot of all registered compilation providers."""
     with _registry_lock:

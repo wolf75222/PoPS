@@ -1,8 +1,10 @@
 """Collected native package test: compile, audit, install, load and call the real ABI consumer."""
 from __future__ import annotations
 
-import json
+import importlib.machinery
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -26,16 +28,39 @@ from pops.external import (
     compile_component,
     load,
 )
+from pops.identity import make_identity
 from pops.model import ComponentManifest
 from pops.output import (
     CoarseOnly, ConsumerGraph, ExternalWriter, ParallelMode, ScientificOutput,
 )
+from pops.runtime._consumer_transaction import ConsumerPublicationError
 from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 from pops.time import every, on_start
 
 
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+
+
+def _require_installed_component_package_proof() -> None:
+    if os.environ.get("POPS_PROVE_INSTALLED_COMPONENT_PACKAGE") != "1":
+        return
+    package_root = Path(pops.__file__).resolve().parent
+    wheel_include = (package_root / "include").resolve()
+    assert wheel_include.is_dir()
+    assert (wheel_include / "pops_headers.manifest").is_file()
+    assert Path(pops_include()).resolve() == wheel_include
+
+    from pops import _pops
+
+    native_path = Path(_pops.__file__).resolve()
+    assert native_path.parent == package_root
+    assert any(
+        native_path.name.endswith(suffix)
+        for suffix in importlib.machinery.EXTENSION_SUFFIXES
+    )
+    assert _pops.__has_kokkos__ is True
+    assert _pops.__native_loader_contract__["schema_version"] == 1
 
 
 def _manifest(*, generic: bool = True, device: str = "cpu") -> ComponentManifest:
@@ -352,6 +377,7 @@ int main(int argc, char** argv) {
 
 
 def test_source_component_executes_through_generic_native_loader_and_flux_consumer(tmp_path):
+    _require_installed_component_package_proof()
     manifest = _manifest()
     source = _source(manifest)
     (tmp_path / "average.cpp").write_bytes(source)
@@ -534,10 +560,18 @@ def _load_example():
     return module
 
 
-def _writer_case(example, artifacts, *, adaptive: bool):
+def _writer_case(
+    example,
+    artifacts,
+    *,
+    adaptive: bool,
+    paired_start_transaction: bool = False,
+):
     from pops.layouts import Uniform
     from pops.output import SelectedLevels
 
+    if adaptive and paired_start_transaction:
+        raise ValueError("paired Writer transaction is a Uniform-only test route")
     core = example.build_authoring(output_root="unused")
     core.numerics.boundaries.add(example.build_transport_boundaries(core))
     core.case.numerics(core.numerics, block=core.tracer)
@@ -570,7 +604,11 @@ def _writer_case(example, artifacts, *, adaptive: bool):
     outputs.append(ScientificOutput(
         format=ExternalWriter(
             artifacts[-1], extension=".popsbin", mode=output_mode),
-        schedule=every(1, clock=core.program.clock),
+        schedule=(
+            on_start(clock=core.program.clock)
+            if paired_start_transaction
+            else every(1, clock=core.program.clock)
+        ),
         fields=(core.tracer_state,),
         levels=SelectedLevels(0, 1) if adaptive else CoarseOnly(),
         target="amr-writer" if adaptive else "uniform-writer",
@@ -611,7 +649,108 @@ def _bind_writer_case(example, core, layout, artifacts, initial_state=None):
     return simulation
 
 
-def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_path):
+def _begin_direct_consumer_run(runtime, request):
+    """Open the run-scoped observer/ROOT lane required by direct transaction tests."""
+    engine = runtime._executor
+    run_identity = make_identity(
+        "run",
+        {
+            "runtime": runtime._runtime_plan.identity.token,
+            "time": float(engine.time()).hex(),
+            "macro_step": int(engine.macro_step()),
+        },
+    )
+    runtime._publisher.begin_post_commit_consumers(run_identity)
+    request.addfinalizer(
+        lambda: runtime._publisher.close_live_visualizations(
+            run_identity, raise_on_failure=False
+        )
+    )
+    return run_identity
+
+
+def test_real_writer_collision_compensates_the_complete_consumer_graph_transaction(
+    tmp_path, request
+):
+    example = _load_example()
+    first = _compile_writer(tmp_path / "transaction-one", "transaction_writer_one")
+    second = _compile_writer(tmp_path / "transaction-two", "transaction_writer_two")
+    core, layout, initial_state = _writer_case(
+        example,
+        (first, second),
+        adaptive=False,
+        paired_start_transaction=True,
+    )
+    runtime = _bind_writer_case(
+        example,
+        core,
+        layout,
+        (first, second),
+        initial_state,
+    )
+    output_root = tmp_path / "transaction-output"
+    runtime._output_root = output_root
+    run_identity = _begin_direct_consumer_run(runtime, request)
+
+    accepted_before = {
+        "time": runtime.time(),
+        "macro_step": runtime.macro_step(),
+        "state": np.asarray(
+            runtime.state_global("tracer"), dtype=np.float64
+        ).copy(),
+        "cursors": runtime.consumer_cursors.to_data(),
+        "reports": tuple(runtime._consumer_reports),
+    }
+    transactions = runtime._stage_consumers(at_start=True)
+    assert len(transactions) == 1
+    transaction = transactions[0]
+    prepared = tuple(row[1] for row in transaction._prepared)
+    assert len(prepared) == 2
+    targets = tuple(row.target for row in prepared)
+    assert all(target is not None for target in targets)
+    first_target, collision_target = targets
+    collision_bytes = b"pre-existing user-owned publication"
+    collision_target.write_bytes(collision_bytes)
+
+    with pytest.raises(ConsumerPublicationError, match="FileExistsError") as failure:
+        transaction.accept()
+
+    report = failure.value.report
+    assert report.status == "failed"
+    assert report.published == ()
+    assert report.cursors.to_data() == accepted_before["cursors"]
+    assert len(report.staged_effects) == 2
+    assert report.rolled_back_effects == tuple(reversed(report.staged_effects))
+    assert not first_target.exists()
+    assert collision_target.read_bytes() == collision_bytes
+    assert not tuple(output_root.rglob(".*.writer-stage*"))
+    assert not tuple(output_root.rglob("*.component-published"))
+    assert runtime.time() == accepted_before["time"]
+    assert runtime.macro_step() == accepted_before["macro_step"]
+    assert np.array_equal(
+        np.asarray(runtime.state_global("tracer"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    assert runtime.consumer_cursors.to_data() == accepted_before["cursors"]
+    assert tuple(runtime._consumer_reports) == accepted_before["reports"]
+
+    collision_target.unlink()
+    accepted_reports = runtime._fire_consumers(at_start=True)
+    assert len(accepted_reports) == 1
+    assert accepted_reports[0].status == "accepted"
+    assert len(accepted_reports[0].published) == 2
+    assert runtime.consumer_cursors.to_data() != accepted_before["cursors"]
+    published = tuple(sorted(output_root.rglob("*.popsbin")))
+    assert len(published) == 2
+    assert all("fields=1" in path.read_text(encoding="utf-8") for path in published)
+    assert not tuple(output_root.rglob(".*.writer-stage*"))
+    assert not tuple(output_root.rglob("*.component-published"))
+    runtime._publisher.close_live_visualizations(run_identity)
+
+
+def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(
+    tmp_path, request
+):
     example = _load_example()
     first = _compile_writer(tmp_path / "source-one", "writer_one")
     second = _compile_writer(tmp_path / "source-two", "writer_two")
@@ -624,6 +763,7 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
 
     # Rejection owns and discards the verified native temporary without publishing it.
     runtime._output_root = tmp_path / "uniform-output"
+    run_identity = _begin_direct_consumer_run(runtime, request)
     transactions = runtime._stage_consumers(at_start=True)
     assert len(transactions) == 1
     stage_dir = runtime._output_root / "reject-stage"
@@ -664,6 +804,8 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
             _layout_plan=runtime._layout_plan,
             _retain_output_recoveries=runtime._retain_output_recoveries,
         ))
+
+    runtime._publisher.close_live_visualizations(run_identity)
 
     run_report = pops.run(
         uniform, t_end=1.0e-4, max_steps=1,

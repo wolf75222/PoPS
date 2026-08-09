@@ -82,6 +82,12 @@ static ModelSpec exb_spec(double q, double B0) {
 // (1 + dt/eps) reste BORNE pour tout dt > 0. rho (comp 0) a source NULLE -> masse conservee a la machine.
 struct StiffMomentumRelax {
   Real inv_eps = Real(0);
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.stiff-momentum-relax", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(inv_eps);
+  }
   template <class State>
   POPS_HD State apply(const State& u, const Aux&) const {
     State s{};
@@ -93,28 +99,20 @@ struct StiffMomentumRelax {
   }
 };
 
-// A genuinely state-independent zero elliptic brick. This keeps the stiff-source oracle independent
-// of Poisson even after the deliberately unstable explicit trajectory becomes non-finite: unlike
-// `0 * state`, it cannot manufacture NaNs in an otherwise exact-zero periodic RHS.
-struct ZeroElliptic {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-
-using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
+// The canonical state-independent zero RHS cannot manufacture NaNs in an otherwise exact-zero
+// periodic solve after the deliberately unstable explicit trajectory becomes non-finite.
+using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, NoElliptic>;
 static StiffCModel stiff_cmodel(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffCModel{Euler{Real(1.4)}, r, ZeroElliptic{}};
+  return StiffCModel{Euler{Real(1.4)}, r, NoElliptic{}};
 }
 
 // Modele COMPILE 4 variables NEUTRE (Euler sans source) : un bloc voisin explicite, MEME nombre de
 // variables que le bloc raide (layout coherent sur la hierarchie partagee).
-using NeutralCModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
+using NeutralCModel = CompositeModel<Euler, NoSource, NoElliptic>;
 static NeutralCModel neutral_cmodel() {
-  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, ZeroElliptic{}};
+  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, NoElliptic{}};
 }
 
 // densite "bulle" gaussienne (gradients non triviaux -> le transport engendre de l'impulsion que la

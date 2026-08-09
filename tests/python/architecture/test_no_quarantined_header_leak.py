@@ -38,7 +38,7 @@ HEADER_MANIFEST = INCLUDE_DIR / "pops_headers.manifest"
 _INCLUDE_RE = re.compile(r"#\s*include\s*<\s*(pops/[^>]+?)\s*>")
 
 # The quarantined, non-production headers (paths relative to include/, i.e. ``pops/...``).
-# The two AMR reference oracles and the two zero-reference validation bricks were DELETED under
+# The two AMR reference oracles and the four zero-reference validation headers were DELETED under
 # ADC-608 (git history preserves them); the assertions below tolerate their absence via (b). The
 # rest are legitimate TEST-ONLY headers classified by the packaging manifest and fenced from
 # production by (a). This keeps quarantine and installation classification in one source of truth.
@@ -47,8 +47,18 @@ _DELETED_QUARANTINED = (
     "pops/numerics/time/reference/amr_reflux.hpp",
     "pops/numerics/time/reference/amr_level.hpp",
     # Deleted (zero-reference validation bricks).
+    "pops/validation/numerics/geometric_mg.hpp",
+    "pops/validation/physics/advection_diffusion.hpp",
     "pops/validation/physics/langmuir.hpp",
     "pops/validation/physics/two_fluid_isothermal.hpp",
+)
+
+# The C++ FieldContext descriptor encoded field outputs through AuxLayout/raw components, while the
+# production seam now owns exact ComponentKeys and storage groups. Keep the Python FieldContext
+# model outside this fence; only the obsolete native header is prohibited.
+_RETIRED_LEGACY_AUX_CONTEXT_HEADERS = (
+    "pops/runtime/context/aux_layout.hpp",
+    "pops/runtime/context/field_context.hpp",
 )
 
 
@@ -136,6 +146,20 @@ def test_every_quarantined_header_is_test_justified_or_deleted():
         "but %s is present with no test using it -- delete it (git preserves the history) or add a "
         "test that exercises it" % orphans
     )
+
+
+def test_retired_native_aux_context_header_cannot_return():
+    """The removed raw-component FieldContext cannot be reintroduced beside exact groups."""
+    manifest = HEADER_MANIFEST.read_text(encoding="utf-8")
+    for rel in _RETIRED_LEGACY_AUX_CONTEXT_HEADERS:
+        assert not (INCLUDE_DIR / rel).exists(), (
+            "the retired native raw-aux FieldContext header must not be restored; use the exact "
+            "auxiliary registry and owner-qualified ComponentKeys instead"
+        )
+        assert rel not in manifest, "the retired native FieldContext header must not be packaged"
+        assert not _cpp_test_referenced(rel), (
+            "C++ tests must exercise exact auxiliary groups rather than the retired FieldContext"
+        )
 
 
 if __name__ == "__main__":

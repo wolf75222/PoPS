@@ -27,6 +27,8 @@ _emit_bricks, _elliptic_field_registrations, _emit_metadata
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Any
 
 from pops.identity.scalar import scalar_cpp
@@ -35,14 +37,13 @@ from pops.codegen.cpp_writer import _cpp_identifier
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
 from pops.codegen.module_emit_helpers import (  # noqa: F401
-    _AUX_BASE_COMPS,
-    _AUX_CANONICAL,
-    _AUX_NAMED_BASE,
     _CANONICAL_ROLES,
     _codegen_exprs,
+    _exact_brick_contract,
     _jac_entries,
     _live_prims,
     _prim_block,
+    _ranked_axes,
     _role_of,
     _roles_for,
 )
@@ -65,25 +66,52 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     name = _cpp_identifier(func or model.name)
     if not model._flux:
         raise ValueError("emit_cpp : call set_flux(...) first")
-    if len(model._flux.get("x", [])) != model.n_vars or len(model._flux.get("y", [])) != model.n_vars:
-        raise ValueError("emit_cpp : flux expected with %d components per direction" % model.n_vars)
+    axes = _ranked_axes(model)
+    wrong_flux_arity = {
+        axis: len(model._flux[axis])
+        for axis in axes
+        if len(model._flux[axis]) != model.n_vars
+    }
+    if wrong_flux_arity:
+        raise ValueError(
+            "emit_cpp : flux expected with %d components on every ranked axis; got %r"
+            % (model.n_vars, wrong_flux_arity)
+        )
+    from pops._ir.visitors import _dependencies
+
+    aux_reads = _dependencies(
+        expression
+        for axis in axes
+        for expression in model._flux[axis]
+    ) & set(model._provider_components)
+    if aux_reads:
+        raise ValueError(
+            "emit_cpp standalone flux cannot bind ProviderPack consumers %s; "
+            "compile the canonical Module instead"
+            % sorted(aux_reads)
+        )
     nc = model.n_vars
     out = [
         "// genere depuis le modele symbolique '%s' (pops.dsl.emit_cpp)" % model.name,
-        "// flux physique F = flux(U, dir) ; dir 0=x, 1=y ; U et F de taille %d." % nc,
+        "// flux physique F = flux<Axis>(U) sur %d axes ; U et F de taille %d."
+        % (len(axes), nc),
         "#include <cmath>",
-        "template <class Real>",
-        "inline void %s_flux(const Real* U, Real* F, int dir) {" % name,
+        "template <int Axis, class Real>",
+        "inline void %s_flux(const Real* U, Real* F) {" % name,
+        "  static_assert(Axis >= 0 && Axis < %d, \"flux axis is outside the emitted rank\");"
+        % len(axes),
     ]
     out += ["  const Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
     out += ["  const Real %s = %s;" % (p, e.to_cpp()) for p, e in model.prim_defs.items()]
-    tl, cpps = _codegen_exprs(model, model._flux["x"] + model._flux["y"], cse, real="Real", indent="  ")
-    out += tl
-    out.append("  if (dir == 0) {")
-    out += ["    F[%d] = %s;" % (i, cpps[i]) for i in range(nc)]
-    out.append("  } else {")
-    out += ["    F[%d] = %s;" % (i, cpps[nc + i]) for i in range(nc)]
-    out += ["  }", "}"]
+    for ordinal, axis in enumerate(axes):
+        out.append("  if constexpr (Axis == %d) {" % ordinal)
+        tl, cpps = _codegen_exprs(
+            model, model._flux[axis], cse, real="Real", indent="    "
+        )
+        out += tl
+        out += ["    F[%d] = %s;" % (i, cpp) for i, cpp in enumerate(cpps)]
+        out.append("  }")
+    out.append("}")
     return "\n".join(out) + "\n"
 
 
@@ -100,10 +128,9 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     bricks written by hand (NoSource, PotentialForce in pops/model/bricks.hpp) and can therefore
     enter as the Source parameter of a CompositeModel.
 
-    CONVENTION: the auxiliary names (set via aux(...)) must be FIELDS of pops::Aux,
-    because they are read directly as a.<name> (e.g. aux('grad_x') -> a.grad_x, aux('grad_y') ->
-    a.grad_y). This convention is the same as that of the manual bricks, where the source reads
-    the outer state only through the pops::Aux channel (potential and its gradient).
+    Every ``aux(name)`` resolves through the exact ``ProviderPack`` to the
+    local slot of the source consumer.  There is no member or prefix chosen
+    from the spelling of an auxiliary quantity.
 
     Style identical to emit_cpp_brick (inlined constants, cons -> locals, primitives -> locals;
     plus, aux -> locals); cse=True factors the common sub-expressions. Raises ValueError if
@@ -125,15 +152,16 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
+        return model._aux_locals_lines()  # source-default consumer slots from ProviderPack
 
-    na = model._total_n_aux()  # required aux width (B_z / T_e / named fields -> > 3)
+    na = model._total_n_aux()
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     S = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SOURCE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_source)."
         % model.name,
-        "// apply(U, a) -> terme source S(U, aux) ; noms aux = champs de pops::Aux (grad_x, grad_y).",
+        "// apply(U, a) -> terme source S(U, aux) ; aux via le ProviderPack exact.",
     ]
     if rt_member:  # RuntimeParams header only if a formula reads a runtime param
         S.append("#include <pops/runtime/config/runtime_params.hpp>")
@@ -145,12 +173,18 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     ]
     if rt_member:  # pops::RuntimeParams params{count, {defaults}} member (P7-b)
         S.append(rt_member.rstrip("\n"))
-    # If a formula reads an EXTRA aux field (B_z...), declare n_aux: CompositeModel
-    # propagates it (max over the bricks) and the system sizes/populates the shared aux channel.
-    # Without an extra field -> no n_aux emitted -> brick strictly identical to the historical one.
-    if na > _AUX_BASE_COMPS:
+    # The exact ProviderPack owns the compact channel width.  Zero is valid and
+    # deliberately emits no auxiliary storage declaration.
+    if na:
         S.append("  static constexpr int n_aux = %d;" % na)
-    S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const pops::Aux& a) const {"
+    S += _exact_brick_contract(
+        model,
+        "source",
+        dimension=len(_ranked_axes(model)) if model._flux else 0,
+        n_vars=nc,
+        runtime_params=bool(rt_member),
+    )
+    S.append("  POPS_HD pops::StateVec<%d> apply(const pops::StateVec<%d>& U, const auto& a) const {"
              % (nc, nc))
     src_exprs = [_ir_wrap(e) for e in model._source]
     S += cons_locals() + prim_locals(_live_prims(model, src_exprs)) + aux_locals()
@@ -165,7 +199,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     # CompositeModel (HasSourceFrequency) and aggregated by step_cfl. Without a call: nothing emitted.
     if model._src_freq is not None:
         S.append("")
-        S.append("  POPS_HD pops::Real frequency(const pops::StateVec<%d>& U, const pops::Aux& a) "
+        S.append("  POPS_HD pops::Real frequency(const pops::StateVec<%d>& U, const auto& a) "
                  "const {" % nc)
         S += cons_locals() + prim_locals(_live_prims(model, [model._src_freq])) + aux_locals()
         ftl, fcpps = _codegen_exprs(model, [model._src_freq], cse)
@@ -178,7 +212,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
         if len(model._src_jac) != nc or any(len(r) != nc for r in model._src_jac):
             raise ValueError("source_jacobian: expected %dx%d matrix (dS_r/dU_c)" % (nc, nc))
         S.append("")
-        S.append("  POPS_HD void jacobian(const pops::StateVec<%d>& U, const pops::Aux& a, "
+        S.append("  POPS_HD void jacobian(const pops::StateVec<%d>& U, const auto& a, "
                  "pops::Real (&J)[%d][%d]) const {" % (nc, nc, nc))
         flat = [e for row in model._src_jac for e in row]
         S += cons_locals() + prim_locals(_live_prims(model, flat)) + aux_locals()
@@ -223,10 +257,18 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
     if model._elliptic is not None:  # elliptic brick generated, otherwise zero rhs (no coupling)
         parts.append(emit_cpp_elliptic(model, name=nm + "Ell", hoist_reciprocals=hoist_reciprocals))
     else:
+        zero_contract = "\n".join(_exact_brick_contract(
+            model,
+            "zero-elliptic-rhs",
+            dimension=len(_ranked_axes(model)),
+            n_vars=nv,
+            runtime_params=False,
+        ))
         parts.append(
-            "namespace pops_generated { struct %sEll {\n"
+            "#include <pops/core/identity/prepared_provider.hpp>\n"
+            "namespace pops_generated { struct %sEll {\n%s\n"
             "  template <class State> POPS_HD pops::Real rhs(const State&) const { return pops::Real(0); }\n"
-            "}; }\n" % nm)
+            "}; }\n" % (nm, zero_contract))
     # NAMED elliptic fields (ADC-428): one SELF-CONTAINED brick per m.elliptic_field, paired with
     # make_poisson_rhs by the native loader and routed to a SECOND elliptic solve. Emitted only when
     # the model declares one -> backward-compatible (no named field => no extra struct, byte-identical
@@ -244,31 +286,43 @@ def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) 
 # ---------------------------------------------------------------------------
 
 def _elliptic_field_registrations(model: Any, nm: Any) -> list:
-    """Per named elliptic field (ADC-428): (field, brick_struct, phi_comp, gx_comp, gy_comp) for the
-    native loader. The aux component of each output name is its channel index: a CANONICAL name
-    (phi/grad_x/...) maps via AUX_CANONICAL; a model-named aux (aux_field) maps to
-    AUX_NAMED_BASE + its position in aux_extra_names. A name the model never declared as an aux is
-    rejected (the solve would write a component no source can read). gx/gy default to -1 (phi only)
-    when the field lists fewer than 3 aux names."""
-    def comp(name: Any) -> int:
-        if name in _AUX_CANONICAL:
-            return _AUX_CANONICAL[name]
-        if name in model.aux_extra_names:
-            return _AUX_NAMED_BASE + model.aux_extra_names.index(name)
+    """Return exact-ranked named-field registrations for the native loader.
+
+    Each row is ``(field, brick_struct, output_keys)``. ``output_keys`` contains
+    either the scalar output alone or that scalar followed by one gradient
+    component per physical axis. They are full owner-qualified ComponentKeys:
+    a field solver must never inherit a package-local numeric slot.
+    """
+    pack = getattr(model, "_auxiliary_provider_pack", None)
+    if pack is None:
         raise ValueError(
-            "elliptic_field: aux output '%s' is not a declared aux field; declare it with "
-            "m.aux_field('%s') (so it gets an aux-channel slot a source can read)" % (name, name))
+            "elliptic_field registrations require the exact ProviderPack; compile through Module"
+        )
+    owner_qid = str(model.owner_path.canonical())
+
+    def output_key(name: Any) -> Any:
+        matches = [
+            key for key in pack
+            if key.owner_qid == owner_qid and key.space_kind == "field"
+            and key.component == name
+        ]
+        if len(matches) != 1:
+            detail = "absent" if not matches else "ambiguous"
+            raise ValueError(
+                "elliptic_field output %r is %s as an owner-qualified FieldSpace component"
+                % (name, detail)
+            )
+        return matches[0]
     regs = []
+    dimension = len(_ranked_axes(model))
     for fld in sorted(model._elliptic_fields):
         aux = model._elliptic_fields[fld]["aux"]
-        if len(aux) == 2 or len(aux) > 3:
+        if len(aux) not in (1, 1 + dimension):
             raise ValueError(
-                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
-                "cannot register %d outputs yet" % (fld, len(aux)))
-        phi_c = comp(aux[0])
-        gx_c = comp(aux[1]) if len(aux) > 1 else -1
-        gy_c = comp(aux[2]) if len(aux) > 2 else -1
-        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), phi_c, gx_c, gy_c))
+                "elliptic_field('%s'): aux outputs must have length 1 or %d; got %d"
+                % (fld, 1 + dimension, len(aux)))
+        output_keys = tuple(output_key(name) for name in aux)
+        regs.append((fld, "pops_generated::%sEll_%s" % (nm, fld), output_keys))
     return regs
 
 
@@ -288,16 +342,42 @@ def _emit_metadata(model: Any, model_alias: Any) -> str:
     out = "\nPOPS_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
     if model.gamma is not None:
         out += "POPS_EXPORT_BLOCK_GAMMA(%s)\n" % scalar_cpp(model.gamma)
-    # Table of NAMED aux names (aux_field, ADC-70), ordered CSV (order = AUX_NAMED_BASE +
-    # k index). OPTIONAL symbol, names/roles pattern: makes the .so SELF-DESCRIBING (a C++ loader
-    # could resolve name -> component; on the Python side the table already lives in CompiledModel).
-    # Emitted ONLY if the model declares named fields -> backward-compatible (.so without a named
-    # field unchanged, symbol absent).
-    if model.aux_extra_names:
-        # Names = valid C++ identifiers (validated in aux_field) -> CSV without quotes, safe C
-        # literal (only [A-Za-z0-9_,]).
-        out += ('extern "C" const char* pops_compiled_aux_extra_names() { return "%s"; }\n'
-                % ",".join(model.aux_extra_names))
+    provider_metadata = getattr(model, "_auxiliary_provider_metadata", None)
+    if provider_metadata is None:
+        raise ValueError(
+            "generated metadata requires the exact auxiliary ProviderPack; compile through Module"
+        )
+    def plain(value: Any) -> Any:
+        """Turn immutable compiler evidence into JSON-only reporting metadata.
+
+        The metadata symbols are deliberately diagnostics: native installation
+        consumes the typed route hook instead.  ``MappingProxyType`` is used to
+        keep the compiler plan immutable, so it must be projected explicitly
+        rather than leaking an implementation detail into ``json.dumps``.
+        """
+        if isinstance(value, Mapping):
+            return {str(key): plain(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return [plain(item) for item in value]
+        return value
+
+    out += (
+        'extern "C" const char* pops_compiled_aux_provider_pack() { return %s; }\n'
+        % json.dumps(json.dumps(provider_metadata, sort_keys=True, separators=(",", ":")))
+    )
+    consumer_plans = getattr(model, "_component_operator_consumer_plans", None)
+    flux_plan = getattr(model, "_component_flux_consumer_plan", None)
+    if consumer_plans is None or flux_plan is None:
+        raise ValueError(
+            "generated metadata requires exact auxiliary consumer ProviderPack plans"
+        )
+    out += (
+        'extern "C" const char* pops_compiled_aux_consumer_plans() { return %s; }\n'
+        % json.dumps(json.dumps(
+            plain({"by_operator": consumer_plans, "physical_flux": flux_plan}),
+            sort_keys=True, separators=(",", ":"),
+        ))
+    )
     return out
 
 
@@ -319,6 +399,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     out = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "// brique de SECOND MEMBRE elliptique generee depuis '%s' (pops.dsl.emit_cpp_elliptic)."
         % model.name,
         "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
@@ -331,6 +412,13 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     ]
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         out.append(rt_member.rstrip("\n"))
+    out += _exact_brick_contract(
+        model,
+        "elliptic-rhs",
+        dimension=len(_ranked_axes(model)) if model._flux else 0,
+        n_vars=model.n_vars,
+        runtime_params=bool(rt_member),
+    )
     out += [
         "  template <class State>",
         "  POPS_HD pops::Real rhs(const State& U) const {",
@@ -362,6 +450,7 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
     spec = model._elliptic_fields[field]
     rt_member = model._runtime_params_member()  # runtime indices BEFORE any to_cpp()
     out = ["#include <cmath>",
+           "#include <pops/core/identity/prepared_provider.hpp>",
            "#include <pops/numerics/spatial/primitives/state_access.hpp>  // StateVec",
            "// brique de SECOND MEMBRE elliptique NOMMEE '%s' (champ '%s', pops.dsl.elliptic_field)."
            % (struct_name, field)]
@@ -372,6 +461,14 @@ def emit_cpp_elliptic_field(model: Any, field: Any, struct_name: Any, namespace:
             "  using State = pops::StateVec<%d>;" % model.n_vars]
     if rt_member:
         out.append(rt_member.rstrip("\n"))
+    out += _exact_brick_contract(
+        model,
+        "named-elliptic-rhs",
+        dimension=len(_ranked_axes(model)),
+        n_vars=model.n_vars,
+        runtime_params=bool(rt_member),
+        slot=field,
+    )
     out += ["  POPS_HD pops::Real elliptic_rhs(const State& U) const {"]
     out += ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
     out += _prim_block(model, _live_prims(model, [spec["rhs"]]), hoist_reciprocals)

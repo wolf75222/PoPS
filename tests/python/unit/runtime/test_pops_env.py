@@ -56,7 +56,7 @@ def _compiled_model(*, abi_key="SIG|c++|c++23", cxx="c++", std="c++23"):
         so_path="<synthetic>", backend="production", cons_names=["u"],
         cons_roles=["Scalar"], prim_names=["u"], n_vars=1, gamma=None, n_aux=0,
         params={}, caps={"cpu": True}, abi_key=abi_key, model_hash="env-model",
-        cxx=cxx, std=std,
+        cxx=cxx, std=std, native_dimension=2,
     )
 
 

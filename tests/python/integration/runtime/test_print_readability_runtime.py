@@ -71,7 +71,8 @@ def _synthetic_compiled():
         so_path="/nonexistent/problem.so", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=0, params={},
-        caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23")
+        caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++",
+        std="c++23", native_dimension=2)
     return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
                            problem_hash="deadbeefcafe", cache_key="0badc0de")
 

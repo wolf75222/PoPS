@@ -1,1574 +1,1032 @@
+/// @file
+/// @brief Exact compile-time-ranked composite FAC Poisson solver for nested Cartesian AMR.
+
 #pragma once
 
+#include <pops/amr/refinement_ratio.hpp>
+#include <pops/amr/transfer/transfer_provider.hpp>
 #include <pops/core/foundation/types.hpp>
-#include <pops/diagnostics/runtime_diagnostics.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/execution/for_each.hpp>
-#include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
+#include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/mesh/layout/refinement.hpp>  // average_down, coarsen_index
+#include <pops/mesh/layout/refinement.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
-#include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
-#include <pops/parallel/comm.hpp>  // my_rank / n_ranks (replicated coarse dmap, MPI dispatch + gather)
+#include <pops/numerics/elliptic/mg/composite_fac_nlevel.hpp>
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
+
+#include <Kokkos_Core.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
+#include <utility>
 #include <vector>
 
-/// @file
-/// @brief CompositeFacPoisson: AMR COMPOSITE elliptic solver (Fast Adaptive Composite, FAC) for
-///        ``div(A grad phi) - kappa phi = f`` across a nested hierarchy. ``kappa=0`` is Poisson;
-///        a positive constant is the screened-Poisson/Helmholtz route.
-///
-/// MOTIVATION (amr-schur path). The current AMR Poisson (Option A) solves the elliptic only on the
-/// coarse level then injects grad phi (piecewise constant) onto the fine patches: the patches refine
-/// the TRANSPORT but NOT the elliptic coupling. A COMPOSITE solver makes the fine patch ACTUALLY
-/// REFINE the elliptic solution (more accurate phi/grad phi near the patch). This is the AMR fidelity
-/// lock (the composite Poisson coupling (FAC) that amr_reflux.hpp explicitly leaves to this solver).
-///
-/// 2-LEVEL FAC ALGORITHM (McCormick), one fine patch INTERIOR to the coarse domain. Composite solution
-/// phi = phi_f on the patch, phi_c elsewhere:
-///   0. initial coarse solve: GeometricMG(Lap phi_c = f_c, Dirichlet);
-///   it. repeat:
-///      1. C-F ghosts: fill the patch ghost ring by BILINEAR INTERPOLATION of phi_c (order
-///         2 vs the constant injection of Option A) -> cell-centered C-F Dirichlet condition;
-///      2. fine solve: red-black GS on the patch with FROZEN ghosts (Lap phi_f = f_f);
-///      3. average_down phi_f -> phi_c on the COVERED coarse cells (consistency);
-///      4. composite coarse residual: r_c = f_c - Lap phi_c (NON covered cells), 0 on covered ones,
-///         + C-F FLUX CORRECTION: on the coarse cells BORDERING the patch, the flux through the
-///         C-F face is replaced by the FINE flux (conservative sum of the 2 fine faces) -> two-way coupling;
-///      5. coarse correction: GeometricMG(Lap e_c = r_c, homogeneous Dirichlet); phi_c += e_c (non covered);
-///   until ||r_c|| (composite residual norm) below tolerance.
-///
-/// SCOPE (ADC-636, generalized envelope). Cartesian, ratio 2, an arbitrary NESTED hierarchy: N
-/// levels, 1..N fine patches per level, ADJACENT (edge/corner-touching) patches allowed, and MPI
-/// (REPLICATED coarse + DISTRIBUTED fine). The 2-level non-adjacent mono-rank case is dispatched to
-/// the legacy arithmetic body (solve_two_level_legacy_); the general path
-/// (composite_fac_nlevel.hpp) serves every other shape. Distributed equals replicated
-/// bit-identically at fixed np by construction. Only ratio != 2 (ADC-602 declared capability) and
-/// overlapping / non-nested / misaligned patches (semantically impossible) are refused.
-///
-/// MULTI-PATCH. Each fine patch has its own box (fine BoxArray); the FINE operations (bilinear C-F
-/// ghosts, SOR, C-F flux correction) loop OVER EACH local patch. The coarse coverage (CoverageMask)
-/// is the UNION of the coarse footprints of all patches: it tells which coarse cells are shadowed
-/// (residual set to 0, average_down) and lets the flux correction skip a face covered on both sides.
-/// Adjacent patches share a fine face: the fine-fine join is realized by fill_boundary before the C/F
-/// bilerp (the shared ghost takes the sibling's valid data), and the two-way flux correction is
-/// enumerated from the uncovered coarse side so a shared interior face gets no correction.
+namespace pops::elliptic::mg {
 
-namespace pops {
+template <int Dim>
+struct CompositeFacBuildRequest {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "CompositeFacBuildRequest only supports dimensions 1, 2, and 3");
+
+  static constexpr int dimension = Dim;
+
+  std::vector<EllipticBuildRequest<Dim>> levels;
+  std::vector<::pops::amr::RefinementRatio<Dim>> ratios;
+};
+
+struct CompositeFacCapabilities {
+  bool scalar_constant_coefficient = true;
+  bool partial_refinement = true;
+  bool arbitrary_level_count = true;
+  bool replicated_mpi = true;
+  bool distributed_mpi = false;
+  bool variable_diagonal = false;
+  bool cross_tensor = false;
+  bool embedded_boundary = false;
+
+  constexpr bool operator==(const CompositeFacCapabilities&) const = default;
+};
 
 namespace detail {
 
-struct FacCopyAllKernel {
-  Array4 dst;
-  ConstArray4 src;
-  int comp;
-  POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = src(i, j, comp); }
-};
-
-struct FacSetAllKernel {
-  Array4 dst;
-  Real value;
-  int comp;
-  POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = value; }
-};
-
-struct FacSumKernel {
-  ConstArray4 value;
-  POPS_HD void operator()(int i, int j, Real& sum) const { sum += value(i, j, 0); }
-};
-
-struct FacShiftKernel {
-  Array4 value;
-  Real shift;
-  POPS_HD void operator()(int i, int j) const { value(i, j, 0) -= shift; }
-};
-
-struct FacApplyConstantReactionKernel {
-  Array4 value;
-  ConstArray4 phi;
-  Real reaction;
-
-  POPS_HD void operator()(int i, int j) const { value(i, j, 0) -= reaction * phi(i, j, 0); }
-};
-
-/// BILINEAR interpolation of the coarse potential (cell-centered, @p C with ghosts) at the CENTER of the
-/// fine cell (i, j). Ratio @p r. The fine center has abscissa (i+0.5)/r in coarse-step units, i.e.
-/// the coarse center-index fx = (i+0.5)/r - 0.5; we interpolate the 4 surrounding coarse centers.
-/// INTERIOR patch -> Ic, Ic+1, Jc, Jc+1 are in the coarse domain (ghosts included).
-POPS_HD inline Real fac_bilerp_coarse(const ConstArray4& C, int i, int j, int r) {
-  const Real fx = (Real(i) + Real(0.5)) / Real(r) - Real(0.5);
-  const Real fy = (Real(j) + Real(0.5)) / Real(r) - Real(0.5);
-  const int Ic = static_cast<int>(std::floor(fx));
-  const int Jc = static_cast<int>(std::floor(fy));
-  const Real tx = fx - Real(Ic), ty = fy - Real(Jc);
-  const Real c00 = C(Ic, Jc, 0), c10 = C(Ic + 1, Jc, 0);
-  const Real c01 = C(Ic, Jc + 1, 0), c11 = C(Ic + 1, Jc + 1, 0);
-  return (Real(1) - tx) * (Real(1) - ty) * c00 + tx * (Real(1) - ty) * c10 +
-         (Real(1) - tx) * ty * c01 + tx * ty * c11;
+inline void validate_fac_options(const CompositeFacOptions& options) {
+  if (options.max_iters < 1 || options.fine_sweeps < 1 || options.coarse_cycles < 1 ||
+      !std::isfinite(static_cast<double>(options.rel_tol)) || options.rel_tol <= Real(0) ||
+      !std::isfinite(static_cast<double>(options.abs_tol)) || options.abs_tol < Real(0) ||
+      !std::isfinite(static_cast<double>(options.coarse_rel_tol)) ||
+      options.coarse_rel_tol <= Real(0) ||
+      !std::isfinite(static_cast<double>(options.coarse_abs_tol)) ||
+      options.coarse_abs_tol < Real(0))
+    throw std::invalid_argument("composite FAC controls are invalid");
 }
 
-struct FacLegacyFillCoarseFineGhostKernel {
-  Array4 fine;
-  ConstArray4 coarse;
-  Box2D valid;
-  int ratio;
+template <int Dim>
+std::string fac_options_contract(const CompositeFacOptions& options, Real reaction) {
+  ExactContractBuilder contract;
+  contract.text("pops.elliptic.composite-fac-options")
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
+      .scalar(options.max_iters)
+      .scalar(options.fine_sweeps)
+      .scalar(options.rel_tol)
+      .scalar(options.abs_tol)
+      .scalar(options.coarse_rel_tol)
+      .scalar(options.coarse_abs_tol)
+      .scalar(options.coarse_cycles)
+      .scalar(options.verbose)
+      .scalar(reaction);
+  return std::move(contract).release();
+}
 
-  POPS_HD void operator()(int i, int j) const {
-    const bool inside =
-        i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1];
-    if (!inside)
-      fine(i, j, 0) = fac_bilerp_coarse(coarse, i, j, ratio);
-  }
-};
+template <int Dim>
+std::string fac_hierarchy_contract(const CompositeFacBuildRequest<Dim>& request) {
+  ExactContractBuilder contract;
+  contract.text("pops.elliptic.composite-fac-hierarchy")
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
+      .scalar(static_cast<std::uint64_t>(request.levels.size()));
+  for (const auto& level : request.levels)
+    contract.bytes(elliptic_contract_detail::build_request_contract(level));
+  contract.scalar(static_cast<std::uint64_t>(request.ratios.size()));
+  for (const auto& ratio : request.ratios)
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(ratio[axis]);
+  return std::move(contract).release();
+}
 
-struct FacLegacyMaskedAddKernel {
-  Array4 destination;
-  ConstArray4 correction;
-  CoverageMaskView coverage;
+template <int Dim>
+std::string fac_build_contract(const CompositeFacBuildRequest<Dim>& request,
+                               const CompositeFacOptions& options, Real reaction) {
+  ExactContractBuilder contract;
+  contract.text("pops.elliptic.composite-fac-build")
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
+      .bytes(fac_hierarchy_contract(request))
+      .bytes(fac_options_contract<Dim>(options, reaction));
+  return std::move(contract).release();
+}
 
-  POPS_HD void operator()(int i, int j) const {
-    if (!coverage.covered(i, j))
-      destination(i, j, 0) += correction(i, j, 0);
-  }
-};
-
-struct FacLegacySorKernel {
-  Array4 phi;
-  ConstArray4 phi_read;
-  ConstArray4 rhs;
-  ConstArray4 eps;
-  ConstArray4 eps_y;
-  ConstArray4 a_xy;
-  ConstArray4 a_yx;
-  Real idx2;
-  Real idy2;
-  Real idx;
-  Real idy;
-  Real omega;
-  Real reaction;
-  int color;
-  bool has_eps;
-  bool has_cross;
-
-  POPS_HD void operator()(int i, int j) const {
-    const int cell_color = has_cross ? (((i & 1) << 1) | (j & 1)) : ((i + j) & 1);
-    if (cell_color != color)
-      return;
-    const Real exm = has_eps ? eps_harmonic(eps(i, j, 0), eps(i - 1, j, 0)) : Real(1);
-    const Real exp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i + 1, j, 0)) : Real(1);
-    const Real eym = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j - 1, 0)) : Real(1);
-    const Real eyp = has_eps ? eps_harmonic(eps_y(i, j, 0), eps_y(i, j + 1, 0)) : Real(1);
-    const Real diagonal = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
-    const Real neighbours = (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
-                            (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
-    const Real cross =
-        has_cross ? cross_div(phi_read, true, a_xy, true, a_yx, i, j, idx, idy) : Real(0);
-    const Real candidate = (neighbours + cross - rhs(i, j, 0)) / diagonal;
-    phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * candidate;
-  }
-};
-
-struct FacLegacyMaskedResidualKernel {
-  Array4 residual;
-  ConstArray4 rhs;
-  ConstArray4 laplacian;
-  CoverageMaskView coverage;
-
-  POPS_HD void operator()(int i, int j) const {
-    residual(i, j, 0) = coverage.covered(i, j) ? Real(0) : rhs(i, j, 0) - laplacian(i, j, 0);
-  }
-};
-
-struct FacLegacyMaskedNormKernel {
-  ConstArray4 residual;
-  CoverageMaskView coverage;
-
-  POPS_HD void operator()(int i, int j, Real& acc) const {
-    if (coverage.covered(i, j))
-      return;
-    const Real value = residual(i, j, 0);
-    const Real magnitude = value < Real(0) ? -value : value;
-    if (!(magnitude <= std::numeric_limits<Real>::max())) {
-      acc = std::numeric_limits<Real>::infinity();
-      return;
-    }
-    if (magnitude > acc)
-      acc = magnitude;
-  }
-};
-
-struct FacLegacyFluxCorrectionKernel {
-  Array4 residual;
-  ConstArray4 coarse_phi;
-  ConstArray4 coarse_eps;
-  ConstArray4 coarse_eps_y;
-  ConstArray4 fine_phi;
-  ConstArray4 fine_eps;
-  ConstArray4 fine_eps_y;
-  CoverageMaskView coverage;
-  Box2D footprint;
-  Real idx2;
-  Real idy2;
-  int ratio;
-  bool has_eps;
-
-  POPS_HD void operator()(int i, int j) const {
-    if (coverage.covered(i, j))
-      return;
-    const int ilo = footprint.lo[0];
-    const int ihi = footprint.hi[0];
-    const int jlo = footprint.lo[1];
-    const int jhi = footprint.hi[1];
-    if (i == ilo - 1 && j >= jlo && j <= jhi) {
-      const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps(i, j, 0), coarse_eps(i + 1, j, 0)) : Real(1)) *
-          (coarse_phi(i + 1, j, 0) - coarse_phi(i, j, 0)) * idx2;
-      Real fine_sum = Real(0);
-      for (int t = 0; t < ratio; ++t) {
-        const int jf = ratio * j + t;
-        const Real face =
-            has_eps ? eps_harmonic(fine_eps(ratio * ilo - 1, jf, 0), fine_eps(ratio * ilo, jf, 0))
-                    : Real(1);
-        fine_sum += face * (fine_phi(ratio * ilo, jf, 0) - fine_phi(ratio * ilo - 1, jf, 0));
-      }
-      residual(i, j, 0) += coarse_face - fine_sum * idx2;
-      return;
-    }
-    if (i == ihi + 1 && j >= jlo && j <= jhi) {
-      const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps(i, j, 0), coarse_eps(i - 1, j, 0)) : Real(1)) *
-          (coarse_phi(i - 1, j, 0) - coarse_phi(i, j, 0)) * idx2;
-      Real fine_sum = Real(0);
-      for (int t = 0; t < ratio; ++t) {
-        const int jf = ratio * j + t;
-        const Real face = has_eps ? eps_harmonic(fine_eps(ratio * ihi + ratio - 1, jf, 0),
-                                                 fine_eps(ratio * ihi + ratio, jf, 0))
-                                  : Real(1);
-        fine_sum += face * (fine_phi(ratio * ihi + ratio - 1, jf, 0) -
-                            fine_phi(ratio * ihi + ratio, jf, 0));
-      }
-      residual(i, j, 0) += coarse_face - fine_sum * idx2;
-      return;
-    }
-    if (j == jlo - 1 && i >= ilo && i <= ihi) {
-      const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j + 1, 0)) : Real(1)) *
-          (coarse_phi(i, j + 1, 0) - coarse_phi(i, j, 0)) * idy2;
-      Real fine_sum = Real(0);
-      for (int t = 0; t < ratio; ++t) {
-        const int fi = ratio * i + t;
-        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jlo - 1, 0),
-                                                 fine_eps_y(fi, ratio * jlo, 0))
-                                  : Real(1);
-        fine_sum += face * (fine_phi(fi, ratio * jlo, 0) - fine_phi(fi, ratio * jlo - 1, 0));
-      }
-      residual(i, j, 0) += coarse_face - fine_sum * idy2;
-      return;
-    }
-    if (j == jhi + 1 && i >= ilo && i <= ihi) {
-      const Real coarse_face =
-          (has_eps ? eps_harmonic(coarse_eps_y(i, j, 0), coarse_eps_y(i, j - 1, 0)) : Real(1)) *
-          (coarse_phi(i, j - 1, 0) - coarse_phi(i, j, 0)) * idy2;
-      Real fine_sum = Real(0);
-      for (int t = 0; t < ratio; ++t) {
-        const int fi = ratio * i + t;
-        const Real face = has_eps ? eps_harmonic(fine_eps_y(fi, ratio * jhi + ratio - 1, 0),
-                                                 fine_eps_y(fi, ratio * jhi + ratio, 0))
-                                  : Real(1);
-        fine_sum += face * (fine_phi(fi, ratio * jhi + ratio - 1, 0) -
-                            fine_phi(fi, ratio * jhi + ratio, 0));
-      }
-      residual(i, j, 0) += coarse_face - fine_sum * idy2;
-    }
-  }
-};
-
-static_assert(std::is_trivially_copyable_v<FacLegacyFillCoarseFineGhostKernel>);
-static_assert(std::is_trivially_copyable_v<FacLegacyMaskedAddKernel>);
-static_assert(std::is_trivially_copyable_v<FacLegacySorKernel>);
-static_assert(std::is_trivially_copyable_v<FacLegacyMaskedResidualKernel>);
-static_assert(std::is_trivially_copyable_v<FacLegacyMaskedNormKernel>);
-static_assert(std::is_trivially_copyable_v<FacLegacyFluxCorrectionKernel>);
-static_assert(std::is_trivially_copyable_v<FacSumKernel>);
-static_assert(std::is_trivially_copyable_v<FacShiftKernel>);
+template <int Dim>
+Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = ratio[axis];
+  return result;
+}
 
 }  // namespace detail
 
-/// Composite FAC Poisson/Helmholtz solver (scalar). Built on the coarse layout (replicated mono-box)
-/// + the fine patch (mono-box). The caller provides f_c (coarse) and f_f (fine); the solver returns
-/// phi_c (coarse, covered = average_down of the fine) and phi_f (fine).
+/// Composite multilevel correction over a replicated nested AMR hierarchy.
+///
+/// The cycle restricts the active residual from every refined level into the covered parent cells,
+/// solves that composite correction with a true geometric V-cycle on the complete coarse level,
+/// prolongs the correction through the hierarchy, relaxes each uncovered level and averages the
+/// accepted fine solution back down. Sparse fine layouts are first-class. Distributed refined
+/// ownership is rejected explicitly until its inter-level transfer transport is prepared; MPI may
+/// still execute this provider redundantly with replicated levels.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class CompositeFacPoisson {
  public:
-  /// MONO-PATCH CTOR (Phase 1): DELEGATES to the multi-patch ctor with a fine BoxArray of a single box, so
-  /// BIT-IDENTICAL to the old path. Kept for existing callers (AmrCouplerMP Option-A composite,
-  /// mono-patch MMS tests).
-  /// @p geom_c: coarse geometry (whole domain). @p ba_c: coarse BoxArray (mono-box covering
-  ///             the domain). @p bc: domain BC (Dirichlet for this milestone). @p fine_box: box of the
-  ///             fine patch (FINE index space, ratio 2, strictly interior). @p ratio: 2.
-  CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
-                      const Box2D& fine_box, int ratio = 2)
-      : CompositeFacPoisson(geom_c, ba_c, bc, BoxArray(std::vector<Box2D>{fine_box}), ratio) {}
+  static_assert(Dim >= 1 && Dim <= 3, "CompositeFacPoisson only supports dimensions 1, 2, and 3");
 
-  /// MULTI-PATCH CTOR (Phase 4a). @p fine_boxes: tiling of the fine level (1..N disjoint patches, FINE
-  /// index space, ratio 2, strictly interior, aligned lo even / hi odd, SEPARATED by at least one
-  /// coarse cell). The coarse stays replicated mono-box (single-rank). N == 1 -> mono-patch path.
-  CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
-                      const BoxArray& fine_boxes, int ratio = 2)
-      : geom_c_(geom_c),
-        geom_f_(geom_c.refine(ratio)),
-        ba_c_(ba_c),
-        // REPLICATED coarse (ADC-636): the mono-box coarse lives on EVERY rank (each rank owns
-        // fab(0)), which is what all the .fab(0) coarse reads assume and what GeometricMG(replicated)
-        // expects. At np=1 my_rank()==0 -> identical to the historical round-robin (size, n_ranks())
-        // that also placed the single box on rank 0: MONO-RANK bit-identical.
-        dm_c_(std::vector<int>(static_cast<std::size_t>(ba_c.size()), my_rank())),
-        bc_(bc),
-        ratio_(ratio),
-        ba_f_(fine_boxes),
-        dm_f_(fine_boxes.size(), n_ranks()),
-        mg_(geom_c, ba_c, bc, {}, FieldDistribution::Replicated),
-        phi_c_(ba_c, dm_c_, 1, 1),
-        phi_f_(ba_f_, dm_f_, 1, 1),
-        f_c_(ba_c, dm_c_, 1, 0),
-        f_f_(ba_f_, dm_f_, 1, 0),
-        res_c_(ba_c, dm_c_, 1, 0),
-        lap_c_(ba_c, dm_c_, 1, 0),
-        lap_f_(ba_f_, dm_f_, 1, 0),
-        boundary_view_c_(ba_c, dm_c_, 1, 1),
-        eps_c_(ba_c, dm_c_, 1, 1),
-        eps_f_(ba_f_, dm_f_, 1, 1),
-        eps_y_c_(ba_c, dm_c_, 1, 1),
-        eps_y_f_(ba_f_, dm_f_, 1, 1),
-        axy_c_(ba_c, dm_c_, 1, 1),
-        ayx_c_(ba_c, dm_c_, 1, 1),
-        axy_f_(ba_f_, dm_f_, 1, 1),
-        ayx_f_(ba_f_, dm_f_, 1, 1),
-        cov_(Box2D::from_extents(geom_c.domain.nx(), geom_c.domain.ny())) {
-    // ADC-636: validate the level-1 patches (aligned lo-even/hi-odd, non-overlapping) and DETECT
-    // adjacency. Adjacent (edge/corner-touching) patches are now legal -- the fine-fine join is
-    // handled by fill_boundary before the C/F bilerp with an uncovered-side flux ownership rule
-    // (composite_fac_nlevel.hpp), and a touching hierarchy routes solve() to the general path. Only
-    // overlapping/misaligned patches are refused (validate_level_patches_); inter-level nesting is
-    // checked by the N-level ctor (validate_nesting_).
-    validate_level_patches_(fine_boxes);
-    // coarse footprints (covered cells) PER PATCH: PatchRange (lo/2 .. (hi-1)/2). The global coarse
-    // coverage = UNION of the footprints (any gap between disjoint patches stays NON covered).
-    for (int g = 0; g < fine_boxes.size(); ++g)
-      patch_coarse_.push_back(PatchRange(fine_boxes[g]).box());
-    for (const Box2D& pc : patch_coarse_)
-      cov_.mark(pc);
-    phi_c_.set_val(Real(0));
-    phi_f_.set_val(Real(0));
-    eps_c_.set_val(Real(1));  // default permittivity 1 -> operator = Laplacian (scalar)
-    eps_f_.set_val(Real(1));
-    eps_y_c_.set_val(Real(1));
-    eps_y_f_.set_val(Real(1));
-    axy_c_.set_val(Real(0));  // default cross terms 0 -> diagonal block only
-    ayx_c_.set_val(Real(0));
-    axy_f_.set_val(Real(0));
-    ayx_f_.set_val(Real(0));
-    // The finest level participates in the scientific composite residual even for a two-level
-    // hierarchy. Deeper constructors reuse this buffer as level 1's residual storage.
-    res_f_ = MultiFab(ba_f_, dm_f_, 1, 0);
-    res_f_.set_val(Real(0));
-    // ADC-636: build the uniform per-level metadata (coverage / footprints / intermediate mg) so the
-    // general path is reachable for a 2-level input too (the cross-check hook and the MPI path). The
-    // legacy 2-level dispatch does not use it -- it keeps cov_/patch_coarse_ as before, untouched.
-    finalize_hierarchy_metadata_();
-    initialize_probe_storage_();
-  }
+  static constexpr int dimension = Dim;
+  using field_type = MultiFab<Dim, MemorySpace>;
+  using request_type = CompositeFacBuildRequest<Dim>;
+  using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
+  using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
-  /// N-LEVEL CTOR (ADC-636). @p level_boxes[k] = the fine BoxArray of level k+1 (in that level's index
-  /// space, ratio 2 over level k), so level_boxes[0] = the level-1 patches (== the 2-level fine_boxes),
-  /// level_boxes[1] = the level-2 patches, ... The 2-level ctor is the level_boxes.size() == 1 case;
-  /// for it this DELEGATES to the multi-patch ctor above (identical level-0/1 allocation), so a
-  /// single-patch-level hierarchy stays bit-identical. For deeper hierarchies the extra levels are
-  /// allocated here (geom refined per level, per-level coverage and parent footprints).
-  CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
-                      const std::vector<BoxArray>& level_boxes, int ratio = 2)
-      : CompositeFacPoisson(geom_c, ba_c, bc,
-                            level_boxes.empty() ? BoxArray(std::vector<Box2D>{}) : level_boxes[0],
-                            ratio) {
-    if (level_boxes.empty())
-      throw std::runtime_error(
-          "CompositeFacPoisson: the N-level ctor needs at least one patch level (level_boxes "
-          "non-empty).");
-    n_levels_ = 1 + static_cast<int>(level_boxes.size());
-    build_extra_levels_(level_boxes);
-    validate_nesting_(level_boxes);  // refuse non-nested patches (C/F bilerp source undefined)
-    initialize_probe_storage_();
-  }
-
-  MultiFab& rhs_coarse() {
-    return f_c_;
-  }  ///< coarse RHS for div(eps grad phi_c) - kappa phi_c = f_c
-  MultiFab& rhs_fine() { return f_f_; }  ///< fine RHS for the same composite operator
-  MultiFab& phi_coarse() { return phi_c_; }
-  MultiFab& phi_fine() { return phi_f_; }
-  /// VARIABLE permittivity eps (at cell centers) PER LEVEL. Fill + use_variable_coefficient(true)
-  /// to go from Lap phi = f to div(eps grad phi) = f -- the condensed Schur operator at B_z = 0
-  /// (eps = 1 + theta^2 dt^2 alpha rho). eps unfilled / not enabled -> scalar (Phase 1), bit-identical.
-  MultiFab& eps_coarse() { return eps_c_; }
-  MultiFab& eps_fine() { return eps_f_; }
-  void use_variable_coefficient(bool v) { has_eps_ = v; }
-  /// Install a spatially uniform reaction coefficient. The internal FAC operator is
-  /// ``div(eps grad phi) - kappa phi``; public ``-div(eps grad phi) + kappa phi`` equations negate
-  /// their RHS at the runtime boundary. The same kappa is installed on every correction MG and in
-  /// every composite residual/SOR level, so refined solves remain one exact Helmholtz operator.
-  void set_reaction(Real reaction) {
-    if (!std::isfinite(static_cast<double>(reaction)) || reaction <= Real(0))
-      throw std::invalid_argument(
-          "CompositeFacPoisson reaction must be finite and strictly positive");
-    reaction_ = reaction;
-    has_reaction_ = true;
-    mg_.set_reaction(constant_scalar_field_provider(reaction));
-    if (fully_refined_solver_)
-      fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction));
-    for (auto& level : level_mg_)
-      if (level)
-        level->set_reaction(constant_scalar_field_provider(reaction));
-  }
-  /// Cross terms a_xy / a_yx (at cell centers) PER LEVEL: FULL tensor A = diag(eps,eps) +
-  /// [[0,a_xy],[a_yx,0]]. This is the condensed Schur operator at B_z != 0 (a_xy = c rho w/det,
-  /// a_yx = -a_xy, w = theta dt B_z) -- antisymmetric, NON self-adjoint. Small for the Schur step
-  /// (c = theta^2 dt^2 alpha) -> convergent SOR/V-cycle (EXPLICIT cross terms). Not enabled -> diagonal
-  /// block only (Phase 3a/1), bit-identical. Requires use_variable_coefficient(true) (the diagonal block).
-  MultiFab& a_xy_coarse() { return axy_c_; }
-  MultiFab& a_yx_coarse() { return ayx_c_; }
-  MultiFab& a_xy_fine() { return axy_f_; }
-  MultiFab& a_yx_fine() { return ayx_f_; }
-  void use_cross_terms(bool v) { has_cross_ = v; }
-  /// Coarse footprint of the FIRST fine patch (mono-patch compat). Multi-patch: see patch_coarse(g).
-  const Box2D& patch_coarse() const { return patch_coarse_[0]; }
-  /// Coarse footprint of fine patch @p g (0 <= g < n_fine_patches()).
-  const Box2D& patch_coarse(int g) const { return patch_coarse_[g]; }
-  /// Number of fine patches (size of the fine BoxArray).
-  int n_fine_patches() const { return ba_f_.size(); }
-  /// Number of levels in the composite hierarchy. The historical 2-level ctors give 2; the N-level
-  /// ctor (ADC-636, composite_fac_nlevel.hpp) gives 1 + number of patch levels.
-  int n_levels() const { return n_levels_; }
-
-  /// N-LEVEL ACCESSORS (ADC-636). Uniform field access by level index k (0 = coarse, 1 = first patch
-  /// level, ...). The 2-level accessors above alias _level(0)/_level(1) so callers can use either. For
-  /// k >= 2 the fields live in the per-level vectors allocated by the N-level ctor.
-  MultiFab& rhs_level(int k) { return k == 0 ? f_c_ : (k == 1 ? f_f_ : f_lv_[k - 2]); }
-  MultiFab& phi_level(int k) { return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]); }
-  const MultiFab& phi_level(int k) const {
-    return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]);
-  }
-  MultiFab& eps_level(int k) { return k == 0 ? eps_c_ : (k == 1 ? eps_f_ : eps_lv_[k - 2]); }
-  MultiFab& eps_y_level(int k) {
-    return k == 0 ? eps_y_c_ : (k == 1 ? eps_y_f_ : eps_y_lv_[k - 2]);
-  }
-  void use_anisotropic_coefficient(bool value) {
-    has_eps_y_ = value;
-    has_eps_ = has_eps_ || value;
-  }
-  MultiFab& a_xy_level(int k) { return k == 0 ? axy_c_ : (k == 1 ? axy_f_ : axy_lv_[k - 2]); }
-  MultiFab& a_yx_level(int k) { return k == 0 ? ayx_c_ : (k == 1 ? ayx_f_ : ayx_lv_[k - 2]); }
-  /// Geometry of level k (k == 0 coarse, k == 1 fine, k >= 2 refined 2^k over the coarse).
-  const Geometry& geom_level(int k) const {
-    return k == 0 ? geom_c_ : (k == 1 ? geom_f_ : geom_lv_[k - 2]);
-  }
-
-  void set_verbose(bool v) { verbose_ = v; }
-  const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
-  void reset_diagnostics() { diagnostics_.clear(); }
-  /// true: iterate the FAC two-way coupling (C-F flux correction + coarse correction). false:
-  /// ONE-WAY path (coarse solve + fine solve with bilinear C-F ghosts) -- the patch refines locally.
-  void set_two_way(bool v) { two_way_ = v; }
-
-  /// Install the composite-FAC knobs (outer iterations / fine sweeps / mixed relative+absolute
-  /// composite stop / internal coarse GeometricMG rel_tol+cycles / verbose).
-  void set_options(const CompositeFacOptions& o) {
-    options_ = o;
-    verbose_ = o.verbose;
-  }
-  const CompositeFacOptions& options() const { return options_; }
-
-  void set_boundary_kernel(const CompiledFieldBoundaryKernel& kernel,
-                           const FieldBoundaryExecutionContext& context = {}) {
-    kernel.validate();
-    boundary_kernel_ = kernel;
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
-    boundary_level_contexts_.assign(static_cast<std::size_t>(n_levels_), {});
-    boundary_level_context_present_.assign(static_cast<std::size_t>(n_levels_), false);
-    pending_boundary_level_contexts_.assign(static_cast<std::size_t>(n_levels_), {});
-    pending_boundary_level_context_present_.assign(static_cast<std::size_t>(n_levels_), false);
-    has_level_qualified_boundary_contexts_ = false;
-    has_pending_level_qualified_boundary_contexts_ = false;
-    level_qualified_boundary_contexts_required_ = false;
-    has_boundary_kernel_ = true;
-    mg_.set_boundary_kernel(boundary_kernel_, boundary_context_);
-    if (fully_refined_solver_)
-      fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
-  }
-
-  void set_boundary_context(const FieldBoundaryExecutionContext& context) {
-    if (!has_boundary_kernel_)
-      throw std::runtime_error("CompositeFacPoisson boundary context has no installed kernel");
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
-    if (!boundary_kernel_.observes_iteration)
-      boundary_context_.point.iteration = 0;
-    std::fill(boundary_level_contexts_.begin(), boundary_level_contexts_.end(),
-              FieldBoundaryExecutionContext{});
-    std::fill(boundary_level_context_present_.begin(), boundary_level_context_present_.end(),
-              false);
-    reset_pending_boundary_contexts_();
-    has_level_qualified_boundary_contexts_ = false;
-    level_qualified_boundary_contexts_required_ = false;
-    mg_.set_boundary_context(boundary_context_);
-    if (fully_refined_solver_)
-      fully_refined_solver_->set_boundary_context(boundary_context_);
-  }
-
-  /// Install the exact state/field dependency carrier for one physical AMR level. Calling this seam
-  /// opts the composite solve into a fail-closed level-qualified contract: every materialized level
-  /// must be installed before solve(), even when only the coarse or fully refined physical boundary
-  /// is active for a particular hierarchy shape.
-  void set_boundary_context_at_level(int level, const FieldBoundaryExecutionContext& context) {
-    const long minimum_level = all_reduce_min(static_cast<long>(level));
-    const long maximum_level = all_reduce_max(static_cast<long>(level));
-    const long minimum_level_count = all_reduce_min(static_cast<long>(n_levels_));
-    const long maximum_level_count = all_reduce_max(static_cast<long>(n_levels_));
-    long preflight_error = 0;
-    if (!has_boundary_kernel_)
-      preflight_error = 1;
-    if (level < 0 || level >= n_levels_)
-      preflight_error = std::max(preflight_error, 2L);
-    if (minimum_level != maximum_level)
-      preflight_error = std::max(preflight_error, 3L);
-    if (minimum_level_count != maximum_level_count)
-      preflight_error = std::max(preflight_error, 4L);
-    preflight_error = all_reduce_max(preflight_error);
-    if (preflight_error != 0) {
-      reset_pending_boundary_contexts_();
-      if (preflight_error == 1)
-        throw std::runtime_error(
-            "CompositeFacPoisson level boundary context has no installed kernel collectively");
-      if (preflight_error == 2)
-        throw std::out_of_range(
-            "CompositeFacPoisson boundary context level is outside the prepared hierarchy "
-            "collectively");
-      if (preflight_error == 4)
-        throw std::logic_error(
-            "CompositeFacPoisson prepared hierarchy depth differs between communicator ranks");
-      throw std::invalid_argument(
-          "CompositeFacPoisson boundary context level differs between communicator ranks");
-    }
-
-    level_qualified_boundary_contexts_required_ = true;
-    long validation_error = all_reduce_max(validate_level_boundary_context_local_(level, context));
-    if (validation_error != 0) {
-      reset_pending_boundary_contexts_();
-      throw std::invalid_argument(
-          "CompositeFacPoisson rejected an invalid level-qualified boundary carrier collectively "
-          "(code " +
-          std::to_string(validation_error) + ")");
-    }
-
-    FieldBoundaryExecutionContext staged = context;
-    staged.failure = &boundary_failure_;
-    // The level argument is the prepared hierarchy authority.  Callers may carry an unqualified
-    // authoring baseline (including the default level zero) while materializing the same boundary
-    // plan on every level; never let that baseline leak into a level-qualified residual/JVP.
-    staged.point.level = level;
-    if (!boundary_kernel_.observes_iteration)
-      staged.point.iteration = 0;
+  CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
+                      Real reaction = Real(0))
+      : options_(options), reaction_(reaction) {
+    std::exception_ptr validation_error;
     try {
-      require_exact_level_boundary_context_contract_(level, staged);
+      detail::validate_fac_options(options_);
+      if (!std::isfinite(static_cast<double>(reaction_)) || reaction_ < Real(0))
+        throw std::invalid_argument("composite FAC reaction must be finite and non-negative");
+      validate_request_(request);
     } catch (...) {
-      reset_pending_boundary_contexts_();
-      throw;
+      validation_error = std::current_exception();
     }
-    pending_boundary_level_contexts_[static_cast<std::size_t>(level)] = staged;
-    pending_boundary_level_context_present_[static_cast<std::size_t>(level)] = true;
-    has_pending_level_qualified_boundary_contexts_ = true;
-
-    bool candidate_complete = true;
-    long pending_mask_divergence = 0;
-    for (bool present : pending_boundary_level_context_present_) {
-      candidate_complete = candidate_complete && present;
-      const long minimum_present = all_reduce_min(present ? 1L : 0L);
-      const long maximum_present = all_reduce_max(present ? 1L : 0L);
-      if (minimum_present != maximum_present)
-        pending_mask_divergence = 1;
-    }
-    if (pending_mask_divergence != 0) {
-      reset_pending_boundary_contexts_();
-      throw std::logic_error(
-          "CompositeFacPoisson pending boundary carrier mask differs between communicator ranks");
-    }
-    if (!candidate_complete)
-      return;
-
-    long candidate_error = 0;
-    for (int candidate_level = 0; candidate_level < n_levels_; ++candidate_level)
-      candidate_error = std::max(
-          candidate_error,
-          validate_level_boundary_context_local_(
-              candidate_level,
-              pending_boundary_level_contexts_[static_cast<std::size_t>(candidate_level)]));
-    const long unsupported_geometry = unsupported_level_boundary_geometry_local_();
-    if (unsupported_geometry != 0)
-      candidate_error = std::max(candidate_error, 100L + unsupported_geometry);
-    candidate_error = all_reduce_max(candidate_error);
-    if (candidate_error != 0) {
-      reset_pending_boundary_contexts_();
-      throw std::invalid_argument(
-          "CompositeFacPoisson rejected the complete level-qualified boundary carrier batch "
-          "collectively (code " +
-          std::to_string(candidate_error) + ")");
+    if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+      if (n_ranks() == 1 && validation_error)
+        std::rethrow_exception(validation_error);
+      throw std::runtime_error("composite FAC preparation failed collectively");
     }
 
-    const FieldBoundaryExecutionContext previous_coarse =
-        has_level_qualified_boundary_contexts_ ? boundary_context_for_level_(0) : boundary_context_;
-    const FieldBoundaryExecutionContext previous_finest =
-        has_level_qualified_boundary_contexts_ ? boundary_context_for_level_(n_levels_ - 1)
-                                               : boundary_context_;
-    bool finest_refresh_attempted = false;
-    bool coarse_refresh_attempted = false;
-    try {
-      // Refresh the two solvers only after every carrier has passed one immutable batch preflight.
-      // Mark a refresh before entering its setter: a late nonlinear-cache failure can occur after
-      // the setter has committed the new context, so rollback must not depend on normal return.
-      if (fully_refined_solver_) {
-        finest_refresh_attempted = true;
-        fully_refined_solver_->set_boundary_context(
-            pending_boundary_level_contexts_[static_cast<std::size_t>(n_levels_ - 1)]);
-      }
-      coarse_refresh_attempted = true;
-      mg_.set_boundary_context(pending_boundary_level_contexts_.front());
-    } catch (...) {
-      const std::exception_ptr refresh_error = std::current_exception();
-      try {
-        if (coarse_refresh_attempted)
-          mg_.set_boundary_context(previous_coarse);
-        if (finest_refresh_attempted)
-          fully_refined_solver_->set_boundary_context(previous_finest);
-      } catch (...) {
-        std::terminate();
-      }
-      reset_pending_boundary_contexts_();
-      std::rethrow_exception(refresh_error);
-    }
-
-    boundary_level_contexts_.swap(pending_boundary_level_contexts_);
-    boundary_level_context_present_.swap(pending_boundary_level_context_present_);
-    boundary_context_ = boundary_level_contexts_.front();
-    has_level_qualified_boundary_contexts_ = true;
-    reset_pending_boundary_contexts_();
+    build_levels_(request);
+    build_connections_(request.ratios);
+    build_coarse_solver_(request.levels.front());
+    exact_prepared_contract_ = detail::fac_build_contract(request, options_, reaction_);
   }
 
-  void set_field_nonlinear_options(const FieldNewtonOptions& options) {
+  CompositeFacPoisson(const CompositeFacPoisson&) = delete;
+  CompositeFacPoisson& operator=(const CompositeFacPoisson&) = delete;
+  CompositeFacPoisson(CompositeFacPoisson&&) noexcept = default;
+  CompositeFacPoisson& operator=(CompositeFacPoisson&&) noexcept = default;
+
+  static constexpr CompositeFacCapabilities capabilities() noexcept { return {}; }
+  static constexpr EllipticOperatorIdentity operator_identity() noexcept {
+    return {"pops.elliptic.composite-fac.nd", 2};
+  }
+  static std::string expected_prepared_contract(const request_type& request,
+                                                CompositeFacOptions options = {},
+                                                Real reaction = Real(0)) {
+    detail::validate_fac_options(options);
+    if (!std::isfinite(static_cast<double>(reaction)) || reaction < Real(0))
+      throw std::invalid_argument("composite FAC reaction must be finite and non-negative");
+    return detail::fac_build_contract(request, options, reaction);
+  }
+
+  std::string_view exact_prepared_contract() const noexcept { return exact_prepared_contract_; }
+  int n_levels() const noexcept { return static_cast<int>(levels_.size()); }
+  int maximum_iterations() const noexcept {
+    if (newton_workspace_)
+      return newton_workspace_->options().max_iterations;
+    if (linear_boundary_workspace_)
+      return linear_boundary_workspace_->options().max_iterations;
+    return options_.max_iters;
+  }
+  field_type& rhs_level(int level) { return levels_.at(static_cast<std::size_t>(level))->rhs; }
+  const field_type& rhs_level(int level) const {
+    return levels_.at(static_cast<std::size_t>(level))->rhs;
+  }
+  field_type& phi_level(int level) { return levels_.at(static_cast<std::size_t>(level))->phi; }
+  const field_type& phi_level(int level) const {
+    return levels_.at(static_cast<std::size_t>(level))->phi;
+  }
+  const SolveReport& last_solve_report() const noexcept { return last_report_; }
+
+  void install_newton(FieldNewtonOptions options) {
+    if (newton_workspace_)
+      throw std::logic_error("composite FAC Newton authority is already installed");
     validate_field_newton_options(options);
-    field_nonlinear_options_ = options;
-    has_field_nonlinear_options_ = true;
-    if (fully_refined_solver_)
-      fully_refined_solver_->prepare_boundary_newton(options);
+    const auto layouts = newton_layouts_();
+    const auto masks = active_masks_();
+    const auto measures = level_cell_measures_();
+    newton_workspace_.emplace(layouts, masks, measures, options);
+    linear_boundary_workspace_.reset();
+    prepare_dynamic_views_();
   }
 
-  const SolveReport& last_solve_report() const { return last_solve_report_; }
-
-  /// Solves the composite system with the installed mixed-tolerance options. Failed linear solves do
-  /// not publish a value through this throwing convenience overload; callers that consume a
-  /// SolveReport directly use the explicit overload below.
-  Real solve() {
-    if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
-      if (!has_field_nonlinear_options_)
-        throw std::runtime_error(
-            "iterate-dependent composite field boundary requires a nonlinear/JVP solve plan");
-      last_solve_report_ = solve_boundary_fas(field_nonlinear_options_);
-      if (!last_solve_report_.solved())
-        throw std::runtime_error(std::string("field nonlinear solve failed: ") +
-                                 last_solve_report_.status_name());
-      return last_residual_;
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
+    if (boundary_kernel_)
+      throw std::logic_error("composite FAC boundary kernel is already installed");
+    kernel.validate();
+    boundary_kernel_ = std::move(kernel);
+    boundary_contexts_.clear();
+    if (!newton_workspace_ && !boundary_kernel_->observes_iteration) {
+      const FieldNewtonOptions options = linear_boundary_newton_options_();
+      const auto layouts = newton_layouts_();
+      const auto masks = active_masks_();
+      const auto measures = level_cell_measures_();
+      linear_boundary_workspace_.emplace(layouts, masks, measures, options);
     }
-    const Real result =
-        solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
-    if (!last_solve_report_.solved()) {
-      throw std::runtime_error(std::string("field composite solve failed: ") +
-                               last_solve_report_.status_name());
+    prepare_dynamic_views_();
+  }
+
+  void set_boundary_contexts(std::vector<FieldBoundaryExecutionContext<Dim>> contexts) {
+    if (!boundary_kernel_)
+      throw std::logic_error("composite FAC has no compiled dynamic boundary kernel");
+    if (contexts.size() != levels_.size())
+      throw std::invalid_argument(
+          "composite FAC requires one dynamic boundary context per live AMR level");
+    for (const FieldBoundaryExecutionContext<Dim>& context : contexts)
+      if (context.failure == nullptr)
+        throw std::invalid_argument(
+            "composite FAC dynamic boundary requires fallible execution channels");
+    boundary_contexts_ = std::move(contexts);
+  }
+
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         std::vector<PreparedVectorDistribution<Dim>> distributions) {
+    if (nullspace_workspace_)
+      throw std::logic_error("composite FAC nullspace authority is already installed");
+    if (distributions.size() != levels_.size())
+      throw std::invalid_argument(
+          "composite FAC nullspace authority requires one distribution per hierarchy level");
+    if (singular_() != !plan.empty())
+      throw std::invalid_argument(
+          "composite FAC nullspace plan disagrees with the prepared operator kernel");
+
+    std::vector<const MultiFab<Dim>*> rhs_layouts;
+    std::vector<MultiFab<Dim>*> candidates;
+    rhs_layouts.reserve(levels_.size());
+    candidates.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      rhs_layouts.push_back(&level->rhs);
+      candidates.push_back(&level->phi);
+    }
+    auto workspace =
+        std::make_unique<FieldNullspaceWorkspace<Dim>>(plan, rhs_layouts, distributions);
+    FieldNullspacePlan<Dim> coarse_plan = coarse_correction_plan_(plan);
+    coarse_solver_->install_nullspace(std::move(coarse_plan), distributions.front());
+
+    nullspace_rhs_ = std::move(rhs_layouts);
+    nullspace_candidates_ = std::move(candidates);
+    nullspace_workspace_ = std::move(workspace);
+  }
+
+  SolveReport solve() {
+    if (!nullspace_workspace_)
+      throw std::logic_error("composite FAC solve has no prepared nullspace authority");
+    try {
+      nullspace_workspace_->require_compatible(nullspace_rhs_);
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+      last_report_ = report;
+      return last_report_;
+    }
+    nullspace_workspace_->apply_gauge(nullspace_candidates_);
+
+    if (newton_workspace_ || boundary_kernel_)
+      return solve_dynamic_();
+
+    compute_composite_residual_();
+    const Real reference = composite_residual_norm_();
+    SolveReport report;
+    report.evaluations = 1;
+    if (!std::isfinite(static_cast<double>(reference))) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "composite_fac_non_finite_initial_residual");
+      last_report_ = report;
+      return last_report_;
+    }
+    report.reference_residual_norm = reference;
+    report.residual_norm = reference;
+    report.rel_residual = reference > Real(0) ? Real(1) : Real(0);
+    const Real stop = std::max(options_.abs_tol, options_.rel_tol * reference);
+    if (reference <= stop) {
+      fill_all_ghosts_();
+      report.mark_solved("composite_fac_initial_residual");
+      last_report_ = report;
+      return last_report_;
+    }
+
+    const int pre = (options_.fine_sweeps + 1) / 2;
+    const int post = options_.fine_sweeps / 2;
+    for (int iteration = 0; iteration < options_.max_iters; ++iteration) {
+      for (std::size_t level = 1; level < levels_.size(); ++level)
+        smooth_level_(level, pre);
+
+      compute_composite_residual_();
+      restrict_residual_tower_();
+      coarse_solver_->phi().set_val(Real(0));
+      copy_scalar_valid(levels_.front()->residual, coarse_solver_->rhs());
+      const SolveReport coarse_report = coarse_solver_->solve();
+      report.evaluations += coarse_report.evaluations;
+      if (!coarse_report.solved()) {
+        report.iters = iteration;
+        report.residual_norm = composite_residual_norm_();
+        report.rel_residual = report.residual_norm / reference;
+        report.mark_failed(coarse_report.status, SolveAction::kFailRun,
+                           "composite_fac_coarse_correction_failed");
+        last_report_ = report;
+        return last_report_;
+      }
+
+      copy_scalar_valid(coarse_solver_->phi(), levels_.front()->correction);
+      report.step_norm = global_norm_inf_(levels_.front()->correction);
+      add_uncovered_(*levels_.front(), levels_.front()->correction);
+      prolong_correction_tower_();
+      for (std::size_t level = 1; level < levels_.size(); ++level)
+        smooth_level_(level, post);
+      average_solution_down_();
+      nullspace_workspace_->apply_gauge(nullspace_candidates_);
+
+      compute_composite_residual_();
+      ++report.evaluations;
+      report.iters = iteration + 1;
+      report.residual_norm = composite_residual_norm_();
+      report.rel_residual = report.residual_norm / reference;
+      if (!std::isfinite(static_cast<double>(report.residual_norm))) {
+        report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                           "composite_fac_non_finite_iteration");
+        last_report_ = report;
+        return last_report_;
+      }
+      if (report.residual_norm <= stop) {
+        fill_all_ghosts_();
+        report.mark_solved("composite_fac_converged");
+        last_report_ = report;
+        return last_report_;
+      }
+    }
+
+    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun,
+                       "composite_fac_iteration_limit");
+    last_report_ = report;
+    return last_report_;
+  }
+
+ private:
+  struct Level {
+    Geometry<Dim> geometry;
+    PhysicalBoundaryConditions<Dim> boundary;
+    field_type phi;
+    field_type rhs;
+    field_type residual;
+    field_type scratch;
+    field_type correction;
+    field_type residual_operator_view;
+    field_type direction_operator_view;
+    field_type covered;
+    field_type active;
+    HaloSchedule<Dim> halo_schedule;
+    PreparedPhysicalBoundary<Dim> physical_boundary;
+    PreparedPhysicalBoundary<Dim> homogeneous_physical_boundary;
+
+    Level(const EllipticBuildRequest<Dim>& request, bool full_domain)
+        : geometry(request.geometry),
+          boundary(request.boundary),
+          phi(request.boxes, request.distribution, request.local_rank, 1,
+              detail::unit_ghosts<Dim>()),
+          rhs(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          residual(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          scratch(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          correction(request.boxes, request.distribution, request.local_rank, 1,
+                     detail::unit_ghosts<Dim>()),
+          residual_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                 detail::unit_ghosts<Dim>()),
+          direction_operator_view(request.boxes, request.distribution, request.local_rank, 1,
+                                  detail::unit_ghosts<Dim>()),
+          covered(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          active(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
+          halo_schedule(prepare_halo_schedule(
+              phi, geometry.domain(), boundary.topology(),
+              full_domain ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level,
+              detail::exact_halo_budget(request.boxes, geometry.domain()))),
+          physical_boundary(prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
+                                                      boundary,
+                                                      detail::exact_boundary_budget<Dim>())),
+          homogeneous_physical_boundary(
+              prepare_physical_boundary(geometry.domain(), detail::unit_ghosts<Dim>(),
+                                        detail::boundary_for_geometry(boundary, geometry, true),
+                                        detail::exact_boundary_budget<Dim>())) {
+      if (halo_schedule.has_remote_jobs())
+        throw std::invalid_argument(
+            "composite FAC distributed halo transport is not a registered capability");
+      phi.set_val(Real(0));
+      rhs.set_val(Real(0));
+      residual.set_val(Real(0));
+      scratch.set_val(Real(0));
+      correction.set_val(Real(0));
+      residual_operator_view.set_val(Real(0));
+      direction_operator_view.set_val(Real(0));
+      covered.set_val(Real(0));
+      active.set_val(Real(1));
+    }
+  };
+
+  struct Connection {
+    ::pops::amr::RefinementRatio<Dim> ratio;
+    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_phi;
+    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_residual_view;
+    std::vector<fac_detail::InjectionTransfer<Dim>> coarse_fine_direction_view;
+    std::vector<fac_detail::CellTransfer<Dim>> residual_restriction;
+    std::vector<fac_detail::CellTransfer<Dim>> solution_restriction;
+    std::vector<fac_detail::CellTransfer<Dim>> direction_restriction;
+    std::vector<fac_detail::CellTransfer<Dim>> correction_prolongation;
+  };
+
+  static FieldNullspacePlan<Dim> coarse_correction_plan_(
+      const FieldNullspacePlan<Dim>& hierarchy_plan) {
+    if (hierarchy_plan.empty())
+      return {};
+    FieldNullspacePlan<Dim> result;
+    result.identity = hierarchy_plan.identity + ":fac-coarse-correction";
+    result.layout_identity = hierarchy_plan.layout_identity + ":fac-coarse-correction";
+    result.bases.reserve(hierarchy_plan.bases.size());
+    result.gauges.reserve(hierarchy_plan.bases.size());
+    for (const FieldNullspaceBasis<Dim>& source : hierarchy_plan.bases) {
+      FieldNullspaceBasis<Dim> basis;
+      basis.identity = source.identity;
+      basis.provenance = source.provenance;
+      basis.recipe_identity = source.recipe_identity + ":fac-coarse-correction";
+      basis.field_component = source.field_component;
+      if (!source.masks.empty()) {
+        if (!source.masks.front())
+          throw std::invalid_argument(
+              "composite FAC coarse nullspace basis has no level-zero mask");
+        basis.masks.push_back(source.masks.front());
+      }
+      basis.cell_measure.push_back(source.measure(0));
+      result.gauges.push_back(FieldGaugeConstraint{basis.identity, Real(0)});
+      result.bases.push_back(std::move(basis));
     }
     return result;
   }
 
-  /// Solves the composite system. @return the final composite infinity-norm residual.
-  /// Stops at max(@p rel_tol * ||R(0)||inf, @p abs_tol), where R(0) is evaluated through the exact
-  /// composite operator on every active level with the installed BCs, masks and coefficients. The
-  /// report denominator is ||R(0)||inf for every nonzero forcing, however small, and one only when it
-  /// is exactly zero. @p max_iters counts FAC two-way iterations; @p fine_sweeps is per fine solve.
-  ///
-  /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the legacy
-  /// arithmetic body (solve_two_level_legacy_ below) -- same arithmetic, hence same bits, gated by
-  /// the golden. Every
-  /// genuinely new shape (N > 2 levels, adjacent fine patches, or n_ranks() > 1) routes to the general
-  /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
-  /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
-  Real solve(int max_iters, int fine_sweeps, Real rel_tol, Real abs_tol) {
-    if (max_iters < 0 || fine_sweeps < 0)
-      throw std::invalid_argument("CompositeFacPoisson iteration budgets must be nonnegative");
-    if (rel_tol < Real(0) || !std::isfinite(static_cast<double>(rel_tol)))
-      throw std::invalid_argument("CompositeFacPoisson rel_tol must be finite and nonnegative");
-    if (abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
-      throw std::invalid_argument("CompositeFacPoisson abs_tol must be finite and nonnegative");
-
-    require_complete_level_boundary_contexts_();
-    require_supported_level_boundary_geometry_();
-    last_solve_report_ = {};
-    diagnostics_.clear();
-    if (has_boundary_kernel_ && !fully_refined_solver_)
-      throw std::runtime_error(
-          "CompositeFacPoisson dynamic boundary requires a fully refined hierarchy; "
-          "coarse/fine FAC corrections have no level-qualified homogeneous/JVP boundary operator");
-    if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
-      throw std::runtime_error(
-          "CompositeFacPoisson iterate-dependent boundary requires solve_boundary_fas");
-    if (fully_refined_solver_)
-      return solve_fully_refined_hierarchy_(max_iters, rel_tol, abs_tol);
-    const bool fallible_linear_boundary =
-        has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
-    if (fallible_linear_boundary)
-      boundary_failure_.reset();
-    const bool general = force_general_ || n_levels_ != 2 || adjacent_ || n_ranks() != 1;
-    if (general)
-      setup_level_coeffs_();
-    else
-      setup_two_level_coeffs_();
-
-    const Real forcing_norm = exact_zero_composite_residual_(general);
-    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error("composite field boundary evaluation failed at face " +
-                               std::to_string(boundary_failure_.face) + " cell (" +
-                               std::to_string(boundary_failure_.i) + "," +
-                               std::to_string(boundary_failure_.j) + ")");
-    if (!std::isfinite(static_cast<double>(forcing_norm)))
-      return mark_invalid_linear_solve_(0);
-
-    const Real report_denominator = forcing_norm == Real(0) ? Real(1) : forcing_norm;
-    const Real relative_stop = rel_tol * forcing_norm;
-    if (!std::isfinite(static_cast<double>(relative_stop)))
-      return mark_invalid_linear_solve_(0);
-    const Real stop = relative_stop > abs_tol ? relative_stop : abs_tol;
-
-    // Respect a converged incoming composite iterate without mutating its valid cells. This matters
-    // for repeated solves and for caller-provided level guesses; the denominator remains R(0), not the
-    // warm-start defect.
-    if (fallible_linear_boundary)
-      boundary_failure_.reset();
-    const Real incoming_residual = composite_residual_norm_(general, /*prepare_cf=*/true);
-    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error("composite field boundary evaluation failed at face " +
-                               std::to_string(boundary_failure_.face) + " cell (" +
-                               std::to_string(boundary_failure_.i) + "," +
-                               std::to_string(boundary_failure_.j) + ")");
-    if (!std::isfinite(static_cast<double>(incoming_residual)))
-      return mark_invalid_linear_solve_(0);
-    record_residual(-1, incoming_residual);
-    if (incoming_residual <= stop) {
-      last_residual_ = incoming_residual;
-      last_solve_report_.iters = 0;
-      last_solve_report_.rel_residual = incoming_residual / report_denominator;
-      if (!std::isfinite(static_cast<double>(last_solve_report_.rel_residual)))
-        return mark_invalid_linear_solve_(0);
-      last_solve_report_.mark_solved();
-      return incoming_residual;
-    }
-
-    if (fallible_linear_boundary)
-      boundary_failure_.reset();
-    const LinearSolveResult outcome = general
-                                          ? solve_composite_nlevel_(max_iters, fine_sweeps, stop)
-                                          : solve_two_level_legacy_(max_iters, fine_sweeps, stop);
-    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
-      throw std::runtime_error("composite field boundary evaluation failed at face " +
-                               std::to_string(boundary_failure_.face) + " cell (" +
-                               std::to_string(boundary_failure_.i) + "," +
-                               std::to_string(boundary_failure_.j) + ")");
-    if (!std::isfinite(static_cast<double>(outcome.residual)))
-      return mark_invalid_linear_solve_(outcome.iterations);
-
-    last_residual_ = outcome.residual;
-    last_solve_report_.iters = outcome.iterations;
-    last_solve_report_.rel_residual = outcome.residual / report_denominator;
-    if (!std::isfinite(static_cast<double>(last_solve_report_.rel_residual)))
-      return mark_invalid_linear_solve_(outcome.iterations);
-    if (outcome.residual <= stop)
-      last_solve_report_.mark_solved();
-    else
-      last_solve_report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    return outcome.residual;
-  }
-
-  /// TEST HOOK (ADC-636): route a 2-level non-adjacent mono-rank input through the GENERAL path so the
-  /// cross-check test can assert general == legacy (array_equal). Never set in production; the
-  /// shipping 2-level path always dispatches to the verbatim legacy body.
-  void force_general_path_for_test(bool v) { force_general_ = v; }
-
- private:
-  struct LinearSolveResult {
-    Real residual;
-    int iterations;
-  };
-
-  void setup_two_level_coeffs_() {
-    if (has_eps_) {
-      device_fence();
-      fill_ghosts(eps_c_, geom_c_.domain, coeff_bc(bc_));
-      fill_cf_coarse_to_fine(eps_c_, eps_f_);
-      if (has_eps_y_) {
-        fill_ghosts(eps_y_c_, geom_c_.domain, coeff_bc(bc_));
-        fill_cf_coarse_to_fine(eps_y_c_, eps_y_f_);
-        mg_.set_epsilon_anisotropic(eps_c_, eps_y_c_);
-      } else {
-        mg_.set_epsilon(eps_c_);
-      }
-    }
-    if (has_cross_) {
-      device_fence();
-      fill_ghosts(axy_c_, geom_c_.domain, coeff_bc(bc_));
-      fill_ghosts(ayx_c_, geom_c_.domain, coeff_bc(bc_));
-      fill_cf_coarse_to_fine(axy_c_, axy_f_);
-      fill_cf_coarse_to_fine(ayx_c_, ayx_f_);
-      mg_.set_cross_terms(axy_c_, ayx_c_);
-    }
-  }
-
-  Real composite_residual_norm_(bool general, bool prepare_cf) {
-    // FAC's scientific residual is the level-0 composite defect: the uncovered coarse residual plus
-    // the conservative flux replacement from every child interface.  This is the defect the FAC
-    // correction actually solves.  Fine-level equations are relaxation subproblems; folding their
-    // transient post-smoothing defects into the outer stop would change the algorithm into a
-    // different (and non-contractive) iteration after the composite defect has converged.
-    // A zero-probe or an arbitrary incoming iterate needs its derived C/F ghosts prepared. During
-    // FAC itself, refresh_fine()/relax_level_() have already frozen those ghosts before smoothing;
-    // rebuilding them after average-down would change the interface flux seen by the correction and
-    // turns the historical contractive iteration into a divergent one.
-    if (prepare_cf) {
-      fill_ghosts(phi_c_, geom_c_.domain, bc_);
-      if (general) {
-        for (int level = 1; level < n_levels_; ++level)
-          fill_cf_phi_(level);
-      } else {
-        fill_cf_ghosts();
-      }
-    }
-    const Real norm = general ? composite_residual_(0) : composite_coarse_residual();
-    return std::isfinite(static_cast<double>(norm)) ? norm : std::numeric_limits<Real>::infinity();
-  }
-
-  static void copy_all_cells_(MultiFab& dst, const MultiFab& src) {
-    for (int li = 0; li < dst.local_size(); ++li) {
-      Array4 d = dst.fab(li).array();
-      const ConstArray4 s = src.fab(li).const_array();
-      const Box2D grown = dst.fab(li).grown_box();
-      for (int comp = 0; comp < dst.ncomp(); ++comp)
-        for_each_cell(grown, detail::FacCopyAllKernel{d, s, comp});
-    }
-  }
-
-  static void set_all_cells_(MultiFab& dst, Real value) {
-    for (int li = 0; li < dst.local_size(); ++li) {
-      Array4 d = dst.fab(li).array();
-      const Box2D grown = dst.fab(li).grown_box();
-      for (int comp = 0; comp < dst.ncomp(); ++comp)
-        for_each_cell(grown, detail::FacSetAllKernel{d, value, comp});
-    }
-  }
-
-  void initialize_probe_storage_() {
-    phi_probe_snapshot_.clear();
-    phi_probe_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      phi_probe_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-    }
-    boundary_probe_snapshot_ = MultiFab(ba_c_, dm_c_, 1, boundary_view_c_.n_grow());
-  }
-
-  Real exact_zero_composite_residual_(bool general) {
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      copy_all_cells_(phi_probe_snapshot_[static_cast<std::size_t>(level)], phi);
-      set_all_cells_(phi, Real(0));
-    }
-    if (has_boundary_kernel_)
-      copy_all_cells_(boundary_probe_snapshot_, boundary_view_c_);
-    auto restore = [&]() {
-      for (int level = 0; level < n_levels_; ++level)
-        copy_all_cells_(phi_level(level), phi_probe_snapshot_[static_cast<std::size_t>(level)]);
-      if (has_boundary_kernel_)
-        copy_all_cells_(boundary_view_c_, boundary_probe_snapshot_);
-    };
-    try {
-      const Real norm = composite_residual_norm_(general, /*prepare_cf=*/true);
-      restore();
-      device_fence();
-      return norm;
-    } catch (...) {
-      restore();
-      device_fence();
-      throw;
-    }
-  }
-
-  Real mark_invalid_linear_solve_(int iterations) {
-    last_residual_ = std::numeric_limits<Real>::infinity();
-    last_solve_report_.iters = iterations;
-    last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
-    last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-    return last_residual_;
-  }
-
-  // Internal multigrid solves are fixed-cycle FAC preconditioner/correction applications. Reaching
-  // that cycle budget still provides a usable correction, but every other failed report must stop
-  // before its mutated iterate is copied into the composite hierarchy.
-  void require_usable_fixed_cycle_result_(const GeometricMG& solver, const char* phase) {
-    const SolveReport& report = solver.last_solve_report();
-    if (report.solved() || (report.valid() && report.status == SolveStatus::kIterationLimit))
-      return;
-    last_solve_report_ = report;
-    throw std::runtime_error(std::string("CompositeFacPoisson ") + phase +
-                             " failed: " + report.status_name());
-  }
-
-  /// Historical 2-level FAC arithmetic driver (ADC-636 dispatch). This is the non-regression anchor:
-  /// the 2-level non-adjacent mono-rank path retains the same floating-point operation sequence.
-  LinearSolveResult solve_two_level_legacy_(int max_iters, int fine_sweeps, Real stop) {
-    // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost). ADC-614: the internal coarse
-    // GeometricMG rel_tol / max_cycles come from the installed options (default = kFAC* constants).
-    copy0(mg_.rhs(), f_c_);
-    mg_.phi().set_val(Real(0));
-    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
-    require_usable_fixed_cycle_result_(mg_, "initial coarse solve");
-    copy0(phi_c_, mg_.phi());
-
-    // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).
-    refresh_fine(fine_sweeps);
-
-    diagnostics_.clear();
-    Real rnorm = composite_residual_norm_(/*general=*/false, /*prepare_cf=*/false);
-    record_residual(-1, rnorm);
-    if (!two_way_) {
-      last_residual_ = rnorm;
-      return {rnorm, 0};
-    }
-
-    // 2) FAC two-way iterations: coarse correction (C-F flux) then re-solve fine.
-    int iterations = 0;
-    for (int it = 0; it < max_iters; ++it) {
-      if (!std::isfinite(static_cast<double>(rnorm)) || rnorm <= stop)
-        break;
-      // coarse correction: Lap e_c = r_c (homogeneous Dirichlet), phi_c += e_c (non covered). The
-      // correction solve uses the SAME internal coarse tolerance/cycles as the initial solve (ADC-614).
-      copy0(mg_.rhs(), res_c_);
-      mg_.phi().set_val(Real(0));
-      mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
-      require_usable_fixed_cycle_result_(mg_, "coarse correction solve");
-      add_uncovered(phi_c_, mg_.phi());
-      // re-ghost + re-solve fine on the corrected phi_c.
-      refresh_fine(fine_sweeps);
-      rnorm = composite_residual_norm_(/*general=*/false, /*prepare_cf=*/false);
-      ++iterations;
-      record_residual(it, rnorm);
-    }
-    last_residual_ = rnorm;
-    return {rnorm, iterations};
-  }
-
- public:
-  Real last_residual() const { return last_residual_; }
-
-  /// Nonlinear/JVP route for a hierarchy that is exactly the uniform finest grid. A partially
-  /// refined FAC hierarchy stays fail-closed until its correction operator can homogenize and
-  /// differentiate the physical closure independently at every coarse/fine level.
-  SolveReport solve_boundary_fas(const FieldNewtonOptions& nonlinear) {
-    if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration)
-      return SolveReport::capability_failure();
-    require_complete_level_boundary_contexts_();
-    require_supported_level_boundary_geometry_();
-    validate_field_newton_options(nonlinear);
-    if (!fully_refined_solver_)
-      return SolveReport::capability_failure();
-
-    const int finest = n_levels_ - 1;
-    GeometricMG& solver = *fully_refined_solver_;
-    if (has_eps_) {
-      if (has_eps_y_)
-        solver.set_epsilon_anisotropic(eps_level(finest), eps_y_level(finest));
-      else
-        solver.set_epsilon(eps_level(finest));
-    }
-    if (has_cross_)
-      solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
-    solver.set_boundary_context(boundary_context_for_level_(finest));
-    copy0_(solver.rhs(), rhs_level(finest));
-    copy0_(solver.phi(), phi_level(finest));
-    last_solve_report_ = solver.solve_boundary_newton(nonlinear);
-    device_fence();
-    last_residual_ = last_solve_report_.solved() ? solver.current_residual()
-                                                 : std::numeric_limits<Real>::infinity();
-    record_residual(last_solve_report_.iters, last_residual_);
-    if (last_solve_report_.solved()) {
-      copy0_(phi_level(finest), solver.phi());
-      cascade_avgdown_();
-      device_fence();
-    }
-    return last_solve_report_;
-  }
-
- private:
-  /// dst <- src (component 0, valid cells).
-  void copy0(MultiFab& dst, const MultiFab& src) {
-    device_fence();
-    for (int li = 0; li < dst.local_size(); ++li) {
-      Array4 d = dst.fab(li).array();
-      const ConstArray4 s = src.fab(li).const_array();
-      const Box2D b = dst.box(li);
-      for_each_cell(b, detail::FacCopyAllKernel{d, s, 0});
-    }
-  }
-
-  /// phi_c += e_c on the NON covered cells (the correction does not touch the covered = average_down).
-  void add_uncovered(MultiFab& phi, const MultiFab& e) {
-    const CoverageMaskView coverage = cov_.view();
-    for (int li = 0; li < phi.local_size(); ++li) {
-      Array4 p = phi.fab(li).array();
-      const ConstArray4 ec = e.fab(li).const_array();
-      const Box2D b = phi.box(li);
-      for_each_cell(b, detail::FacLegacyMaskedAddKernel{p, ec, coverage});
-    }
-  }
-
-  /// ADC-636 ctor validation of a level's patch tiling. Refuses only the semantically impossible:
-  /// MISALIGNED patches (not lo-even / hi-odd under ratio 2) and OVERLAPPING same-level patches
-  /// (footprints intersect). Adjacent (edge/corner-touching) patches are ALLOWED and set adjacent_ so
-  /// solve() takes the general path (fill_boundary fine-fine join + uncovered-side flux ownership).
-  void validate_level_patches_(const BoxArray& boxes) {
-    const int N = boxes.size();
-    for (int g = 0; g < N; ++g) {
-      const Box2D& fb = boxes[g];
-      if ((fb.lo[0] % ratio_) != 0 || (fb.lo[1] % ratio_) != 0 || ((fb.hi[0] + 1) % ratio_) != 0 ||
-          ((fb.hi[1] + 1) % ratio_) != 0)
-        throw std::runtime_error(
-            "CompositeFacPoisson: misaligned fine patch (require lo even / hi odd under ratio 2).");
-    }
-    for (int g = 0; g < N; ++g) {
-      const Box2D ag = PatchRange(boxes[g]).box();
-      for (int h = g + 1; h < N; ++h) {
-        const Box2D bh = PatchRange(boxes[h]).box();
-        if (!ag.intersect(bh).empty())
-          throw std::runtime_error(
-              "CompositeFacPoisson: overlapping fine patches (coarse footprints intersect).");
-        // touching (grown-by-one footprints intersect but the footprints themselves do not) = adjacent.
-        if (!ag.grow(1).intersect(bh).empty())
-          adjacent_ = true;
-      }
-    }
-  }
-
-  /// ADC-636 inter-level nesting check (design 4a). Refuses a NON-NESTED patch: a level-(k+1) patch
-  /// whose GROWN level-k footprint is not contained in the covered/footprint region of a single
-  /// level-k patch, so its C/F ghosts have no parent to bilerp. Called by the N-level ctor.
-  void validate_nesting_(const std::vector<BoxArray>& level_boxes) {
-    const int L = n_levels_;
-    for (int k = 1; k + 1 < L; ++k) {
-      // parents = level-k patches (level_boxes[k-1]); children = level-(k+1) patches (level_boxes[k]).
-      const BoxArray& parents = level_boxes[k - 1];
-      const BoxArray& children = level_boxes[k];
-      for (int g = 0; g < children.size(); ++g) {
-        // child footprint on level k = PatchRange(child) grown by one (the C/F ghost ring reads it).
-        const Box2D foot = PatchRange(children[g]).box().grow(1);
-        bool nested = false;
-        for (int p = 0; p < parents.size(); ++p)
-          if (parents[p].contains(foot)) {
-            nested = true;
-            break;
-          }
-        if (!nested)
-          throw std::runtime_error(
-              "CompositeFacPoisson: non-nested fine patch (a level-(k+1) patch grown footprint is "
-              "not contained in a single parent patch; its coarse-fine bilerp has no source).");
-      }
-    }
-  }
-
-  /// Fills the ghost ring of EACH fine patch by bilerp of phi_c (cell-centered C-F Dirichlet).
-  /// Since the patches are separated by at least one coarse cell, the ghost ring of a patch never
-  /// overlaps the valid cells of another -> read from the coarse only (no fine-fine exchange).
-  void fill_cf_ghosts() {
-    const ConstArray4 C = phi_c_.fab(0).const_array();  // replicated mono-box coarse
-    for (int li = 0; li < phi_f_.local_size(); ++li) {
-      Array4 F = phi_f_.fab(li).array();
-      const Box2D vb = phi_f_.box(li);
-      for_each_cell(phi_f_.fab(li).grown_box(),
-                    detail::FacLegacyFillCoarseFineGhostKernel{F, C, vb, ratio_});
-    }
-  }
-
-  /// Fills the ghosts of a fine COEFFICIENT field (@p fine) by bilerp of the coarse field (@p coarse):
-  /// coefficient consistency at the C-F interface (the coefficient face at the patch border mixes the fine
-  /// interior coeff and the injected coarse coeff). Generic (eps, a_xy, a_yx).
-  void fill_cf_coarse_to_fine(const MultiFab& coarse, MultiFab& fine) {
-    const ConstArray4 C = coarse.fab(0).const_array();  // replicated mono-box coarse
-    for (int li = 0; li < fine.local_size(); ++li) {
-      Array4 F = fine.fab(li).array();
-      const Box2D vb = fine.box(li);
-      for_each_cell(fine.fab(li).grown_box(),
-                    detail::FacLegacyFillCoarseFineGhostKernel{F, C, vb, ratio_});
-    }
-  }
-
-  /// Coefficient (eps) BC: periodic preserved, physical border -> zero-gradient (Foextrap), like
-  /// the Schur builder (coeff_bc) -- the coefficient carries no Dirichlet.
-  static BCRec coeff_bc(const BCRec& b) {
-    auto fo = [](BCType t) { return t == BCType::Periodic ? t : BCType::Foextrap; };
-    BCRec c;
-    c.xlo = fo(b.xlo);
-    c.xhi = fo(b.xhi);
-    c.ylo = fo(b.ylo);
-    c.yhi = fo(b.yhi);
-    return c;
-  }
-
-  /// SOR over-relaxation factor ~ optimal for a patch (2/(1+sin(pi/N))) -> O(N) sweeps convergence
-  /// instead of O(N^2) for GS. N = largest side of box @p b (computed per patch in multi-patch).
-  Real sor_omega(const Box2D& b) const {
-    const int N = std::max(b.nx(), b.ny());
-    return Real(2) / (Real(1) + std::sin(Real(kPi_) / Real(N)));
-  }
-
-  /// Re-fills the bilinear C-F ghosts from phi_c then relaxes EACH fine patch (SOR) with FROZEN ghosts.
-  void refresh_fine(int sweeps) {
-    device_fence();
-    fill_ghosts(phi_c_, geom_c_.domain,
-                bc_);  // phi_c physical ghosts (the bilerp reads up to the border)
-    fill_cf_ghosts();
-    fine_sor(sweeps);
-    average_down(phi_f_, phi_c_,
-                 ratio_);  // consistency: coarse covered = fine average (multi-box OK)
-  }
-
-  /// Red-black SOR over EACH fine patch: div(eps grad phi_f)-kappa phi_f=f_f, FROZEN
-  /// ghosts (no re-filling). eps == 1 everywhere (scalar) -> Laplacian, bit-identical to Phase 1.
-  /// The over-relaxation factor is computed PER PATCH (own size). Since the patches are separated, the
-  /// 9-point stencil of a patch never reads the valid cells of another (frozen ghosts only).
-  void fine_sor(int sweeps) {
-    const Real idx2 = Real(1) / (geom_f_.dx() * geom_f_.dx());
-    const Real idy2 = Real(1) / (geom_f_.dy() * geom_f_.dy());
-    const bool he = has_eps_;
-    const bool hc = has_cross_;
-    const Real idx = Real(1) / geom_f_.dx(), idy = Real(1) / geom_f_.dy();  // cross_div: 1/dx, 1/dy
-    for (int li = 0; li < phi_f_.local_size(); ++li) {
-      const Box2D vb = phi_f_.box(li);
-      const Real omega = sor_omega(vb);
-      Array4 P = phi_f_.fab(li).array();
-      const ConstArray4 Pc =
-          phi_f_.fab(li).const_array();  // const view (same memory) for cross stencil
-      const ConstArray4 F = f_f_.fab(li).const_array();
-      const ConstArray4 E = eps_f_.fab(li).const_array();
-      const ConstArray4 EY =
-          has_eps_y_ ? eps_y_f_.fab(li).const_array() : eps_f_.fab(li).const_array();
-      const ConstArray4 AXY = axy_f_.fab(li).const_array();
-      const ConstArray4 AYX = ayx_f_.fab(li).const_array();
-      const int color_count = hc ? 4 : 2;
-      for (int s = 0; s < sweeps; ++s)
-        for (int color = 0; color < color_count; ++color)
-          for_each_cell(
-              vb, detail::FacLegacySorKernel{P, Pc, F, E, EY, AXY, AYX, idx2, idy2, idx, idy, omega,
-                                             has_reaction_ ? reaction_ : Real(0), color, he, hc});
-    }
-  }
-
-  /// Composite coarse residual: r_c = f_c - div(eps grad phi_c) (non covered), 0 (covered), + C-F
-  /// FLUX correction on the cells bordering the patch. @return ||r_c||_inf (NON covered cells).
-  Real composite_coarse_residual() {
-    const FieldBoundaryExecutionContext* boundary_context =
-        has_boundary_kernel_ ? &boundary_context_for_level_(0) : nullptr;
-    MultiFab& operator_view = prepare_field_residual_view(
-        phi_c_, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, geom_c_, bc_,
-        has_boundary_kernel_ ? &boundary_kernel_ : nullptr, boundary_context);
-    // r_c = f_c - div(A grad phi_c) (apply_laplacian reads the already-filled ghosts; eps + cross if active).
-    // The cross terms are read also on the COVERED cells (= fine average after average_down) -> the
-    // 9-point stencil stays consistent at the interface; only the NORMAL flux is explicitly joined C-F
-    // (the cross flux, tangential and small for the Schur step, is carried by the volume stencil).
-    apply_laplacian(operator_view, geom_c_, lap_c_, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
-                    /*kappa=*/nullptr, has_eps_y_ ? &eps_y_c_ : nullptr,
-                    has_cross_ ? &axy_c_ : nullptr, has_cross_ ? &ayx_c_ : nullptr);
-    if (has_reaction_)
-      apply_constant_reaction_(lap_c_, operator_view);
-    Array4 R = res_c_.fab(0).array();
-    const ConstArray4 LAP = lap_c_.fab(0).const_array();
-    const ConstArray4 FC = f_c_.fab(0).const_array();
-    const Box2D b = res_c_.box(0);
-    const CoverageMaskView coverage = cov_.view();
-    for_each_cell(b, detail::FacLegacyMaskedResidualKernel{R, FC, LAP, coverage});
-    if (has_boundary_kernel_)
-      for (int face = 0; face < 4; ++face)
-        boundary_kernel_.add_residual(face, phi_c_, res_c_, geom_c_, *boundary_context);
-
-    // C-F FLUX CORRECTION, PER FINE PATCH. On each coarse cell BORDERING a patch (non covered,
-    // covered neighbor), we REPLACE the contribution of the C-F face in div(eps grad phi_c) by the
-    // FINE contribution (conservative sum of the r fine faces, harmonic face eps): r_c += (coarse
-    // - fine). Since the patches are separated by at least one coarse cell, each border is a TRUE
-    // coarse-fine join; the test !cov_.covered(I, J) defensively skips a bordering cell that would be
-    // covered by ANOTHER patch (impossible under the guard, but robust: a covered bordering
-    // cell is already interior to another patch, its residual stays 0). A cell SEPARATING two
-    // patches (right border of one, left border of the other) gets TWO corrections, one per face: correct.
-    const ConstArray4 PC = phi_c_.fab(0).const_array();
-    const ConstArray4 EC = eps_c_.fab(0).const_array();
-    const ConstArray4 EYC =
-        has_eps_y_ ? eps_y_c_.fab(0).const_array() : eps_c_.fab(0).const_array();
-    const bool he = has_eps_;
-    const Real idx2 = Real(1) / (geom_c_.dx() * geom_c_.dx());
-    const Real idy2 = Real(1) / (geom_c_.dy() * geom_c_.dy());
-    const int r = ratio_;
-    for (int g = 0; g < phi_f_.local_size(); ++g) {
-      const ConstArray4 PF = phi_f_.fab(g).const_array();
-      const ConstArray4 EF = eps_f_.fab(g).const_array();
-      const ConstArray4 EYF =
-          has_eps_y_ ? eps_y_f_.fab(g).const_array() : eps_f_.fab(g).const_array();
-      for_each_cell(patch_coarse_[g].grow(1),
-                    detail::FacLegacyFluxCorrectionKernel{R, PC, EC, EYC, PF, EF, EYF, coverage,
-                                                          patch_coarse_[g], idx2, idy2, r, he});
-    }
-
-    // inf norm of the residual over the NON covered cells.
-    return reduce_max_cell(
-        b, detail::FacLegacyMaskedNormKernel{res_c_.fab(0).const_array(), coverage});
-  }
-
-  void record_residual(int iteration, Real residual) {
-    if (!verbose_)
-      return;
-    (void)diagnostics_.try_record("elliptic.fac.residual", "CompositeFacPoisson", "info",
-                                  iteration < 0 ? "initial composite hierarchy residual"
-                                                : "FAC iteration composite hierarchy residual",
-                                  iteration, static_cast<double>(residual));
-  }
-
-  Geometry geom_c_, geom_f_;
-  BoxArray ba_c_;
-  DistributionMapping dm_c_;
-  BCRec bc_;
-  int ratio_;
-  BoxArray ba_f_;
-  DistributionMapping dm_f_;
-  GeometricMG mg_;  ///< coarse solver (initial + corrections), homogeneous Dirichlet
-  MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, lap_c_, lap_f_, boundary_view_c_;
-  MultiFab eps_c_, eps_f_;                  ///< x-normal diagonal coefficient per level
-  MultiFab eps_y_c_, eps_y_f_;              ///< optional y-normal diagonal coefficient per level
-  MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< cross terms per level (full tensor, Schur B_z!=0)
-  std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
-  CoverageMask cov_;
-  Real last_residual_ = 0;
-  RuntimeDiagnosticsReport diagnostics_ =
-      make_runtime_diagnostics_report("pops.numerics.elliptic.composite_fac_poisson");
-  bool has_eps_ = false;    ///< true: div(eps grad phi) operator; false: scalar Laplacian (Phase 1)
-  bool has_eps_y_ = false;  ///< true: y faces use eps_y; false: isotropic y faces reuse eps
-  bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
-  bool has_reaction_ = false;  ///< true: constant Helmholtz term -reaction_*phi on every level
-  Real reaction_ = Real(0);
-  bool has_boundary_kernel_ = false;
-  CompiledFieldBoundaryKernel boundary_kernel_{};
-  FieldBoundaryExecutionContext boundary_context_{};
-  std::vector<FieldBoundaryExecutionContext> boundary_level_contexts_;
-  std::vector<bool> boundary_level_context_present_;
-  std::vector<FieldBoundaryExecutionContext> pending_boundary_level_contexts_;
-  std::vector<bool> pending_boundary_level_context_present_;
-  bool has_level_qualified_boundary_contexts_ = false;
-  bool has_pending_level_qualified_boundary_contexts_ = false;
-  bool level_qualified_boundary_contexts_required_ = false;
-  FieldBoundaryFailure boundary_failure_{};
-  std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
-  MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
-  bool has_field_nonlinear_options_ = false;
-  FieldNewtonOptions field_nonlinear_options_{};
-  SolveReport last_solve_report_{};
-  bool verbose_ = false;
-  bool two_way_ = true;
-  CompositeFacOptions options_;  ///< Installed FAC budgets, mixed tolerances and diagnostics knobs.
-  int n_levels_ =
-      2;  ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
-  bool adjacent_ =
-      false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
-  bool force_general_ =
-      false;  ///< ADC-636 test hook: route the 2-level input through the general path.
-  static constexpr Real kPi_ = Real(3.14159265358979323846);
-
-  // ADC-636 N-level storage (levels k >= 2; levels 0/1 keep the members above). One entry per
-  // extra patch level, index 0 == level 2. Allocated by the N-level ctor; empty on the 2-level path
-  // so the historical allocation is untouched. geom_lv_[k-2] = geom_c_.refine(2^k); cov_lv_[k-2] is
-  // the coverage of level k by level k+1 (empty for the finest); foot_lv_[k-2][g] is the coarse
-  // (level k-1) footprint of patch g. mg_lv_[k-2] serves the intermediate-level correction solve.
-  MultiFab
-      res_f_;  ///< level-1 composite residual buffer (report/stop norm and N-level correction).
-  std::vector<Geometry> geom_lv_;  ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
-  std::vector<BoxArray> ba_lv_;    ///< ba_lv_[k-2] = the level-k patch tiling
-  std::vector<DistributionMapping> dm_lv_;
-  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, lap_lv_, eps_lv_, eps_y_lv_, axy_lv_, ayx_lv_;
-  // Uniform per-level metadata, index m in [0, L-1] (covers level 0/1 as well as k >= 2 so the driver
-  // loops without special-casing). cov_of_[m] = coverage of level m by level m+1 (finest: none).
-  // foot_of_[m][g] = PatchRange of patch g of level m on level m-1 (empty at m == 0).
-  std::vector<CoverageMask> cov_of_;
-  std::vector<std::vector<Box2D>> foot_of_;
-  // Intermediate-level correction multigrid: level_mg_[m] serves level m for 1 <= m <= L-2 (the
-  // finest patch level is relaxed by SOR only). [0] (base mg_) and [L-1] stay null.
-  std::vector<std::unique_ptr<GeometricMG>> level_mg_;
-  // A hierarchy whose every transition covers the complete parent domain has no coarse/fine
-  // interface and no uncovered coarse unknown.  Its exact composite operator is therefore the
-  // uniform operator on the finest level, followed by conservative restriction to its covered
-  // parents.  Materialize that solver with the hierarchy (never in solve()) so the residual cannot
-  // silently collapse to zero merely because the interface set is empty.
-  std::unique_ptr<GeometricMG> fully_refined_solver_;
-  // Hot-path MPI communication scratch.  Built with the hierarchy, then reset/reused by every
-  // residual/correction: no FluxRegister or MultiFab allocation is allowed inside solve().
-  std::vector<std::unique_ptr<FluxRegister>> flux_registers_;
-  std::unique_ptr<FluxRegister> coarse_average_register_;
-  std::vector<MultiFab> correction_residual_replicated_, correction_eps_replicated_,
-      correction_eps_y_replicated_, correction_axy_replicated_, correction_ayx_replicated_;
-
-  [[nodiscard]] const FieldBoundaryExecutionContext& boundary_context_for_level_(int level) const {
-    if (!has_level_qualified_boundary_contexts_)
-      return boundary_context_;
-    if (level < 0 || level >= n_levels_ ||
-        boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
-        boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
-        !boundary_level_context_present_[static_cast<std::size_t>(level)])
-      throw std::runtime_error(
-          "CompositeFacPoisson is missing a level-qualified boundary carrier for level " +
-          std::to_string(level));
-    return boundary_level_contexts_[static_cast<std::size_t>(level)];
-  }
-
-  [[nodiscard]] long validate_level_boundary_context_local_(
-      int level, const FieldBoundaryExecutionContext& context) const {
-    long validation_error = 0;
-    const auto validate_dependency_pack = [&](const MultiFab* const* fields,
-                                              const FieldDistribution* distributions,
-                                              const std::string* identities, int count,
-                                              long incomplete_code, long layout_code,
-                                              long distribution_code, long identity_code) {
-      if (count < 0 ||
-          (count > 0 && (fields == nullptr || distributions == nullptr || identities == nullptr))) {
-        validation_error = std::max(validation_error, incomplete_code);
-        return;
-      }
-      const MultiFab& layout = phi_level(level);
-      for (int index = 0; index < count; ++index) {
-        const MultiFab* dependency = fields[index];
-        if (dependency == nullptr ||
-            dependency->box_array().boxes() != layout.box_array().boxes() ||
-            dependency->dmap().ranks() != layout.dmap().ranks())
-          validation_error = std::max(validation_error, layout_code);
-        if (!field_distribution_is_valid(distributions[index]))
-          validation_error = std::max(validation_error, distribution_code);
-        if (identities[index].empty())
-          validation_error = std::max(validation_error, identity_code);
-      }
-    };
-    validate_dependency_pack(context.states, context.state_distributions, context.state_identities,
-                             context.state_count, /*incomplete_code=*/1, /*layout_code=*/2,
-                             /*distribution_code=*/3, /*identity_code=*/9);
-    validate_dependency_pack(context.fields, context.field_distributions, context.field_identities,
-                             context.field_count, /*incomplete_code=*/4, /*layout_code=*/5,
-                             /*distribution_code=*/6, /*identity_code=*/10);
-    if (context.parameter_count < 0 ||
-        (context.parameter_count > 0 && context.parameters == nullptr) ||
-        (context.parameters != nullptr &&
-         static_cast<std::size_t>(context.parameter_count) > context.parameters->size()))
-      validation_error = std::max(validation_error, 7L);
-    if (boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
-        boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
-        pending_boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
-        pending_boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_))
-      validation_error = std::max(validation_error, 8L);
-    return validation_error;
-  }
-
-  void require_exact_level_boundary_context_contract_(
-      int level, const FieldBoundaryExecutionContext& context) const {
-    std::string contract;
-    long materialization_failure = 0;
-    try {
-      const auto append = [&contract](const auto& value) {
-        detail::append_exact_contract_value(contract, value);
-      };
-      const auto append_text = [&contract, &append](std::string_view value) {
-        append(static_cast<std::uint64_t>(value.size()));
-        contract.append(value.data(), value.size());
-      };
-      append(level);
-      append(context.point.time);
-      append(context.point.dt);
-      append(context.point.clock_slot);
-      append(context.point.partition_slot);
-      append(context.point.stage_slot);
-      append(context.point.step);
-      append(context.point.substep);
-      append(context.point.iteration);
-      append(context.state_count);
-      append(context.field_count);
-      append(context.parameter_count);
-      for (int index = 0; index < context.state_count; ++index) {
-        append_text(context.state_identities[index]);
-        append_text(detail::field_distribution_layout_contract(*context.states[index],
-                                                               context.state_distributions[index]));
-      }
-      for (int index = 0; index < context.field_count; ++index) {
-        append_text(context.field_identities[index]);
-        append_text(detail::field_distribution_layout_contract(*context.fields[index],
-                                                               context.field_distributions[index]));
-      }
-      for (int index = 0; index < context.parameter_count; ++index)
-        append((*context.parameters)[static_cast<std::size_t>(index)]);
-    } catch (...) {
-      materialization_failure = 1;
-    }
-    if (all_reduce_max(materialization_failure) != 0)
-      throw std::runtime_error(
-          "CompositeFacPoisson level boundary carrier contract materialization failed "
-          "collectively");
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"composite-fac-level-boundary-context", std::string_view(contract)}}))
+  static void validate_request_(const request_type& request) {
+    if (request.levels.empty() || request.ratios.size() + 1 != request.levels.size())
       throw std::invalid_argument(
-          "CompositeFacPoisson level boundary carrier contract differs between communicator "
-          "ranks");
+          "composite FAC requires one ratio between each adjacent pair of levels");
+    for (std::size_t level = 0; level < request.levels.size(); ++level) {
+      const auto& current = request.levels[level];
+      detail::validate_boundary(current.geometry, current.boundary);
+      if (current.geometry.domain().empty() || current.boxes.empty() ||
+          !current.distribution.matches_layout(current.boxes) ||
+          !current.distribution.rank_space().contains(current.local_rank) ||
+          current.distribution.rank_space().size() != static_cast<std::size_t>(n_ranks()) ||
+          current.distribution.rank_space().linear_rank(current.local_rank) !=
+              static_cast<std::size_t>(my_rank()) ||
+          !current.boxes.is_disjoint_within(current.geometry.domain(), current.layout_budget))
+        throw std::invalid_argument("composite FAC level has an invalid exact-ranked layout");
+      if (level == 0 &&
+          !current.boxes.tiles_exactly(current.geometry.domain(), current.layout_budget))
+        throw std::invalid_argument("composite FAC coarse level must tile its complete domain");
+      if (n_ranks() > 1 && !current.distribution.replicated())
+        throw std::invalid_argument("composite FAC currently requires replicated levels under MPI");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (current.rhs_ghosts[axis] != 0 || current.phi_ghosts[axis] < 1)
+          throw std::invalid_argument(
+              "composite FAC requires a ghost-free RHS and one solution ghost");
+      if (level == 0)
+        continue;
+      const auto& parent = request.levels[level - 1];
+      const auto& ratio = request.ratios[level - 1];
+      fac_detail::require_ratio(ratio);
+      const Extent<Dim> ratio_value = detail::ratio_extent(ratio);
+      if (current.geometry != parent.geometry.refine(ratio_value))
+        throw std::invalid_argument(
+            "composite FAC adjacent geometries do not match their exact refinement ratio");
+      for (const Box<Dim>& patch : current.boxes.boxes())
+        if (refine(coarsen(patch, ratio_value), ratio_value) != patch)
+          throw std::invalid_argument(
+              "composite FAC fine patches are not exactly aligned to their parent index space");
+    }
   }
 
-  void reset_pending_boundary_contexts_() {
-    std::fill(pending_boundary_level_contexts_.begin(), pending_boundary_level_contexts_.end(),
-              FieldBoundaryExecutionContext{});
-    std::fill(pending_boundary_level_context_present_.begin(),
-              pending_boundary_level_context_present_.end(), false);
-    has_pending_level_qualified_boundary_contexts_ = false;
+  void build_levels_(const request_type& request) {
+    levels_.reserve(request.levels.size());
+    for (std::size_t level = 0; level < request.levels.size(); ++level)
+      levels_.push_back(std::make_unique<Level>(request.levels[level], level == 0));
   }
 
-  void require_complete_level_boundary_contexts_() const {
-    if (!level_qualified_boundary_contexts_required_)
-      return;
-    long missing_level = 0;
-    if (has_pending_level_qualified_boundary_contexts_)
-      for (int level = 0; level < n_levels_; ++level)
-        if (!pending_boundary_level_context_present_[static_cast<std::size_t>(level)]) {
-          missing_level = level + 1;
-          break;
+  void build_connections_(const std::vector<::pops::amr::RefinementRatio<Dim>>& ratios) {
+    connections_.reserve(ratios.size());
+    for (std::size_t parent_index = 0; parent_index < ratios.size(); ++parent_index) {
+      Level& parent = *levels_[parent_index];
+      Level& child = *levels_[parent_index + 1];
+      Connection connection{ratios[parent_index], {}, {}, {}, {}, {}, {}, {}};
+      mark_coverage_(parent, child, connection.ratio);
+      prepare_connection_(parent, child, connection);
+      connections_.push_back(std::move(connection));
+    }
+  }
+
+  void mark_coverage_(Level& parent, const Level& child,
+                      const ::pops::amr::RefinementRatio<Dim>& ratio) {
+    for (const Box<Dim>& fine_patch : child.phi.layout().boxes()) {
+      const Box<Dim> footprint = coarsen(fine_patch, detail::ratio_extent(ratio));
+      for (std::size_t local = 0; local < parent.covered.local_size(); ++local) {
+        const Box<Dim> region = parent.covered.box(local).intersect(footprint);
+        if (!region.empty()) {
+          for_each_cell(
+              region, fac_detail::SetScalarKernel<Dim>{parent.covered.fab(local).view(), Real(1)});
+          for_each_cell(region,
+                        fac_detail::SetScalarKernel<Dim>{parent.active.fab(local).view(), Real(0)});
         }
-    if (missing_level == 0 && !has_level_qualified_boundary_contexts_)
-      missing_level = n_levels_ + 1;
-    for (int level = 0; level < n_levels_ && missing_level == 0; ++level)
-      if (boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
-          boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
-          !boundary_level_context_present_[static_cast<std::size_t>(level)]) {
-        missing_level = level + 1;
-        break;
-      }
-    missing_level = all_reduce_max(missing_level);
-    if (missing_level > n_levels_)
-      throw std::runtime_error(
-          "CompositeFacPoisson has no committed level-qualified boundary carrier batch");
-    if (missing_level != 0)
-      throw std::runtime_error(
-          "CompositeFacPoisson is missing a level-qualified boundary carrier for level " +
-          std::to_string(missing_level - 1));
-  }
-
-  [[nodiscard]] long unsupported_level_boundary_geometry_local_() const {
-    if (fully_refined_solver_)
-      return 0;
-    for (int level = 1; level < n_levels_; ++level) {
-      const Box2D domain = geom_level(level).domain;
-      for (const Box2D& patch : phi_level(level).box_array().boxes()) {
-        const bool touches_physical_boundary =
-            (bc_.xlo != BCType::Periodic && patch.lo[0] <= domain.lo[0]) ||
-            (bc_.xhi != BCType::Periodic && patch.hi[0] >= domain.hi[0]) ||
-            (bc_.ylo != BCType::Periodic && patch.lo[1] <= domain.lo[1]) ||
-            (bc_.yhi != BCType::Periodic && patch.hi[1] >= domain.hi[1]);
-        if (touches_physical_boundary)
-          return level + 1;
       }
     }
-    return 0;
+    Kokkos::fence();
   }
 
-  void require_supported_level_boundary_geometry_() const {
-    if (!level_qualified_boundary_contexts_required_)
-      return;
-    const long unsupported_level = all_reduce_max(unsupported_level_boundary_geometry_local_());
-    if (unsupported_level != 0)
-      throw std::runtime_error(
-          "CompositeFacPoisson level-qualified dynamic boundaries require partially refined "
-          "patches to remain strictly inside each physical domain; unsupported level " +
-          std::to_string(unsupported_level - 1));
+  void prepare_connection_(Level& parent, Level& child, Connection& connection) {
+    using Provider =
+        ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>;
+    const Provider restriction = Provider::conservative_restriction();
+    const Provider prolongation = Provider::linear_prolongation();
+
+    for (std::size_t child_local = 0; child_local < child.phi.local_size(); ++child_local) {
+      const std::size_t child_global = child.phi.global_index(child_local);
+      const Box<Dim>& fine_valid = child.phi.box(child_local);
+      const Extent<Dim> ratio_value = detail::ratio_extent(connection.ratio);
+      const Box<Dim> footprint = coarsen(fine_valid, ratio_value);
+      std::int64_t restricted_cells = 0;
+      for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
+        const Box<Dim> region = parent.phi.box(parent_local).intersect(footprint);
+        if (region.empty())
+          continue;
+        restricted_cells += region.numPts();
+        const auto child_residual_view =
+            static_cast<const field_type&>(child.residual).fab(child_local).view();
+        const auto child_phi_view =
+            static_cast<const field_type&>(child.phi).fab(child_local).view();
+        connection.residual_restriction.push_back(
+            restriction.prepare(child_residual_view, parent.residual.fab(parent_local).view(),
+                                region, connection.ratio));
+        connection.solution_restriction.push_back(restriction.prepare(
+            child_phi_view, parent.phi.fab(parent_local).view(), region, connection.ratio));
+        connection.direction_restriction.push_back(restriction.prepare(
+            static_cast<const field_type&>(child.correction).fab(child_local).view(),
+            parent.correction.fab(parent_local).view(), region, connection.ratio));
+      }
+      if (restricted_cells != footprint.numPts())
+        throw std::invalid_argument(
+            "composite FAC fine footprint is not completely nested in its parent layout");
+
+      std::int64_t prolonged_cells = 0;
+      for (std::size_t parent_local = 0; parent_local < parent.correction.local_size();
+           ++parent_local) {
+        const Box<Dim> region =
+            fine_valid.intersect(refine(parent.correction.box(parent_local), ratio_value));
+        if (region.empty())
+          continue;
+        prolonged_cells += region.numPts();
+        const auto parent_correction_view =
+            static_cast<const field_type&>(parent.correction).fab(parent_local).view();
+        connection.correction_prolongation.push_back(
+            prolongation.prepare(parent_correction_view, child.correction.fab(child_local).view(),
+                                 region, connection.ratio));
+      }
+      if (prolonged_cells != fine_valid.numPts())
+        throw std::invalid_argument(
+            "composite FAC correction prolongation does not cover a fine patch exactly");
+
+      std::vector<Box<Dim>> pending{child.phi.fab(child_local).grown_box()};
+      for (const Box<Dim>& valid : child.phi.layout().boxes())
+        fac_detail::subtract_from_regions(pending, valid);
+      for (const HaloJob<Dim>& halo : child.halo_schedule.canonical_jobs())
+        if (halo.destination_box == child_global)
+          fac_detail::subtract_from_regions(pending, halo.destination_region);
+
+      for (std::size_t parent_local = 0; parent_local < parent.phi.local_size(); ++parent_local) {
+        const Box<Dim> parent_reach = refine(parent.phi.fab(parent_local).grown_box(), ratio_value);
+        std::vector<Box<Dim>> next;
+        for (const Box<Dim>& region : pending) {
+          const Box<Dim> destination = region.intersect(parent_reach);
+          if (!destination.empty()) {
+            const auto source = static_cast<const field_type&>(parent.phi).fab(parent_local).view();
+            connection.coarse_fine_phi.push_back(fac_detail::InjectionTransfer<Dim>{
+                source, child.phi.fab(child_local).view(), destination, connection.ratio, {}});
+            const auto residual_source =
+                static_cast<const field_type&>(parent.residual_operator_view)
+                    .fab(parent_local)
+                    .view();
+            connection.coarse_fine_residual_view.push_back(fac_detail::InjectionTransfer<Dim>{
+                residual_source,
+                child.residual_operator_view.fab(child_local).view(),
+                destination,
+                connection.ratio,
+                {}});
+            const auto direction_source =
+                static_cast<const field_type&>(parent.direction_operator_view)
+                    .fab(parent_local)
+                    .view();
+            connection.coarse_fine_direction_view.push_back(fac_detail::InjectionTransfer<Dim>{
+                direction_source,
+                child.direction_operator_view.fab(child_local).view(),
+                destination,
+                connection.ratio,
+                {}});
+          }
+          std::vector<Box<Dim>> remainder = fac_detail::subtract_box(region, destination);
+          next.insert(next.end(), remainder.begin(), remainder.end());
+        }
+        pending = std::move(next);
+      }
+      if (!pending.empty())
+        throw std::invalid_argument(
+            "composite FAC could not prepare every coarse/fine ghost destination");
+    }
   }
 
-  // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
-  // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy
-  // body + dispatch and the general machinery lives in the mg/ layer per ADC-334.
-  LinearSolveResult solve_composite_nlevel_(int max_iters, int fine_sweeps, Real stop);
-  void build_extra_levels_(const std::vector<BoxArray>& level_boxes);
-  // Build the uniform per-level metadata (cov_of_[m] = level m covered by level m+1, foot_of_[m][g] =
-  // level-(m-1) footprint of patch g, level_mg_[m] = intermediate correction multigrid) from the
-  // current hierarchy. Called by EVERY ctor (the 2-level ctor too) so the general path can be reached
-  // for any shape, including a 2-level input via the test hook.
-  void finalize_hierarchy_metadata_();
-  void prepare_fully_refined_solver_();
-  Real solve_fully_refined_hierarchy_(int max_iters, Real rel_tol, Real abs_tol);
-  void setup_level_coeffs_();
-  void fill_cf_field_(int k, MultiFab& fine,
-                      const MultiFab& parent);  // C-F bilerp parent -> level k
-  void fill_cf_phi_(int k);                     // ghost order 3b for phi_level(k)
-  void relax_level_(int m, int sweeps);         // C-F ghost + fill_boundary + SOR (no avgdown)
-  void cascade_avgdown_();                      // fine-to-coarse average-down of the whole tower
-  void correct_level_(int m);                   // L_m e_m = res_m; phi_m += e_m on uncovered
-  void project_base_correction_rhs_();  // periodic Poisson correction -> compatible mean-zero range
-  Real composite_residual_(int m);      // res_m + C/F flux correction; return ||.||_inf
-  void fine_sor_level_(int m, const MultiFab& f_eff, int sweeps);  // red-black SOR on level m
-  // Accumulate the level-m/level-(m+1) two-way C-F flux correction into dst (level-m residual or
-  // effective RHS), enumerated from the uncovered coarse side (design 4c). single_writer_gather
-  // routes remote fine fluxes through a per-face FluxRegister (ADC-636 commit 4) for MPI bit-identity.
-  void add_flux_correction_(int m, MultiFab& dst);
-  MultiFab& res_level_(int m) { return m == 0 ? res_c_ : (m == 1 ? res_f_ : res_lv_[m - 2]); }
-  MultiFab& lap_level_(int m) { return m == 0 ? lap_c_ : (m == 1 ? lap_f_ : lap_lv_[m - 2]); }
-  void add_uncovered_level_(int m, MultiFab& phi,
-                            const MultiFab& e);     // phi += e on uncovered cells
-  void copy0_(MultiFab& dst, const MultiFab& src);  // dst <- src (comp 0, valid)
-  void apply_constant_reaction_(MultiFab& value, const MultiFab& phi) const {
-    for (int li = 0; li < value.local_size(); ++li)
-      for_each_cell(value.box(li),
-                    detail::FacApplyConstantReactionKernel{value.fab(li).array(),
-                                                           phi.fab(li).const_array(), reaction_});
+  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
+    GeometricMultigridOptions controls;
+    controls.relative_tolerance = options_.coarse_rel_tol;
+    controls.absolute_tolerance = options_.coarse_abs_tol;
+    controls.maximum_cycles = options_.coarse_cycles;
+    controls.reaction = reaction_;
+    EllipticBuildRequest<Dim> correction_request = coarse_request;
+    correction_request.boundary =
+        detail::boundary_for_geometry(coarse_request.boundary, coarse_request.geometry, true);
+    coarse_solver_ =
+        std::make_unique<GeometricMG<Dim, MemorySpace>>(std::move(correction_request), controls);
   }
-  // Average-down phi_level(m) -> phi_level(m-1). When the parent (m-1) is the REPLICATED coarse under
-  // MPI, parallel_copy would only update the src-owner rank; this routes the covered-cell averages
-  // through a single-writer FluxRegister so every rank's replicated parent gets the same values
-  // (identity at np=1, so mono-rank stays bit-identical to the legacy average_down).
-  void average_down_level_(int m);
-  Real sor_omega_(const Box2D& b) const {  // per-patch over-relaxation (== legacy sor_omega)
-    const int N = std::max(b.nx(), b.ny());
-    return Real(2) / (Real(1) + std::sin(Real(kPi_) / Real(N)));
+
+  void fill_level_ghosts_(std::size_t level_index, field_type& field, bool interpolate_parent) {
+    Level& level = *levels_.at(level_index);
+    fill_boundary(field, level.halo_schedule);
+    if (interpolate_parent && level_index > 0)
+      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_phi);
+    fill_physical_boundary(field, level.physical_boundary);
   }
+
+  void fill_all_ghosts_() {
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      fill_level_ghosts_(level, levels_[level]->phi, true);
+  }
+
+  void smooth_level_(std::size_t level_index, int sweeps) {
+    Level& level = *levels_.at(level_index);
+    Real inverse_spacing_squared[Dim]{};
+    Real diagonal = reaction_;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real inverse = Real(1) / level.geometry.spacing(axis);
+      inverse_spacing_squared[axis] = inverse * inverse;
+      diagonal += Real(2) * inverse_spacing_squared[axis];
+    }
+    for (int sweep = 0; sweep < sweeps; ++sweep) {
+      fill_level_ghosts_(level_index, level.phi, true);
+      for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
+        const auto phi_view = static_cast<const field_type&>(level.phi).fab(local).view();
+        const auto rhs_view = static_cast<const field_type&>(level.rhs).fab(local).view();
+        const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+        fac_detail::MaskedJacobiKernel<Dim> kernel{level.scratch.fab(local).view(),
+                                                   phi_view,
+                                                   rhs_view,
+                                                   covered_view,
+                                                   {},
+                                                   Real(1) / diagonal,
+                                                   Real(2) / Real(3),
+                                                   reaction_};
+        for (int axis = 0; axis < Dim; ++axis)
+          kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
+        for_each_cell(level.phi.box(local), kernel);
+      }
+      Kokkos::fence();
+      copy_scalar_valid(level.scratch, level.phi);
+    }
+  }
+
+  void compute_level_residual_(std::size_t level_index) {
+    Level& level = *levels_.at(level_index);
+    fill_level_ghosts_(level_index, level.phi, true);
+    poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual, reaction_);
+    for (std::size_t local = 0; local < level.residual.local_size(); ++local) {
+      const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+      for_each_cell(level.residual.box(local), fac_detail::MaskResidualKernel<Dim>{
+                                                   level.residual.fab(local).view(), covered_view});
+    }
+    Kokkos::fence();
+  }
+
+  void compute_composite_residual_() {
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      compute_level_residual_(level);
+  }
+
+  void restrict_residual_tower_() {
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      fac_detail::execute_transfers(connections_.at(child - 1).residual_restriction);
+  }
+
+  void prolong_correction_tower_() {
+    for (std::size_t parent = 0; parent < connections_.size(); ++parent) {
+      Level& parent_level = *levels_[parent];
+      Level& child_level = *levels_[parent + 1];
+      fill_level_ghosts_(parent, parent_level.correction, false);
+      child_level.correction.set_val(Real(0));
+      fac_detail::execute_transfers(connections_[parent].correction_prolongation);
+      saxpy(child_level.phi, Real(1), child_level.correction);
+    }
+  }
+
+  void average_solution_down_() {
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      fac_detail::execute_transfers(connections_.at(child - 1).solution_restriction);
+  }
+
+  void add_uncovered_(Level& level, const field_type& correction) {
+    for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
+      const auto covered_view = static_cast<const field_type&>(level.covered).fab(local).view();
+      for_each_cell(level.phi.box(local),
+                    fac_detail::MaskedAddKernel<Dim>{level.phi.fab(local).view(),
+                                                     correction.fab(local).view(), covered_view});
+    }
+    Kokkos::fence();
+  }
+
+  std::vector<const field_type*> newton_layouts_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->phi);
+    return result;
+  }
+
+  std::vector<const field_type*> active_masks_() const {
+    std::vector<const field_type*> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_)
+      result.push_back(&level->active);
+    return result;
+  }
+
+  std::vector<Real> level_cell_measures_() const {
+    std::vector<Real> result;
+    result.reserve(levels_.size());
+    for (const auto& level : levels_) {
+      Real measure = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        measure *= level->geometry.spacing(axis);
+      result.push_back(measure);
+    }
+    return result;
+  }
+
+  void prepare_dynamic_views_() {
+    candidate_view_.resize(levels_.size());
+    dynamic_const_view_.resize(levels_.size());
+    dynamic_mutable_view_.resize(levels_.size());
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      candidate_view_[level] = &levels_[level]->phi;
+  }
+
+  static void copy_valid_(const field_type& source, field_type& destination) {
+    copy_scalar_valid(source, destination);
+  }
+
+  static void copy_grown_(const field_type& source, field_type& destination) {
+    if (source.layout() != destination.layout() ||
+        source.distribution() != destination.distribution() ||
+        source.local_rank() != destination.local_rank() || source.ncomp() != 1 ||
+        destination.ncomp() != 1 || source.ghosts() != destination.ghosts())
+      throw std::invalid_argument("composite FAC dynamic operator views differ from candidates");
+    for (std::size_t local = 0; local < source.local_size(); ++local) {
+      const auto values = source.fab(local).view();
+      const auto published = destination.fab(local).view();
+      for_each_cell(source.fab(local).grown_box(),
+                    [=] POPS_HD(const Index<Dim>& cell) { published(cell, 0) = values(cell, 0); });
+    }
+    Kokkos::fence();
+  }
+
+  void stage_iterate_(const nonlinear_hierarchy_type& iterate) {
+    if (iterate.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear iterate has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(iterate[level], levels_[level]->phi);
+    average_solution_down_();
+  }
+
+  void stage_direction_(const nonlinear_hierarchy_type& direction) {
+    if (direction.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear direction has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      copy_valid_(direction[level], levels_[level]->correction);
+    for (std::size_t child = levels_.size(); child-- > 1;)
+      fac_detail::execute_transfers(connections_.at(child - 1).direction_restriction);
+  }
+
+  FieldBoundaryExecutionContext<Dim>& boundary_context_at_(std::size_t level, int iteration) {
+    if (boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("composite FAC dynamic boundary contexts are absent");
+    boundary_contexts_[level].point.iteration = iteration;
+    return boundary_contexts_[level];
+  }
+
+  static void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
+                                            const char* message) {
+    Kokkos::fence();
+    if (context.failure->synchronize_across_ranks())
+      throw std::runtime_error(message);
+  }
+
+  void fill_dynamic_residual_ghosts_(std::size_t level_index, int iteration) {
+    Level& level = *levels_.at(level_index);
+    copy_valid_(level.phi, level.residual_operator_view);
+    fill_boundary(level.residual_operator_view, level.halo_schedule);
+    if (level_index > 0)
+      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_residual_view);
+    fill_physical_boundary(level.residual_operator_view, level.physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_residual_view(face, level.phi, level.residual_operator_view,
+                                                level.geometry, context);
+      synchronize_boundary_failure_(context,
+                                    "composite FAC dynamic boundary residual failed collectively");
+    }
+  }
+
+  void fill_dynamic_jvp_ghosts_(std::size_t level_index, int iteration) {
+    Level& level = *levels_.at(level_index);
+    copy_valid_(level.correction, level.direction_operator_view);
+    fill_boundary(level.direction_operator_view, level.halo_schedule);
+    if (level_index > 0)
+      fac_detail::execute_injections(connections_.at(level_index - 1).coarse_fine_direction_view);
+    fill_physical_boundary(level.direction_operator_view, level.homogeneous_physical_boundary);
+    if (boundary_kernel_) {
+      auto& context = boundary_context_at_(level_index, iteration);
+      context.failure->reset();
+      for (int face = 0; face < 2 * Dim; ++face)
+        boundary_kernel_->prepare_jvp_view(face, level.phi, level.correction,
+                                           level.direction_operator_view, level.geometry, context);
+      synchronize_boundary_failure_(context,
+                                    "composite FAC dynamic boundary JVP failed collectively");
+    }
+  }
+
+  static void mask_covered_(Level& level, field_type& values) {
+    for (std::size_t local = 0; local < values.local_size(); ++local) {
+      const auto covered = static_cast<const field_type&>(level.covered).fab(local).view();
+      for_each_cell(values.box(local),
+                    fac_detail::MaskResidualKernel<Dim>{values.fab(local).view(), covered});
+    }
+    Kokkos::fence();
+  }
+
+  void evaluate_dynamic_residual_(const nonlinear_hierarchy_type& iterate,
+                                  nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear residual has the wrong level count");
+    stage_iterate_(iterate);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_residual_ghosts_(level_index, iteration);
+      poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+                             level.residual, reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        context.failure->reset();
+        for (int face = 0; face < 2 * Dim; ++face)
+          boundary_kernel_->add_residual(face, level.phi, level.residual, level.geometry, context);
+        synchronize_boundary_failure_(context,
+                                      "composite FAC dynamic residual closure failed collectively");
+      }
+      mask_covered_(level, level.residual);
+      copy_valid_(level.residual, output[level_index]);
+      dynamic_const_view_[level_index] = &output[level_index];
+    }
+    nullspace_workspace_->require_compatible(dynamic_const_view_);
+  }
+
+  void apply_dynamic_linearized_(const nonlinear_hierarchy_type& iterate,
+                                 const nonlinear_hierarchy_type& direction,
+                                 nonlinear_hierarchy_type& output, int iteration) {
+    if (output.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear JVP has the wrong level count");
+    stage_iterate_(iterate);
+    stage_direction_(direction);
+    for (std::size_t level_index = 0; level_index < levels_.size(); ++level_index) {
+      Level& level = *levels_[level_index];
+      fill_dynamic_jvp_ghosts_(level_index, iteration);
+      apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
+                                   reaction_);
+      if (boundary_kernel_) {
+        auto& context = boundary_context_at_(level_index, iteration);
+        context.failure->reset();
+        for (int face = 0; face < 2 * Dim; ++face)
+          boundary_kernel_->apply_jvp(face, level.phi, level.correction, level.scratch,
+                                      level.geometry, context);
+        synchronize_boundary_failure_(context,
+                                      "composite FAC dynamic JVP closure failed collectively");
+      }
+      mask_covered_(level, level.scratch);
+      copy_valid_(level.scratch, output[level_index]);
+    }
+  }
+
+  void apply_dynamic_gauge_(nonlinear_hierarchy_type& values) {
+    if (values.size() != levels_.size())
+      throw std::invalid_argument("composite FAC nonlinear gauge has the wrong level count");
+    for (std::size_t level = 0; level < levels_.size(); ++level)
+      dynamic_mutable_view_[level] = &values[level];
+    nullspace_workspace_->apply_gauge(dynamic_mutable_view_);
+  }
+
+  SolveReport solve_dynamic_() {
+    if (boundary_kernel_ && boundary_contexts_.size() != levels_.size())
+      throw std::logic_error("composite FAC dynamic boundary has no level-qualified contexts");
+    if (boundary_kernel_ && boundary_kernel_->observes_iteration && !newton_workspace_)
+      throw std::logic_error(
+          "iterate-dependent composite FAC boundary requires a prepared Newton authority");
+    auto* workspace = newton_workspace_ ? &*newton_workspace_ : &*linear_boundary_workspace_;
+    SolveReport report;
+    try {
+      report = workspace->solve(
+          candidate_view_,
+          [this](const nonlinear_hierarchy_type& iterate, nonlinear_hierarchy_type& residual,
+                 int iteration) { evaluate_dynamic_residual_(iterate, residual, iteration); },
+          [this](const nonlinear_hierarchy_type& iterate, const nonlinear_hierarchy_type& direction,
+                 nonlinear_hierarchy_type& output, int iteration) {
+            apply_dynamic_linearized_(iterate, direction, output, iteration);
+          },
+          [this](nonlinear_hierarchy_type& values) { apply_dynamic_gauge_(values); });
+    } catch (const FieldNullspaceIncompatibleRhs& error) {
+      report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
+    } catch (const FieldNullspaceInvalidEvaluation& error) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, error.what());
+    }
+    if (report.solved_value_available()) {
+      average_solution_down_();
+      nullspace_workspace_->apply_gauge(nullspace_candidates_);
+      for (std::size_t level = 0; level < levels_.size(); ++level) {
+        fill_dynamic_residual_ghosts_(level, report.iters);
+        copy_grown_(levels_[level]->residual_operator_view, levels_[level]->phi);
+      }
+    }
+    last_report_ = report;
+    return last_report_;
+  }
+
+  FieldNewtonOptions linear_boundary_newton_options_() const {
+    FieldNewtonOptions options;
+    options.tolerance = std::max(options_.rel_tol,
+                                 options_.abs_tol > Real(0) ? options_.abs_tol : options_.rel_tol);
+    options.max_iterations = 1;
+    options.linear_tolerance = options_.rel_tol;
+    options.linear_max_iterations = std::max(1, options_.max_iters);
+    options.restart = std::min(30, options.linear_max_iterations);
+    validate_field_newton_options(options);
+    return options;
+  }
+
+  Real global_norm_inf_(const field_type& field) const {
+    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field))));
+  }
+
+  Real composite_residual_norm_() const {
+    Real result = Real(0);
+    for (const auto& level : levels_)
+      result = std::max(result, norm_inf(level->residual));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(result)));
+  }
+
+  bool singular_() const noexcept {
+    return detail::is_singular(levels_.front()->boundary, reaction_);
+  }
+
+  CompositeFacOptions options_{};
+  Real reaction_ = Real(0);
+  std::vector<std::unique_ptr<Level>> levels_{};
+  std::vector<Connection> connections_{};
+  std::unique_ptr<GeometricMG<Dim, MemorySpace>> coarse_solver_{};
+  std::vector<const MultiFab<Dim>*> nullspace_rhs_{};
+  std::vector<MultiFab<Dim>*> nullspace_candidates_{};
+  std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
+  std::optional<CompiledFieldBoundaryKernel<Dim>> boundary_kernel_{};
+  std::vector<FieldBoundaryExecutionContext<Dim>> boundary_contexts_{};
+  std::optional<nonlinear_workspace_type> newton_workspace_{};
+  std::optional<nonlinear_workspace_type> linear_boundary_workspace_{};
+  std::vector<field_type*> candidate_view_{};
+  std::vector<const field_type*> dynamic_const_view_{};
+  std::vector<field_type*> dynamic_mutable_view_{};
+  std::string exact_prepared_contract_{};
+  SolveReport last_report_{};
 };
 
-}  // namespace pops
-
-// ADC-636: the general N-level / adjacent / MPI FAC lives here (mg/ layering, ADC-334). Tail-included
-// so composite_fac_poisson.hpp above keeps only the legacy body + dispatch + N-level ctor/accessors.
-#include <pops/numerics/elliptic/mg/composite_fac_nlevel.hpp>  // solve_composite_nlevel_ + helpers
+}  // namespace pops::elliptic::mg

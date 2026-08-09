@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pops._cartesian_axes import flattened_axis_values
 from pops._ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
 from pops._ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
 from pops._ir.visitors import _children  # noqa: F401
@@ -28,14 +29,12 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         """All the Expr of the model (primitives, flux, eigenvalues, source, elliptic,
         cons_from). Used to discover the RuntimeParamRef nodes hidden in the tree."""
         out = list(self.prim_defs.values())
-        for d in ("x", "y"):
-            out += self._flux.get(d, [])
-            out += self._eig.get(d, [])
+        out += flattened_axis_values(self._flux)
+        out += flattened_axis_values(self._eig)
         if self._wave_speeds is not None:  # explicit signed speeds: runtime params included
-            for d in ("x", "y"):
-                out += list(self._wave_speeds[d])
+            out += flattened_axis_values(self._wave_speeds)
         if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
-            for d in ("x", "y"):  # jacobian entries: runtime params included
+            for d in self._ws_jacobian["rows"]:  # jacobian entries: runtime params included
                 out += [e for row in self._ws_jacobian["rows"][d] for e in row]
         if self._source is not None:
             out += [_wrap(e) for e in self._source]
@@ -51,8 +50,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out += [_wrap(e) for e in transform["expressions"]]
             out.append(_wrap(transform["valid_if"]))
         for term in (getattr(self, "_flux_terms", {}) or {}).values():
-            for d in ("x", "y"):
-                out += [_wrap(e) for e in term.get(d, [])]
+            out += [_wrap(e) for e in flattened_axis_values(term)]
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:
@@ -64,7 +62,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         for info in (getattr(self, "_elliptic_fields", {}) or {}).values():
             out.append(_wrap(info["rhs"]))
         if self._roe_rows is not None:  # Roe rows provided: discover their runtime params (via StateRef)
-            out += self._roe_rows["x"] + self._roe_rows["y"]
+            out += flattened_axis_values(self._roe_rows)
         return out
 
     def runtime_param_nodes(self) -> Any:
@@ -129,7 +127,7 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         aux dependency is also a missing capability there."""
         known = set(self.cons_names) | set(self.prim_defs)
         if allow_aux:
-            known |= set(self.aux_names) | set(self.aux_extra_names)
+            known |= set(self._provider_components)
         missing = sorted(form.deps() - known)
         if missing:
             raise ValueError(

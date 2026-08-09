@@ -1,547 +1,305 @@
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <limits>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <vector>
-
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>
-#include <pops/runtime/numerical_defaults.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
+
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
-using pops::Real;
-using pops::PreparedProviderOptions;
-using pops::PreparedProviderSupport;
-using pops::runtime::program::AmrProgramContext;
-using pops::runtime::program::AmrTensorElliptic;
-using pops::runtime::program::HierarchyTensorSolverBuildRequest;
-using pops::runtime::program::HierarchyTensorSolverExecutionPath;
-using pops::runtime::program::HierarchyTensorSolverProvider;
-using pops::runtime::program::PreparedHierarchyTensorSolver;
-using pops::runtime::program::ProgramExecutionServices;
+template <int Dim>
+pops::Extent<Dim> extents(std::int64_t value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
 
-static_assert(
-    std::is_base_of_v<ProgramExecutionServices<AmrProgramContext>, AmrProgramContext>,
-    "AmrProgramContext must consume the one shared Program execution-service implementation");
+template <int Dim>
+pops::RealVector<Dim> coordinates(pops::Real value) {
+  pops::RealVector<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
+}
 
-class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
- public:
-  explicit DistinctHierarchyPrepared(std::string contract) : contract_(std::move(contract)) {}
-  std::string_view provider_identity() const noexcept override {
-    return "pops.test.hierarchy.distinct";
+template <int Dim>
+pops::PhysicalBoundaryConditions<Dim> homogeneous_dirichlet(const pops::Geometry<Dim>& geometry) {
+  std::array<pops::PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    spacing[axis] = geometry.spacing(axis);
+    for (const pops::BoundarySide side : {pops::BoundarySide::lower, pops::BoundarySide::upper})
+      faces[static_cast<std::size_t>(pops::Face<Dim>{axis, side}.ordinal())] =
+          pops::PhysicalBoundaryFace{pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)};
   }
-  std::uint64_t provider_version() const noexcept override { return 1; }
-  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
-  HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
-    return HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
-  }
-  int level_count() const noexcept override { return 0; }
-  pops::MultiFab& assembly_target(std::string_view, int) override {
-    throw std::logic_error("test provider has no materialized build request");
-  }
-  pops::MultiFab& solution(int) override {
-    throw std::logic_error("test provider has no materialized build request");
-  }
-  void stage_initial_guess(int, const pops::MultiFab*) override {
-    throw std::logic_error("test provider has no materialized build request");
-  }
-  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
-    return pops::SolveReport::capability_failure();
-  }
+  return {pops::BoundaryTopology<Dim>::physical(), faces, spacing};
+}
 
- private:
-  std::string contract_;
-};
+template <int Dim>
+pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refined = false) {
+  using namespace pops;
+  using namespace pops::runtime::program;
 
-class DistinctHierarchyProvider final : public HierarchyTensorSolverProvider {
- public:
-  explicit DistinctHierarchyProvider(
-      std::string collective_contract = "pops.test.hierarchy.distinct@1",
-      std::vector<std::string> capabilities = {"pops.test.hierarchy.distinct.flat-krylov@1"})
-      : collective_contract_(std::move(collective_contract)),
-        capabilities_(std::move(capabilities)) {}
-  std::string_view identity() const noexcept override { return "pops.test.hierarchy.distinct"; }
-  std::uint64_t interface_version() const noexcept override { return 1; }
-  std::string_view collective_contract() const noexcept override { return collective_contract_; }
-  std::vector<std::string> capability_contracts() const override { return capabilities_; }
-  PreparedProviderOptions default_options() const override {
-    return {"pops.test.hierarchy.distinct.options@1", {}};
+  Index<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = 3;
+  const Box<Dim> domain{Index<Dim>{}, upper};
+  const Geometry<Dim> geometry =
+      Geometry<Dim>::from_bounds(domain, coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
+  const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> rank_space{Index<Dim>{}, extents<Dim>(1)};
+  const mesh::Distribution<Dim> distribution =
+      mesh::Distribution<Dim>::replicated(layout, rank_space);
+  HierarchyTensorLevelBuildRequest<Dim> level{geometry, homogeneous_dirichlet(geometry), layout,
+                                              distribution, Index<Dim>{}};
+
+  HierarchyTensorSolverBuildRequest<Dim> result;
+  result.block = 4;
+  result.components = 1;
+  result.levels.push_back(std::move(level));
+  if (refined) {
+    std::array<int, Dim> ratio_components{};
+    ratio_components.fill(2);
+    const amr::RefinementRatio<Dim> ratio{ratio_components};
+    const Geometry<Dim> fine_geometry = geometry.refine(extents<Dim>(2));
+    const mesh::BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{fine_geometry.domain()});
+    const mesh::Distribution<Dim> fine_distribution = mesh::Distribution<Dim>::partitioned(
+        fine_layout, rank_space, std::vector<Index<Dim>>{Index<Dim>{}});
+    result.levels.push_back(
+        HierarchyTensorLevelBuildRequest<Dim>{fine_geometry, homogeneous_dirichlet(fine_geometry),
+                                              fine_layout, fine_distribution, Index<Dim>{}});
+    result.ratios.push_back(ratio);
   }
-  PreparedProviderSupport accepts_options(
-      const PreparedProviderOptions& options) const noexcept override {
-    return options.schema_identity == "pops.test.hierarchy.distinct.options@1" &&
-                   options.values.empty()
-               ? PreparedProviderSupport::accept()
-               : PreparedProviderSupport::reject(1, "distinct provider options are invalid");
-  }
-  PreparedProviderSupport supports(
-      const HierarchyTensorSolverBuildRequest& request) const noexcept override {
-    return request.levels == 1 && accepts_options(request.options).accepted()
-               ? PreparedProviderSupport::accept()
-               : PreparedProviderSupport::reject(2, "distinct provider requires one level");
-  }
-  PreparedProviderSupport accepts_execution(
-      const HierarchyTensorSolverBuildRequest& request,
-      HierarchyTensorSolverExecutionPath execution) const noexcept override {
-    return supports(request).accepted() &&
-                   execution == HierarchyTensorSolverExecutionPath::PreparedKrylovFallback
-               ? PreparedProviderSupport::accept()
-               : PreparedProviderSupport::reject(3, "distinct provider execution is invalid");
-  }
-  std::string expected_prepared_contract(const HierarchyTensorSolverBuildRequest&) const override {
-    return "pops.test.hierarchy.distinct.prepared@1";
-  }
-  std::unique_ptr<PreparedHierarchyTensorSolver> prepare(
-      const HierarchyTensorSolverBuildRequest& request) const override {
-    if (!supports(request).accepted())
-      throw std::invalid_argument("unsupported distinct hierarchy request");
-    return std::make_unique<DistinctHierarchyPrepared>(expected_prepared_contract(request));
+  result.plan_identity = "pops.test.tensor-plan";
+  result.operator_contract_identity =
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticRank2Contract);
+  result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<Dim>();
+  result.solution_field_slot = "pops.tensor-elliptic.solution";
+  result.options = tensor_elliptic_detail::default_options();
+  return result;
+}
+
+template <int Dim>
+struct ExactIdentityTensorKernel {
+  static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.test.exact-identity-tensor", 1};
   }
 
- private:
-  std::string collective_contract_;
-  std::vector<std::string> capabilities_;
-};
-
-class ReportOnlyHierarchyPrepared final : public PreparedHierarchyTensorSolver {
- public:
-  explicit ReportOnlyHierarchyPrepared(pops::SolveReport report) : report_(std::move(report)) {}
-  std::string_view provider_identity() const noexcept override {
-    return "pops.test.hierarchy.report-only";
-  }
-  std::uint64_t provider_version() const noexcept override { return 1; }
-  std::string_view exact_prepared_contract() const noexcept override {
-    return "pops.test.hierarchy.report-only.prepared@1";
-  }
-  HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
-    return HierarchyTensorSolverExecutionPath::DirectProvider;
-  }
-  int level_count() const noexcept override { return 0; }
-  pops::MultiFab& assembly_target(std::string_view, int) override {
-    throw std::logic_error("report-only provider has no field storage");
-  }
-  pops::MultiFab& solution(int) override {
-    throw std::logic_error("report-only provider has no field storage");
-  }
-  void stage_initial_guess(int, const pops::MultiFab*) override {}
-  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
-    return report_;
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    contract.text("identity-tensor").scalar(std::int32_t{Dim});
   }
 
- private:
-  pops::SolveReport report_;
-};
-
-class FlatIdentityPrepared final : public PreparedHierarchyTensorSolver {
- public:
-  explicit FlatIdentityPrepared(std::string contract)
-      : contract_(std::move(contract)),
-        boxes_(std::vector<pops::Box2D>{pops::Box2D::from_extents(8, 8)}),
-        mapping_(boxes_.size(), pops::n_ranks()),
-        rhs_(boxes_, mapping_, 1, 0),
-        solution_(boxes_, mapping_, 1, 0) {
-    rhs_.set_val(Real(0));
-    solution_.set_val(Real(0));
-  }
-  std::string_view provider_identity() const noexcept override {
-    return "pops.test.hierarchy.flat-identity";
-  }
-  std::uint64_t provider_version() const noexcept override { return 1; }
-  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
-  HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
-    return HierarchyTensorSolverExecutionPath::DirectProvider;
-  }
-  int level_count() const noexcept override { return 1; }
-  pops::MultiFab& assembly_target(std::string_view slot, int level) override {
-    if (slot != "pops.test.identity.rhs" || level != 0)
-      throw std::invalid_argument("flat identity provider received an unknown field slot");
-    return rhs_;
-  }
-  pops::MultiFab& solution(int level) override {
-    if (level != 0)
-      throw std::out_of_range("flat identity provider has exactly one level");
-    return solution_;
-  }
-  void stage_initial_guess(int level, const pops::MultiFab*) override {
-    if (level != 0)
-      throw std::out_of_range("flat identity provider has exactly one level");
-  }
-  pops::SolveReport solve(const pops::runtime::program::HierarchyTensorSolveControls&) override {
-    pops::parallel_copy(solution_, rhs_);  // Exact inverse of the authenticated identity operator.
+  pops::SolveReport operator()(
+      const pops::runtime::program::HierarchyTensorSolveInvocation<Dim>& invocation) const {
+    pops::Real reference = pops::Real(0);
+    for (const auto& level : invocation.levels) {
+      pops::runtime::program::tensor_elliptic_detail::copy_valid(*level.solution, *level.rhs);
+      reference = std::max(reference, pops::norm_inf(*level.rhs));
+    }
     pops::SolveReport report;
-    report.reference_residual_norm = pops::norm_inf(rhs_);
-    report.residual_norm = Real(0);
-    report.rel_residual = Real(0);
-    report.mark_solved("exact identity solve");
+    report.reference_residual_norm =
+        static_cast<pops::Real>(pops::all_reduce_max(static_cast<double>(reference)));
+    report.residual_norm = pops::Real(0);
+    report.rel_residual = pops::Real(0);
+    report.mark_solved("exact identity tensor kernel");
     return report;
   }
-
- private:
-  std::string contract_;
-  pops::BoxArray boxes_;
-  pops::DistributionMapping mapping_;
-  pops::MultiFab rhs_;
-  pops::MultiFab solution_;
 };
 
-class FlatIdentityProvider final : public HierarchyTensorSolverProvider {
- public:
-  std::string_view identity() const noexcept override {
-    return "pops.test.hierarchy.flat-identity";
-  }
-  std::uint64_t interface_version() const noexcept override { return 1; }
-  std::string_view collective_contract() const noexcept override {
-    return "pops.test.hierarchy.flat-identity@1";
-  }
-  std::vector<std::string> capability_contracts() const override {
-    return {"pops.test.hierarchy.flat-identity.direct@1",
-            "pops.test.hierarchy.flat-identity.distributed@1"};
-  }
-  PreparedProviderOptions default_options() const override {
-    return {"pops.test.hierarchy.flat-identity.options@1", {}};
-  }
-  PreparedProviderSupport accepts_options(
-      const PreparedProviderOptions& options) const noexcept override {
-    return options.schema_identity == "pops.test.hierarchy.flat-identity.options@1" &&
-                   options.values.empty()
-               ? PreparedProviderSupport::accept()
-               : PreparedProviderSupport::reject(1, "flat identity options are invalid");
-  }
-  PreparedProviderSupport supports(
-      const HierarchyTensorSolverBuildRequest& request) const noexcept override {
-    const bool accepted =
-        request.levels == 1 && request.level_populated == std::vector<bool>{true} &&
-        request.level_distributions ==
-            std::vector<pops::FieldDistribution>{pops::FieldDistribution::Distributed} &&
-        request.components == 1 &&
-        request.operator_contract_identity == "pops.test.operator.identity@1" &&
-        request.assembly_field_slots == std::vector<std::string>{"pops.test.identity.rhs"} &&
-        request.solution_field_slot == "pops.test.identity.solution" &&
-        accepts_options(request.options).accepted();
-    return accepted ? PreparedProviderSupport::accept()
-                    : PreparedProviderSupport::reject(2, "flat identity request is invalid");
-  }
-  PreparedProviderSupport accepts_execution(
-      const HierarchyTensorSolverBuildRequest& request,
-      HierarchyTensorSolverExecutionPath execution) const noexcept override {
-    return supports(request).accepted() &&
-                   execution == HierarchyTensorSolverExecutionPath::DirectProvider
-               ? PreparedProviderSupport::accept()
-               : PreparedProviderSupport::reject(3, "flat identity execution is invalid");
-  }
-  std::string expected_prepared_contract(
-      const HierarchyTensorSolverBuildRequest& request) const override {
-    pops::ExactContractBuilder contract;
-    contract.text("pops.test.hierarchy.flat-identity.prepared")
-        .scalar(std::uint32_t{1})
-        .text(request.plan_identity)
-        .text(request.operator_contract_identity)
-        .sequence(request.assembly_field_slots, [](pops::ExactContractBuilder& item,
-                                                   const std::string& slot) { item.text(slot); })
-        .text(request.solution_field_slot)
-        .sequence(request.level_populated,
-                  [](pops::ExactContractBuilder& item, bool populated) { item.scalar(populated); })
-        .sequence(request.level_distributions,
-                  [](pops::ExactContractBuilder& item, pops::FieldDistribution distribution) {
-                    item.scalar(distribution);
-                  })
-        .bytes(request.options.exact_contract());
-    return std::move(contract).release();
-  }
-  std::unique_ptr<PreparedHierarchyTensorSolver> prepare(
-      const HierarchyTensorSolverBuildRequest& request) const override {
-    if (!supports(request).accepted())
-      throw std::invalid_argument("flat identity provider rejected the request");
-    return std::make_unique<FlatIdentityPrepared>(expected_prepared_contract(request));
+struct FillTensorManufacturedRhs {
+  pops::Geometry<2> geometry;
+  pops::FieldView<pops::Real, 2> rhs;
+
+  POPS_HD void operator()(const pops::Index<2>& cell) const {
+    const pops::Real x = geometry.cell_coordinate(0, cell[0]);
+    const pops::Real y = geometry.cell_coordinate(1, cell[1]);
+    constexpr pops::Real a_xx = pops::Real(2);
+    constexpr pops::Real a_xy = pops::Real(0.3);
+    constexpr pops::Real a_yx = pops::Real(0.3);
+    constexpr pops::Real a_yy = pops::Real(1.5);
+    rhs(cell, 0) =
+        pops::Real(2) * a_xx * y * (pops::Real(1) - y) +
+        pops::Real(2) * a_yy * x * (pops::Real(1) - x) -
+        (a_xy + a_yx) * (pops::Real(1) - pops::Real(2) * x) * (pops::Real(1) - pops::Real(2) * y);
   }
 };
 
-using ConfigureSolver = void (AmrProgramContext::*)(int, int, const std::string&,
-                                                    const std::string&, const std::string&,
-                                                    const std::vector<std::string>&,
-                                                    const std::string&,
-                                                    const PreparedProviderOptions&) const;
-static_assert(std::is_same_v<decltype(&AmrProgramContext::configure_hierarchy_tensor_solver),
-                             ConfigureSolver>);
+struct ManufacturedError {
+  pops::Geometry<2> geometry;
+  pops::FieldView<const pops::Real, 2> solution;
+  pops::Box<2> region;
 
-TEST(HierarchyTensorSolverProviderContract, BuiltinAdvertisesOnlyItsStructuralEnvelope) {
-  const auto registry =
-      pops::runtime::program::make_default_hierarchy_tensor_solver_provider_registry();
-  const auto provider = registry->resolve("pops.hierarchy.composite-tensor-fac");
-  const std::vector<std::string> capabilities = provider->capability_contracts();
-  EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
-                      "pops.hierarchy.composite-tensor-fac.flat-krylov@1"),
-            capabilities.end());
-  EXPECT_NE(std::find(capabilities.begin(), capabilities.end(),
-                      "pops.hierarchy.composite-tensor-fac.refined-direct@1"),
-            capabilities.end());
-  EXPECT_EQ(provider->default_options().schema_identity,
-            "pops.hierarchy.composite-tensor-fac.options@1");
-}
-
-TEST(HierarchyTensorSolverProviderContract,
-     DistinctCompiledComponentDeclarationIsCollectiveAndAppendOnly) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  registry.add_collectively(std::make_shared<DistinctHierarchyProvider>());
-  registry.add_collectively(std::make_shared<DistinctHierarchyProvider>());
-  EXPECT_EQ(registry.resolve("pops.test.hierarchy.distinct")->capability_contracts(),
-            DistinctHierarchyProvider().capability_contracts());
-  EXPECT_THROW(registry.add_collectively(std::make_shared<DistinctHierarchyProvider>(
-                   "pops.test.hierarchy.distinct.conflict@1")),
-               std::invalid_argument);
-}
-
-TEST(HierarchyTensorSolverProviderContract,
-     CapabilityDeclarationOrderDoesNotChangeTheExactProviderContract) {
-  const DistinctHierarchyProvider first(
-      "pops.test.hierarchy.distinct@1",
-      {"pops.test.hierarchy.distinct.zeta@1", "pops.test.hierarchy.distinct.alpha@1"});
-  const DistinctHierarchyProvider second(
-      "pops.test.hierarchy.distinct@1",
-      {"pops.test.hierarchy.distinct.alpha@1", "pops.test.hierarchy.distinct.zeta@1"});
-  EXPECT_EQ(pops::runtime::program::exact_hierarchy_tensor_solver_provider_declaration(first),
-            pops::runtime::program::exact_hierarchy_tensor_solver_provider_declaration(second));
-}
-
-TEST(HierarchyTensorSolverProviderContract,
-     CapabilityDeclarationsAreOptionalWhenSupportsOwnsCompatibility) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  EXPECT_NO_THROW(registry.add(std::make_shared<DistinctHierarchyProvider>(
-      "pops.test.hierarchy.distinct@1", std::vector<std::string>{})));
-  EXPECT_TRUE(registry.resolve("pops.test.hierarchy.distinct")->capability_contracts().empty());
-}
-
-TEST(HierarchyTensorSolverProviderContract, InvalidDeclarationIsRejectedBeforeRegistryMutation) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  const std::vector<std::string> duplicate_capabilities = {
-      "pops.test.hierarchy.distinct.duplicate@1", "pops.test.hierarchy.distinct.duplicate@1"};
-  EXPECT_THROW(registry.add(std::make_shared<DistinctHierarchyProvider>(
-                   "pops.test.hierarchy.distinct@1", duplicate_capabilities)),
-               std::invalid_argument);
-
-  // The rejected declaration must not reserve the provider identity.
-  EXPECT_NO_THROW(registry.add(std::make_shared<DistinctHierarchyProvider>()));
-  EXPECT_EQ(registry.resolve("pops.test.hierarchy.distinct")->identity(),
-            "pops.test.hierarchy.distinct");
-}
-
-TEST(HierarchyTensorSolverProviderContract,
-     ProviderOwnedSupportCodeAndReasonSurviveTheCollectiveBoundary) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  registry.add(std::make_shared<DistinctHierarchyProvider>());
-  HierarchyTensorSolverBuildRequest request;
-  request.levels = 2;
-  request.options = DistinctHierarchyProvider().default_options();
-
-  try {
-    (void)pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
-        registry, "pops.test.hierarchy.distinct", request);
-    FAIL() << "the one-level provider accepted a two-level request";
-  } catch (const std::invalid_argument& error) {
-    EXPECT_NE(std::string(error.what()).find("code 2"), std::string::npos);
-    EXPECT_NE(std::string(error.what()).find("distinct provider requires one level"),
-              std::string::npos);
+  POPS_HD void operator()(std::int64_t linear, pops::Real& error) const {
+    const int x_index = static_cast<int>(linear % region.length(0)) + region.lo[0];
+    const int y_index = static_cast<int>(linear / region.length(0)) + region.lo[1];
+    const pops::Index<2> cell{x_index, y_index};
+    const pops::Real x = geometry.cell_coordinate(0, x_index);
+    const pops::Real y = geometry.cell_coordinate(1, y_index);
+    const pops::Real exact = x * (pops::Real(1) - x) * y * (pops::Real(1) - y);
+    error = std::max(error, Kokkos::abs(solution(cell, 0) - exact));
   }
+};
+
+pops::runtime::program::HierarchyTensorSolverBuildRequest<2> manufactured_request(
+    int coarse_cells) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{coarse_cells - 1, coarse_cells - 1}};
+  const Geometry<2> coarse_geometry = Geometry<2>::from_bounds(
+      coarse_domain, RealVector<2>{Real(0), Real(0)}, RealVector<2>{Real(1), Real(1)});
+  const mesh::BoxArray<2> coarse_layout(std::vector<Box<2>>{coarse_domain});
+  const mesh::RankSpace<2> rank_space{Index<2>{0, 0}, Extent<2>{1, 1}};
+  const mesh::Distribution<2> coarse_distribution =
+      mesh::Distribution<2>::replicated(coarse_layout, rank_space);
+
+  const amr::RefinementRatio<2> ratio{std::array<int, 2>{2, 2}};
+  const Geometry<2> fine_geometry = coarse_geometry.refine(Extent<2>{2, 2});
+  const int fine_cells = 2 * coarse_cells;
+  const Box<2> fine_patch{Index<2>{fine_cells / 4, fine_cells / 4},
+                          Index<2>{3 * fine_cells / 4 - 1, 3 * fine_cells / 4 - 1}};
+  const mesh::BoxArray<2> fine_layout(std::vector<Box<2>>{fine_patch});
+  const mesh::Distribution<2> fine_distribution = mesh::Distribution<2>::partitioned(
+      fine_layout, rank_space, std::vector<Index<2>>{Index<2>{0, 0}});
+
+  HierarchyTensorSolverBuildRequest<2> result;
+  result.block = 1;
+  result.components = 1;
+  result.levels.push_back(
+      HierarchyTensorLevelBuildRequest<2>{coarse_geometry, homogeneous_dirichlet(coarse_geometry),
+                                          coarse_layout, coarse_distribution, Index<2>{0, 0}});
+  result.levels.push_back(
+      HierarchyTensorLevelBuildRequest<2>{fine_geometry, homogeneous_dirichlet(fine_geometry),
+                                          fine_layout, fine_distribution, Index<2>{0, 0}});
+  result.ratios.push_back(ratio);
+  result.plan_identity = "pops.test.rank2-tensor-mms";
+  result.operator_contract_identity =
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticRank2Contract);
+  result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<2>();
+  result.solution_field_slot = "pops.tensor-elliptic.solution";
+  result.options = tensor_elliptic_detail::default_options();
+  result.options.values.emplace("fac.fine_sweeps", std::int64_t{32});
+  result.options.values.emplace("fac.coarse_cycles", std::int64_t{96});
+  result.options.values.emplace("fac.coarse_rel_tol", 1.0e-10);
+  return result;
 }
 
-TEST(HierarchyTensorSolverProviderContract,
-     FlatDirectProviderOwnsStorageSolveAndPublicationWithoutKrylov) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  registry.add(std::make_shared<FlatIdentityProvider>());
-  HierarchyTensorSolverBuildRequest request;
-  request.components = 1;
-  request.levels = 1;
-  request.level_populated = {true};
-  request.level_distributions = {pops::FieldDistribution::Distributed};
-  request.plan_identity = "pops.test.flat-direct-plan@1";
-  request.operator_contract_identity = "pops.test.operator.identity@1";
-  request.assembly_field_slots = {"pops.test.identity.rhs"};
-  request.solution_field_slot = "pops.test.identity.solution";
-  request.options = FlatIdentityProvider().default_options();
+pops::Real solve_manufactured_error(int coarse_cells) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  auto build_request = manufactured_request(coarse_cells);
+  const std::array<Geometry<2>, 2> geometries{build_request.levels[0].geometry,
+                                              build_request.levels[1].geometry};
+  const Box<2> comparison = build_request.levels[1].layout[0].grow(-std::max(2, coarse_cells / 4));
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>();
+  auto prepared = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(build_request));
 
-  auto prepared = pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
-      registry, "pops.test.hierarchy.flat-identity", request);
-  ASSERT_EQ(prepared->execution_path(), HierarchyTensorSolverExecutionPath::DirectProvider);
-  prepared->assembly_target("pops.test.identity.rhs", 0).set_val(Real(3.25));
-  prepared->solution(0).set_val(Real(-7));
-  pops::SolveOutcome outcome = pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-      *prepared, {Real(1.0e-12), Real(0), 1});
-  ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
-  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(7))
-      << "the provider solution must remain physically unchanged before Accept";
-  const pops::SolveReport report = outcome.consume(pops::SolveConsumption::kAccept);
-  ASSERT_TRUE(report.solved()) << report.reason;
-  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(3.25));
+  for (int level = 0; level < prepared->level_count(); ++level) {
+    prepared->assembly_target("pops.tensor-elliptic.coefficient.0.0", level).set_val(Real(2));
+    prepared->assembly_target("pops.tensor-elliptic.coefficient.0.1", level).set_val(Real(0.3));
+    prepared->assembly_target("pops.tensor-elliptic.coefficient.1.0", level).set_val(Real(0.3));
+    prepared->assembly_target("pops.tensor-elliptic.coefficient.1.1", level).set_val(Real(1.5));
+    auto& rhs = prepared->assembly_target("pops.tensor-elliptic.rhs", level);
+    for (std::size_t local = 0; local < rhs.local_size(); ++local)
+      for_each_cell(rhs.box(local),
+                    FillTensorManufacturedRhs{geometries[static_cast<std::size_t>(level)],
+                                              rhs.fab(local).view()});
+    prepared->stage_initial_guess(level, nullptr);
+  }
+  Kokkos::fence();
+
+  SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
+      *prepared, HierarchyTensorSolveControls{Real(8e-7), Real(1e-12), 60});
+  const SolveReport report = outcome.consume(SolveConsumption::kAccept);
+  if (!report.solved())
+    throw std::runtime_error("rank-two tensor MMS did not converge: " + report.reason);
+
+  const auto& fine = prepared->solution(1);
+  Real error = Real(0);
+  Kokkos::parallel_reduce(
+      "pops_rank2_tensor_mms_error", Kokkos::RangePolicy<std::int64_t>(0, comparison.numPts()),
+      ManufacturedError{geometries[1], std::as_const(fine.fab(0)).view(), comparison},
+      Kokkos::Max<Real>(error));
+  Kokkos::fence();
+  return error;
 }
 
-TEST(HierarchyTensorSolverProviderContract,
-     DelayedAcceptRejectsDestinationLayoutDriftBeforePublication) {
-  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
-  registry.add(std::make_shared<FlatIdentityProvider>());
-  HierarchyTensorSolverBuildRequest request;
-  request.components = 1;
-  request.levels = 1;
-  request.level_populated = {true};
-  request.level_distributions = {pops::FieldDistribution::Distributed};
-  request.plan_identity = "pops.test.flat-direct-layout-drift@1";
-  request.operator_contract_identity = "pops.test.operator.identity@1";
-  request.assembly_field_slots = {"pops.test.identity.rhs"};
-  request.solution_field_slot = "pops.test.identity.solution";
-  request.options = FlatIdentityProvider().default_options();
-
-  auto prepared = pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
-      registry, "pops.test.hierarchy.flat-identity", request);
-  prepared->assembly_target("pops.test.identity.rhs", 0).set_val(Real(4.5));
-  pops::SolveOutcome outcome = pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-      *prepared, {Real(1.0e-12), Real(0), 1});
-  ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
-
-  const pops::BoxArray boxes = prepared->solution(0).box_array();
-  const pops::DistributionMapping mapping = prepared->solution(0).dmap();
-  prepared->solution(0) = pops::MultiFab(boxes, mapping, 1, 1);
-  EXPECT_THROW((void)outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
-
-  prepared->solution(0) = pops::MultiFab(boxes, mapping, 1, 0);
-  EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
-  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(4.5));
+template <int Dim>
+void expect_rank_rejected() {
+  using namespace pops::runtime::program;
+  CompositeTensorHierarchyProvider<Dim> provider;
+  const pops::PreparedProviderSupport support = provider.supports(request<Dim>());
+  EXPECT_FALSE(support.accepted());
+  EXPECT_EQ(support.code, 10u);
 }
 
-TEST(HierarchyTensorSolverProviderContract,
-     MalformedThirdPartyReportsAreRejectedAtTheCollectivePublicationBoundary) {
-  const pops::runtime::program::HierarchyTensorSolveControls controls{Real(1.0e-8), Real(0), 4};
-
-  pops::SolveReport invalid_status;
-  invalid_status.status = static_cast<pops::SolveStatus>(999);
-  invalid_status.action = pops::SolveAction::kFailRun;
-  invalid_status.reason = "unknown provider status";
-  ReportOnlyHierarchyPrepared invalid_status_solver(invalid_status);
-  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-                   invalid_status_solver, controls),
-               std::runtime_error);
-
-  pops::SolveReport invalid_action;
-  invalid_action.status = pops::SolveStatus::kBreakdown;
-  invalid_action.action = static_cast<pops::SolveAction>(999);
-  invalid_action.reason = "unknown provider action";
-  ReportOnlyHierarchyPrepared invalid_action_solver(invalid_action);
-  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-                   invalid_action_solver, controls),
-               std::runtime_error);
-
-  pops::SolveReport nonfinite;
-  nonfinite.mark_solved();
-  nonfinite.residual_norm = std::numeric_limits<Real>::quiet_NaN();
-  ReportOnlyHierarchyPrepared nonfinite_solver(nonfinite);
-  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-                   nonfinite_solver, controls),
-               std::runtime_error);
-
-  pops::SolveReport impossible_iterations;
-  impossible_iterations.mark_solved();
-  impossible_iterations.iters = controls.maximum_iterations + 1;
-  ReportOnlyHierarchyPrepared impossible_iterations_solver(impossible_iterations);
-  EXPECT_THROW((void)pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
-                   impossible_iterations_solver, controls),
-               std::runtime_error);
+TEST(HierarchyTensorExactRank, OneAndThreeDimensionalRequestsFailAtPreparation) {
+  expect_rank_rejected<1>();
+  expect_rank_rejected<3>();
 }
 
-TEST(HierarchyTensorSolverProviderContract,
-     ProgramContextRegistersADistinctProviderThroughTheRuntimeFacade) {
-  pops::AmrSystem system(pops::AmrSystemConfig{16});
-  AmrProgramContext context(nullptr, &system);
-  context.register_hierarchy_tensor_solver_provider(std::make_shared<DistinctHierarchyProvider>());
-  EXPECT_EQ(system.hierarchy_tensor_solver_provider_registry()
-                ->resolve("pops.test.hierarchy.distinct")
-                ->collective_contract(),
-            "pops.test.hierarchy.distinct@1");
+TEST(HierarchyTensorExactRank, RankTwoProvidesTheBuiltinFullTensorFacKernel) {
+  using namespace pops::runtime::program;
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>();
+  const auto provider = registry->resolve(tensor_elliptic_detail::kCompositeTensorProvider);
+  const pops::PreparedProviderSupport support = provider->supports(request<2>(true));
+  EXPECT_TRUE(support.accepted());
 }
 
-TEST(AmrProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
-  AmrProgramContext context(nullptr, nullptr);
-  EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+TEST(HierarchyTensorExactRank, RankTwoPublishesOnlyAfterSolveOutcomeAccept) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+
+  PreparedHierarchyTensorKernel<2> kernel{ExactIdentityTensorKernel<2>{}};
+  const auto registry = make_hierarchy_tensor_solver_provider_registry<2>(std::move(kernel));
+  auto prepared = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<2>(true));
+
+  EXPECT_EQ(prepared->level_count(), 2);
+  EXPECT_EQ(prepared->assembly_target("pops.tensor-elliptic.flux", 0).ncomp(), 2);
+  FieldView<Real, 2> coefficient =
+      prepared->assembly_target_view("pops.tensor-elliptic.coefficient.1.0", 0, 0);
+  EXPECT_EQ(coefficient.ncomp, 1);
+
+  prepared->assembly_target("pops.tensor-elliptic.rhs", 0).set_val(Real(2));
+  prepared->solution(0).set_val(Real(0));
+  SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
+      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4});
+
+  EXPECT_EQ(norm_inf(prepared->solution(0)), Real(0));
+  const SolveReport accepted = outcome.consume(SolveConsumption::kAccept);
+  EXPECT_TRUE(accepted.solved());
+  EXPECT_EQ(norm_inf(prepared->solution(0)), Real(2));
 }
 
-TEST(AmrTensorFacSolver, OmittedFacControlsResolveFromNativeOptionsOnly) {
-  AmrTensorElliptic driver(nullptr, 0, 1);
-  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(0), 23), std::logic_error);
-
-  driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, -1);
-  const pops::CompositeFacOptions options =
-      driver.composite_fac_options(Real(3.0e-8), Real(2.0e-12), 23);
-
-  EXPECT_EQ(options.max_iters, 23);
-  EXPECT_EQ(options.rel_tol, Real(3.0e-8));
-  EXPECT_EQ(options.abs_tol, Real(2.0e-12));
-  EXPECT_EQ(options.fine_sweeps, pops::kFACDefaultFineSweeps);
-  EXPECT_EQ(options.coarse_rel_tol, pops::kFACInitialCoarseRelTol);
-  EXPECT_EQ(options.coarse_abs_tol, pops::kFACInitialCoarseAbsTol);
-  EXPECT_EQ(options.coarse_cycles, pops::kFACInitialCoarseMaxCycles);
-  EXPECT_FALSE(options.verbose);
+TEST(HierarchyTensorExactRank, BuiltinRankTwoFacSolvesARealCrossTensorMms) {
+  const pops::Real coarse_error = solve_manufactured_error(8);
+  const pops::Real fine_error = solve_manufactured_error(16);
+  ASSERT_GT(coarse_error, pops::Real(0));
+  ASSERT_GT(fine_error, pops::Real(0));
+  EXPECT_LT(fine_error, coarse_error);
+  const pops::Real observed_order = std::log(coarse_error / fine_error) / std::log(pops::Real(2));
+  EXPECT_GE(observed_order, pops::Real(1.5))
+      << "coarse_error=" << coarse_error << " fine_error=" << fine_error;
 }
 
-TEST(AmrTensorFacSolver, ExplicitFacControlsJoinDirectSolverControls) {
-  AmrTensorElliptic driver(nullptr, 0, 1);
-  driver.configure_composite_tensor_fac(7, Real(2.0e-7), Real(4.0e-14), 9, 1);
-  pops::CompositeFacOptions options = driver.composite_fac_options(Real(4.0e-8), Real(3.0e-13), 17);
-
-  EXPECT_EQ(options.max_iters, 17);
-  EXPECT_EQ(options.rel_tol, Real(4.0e-8));
-  EXPECT_EQ(options.abs_tol, Real(3.0e-13));
-  EXPECT_EQ(options.fine_sweeps, 7);
-  EXPECT_EQ(options.coarse_rel_tol, Real(2.0e-7));
-  EXPECT_EQ(options.coarse_abs_tol, Real(4.0e-14));
-  EXPECT_EQ(options.coarse_cycles, 9);
-  EXPECT_TRUE(options.verbose);
-
-  driver.configure_composite_tensor_fac(8, Real(3.0e-7), Real(5.0e-14), 10, 0);
-  options = driver.composite_fac_options(Real(5.0e-8), Real(4.0e-13), 19);
-  EXPECT_EQ(options.max_iters, 19);
-  EXPECT_EQ(options.rel_tol, Real(5.0e-8));
-  EXPECT_EQ(options.abs_tol, Real(4.0e-13));
-  EXPECT_EQ(options.fine_sweeps, 8);
-  EXPECT_EQ(options.coarse_rel_tol, Real(3.0e-7));
-  EXPECT_EQ(options.coarse_abs_tol, Real(5.0e-14));
-  EXPECT_EQ(options.coarse_cycles, 10);
-  EXPECT_FALSE(options.verbose);
-}
-
-TEST(AmrTensorFacSolver, WireAndDirectSolverControlsAreStrictlyValidated) {
-  AmrTensorElliptic driver(nullptr, 0, 1);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(-1, Real(0), Real(0), 0, -1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(-1.0e-7), Real(0), 0, -1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(1), Real(0), 0, -1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, std::numeric_limits<Real>::quiet_NaN(),
-                                                     Real(0), 0, -1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(0), -1, -1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, -2),
-               std::invalid_argument);
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, 2),
-               std::invalid_argument);
-
-  EXPECT_THROW(driver.configure_composite_tensor_fac(0, Real(0), Real(-1), 0, -1),
-               std::invalid_argument);
-  driver.configure_composite_tensor_fac(0, Real(0), Real(0), 0, -1);
-  EXPECT_THROW(driver.composite_fac_options(Real(0), Real(0), 1), std::invalid_argument);
-  EXPECT_THROW(driver.composite_fac_options(std::numeric_limits<Real>::quiet_NaN(), Real(0), 1),
-               std::invalid_argument);
-  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(-1), 1), std::invalid_argument);
-  EXPECT_THROW(
-      driver.composite_fac_options(Real(1.0e-8), std::numeric_limits<Real>::quiet_NaN(), 1),
-      std::invalid_argument);
-  EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(0), 0), std::invalid_argument);
-}
-
-TEST(AmrTensorFacSolver, NonScalarOperatorIsRejectedAtTheNativeBoundary) {
-  EXPECT_THROW((AmrTensorElliptic(nullptr, 0, 2)), std::invalid_argument);
+TEST(HierarchyTensorExactRank, ContractsAuthenticateRankGeometryAndOwnership) {
+  using namespace pops::runtime::program;
+  const auto one = request<1>();
+  const auto two = request<2>();
+  const auto three = request<3>();
+  const std::string one_contract = hierarchy_tensor_detail::request_contract(one);
+  const std::string two_contract = hierarchy_tensor_detail::request_contract(two);
+  const std::string three_contract = hierarchy_tensor_detail::request_contract(three);
+  EXPECT_NE(one_contract, two_contract);
+  EXPECT_NE(two_contract, three_contract);
+  EXPECT_NE(one_contract, three_contract);
 }
 
 }  // namespace

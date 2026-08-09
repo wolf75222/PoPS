@@ -3,54 +3,114 @@
 This module contains only backend lowering.  Runtime selection lives in
 ``_runtime_executor`` and therefore never depends on historical target strings.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
 def _uniform_system_values(
-    mesh: Any,
-) -> tuple[int, float, tuple[bool, bool], float, float]:
-    """Project exactly the uniform mesh shapes representable by native ``SystemConfig``."""
-    from pops.mesh.grid import CartesianGrid
+    native_layout: Any,
+) -> tuple[
+    tuple[int, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[bool, ...],
+    tuple[tuple[tuple[int, ...], tuple[int, ...]], ...],
+    str,
+]:
+    """Project one exact ranked uniform layout into ``SystemConfig<Dim>`` values."""
+    from pops.mesh import NativeSpatialLayout
 
-    if type(mesh) is not CartesianGrid:
+    if type(native_layout) is not NativeSpatialLayout:
+        raise TypeError("native uniform lowering requires an exact NativeSpatialLayout")
+    dimension = native_layout.dimension
+    expected_coordinates, expected_measure = cartesian_geometry_contract(dimension)
+    if (
+        native_layout.coordinate_system != expected_coordinates
+        or native_layout.cell_measure != expected_measure
+        or native_layout.centering != "cell"
+    ):
         raise NotImplementedError(
-            "native uniform System lowering requires an exact pops.mesh.CartesianGrid; "
-            "construct it from a framed pops.domain.Rectangle")
-    if mesh.cells[0] != mesh.cells[1]:
+            "native uniform SystemConfig<%d> requires the exact cell-centered Cartesian "
+            "coordinate and measure providers" % dimension
+        )
+    shape = native_layout.shape
+    decomposition = native_layout.decomposition
+    if decomposition.get("schema_version") != 1:
+        raise TypeError("native uniform decomposition uses an unsupported schema")
+    boxes = decomposition.get("boxes")
+    if (
+        decomposition.get("kind") not in {"single_box", "axis_bands"}
+        or not isinstance(boxes, (tuple, list))
+        or not boxes
+    ):
         raise NotImplementedError(
-            "native SystemConfig has one n and cannot represent a rectangular CartesianGrid")
-    lengths = mesh.frame.lengths
-    if lengths[0] != lengths[1]:
-        raise NotImplementedError(
-            "native SystemConfig has one L and cannot represent anisotropic CartesianGrid extents")
-    periodic_axes = mesh.topology.periodic_axes
-    periodic_indices = {axis.index for axis in periodic_axes}
+            "native uniform SystemConfig requires an explicit ranked box decomposition"
+        )
+    ranked_boxes: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    for index, box in enumerate(boxes):
+        if not isinstance(box, Mapping) or set(box) != {"lower", "upper_exclusive"}:
+            raise TypeError("native uniform box %d has an unsupported schema" % index)
+        lower = tuple(box["lower"])
+        upper = tuple(box["upper_exclusive"])
+        if (
+            len(lower) != dimension
+            or len(upper) != dimension
+            or any(type(value) is not int for value in lower + upper)
+        ):
+            raise TypeError("native uniform boxes must contain exact ranked integer bounds")
+        if any(
+            low < 0 or high <= low or high > extent
+            for low, high, extent in zip(lower, upper, shape, strict=True)
+        ):
+            raise ValueError("native uniform box lies outside the exact layout shape")
+        ranked_boxes.append((lower, upper))
+    for index, (lower, upper) in enumerate(ranked_boxes):
+        for other_lower, other_upper in ranked_boxes[:index]:
+            if all(
+                max(low, other_low) < min(high, other_high)
+                for low, high, other_low, other_high in zip(
+                    lower, upper, other_lower, other_upper, strict=True
+                )
+            ):
+                raise ValueError("native uniform decomposition contains overlapping boxes")
+    covered = sum(
+        math.prod(high - low for low, high in zip(lower, upper, strict=True))
+        for lower, upper in ranked_boxes
+    )
+    if covered != math.prod(shape):
+        raise ValueError("native uniform decomposition does not tile the exact layout shape")
     return (
-        int(mesh.cells[0]),
-        float(lengths[0]),
-        (0 in periodic_indices, 1 in periodic_indices),
-        float(mesh.frame.lower[0]),
-        float(mesh.frame.lower[1]),
+        tuple(shape),
+        tuple(native_layout.lower),
+        tuple(native_layout.upper),
+        native_layout.periodicity,
+        tuple(ranked_boxes),
+        native_layout.coordinate_system,
     )
 
 
-def system_config_from_layout(layout: Any) -> Any:
+def system_config_from_layout(native_layout: Any) -> Any:
     """Build the native uniform config from an authenticated layout descriptor."""
     from pops._bootstrap import SystemConfig
 
-    n, extent, periodicity, xlo, ylo = _uniform_system_values(layout.mesh)
+    shape, lower, upper, periodicity, boxes, coordinate_system = _uniform_system_values(
+        native_layout
+    )
     cfg = SystemConfig()
-    cfg.n = n
-    cfg.L = extent
+    cfg.shape = shape
+    cfg.lower = lower
+    cfg.upper = upper
     cfg.periodicity = periodicity
-    cfg.xlo = xlo
-    cfg.ylo = ylo
+    cfg.boxes = boxes
+    cfg.coordinate_system = coordinate_system
     return cfg
 
 
@@ -69,8 +129,11 @@ def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
     embedded = options.get("embedded_boundary") if isinstance(options, dict) else None
     if embedded is None:
         return
-    if not hasattr(embedded, "get") or embedded.get("schema_version") != 1 \
-            or set(embedded) != {"schema_version", "level_set", "boundary", "transport"}:
+    if (
+        not hasattr(embedded, "get")
+        or embedded.get("schema_version") != 1
+        or set(embedded) != {"schema_version", "level_set", "boundary", "transport"}
+    ):
         raise TypeError("normalized embedded-boundary data has an unsupported shape")
     if embedded["boundary"] != {"provider": "zero_flux"}:
         raise NotImplementedError(
@@ -88,11 +151,15 @@ def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
     from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
     ((opcodes, literals),) = lower_analytic_components(
-        (level_set.expression.to_data(),), frame_id=frame_id,
+        (level_set.expression.to_data(),),
+        frame_id=frame_id,
     )
     transport = embedded["transport"]
     if not hasattr(transport, "get") or set(transport) != {
-        "mode", "kappa_min", "face_open_eps", "cut_theta_min",
+        "mode",
+        "kappa_min",
+        "face_open_eps",
+        "cut_theta_min",
     }:
         raise TypeError("normalized embedded transport data has an unsupported shape")
     sim._s._set_analytic_level_set(
@@ -106,15 +173,22 @@ def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
 
 
 def flow_bootstrap_tagging(
-    sim: Any, bootstrap: Any, params: Any, *, clock_identity: str,
+    sim: Any,
+    bootstrap: Any,
+    params: Any,
+    *,
+    clock_identity: str,
     field_plans: Any = None,
 ) -> None:
     """Compile one authenticated tagging graph to the native data-only VM."""
     if not isinstance(clock_identity, str) or not clock_identity:
         raise ValueError("pops.bind: AMR tagging requires one exact clock identity")
     data = bootstrap.tagging.runtime_tagging_data(params)
-    if type(data) is not dict or data.get("schema_version") != 1 \
-            or data.get("graph_type") != "amr_tagging_runtime":
+    if (
+        type(data) is not dict
+        or data.get("schema_version") != 1
+        or data.get("graph_type") != "amr_tagging_runtime"
+    ):
         raise ValueError("pops.bind: tagging provider returned an unsupported runtime manifest")
 
     registrations = {}
@@ -123,9 +197,12 @@ def flow_bootstrap_tagging(
             raise ValueError("pops.bind: malformed tagging lowering registration")
         node_type = row.get("node_type")
         lowering = row.get("lowering", {})
-        if not isinstance(node_type, str) or not node_type \
-                or lowering.get("kind") != "tag_lowering" \
-                or lowering.get("local_id") != node_type:
+        if (
+            not isinstance(node_type, str)
+            or not node_type
+            or lowering.get("kind") != "tag_lowering"
+            or lowering.get("local_id") != node_type
+        ):
             raise ValueError("pops.bind: unauthenticated tagging lowering registration")
         if node_type in registrations:
             raise ValueError("pops.bind: duplicate tagging lowering registration")
@@ -143,8 +220,7 @@ def flow_bootstrap_tagging(
             )
         if identity in field_plans_by_identity:
             raise ValueError(
-                "pops.bind: multiple resolved field plans claim solved-field identity %s"
-                % identity
+                "pops.bind: multiple resolved field plans claim solved-field identity %s" % identity
             )
         field_plans_by_identity[identity] = plan
     leaves: list[tuple[str, str, str, str, int, int, float, int]] = []
@@ -165,37 +241,45 @@ def flow_bootstrap_tagging(
             subject_kind = indicator["kind"]
             subject_identity = indicator.get("qualified_id")
             if not isinstance(subject_identity, str) or not subject_identity:
-                raise ValueError("pops.bind: native tag leaves require a qualified subject identity")
+                raise ValueError(
+                    "pops.bind: native tag leaves require a qualified subject identity"
+                )
             variable = node.get("variable", indicator.get("local_id"))
             threshold = node.get("threshold")
-            if not isinstance(variable, str) or not variable \
-                    or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            if (
+                not isinstance(variable, str)
+                or not variable
+                or isinstance(threshold, bool)
+                or not isinstance(threshold, (int, float))
+            ):
                 raise TypeError("pops.bind: malformed native tag leaf")
             block_name = ""
             field_component_index = -1
             if subject_kind == "state":
                 block = indicator.get("block_ref")
                 if type(block) is not dict or not isinstance(block.get("local_id"), str):
-                    raise ValueError(
-                        "pops.bind: native state tag leaves must be block-qualified")
+                    raise ValueError("pops.bind: native state tag leaves must be block-qualified")
                 block_name = block["local_id"]
             else:
                 plan = field_plans_by_identity.get(subject_identity)
                 if plan is None:
                     raise ValueError(
-                        "pops.bind: native field tag leaf has no authenticated field plan")
+                        "pops.bind: native field tag leaf has no authenticated field plan"
+                    )
                 options = getattr(plan, "native_options", None)
                 output = options.get("output_route") if isinstance(options, Mapping) else None
                 components = output.get("components") if isinstance(output, Mapping) else None
                 if not isinstance(components, (list, tuple)) or components.count(variable) != 1:
                     raise ValueError(
-                        "pops.bind: native field tag leaf is absent from its prepared output route")
+                        "pops.bind: native field tag leaf is absent from its prepared output route"
+                    )
                 field_component_index = components.index(variable)
             stencil_index = -1
             if node_type in {"gradient_above", "gradient_below"}:
                 context = node.get("discrete_context")
-                lowering_data = context.get("stencil_lowering") \
-                    if isinstance(context, dict) else None
+                lowering_data = (
+                    context.get("stencil_lowering") if isinstance(context, dict) else None
+                )
                 from pops.numerics.indicator_stencils import DiscreteGradientStencil
 
                 lowering = DiscreteGradientStencil.from_data(lowering_data)
@@ -208,11 +292,20 @@ def flow_bootstrap_tagging(
                     stencils.append(canonical)
                 elif stencils[stencil_index] != canonical:
                     raise ValueError(
-                        "pops.bind: AMR stencil identity collision changed coefficients")
-            leaves.append((
-                subject_kind, subject_identity, block_name, variable, field_component_index,
-                leaf_op, float(threshold), stencil_index,
-            ))
+                        "pops.bind: AMR stencil identity collision changed coefficients"
+                    )
+            leaves.append(
+                (
+                    subject_kind,
+                    subject_identity,
+                    block_name,
+                    variable,
+                    field_component_index,
+                    leaf_op,
+                    float(threshold),
+                    stencil_index,
+                )
+            )
             return [leaf_op], [len(leaves) - 1]
 
         logical_op = _TAG_LOGICAL_OPS.get(node_type)
@@ -254,11 +347,26 @@ def flow_bootstrap_tagging(
         "resolved_graph_identity": bootstrap.tagging.qualified_id,
         "stencils": stencils,
         "leaves": [
-            {"subject_kind": kind, "subject_identity": identity, "block": block,
-             "variable": variable, "field_component_index": component_index,
-             "opcode": opcode, "threshold": threshold, "stencil_index": stencil_index}
-            for (kind, identity, block, variable, component_index, opcode, threshold,
-                 stencil_index) in leaves
+            {
+                "subject_kind": kind,
+                "subject_identity": identity,
+                "block": block,
+                "variable": variable,
+                "field_component_index": component_index,
+                "opcode": opcode,
+                "threshold": threshold,
+                "stencil_index": stencil_index,
+            }
+            for (
+                kind,
+                identity,
+                block,
+                variable,
+                component_index,
+                opcode,
+                threshold,
+                stencil_index,
+            ) in leaves
         ],
         "refine_opcodes": refine_ops,
         "refine_arguments": refine_args,

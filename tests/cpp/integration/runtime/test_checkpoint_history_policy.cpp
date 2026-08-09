@@ -8,9 +8,7 @@
 
 #include <pops/mesh/storage/mf_arith.hpp>  // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/physics/bricks/source.hpp>                // NoSource
-#include <pops/physics/composition/composite.hpp>        // CompositeModel
-#include <pops/physics/fluids/euler.hpp>                 // Euler
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
@@ -24,6 +22,16 @@
 
 using namespace pops;
 
+namespace pops {
+
+template <int Dim, class Model>
+PreparedSystemBlock<Dim> prepare_exact_system_block(
+    CompiledSystemBlockPreparation<Dim, Model> request) {
+  return prepare_generated_system_block(std::move(request));
+}
+
+}  // namespace pops
+
 namespace {
 
 // ONE Kokkos ScopeGuard for the whole TU: a function-local static initialized on the first call and
@@ -35,26 +43,25 @@ void kokkos() {
 #endif
 }
 
-struct NoEll {
-  template <class State>
-  POPS_HD Real rhs(const State&) const {
-    return Real(0);
-  }
-};
-using GasModel = CompositeModel<Euler, NoSource, NoEll>;
 constexpr double kGamma = 1.4;
+constexpr int kTestDimension = kNativeDimension;
+using NativeSystem = System<kTestDimension>;
+using NativeSystemConfig = SystemConfig<kTestDimension>;
+using NativeField = MultiFab<kTestDimension>;
+using NativeGasLaw = nd::IdealGasEuler<kTestDimension>;
 
-void add_gas_block(System& s, const std::string& name) {
-  add_compiled_model(s, name, GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
-                     "conservative", "explicit", kGamma);
+void add_gas_block(NativeSystem& s, const std::string& name) {
+  s.install_block_state_route(name, "test.checkpoint-history-policy." + name + ".state@1");
+  add_compiled_model(s, name, NativeGasLaw::prepare(kGamma), "minmod", "rusanov", "conservative",
+                     "explicit", kGamma);
 }
 
-void add_gas(System& s) {
+void add_gas(NativeSystem& s) {
   add_gas_block(s, "gas");
-  s.set_poisson("charge_density", "geometric_mg");
+  s.set_poisson("charge_density", "cartesian_cg");
 }
 
-void register_state_history(System& s, const std::string& ring, int depth, int owner = 0) {
+void register_state_history(NativeSystem& s, const std::string& ring, int depth, int owner = 0) {
   s.register_history(ring, depth - 1, -1, owner, "test.state." + std::to_string(owner),
                      "test.space", "test.clock", "test.exact");
 }
@@ -64,27 +71,30 @@ void register_state_history(System& s, const std::string& ring, int depth, int o
 // with its starting sample (the outgoing interval toward the newer sample). `inc` scales with dt so
 // a variable-dt run with multiple independent gaps proves that exact provenance. The closure
 // captures &s; s must outlive it.
-void install_ramp_program(System& s, const std::string& ring, double rate, int owner = 0,
+void install_ramp_program(NativeSystem& s, const std::string& ring, double rate, int owner = 0,
                           int* executed_steps = nullptr) {
-  System* self = &s;
+  NativeSystem* self = &s;
   self->install_program_step([self, ring, rate, owner, executed_steps](double dt) {
     if (executed_steps != nullptr)
       ++*executed_steps;
-    MultiFab& U = self->block_state(owner);
+    NativeField& U = self->block_state(owner);
     self->store_history(ring, U);
     // Advance: U += rate*dt (a deterministic, dt-dependent conservative increment on every component).
-    MultiFab bump = U;  // same layout
+    NativeField bump = U;  // same layout
     bump.set_val(Real(rate) * Real(dt));
     pops::saxpy(U, Real(1), bump);
     self->rotate_histories();
   });
 }
 
-SystemConfig make_cfg() {
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
+NativeSystemConfig make_cfg() {
+  NativeSystemConfig cfg;
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    cfg.shape[axis] = 8;
+    cfg.lower[axis] = Real(0);
+    cfg.upper[axis] = Real(1);
+    cfg.periodicity[axis] = true;
+  }
   return cfg;
 }
 
@@ -92,13 +102,13 @@ SystemConfig make_cfg() {
 
 TEST(CheckpointHistoryPolicy, DirectStepCannotAuthorizeIntervalOrRevolveSelectiveReplay) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   constexpr int depth = 5;
   const std::vector<std::vector<int>> policies = {{0, 2, 4}, {0, 1, 4}};
 
   for (const auto& stored : policies) {
-    System system(cfg);
+    NativeSystem system(cfg);
     add_gas(system);
     register_state_history(system, ring, depth);
     int executed_steps = 0;
@@ -125,10 +135,10 @@ TEST(CheckpointHistoryPolicy, DirectStepCannotAuthorizeIntervalOrRevolveSelectiv
 
 TEST(CheckpointHistoryPolicy, DenseIsANoOpWithoutArtifactReplayAuthority) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   constexpr int depth = 5;
-  System system(cfg);
+  NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
   int executed_steps = 0;
@@ -147,10 +157,10 @@ TEST(CheckpointHistoryPolicy, DenseIsANoOpWithoutArtifactReplayAuthority) {
 
 TEST(CheckpointHistoryPolicy, VariableDtDirectStepStillLacksArtifactReplayAuthority) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   constexpr int depth = 5;
-  System system(cfg);
+  NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
   int executed_steps = 0;
@@ -177,13 +187,13 @@ TEST(CheckpointHistoryPolicy, VariableDtDirectStepStillLacksArtifactReplayAuthor
 
 TEST(CheckpointHistoryPolicy, QualifiedNonzeroOwnerStillRequiresArtifactReplayAuthority) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "second_state_prev";
   constexpr int depth = 5;
-  System system(cfg);
+  NativeSystem system(cfg);
   add_gas_block(system, "first");
   add_gas_block(system, "second");
-  system.set_poisson("charge_density", "geometric_mg");
+  system.set_poisson("charge_density", "cartesian_cg");
   register_state_history(system, ring, depth, /*owner=*/1);
   int executed_steps = 0;
   install_ramp_program(system, ring, 2.0, /*owner=*/1, &executed_steps);
@@ -210,10 +220,10 @@ TEST(CheckpointHistoryPolicy, QualifiedNonzeroOwnerStillRequiresArtifactReplayAu
 
 TEST(CheckpointHistoryPolicy, SelectiveReplayRefusesNonDefaultProgramCadence) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   constexpr int depth = 5;
-  System system(cfg);
+  NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
   install_ramp_program(system, ring, 1.0);
@@ -235,10 +245,10 @@ TEST(CheckpointHistoryPolicy, SelectiveReplayRefusesNonDefaultProgramCadence) {
 
 TEST(CheckpointHistoryPolicy, InvalidOutgoingDtFailsBeforeSelectiveReplayMutation) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   constexpr int depth = 3;
-  System system(cfg);
+  NativeSystem system(cfg);
   add_gas(system);
   register_state_history(system, ring, depth);
   int executed_steps = 0;
@@ -268,10 +278,10 @@ TEST(CheckpointHistoryPolicy, InvalidOutgoingDtFailsBeforeSelectiveReplayMutatio
 // (D) The oldest slot MUST be stored: a policy whose stored set omits slot depth-1 is refused verbatim.
 TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   const int depth = 5;
-  System s(cfg);
+  NativeSystem s(cfg);
   add_gas(s);
   install_ramp_program(s, ring, 1.0);
   register_state_history(s, ring, depth);
@@ -294,10 +304,10 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
 // (E) The newest slot MUST be stored: there is no newer anchor from which to fill it backwards.
 TEST(CheckpointHistoryPolicy, RebuildRefusesMissingNewestSlot) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
   const int depth = 5;
-  System s(cfg);
+  NativeSystem s(cfg);
   add_gas(s);
   register_state_history(s, ring, depth);
   install_ramp_program(s, ring, 1.0);
@@ -321,9 +331,9 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingNewestSlot) {
 // (F) Replay requires an installed Program: rebuild without a program fails loud (never a silent skip).
 TEST(CheckpointHistoryPolicy, RebuildRefusesWithoutInstalledProgram) {
   kokkos();
-  const SystemConfig cfg = make_cfg();
+  const NativeSystemConfig cfg = make_cfg();
   const std::string ring = "state_prev";
-  System s(cfg);
+  NativeSystem s(cfg);
   add_gas(s);
   register_state_history(s, ring, /*depth=*/4);
   s.restore_history(ring, 0, s.history_global(ring, 0));

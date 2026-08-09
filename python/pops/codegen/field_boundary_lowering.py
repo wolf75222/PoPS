@@ -1,4 +1,5 @@
 """Resolve field topology and physical-face laws into exact native records."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -63,11 +64,13 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
     kind = data.get("layout")
     if kind == "amr":
         levels = _exact_positive_int(
-            data.get("max_levels"), where="AMR field layout max_levels", minimum=1)
+            data.get("max_levels"), where="AMR field layout max_levels", minimum=1
+        )
         raw_ratios = data.get("transition_ratios")
         if not isinstance(raw_ratios, (list, tuple)):
             raise TypeError(
-                "AMR field layout transition_ratios must be an ordered integer sequence")
+                "AMR field layout transition_ratios must be an ordered integer sequence"
+            )
         ratios = tuple(
             _exact_positive_int(
                 value,
@@ -79,36 +82,38 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
         if len(ratios) != levels - 1:
             raise ValueError(
                 "AMR field layout transition_ratios must contain exactly one ratio per "
-                "coarse/fine transition")
+                "coarse/fine transition"
+            )
         refinements = [1]
         for ratio in ratios:
             refinements.append(refinements[-1] * ratio)
         candidates = [
-            value for value in (getattr(layout, "grid", None), getattr(layout, "base", None))
+            value
+            for value in (getattr(layout, "grid", None), getattr(layout, "base", None))
             if value is not None
         ]
         if len(candidates) != 1:
-            raise TypeError(
-                "AMR field layout must expose exactly one grid/base mesh provider")
+            raise TypeError("AMR field layout must expose exactly one grid/base mesh provider")
         embedded = getattr(layout, "embedded_boundary", None)
         if embedded is not None:
             raise TypeError(
                 "AMR field layout advertises an embedded boundary without a typed field "
-                "topology provider")
-        return FieldLayoutContract(
-            kind, candidates[0], None, levels, ratios, tuple(refinements))
+                "topology provider"
+            )
+        return FieldLayoutContract(kind, candidates[0], None, levels, ratios, tuple(refinements))
     if kind == "uniform":
-        levels = _exact_positive_int(
-            data.get("levels"), where="uniform field layout levels")
+        levels = _exact_positive_int(data.get("levels"), where="uniform field layout levels")
         if levels != 1:
             raise ValueError("uniform field layout must advertise exactly one level")
         mesh = getattr(layout, "mesh", None)
         if mesh is None:
             raise TypeError("uniform field layout must expose its mesh provider")
         return FieldLayoutContract(
-            kind, mesh, getattr(layout, "embedded_boundary", None), levels, (), (1,))
+            kind, mesh, getattr(layout, "embedded_boundary", None), levels, (), (1,)
+        )
     raise ValueError(
-        "field layout capabilities require layout='uniform' or layout='amr'; got %r" % kind)
+        "field layout capabilities require layout='uniform' or layout='amr'; got %r" % kind
+    )
 
 
 def _mesh_periodic(mesh: Any) -> bool:
@@ -125,40 +130,64 @@ def _mesh_periodic(mesh: Any) -> bool:
             return True
         raise TypeError(
             "field topology cannot lower an all-boundaries condition onto a partially periodic "
-            "CartesianGrid; select typed per-axis field boundaries")
+            "CartesianGrid; select typed per-axis field boundaries"
+        )
     raise TypeError("field topology requires an exact mesh periodicity contract")
 
 
 def _reject(
-    rows: list[LoweringCoverageRow], source: str, gate: str, message: str,
+    rows: list[LoweringCoverageRow],
+    source: str,
+    gate: str,
+    message: str,
 ) -> NoReturn:
-    report = LoweringCoverageReport((*rows, LoweringCoverageRow(
-        source, "rejected", gate=gate)))
-    raise LoweringRejection(
-        message, coverage_report=report, source=source, gate=gate)
+    report = LoweringCoverageReport((*rows, LoweringCoverageRow(source, "rejected", gate=gate)))
+    raise LoweringRejection(message, coverage_report=report, source=source, gate=gate)
 
 
-def _native_scalar(value: Any, *, name: str, source: str,
-                   rows: list[LoweringCoverageRow], unknown: Any,
-                   placeholder: float = 0.0) -> tuple[float, Any | None, bool]:
+def _native_scalar(
+    value: Any,
+    *,
+    name: str,
+    source: str,
+    rows: list[LoweringCoverageRow],
+    unknown: Any,
+    placeholder: float = 0.0,
+) -> tuple[float, Any | None, bool]:
     import math
-    if isinstance(value, bool) or not isinstance(value, (int, float)) \
-            or not math.isfinite(float(value)):
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
         from pops._ir.expr import Expr
         from pops.model import Handle
+
         if not isinstance(value, (Expr, Handle)):
-            _reject(rows, source, "field.boundary.expression_not_lowerable",
-                    "%s must be a finite scalar or a typed symbolic Expr/Handle" % name)
+            _reject(
+                rows,
+                source,
+                "field.boundary.expression_not_lowerable",
+                "%s must be a finite scalar or a typed symbolic Expr/Handle" % name,
+            )
         from pops.fields._references import collect_references
+
         references = collect_references(value)
-        unsupported = [reference for reference in references
-                       if getattr(reference, "kind", None)
-                       not in {"parameter", "state", "field"} and
-                       reference.canonical_identity() != unknown.canonical_identity()]
+        unsupported = [
+            reference
+            for reference in references
+            if getattr(reference, "kind", None) not in {"parameter", "state", "field"}
+            and reference.canonical_identity() != unknown.canonical_identity()
+        ]
         if unsupported:
-            _reject(rows, source, "field.boundary.prepared_dependency_not_native",
-                    "%s references unsupported boundary dependencies %s"
-                    % (name, [reference.qualified_id for reference in unsupported]))
+            _reject(
+                rows,
+                source,
+                "field.boundary.prepared_dependency_not_native",
+                "%s references unsupported boundary dependencies %s"
+                % (name, [reference.qualified_id for reference in unsupported]),
+            )
 
         from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
         from pops._ir.handle_expr import ValueExpr
@@ -169,17 +198,27 @@ def _native_scalar(value: Any, *, name: str, source: str,
             if isinstance(node, (Const, RuntimeParamRef, BoundaryValue, LogicalTimeValue)):
                 return
             if isinstance(node, ValueExpr):
-                if getattr(node.handle, "kind", None) in {"state", "field"} \
-                        and node.handle != unknown:
-                    _reject(rows, source, "field.boundary.ambiguous_value_handle",
-                            "%s reads %s without an explicit component/sample contract; use "
-                            "pops.fields.boundary_value(handle, component)"
-                            % (name, node.handle.qualified_id))
+                if (
+                    getattr(node.handle, "kind", None) in {"state", "field"}
+                    and node.handle != unknown
+                ):
+                    _reject(
+                        rows,
+                        source,
+                        "field.boundary.ambiguous_value_handle",
+                        "%s reads %s without an explicit component/sample contract; use "
+                        "pops.fields.boundary_value(handle, component)"
+                        % (name, node.handle.qualified_id),
+                    )
                 return
             if isinstance(node, Var):
-                _reject(rows, source, "field.boundary.unqualified_variable",
-                        "%s contains unqualified Var(%r); boundary dependencies require typed, "
-                        "owner-qualified handles" % (name, node.name))
+                _reject(
+                    rows,
+                    source,
+                    "field.boundary.unqualified_variable",
+                    "%s contains unqualified Var(%r); boundary dependencies require typed, "
+                    "owner-qualified handles" % (name, node.name),
+                )
             if isinstance(node, (Neg, Sqrt, Abs, Sign)):
                 validate_expression(node.a)
                 return
@@ -187,68 +226,116 @@ def _native_scalar(value: Any, *, name: str, source: str,
                 validate_expression(node.a)
                 validate_expression(node.b)
                 return
-            _reject(rows, source, "field.boundary.expression_node_not_native",
-                    "%s contains unsupported symbolic node %s"
-                    % (name, type(node).__name__))
+            _reject(
+                rows,
+                source,
+                "field.boundary.expression_node_not_native",
+                "%s contains unsupported symbolic node %s" % (name, type(node).__name__),
+            )
 
         if isinstance(value, Expr):
             validate_expression(value)
         iterate_dependent = any(
             reference.canonical_identity() == unknown.canonical_identity()
-            for reference in references)
-        rows.append(LoweringCoverageRow(
-            "%s:expression:%s" % (source, name.lower().replace(" ", "_")),
-            "lowered", ("field-boundary-generated-expression",),
-        ))
+            for reference in references
+        )
+        rows.append(
+            LoweringCoverageRow(
+                "%s:expression:%s" % (source, name.lower().replace(" ", "_")),
+                "lowered",
+                ("field-boundary-generated-expression",),
+            )
+        )
         return placeholder, value, iterate_dependent
     return float(value), None, False
 
 
-def _condition_record(condition: Any, *, source: str,
-                      rows: list[LoweringCoverageRow], unknown: Any) -> dict[str, Any]:
+def _condition_record(
+    condition: Any, *, source: str, rows: list[LoweringCoverageRow], unknown: Any
+) -> dict[str, Any]:
     if isinstance(condition, Dirichlet):
         value, dynamic, iterate = _native_scalar(
-            condition.value, name="Dirichlet value", source=source, rows=rows,
-            unknown=unknown)
-        return {"type": "dirichlet", "alpha": 1.0, "beta": 0.0,
-                "value": value,
-                "dynamic": ({"value": strict_field_data(dynamic)}
-                            if dynamic is not None else {}),
-                "iterate_dependent": iterate}
+            condition.value, name="Dirichlet value", source=source, rows=rows, unknown=unknown
+        )
+        return {
+            "type": "dirichlet",
+            "alpha": 1.0,
+            "beta": 0.0,
+            "value": value,
+            "dynamic": ({"value": strict_field_data(dynamic)} if dynamic is not None else {}),
+            "iterate_dependent": iterate,
+        }
     if isinstance(condition, Neumann):
         value, dynamic, iterate = _native_scalar(
-            condition.flux, name="Neumann flux", source=source, rows=rows,
-            unknown=unknown)
-        return {"type": "neumann", "alpha": 0.0, "beta": 1.0,
-                "value": value,
-                "dynamic": ({"value": strict_field_data(dynamic)}
-                            if dynamic is not None else {}),
-                "iterate_dependent": iterate}
+            condition.flux, name="Neumann flux", source=source, rows=rows, unknown=unknown
+        )
+        return {
+            "type": "neumann",
+            "alpha": 0.0,
+            "beta": 1.0,
+            "value": value,
+            "dynamic": ({"value": strict_field_data(dynamic)} if dynamic is not None else {}),
+            "iterate_dependent": iterate,
+        }
     if isinstance(condition, Mixed):
         alpha, dynamic_alpha, iterate_alpha = _native_scalar(
-            condition.alpha, name="Mixed alpha", source=source, rows=rows,
-            unknown=unknown, placeholder=1.0)
+            condition.alpha,
+            name="Mixed alpha",
+            source=source,
+            rows=rows,
+            unknown=unknown,
+            placeholder=1.0,
+        )
         beta, dynamic_beta, iterate_beta = _native_scalar(
-            condition.beta, name="Mixed beta", source=source, rows=rows,
-            unknown=unknown, placeholder=1.0)
+            condition.beta,
+            name="Mixed beta",
+            source=source,
+            rows=rows,
+            unknown=unknown,
+            placeholder=1.0,
+        )
         if dynamic_alpha is None and dynamic_beta is None and alpha == 0.0 and beta == 0.0:
-            _reject(rows, source, "field.boundary.mixed_degenerate",
-                    "Mixed boundary alpha and beta cannot both be zero")
+            _reject(
+                rows,
+                source,
+                "field.boundary.mixed_degenerate",
+                "Mixed boundary alpha and beta cannot both be zero",
+            )
         value, dynamic_value, iterate_value = _native_scalar(
-            condition.value, name="Mixed value", source=source, rows=rows,
-            unknown=unknown)
-        dynamic = {key: strict_field_data(item) for key, item in (
-            ("alpha", dynamic_alpha), ("beta", dynamic_beta), ("value", dynamic_value))
-                   if item is not None}
-        return {"type": "mixed", "alpha": alpha, "beta": beta,
-                "value": value, "dynamic": dynamic,
-                "iterate_dependent": iterate_alpha or iterate_beta or iterate_value}
+            condition.value, name="Mixed value", source=source, rows=rows, unknown=unknown
+        )
+        dynamic = {
+            key: strict_field_data(item)
+            for key, item in (
+                ("alpha", dynamic_alpha),
+                ("beta", dynamic_beta),
+                ("value", dynamic_value),
+            )
+            if item is not None
+        }
+        return {
+            "type": "mixed",
+            "alpha": alpha,
+            "beta": beta,
+            "value": value,
+            "dynamic": dynamic,
+            "iterate_dependent": iterate_alpha or iterate_beta or iterate_value,
+        }
     if isinstance(condition, Periodic):
-        return {"type": "periodic", "alpha": 0.0, "beta": 0.0, "value": 0.0,
-                "dynamic": {}, "iterate_dependent": False}
-    _reject(rows, source, "field.boundary.condition_not_native",
-            "field boundary condition %s has no native residual lowering"
-            % type(condition).__name__)
+        return {
+            "type": "periodic",
+            "alpha": 0.0,
+            "beta": 0.0,
+            "value": 0.0,
+            "dynamic": {},
+            "iterate_dependent": False,
+        }
+    _reject(
+        rows,
+        source,
+        "field.boundary.condition_not_native",
+        "field boundary condition %s has no native residual lowering" % type(condition).__name__,
+    )
 
 
 def boundary_plan(
@@ -257,57 +344,97 @@ def boundary_plan(
     rows: list[LoweringCoverageRow],
     layout: Any,
     unknown: Any,
+    dimension: int,
 ) -> tuple[str, tuple[dict[str, Any], ...] | None]:
-    """Resolve all four Cartesian faces, retaining exact Robin coefficients."""
+    """Resolve every face of one exact-ranked Cartesian domain."""
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise TypeError("field boundary lowering requires an exact Cartesian rank")
+    face_count = 2 * dimension
     if not plan.boundaries:
         contract = field_layout_contract(layout)
         periodic = _mesh_periodic(contract.mesh)
         kind = "periodic" if periodic else "dirichlet"
-        record = ({"type": kind, "alpha": 0.0 if periodic else 1.0,
-                   "beta": 0.0, "value": 0.0, "dynamic": {},
-                   "iterate_dependent": False},) * 4
-        rows.append(LoweringCoverageRow(
-            "field:%s:boundaries" % name, "derived",
-            rule="resolved layout topology selects %s BC" % kind))
+        record = (
+            {
+                "type": kind,
+                "alpha": 0.0 if periodic else 1.0,
+                "beta": 0.0,
+                "value": 0.0,
+                "dynamic": {},
+                "iterate_dependent": False,
+            },
+        ) * face_count
+        rows.append(
+            LoweringCoverageRow(
+                "field:%s:boundaries" % name,
+                "derived",
+                rule="resolved layout topology selects %s BC" % kind,
+            )
+        )
         return "explicit", record
-    face_index = {(0, "lo"): 0, (0, "hi"): 1, (1, "lo"): 2, (1, "hi"): 3}
-    faces: list[dict[str, Any] | None] = [None, None, None, None]
+    face_index = {
+        (axis, side): 2 * axis + side_index
+        for axis in range(dimension)
+        for side_index, side in enumerate(("lo", "hi"))
+    }
+    faces: list[dict[str, Any] | None] = [None] * face_count
     for index, binding in enumerate(plan.boundaries):
         source = "field:%s:boundary:%d" % (name, index)
         selector = binding.selector
-        record = _condition_record(
-            binding.condition, source=source, rows=rows, unknown=unknown)
+        record = _condition_record(binding.condition, source=source, rows=rows, unknown=unknown)
         if isinstance(selector, AllPhysicalBoundaries):
-            selected = range(4)
+            selected = range(face_count)
         elif isinstance(selector, AxisBoundary):
             if (selector.axis, selector.side) not in face_index:
-                _reject(rows, source, "field.boundary.dimension_not_native",
-                        "native field solver is 2-D; boundary axis %d is unsupported" % selector.axis)
+                _reject(
+                    rows,
+                    source,
+                    "field.boundary.dimension_not_native",
+                    "native field solver rank is %d; boundary axis %d is unsupported"
+                    % (dimension, selector.axis),
+                )
             selected = (face_index[(selector.axis, selector.side)],)
         else:
-            _reject(rows, source, "field.boundary.selector_not_native",
-                    "field %r uses a boundary selector the native Cartesian solver cannot lower"
-                    % name)
+            _reject(
+                rows,
+                source,
+                "field.boundary.selector_not_native",
+                "field %r uses a boundary selector the native Cartesian solver cannot lower" % name,
+            )
         for face in selected:
             if faces[face] is not None:
-                _reject(rows, source, "field.boundary.duplicate_face",
-                        "field %r assigns a physical face more than once" % name)
+                _reject(
+                    rows,
+                    source,
+                    "field.boundary.duplicate_face",
+                    "field %r assigns a physical face more than once" % name,
+                )
             faces[face] = dict(record)
-        rows.append(LoweringCoverageRow(source, "lowered", (
-            "field-install:%s:boundary-residual" % name,)))
+        rows.append(
+            LoweringCoverageRow(source, "lowered", ("field-install:%s:boundary-residual" % name,))
+        )
     if any(face is None for face in faces):
-        _reject(rows, "field:%s:boundaries" % name, "field.boundary.incomplete",
-                "field %r boundary plan does not cover all 2-D physical faces" % name)
+        _reject(
+            rows,
+            "field:%s:boundaries" % name,
+            "field.boundary.incomplete",
+            "field %r boundary plan does not cover all %d-D physical faces" % (name, dimension),
+        )
     complete_faces = tuple(face for face in faces if face is not None)
-    if len(complete_faces) != 4:
+    if len(complete_faces) != face_count:
         raise RuntimeError("validated field boundary plan lost a physical face")
-    for lo, hi, axis in ((0, 1, "x"), (2, 3, "y")):
-        if (complete_faces[lo]["type"] == "periodic") != (
-                complete_faces[hi]["type"] == "periodic"):
-            _reject(rows, "field:%s:boundaries" % name,
-                    "field.boundary.periodic_pair_incomplete",
-                    "field %r marks only one %s face periodic; periodic topology is paired"
-                    % (name, axis))
+    axis_names = ("x", "y", "z")
+    for axis in range(dimension):
+        lo = 2 * axis
+        hi = lo + 1
+        if (complete_faces[lo]["type"] == "periodic") != (complete_faces[hi]["type"] == "periodic"):
+            _reject(
+                rows,
+                "field:%s:boundaries" % name,
+                "field.boundary.periodic_pair_incomplete",
+                "field %r marks only one %s face periodic; periodic topology is paired"
+                % (name, axis_names[axis]),
+            )
     return "explicit", complete_faces
 
 
@@ -316,8 +443,7 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
     mesh = contract.mesh
     embedded = contract.embedded_boundary
     periodic = _mesh_periodic(mesh)
-    hierarchy = ("amr-composite-cell-graph" if contract.kind == "amr"
-                 else "uniform-cell-graph")
+    hierarchy = "amr-composite-cell-graph" if contract.kind == "amr" else "uniform-cell-graph"
     connectivity = {
         "graph": hierarchy,
         "stencil": "axis-neighbor",
@@ -331,7 +457,9 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
                 }
                 for index, ratio in enumerate(contract.transition_ratios)
             ]
-            if contract.kind == "amr" else []),
+            if contract.kind == "amr"
+            else []
+        ),
         "material_predicate": "all-cells" if embedded is None else "embedded-boundary",
     }
     return {
@@ -339,7 +467,9 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
         "mesh_type": type(mesh).__name__,
         "mesh": strict_field_data(mesh.options()),
         "embedded_boundary": (
-            None if embedded is None else {
+            None
+            if embedded is None
+            else {
                 "type": type(embedded).__name__,
                 "options": strict_field_data(embedded.options()),
             }
@@ -354,7 +484,8 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
 
 
 def boundary_dependency_pack(
-    plan: FieldDiscretizationProtocol, unknown: Any,
+    plan: FieldDiscretizationProtocol,
+    unknown: Any,
 ) -> dict[str, Any]:
     """Canonical direct-buffer pack required by all dynamic physical-face laws."""
     from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
@@ -380,7 +511,8 @@ def boundary_dependency_pack(
                 if block is None:
                     raise TypeError(
                         "boundary dependency %s is not qualified through a Case block"
-                        % handle.qualified_id)
+                        % handle.qualified_id
+                    )
                 record = {
                     "handle": handle.canonical_identity(),
                     "qualified_id": handle.qualified_id,

@@ -9,8 +9,8 @@ carries the operator NAME + the coupled ``subset`` + the scalar coefficients, an
 the P.schur_* ops.
 
 Compile-time refusals (design section 5), fail-loud at build, never a silent partial:
-  - the subset is the SPATIAL velocity block eliminated against grad(phi)/div(F), so its size
-    must equal the native spatial dimension (NATIVE_DIMENSION, the ADC-294 2D core invariant);
+  - the subset is the SPATIAL velocity block eliminated against grad(phi)/div(F); authoring
+    records its rank and resolve later matches it to the selected layout dimension;
     the J machinery itself (block_inverse<N> / mat_inverse<N>) is unbounded in N;
   - subset must be distinct non-negative component indices;
   - the coefficients must be numbers or dt-polynomials, c_rho a non-negative int.
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops._native_facts import NATIVE_DIMENSION
+from pops._native_facts import NATIVE_SUPPORTED_DIMENSIONS
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time._program.constants import _ProgramConstants
 from pops.time._program.value_validation import require_compatible_spaces
@@ -48,9 +48,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def _condensed_subset(self, subset: Any, where: Any) -> tuple:
         """Validate + normalize the coupled component @p subset (the momentum block the solve
         eliminates): a tuple of DISTINCT non-negative ints whose size equals the native spatial
-        dimension -- the subset IS the velocity vector eliminated against grad(phi)/div(F), so its
-        length is set by the space the elliptic coupling lives in (ADC-294 2D core invariant), not
-        by any dense-inverse capacity (block_inverse<N>/mat_inverse<N> are unbounded in N)."""
+        dimension -- the subset IS the velocity vector eliminated against grad(phi)/div(F)."""
         if not isinstance(subset, (tuple, list)) or not subset:
             raise ValueError("%s: subset must be a non-empty tuple of component indices" % where)
         sub = tuple(subset)
@@ -60,12 +58,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
                                  % (where, c))
         if len(set(sub)) != len(sub):
             raise ValueError("%s: subset components must be distinct (got %r)" % (where, sub))
-        if len(sub) != NATIVE_DIMENSION:
+        if len(sub) not in NATIVE_SUPPORTED_DIMENSIONS:
             raise ValueError(
-                "%s: the condensed subset is the spatial velocity block eliminated against "
-                "grad(phi)/div(F), so its size must equal the native spatial dimension "
-                "(dimension=%d, the 2D core invariant); got %d components %r"
-                % (where, NATIVE_DIMENSION, len(sub), sub))
+                "%s: the condensed spatial subset must have rank 1, 2, or 3; got %d "
+                "components %r" % (where, len(sub), sub))
         return sub
 
     @staticmethod
@@ -90,11 +86,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
     def condensed_coeffs(self, name: Any = None, state: Any = None, linear_operator: Any = None,
                          subset: Any = None, c: Any = None, th_dt: Any = None, c_rho: Any = 0) -> Any:
         """Assemble the per-cell tensor coefficient ``A = I + c*rho*M^{-1}`` of the condensed operator
-        from an authored linear operator J (``M = I - th_dt*J``) on the coupled 2D momentum @p subset and
-        a State (rho at @p c_rho). Returns a ``condensed_coeffs`` bundle carrying the four coefficient
-        fields (eps_x, eps_y, a_xy, a_yx) -- pass it to ``P.apply_laplacian_coeff`` inside a matrix-free
-        apply. Generic counterpart of ``P.schur_coeffs``: the codegen inverts M with
-        ``pops::detail::block_inverse<2>`` inline (bit-identical to the Schur brick for the Lorentz J).
+        from an authored linear operator J (``M = I - th_dt*J``) on the exact-ranked momentum @p subset
+        and a State (rho at @p c_rho). Returns a ``condensed_coeffs`` bundle carrying one row-major
+        ``Dim*Dim`` tensor field -- pass it to ``P.apply_laplacian_coeff`` inside a matrix-free apply.
+        The codegen inverts M with ``pops::detail::block_inverse<Dim>`` inline.
 
         @p c = theta^2*dt^2*alpha and @p th_dt = theta*dt are scalars (numbers or dt-polynomials). rho
         (a conservative var) enters only the outer c*rho factor, never M (R2)."""
@@ -105,14 +100,15 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         c_d = self._coeff_dict(c, "c", "condensed_coeffs")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_coeffs")
         return self._new("condensed_coeffs", "condensed_coeffs", (state,),
-                         {"linear_operator": opname, "subset": sub, "c": c_d, "th_dt": th_d,
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "c": c_d, "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_coeffs")}, name,
                          state.block)
 
     def condensed_rhs(self, out: Any = None, phi_n: Any = None, state: Any = None,
                       linear_operator: Any = None, subset: Any = None, th_dt: Any = None,
                       g: Any = None) -> Any:
-        """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1}(mx, my))`` (F = M^{-1} applied to the
+        """Record the fused RHS ``out = -Lap(phi_n) - g*div(M^{-1} momentum)`` (F = M^{-1} applied to the
         momentum @p subset) -- the generic counterpart of ``P.schur_rhs``. @p out is a 1-component
         scalar_field, @p phi_n the warm-start potential (its ghosts are filled for the Laplacian), @p
         state a State. @p th_dt = theta*dt, @p g = theta*dt*alpha (numbers or dt-polynomials). The
@@ -128,7 +124,8 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_rhs")
         g_d = self._coeff_dict(g, "g", "condensed_rhs")
         return self._new("scalar_field", "condensed_rhs", (out, phi_n, state),
-                         {"linear_operator": opname, "subset": sub, "th_dt": th_d, "g": g_d},
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "th_dt": th_d, "g": g_d},
                          out.name, state.block)
 
     def condensed_reconstruct(self, name: Any = None, state: Any = None, phi: Any = None,
@@ -154,19 +151,18 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         sub = self._condensed_subset(subset, "condensed_reconstruct")
         th_d = self._coeff_dict(th_dt, "th_dt", "condensed_reconstruct")
         return self._new("state", "condensed_reconstruct", (state, phi),
-                         {"linear_operator": opname, "subset": sub, "th_dt": th_d,
+                         {"linear_operator": opname, "subset": sub,
+                          "spatial_dimension": len(sub), "th_dt": th_d,
                           "c_rho": self._comp_index(c_rho, "c_rho", "condensed_reconstruct")}, name,
                          state.block, space=state.space)
 
     def condensed_energy(self, name: Any = None, state: Any = None, state_old: Any = None,
-                         c_rho: Any = 0, c_mx: Any = 1, c_my: Any = 2, c_E: Any = 3) -> Any:
+                         subset: Any = None, c_rho: Any = 0, c_E: Any = 3) -> Any:
         """Record the kinetic-energy increment IN PLACE on @p state (ADC-427):
-        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``, ``v = (mx, my)/rho`` -- the generic
-        counterpart of the retired ``P.schur_energy``. @p state carries ``rho`` / ``mx`` / ``my`` / ``E``
-        at @p c_rho / @p c_mx / @p c_my / @p c_E AFTER the velocity update (mom = rho*v^{n+1}); @p
-        state_old is U^n (read for v^n = mom^n/rho^n and the base energy E^n). rho is frozen, so the same
-        rho is read from both. Returns @p state (E overwritten in place). Emitted as a self-contained
-        inline kernel (no block inverse, no coupling/schur)."""
+        ``E^{n+1} = E^n + (1/2)*rho*(|v^{n+1}|^2 - |v^n|^2)``. The exact-ranked momentum
+        @p subset is the same 1D/2D/3D subset used by the condensed solve. @p state carries the updated
+        momentum and energy at @p c_E; @p state_old is U^n. rho is frozen, so both velocities use the
+        same density. Returns @p state (E overwritten in place)."""
         if isinstance(name, ProgramValue) and state is None:
             name, state = None, name
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
@@ -177,9 +173,10 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
             raise ValueError("condensed_energy: state and state_old must belong to the same block")
         require_compatible_spaces(
             state.space, state_old.space, "condensed_energy", typed_pair=True)
-        for nm, ci in (("c_rho", c_rho), ("c_mx", c_mx), ("c_my", c_my), ("c_E", c_E)):
-            if isinstance(ci, bool) or not isinstance(ci, int) or ci < 0:
-                raise ValueError("condensed_energy: %s must be a Python int >= 0 (got %r)" % (nm, ci))
+        sub = self._condensed_subset(subset, "condensed_energy")
+        rho_component = self._comp_index(c_rho, "c_rho", "condensed_energy")
+        energy_component = self._comp_index(c_E, "c_E", "condensed_energy")
         return self._new("state", "condensed_energy", (state, state_old),
-                         {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
+                         {"subset": sub, "spatial_dimension": len(sub),
+                          "c_rho": rho_component, "c_E": energy_component},
                          name, state.block, space=state.space)

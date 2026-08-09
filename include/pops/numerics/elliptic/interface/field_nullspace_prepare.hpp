@@ -22,9 +22,10 @@ namespace pops {
 /// selection carries opaque provider options, and the provider owns all mathematical decisions.
 /// Every potentially rank-local failure is converted to a uniform failure before another provider
 /// callback can enter a scientific collective.
-inline PreparedFieldNullspace prepare_field_nullspace_collectively(
-    const FieldNullspaceProviderRegistry& registry,
-    const FieldNullspaceProviderSelection& selection, FieldNullspaceProviderRequest request) {
+template <int Dim>
+inline PreparedFieldNullspace<Dim> prepare_field_nullspace_collectively(
+    const FieldNullspaceProviderRegistry<Dim>& registry,
+    const FieldNullspaceProviderSelection& selection, FieldNullspaceProviderRequest<Dim> request) {
   request.options = selection.options;
   std::string operator_facts_contract;
   bool operator_facts_failed = false;
@@ -39,7 +40,7 @@ inline PreparedFieldNullspace prepare_field_nullspace_collectively(
           {{"field-nullspace-operator-facts", operator_facts_contract}}))
     throw std::runtime_error("field-nullspace operator facts differ across MPI ranks");
 
-  std::shared_ptr<const FieldNullspaceProvider> provider;
+  std::shared_ptr<const FieldNullspaceProvider<Dim>> provider;
   std::string provider_contract;
   PreparedProviderSupport support =
       PreparedProviderSupport::reject(1, "field-nullspace provider resolution failed");
@@ -72,7 +73,7 @@ inline PreparedFieldNullspace prepare_field_nullspace_collectively(
     throw std::runtime_error(
         "field-nullspace provider accepted the request without an expected contract");
 
-  PreparedFieldNullspace prepared;
+  PreparedFieldNullspace<Dim> prepared;
   bool preparation_failed = false;
   try {
     prepared = provider->prepare(request);

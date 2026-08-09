@@ -2,6 +2,9 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
+
+#include <cstdint>
 
 /// @file
 /// @brief Elliptic RIGHT-HAND-SIDE bricks f(U): a block's contribution to the right-hand side
@@ -11,6 +14,19 @@
 ///        and the solve live on the system side (runtime); here only the per-block right-hand side.
 
 namespace pops {
+
+/// Neutral elliptic right-hand side. Its exact contract is intentionally parameter-free.
+struct NoElliptic {
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.elliptic.none", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder&) const {}
+
+  template <class State>
+  POPS_HD Real rhs(const State&) const {
+    return Real(0);
+  }
+};
 
 /// Charge density f = q n. Elliptic right-hand side of the ion or electron block.
 ///
@@ -23,6 +39,12 @@ namespace pops {
 struct ChargeDensity {
   Real q = 1;
   int c_rho = 0;  // default = density in component 0 (bit-identical)
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.elliptic.charge-density", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(q).scalar(std::int32_t{c_rho});
+  }
   template <class State>
   POPS_HD Real rhs(const State& u) const {
     return q * u[c_rho];
@@ -39,6 +61,12 @@ struct ChargeDensity {
 struct BackgroundDensity {
   Real alpha = 1, n0 = 0;
   int c_rho = 0;  // default = density in component 0 (bit-identical)
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.elliptic.background-density", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(alpha).scalar(n0).scalar(std::int32_t{c_rho});
+  }
   template <class State>
   POPS_HD Real rhs(const State& u) const {
     return alpha * (u[c_rho] - n0);
@@ -55,6 +83,12 @@ struct BackgroundDensity {
 struct GravityCoupling {
   Real sign = 1, four_pi_G = 1, rho0 = 1;
   int c_rho = 0;  // default = density in component 0 (bit-identical)
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.elliptic.gravity-coupling", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(sign).scalar(four_pi_G).scalar(rho0).scalar(std::int32_t{c_rho});
+  }
   template <class State>
   POPS_HD Real rhs(const State& u) const {
     return sign * four_pi_G * (u[c_rho] - rho0);

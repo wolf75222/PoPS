@@ -64,6 +64,29 @@ def test_minimal_selection_preserves_qualified_identity_and_refuses_missing_prov
         pack.select([ComponentKey("case/missing", "field", "electric", "grad_x")])
 
 
+def test_component_selection_is_space_qualified_and_refuses_homonym_ambiguity():
+    contract = ComponentContract("field", "cell", "V/m", "cell")
+    left = ComponentKey("owner", "field", "left", "grad_x")
+    right = ComponentKey("owner", "field", "right", "grad_x")
+    pack = ProviderPack([
+        (left, contract, ProviderEntry("left_solver", True, 0)),
+        (right, contract, ProviderEntry("right_solver", True, 0)),
+    ])
+
+    selected = pack.select_components(
+        owner_qid="owner",
+        spaces=(("field", "left"),),
+        components=("grad_x",),
+    )
+    assert tuple(selected) == (left,)
+    with pytest.raises(MissingInputProvider, match="ambiguous component"):
+        pack.select_components(
+            owner_qid="owner",
+            spaces=(("field", "left"), ("field", "right")),
+            components=("grad_x",),
+        )
+
+
 def test_operator_provider_pack_contains_fields_but_not_explicit_state_trace():
     module = Module("operator_pack")
     state = module.state_space("U", ("rho",))
@@ -76,6 +99,21 @@ def test_operator_provider_pack_contains_fields_but_not_explicit_state_trace():
         ("field", "electric", "grad_x"),
         ("field", "electric", "grad_y"),
     }
+
+
+def test_operator_requirements_select_only_declared_components():
+    module = Module("operator_component_pack")
+    state = module.state_space("U", ("rho",))
+    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"))
+    module.operator("solve", state >> fields, "field_operator", expr=1.0)
+    operator = SimpleNamespace(
+        signature=SimpleNamespace(inputs=(state, fields)),
+        requirements={"aux": ("grad_x",)},
+    )
+
+    pack = build_operator_provider_pack(module, operator)
+
+    assert tuple(key.component for key in pack) == ("grad_x",)
 
 
 def test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atomically():
@@ -94,17 +132,20 @@ def test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atom
 def test_module_lowering_retains_typed_contract_producer_and_availability():
     module = Module("typed")
     state = module.state_space("U", ("rho",))
-    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"))
+    # A scalar output is rank-independent.  Gradient outputs require the
+    # resolved mesh/frame; a raw Module declaration must not silently assume
+    # two Cartesian axes from legacy phi/grad spellings.
+    fields = module.field_space("electric", ("electric_potential",))
     module.operator("solve_electric", state >> fields, "field_operator", expr=1.0)
     lowered = _module_to_model(module)
     pack = lowered._component_provider_pack
     rows = pack.to_data()["entries"]
-    phi = next(row for row in rows if row["key"]["component"] == "phi")
-    assert phi["key"]["space_kind"] == "field"
-    assert phi["key"]["space_name"] == "electric"
-    assert phi["contract"]["unit"] is None
-    assert "solve_electric" in phi["provider"]["producer"]
-    assert phi["provider"]["availability"] is True
+    potential = next(row for row in rows if row["key"]["component"] == "electric_potential")
+    assert potential["key"]["space_kind"] == "field"
+    assert potential["key"]["space_name"] == "electric"
+    assert potential["contract"]["unit"] is None
+    assert "solve_electric" in potential["provider"]["producer"]
+    assert potential["provider"]["availability"] is True
 
 
 @pytest.mark.parametrize(
@@ -124,7 +165,7 @@ def test_same_component_spelling_in_distinct_typed_spaces_never_merges():
     module.state_space("U", ("rho",))
     module.field_space("left", ("phi",))
     module.field_space("right", ("phi",))
-    with pytest.raises(ValueError, match="cannot be merged silently"):
+    with pytest.raises(ValueError, match="one owner-qualified storage route"):
         _module_to_model(module)
 
 
@@ -134,5 +175,5 @@ def test_module_field_operator_rejects_unsupported_output_arity(count):
     state = module.state_space("U", ("rho",))
     fields = module.field_space("fields", tuple("f%d" % i for i in range(count)))
     module.operator("solve", state >> fields, "field_operator", expr=1.0)
-    with pytest.raises(ValueError, match="length 1 or 3"):
+    with pytest.raises(ValueError, match="gradient outputs require an exact 1D/2D/3D frame"):
         _module_to_model(module)

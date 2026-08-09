@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-
 # This extension is an implementation detail of ``pops``.  ``__all__`` is the
 # complete supported direct surface; the config/model/engine declarations below
 # are only the typed seam consumed by ``pops._bootstrap``.
@@ -16,6 +15,7 @@ __all__ = (
     "__normalization_version__",
     "__component_registry_version__",
     "__checkpoint_schema_version__",
+    "__native_dimension__",
     "__cxx_std__",
     "__cxx_compiler__",
     "__has_kokkos__",
@@ -45,7 +45,6 @@ __all__ = (
     "kokkos_is_initialized",
 )
 
-
 __version__: str
 __abi_version__: int
 __release_contract_sha256__: str
@@ -54,6 +53,7 @@ __semantic_ir_version__: int
 __normalization_version__: int
 __component_registry_version__: int
 __checkpoint_schema_version__: int
+__native_dimension__: Literal[1, 2, 3]
 __cxx_std__: int
 __cxx_compiler__: str
 __has_kokkos__: bool
@@ -68,7 +68,6 @@ __aux_base_comps__: int
 __aux_max_comps__: int
 __max_runtime_params__: int
 __aux_canonical__: dict[str, int]
-
 
 class StepAttemptRejected(RuntimeError):
     status: Literal[
@@ -88,7 +87,6 @@ class StepAttemptRejected(RuntimeError):
     disposition: Literal["retry", "reject"]
     reason_code: int
     failed_rank: int
-
 
 class _RuntimeEnvironmentReport(TypedDict):
     dimension: int
@@ -125,7 +123,6 @@ class _RuntimeEnvironmentReport(TypedDict):
     comm_allocator_mode: str
     allocator_lifetime: str
 
-
 class _NativeExecutionResource:
     """Non-constructible process-lifetime Kokkos execution resource."""
 
@@ -136,13 +133,11 @@ class _NativeExecutionResource:
     stream_handle: int
     stream_identity: str
 
-
 class _NativeMpiDatatype:
     """Non-constructible native MPI datatype identity owned by the process world."""
 
     identity: str
     fortran_handle: int
-
 
 class _NativeWorldCommunicator:
     """Non-constructible exact native process-world authority."""
@@ -160,11 +155,8 @@ class _NativeWorldCommunicator:
     def barrier(self) -> None: ...
     def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
     def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
-    def gather_bytes(
-        self, payload: bytes, root: int = 0
-    ) -> tuple[bytes, ...] | None: ...
+    def gather_bytes(self, payload: bytes, root: int = 0) -> tuple[bytes, ...] | None: ...
     def duplicate_observer_lane(self, identity: str) -> _NativeObserverMpiLane: ...
-
 
 class _NativeObserverMpiLane:
     """Explicit-lifetime communicator duplicated for one post-commit observer worker."""
@@ -178,11 +170,8 @@ class _NativeObserverMpiLane:
     def barrier(self) -> None: ...
     def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
     def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
-    def gather_bytes(
-        self, payload: bytes, root: int = 0
-    ) -> tuple[bytes, ...] | None: ...
+    def gather_bytes(self, payload: bytes, root: int = 0) -> tuple[bytes, ...] | None: ...
     def close_collectively(self) -> None: ...
-
 
 class _SolveReport:
     iters: int
@@ -193,9 +182,8 @@ class _SolveReport:
     residual_norm: float
     step_norm: float
     condition_evidence: float
-    failed_i: int
-    failed_j: int
-    failed_component: int
+    failure_index: tuple[int, ...] | None
+    failure_component: int | None
     status: str
     action: str
     reason: str
@@ -204,48 +192,43 @@ class _SolveReport:
     def solved_value_available(self) -> bool: ...
     def failed(self) -> bool: ...
 
-
 # Internal bootstrap seam: these data PODs are re-exported from pops.runtime,
 # not from the private native module's supported direct API.
 class SystemConfig:
-    n: int
-    L: float
-    xlo: float
-    ylo: float
-    periodicity: tuple[bool, bool]
-    geometry: str
-    nr: int
-    ntheta: int
-    r_min: float
-    r_max: float
-    theta_boxes: int
+    shape: tuple[int, ...]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
+    periodicity: tuple[bool, ...]
+    boxes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+    coordinate_system: str
     def __init__(self) -> None: ...
 
-
 class AmrSystemConfig:
-    n: int
-    ny: int
-    L: float
-    Ly: float
-    xlo: float
-    ylo: float
+    shape: tuple[int, ...]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
+    boxes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+    coordinate_system: str
     regrid_every: int
     level_count: int
-    regrid_grow: int
-    regrid_margin: int
+    transition_ratios: tuple[tuple[int, ...], ...]
+    transition_buffers: tuple[tuple[int, ...], ...]
+    transition_lookaheads: tuple[tuple[int, ...], ...]
     explicit_bootstrap: bool
-    periodicity: tuple[bool, bool]
+    periodicity: tuple[bool, ...]
     distribute_coarse: bool
-    coarse_max_grid: int
+    coarse_max_grid: tuple[int, ...]
     cluster_min_efficiency: float
     cluster_min_box_size: int
     cluster_max_box_size: int
     def __init__(self) -> None: ...
     def _set_load_balance_provider(
-        self, route: str, semantic_identity: str,
-        option_schema_identity: str, options: dict[str, object],
+        self,
+        route: str,
+        semantic_identity: str,
+        option_schema_identity: str,
+        options: dict[str, object],
     ) -> None: ...
-
 
 class ModelSpec:
     transport: str
@@ -269,13 +252,21 @@ class ModelSpec:
     def _pops_freeze_snapshot(self, capability: object) -> bool: ...
     def _pops_freeze_restore(self, capability: object, state: bool) -> None: ...
 
-
 # Internal native engines.  Their operational methods deliberately have no
 # dynamic fallback in the stub: a new bootstrap use must be declared explicitly.
 class System:
     def __init__(self, config: SystemConfig) -> None: ...
     def solve_fields(self) -> _SolveReport: ...
     def _consume_step_projections(self) -> list[str]: ...
+    def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def output_state_local_pieces(
         self, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
@@ -283,18 +274,46 @@ class System:
         self, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_state_root_pieces(
-        self, world: _NativeWorldCommunicator, block: str, level: int
+        self, lane: _NativeObserverMpiLane, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_field_root_pieces(
-        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+        self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
-
 
 class AmrSystem:
     def __init__(self, config: AmrSystemConfig) -> None: ...
     def n_levels(self) -> int: ...
     def configured_n_levels(self) -> int: ...
+    def _set_analytic_level_set(
+        self,
+        opcodes: list[str],
+        literals: list[float],
+        mode: str = "none",
+        kappa_min: float = 0.0,
+        face_open_eps: float = 0.0,
+        cut_theta_min: float = 0.0,
+    ) -> None: ...
+    def set_disc_domain(
+        self,
+        cx: float,
+        cy: float,
+        R: float,
+        mode: str = "none",
+        kappa_min: float = 0.0,
+        face_open_eps: float = 0.0,
+        cut_theta_min: float = 0.0,
+    ) -> None: ...
+    def set_geometry_mode(self, mode: str) -> None: ...
     def _consume_step_projections(self) -> list[str]: ...
+    def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def materialize_program_restart_histories(
         self,
         payload: bytes,
@@ -309,12 +328,17 @@ class AmrSystem:
         self, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_state_root_pieces(
-        self, world: _NativeWorldCommunicator, block: str, level: int
+        self, lane: _NativeObserverMpiLane, block: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_embedded_boundary_local_pieces(
+        self, name: str, level: int
+    ) -> tuple[dict[str, object], ...]: ...
+    def output_embedded_boundary_root_pieces(
+        self, lane: _NativeObserverMpiLane, name: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_field_root_pieces(
-        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+        self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
-
 
 def abi_key() -> str: ...
 def my_rank() -> int: ...
@@ -323,15 +347,12 @@ def mpi_world() -> _NativeWorldCommunicator: ...
 def module_capabilities(target: str = "module") -> dict[str, object]: ...
 def capability_report(target: str = "module") -> dict[str, object]: ...
 def runtime_environment_report() -> _RuntimeEnvironmentReport: ...
-def runtime_backend_manifest(
-    backend: str, target: str, communicator: str
-) -> dict[str, object]: ...
+def runtime_backend_manifest(backend: str, target: str, communicator: str) -> dict[str, object]: ...
 def native_execution_resource() -> _NativeExecutionResource: ...
 def numerical_defaults_report() -> dict[str, object]: ...
 def fallback_diagnostics_report() -> dict[str, object]: ...
 def reset_fallback_diagnostics() -> None: ...
 def kokkos_is_initialized() -> bool: ...
-
 
 # Private native parallel-HDF5 provider.  The world argument is the exact non-fabricable native
 # authority; manifest/array descriptors are validated by the binding before the C API is entered.
@@ -343,7 +364,6 @@ def _write_parallel_hdf5(
     root_arrays: dict[str, object],
     fields: tuple[dict[str, object], ...],
 ) -> None: ...
-
 
 # Private native identity helpers used by the Python implementation and its
 # native-parity tests.  ``object`` is intentional: C++ validates the closed

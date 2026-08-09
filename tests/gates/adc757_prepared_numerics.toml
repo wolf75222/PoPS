@@ -1,0 +1,616 @@
+schema_version = 3
+gate = "adc757-prepared-numerics-slice"
+issue = "ADC-757"
+evidence_from = ["ADC-682", "ADC-711", "ADC-733", "ADC-737", "ADC-749", "ADC-750", "ADC-751", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
+deferred = [
+  "remaining_runtime_nd_metric_eb_characteristic_execution",
+  "remaining_multirank_multibox_amr_local_time_execution",
+]
+
+[hardware_evidence]
+kind = "authenticated_hardware_report"
+polarity = "positive"
+report_schema = "pops.adc757.heterogeneous-numerics.v1"
+verifier = "benchmarks/adc757/verify.py"
+requirements = [
+  "gpu_backend_execution",
+  "accelerator_stream_partitioning",
+  "performance_baselines_and_regression_thresholds",
+]
+
+# This is an executable partial gate, not ADC-757 closure. Every claimed
+# software requirement has success and refusal/detector proofs. The three
+# hardware positives must be supplied by the single authenticated report route above;
+# ordinary CPU CTests may provide only their fail-closed detector proofs.
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FiniteDifferenceAnalyticAndAdUseOneOutcomeContract$"
+
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "refusal"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.EveryFailureClassIsExplicitAndLeavesTheGuessUntouched$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FallibleEvaluationStatusAndReasonRemainDistinct$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.FatalEvaluationIsTypedAllocationFreeAndCannotPublish$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.tentative_publication_rolls_back_solution_and_warm_start$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.malformed_and_repair_candidates_fail_closed$"
+
+[[check]]
+requirement = "model_declared_admissibility"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_permits_valid_candidate$"
+
+[[check]]
+requirement = "model_declared_admissibility"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_blocks_publication$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "positive"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.ConvergedPreparedPathAllocatesNothingAndRollsBack$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "positive"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.one_dimensional_fixed_and_extrapolated_halos_are_exact$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "refusal"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.analytic_boundary_without_nd_coordinate_provider_is_refused$"
+
+[[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "positive"
+target = "test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage$"
+
+[[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/mesh/test_boundary_topology_ports.py"
+test = "test_post_riemann_flux_refuses_wrong_component_route_or_output"
+
+[[check]]
+requirement = "mpi_collective_execution"
+polarity = "positive"
+kind = "mpi_ctest"
+target = "test_mpi_system_analytic_level_set"
+test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
+
+[[check]]
+requirement = "mpi_collective_execution"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_flux_failure_collective"
+test_regex = "^test_mpi_flux_failure_collective_np2$"
+nproc = 2
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.generated_provider_requirements_own_native_slot_reads$"
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_compiler_model_provider.py"
+test = "test_field_dependent_flux_without_provider_fails_before_native_source"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "positive"
+target = "test_riemann_capabilities"
+test_regex = "^test_riemann_capabilities\\.state_layout_permutation_is_provider_owned$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.hllc_rejects_each_nonfinite_provider_stage_with_a_typed_cause$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.roe_rejects_nonfinite_dissipation_with_a_typed_cause$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiters\\.mc_and_superbee_match_reference_formulas$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "refusal"
+target = "test_dispatch_tags"
+test_regex = "^test_dispatch_tags\\.validate_limiter_accepts_and_rejects$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.recovery_report_uses_the_flux_failure_reduction_without_type_erasure$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.face_recovery_refusal_never_reaches_the_numerical_flux$"
+
+[[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.prepared_riemann_recovery_is_ordered_typed_and_device_copyable$"
+
+[[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.prepared_riemann_recovery_exhaustion_is_typed_and_cannot_publish$"
+
+[[check]]
+requirement = "public_prepared_riemann_recovery"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/descriptors/test_lib_descriptors.py"
+test = "test_riemann_recovery_is_the_exact_prepared_native_policy"
+
+[[check]]
+requirement = "public_prepared_riemann_recovery"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/descriptors/test_lib_descriptors.py"
+test = "test_riemann_recovery_refuses_external_and_forged_native_candidates"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "positive"
+target = "test_generated_amr_system_block"
+test_regex = "^GeneratedAmrSystemBlock\\.CellPrimitiveConversionConsumesPreparedRecoveryOutcome$"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
+
+[[check]]
+requirement = "uniform_recovery_warm_start"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.uniform_consumer_reuses_only_exact_generation_qualified_cells$"
+
+[[check]]
+requirement = "uniform_recovery_warm_start"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.uniform_consumer_failure_keeps_output_and_invalidates_all_slots$"
+
+[[check]]
+requirement = "analytic_initial_recovery_publication"
+polarity = "positive"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesWhenPreparedRecoveryAcceptsEveryCell$"
+
+[[check]]
+requirement = "analytic_initial_recovery_publication"
+polarity = "refusal"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell$"
+
+[[check]]
+requirement = "fallible_primitive_to_conservative_publication"
+polarity = "positive"
+target = "test_generated_amr_system_block"
+test_regex = "^GeneratedAmrSystemBlock\\.PrimitiveToConservativePublicationRoundtripsBeforeCommit$"
+
+[[check]]
+requirement = "fallible_primitive_to_conservative_publication"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication$"
+
+[[check]]
+requirement = "amr_regrid_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
+
+[[check]]
+requirement = "amr_regrid_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RegridRecoveryRefusalRollsBackHierarchyStateAndPublicationCounters$"
+
+[[check]]
+requirement = "amr_restriction_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RestrictionPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
+
+[[check]]
+requirement = "amr_restriction_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RestrictionRecoveryRefusalRollsBackEveryLevelAndHierarchyPublication$"
+
+[[check]]
+requirement = "amr_bootstrap_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.BootstrapCommitPublishesRecoveryAcceptedLevels$"
+
+[[check]]
+requirement = "amr_bootstrap_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.BootstrapRecoveryRefusalKeepsPendingLevelRollbackable$"
+
+[[check]]
+requirement = "amr_history_recovery_publication"
+polarity = "positive"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RegridRemapKeepsSlotsConsistent$"
+
+[[check]]
+requirement = "amr_history_recovery_publication"
+polarity = "refusal"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RegridRecoveryRefusalRollsBackRemappedHistoryAndLiveHierarchy$"
+
+[[check]]
+requirement = "physical_boundary_trace_recovery_publication"
+polarity = "positive"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.physical_fill_preflight_token_commits_one_complete_builtin_transaction$"
+
+[[check]]
+requirement = "physical_boundary_trace_recovery_publication"
+polarity = "refusal"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.characteristic_boundary_requires_model_qualification_before_physical_mutation$"
+
+[[check]]
+requirement = "terminal_source_recovery_publication"
+polarity = "positive"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate$"
+
+[[check]]
+requirement = "terminal_source_recovery_publication"
+polarity = "refusal"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit$"
+
+[[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.type_erased_report_preserves_selected_method_kind$"
+
+[[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.rejected_report_names_last_method_without_forging_selection$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "positive"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.executes_bounded_rung_batches_and_commits_exact_local_clocks$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "refusal"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
+
+[[check]]
+requirement = "cell_local_temporal_scientific_provider"
+polarity = "positive"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.production_same_level_provider_commits_real_state_and_integrated_face_fluxes$"
+
+[[check]]
+requirement = "cell_local_temporal_scientific_provider"
+polarity = "refusal"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.production_same_level_provider_rolls_back_and_refuses_unproved_envelopes$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "positive"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "refusal"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.workspace_rebind_reserves_mutation_during_blocking_operator_prepare$"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_is_emitted_and_hashed"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_rejects_ambiguous_authoring"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_preflight_returns_exact_native_payload_and_counters"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_historical_version_refusal_happens_before_restart_transaction"
+
+[[check]]
+requirement = "native_spatial_provider_dimension_matrix"
+polarity = "positive"
+target = "test_prepared_cartesian_nd"
+test_regex = "^test_prepared_cartesian_nd\\.one_dimensional_kernel_preserves_constant_state_and_conservation$"
+
+[[check]]
+requirement = "native_spatial_provider_dimension_matrix"
+polarity = "positive"
+target = "test_prepared_cartesian_nd"
+test_regex = "^test_prepared_cartesian_nd\\.three_dimensional_kernel_is_axis_permutation_invariant_and_conservative$"
+
+[[check]]
+requirement = "native_spatial_provider_dimension_matrix"
+polarity = "positive"
+target = "test_spatial_provider_matrix"
+test_regex = "^test_spatial_provider_matrix\\.independent_axes_do_not_form_false_cross_product_capabilities$"
+
+[[check]]
+requirement = "native_spatial_provider_dimension_matrix"
+polarity = "refusal"
+target = "test_spatial_provider_matrix"
+test_regex = "^test_spatial_provider_matrix\\.native_runtime_dimension_refuses_unproved_3d_execution$"
+
+[[check]]
+requirement = "metric_spatial_provider_geometry_matrix"
+polarity = "positive"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMetrics$"
+
+[[check]]
+requirement = "metric_spatial_provider_geometry_matrix"
+polarity = "refusal"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.EmbeddedBoundaryCapabilitiesRejectUnsupportedProvidersBeforePublication$"
+
+[[check]]
+requirement = "characteristic_boundary_geometry_matrix"
+polarity = "positive"
+target = "test_prepared_hyperbolic_boundary"
+test_regex = "^test_prepared_hyperbolic_boundary\\.characteristic_metadata_preserves_the_compile_time_rank$"
+
+[[check]]
+requirement = "characteristic_boundary_geometry_matrix"
+polarity = "refusal"
+target = "test_spatial_provider_matrix"
+test_regex = "^test_spatial_provider_matrix\\.embedded_metric_residuals_do_not_claim_characteristic_or_linearization$"
+
+[[check]]
+requirement = "measured_load_balance_decision"
+polarity = "positive"
+target = "test_load_balance"
+test_regex = "^test_load_balance\\.measured_rebalance_accepts_only_net_benefit_after_migration$"
+
+[[check]]
+requirement = "measured_load_balance_decision"
+polarity = "refusal"
+target = "test_load_balance"
+test_regex = "^test_load_balance\\.measured_rebalance_refuses_stale_or_incomplete_evidence$"
+
+[[check]]
+requirement = "measured_load_balance_decision"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/amr/test_public_amr_resolution.py"
+test = "test_measured_knapsack_roundtrips_exact_native_decision_policy"
+
+[[check]]
+requirement = "measured_load_balance_decision"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/amr/test_public_amr_resolution.py"
+test = "test_measured_knapsack_rejects_invalid_decision_policy"
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "positive"
+kind = "mpi_ctest"
+target = "test_mpi_amr_rebalance_migration"
+test_regex = "^test_mpi_amr_rebalance_migration_np2$"
+nproc = 2
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_amr_rebalance_migration"
+test_regex = "^test_mpi_amr_rebalance_migration_np4$"
+nproc = 4
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "positive"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.accepted_checkpoint_state_rematerializes_payloads_by_explicit_ownership$"
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "refusal"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.accepted_checkpoint_state_rematerialization_refuses_metadata_disagreement$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "positive"
+target = "test_cell_temporal_program_route"
+test_regex = "^test_cell_temporal_program_route\\.installed_program_commits_exact_ticks_state_and_conservative_face_ledger$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+target = "test_cell_temporal_program_route"
+test_regex = "^test_cell_temporal_program_route\\.invalid_tick_outer_rollback_and_same_topology_restart_remain_atomic$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_cell_temporal_program_refusal"
+test_regex = "^test_mpi_cell_temporal_program_refusal_np2$"
+nproc = 2
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_cell_local_time_codegen.py"
+test = "test_cell_local_time_contract_is_frozen_rebuilt_and_hashed"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_cell_local_time_codegen.py"
+test = "test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence"
+
+[[check]]
+requirement = "gpu_backend_execution"
+polarity = "refusal"
+target = "test_prepared_stream_executor"
+test_regex = "^PreparedStreamExecutor\\.CpuBackendsCannotClaimIndependentAcceleratorStreams$"
+
+[[check]]
+requirement = "accelerator_stream_partitioning"
+polarity = "refusal"
+target = "test_prepared_stream_executor"
+test_regex = "^PreparedStreamExecutor\\.InvalidPreparationIsRejectedBeforeBackendSelection$"
+
+[[check]]
+requirement = "performance_baselines_and_regression_thresholds"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_adc757_heterogeneous_campaign.py"
+test = "test_adc757_hardware_report_refuses_false_closure"
+
+[[check]]
+requirement = "prepared_hyperbolic_boundary_only_transport_authority"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
+test = "test_prepared_hyperbolic_boundary_is_the_only_native_transport_authority"
+
+[[check]]
+requirement = "prepared_hyperbolic_boundary_only_transport_authority"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
+test = "test_legacy_transport_boundary_authorities_are_deleted"
+
+[[check]]
+requirement = "polar_runtime_capability_honesty"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_program_only_temporal_facades.py"
+test = "test_standalone_polar_elliptic_algorithms_remain_explicit"
+
+[[check]]
+requirement = "polar_runtime_capability_honesty"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_program_only_temporal_facades.py"
+test = "test_polar_runtime_builder_is_retired_until_an_exact_ranked_metric_provider_exists"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_runtime_materialization_consumes_only_prepared_batch_before_publication"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_runtime_materialization_has_no_pointwise_compatibility_authority"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveMaterializationRefusesMissingPreparedBatchAuthority$"

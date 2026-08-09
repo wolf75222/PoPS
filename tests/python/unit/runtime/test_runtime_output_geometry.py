@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops._geometry_contracts import cartesian_geometry_contract
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -15,19 +16,51 @@ from pops.mesh._layout_plan_contracts import LayoutLevel
 from pops.identity import make_identity
 from pops.model import Handle, OwnerKind, OwnerPath
 from pops.output import FieldKey
+from pops.output._consumer_contracts import ParallelMode
 from pops.runtime._runtime_consumers import (
     _active_output_levels,
+    _native_cartesian_geometry,
     RuntimeOutputSnapshot,
 )
 
 
+@pytest.mark.parametrize("shape", ((5,), (4, 3), (4, 3, 2)))
+def test_native_cartesian_geometry_contract_accepts_every_compiled_rank(shape):
+    coordinate_system, cell_measure = cartesian_geometry_contract(len(shape))
+    geometry = NormalizedGeometry(
+        coordinate_system,
+        cell_measure,
+        ("x", "y", "z")[:len(shape)],
+        (0.0,) * len(shape),
+        (1.0,) * len(shape),
+        shape,
+    )
+
+    assert _native_cartesian_geometry(geometry)
+    assert not _native_cartesian_geometry(replace(
+        geometry, cell_measure="pops://cell-measures/not-cartesian@1"
+    ))
+
+
 class _Engine:
-    def __init__(self, nx: int, ny: int) -> None:
-        self._nx = nx
-        self._ny = ny
+    def __init__(
+        self,
+        nx: int | None = None,
+        ny: int | None = None,
+        *,
+        shape: tuple[int, ...] | None = None,
+    ) -> None:
+        if shape is None:
+            if nx is None or ny is None:
+                raise TypeError("the test engine requires nx/ny or one ranked shape")
+            shape = (nx, ny)
+        self._shape = tuple(shape)
+        self._nx = self._shape[0]
+        self._ny = self._shape[1] if len(self._shape) > 1 else 1
         self._L = 10_000.0  # legacy private state must not influence normalized output geometry
         self._s = self
         self.geometry_calls = 0
+        self.geometry_shapes = []
         self.topology_epoch = 0
         self.boxes = ()
         self.active_levels = 1
@@ -48,33 +81,57 @@ class _Engine:
         self.geometry_calls += 1
         if len(args) == 4:
             origin, spacing, shape, cell_measure = args
-            level, ratio, boxes = 0, 0, ((0, 0, shape[0], shape[1]),)
+            level, ratio = 0, 0
+            materialized = ((tuple(0 for _ in shape), tuple(item - 1 for item in shape)),)
         else:
             level, origin, spacing, shape, ratio, cell_measure = args
-            boxes = ((0, 0, shape[0], shape[1]),) if level == 0 else tuple(
-                (jlo, ilo, jhi + 1, ihi + 1)
-                for box_level, ilo, jlo, ihi, jhi in self.boxes
-                if box_level == level
+            materialized = (
+                ((tuple(0 for _ in shape), tuple(item - 1 for item in shape)),)
+                if level == 0
+                else tuple(
+                    (lower, upper)
+                    for box_level, lower, upper in self.boxes
+                    if box_level == level
+                )
             )
-        valid = np.zeros(shape, dtype=np.bool_)
-        for jlo, ilo, jhi, ihi in boxes:
-            valid[jlo:jhi, ilo:ihi] = True
-        coverage = np.zeros(shape, dtype=np.bool_)
+        shape = tuple(shape)
+        self.geometry_shapes.append(shape)
+        assert shape == tuple(item * (2 ** level) for item in self._shape)
+        cell_shape = tuple(reversed(shape))
+        boxes = tuple(
+            tuple(reversed(lower)) + tuple(item + 1 for item in reversed(upper))
+            for lower, upper in materialized
+        )
+        valid = np.zeros(cell_shape, dtype=np.bool_)
+        for box in boxes:
+            valid[tuple(slice(low, high) for low, high in zip(
+                box[:len(shape)], box[len(shape):], strict=True
+            ))] = True
+        coverage = np.zeros(cell_shape, dtype=np.bool_)
         if ratio:
-            for box_level, ilo, jlo, ihi, jhi in self.boxes:
+            for box_level, lower, upper in self.boxes:
                 if box_level == level + 1:
-                    coverage[jlo // ratio:(jhi + 1 + ratio - 1) // ratio,
-                             ilo // ratio:(ihi + 1 + ratio - 1) // ratio] = True
-        if cell_measure.endswith("cartesian-area@1"):
-            volumes = np.full(shape, spacing[0] * spacing[1], dtype=np.float64)
+                    parent_lower = tuple(item // ratio for item in lower)
+                    parent_upper = tuple(item // ratio + 1 for item in upper)
+                    coverage[tuple(slice(low, high) for low, high in zip(
+                        reversed(parent_lower), reversed(parent_upper), strict=True
+                    ))] = True
+        if cell_measure in {
+            "pops://cell-measures/cartesian-length@1",
+            "pops://cell-measures/cartesian-area@1",
+            "pops://cell-measures/cartesian-volume@1",
+        }:
+            volumes = np.full(cell_shape, math.prod(spacing), dtype=np.float64)
         else:
-            radial = origin[0] + np.arange(shape[1], dtype=np.float64) * spacing[0]
+            radial = origin[0] + np.arange(shape[0], dtype=np.float64) * spacing[0]
             areas = 0.5 * ((radial + spacing[0]) ** 2 - radial ** 2) * spacing[1]
-            volumes = np.broadcast_to(areas, shape).copy()
+            volumes = np.broadcast_to(areas, cell_shape).copy()
         for value in (valid, coverage, volumes):
             value.setflags(write=False)
         return {
+            "dimension": len(shape),
             "topology_epoch": self.topology_epoch,
+            "cell_shape": cell_shape,
             "boxes": boxes,
             "valid_cells": valid,
             "coverage": coverage,
@@ -119,7 +176,7 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
         levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
     )
     engine = _Engine(4, 4)
-    engine.boxes = ((1, 2, 2, 5, 5),)
+    engine.boxes = ((1, (2, 2), (5, 5)),)
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
         _executor_for_layout=lambda layout_id: engine,
@@ -139,7 +196,7 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
     assert tuple(builder._geometry_cache) == ((third.layout_identity.token, 0, 1),)
 
     # Restart can reuse an old epoch number for a different accepted hierarchy.
-    engine.boxes = ((1, 0, 0, 3, 3),)
+    engine.boxes = ((1, (0, 0), (3, 3)),)
     builder.invalidate_geometry_cache()
     fourth = builder._geometry(layout, 0)
     assert fourth is not third
@@ -184,7 +241,7 @@ def test_runtime_output_accepts_adaptive_rectangular_geometry():
         levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
     )
     engine = _Engine(4, 3)
-    engine.boxes = ((1, 2, 1, 5, 4),)
+    engine.boxes = ((1, (2, 1), (5, 4)),)
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
         _executor_for_layout=lambda layout_id: engine,
@@ -258,6 +315,7 @@ def test_runtime_output_refuses_unknown_extension_cell_measure():
             "pops://cell-measures/extension-area@1",
             ("a", "b"), (0.0, 0.0), (1.0, 1.0), (4, 4),
         ),
+        native_spatial_layout=None,
     )
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
@@ -268,25 +326,195 @@ def test_runtime_output_refuses_unknown_extension_cell_measure():
         RuntimeOutputSnapshot(owner)._geometry(layout, 0)
 
 
-def test_normalized_geometry_is_rank_generic_but_current_output_provider_refuses_3d():
+def _generic_layout(geometry: NormalizedGeometry, *, owner: str):
+    frame = Rectangle(owner, (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    plan = normalize_layout_plan(
+        Uniform(CartesianGrid(frame=frame, cells=(4, 4))),
+        owner=OwnerPath.case(owner),
+    )
+    return replace(plan.layouts[0], geometry=geometry, native_spatial_layout=None)
+
+
+@pytest.mark.parametrize(
+    ("geometry", "expected_shape", "expected_spacing", "expected_volume"),
+    (
+        (
+            NormalizedGeometry(
+                "pops://coordinates/cartesian-1d@1",
+                "pops://cell-measures/cartesian-length@1",
+                ("x",), (-2.0,), (3.0,), (5,),
+            ),
+            (5,),
+            (1.0,),
+            1.0,
+        ),
+        (
+            NormalizedGeometry(
+                "pops://coordinates/cartesian-3d@1",
+                "pops://cell-measures/cartesian-volume@1",
+                ("x", "y", "z"),
+                (0.0, -1.0, 2.0),
+                (1.0, 1.0, 5.0),
+                (4, 6, 8),
+            ),
+            (8, 6, 4),
+            (0.25, 1.0 / 3.0, 0.375),
+            0.03125,
+        ),
+    ),
+)
+def test_runtime_output_infers_rank_from_normalized_geometry(
+    geometry, expected_shape, expected_spacing, expected_volume
+):
+    assert NormalizedGeometry.from_data(geometry.to_data()) == geometry
+    layout = _generic_layout(geometry, owner="ranked-output")
+    engine = _Engine(shape=geometry.cells)
+    owner = SimpleNamespace(
+        _layout_plan=SimpleNamespace(layouts=(layout,)),
+        _executor_for_layout=lambda layout_id: engine,
+    )
+
+    result = RuntimeOutputSnapshot(owner)._geometry(layout, 0)
+
+    assert result.spatial_rank == geometry.dimension
+    assert result.cell_shape == expected_shape
+    assert result.spacing == expected_spacing
+    assert result.axis_names == geometry.axis_names
+    assert result.boxes == ((0,) * geometry.dimension + expected_shape,)
+    np.testing.assert_array_equal(
+        result.cell_volumes,
+        np.full(expected_shape, expected_volume, dtype=np.float64),
+    )
+    assert engine.geometry_shapes == [geometry.cells]
+
+
+def test_runtime_output_preserves_rank_three_amr_patch_bounds():
     geometry = NormalizedGeometry(
         "pops://coordinates/cartesian-3d@1",
         "pops://cell-measures/cartesian-volume@1",
-        ("x", "y", "z"), (0.0, -1.0, 2.0), (1.0, 1.0, 5.0), (4, 6, 8),
+        ("x", "y", "z"),
+        (0.0, -1.0, 2.0),
+        (4.0, 2.0, 4.0),
+        (4, 3, 2),
     )
-    assert geometry.dimension == 3
-    assert NormalizedGeometry.from_data(geometry.to_data()) == geometry
-
-    frame = Rectangle("rank-gate", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
-    plan = normalize_layout_plan(
-        Uniform(CartesianGrid(frame=frame, cells=(4, 6))),
-        owner=OwnerPath.case("rank-gate"),
+    layout = replace(
+        _generic_layout(geometry, owner="rank-three-amr"),
+        adaptive=True,
+        transition_ratios=(2,),
+        levels=(LayoutLevel(0, 1), LayoutLevel(1, 2)),
     )
-    layout = replace(plan.layouts[0], geometry=geometry)
+    engine = _Engine(shape=geometry.cells)
+    engine.boxes = ((1, (2, 1, 0), (5, 4, 3)),)
+    engine.active_levels = 2
     owner = SimpleNamespace(
         _layout_plan=SimpleNamespace(layouts=(layout,)),
-        _executor_for_layout=lambda layout_id: _Engine(nx=4, ny=6),
+        _executor_for_layout=lambda layout_id: engine,
     )
 
-    with pytest.raises(NotImplementedError, match="supports rank-2 geometry"):
+    result = RuntimeOutputSnapshot(owner)._geometry(layout, 1)
+
+    assert result.cell_shape == (4, 6, 8)
+    assert result.boxes == ((0, 1, 2, 4, 5, 6),)
+    assert int(np.count_nonzero(result.valid_cells)) == 4 * 4 * 4
+
+
+def test_runtime_output_rejects_native_rank_that_differs_from_compiled_geometry():
+    geometry = NormalizedGeometry(
+        "pops://coordinates/cartesian-3d@1",
+        "pops://cell-measures/cartesian-volume@1",
+        ("x", "y", "z"),
+        (0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        (2, 3, 4),
+    )
+
+    class _WrongRankEngine(_Engine):
+        def _output_geometry_snapshot(self, *args):
+            result = super()._output_geometry_snapshot(*args)
+            result["dimension"] = 2
+            return result
+
+    layout = _generic_layout(geometry, owner="rank-mismatch")
+    engine = _WrongRankEngine(shape=geometry.cells)
+    owner = SimpleNamespace(
+        _layout_plan=SimpleNamespace(layouts=(layout,)),
+        _executor_for_layout=lambda layout_id: engine,
+    )
+
+    with pytest.raises(ValueError, match="rank differs"):
         RuntimeOutputSnapshot(owner)._geometry(layout, 0)
+
+
+@pytest.mark.parametrize(
+    ("lower", "upper"),
+    (
+        ((2,), (7,)),
+        ((1, 2, 3), (3, 5, 7)),
+    ),
+)
+def test_runtime_output_piece_lowering_uses_the_geometry_rank(lower, upper):
+    dimension = len(lower)
+    spatial_shape = tuple(high - low for low, high in zip(lower, upper, strict=True))
+    values = np.arange(2 * math.prod(spatial_shape), dtype=np.float64).reshape(
+        (2, *spatial_shape)
+    )
+
+    class _PieceProvider:
+        @staticmethod
+        def pieces():
+            return (
+                {
+                    "lower": lower,
+                    "upper": upper,
+                    "values": values,
+                    "global_box_index": 0,
+                    "owner_rank": 0,
+                    "replicated": False,
+                },
+            )
+
+    pieces = RuntimeOutputSnapshot._local_pieces(
+        _PieceProvider(),
+        "pieces",
+        (),
+        mode=ParallelMode.SERIAL,
+        rank=0,
+        dimension=dimension,
+    )
+
+    assert pieces[0].lower == lower
+    assert pieces[0].upper == upper
+    assert pieces[0].values.shape == (2, *spatial_shape)
+    RuntimeOutputSnapshot._validate_piece_bounds(
+        pieces,
+        (lower + upper,),
+        dimension=dimension,
+        complete=True,
+        rank=0,
+    )
+
+
+def test_runtime_output_piece_lowering_rejects_a_bound_from_another_rank():
+    class _PieceProvider:
+        @staticmethod
+        def pieces():
+            return (
+                {
+                    "lower": (0, 0),
+                    "upper": (2, 3),
+                    "values": np.zeros((1, 2, 3), dtype=np.float64),
+                    "global_box_index": 0,
+                    "owner_rank": 0,
+                    "replicated": False,
+                },
+            )
+
+    with pytest.raises(TypeError, match="3 exact integer bounds"):
+        RuntimeOutputSnapshot._local_pieces(
+            _PieceProvider(),
+            "pieces",
+            (),
+            mode=ParallelMode.SERIAL,
+            rank=0,
+            dimension=3,
+        )

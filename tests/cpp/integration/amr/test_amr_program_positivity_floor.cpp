@@ -1,7 +1,7 @@
 // End-to-end positivity-floor coverage through the installed AMR Program.
 //
-// The local coarse/fine interpolation primitive is covered separately by test_cf_interface.  This
-// test deliberately starts from the public AmrSystem facade, materializes a genuine two-level
+// Exact-ranked coarse/fine interpolation is covered by test_prepared_amr_ghost_fill. This test
+// deliberately starts from the public AmrSystem facade, materializes a genuine two-level
 // hierarchy, installs the same explicit Program used by compiled AMR tests, and advances it through
 // AmrSystem::step.  The comparison with an otherwise identical floor-disabled run proves that the
 // block's positivity option reaches the face reconstruction evaluated by ProgramGraph on the refined
@@ -38,11 +38,17 @@ struct DensityAdvection {
   using Prim = State;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
+  static constexpr int dimension = pops::kNativeDimension;
 
-  POPS_HD State flux(const State& state, const Aux&, int direction) const {
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.density-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder&) const {}
+
+  POPS_HD State flux(const State& state, const auto&, int direction) const {
     return direction == 0 ? state : State{Real(0)};
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int direction) const {
+  POPS_HD Real max_wave_speed(const State&, const auto&, int direction) const {
     return direction == 0 ? Real(1) : Real(0);
   }
   POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }

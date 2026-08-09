@@ -122,12 +122,16 @@ def _require_exact_field_provider_depth(slot, provider_levels, active_levels, *,
         )
 
 
-def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persistence):
+def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     """Freeze the complete AMR gather plan without invoking a native collective."""
     import numpy as np
     from pops.identity import make_identity
     from pops.output._checkpoint_collective import canonical_checkpoint_path, checkpoint_topology
     from pops.runtime._amr_checkpoint_contract import encode_contract
+    from pops.runtime._checkpoint_spatial import (
+        add_checkpoint_spatial_contract,
+        require_checkpoint_spatial_contract,
+    )
     from pops.runtime._engine_descriptors import abi_key
     from pops.runtime._program_cadence_checkpoint import capture_program_cadence
     from pops.runtime._system_io_history import prepare_history_capture
@@ -145,12 +149,20 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
         else int(sim.n_blocks()) != 1
     )
     levels, configured_levels = _live_amr_level_envelope(sim)
+    spatial = require_checkpoint_spatial_contract(owner)
+    if len(spatial.refinement_ratios) != configured_levels - 1:
+        raise ValueError(
+            "checkpoint AMR refinement-ratio vectors do not cover the configured level envelope"
+        )
     names = tuple(str(name) for name in sim.block_names())
     if levels <= 0 or not names or len(names) != len(set(names)):
         raise ValueError("checkpoint requires non-empty unique AMR blocks and levels")
     patch_boxes = tuple(tuple(int(value) for value in row) for row in sim.patch_boxes())
-    if any(len(row) != 5 for row in patch_boxes):
-        raise ValueError("checkpoint AMR patch-box rows must contain exactly five integers")
+    box_width = 1 + 2 * spatial.dimension
+    if any(len(row) != box_width for row in patch_boxes):
+        raise ValueError(
+            "checkpoint AMR patch-box rows must contain level plus two bounds per axis"
+        )
     time = float(sim.time())
     macro_step = int(sim.macro_step())
     cadence = capture_program_cadence(sim, macro_step=macro_step)
@@ -209,21 +221,10 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
     )
     if missing_collectives:
         raise TypeError("checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
-    nx, ny = int(sim.nx()), int(sim.ny())
-    Lx, Ly = (float(value) for value in lengths)
-    xlo, ylo = (float(value) for value in lower)
     out = {
         "pops_amr_checkpoint_version": _VERSION,
         "t": time,
         "macro_step": macro_step,
-        # n/L retain their historical meaning as the x-axis values.  The y-axis and origin are
-        # persisted independently so rectangular and shifted Cartesian domains authenticate exactly.
-        "n": nx,
-        "ny": ny,
-        "L": Lx,
-        "Ly": Ly,
-        "xlo": xlo,
-        "ylo": ylo,
         "regrid_every": int(regrid_every),
         "abi_key": abi_key(),
         "blocks": np.array(names),
@@ -233,7 +234,7 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
         "patch_boxes": (
             np.asarray(patch_boxes, dtype=np.int64)
             if patch_boxes
-            else np.zeros((0, 5), dtype=np.int64)
+            else np.zeros((0, box_width), dtype=np.int64)
         ),
         "temporal_restart_state": np.array(temporal_json),
         "regrid_count": int(sim.checkpoint_regrid_count()),
@@ -244,6 +245,7 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
         else "",
         "field_provider_slots": np.asarray(field_slots),
     }
+    add_checkpoint_spatial_contract(out, spatial)
     out.update(cadence.to_payload())
     for name, value in zip(names, nvars, strict=True):
         out["n_vars_%s" % name] = value
@@ -255,9 +257,7 @@ def _prepare_capture_v3(owner, sim, path, lengths, lower, regrid_every, persiste
             "runtime_kind": "amr",
             "target": str(target),
             "clock": {"time": time.hex(), "macro_step": macro_step},
-            "cells": [nx, ny],
-            "lower": [xlo.hex(), ylo.hex()],
-            "upper": [(xlo + Lx).hex(), (ylo + Ly).hex()],
+            "spatial_contract": spatial.to_data(),
             "regrid_every": int(regrid_every),
             "abi_key": str(out["abi_key"]),
             "blocks": [
@@ -345,9 +345,7 @@ def _capture_v3(owner, sim, prepared):
     if prepared.local_program_state:
         rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
         if not callable(rematerialize):
-            raise TypeError(
-                "checkpoint AMR engine lacks accepted-state consensus validation"
-            )
+            raise TypeError("checkpoint AMR engine lacks accepted-state consensus validation")
         # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
         # authenticates every rank-independent accepted field, including persistent tagging,
         # before any rank may seal or publish a checkpoint.
@@ -396,7 +394,7 @@ def _capture_v3(owner, sim, prepared):
     return out, identity.token
 
 
-def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
+def write_v3(owner, sim, path, regrid_every, persistence=None):
     """Capture exact AMR accepted state with preflight consensus before native gathers."""
     import os
     import numpy as np
@@ -405,9 +403,7 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
     prepared_holder = {}
 
     def prepare():
-        prepared = _prepare_capture_v3(
-            owner, sim, path, lengths, lower, regrid_every, persistence or {}
-        )
+        prepared = _prepare_capture_v3(owner, sim, path, regrid_every, persistence or {})
         prepared_holder["plan"] = prepared
         return prepared, prepared.capture_identity
 
@@ -434,24 +430,27 @@ def prepare_v3(
     owner,
     sim,
     d,
-    lengths,
-    lower,
     *,
     bit_identical=False,
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v7 AMR payload without mutating the native engine.
+    """Validate an accepted-state v8 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
     import numpy as np
     from pops.output._checkpoint_collective import checkpoint_topology
-    from pops.runtime._amr_checkpoint_contract import preflight_contract
+    from pops.runtime._amr_checkpoint_contract import (
+        checkpoint_temporal_partition_kind,
+        preflight_contract,
+    )
+    from pops.runtime._checkpoint_spatial import authenticate_checkpoint_spatial_contract
     from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
     from pops.runtime._temporal_restart import TemporalRestartState
 
     topology = checkpoint_topology(owner)
+    spatial = authenticate_checkpoint_spatial_contract(owner, d)
     current_ranks = topology.size
     if type(bit_identical) is not bool:
         raise TypeError("restart: bit_identical policy must be an exact bool")
@@ -488,6 +487,17 @@ def prepare_v3(
             raise ValueError(
                 "restart: RegridOnRestart requires an artifact-backed compiled AMR Program"
             )
+    if checkpoint_temporal_partition_kind(d) == "cell_local":
+        if checkpoint_ranks != current_ranks:
+            raise ValueError(
+                "restart: cell-local temporal partitions require the recorded MPI cardinality "
+                "until ownership rematerialization is implemented"
+            )
+        if hierarchy_mode != "restore_recorded_hierarchy":
+            raise ValueError(
+                "restart: cell-local temporal partitions require RestoreRecordedHierarchy "
+                "until regrid rematerialization is implemented"
+            )
     checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
 
@@ -523,33 +533,8 @@ def prepare_v3(
         program_schedule=installed_schedule,
     )
 
-    # (2) GUARDS.
-    geometry_keys = ("n", "ny", "L", "Ly", "xlo", "ylo")
-    missing_geometry = [key for key in geometry_keys if key not in d]
-    if missing_geometry:
-        raise ValueError(
-            "restart: AMR checkpoint lacks exact Cartesian geometry keys %r" % missing_geometry
-        )
-    current_cells = (int(sim.nx()), int(sim.ny()))
-    checkpoint_cells = (int(d["n"]), int(d["ny"]))
-    if checkpoint_cells != current_cells:
-        raise ValueError(
-            "restart : checkpoint grid %r != system grid %r" % (checkpoint_cells, current_cells)
-        )
-    current_lengths = tuple(float(value) for value in lengths)
-    checkpoint_lengths = (float(d["L"]), float(d["Ly"]))
-    if checkpoint_lengths != current_lengths:
-        raise ValueError(
-            "restart : checkpoint domain lengths %r != system lengths %r -- different spacing"
-            % (checkpoint_lengths, current_lengths)
-        )
-    current_lower = tuple(float(value) for value in lower)
-    checkpoint_lower = (float(d["xlo"]), float(d["ylo"]))
-    if checkpoint_lower != current_lower:
-        raise ValueError(
-            "restart : checkpoint lower bounds %r != system lower bounds %r"
-            % (checkpoint_lower, current_lower)
-        )
+    # (2) GUARDS. The exact rank-generic geometry was authenticated above before any native
+    # hierarchy allocation or restart transaction can begin.
     chk_blocks = [str(b) for b in d["blocks"]]
     cur_blocks = list(sim.block_names())
     if chk_blocks != cur_blocks:
@@ -558,7 +543,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v7 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v8 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -607,13 +592,12 @@ def prepare_v3(
                 raise ValueError(
                     "restart: checkpoint lacks level %d potential for field provider %s" % (k, slot)
                 )
-            width = int(sim.nx()) << k
-            height = int(sim.ny()) << k
+            expected_cells = spatial.cells_at_level(k)
             value = np.asarray(d[key], dtype=np.float64).ravel()
-            if value.size != width * height:
+            if value.size != expected_cells:
                 raise ValueError(
                     "restart: field provider %s level %d potential has size %d, expected %d"
-                    % (slot, k, value.size, width * height)
+                    % (slot, k, value.size, expected_cells)
                 )
             values.append(value)
         field_payload.append((slot, values))
@@ -623,27 +607,41 @@ def prepare_v3(
     # with the live composition, so malformed state/aux/history cannot fail only after a hierarchy
     # mutation.  The native transaction remains the final exception-safety boundary.
     raw_boxes = np.asarray(d["patch_boxes"], dtype=np.int64)
-    if raw_boxes.ndim != 2 or raw_boxes.shape[1] != 5:
-        raise ValueError("restart: patch_boxes must have shape (npatches, 5)")
+    box_width = 1 + 2 * spatial.dimension
+    if raw_boxes.ndim != 2 or raw_boxes.shape[1] != box_width:
+        raise ValueError(
+            "restart: patch_boxes must contain level plus two bounds per spatial axis"
+        )
     boxes = [tuple(int(x) for x in row) for row in raw_boxes]
     per_level_boxes = {k: [] for k in range(nlev)}
     for box in boxes:
-        level, ilo, jlo, ihi, jhi = box
+        level = box[0]
+        lower = box[1 : 1 + spatial.dimension]
+        upper = box[1 + spatial.dimension :]
         if level <= 0 or level >= nlev:
             raise ValueError("restart: fine patch level %d is outside [1, %d]" % (level, nlev - 1))
-        width = int(sim.nx()) << level
-        height = int(sim.ny()) << level
-        if ilo < 0 or jlo < 0 or ihi < ilo or jhi < jlo or ihi >= width or jhi >= height:
+        level_shape = spatial.shape_at_level(level)
+        if any(
+            low < 0 or high < low or high >= extent
+            for low, high, extent in zip(lower, upper, level_shape, strict=True)
+        ):
             raise ValueError(
-                "restart: invalid level-%d patch box %r for shape (%d, %d)"
-                % (level, box[1:], height, width)
+                "restart: invalid level-%d patch box %r for shape %r"
+                % (level, box[1:], level_shape)
             )
         for other in per_level_boxes[level]:
-            if not (ihi < other[0] or other[2] < ilo or jhi < other[1] or other[3] < jlo):
+            other_lower, other_upper = other
+            overlaps = all(
+                not (high < other_low or other_high < low)
+                for low, high, other_low, other_high in zip(
+                    lower, upper, other_lower, other_upper, strict=True
+                )
+            )
+            if overlaps:
                 raise ValueError(
                     "restart: overlapping level-%d patch boxes %r and %r" % (level, other, box[1:])
                 )
-        per_level_boxes[level].append((ilo, jlo, ihi, jhi))
+        per_level_boxes[level].append((lower, upper))
     if nlev > 1:
         for level in range(1, nlev):
             if not per_level_boxes[level]:
@@ -701,10 +699,8 @@ def prepare_v3(
                 raise ValueError(
                     "restart: checkpoint lacks state for block '%s' level %d" % (block, level)
                 )
-            width = int(sim.nx()) << level
-            height = int(sim.ny()) << level
             state = np.asarray(d[key], dtype=np.float64)
-            expected = current_nvars * width * height
+            expected = current_nvars * spatial.cells_at_level(level)
             if state.size != expected:
                 raise ValueError(
                     "restart: block '%s' level %d state has size %d, expected %d"
@@ -715,7 +711,7 @@ def prepare_v3(
 
     aux_payload = []
     phi_payload = []
-    coarse_width = int(sim.nx()) * int(sim.ny())
+    coarse_width = spatial.cells_at_level(0)
     coarse_aux_size = len(sim.level_aux_flat(0))
     if coarse_width < 1 or coarse_aux_size % coarse_width:
         raise ValueError("restart: installed coarse auxiliary storage has an invalid shape")
@@ -728,23 +724,22 @@ def prepare_v3(
                 "restart: checkpoint lacks aux or potential payload for level %d" % level
             )
         aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
-        width = int(sim.nx()) << level
-        height = int(sim.ny()) << level
-        expected_aux = aux_components * width * height
+        expected_cells = spatial.cells_at_level(level)
+        expected_aux = aux_components * expected_cells
         if aux.size != expected_aux:
             raise ValueError(
                 "restart: level %d aux has size %d, expected %d" % (level, aux.size, expected_aux)
             )
         phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
-        if phi.size != width * height:
+        if phi.size != expected_cells:
             raise ValueError(
                 "restart: level %d potential has size %d, expected %d"
-                % (level, phi.size, width * height)
+                % (level, phi.size, expected_cells)
             )
         aux_payload.append(aux)
         phi_payload.append(phi)
 
-    _preflight_histories_v3(sim, d, current_ranks)
+    _preflight_histories_v3(sim, d, current_ranks, spatial)
 
     return _PreparedAMRRestart(
         payload=d,
@@ -1060,9 +1055,7 @@ def apply_v3(owner, sim, prepared):
             "recorded accepted-contract identity",
             lambda: _restart_accepted_contract_identity(sim),
         )
-        before_history_identity = _restart_history_identity(
-            owner, sim, phase="recorded hierarchy"
-        )
+        before_history_identity = _restart_history_identity(owner, sim, phase="recorded hierarchy")
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,
@@ -1123,7 +1116,7 @@ def apply_v3(owner, sim, prepared):
     return report
 
 
-def _preflight_histories_v3(sim, d, current_ranks):
+def _preflight_histories_v3(sim, d, current_ranks, spatial):
     """Validate the entire ring registry and persisted buffers without mutating native state."""
     import numpy as np
     from pops.time._history.persistence import HistoryPersistence
@@ -1223,8 +1216,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
                     "with manifest cadence %r" % (name, recorded, list(expected_steps))
                 )
         expected_values = ncomp * sum(
-            (int(sim.nx()) << level) * (int(sim.ny()) << level)
-            for level in range(int(d["n_levels"]))
+            spatial.cells_at_level(level) for level in range(int(d["n_levels"]))
         )
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
@@ -1240,7 +1232,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v7 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v8 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

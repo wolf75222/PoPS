@@ -372,6 +372,168 @@ def test_two_native_layouts_execute_sliced_programs_and_exact_transfer(compiled_
     assert len(inspection.instance["installed_components"]) == 1
 
 
+def test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract(
+    compiled_multi_layout,
+):
+    from pops.runtime._runtime_instance import RuntimeInstance
+    from tests.python.integration.runtime.test_dsl_runtime_params import (
+        DT as SINGLE_LAYOUT_DT,
+        _resolved_analytic_initial_parameter_case,
+    )
+
+    executions = []
+    for label, target in (("uniform", "system"), ("amr", "amr_system")):
+        resolved, amplitude = _resolved_analytic_initial_parameter_case(
+            target=target
+        )
+        artifact = pops.compile(resolved)
+        runtime = pops.bind(
+            artifact,
+            params={amplitude: 1.0},
+            resources={"execution_context": artifact_execution_context(artifact)},
+        )
+        report = pops.run(
+            runtime,
+            t_end=SINGLE_LAYOUT_DT,
+            max_steps=1,
+            console=False,
+        )
+        executions.append((label, runtime, artifact, report))
+
+    (
+        multi,
+        multi_artifact,
+        coarse_layout_id,
+        fine_layout_id,
+        mapping_id,
+        _u_fine,
+        _u_coarse,
+    ) = _bind(
+        compiled_multi_layout
+    )
+    multi_report = pops.run(
+        multi,
+        t_end=DT,
+        max_steps=1,
+        console=False,
+    )
+    executions.append(("multi-layout", multi, multi_artifact, multi_report))
+
+    expected_layout_counts = {"uniform": 1, "amr": 1, "multi-layout": 2}
+    expected_level_counts = {"uniform": 1, "amr": 2, "multi-layout": 1}
+    expected_runtime_kinds = {
+        "uniform": "uniform",
+        "amr": "adaptive",
+        "multi-layout": "uniform",
+    }
+    expected_final_times = {
+        "uniform": SINGLE_LAYOUT_DT,
+        "amr": SINGLE_LAYOUT_DT,
+        "multi-layout": DT,
+    }
+    schemas = set()
+
+    for label, runtime, artifact, report in executions:
+        assert type(runtime) is RuntimeInstance
+        assert type(report) is pops.RunReport
+        assert report.accepted_steps == 1
+        assert report.rejected_steps == 0
+        assert report.final_time == expected_final_times[label]
+        assert report.final_macro_step == 1
+        assert report.stop_reason is pops.RunStopReason.TARGET_TIME_REACHED
+        assert report.run_identity == runtime.last_run_identity
+        assert report.bind_identity == runtime.bind_identity
+        assert report.execution_identity == runtime._execution_context.identity
+        assert report.artifact_identity == artifact.artifact_identity
+        assert report.artifact_identity == runtime.bound_snapshot.artifact_identity
+        assert report.field_providers == ()
+        assert runtime.time() == report.final_time
+        assert runtime.macro_step() == report.final_macro_step
+        assert runtime.n_levels() == expected_level_counts[label]
+
+        inspection = runtime.inspect().to_dict()
+        instance = inspection["instance"]
+        program = runtime.program_report().to_dict()
+        report_data = report.to_data()
+        assert inspection["runtime"] == expected_runtime_kinds[label]
+        assert inspection["clock"] == {
+            "time": runtime.time(),
+            "macro_step": runtime.macro_step(),
+        }
+        assert inspection["blocks"] == list(runtime.block_names())
+        assert inspection["bound_snapshot"] == runtime.bound_snapshot.to_dict()
+        assert instance["bind_identity"] == runtime.bind_identity.to_data()
+        assert instance["artifact_identity"] == artifact.artifact_identity.to_data()
+        assert instance["consumer_graph"] == runtime.consumer_graph.to_data()
+        assert instance["consumer_cursors"] == runtime.consumer_cursors.to_data()
+        assert instance["last_run_identity"] == report.run_identity.to_data()
+        assert len(instance["layout_plan"]["layouts"]) == expected_layout_counts[label]
+        assert program["installed"] is True
+        assert program["program_hash"] == runtime.installed_program_hash()
+        assert len(program["block_map"]) == len(runtime.block_names())
+        assert tuple(sorted(program["block_map"])) == tuple(
+            range(len(runtime.block_names()))
+        )
+        assert all(
+            type(row["count"]) is int and 0 <= row["count"] <= row["limit"]
+            for row in program["params"]
+        )
+        assert inspection["program"]["installed"] == program["installed"]
+        assert inspection["program"]["hash"] == program["program_hash"]
+        for name in (
+            "step_transaction",
+            "block_map",
+            "params",
+            "diagnostics",
+            "histories",
+            "cache",
+            "profiler",
+            "clocks",
+            "level_relations",
+            "flux_ledger",
+            "synchronization",
+            "temporal",
+        ):
+            assert inspection["program"][name] == program[name]
+        assert all(
+            np.isfinite(runtime.integral(block))
+            for block in runtime.block_names()
+        )
+
+        native_transaction = runtime._executor._last_step_transaction_report
+        assert (
+            native_transaction.status,
+            native_transaction.phase,
+            native_transaction.action,
+        ) == ("accepted", "commit", "commit")
+        assert native_transaction.staged_effects
+        assert (
+            native_transaction.committed_effects
+            == native_transaction.staged_effects
+        )
+        assert native_transaction.rolled_back_effects == ()
+        schemas.add(
+            (
+                tuple(sorted(report_data)),
+                tuple(sorted(inspection)),
+                tuple(sorted(instance)),
+                tuple(sorted(program)),
+            )
+        )
+
+    assert len(schemas) == 1
+    multi_program = multi.program_report()
+    assert len(multi_program.program_hash) == 64
+    assert tuple(sorted(multi_program.block_map)) == (0, 1)
+    assert {row["program_block"] for row in multi_program.params} == {0, 1}
+    assert {row["block"] for row in multi_program.params} == {"coarse", "tracer"}
+    assert {row["layout_id"] for row in multi_program.params} == {
+        coarse_layout_id,
+        fine_layout_id,
+    }
+    assert multi._executor.mapping_report() == {mapping_id: 1}
+
+
 def test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count(
     compiled_multi_layout, tmp_path
 ):

@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
+#include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -8,6 +9,11 @@
 #include <array>
 #include <initializer_list>
 #include <limits>
+
+using System = pops::System<pops::kNativeDimension>;
+using SystemConfig = pops::SystemConfig<pops::kNativeDimension>;
+using SystemLayoutTransferSpec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
+using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
 
 // ADC-365: the System runtime-composition facade bindings.
 //
@@ -48,7 +54,7 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& row) {
           py::cast<std::string>(row["source_representation"]),
           py::cast<std::string>(row["target_representation"]),
           py::cast<std::string>(row["synchronization_identity"]),
-          py::cast<std::array<std::int32_t, 2>>(row["refinement_ratio"]),
+          py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["refinement_ratio"]),
           py::cast<std::int32_t>(row["operation"])};
 }
 
@@ -146,8 +152,8 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton. newton_diagnostics=True enables the report
-          // (newton_report(name)).
+          // Options of the implicit IMEX source Newton. The Program-only System runtime rejects
+          // newton_diagnostics=True until a typed consumer actually publishes that report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -169,19 +175,42 @@ void bind_system_assembly(py::class_<System>& cls) {
           "_install_boundary_plan",
           [](System& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
-             const std::vector<double>& face_values, int ncomp,
+             const std::vector<double>& face_values,
+             const std::vector<std::string>& face_identities,
+             const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-             const std::vector<std::array<int, 6>>& periodic_identifications) {
-            system.install_boundary_plan(
-                name, identity, required_depth, face_types, face_values, ncomp,
-                omitted_interface_faces, state_identity, PreparedBoundaryReadDependencies{},
-                decode_periodic_identification_rows(periodic_identifications));
+             const std::vector<std::vector<int>>& periodic_identifications,
+             const std::vector<std::string>& face_representations,
+             const std::vector<std::string>& face_converter_identities,
+             const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+             const std::vector<std::vector<double>>& face_analytic_literals,
+             const std::vector<std::string>& face_analytic_clocks) {
+            reject_unqualified_periodic_identifications<pops::kNativeDimension>(
+                periodic_identifications, "ranked Cartesian boundary authority");
+            std::vector<bool> omitted(face_types.size(), false);
+            for (int ordinal : omitted_interface_faces) {
+              if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= face_types.size() ||
+                  face_types[static_cast<std::size_t>(ordinal)] != "external" ||
+                  omitted[static_cast<std::size_t>(ordinal)])
+                throw py::value_error(
+                    "every omitted interface face must be one unique external ranked face");
+              omitted[static_cast<std::size_t>(ordinal)] = true;
+            }
+            system.install_hyperbolic_boundary(
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, state_identity, face_representations, face_converter_identities,
+                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
-          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
+          py::arg("periodic_identifications") = std::vector<std::vector<int>>{},
+          py::arg("face_representations") = std::vector<std::string>{},
+          py::arg("face_converter_identities") = std::vector<std::string>{},
+          py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
+          py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
+          py::arg("face_analytic_clocks") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
@@ -189,60 +218,19 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_install_field_storage_route", &System::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
            "Bind one exact solved-field Handle to native provider storage.")
-      .def("_discard_boundary_plans", &System::discard_boundary_plans,
+      .def("_discard_boundary_plans", &System::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
-      .def(
-          "_install_ghost_boundary_component",
-          [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_ghost_boundary_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
-      .def(
-          "_install_field_boundary_residual_component",
-          [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_field_boundary_residual_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
-      .def(
-          "_install_field_boundary_jvp_component",
-          [](System& system, const std::string& name,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
-             const std::string& parameters_json, const std::string& target_json,
-             const py::dict& execution) {
-            system.install_field_boundary_jvp_component(
-                name,
-                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
-                                                                          target_json, execution),
-                std::move(component));
-          },
-          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
       .def(
           "_install_interface_flux_component",
           [](System& system, std::size_t left_block, std::size_t right_block, int level,
              std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& interface,
              const py::dict& binding, const std::string& parameters_json,
              const std::string& target_json, const py::dict& execution) {
-            auto route = pops::python::detail::interface_route_from_python(interface, left_block,
-                                                                           right_block, level);
-            auto spec = pops::python::detail::interface_flux_spec_from_python(
-                interface, binding, parameters_json, target_json, execution);
+            auto route = pops::python::detail::interface_route_from_python<pops::kNativeDimension>(
+                interface, left_block, right_block, level);
+            auto spec =
+                pops::python::detail::interface_flux_spec_from_python<pops::kNativeDimension>(
+                    interface, binding, parameters_json, target_json, execution);
             system.install_interface_flux_component(std::move(route), std::move(spec),
                                                     std::move(component));
           },
@@ -253,40 +241,6 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("level") = 0)
       .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
-      // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
-      // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
-      .def(
-          "newton_report",
-          [](const System& s, const std::string& name) {
-            const System::SourceNewtonReport r = s.newton_report(name);
-            py::dict d;
-            d["enabled"] = r.enabled;
-            d["converged"] = r.converged;
-            d["max_residual"] = r.max_residual;
-            d["max_iters_used"] = r.max_iters_used;
-            d["n_failed"] = r.n_failed;
-            if (r.failed_i >= 0)
-              d["failed_cell"] =
-                  py::make_tuple(static_cast<int>(r.failed_i), static_cast<int>(r.failed_j));
-            else
-              d["failed_cell"] = py::none();
-            d["failed_component"] = static_cast<int>(r.failed_comp);
-            py::list diagnostics;
-            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
-              py::dict row;
-              row["code"] = event.code;
-              row["component"] = event.component;
-              row["severity"] = event.severity;
-              row["message"] = event.message;
-              row["iteration"] = event.iteration;
-              row["value"] = event.value;
-              diagnostics.append(row);
-            }
-            d["diagnostics"] = diagnostics;
-            return d;
-          },
-          py::arg("name"))
       // ADC-510 (Spec 5 C5): changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT
       // recompiling the .so. prog_block = the PROGRAM block index (P.state order); values = that block's
       // params in sorted-name order (the .so pops_program_param_* metadata). cf.
@@ -295,12 +249,13 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("values"))
       // Private package-install seam. The resolved parameter vector is injected before native
       // closures are built; no mutable per-block parameter side channel exists.
-      .def("_install_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
-           py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
+      .def("_register_native_package", &System::register_native_package, py::arg("name"),
+           py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
            py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
+      .def("_finalize_native_packages", &System::finalize_native_packages)
       .def("_install_external_riemann_block", &System::add_external_riemann_block, py::arg("name"),
            py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"), py::arg("limiter"),
            py::arg("recon"), py::arg("time"), py::arg("gamma"), py::arg("substeps"),
@@ -313,7 +268,7 @@ void bind_system_assembly(py::class_<System>& cls) {
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
       .def("install_program", &System::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
-      // installed program closure (cf. SystemProgramDriver::step). Separate from install_program so the .so
+      // installed program closure (cf. System::step). Separate from install_program so the .so
       // Internal compiled-kernel cadence seam; the public controller is Program.step_strategy().
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"));
@@ -339,13 +294,26 @@ void bind_system_program(py::class_<System>& cls) {
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
+      // Exact Program-index -> System-index map established by name during install_program.  The
+      // structured runtime report consumes this owned native fact; an empty Python-side fallback
+      // must never be mistaken for an identity map in a sliced multi-layout Program.
+      .def("program_block_map", &System::program_block_map)
+      // Metadata-only parameter occupancy for ProgramRuntimeReport.  Keep the fixed-size values
+      // private while exposing the native count that proves every compiled carrier was installed.
+      .def(
+          "program_param_count",
+          [](const System& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       // ADC-592: runtime freeze lifecycle. mark_bound() (called LAST by the Python bind flow) freezes
       // the composition -> every structural setter then rejects; lifecycle_state() reports
       // assembling / bound / running (running derived from macro_step()).
       .def("mark_bound", &System::mark_bound)
       .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver (geometry-specific default: geometric_mg Cartesian, polar on a ring). install_program
+      // solver; the geometry-specific default is cartesian_cg on a uniform Cartesian domain).
+      // install_program
       // reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
@@ -354,6 +322,10 @@ void bind_system_program(py::class_<System>& cls) {
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
+      .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &System::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
@@ -367,7 +339,13 @@ void bind_system_program(py::class_<System>& cls) {
 
 // Checkpoint/restart seams: multistep history rings + scheduler value-cache (gathered/restored directly).
 void bind_system_checkpoint(py::class_<System>& cls) {
-  cls
+  cls.def(
+         "_prepare_checkpoint_spatial_contract",
+         [](const System&, const py::dict& data) {
+           return pops::python::detail::prepare_checkpoint_spatial_contract<kNativeDimension>(data);
+         },
+         py::arg("contract"),
+         "Validate the exact rank-generic checkpoint schema before restart state work.")
       // Multistep history checkpoint/restart seam (ADC-406b): the facade gathers/restores the
       // System-owned rings DIRECTLY (no .so checkpoint_extra ABI). history_global mirrors state_global
       // (collective gather, component-major); restore_history mirrors set_state (owner-rank scatter).
@@ -377,7 +355,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       .def(
           "history_global",
           [](const System& s, const std::string& name, int slot) {
-            return to_3d(s.history_global(name, slot), s.history_ncomp(name), s.ny(), s.nx());
+            return to_ranked_state(s.history_global(name, slot), s.history_ncomp(name),
+                                   s.spatial_shape());
           },
           py::arg("name"), py::arg("slot"))
       .def("history_initialized", &System::history_initialized, py::arg("name"))
@@ -417,8 +396,8 @@ void bind_system_checkpoint(py::class_<System>& cls) {
       .def(
           "program_cache_global",
           [](const System& s, int node_id) {
-            return to_3d(s.program_cache_global(node_id), s.program_cache_ncomp(node_id), s.ny(),
-                         s.nx());
+            return to_ranked_state(s.program_cache_global(node_id), s.program_cache_ncomp(node_id),
+                                   s.spatial_shape());
           },
           py::arg("node_id"))
       .def(
@@ -434,7 +413,7 @@ void bind_system_checkpoint(py::class_<System>& cls) {
 }
 
 // Physics wiring: inter-species couplings, Poisson/field config, geometry (disc),
-// epsilon/reaction/magnetic/aux fields, and state initialization.
+// magnetic/aux fields, and state initialization.
 void bind_system_physics(py::class_<System>& cls) {
   // The named inter-species couplings (add_ionization / add_collision / add_thermal_exchange) are no
   // longer bound (ADC-595): they are Python presets lowering to add_coupling_operator. A new coupling
@@ -545,37 +524,18 @@ void bind_system_physics(py::class_<System>& cls) {
            "'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")
       .def("block_gamma", &System::block_gamma, py::arg("name"))
-      .def(
-          "set_poisson", &System::set_poisson,
-          "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
-          "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
-          "historical "
-          "alias). solver: 'geometric_mg' (any case, wall included) | 'fft' (periodic, "
-          "discrete stencil; n = 2^k for the fast FFT, otherwise direct DFT O(n^2)) | "
-          "'fft_spectral' "
-          "(periodic, continuous symbol -(kx^2+ky^2)). bc: 'auto' | 'periodic' | 'dirichlet' | "
-          "'neumann'. wall: 'none' | "
-          "'circle' (conducting wall centered at (L/2, L/2), radius wall_radius). epsilon: "
-          "CONSTANT permittivity of div(eps grad phi) = f (for variable eps(x): "
-          "set_epsilon_field). "
-          "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative "
-          "criterion, "
-          "historical; no effect on FFT). rel_tol / max_cycles / min_coarse / pre_smooth / "
-          "post_smooth / bottom_sweeps: the GeometricMG V-cycle knobs (ADC-613); they default to "
-          "the native kMG* constants so an omitting call is bit-identical to the historical "
-          "V-cycle, and are inert for the FFT solver. coarse_threshold (ADC-644): a total-cell "
-          "coarsening ceiling -- coarsening stops once a level's nx*ny is at or below it; distinct "
-          "from the per-axis min_coarse. Default 0 = disabled (only min_coarse governs), "
-          "bit-identical to the historical hierarchy; inert for the FFT solver.",
-          py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
-          py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0,
-          py::arg("rel_tol") = static_cast<double>(kMGDefaultRelTol),
-          py::arg("max_cycles") = kMGDefaultMaxCycles, py::arg("min_coarse") = kMGDefaultMinCoarse,
-          py::arg("pre_smooth") = kMGDefaultPreSmooth,
-          py::arg("post_smooth") = kMGDefaultPostSmooth,
-          py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
-          py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
+      .def("set_poisson", &System::set_poisson,
+           "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
+           "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = "
+           "historical alias). solver: 'cartesian_cg', the exact-ranked uniform "
+           "constant-coefficient backend. GeometricMG belongs to AmrSystem MG/FAC. "
+           "bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. "
+           "abs_tol / rel_tol / max_iterations are the only CartesianCG solve controls.",
+           py::arg("rhs") = "charge_density", py::arg("solver") = "cartesian_cg",
+           py::arg("bc") = "auto",
+           py::arg("abs_tol") = static_cast<double>(kCartesianCGDefaultAbsTol),
+           py::arg("rel_tol") = static_cast<double>(kCartesianCGDefaultRelTol),
+           py::arg("max_iterations") = kCartesianCGDefaultMaxIterations)
       .def(
           "register_configured_field_solver_provider",
           [](System& system, const std::string& family_route, const std::string& provider_route,
@@ -638,9 +598,25 @@ void bind_system_physics(py::class_<System>& cls) {
             return report;
           },
           py::arg("provider_slot"))
-      .def("register_elliptic_field", &System::register_elliptic_field, py::arg("block"),
-           py::arg("field"), py::arg("phi_comp"), py::arg("gx_comp"), py::arg("gy_comp"),
-           py::arg("gradient_sign"))
+      .def(
+          "register_elliptic_field",
+          [](System& system, const std::string& block, const std::string& field,
+             const std::vector<py::dict>& rows, int gradient_sign) {
+            std::vector<pops::runtime::system::AuxiliaryComponentKey> keys;
+            keys.reserve(rows.size());
+            for (const py::dict& row : rows) {
+              if (row.size() != 4 || !row.contains("owner_qid") || !row.contains("space_kind") ||
+                  !row.contains("space_name") || !row.contains("component"))
+                throw std::invalid_argument(
+                    "elliptic field output requires an exact ComponentKey mapping");
+              keys.push_back({py::cast<std::string>(row["owner_qid"]),
+                              py::cast<std::string>(row["space_kind"]),
+                              py::cast<std::string>(row["space_name"]),
+                              py::cast<std::string>(row["component"])});
+            }
+            system.register_elliptic_field(block, field, keys, gradient_sign);
+          },
+          py::arg("block"), py::arg("field"), py::arg("output_keys"), py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &System::set_field_boundary_plan, py::arg("provider_slot"),
            py::arg("kind"), py::arg("alpha"), py::arg("beta"), py::arg("value"))
       .def("set_field_boundary_dependencies", &System::set_field_boundary_dependencies,
@@ -682,58 +658,40 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("cut_theta_min") = 0.0)
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      // Domain 0/1 mask (ny, nx) row-major. Historical name retained for compatibility; it reports
+      // Ranked domain 0/1 mask. Historical name retained for compatibility; it reports
       // the mask of any analytic level set and is all 1.0 when none is installed.
-      .def("disc_mask", [](const System& s) { return to_2d(s.disc_mask(), s.ny(), s.nx()); })
+      .def("disc_mask",
+           [](const System& s) { return to_ranked_field(s.disc_mask(), s.spatial_shape()); })
+      // Auxiliary values are addressed by their complete owner-qualified key.  Python supplies
+      // only data; native generated packages install the immutable producer graph and kernels.
       .def(
-          "set_epsilon_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_epsilon_field(flat(arr));
-          },
-          py::arg("eps"))
-      .def(
-          "set_epsilon_anisotropic_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> eps_x,
-             py::array_t<double, py::array::c_style | py::array::forcecast> eps_y) {
-            s.set_epsilon_anisotropic_field(flat(eps_x), flat(eps_y));
-          },
-          py::arg("eps_x"), py::arg("eps_y"))
-      .def(
-          "set_reaction_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_reaction_field(flat(arr));
-          },
-          py::arg("kappa"))
-      .def(
-          "set_magnetic_field",
-          [](System& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_magnetic_field(flat(arr));
-          },
-          py::arg("bz"))
-      // NAMED aux fields (ADC-70 phase 1): by canonical COMPONENT (>= 5). The name -> comp
-      // resolution lives in the private Python System facade, which calls these two methods.
-      .def(
-          "set_aux_field_component",
-          [](System& s, int comp,
+          "stage_auxiliary_input",
+          [](System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_aux_field_component(comp, flat(arr));
+            s.stage_auxiliary_input({owner_qid, space_kind, space_name, component}, flat(arr));
           },
-          py::arg("comp"), py::arg("field"))
-      // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2). The Python
-      // facade (System.set_aux_field(..., halo=pops.mesh.AuxHalo(...))) resolves name -> comp and calls this.
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"),
+          py::arg("values"))
       .def(
-          "set_aux_field_halo_component",
-          [](System& s, int comp, int bc_type, double value) {
-            s.set_aux_field_halo_component(comp, bc_type, value);
+          "auxiliary_component",
+          [](const System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            return to_ranked_field(
+                s.auxiliary_component({owner_qid, space_kind, space_name, component}),
+                s.spatial_shape());
           },
-          py::arg("comp"), py::arg("bc_type"), py::arg("value"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"))
       .def(
-          "aux_field_component",
-          [](const System& s, int comp) {
-            return to_2d(s.aux_field_component(comp), s.ny(), s.nx());
+          "auxiliary_address",
+          [](const System& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            const auto address =
+                s.auxiliary_address({owner_qid, space_kind, space_name, component});
+            return py::make_tuple(address.group, address.component);
           },
-          py::arg("comp"))
-      .def("set_electron_temperature_from", &System::set_electron_temperature_from, py::arg("name"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"), py::arg("component"))
+      .def("auxiliary_registry_contract", &System::auxiliary_registry_contract)
       .def(
           "set_density",
           [](System& s, const std::string& name,
@@ -755,7 +713,7 @@ void bind_system_physics(py::class_<System>& cls) {
       .def(
           "get_primitive_state",
           [](System& s, const std::string& name) {
-            return to_3d(s.get_primitive_state(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.get_primitive_state(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"));
 }
@@ -833,13 +791,13 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def(
           "eval_rhs",
           [](System& s, const std::string& name) {
-            return to_3d(s.eval_rhs(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.eval_rhs(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
           "get_state",
           [](System& s, const std::string& name) {
-            return to_3d(s.get_state(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.get_state(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
@@ -852,18 +810,64 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_set_analytic_expression_state", &System::set_analytic_expression_state,
            py::arg("name"), py::arg("space"), py::arg("centering"), py::arg("projection"),
            py::arg("opcodes"), py::arg("literals"))
-      .def("_set_analytic_mapped_state", &System::set_analytic_mapped_state, py::arg("name"),
-           py::arg("opcodes"), py::arg("literals"), py::arg("input_sources"))
-      .def("_set_analytic_gaussian_state", &System::set_analytic_gaussian_state, py::arg("name"),
-           py::arg("center_x"), py::arg("center_y"), py::arg("background"), py::arg("amplitude"),
-           py::arg("inverse_width"));
+      .def(
+          "_set_analytic_mapped_state",
+          [](System& system, const std::string& name,
+             const std::vector<std::vector<std::string>>& opcodes,
+             const std::vector<std::vector<double>>& literals, const std::vector<py::dict>& rows,
+             const std::string& consumer_qid) {
+            std::vector<pops::runtime::system::AnalyticMappedInput> inputs;
+            inputs.reserve(rows.size());
+            for (const py::dict& row : rows) {
+              if (!row.contains("source"))
+                throw std::invalid_argument(
+                    "mapped analytic input requires an exact source discriminator");
+              const std::string source = py::cast<std::string>(row["source"]);
+              if (source == "state") {
+                if (row.size() != 2 || !row.contains("component"))
+                  throw std::invalid_argument(
+                      "mapped analytic state input requires exactly source/component");
+                inputs.push_back(pops::runtime::system::AnalyticMappedInput::state(
+                    py::cast<int>(row["component"])));
+                continue;
+              }
+              if (source != "provider" || row.size() != 2 || !row.contains("key"))
+                throw std::invalid_argument(
+                    "mapped analytic provider input requires exactly source/key");
+              const py::dict key = py::cast<py::dict>(row["key"]);
+              if (key.size() != 4 || !key.contains("owner_qid") || !key.contains("space_kind") ||
+                  !key.contains("space_name") || !key.contains("component"))
+                throw std::invalid_argument(
+                    "mapped analytic provider input requires an exact ComponentKey");
+              inputs.push_back(pops::runtime::system::AnalyticMappedInput::provider(
+                  {py::cast<std::string>(key["owner_qid"]),
+                   py::cast<std::string>(key["space_kind"]),
+                   py::cast<std::string>(key["space_name"]),
+                   py::cast<std::string>(key["component"])}));
+            }
+            return system.set_analytic_mapped_state(name, opcodes, literals, inputs, consumer_qid);
+          },
+          py::arg("name"), py::arg("opcodes"), py::arg("literals"), py::arg("inputs"),
+          py::arg("consumer_qid"))
+      .def(
+          "_set_analytic_gaussian_state",
+          [](System& system, const std::string& name, const py::handle& center, double background,
+             double amplitude, double inverse_width) {
+            return system.set_analytic_gaussian_state(
+                name,
+                ranked_real_vector_from_python<pops::kNativeDimension>(center,
+                                                                       "System Gaussian center"),
+                background, amplitude, inverse_width);
+          },
+          py::arg("name"), py::arg("center"), py::arg("background"), py::arg("amplitude"),
+          py::arg("inverse_width"));
 }
 
 // Data + IO accessors: shape/introspection, mass/density/potential, MPI-safe globals, local hyperslabs.
 void bind_system_data(py::class_<System>& cls) {
   cls.def("n_vars", &System::n_vars, py::arg("name"))
-      .def("nx", &System::nx)
-      .def("ny", &System::ny)
+      .def("spatial_shape",
+           [](const System& s) { return ranked_extent_to_python(s.spatial_shape()); })
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
@@ -877,10 +881,10 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "density",
           [](const System& s, const std::string& name) {
-            return to_2d(s.density(name), s.ny(), s.nx());
+            return to_ranked_field(s.density(name), s.spatial_shape());
           },
           py::arg("name"))
-      .def("potential", [](System& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
+      .def("potential", [](System& s) { return to_ranked_field(s.potential(), s.spatial_shape()); })
       // GLOBAL accessors (MPI-safe collectives): accepted-state checkpoint capture. Each
       // rank MUST call them (internal all_reduce); they return the COMPLETE field (rank-0 gather
       // implicit via all_reduce_sum) -- single-rank: bit-identical to density / get_state / potential.
@@ -888,21 +892,21 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "density_global",
           [](const System& s, const std::string& name) {
-            return to_2d(s.density_global(name), s.ny(), s.nx());
+            return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
       .def(
           "state_global",
           [](const System& s, const std::string& name) {
-            return to_3d(s.state_global(name), s.n_vars(name), s.ny(), s.nx());
+            return to_ranked_state(s.state_global(name), s.n_vars(name), s.spatial_shape());
           },
           py::arg("name"))
       .def("potential_global",
-           [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
+           [](System& s) { return to_ranked_field(s.potential_global(), s.spatial_shape()); })
       .def(
           "field_potential_global",
           [](System& s, const std::string& slot) {
-            return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
+            return to_ranked_field(s.field_potential_global(slot), s.spatial_shape());
           },
           py::arg("provider_slot"))
       .def(
@@ -920,39 +924,60 @@ void bind_system_data(py::class_<System>& cls) {
           py::arg("provider_slot"), py::arg("level"),
           "Exact compact valid-cell field pieces owned by this rank.")
       .def(
+          "output_embedded_boundary_local_pieces",
+          [](const System& s, const std::string& name, int level) {
+            return output_pieces_to_python(s.output_embedded_boundary_local_pieces(name, level));
+          },
+          py::arg("name"), py::arg("level"),
+          "Exact compact prepared embedded-boundary sidecar pieces owned by this rank.")
+      .def(
           "output_state_root_pieces",
-          [](const System& s, const WorldCommunicator& world, const std::string& block, int level) {
-            std::vector<OutputPiece> pieces;
+          [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_state_root_pieces(world, block, level);
+              pieces = s.output_state_root_pieces(lane, block, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("block"), py::arg("level"),
+          py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "output_field_root_pieces",
-          [](System& s, const WorldCommunicator& world, const std::string& provider_slot,
-             int level) {
-            std::vector<OutputPiece> pieces;
+          [](System& s, const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_field_root_pieces(world, provider_slot, level);
+              pieces = s.output_field_root_pieces(lane, provider_slot, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
+          "output_embedded_boundary_root_pieces",
+          [](const System& s, const ObserverMpiLane& lane, const std::string& name, int level) {
+            std::vector<OutputPiece<pops::kNativeDimension>> pieces;
+            {
+              py::gil_scoped_release release;
+              pieces = s.output_embedded_boundary_root_pieces(lane, name, level);
+            }
+            return output_pieces_to_python(pieces);
+          },
+          py::arg("lane"), py::arg("name"), py::arg("level"),
+          "Collectively gather prepared embedded-boundary sidecars on MPI rank zero.")
+      .def(
           "_output_geometry_snapshot",
-          [](const System& s, const std::array<double, 2>& origin,
-             const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
+          [](const System& s, const std::array<double, pops::kNativeDimension>& origin,
+             const std::array<double, pops::kNativeDimension>& spacing,
+             const std::array<std::int64_t, pops::kNativeDimension>& cell_shape,
              const std::string& cell_measure) {
-            if (cell_shape[0] != s.ny() || cell_shape[1] != s.nx())
-              throw std::invalid_argument(
-                  "System output geometry shape differs from the native domain");
-            return pops::python::detail::native_output_geometry_snapshot(
+            const Extent<pops::kNativeDimension> native_shape = s.spatial_shape();
+            for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+              if (cell_shape[static_cast<std::size_t>(axis)] != native_shape[axis])
+                throw std::invalid_argument(
+                    "System output geometry shape differs from the native domain");
+            return pops::python::detail::native_output_geometry_snapshot<pops::kNativeDimension>(
                 0, 0, origin, spacing, cell_shape, cell_measure, {}, 0, false);
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
@@ -970,9 +995,8 @@ void bind_system_data(py::class_<System>& cls) {
             const auto boxes = s.local_boxes(name);
             if (li < 0 || li >= static_cast<int>(boxes.size()))
               throw std::out_of_range("System.local_state: local fab index out of bounds");
-            const int bnx = boxes[li][2] - boxes[li][0] + 1;  // ihi - ilo + 1
-            const int bny = boxes[li][3] - boxes[li][1] + 1;  // jhi - jlo + 1
-            return to_3d(s.local_state(name, li), s.n_vars(name), bny, bnx);
+            return to_ranked_state(s.local_state(name, li), s.n_vars(name),
+                                   boxes[static_cast<std::size_t>(li)].extent());
           },
           py::arg("name"), py::arg("li"))
       .def_static("abi_key", &System::abi_key,

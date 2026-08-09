@@ -1022,12 +1022,12 @@ def _emit_composite_tensor_fac(
         )
     option_map = "{" + ", ".join(native_options) + "}"
     plan_identity = request.node.attrs["hierarchy_solver_identity"]
-    operator_contract = "pops.operator.scalar-tensor-elliptic-2d@1"
+    operator_contract = "pops.operator.scalar-tensor-elliptic.rank2@2"
     assembly_slots = (
-        "pops.tensor-elliptic.diagonal.x",
-        "pops.tensor-elliptic.diagonal.y",
-        "pops.tensor-elliptic.cross.xy",
-        "pops.tensor-elliptic.cross.yx",
+        "pops.tensor-elliptic.coefficient.0.0",
+        "pops.tensor-elliptic.coefficient.0.1",
+        "pops.tensor-elliptic.coefficient.1.0",
+        "pops.tensor-elliptic.coefficient.1.1",
         "pops.tensor-elliptic.rhs",
         "pops.tensor-elliptic.flux",
     )
@@ -1091,15 +1091,17 @@ def _validate_composite_tensor_fac_use(
 _COMPOSITE_PROVIDER = register_prepared_hierarchy_solver_provider(
     PreparedHierarchySolverProvider(
         provider_id="pops.hierarchy.composite-tensor-fac",
-        interface_version=1,
-        emitter_id="pops.codegen.hierarchy.composite-tensor-fac@1",
-        option_schema="pops.hierarchy.composite-tensor-fac.options@1",
+        interface_version=2,
+        emitter_id="pops.codegen.hierarchy.composite-tensor-fac@2",
+        option_schema="pops.hierarchy.composite-tensor-fac.options@2",
         capabilities=frozenset(
             {
-                "pops.hierarchy.composite-tensor-fac.flat-krylov@1",
-                "pops.hierarchy.composite-tensor-fac.refined-direct@1",
-                "pops.hierarchy.composite-tensor-fac.mixed-level-distribution@1",
-                "pops.hierarchy.composite-tensor-fac.exact-preparation@1",
+                "pops.hierarchy.composite-tensor-fac.exact-rank@2",
+                "pops.hierarchy.composite-tensor-fac.flat-krylov@2",
+                "pops.hierarchy.composite-tensor-fac.preallocated-publication@2",
+                "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac@2",
+                "pops.hierarchy.composite-tensor-fac.partitioned-mpi@2",
+                "pops.hierarchy.composite-tensor-fac.rank2-only@2",
             }
         ),
         use_policy=PreparedHierarchySolverUsePolicy(
@@ -1108,7 +1110,7 @@ _COMPOSITE_PROVIDER = register_prepared_hierarchy_solver_provider(
             capabilities=frozenset(
                 {
                     "pops.hierarchy.use-facts.common@1",
-                    "pops.operator.scalar-tensor-elliptic-2d@1",
+                    "pops.operator.scalar-tensor-elliptic.rank2@2",
                     "pops.target.amr-system@1",
                 }
             ),

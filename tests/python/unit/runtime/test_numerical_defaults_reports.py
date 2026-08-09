@@ -27,6 +27,11 @@ def test_numerical_defaults_report_is_structured():
     assert d["newton"]["fd_eps"] == pytest.approx(1e-7)
     assert d["krylov"]["polar_tensor_max_iters"] == 400
     assert d["krylov"]["schur_polar_max_iters"] == 600
+    assert d["cartesian_cg"] == {
+        "rel_tol": pytest.approx(1e-10),
+        "abs_tol": pytest.approx(0.0),
+        "max_iterations": 2000,
+    }
     assert d["mg"]["rel_tol"] == pytest.approx(1e-8)
     assert d["mg"]["max_cycles"] == 50
     assert d["fac"]["rel_tol"] == pytest.approx(1e-9)
@@ -62,6 +67,7 @@ def test_numerical_defaults_report_classifies_every_constant():
     assert classification["kNewtonDefaultFdEps"] == "public_knob"
     # ADC-644/645: the newly wired knobs are public.
     assert classification["kMGDefaultCoarseThreshold"] == "public_knob"
+    assert classification["kCartesianCGDefaultMaxIterations"] == "public_knob"
     assert classification["kWenoEpsilon"] == "public_knob"
     assert classification["kCflSpeedFloor"] == "public_knob"
 
@@ -76,7 +82,6 @@ def test_system_inspect_reports_effective_block_and_solver_options():
             newton_rel_tol=1e-6,
             newton_fd_eps=2e-7,
             newton_damping=0.8,
-            newton_diagnostics=True,
         ),
         spatial=engine.Spatial(positivity_floor=1e-12),
     )
@@ -84,7 +89,11 @@ def test_system_inspect_reports_effective_block_and_solver_options():
 
     options = sim.inspect().to_dict()["options"]
     assert options["defaults"]["newton"]["max_iters"] == 25
-    assert options["poisson"]["solver"] == "geometric_mg"
+    assert options["poisson"]["solver"] == "cartesian_cg"
+    assert options["poisson"]["solver_option_schema"] == (
+        "pops.system.cartesian-cg-options@1"
+    )
+    assert options["poisson"]["max_iterations"] == 2000
     assert options["poisson"]["epsilon"] == pytest.approx(1.0)
     assert options["poisson"]["abs_tol"] == pytest.approx(1e-11)
     assert options["topology"] == {"periodic_x": True, "periodic_y": True}
@@ -97,10 +106,23 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert block["newton"]["rel_tol"] == pytest.approx(1e-6)
     assert block["newton"]["fd_eps"] == pytest.approx(2e-7)
     assert "fail_policy" not in block["newton"]
-    assert block["newton"]["diagnostics"] is True
+    assert block["newton"]["diagnostics"] is False
     assert block["physical"]["cs2"] == pytest.approx(0.7)
     assert block["physical"]["q"] == pytest.approx(-2.0)
     assert block["positivity_floor"] == pytest.approx(1e-12)
+
+
+def test_system_rejects_unpublished_newton_diagnostics():
+    sim = System(n=8, L=1.0, periodicity=(True, True))
+    with pytest.raises(
+        ValueError,
+        match="no typed implicit Program consumer publishes that report",
+    ):
+        sim.add_equation(
+            "ion",
+            _isothermal_model(),
+            time=engine.IMEX(newton_diagnostics=True),
+        )
 
 
 def test_invalid_newton_values_are_rejected():

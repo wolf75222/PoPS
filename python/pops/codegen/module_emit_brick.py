@@ -1,10 +1,9 @@
 """pops.codegen.module_emit_brick : the HyperbolicModel concept brick emitter.
 
 Extracted verbatim from ``pops.codegen.module_codegen`` so the brick emitter fits the
-Spec-4 file-size budget.  ``emit_cpp_brick`` lowers a ``HyperbolicModel`` to a C++ struct
-satisfying the ``pops::HyperbolicModel`` concept; the OPTIONAL Riemann capabilities
-(HLLC / Roe) live in ``module_emit_riemann``.  The emitted text is byte-identical to the
-historical single-module form.
+Spec-4 file-size budget.  ``emit_cpp_brick`` lowers a ``HyperbolicModel`` to one exact-ranked
+C++ struct whose compile-time dimension comes from the canonical x[/y[/z]] flux map.  OPTIONAL
+Riemann capabilities (HLLC / Roe) live in ``module_emit_riemann``.
 """
 
 from __future__ import annotations
@@ -18,11 +17,13 @@ from pops.codegen.cpp_writer import (
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
-    _AUX_BASE_COMPS,
+    _axis_values,
     _codegen_exprs,
+    _exact_brick_contract,
     _jac_entries,
     _live_prims,
     _prim_block,
+    _ranked_axes,
     _roles_for,
 )
 from pops.codegen.module_emit_riemann import (
@@ -38,7 +39,7 @@ from pops.identity.scalar import scalar_cpp
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
                    hoist_reciprocals: Any = False) -> str:
     """Generates a C++ BRICK satisfying the pops::HyperbolicModel concept (wrapping : step
-    2bis). The produced struct uses StateVec / Aux / POPS_HD / Variables and exposes flux,
+    2bis). The produced struct uses StateVec / ProviderValues / POPS_HD / Variables and exposes flux,
     max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : it can
     therefore enter a CompositeModel and run in the compiled solver.
 
@@ -48,20 +49,47 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     type inside Kokkos kernels; no host-vtable execution path is emitted."""
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
+    if len(model.prim_state) != model.n_vars:
+        raise ValueError(
+            "emit_cpp_brick : primitive and conservative states must have equal arity "
+            "(got %d primitive and %d conservative components)"
+            % (len(model.prim_state), model.n_vars)
+        )
     if model.cons_from is None or len(model.cons_from) != model.n_vars:
         raise ValueError("emit_cpp_brick : set_conservative_from([...]) expected (%d expressions)"
                          % model.n_vars)
     if not model._flux:
         raise ValueError("emit_cpp_brick : call set_flux(...) first")
-    if len(model._flux.get("x", [])) != model.n_vars or len(model._flux.get("y", [])) != model.n_vars:
-        raise ValueError("emit_cpp_brick : flux expected with %d components per direction"
-                         % model.n_vars)
+    axes = _ranked_axes(model)
+    wrong_flux_arity = {
+        axis: len(model._flux[axis])
+        for axis in axes
+        if len(model._flux[axis]) != model.n_vars
+    }
+    if wrong_flux_arity:
+        raise ValueError(
+            "emit_cpp_brick : flux expected with %d components on every ranked axis; got %r"
+            % (model.n_vars, wrong_flux_arity)
+        )
     if not model._eig and model._wave_speeds is None and model._ws_jacobian is None:
         raise ValueError("emit_cpp_brick : call set_eigenvalues(...), set_wave_speeds(...) "
                          "or set_wave_speeds_from_jacobian(...) first (source of "
                          "max_wave_speed / CFL)")
     nm = _cpp_identifier(name or (model.name.capitalize() + "Gen"))
-    nc, npr = model.n_vars, len(model.prim_state)
+    nc, npr, dimension = model.n_vars, len(model.prim_state), len(axes)
+
+    def axis_values(values: Any, where: str) -> list:
+        return _axis_values(model, values, where=where)
+
+    def axis_branch(ordinal: int, indent: str = "    ") -> str:
+        keyword = "if" if ordinal == 0 else "else if"
+        return "%s%s constexpr (Axis == %d) {" % (indent, keyword, ordinal)
+
+    def axis_guard(operation: str, indent: str = "    ") -> str:
+        return (
+            '%sstatic_assert(Axis >= 0 && Axis < dimension, "%s axis is outside the emitted rank");'
+            % (indent, operation)
+        )
 
     def cons_locals() -> list:
         return ["    const pops::Real %s = U[%d];" % (c, i) for i, c in enumerate(model.cons_names)]
@@ -71,15 +99,16 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         return _prim_block(model, live, hoist_reciprocals)
 
     def aux_locals() -> list:
-        return model._aux_locals_lines()  # canonical (a.<n>) + named (a.extra_field(k)), ADC-70
+        return model._flux_provider_locals_lines()
 
-    # Aux parameter named 'a' only if a formula reads an auxiliary field (canonical OR
-    # named ; otherwise anonymous, so as not to trigger an unused-parameter warning).
-    aux_param = "const Aux& a" if model._reads_aux() else "const Aux&"
+    # Physical laws consume the exact provider-read protocol. The parameter remains generic so
+    # the FV route may pass its exact model-qualified provider view without reconstructing a
+    # process-wide auxiliary carrier.
+    aux_param = "const auto& a" if model._reads_aux() else "const auto&"
 
     def eig_reduce(cpps: Any, ind: Any) -> list:
         # cpps : C++ already generated (possibly CSE) for the eigenvalues. Internal names suffixed
-        # '_' : they shadow neither a user variable nor the Aux parameter 'a' (see adversarial review).
+        # '_' : they shadow neither a user variable nor the provider parameter 'a'.
         lines = ["%sconst pops::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
         lines.append("%spops::Real mws_ = lam0_ < 0 ? -lam0_ : lam0_;" % ind)
         for k in range(1, len(cpps)):
@@ -98,7 +127,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             lines.append("%sif (lam%d_ > smax) smax = lam%d_;" % (ind, k, k))
         return lines
 
-    def ws_jac_pieces(key: Any) -> tuple:
+    def ws_jac_pieces(key: Any, indent: str = "    ") -> tuple:
         # 'numeric' jacobian path : CSE of the NON-ZERO entries of the sub-blocks of
         # direction @p key ; the structural zeros (10 identity rows of a moment system,
         # arbitrary sparsity) are emitted as literals without going through the CSE.
@@ -113,7 +142,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
                         zeros.append((bi, r, c))
                     else:
                         entries.append((bi, r, c, e))
-        tl, cpps = _codegen_exprs(model, [e for (_, _, _, e) in entries], cse)
+        tl, cpps = _codegen_exprs(
+            model, [e for (_, _, _, e) in entries], cse, indent=indent
+        )
         fill = {}
         for (bi, r, c, _), cpp in zip(entries, cpps, strict=True):
             fill.setdefault(bi, []).append((r, c, cpp))
@@ -121,7 +152,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             fill.setdefault(bi, []).append((r, c, "pops::Real(0)"))
         return tl, fill
 
-    def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any = "x", fill: Any = None,
+    def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any, fill: Any = None,
                     invalid_return: Any = "return;") -> list:
         # body of the jacobian computation -> extremes (@p lo/@p hi : destination names).
         # eig='fd' : column-wise jacobian by central finite differences of the COMPILED flux ;
@@ -144,8 +175,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
                      % (ind, fd_eps_lit))
             L.append("%s  Up_[k_] += eps_;" % ind)
             L.append("%s  Um_[k_] -= eps_;" % ind)
-            L.append("%s  const State Fp_ = flux(Up_, a, dir);" % ind)
-            L.append("%s  const State Fm_ = flux(Um_, a, dir);" % ind)
+            L.append("%s  const State Fp_ = flux<Axis>(Up_, a);" % ind)
+            L.append("%s  const State Fm_ = flux<Axis>(Um_, a);" % ind)
             L.append("%s  for (int i_ = 0; i_ < %d; ++i_) Jf_[i_][k_] = (Fp_[i_] - Fm_[i_])"
                      " / (pops::Real(2) * eps_);" % (ind, nv))
             L.append("%s}" % ind)
@@ -198,7 +229,20 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Keeping the vectors total also makes metadata validation independent of particular model
     # families (moments, passive scalars, user-defined systems, ...).
     def roles_init(roles: Any) -> Any:
-        return ", ".join("pops::VariableRole::%s" % r for r in roles)
+        scalar = {
+            "density": "Density", "energy": "Energy", "pressure": "Pressure",
+            "temperature": "Temperature", "scalar": "Scalar", "custom": "Custom",
+        }
+
+        def cpp_semantic(role: str) -> str:
+            if role in scalar:
+                return "pops::VariableSemantic::%s" % scalar[role]
+            family, separator, axis = role.partition(":")
+            if family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal():
+                return "pops::VariableSemantic::%s(%s)" % (family, axis)
+            raise ValueError("generated model has unsupported structured variable role %r" % role)
+
+        return ", ".join(cpp_semantic(r) for r in roles)
 
     croles = roles_init(_roles_for(model.cons_names, model.cons_roles))
     proles = roles_init(_roles_for(model.prim_state, model.prim_roles))
@@ -208,7 +252,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "#include <array>",
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
         "#include <limits>",
+        "#include <Kokkos_MathematicalFunctions.hpp>",
+        "#include <pops/core/identity/prepared_provider.hpp>",
         "#include <pops/numerics/fv/flux_interfaces.hpp>",
+        "#include <pops/numerics/spatial/nd/state_schema.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -225,10 +272,21 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "struct %s {" % nm,
         "  using State = pops::StateVec<%d>;" % nc,
         "  using Prim  = pops::StateVec<%d>;" % npr,
-        "  using Aux   = pops::Aux;",
+        "  using Primitive = Prim;",
+        "  static constexpr int dimension = %d;" % dimension,
         "  static constexpr int n_vars = %d;" % nc,
+        "  struct Schema {",
+        "    using Conservative = State;",
+        "    using Primitive = Prim;",
+        "    static constexpr int dimension = %d;" % dimension,
+        "    static constexpr int nvars = n_vars;",
+        "  };",
     ]
-    provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
+    provider_rows = getattr(model, "_component_flux_consumer_plan", None)
+    if provider_rows is None:
+        raise ValueError(
+            "generated physics brick requires the physical-flux consumer ProviderPack plan"
+        )
     S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
     S.append(
         "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
@@ -241,104 +299,121 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             contract["representation"], contract["centering"], contract["unit"] or "",
             contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
         ]
-        S.append("    {%s, %d}," %
-                 (", ".join(json.dumps(value) for value in values), provider["slot"]))
+        availability = "true" if provider["availability"] else "false"
+        S.append("    {%s, %s, %d}," %
+                 (", ".join(json.dumps(value) for value in values),
+                  availability, row["consumer_slot"]))
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
+    S += _exact_brick_contract(
+        model,
+        "hyperbolic",
+        dimension=dimension,
+        n_vars=nc,
+        runtime_params=bool(rt_member),
+    )
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant
     # M[k][k] + real_eig_minmax, declarees une fois par couple (field, k). Device-clean (ADC-289).
     S += _eig_witness_helpers(eig_pairs)
-    # n_aux if a formula (flux / eigenvalues) reads an extra aux field : canonical
-    # (B_z...) OR named (aux_field -> kAuxNamedBase + k). Without an extra field -> no n_aux emitted,
-    # brick strictly bit-identical to history.
-    if model._total_n_aux() > _AUX_BASE_COMPS:
+    # Compact auxiliary width comes exclusively from the resolved ProviderPack.
+    if model._total_n_aux():
         S.append("  static constexpr int n_aux = %d;" % model._total_n_aux())
     S += [
         "",
-        "  POPS_HD State flux(const State& U, %s, int dir) const {" % aux_param,
+        "  template <int Axis>",
+        "  POPS_HD State flux(const State& U, %s) const {" % aux_param,
+        axis_guard("physical-flux"),
     ]
-    S += cons_locals() + prim_locals(_live_prims(model, model._flux["x"] + model._flux["y"])) \
-        + aux_locals()
-    ftl, fcpps = _codegen_exprs(model, model._flux["x"] + model._flux["y"], cse)
-    S += ftl
+    all_fluxes = axis_values(model._flux, "physical flux")
+    S += cons_locals() + prim_locals(_live_prims(model, all_fluxes)) + aux_locals()
     S.append("    State F{};")
-    S.append("    if (dir == 0) {")
-    S += ["      F[%d] = %s;" % (i, fcpps[i]) for i in range(nc)]
-    S.append("    } else {")
-    S += ["      F[%d] = %s;" % (i, fcpps[nc + i]) for i in range(nc)]
-    S += ["    }", "    return F;", "  }", ""]
+    for ordinal, axis in enumerate(axes):
+        S.append(axis_branch(ordinal))
+        ftl, fcpps = _codegen_exprs(model, model._flux[axis], cse, indent="      ")
+        S += ftl
+        S += ["      F[%d] = %s;" % (i, cpp) for i, cpp in enumerate(fcpps)]
+        S.append("    }")
+    S += ["    return F;", "  }", ""]
 
-    # in 'fd' jacobian mode WITHOUT eigenvalues, max_wave_speed calls flux(U, a, dir) : the
-    # Aux parameter must be named even if no formula reads an aux.
+    # In finite-difference Jacobian mode max_wave_speed calls flux<Axis>(U, a), so the provider
+    # parameter must be named even if no formula reads a provider directly.
     ws_jac: Any = model._ws_jacobian
     jac_fd = model._ws_jacobian is not None and model._ws_jacobian["eig"] == "fd"
-    mws_aux_param = "const Aux& a" if (jac_fd and not model._eig) else aux_param
-    S.append("  POPS_HD pops::Real max_wave_speed(const State& U, %s, int dir) const {"
-             % mws_aux_param)
+    mws_aux_param = "const auto& a" if (jac_fd and not model._eig) else aux_param
+    S += [
+        "  template <int Axis>",
+        "  POPS_HD pops::Real max_wave_speed(const State& U, %s) const {" % mws_aux_param,
+        axis_guard("maximum-wave-speed"),
+    ]
     if model._eig:
-        mws_drv = model._eig["x"] + model._eig["y"]
+        mws_drv = axis_values(model._eig, "eigenvalues")
     elif model._wave_speeds is not None:
-        mws_drv = list(model._wave_speeds["x"]) + list(model._wave_speeds["y"])
+        mws_drv = axis_values(model._wave_speeds, "explicit wave speeds")
     elif ws_jac["eig"] == "fd":
         mws_drv = []  # fd path: max_wave_speed calls flux(), no direct primitive
     else:
         mws_drv = _jac_entries(model)
     S += cons_locals() + prim_locals(_live_prims(model, mws_drv)) + aux_locals()
     if model._eig:
-        # historical source : max(|eigenvalues|), bit-identical.
-        nx = len(model._eig["x"])
-        etl, ecpps = _codegen_exprs(model, model._eig["x"] + model._eig["y"], cse)
-        S += etl
-        S.append("    if (dir == 0) {")
-        S += eig_reduce(ecpps[:nx], "      ")
-        S.append("    } else {")
-        S += eig_reduce(ecpps[nx:], "      ")
-        S += ["    }", "  }", ""]
+        for ordinal, axis in enumerate(axes):
+            S.append(axis_branch(ordinal))
+            etl, ecpps = _codegen_exprs(
+                model, model._eig[axis], cse, indent="      "
+            )
+            S += etl + eig_reduce(ecpps, "      ")
+            S.append("    }")
+        S += ["  }", ""]
     elif model._wave_speeds is not None:
         # WITHOUT eigenvalues : Rusanov / CFL bound derived from the explicit SIGNED wave speeds,
         # max(|smin|, |smax|) -- the pair bounds the spectrum by set_wave_speeds contract.
         ws = model._wave_speeds
-        wtl, wcpps = _codegen_exprs(model, list(ws["x"]) + list(ws["y"]), cse)
-        S += wtl
-        S.append("    if (dir == 0) {")
-        S += eig_reduce(wcpps[:2], "      ")
-        S.append("    } else {")
-        S += eig_reduce(wcpps[2:], "      ")
-        S += ["    }", "  }", ""]
+        for ordinal, axis in enumerate(axes):
+            S.append(axis_branch(ordinal))
+            wtl, wcpps = _codegen_exprs(
+                model, list(ws[axis]), cse, indent="      "
+            )
+            S += wtl + eig_reduce(wcpps, "      ")
+            S.append("    }")
+        S += ["  }", ""]
     else:
         # WITHOUT eigenvalues : Rusanov / CFL bound = max(|smin|, |smax|) of the jacobian
         # spectrum extremes (same blocks as wave_speeds : Rusanov and HLL share the
         # same truth).
         S.append("    pops::Real lo_ = pops::Real(0), hi_ = pops::Real(0);")
-        jac_same_blocks = ws_jac["blocks"]["x"] == ws_jac["blocks"]["y"]
+        if tuple(ws_jac["blocks"]) != axes:
+            raise ValueError(
+                "wave-speed Jacobian blocks must cover the exact emitted axis set %s" % (axes,)
+            )
+        first_axis = axes[0]
+        jac_same_blocks = all(
+            ws_jac["blocks"][axis] == ws_jac["blocks"][first_axis]
+            for axis in axes[1:]
+        )
         if ws_jac["eig"] == "fd" and jac_same_blocks:
             S += ws_jac_body(
-                "    ", "lo_", "hi_",
+                "    ", "lo_", "hi_", first_axis,
                 invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
         elif ws_jac["eig"] == "fd":
-            S.append("    if (dir == 0) {")
-            S += ws_jac_body(
-                "      ", "lo_", "hi_", "x",
-                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
-            S.append("    } else {")
-            S += ws_jac_body(
-                "      ", "lo_", "hi_", "y",
-                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
-            S.append("    }")
+            for ordinal, axis in enumerate(axes):
+                S.append(axis_branch(ordinal))
+                S += ws_jac_body(
+                    "      ", "lo_", "hi_", axis,
+                    invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
+                S.append("    }")
         else:
-            ptx, pty = ws_jac_pieces("x"), ws_jac_pieces("y")
-            S.append("    if (dir == 0) {")
-            S += ptx[0]
-            S += ws_jac_body(
-                "      ", "lo_", "hi_", "x", ptx[1],
-                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
-            S.append("    } else {")
-            S += pty[0]
-            S += ws_jac_body(
-                "      ", "lo_", "hi_", "y", pty[1],
-                invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
-            S.append("    }")
+            if tuple(ws_jac["rows"]) != axes:
+                raise ValueError(
+                    "wave-speed Jacobian rows must cover the exact emitted axis set %s" % (axes,)
+                )
+            for ordinal, axis in enumerate(axes):
+                pieces = ws_jac_pieces(axis, indent="      ")
+                S.append(axis_branch(ordinal))
+                S += pieces[0]
+                S += ws_jac_body(
+                    "      ", "lo_", "hi_", axis, pieces[1],
+                    invalid_return="return std::numeric_limits<pops::Real>::quiet_NaN();")
+                S.append("    }")
         S.append("    const pops::Real alo_ = lo_ < 0 ? -lo_ : lo_;")
         S.append("    const pops::Real ahi_ = hi_ < 0 ? -hi_ : hi_;")
         S += ["    return alo_ > ahi_ ? alo_ : ahi_;", "  }", ""]
@@ -361,7 +436,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += cons_locals() + prim_locals(_live_prims(model, [], seed=["p"]))
         S += ["    return p;", "  }", ""]
 
-    # SIGNED wave speeds wave_speeds(U, aux, dir, smin, smax) : HLL gate of the core
+    # SIGNED wave speeds wave_speeds<Axis>(U, aux, smin, smax) : HLL gate of the core
     # (block_builder.hpp requires { m.wave_speeds(...) }). Two sources, by priority :
     #   1. EXPLICIT pair set_wave_speeds (smin, smax per direction) -- INDEPENDENT of 'p' :
     #      a model without pressure (moments, isothermal...) gets access to riemann='hll' ;
@@ -370,60 +445,83 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # Without either of the two (e.g. ExB scalar transport) : nothing emitted, Rusanov alone, unchanged.
     if model._wave_speeds is not None:
         ws = model._wave_speeds
-        S.append("  POPS_HD void wave_speeds(const State& U, %s, int dir, pops::Real& smin, "
-                 "pops::Real& smax) const {" % aux_param)
+        S += [
+            "  template <int Axis>",
+            "  POPS_HD void wave_speeds(const State& U, %s, pops::Real& smin, "
+            "pops::Real& smax) const {" % aux_param,
+            axis_guard("signed-wave-speed"),
+        ]
+        all_wave_speeds = axis_values(ws, "explicit wave speeds")
         S += cons_locals() \
-            + prim_locals(_live_prims(model, list(ws["x"]) + list(ws["y"]))) + aux_locals()
-        wtl, wcpps = _codegen_exprs(model, list(ws["x"]) + list(ws["y"]), cse)
-        S += wtl
-        S.append("    if (dir == 0) {")
-        S.append("      smin = %s; smax = %s;" % (wcpps[0], wcpps[1]))
-        S.append("    } else {")
-        S.append("      smin = %s; smax = %s;" % (wcpps[2], wcpps[3]))
-        S += ["    }", "  }", ""]
+            + prim_locals(_live_prims(model, all_wave_speeds)) + aux_locals()
+        for ordinal, axis in enumerate(axes):
+            S.append(axis_branch(ordinal))
+            wtl, wcpps = _codegen_exprs(model, list(ws[axis]), cse, indent="      ")
+            S += wtl
+            S.append("      smin = %s; smax = %s;" % (wcpps[0], wcpps[1]))
+            S.append("    }")
+        S += ["  }", ""]
     elif model._ws_jacobian is not None:
         # EXACT speeds via jacobian eigenvalues (see set_wave_speeds_from_jacobian :
         # 'numeric' = entries as formulas, 'fd' = columns by finite differences of the compiled
         # flux ; extremes per sub-block via pops::real_eig_minmax. Non-convergence and non-real or
         # non-finite spectra invalidate the provider; the diagnostic Gershgorin enclosure is never
         # consumed as an HLL speed.)
-        ws_aux = aux_param if model._ws_jacobian["eig"] != "fd" else "const Aux& a"
-        S.append("  POPS_HD void wave_speeds(const State& U, %s, int dir, pops::Real& smin, "
-                 "pops::Real& smax) const {" % ws_aux)
+        ws_aux = aux_param if model._ws_jacobian["eig"] != "fd" else "const auto& a"
+        S += [
+            "  template <int Axis>",
+            "  POPS_HD void wave_speeds(const State& U, %s, pops::Real& smin, "
+            "pops::Real& smax) const {" % ws_aux,
+            axis_guard("signed-wave-speed"),
+        ]
         ws_drv = [] if model._ws_jacobian["eig"] == "fd" else _jac_entries(model)
         S += cons_locals() + prim_locals(_live_prims(model, ws_drv)) + aux_locals()
-        ws_same_blocks = model._ws_jacobian["blocks"]["x"] == model._ws_jacobian["blocks"]["y"]
+        ws_blocks = model._ws_jacobian["blocks"]
+        if tuple(ws_blocks) != axes:
+            raise ValueError(
+                "wave-speed Jacobian blocks must cover the exact emitted axis set %s" % (axes,)
+            )
+        first_axis = axes[0]
+        ws_same_blocks = all(
+            ws_blocks[axis] == ws_blocks[first_axis] for axis in axes[1:]
+        )
         if model._ws_jacobian["eig"] == "fd" and ws_same_blocks:
-            S += ws_jac_body("    ", "smin", "smax")
+            S += ws_jac_body("    ", "smin", "smax", first_axis)
         elif model._ws_jacobian["eig"] == "fd":
-            S.append("    if (dir == 0) {")
-            S += ws_jac_body("      ", "smin", "smax", "x")
-            S.append("    } else {")
-            S += ws_jac_body("      ", "smin", "smax", "y")
-            S.append("    }")
+            for ordinal, axis in enumerate(axes):
+                S.append(axis_branch(ordinal))
+                S += ws_jac_body("      ", "smin", "smax", axis)
+                S.append("    }")
         else:
-            ptx, pty = ws_jac_pieces("x"), ws_jac_pieces("y")
-            S.append("    if (dir == 0) {")
-            S += ptx[0]
-            S += ws_jac_body("      ", "smin", "smax", "x", ptx[1])
-            S.append("    } else {")
-            S += pty[0]
-            S += ws_jac_body("      ", "smin", "smax", "y", pty[1])
-            S.append("    }")
+            if tuple(model._ws_jacobian["rows"]) != axes:
+                raise ValueError(
+                    "wave-speed Jacobian rows must cover the exact emitted axis set %s" % (axes,)
+                )
+            for ordinal, axis in enumerate(axes):
+                pieces = ws_jac_pieces(axis, indent="      ")
+                S.append(axis_branch(ordinal))
+                S += pieces[0]
+                S += ws_jac_body("      ", "smin", "smax", axis, pieces[1])
+                S.append("    }")
         S += ["  }", ""]
     elif "p" in model.prim_defs:
-        nx = len(model._eig["x"])
-        S.append("  POPS_HD void wave_speeds(const State& U, %s, int dir, pops::Real& smin, "
-                 "pops::Real& smax) const {" % aux_param)
+        all_eigenvalues = axis_values(model._eig, "eigenvalues")
+        S += [
+            "  template <int Axis>",
+            "  POPS_HD void wave_speeds(const State& U, %s, pops::Real& smin, "
+            "pops::Real& smax) const {" % aux_param,
+            axis_guard("signed-wave-speed"),
+        ]
         S += cons_locals() \
-            + prim_locals(_live_prims(model, model._eig["x"] + model._eig["y"])) + aux_locals()
-        wtl, wcpps = _codegen_exprs(model, model._eig["x"] + model._eig["y"], cse)
-        S += wtl
-        S.append("    if (dir == 0) {")
-        S += eig_minmax(wcpps[:nx], "      ")
-        S.append("    } else {")
-        S += eig_minmax(wcpps[nx:], "      ")
-        S += ["    }", "  }", ""]
+            + prim_locals(_live_prims(model, all_eigenvalues)) + aux_locals()
+        for ordinal, axis in enumerate(axes):
+            S.append(axis_branch(ordinal))
+            wtl, wcpps = _codegen_exprs(
+                model, model._eig[axis], cse, indent="      "
+            )
+            S += wtl + eig_minmax(wcpps, "      ")
+            S.append("    }")
+        S += ["  }", ""]
 
     if model._hllc:
         S += _emit_hllc(model, nc)
@@ -439,12 +537,15 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     # OPTIONAL step bounds (m.stability_speed / m.stability_dt): emitted like the C++
     # traits HasStabilitySpeed / HasStabilityDt (cf. pops/core/physical_model.hpp). A single
-    # expression (isotropic): dir is ignored. WITHOUT a call, nothing emitted -> strict fallback
+    # expression (isotropic): Axis only authenticates the ranked call. WITHOUT a call, nothing
+    # emitted -> strict fallback
     # max_wave_speed (historical step policy).
     if model._stab_speed is not None:
-        S.append("  POPS_HD pops::Real stability_speed(const State& U, %s, int dir) const {"
-                 % aux_param)
-        S.append("    (void)dir;  // borne isotrope : une seule expression pour les deux directions")
+        S += [
+            "  template <int Axis>",
+            "  POPS_HD pops::Real stability_speed(const State& U, %s) const {" % aux_param,
+            axis_guard("stability-speed"),
+        ]
         S += cons_locals() + prim_locals(_live_prims(model, [model._stab_speed])) + aux_locals()
         stl, scpps = _codegen_exprs(model, [model._stab_speed], cse)
         S += stl
@@ -468,6 +569,26 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += ["    Up[%d] = %s;" % (i, c) for i, c in enumerate(pcpps)]
         S += ["    return Up;", "  }", ""]
 
+    recovery_constraints = getattr(model, "_recovery_admissibility", {})
+    if recovery_constraints:
+        S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
+        S += ["    const pops::Real %s = P[%d];" % (name, index)
+              for index, name in enumerate(model.prim_state)]
+        for component, name in enumerate(model.prim_state):
+            predicate = recovery_constraints.get(name)
+            if predicate is None:
+                continue
+            S.append("    if (!(%s)) {" % predicate.to_cpp())
+            S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
+            S.append("      return false;")
+            S.append("    }")
+        S += [
+            "    if (failing_component_ != nullptr) *failing_component_ = -1;",
+            "    return true;",
+            "  }",
+            "",
+        ]
+
     S.append("  POPS_HD Prim to_primitive(const State& U) const {")
     S += cons_locals() + prim_locals(_live_prims(model, [], seed=model.prim_state))
     S.append("    Prim P{};")
@@ -481,6 +602,51 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     S.append("    State U{};")
     S += ["    U[%d] = %s;" % (i, c) for i, c in enumerate(ccpps)]
     S += ["    return U;", "  }", ""]
+
+    # Canonical ND finite-volume conversion protocol.  The generated formulas remain the only
+    # conversion authority; these wrappers merely publish their fallible result to reconstruction.
+    S += [
+        "  POPS_HD pops::nd::StateConversion<Prim> recover(const State& U) const {",
+        "    pops::nd::StateConversion<Prim> result{};",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(U[component])) return result;",
+        "    result.value = to_primitive(U);",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(result.value[component])) return result;",
+    ]
+    if recovery_constraints:
+        S += [
+            "    int failing_component = -1;",
+            "    if (!recovery_admissible(result.value, &failing_component)) return result;",
+        ]
+    S += [
+        "    result.status = pops::nd::StateConversionStatus::Success;",
+        "    return result;",
+        "  }",
+        "",
+        "  POPS_HD pops::nd::StateConversionStatus admissibility(const State& U) const {",
+        "    return recover(U).status;",
+        "  }",
+        "",
+        "  POPS_HD pops::nd::StateConversion<State> make_conservative(const Prim& P) const {",
+        "    pops::nd::StateConversion<State> result{};",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(P[component])) return result;",
+    ]
+    if recovery_constraints:
+        S += [
+            "    int failing_component = -1;",
+            "    if (!recovery_admissible(P, &failing_component)) return result;",
+        ]
+    S += [
+        "    result.value = to_conservative(P);",
+        "    for (int component = 0; component < n_vars; ++component)",
+        "      if (!Kokkos::isfinite(result.value[component])) return result;",
+        "    result.status = pops::nd::StateConversionStatus::Success;",
+        "    return result;",
+        "  }",
+        "",
+    ]
 
     cons_set = "{pops::VariableKind::Conservative, {%s}, %d%s}" % (
         cnames, nc, (", {%s}" % croles) if croles is not None else "")

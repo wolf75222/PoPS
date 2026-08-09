@@ -10,9 +10,11 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 
 #include "amr_tagging_test_authority.hpp"
 
@@ -77,6 +79,18 @@ static void install_regrid_state_authorities(AmrSystem& system,
                                              "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
     system.bind_bootstrap_block_subject(subject, block);
   }
+}
+
+TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeAmrFillPatchConstruction) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::block::tracer::xlo", "case::block::tracer::xhi", "case::block::tracer::ylo",
+       "case::block::tracer::yhi"},
+      {"Scalar"}, true);
+  EXPECT_THROW((void)boundary.periodic_axes(), std::logic_error);
 }
 
 TEST(test_amr_system_contract, Runs) {
@@ -226,7 +240,7 @@ TEST(test_amr_system_contract, Runs) {
     s.set_poisson("composite", "geometric_mg");
   }) << "set_poisson accepte rhs='composite'";
 
-  // --- set_poisson : bc/wall valides au build (poisson_bc/wall_active), donc au 1er mass() ---
+  // --- set_poisson : boundary validation stays independent from embedded geometry authoring ---
   EXPECT_THROW(
       {
         AmrSystem s(cfg);
@@ -236,16 +250,6 @@ TEST(test_amr_system_contract, Runs) {
       },
       std::runtime_error)
       << "bc inconnu refuse au build";
-  EXPECT_THROW(
-      {
-        AmrSystem s(cfg);
-        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-        s.set_poisson("charge_density", "geometric_mg", "auto", "mur_bidon");
-        (void)s.mass();  // declenche ensure_built -> wall_active()
-      },
-      std::runtime_error)
-      << "wall inconnu refuse au build";
-
   // --- add_block : schemas cables ACCEPTES, valeur inconnue REFUSEE ---------------------------
   // Chaque identifiant public doit atteindre son chemin natif : ``explicit`` canonique (SSPRK2),
   // Forward Euler, SSPRK3 et source raide IMEX. Ce verrou complete les tests numeriques qui
@@ -391,6 +395,62 @@ TEST(test_amr_system_contract, Runs) {
   }
 }
 
+TEST(test_amr_system_contract, PrimitiveFixedStateUsesTheConcreteAmrBlockModelConversion) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {false, false};
+  AmrSystem system(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  system.install_block_state_route("fluid", state_identity);
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  system.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
+                               {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+                               {"case::block::fluid::xlo", "case::block::fluid::xhi",
+                                "case::block::fluid::ylo", "case::block::fluid::yhi"},
+                               {"Density", "MomentumX", "MomentumY"}, {}, state_identity, {}, {},
+                               {"conservative", "primitive", "conservative", "conservative"},
+                               {"", "case::block::fluid::model-p2c", "", ""});
+  system.add_block("fluid", magnetic_fluid_spec(), "minmod", "rusanov", "conservative", "explicit",
+                   1);
+  (void)system.mass("fluid");
+
+  AmrRuntime* runtime = system.engine();
+  ASSERT_NE(runtime, nullptr);
+  MultiFab& state = runtime->level_state(0, 0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < 3; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  device_fence();
+  MultiFab rhs = runtime->level_scalar_field(0, state.ncomp(), 0);
+  runtime->level_rhs_into(0, 0, state, rhs);
+  device_fence();
+  state.sync_host();
+
+  const Box2D domain = runtime->level_geom(0).domain;
+  bool observed = false;
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& values = state.fab(local);
+    if (!values.grown_box().contains(domain.hi[0] + 1, 2))
+      continue;
+    observed = true;
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 0), Real(3));
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 1), Real(11));
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 2), Real(-5));
+  }
+  EXPECT_TRUE(observed);
+}
+
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;
@@ -434,6 +494,46 @@ TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
   EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
   EXPECT_EQ(system.program_cadence_window_steps(), 0);
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(test_amr_system_contract, StrideHeldStepPublishesTheExactZeroBalance) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+  system.install_program_step([](double) {});
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.begin_step_transaction();
+  system.step(0.1);
+
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '8');
+  const auto balance = system.accepted_balance_terms(route);
+  EXPECT_EQ(balance.size(), 5u);
+  for (const auto& [name, value] : balance) {
+    EXPECT_FALSE(name.empty());
+    EXPECT_DOUBLE_EQ(value, 0.0);
+  }
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+
+  system.begin_step_transaction();
+  system.step(0.1);
+  system.rollback_step_transaction();
+  system.begin_step_transaction();
+  const auto restored = system.accepted_balance_terms(route);
+  EXPECT_EQ(restored.size(), 5u);
+  for (const auto& [name, value] : restored) {
+    EXPECT_FALSE(name.empty());
+    EXPECT_DOUBLE_EQ(value, 0.0);
+  }
+  system.rollback_step_transaction();
 }
 
 TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutatingAcceptedState) {
@@ -508,10 +608,16 @@ TEST(test_amr_system_contract,
 
   EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
             std::bit_cast<std::uint64_t>(accepted_endpoint));
-  const runtime::program::AmrProgramAcceptedState accepted =
-      runtime::program::deserialize_amr_program_accepted_state(system.program_accepted_state());
-  ASSERT_FALSE(accepted.level_clocks.empty());
-  for (const auto& clock : accepted.level_clocks) {
+  runtime::program::AmrProgramAcceptedState<2> accepted;
+  accepted.spatial_contract = "test.non-associative-accepted-clock.dim2";
+  accepted.level_clocks = {
+      {0, system.macro_step(), amr::Rational(0, 1), system.time()},
+  };
+  const auto encoded = runtime::program::serialize_amr_program_accepted_state(accepted);
+  const auto decoded = runtime::program::deserialize_amr_program_accepted_state<2>(encoded);
+  EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(decoded), encoded);
+  ASSERT_FALSE(decoded.level_clocks.empty());
+  for (const auto& clock : decoded.level_clocks) {
     EXPECT_EQ(std::bit_cast<std::uint64_t>(clock.physical_time),
               std::bit_cast<std::uint64_t>(system.time()));
     EXPECT_EQ(clock.macro_step, system.macro_step());

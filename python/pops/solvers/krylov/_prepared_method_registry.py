@@ -318,7 +318,7 @@ def _builtin(expression: str) -> PreparedKrylovEmitter:
 
 
 def _emit_gmres(_node: Any, options: Mapping[str, Any]) -> str:
-    return "pops::gmres_krylov_method(%d)" % options["restart"]
+    return "pops::gmres_krylov_method<pops::kNativeDimension>(%d)" % options["restart"]
 
 
 def _emit_richardson(_node: Any, options: Mapping[str, Any]) -> str:
@@ -332,8 +332,9 @@ def _emit_richardson(_node: Any, options: Mapping[str, Any]) -> str:
         )
     else:
         literal = ScalarLiteral(kind, prepared["value"])
-    return "pops::richardson_krylov_method(static_cast<pops::Real>(%s))" % scalar_cpp(
-        literal
+    return (
+        "pops::richardson_krylov_method<pops::kNativeDimension>("
+        "static_cast<pops::Real>(%s))" % scalar_cpp(literal)
     )
 
 
@@ -350,7 +351,7 @@ def _register_builtins() -> None:
             "pops.krylov.cg.options@1",
             _empty_options,
             _validate_cg,
-            _builtin("pops::cg_krylov_method()"),
+            _builtin("pops::cg_krylov_method<pops::kNativeDimension>()"),
             "none",
         ),
         (
@@ -358,7 +359,7 @@ def _register_builtins() -> None:
             "pops.krylov.bicgstab.options@1",
             _empty_options,
             _validate_generic,
-            _builtin("pops::bicgstab_krylov_method()"),
+            _builtin("pops::bicgstab_krylov_method<pops::kNativeDimension>()"),
             "right",
         ),
         (

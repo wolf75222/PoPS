@@ -1,7 +1,9 @@
 # Pybind and native component boundary
 
 This note defines the final binding boundary. Python authoring never selects a native algorithm with
-a string and never calls `System.add_block`. A typed descriptor contributes a versioned
+a string, and the private Python runtime wrappers do not expose `System.add_block` or
+`AmrSystem.add_block`; `pops.bind` uses their single type-dispatched `add_equation` seam. A typed
+descriptor contributes a versioned
 `ComponentManifest`; resolution authenticates its small interfaces and produces an immutable route
 identity. Pybind materializes the already-resolved plan and does not reinterpret scientific intent.
 

@@ -12,7 +12,7 @@
 /// dsl.emit_cpp_native_loader) inlines the pops::add_compiled_model header template and calls
 /// out-of-line methods of pops::System DEFINED in the already-loaded _pops module. The loader and the
 /// module MUST share the same ABI (same headers, same compiler, same standard); otherwise the
-/// memory layout of objects crossing the boundary (System, GridContext, BlockClosures...)
+/// memory layout of exact-ranked objects crossing the boundary (System<Dim>, fields, providers...)
 /// diverges -> SILENT undefined behavior. We make the incompatibility EXPLICIT: the loader exposes
 /// pops_native_abi_key() (key frozen at ITS compilation) and the System compares it against ITS own
 /// abi_key() at load time (add_native_block); a mismatch raises a clear error instead of UB.
@@ -50,6 +50,13 @@
 // it (expansion happens at use, but keeping it readable does no harm).
 #define POPS_ABI_STR_(x) #x
 #define POPS_ABI_STR(x) POPS_ABI_STR_(x)
+
+#ifndef POPS_NATIVE_DIM
+#error "PoPS ABI requires an explicit POPS_NATIVE_DIM=1, 2, or 3"
+#endif
+#if POPS_NATIVE_DIM < 1 || POPS_NATIVE_DIM > 3
+#error "POPS_NATIVE_DIM must be exactly 1, 2, or 3"
+#endif
 
 // Kokkos token: evaluated PER UNIT (_pops module on one side, generated .so loader on the other).
 #ifdef POPS_HAS_KOKKOS
@@ -95,7 +102,7 @@
 
 // ABI key of the current TRANSLATION UNIT, as a pure literal concatenated by the preprocessor:
 // "compiler=<__VERSION__>;std=<__cplusplus>;headers=<POPS_HEADER_SIG>;kokkos=<0|1>;stdlib=<...>;
-// mpi=<0|1>;mpi_abi=<sha256|off>".
+// mpi=<0|1>;mpi_abi=<sha256|off>;dim=<1|2|3>".
 // All tokens are string literals (__VERSION__ and POPS_HEADER_SIG already are), so the key is frozen
 // in the .rodata of EACH TU at preprocessing -- NO function call.
 //
@@ -112,7 +119,8 @@
   "compiler=" POPS_ABI_COMPILER                                                            \
   ";std=" POPS_ABI_STR(__cplusplus) ";headers=" POPS_HEADER_SIG ";kokkos=" POPS_ABI_KOKKOS \
                                     ";stdlib=" POPS_ABI_STDLIB ";mpi=" POPS_ABI_MPI        \
-                                    ";mpi_abi=" POPS_ABI_MPI_ID
+                                    ";mpi_abi=" POPS_ABI_MPI_ID                            \
+                                    ";dim=" POPS_ABI_STR(POPS_NATIVE_DIM)
 
 namespace pops {
 namespace detail {

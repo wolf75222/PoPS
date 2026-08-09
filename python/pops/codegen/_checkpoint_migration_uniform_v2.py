@@ -29,6 +29,7 @@ UNIFORM_V2_AUTHORITY_TRANSFERS = (
     "history_fill_count",
     "history_persistence",
     "consumer_state",
+    "embedded_boundary_contract",
 )
 
 
@@ -108,8 +109,7 @@ class _CurrentUniformAuthority:
     blocks: tuple[str, ...]
     block_components: Mapping[str, tuple[str, ...]]
     histories: tuple[str, ...]
-    nx: int
-    ny: int
+    spatial: Any
     time: float
     macro_step: int
     abi_key: str
@@ -333,6 +333,14 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         inspect_checkpoint_payload_integrity,
         require_exact_payload_version,
     )
+    from pops.runtime._checkpoint_embedded_boundary import (
+        EMBEDDED_BOUNDARY_CONTRACT_KEY,
+        inspect_checkpoint_embedded_boundary_contract,
+    )
+    from pops.runtime._checkpoint_spatial import (
+        SPATIAL_CONTRACT_KEY,
+        inspect_checkpoint_spatial_contract,
+    )
     from pops.runtime._program_cadence_checkpoint import (
         PROGRAM_CADENCE_CHECKPOINT_KEYS,
         ProgramCadenceCheckpointState,
@@ -353,8 +361,8 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         runtime_kind="Uniform migration authority",
     )
     preflight_uniform_restart(payload)
-    nx = _int_scalar(payload, "nx", minimum=1)
-    ny = _int_scalar(payload, "ny", minimum=1)
+    spatial = inspect_checkpoint_spatial_contract(payload)
+    inspect_checkpoint_embedded_boundary_contract(payload)
     time = _float64_scalar(payload, "t")
     macro_step = _int_scalar(payload, "macro_step")
     abi = _text_scalar(payload, "abi_key")
@@ -366,17 +374,15 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     histories = _text_vector(payload, "history_names", nonempty=False)
     if _text_vector(payload, "field_provider_slots", nonempty=False):
         raise ValueError("Uniform v2 migration authority must have no field-provider slots")
-    if _int_vector(payload, "cache_nodes") or _text_vector(
-        payload, "cache_names", nonempty=False
-    ):
+    if _int_vector(payload, "cache_nodes") or _text_vector(payload, "cache_names", nonempty=False):
         raise ValueError("Uniform v2 migration authority must have no scheduled caches")
 
     expected = {
         "pops_checkpoint_version",
         "t",
         "macro_step",
-        "nx",
-        "ny",
+        SPATIAL_CONTRACT_KEY,
+        EMBEDDED_BOUNDARY_CONTRACT_KEY,
         "abi_key",
         "program_hash",
         "blocks",
@@ -398,10 +404,10 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         names = _text_vector(payload, "names_" + block, nonempty=True)
         if len(names) != ncomp:
             raise ValueError("authority block %r component names do not match ncomp" % block)
-        _float64_array(payload, "state_" + block, (ncomp, nx, ny))
+        _float64_array(payload, "state_" + block, (ncomp, *spatial.shape))
         block_components[block] = names
         expected.update({"ncomp_" + block, "names_" + block, "state_" + block})
-    _float64_array(payload, "phi", (nx, ny))
+    _float64_array(payload, "phi", spatial.shape)
 
     for name in histories:
         depth = _int_scalar(payload, "history_depth_" + name, minimum=1)
@@ -435,7 +441,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         )
         for slot in stored:
             key = "history_%s_%d" % (name, slot)
-            _float64_array(payload, key, (ncomp, nx, ny))
+            _float64_array(payload, key, (ncomp, *spatial.shape))
             expected.add(key)
     if _files(payload) != expected:
         raise ValueError("current Uniform migration authority has ambiguous or unknown keys")
@@ -500,8 +506,7 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
         blocks,
         block_components,
         histories,
-        nx,
-        ny,
+        spatial,
         time,
         macro_step,
         abi,
@@ -640,9 +645,10 @@ def _pin_authorities(
     )
     if observed != expected:
         raise ValueError("current authority or target lifecycle pins differ from the mapping")
-    if (
-        (source.nx, source.ny, source.time, source.macro_step)
-        != (authority.nx, authority.ny, authority.time, authority.macro_step)
+    if ((source.nx, source.ny), source.time, source.macro_step) != (
+        authority.spatial.shape,
+        authority.time,
+        authority.macro_step,
     ):
         raise ValueError(
             "legacy source and current authority must have the exact same grid and accepted clock"
@@ -727,13 +733,11 @@ def _migrate_payload(
             source_depth,
         ):
             raise ValueError(
-                "history %r fill count is inconsistent with the legacy accepted clock"
-                % row.source
+                "history %r fill count is inconsistent with the legacy accepted clock" % row.source
             )
         if source_depth and float(source_slot_dt[0]) != float(output["program_last_dt"]):
             raise ValueError(
-                "history %r newest outgoing dt differs from the authority cadence"
-                % row.source
+                "history %r newest outgoing dt differs from the authority cadence" % row.source
             )
         _require_bijection(
             row.components,
@@ -748,9 +752,7 @@ def _migrate_payload(
         output["history_slot_dt_" + row.target] = np.array(source_slot_dt, copy=True)
         for slot in range(source_depth):
             source_values = np.asarray(source.payload["history_%s_%d" % (row.source, slot)])
-            target_values = np.empty_like(
-                np.asarray(output["history_%s_%d" % (row.target, slot)])
-            )
+            target_values = np.empty_like(np.asarray(output["history_%s_%d" % (row.target, slot)]))
             for source_index, target_index in row.components:
                 target_values[target_index] = source_values[source_index]
             output["history_%s_%d" % (row.target, slot)] = target_values

@@ -22,45 +22,50 @@ bool close(Real a, Real b, Real tol = 1e-12) {
 }  // namespace
 
 TEST(test_primitive_recon, euler_round_trip_and_wave_speed) {
-  // Euler : round-trip conservatif -> primitif -> conservatif.
-  Euler e;
-  e.gamma = 1.4;
-  Euler::State U{};
-  U[0] = 1.2;
-  U[1] = 0.36;
-  U[2] = -0.6;
-  U[3] = 3.0;
-  const Euler::Prim P = e.to_primitive(U);
-  EXPECT_TRUE(close(P[0], 1.2) && close(P[1], 0.36 / 1.2) && close(P[2], -0.6 / 1.2))
-      << "Euler to_primitive : (rho, u, v)";
-  EXPECT_GT(P[3], 0) << "Euler to_primitive : pression positive";
-  const Euler::State U2 = e.to_conservative(P);
-  bool rt = true;
-  for (int c = 0; c < 4; ++c)
-    rt = rt && close(U[c], U2[c]);
-  EXPECT_TRUE(rt) << "Euler round-trip cons->prim->cons == identite";
+  const auto check = []<int Dim>() {
+    EulerND<Dim> model;
+    model.gamma = Real(1.4);
+    typename EulerND<Dim>::Prim primitive{};
+    primitive[0] = Real(1.2);
+    for (int axis = 0; axis < Dim; ++axis)
+      primitive[EulerND<Dim>::momentum_component(axis)] = Real(0.3) * Real(axis + 1);
+    primitive[EulerND<Dim>::energy_component] = Real(1.1);
 
-  // max_wave_speed calcule via le primitif, coherent avec |u| + c.
-  Aux a{};
-  const Real c = std::sqrt(1.4 * e.pressure(U) / U[0]);
-  EXPECT_TRUE(close(e.max_wave_speed(U, a, 0), std::fabs(0.36 / 1.2) + c))
-      << "Euler max_wave_speed (via primitif) == |u| + c";
+    const auto conservative = model.to_conservative(primitive);
+    const auto restored = model.to_primitive(conservative);
+    for (int component = 0; component < EulerND<Dim>::n_vars; ++component)
+      EXPECT_TRUE(close(primitive[component], restored[component]));
+
+    const ProviderValues<0> providers{};
+    const Real sound_speed =
+        std::sqrt(model.gamma * primitive[EulerND<Dim>::energy_component] / primitive[0]);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const Real velocity = primitive[EulerND<Dim>::momentum_component(axis)];
+      EXPECT_TRUE(close(model.max_wave_speed(conservative, providers, axis),
+                        std::fabs(velocity) + sound_speed));
+    }
+  };
+  check.template operator()<1>();
+  check.template operator()<2>();
+  check.template operator()<3>();
 }
 
 TEST(test_primitive_recon, isothermal_round_trip) {
-  IsothermalFlux is;
-  is.cs2 = 0.5;
-  StateVec<3> Ui{};
-  Ui[0] = 2.0;
-  Ui[1] = 0.8;
-  Ui[2] = -0.2;
-  const auto Pi = is.to_primitive(Ui);
-  const auto Ui2 = is.to_conservative(Pi);
-  bool rti = true;
-  for (int k = 0; k < 3; ++k)
-    rti = rti && close(Ui[k], Ui2[k]);
-  EXPECT_TRUE(rti && close(Pi[1], 0.4) && close(Pi[2], -0.1))
-      << "isotherme round-trip + (u, v) primitifs";
+  const auto check = []<int Dim>() {
+    IsothermalFluxND<Dim> model;
+    model.cs2 = Real(0.5);
+    typename IsothermalFluxND<Dim>::Prim primitive{};
+    primitive[0] = Real(2);
+    for (int axis = 0; axis < Dim; ++axis)
+      primitive[IsothermalFluxND<Dim>::momentum_component(axis)] = Real(0.4) * Real(axis + 1);
+    const auto conservative = model.to_conservative(primitive);
+    const auto restored = model.to_primitive(conservative);
+    for (int component = 0; component < IsothermalFluxND<Dim>::n_vars; ++component)
+      EXPECT_TRUE(close(primitive[component], restored[component]));
+  };
+  check.template operator()<1>();
+  check.template operator()<2>();
+  check.template operator()<3>();
 }
 
 TEST(test_primitive_recon, scalar_exb_conversions_are_identity) {

@@ -9,20 +9,15 @@ documentation update:
 
   T1 - the published top-level keys stay present (the doc and the limitations pages key off
        them; a vanished key means a stale reference).
-  T2 - the Riemann surface matches the dispatch gates: hllc/roe are exposed on the cartesian
-       and AMR facades but NOT on polar (no polar energy-flux brick, make_block_polar rejects
-       them); polar exposes only rusanov + hll (the isothermal fluid declares wave_speeds).
-       Guards the "hllc/roe = 2D Euler only" and "polar = scalar ExB only" doc regressions.
+  T2 - the Riemann surface matches the dispatch gates: all four public providers have one
+       capability-gated Cartesian and AMR route; the retired polar System is absent.
   T3 - backends_dsl MPI/AMR flags agree (truthiness) with the _BACKEND_CAPS table that
        actually drives backend selection; catches drift between the two tables.
-  T4 - the polar stability bounds (stability_speed / stability_dt / source_frequency) are
-       advertised as wired (system_polar.cpp installs them); guards the PolarMesh "NOT wired"
-       docstring regression.
+  T4 - no capability family advertises the retired ``system_polar`` runtime.
   T5 - the AMR Schur stage is advertised as implemented (Phase 4a), not "to be done";
        guards the ALGORITHMS.md section 25 "the implementation does not exist" regression.
-  T6 - the spatial-dimension invariant is published as the structured scalar dimension == 2
-       (ADC-294 / ADR-0001 Decision 1: the 2D core is an official, introspectable limit, not
-       prose); guards against the key silently vanishing or drifting to a non-2D value.
+  T6 - the exact selected native spatial rank is published as a structured scalar and agrees
+       with the loaded 1D/2D/3D specialization.
   T7 - the AMR regrid variable is advertised as selectable by name/role (ADC-296 / ADR-0001
        Decision 5), on native and compiled runtime blocks through one prepared graph; guards
        the "regrid is component-0 only" doc regression now that a selector exists.
@@ -31,7 +26,6 @@ The test is pure Python: it only reads ``capabilities()`` and the backend table,
 needs the _pops extension to import but does not build or run any model.
 """
 from pops.codegen._compile import _BACKEND_CAPS
-from pops.physics.aux import AUX_BASE_COMPS, AUX_CANONICAL, AUX_NAMED_BASE, AUX_NAMED_MAX
 from pops.runtime.doctor import capabilities
 
 EXPECTED_TOP_KEYS = {
@@ -48,14 +42,11 @@ def test_top_level_keys_present():
 
 
 def test_riemann_surface_matches_dispatch():
-    # ADC-752: each provider has one capability-gated route; polar stays rusanov + hll.
+    # ADC-752: each provider has one capability-gated route on every executable geometry.
     riemann = capabilities()["riemann"]
     expected = ["rusanov", "hll", "hllc", "roe"]
     assert riemann["system_cartesian"] == expected, riemann["system_cartesian"]
     assert riemann["amr"] == expected, riemann["amr"]
-    # Polar has no contact/Roe metric provider: only rusanov + hll are currently wired.
-    assert riemann["system_polar"] == ["rusanov", "hll"], riemann["system_polar"]
-    assert "hllc" not in riemann["system_polar"] and "roe" not in riemann["system_polar"]
 
 
 def test_backends_dsl_flags_match_backend_caps():
@@ -68,10 +59,10 @@ def test_backends_dsl_flags_match_backend_caps():
     assert bool(got["amr"]) == bool(ref["amr"])
 
 
-def test_polar_stability_bounds_advertised_wired():
-    polar = " ".join(capabilities()["stability_policy"]["system_polar"])
-    for bound in ("stability_speed", "stability_dt", "source_frequency"):
-        assert bound in polar, "polar stability bound %r missing from capabilities()" % bound
+def test_retired_polar_system_is_absent_from_runtime_capabilities():
+    caps = capabilities()
+    for family in ("riemann", "time", "stability_policy", "poisson", "geometry", "schur"):
+        assert "system_polar" not in caps[family], family
 
 
 def test_amr_condensed_program_advertised_implemented():
@@ -83,14 +74,14 @@ def test_amr_condensed_program_advertised_implemented():
         assert stale_limit not in amr_schur
 
 
-def test_dimension_invariant_2d():
-    # ADC-294 / ADR-0001 Decision 1: the core is officially 2D. The limit is published as a
-    # structured scalar (not prose) so scripts and the limitations doc can introspect it, and it is
-    # a SEPARATE top-level key, NOT nested under "geometry" (polar is a second geometry at the SAME
-    # dimension, not a third axis).
+def test_dimension_matches_selected_native_specialization():
+    from pops import _pops
+
+    # The rank is a separate structured scalar, not geometry metadata. It must be the immutable
+    # 1D/2D/3D specialization selected before the runtime is imported.
     caps = capabilities()
     dim = caps["dimension"]
-    assert dim == 2, "capabilities()['dimension'] should declare the 2D-core invariant, got %r" % (dim,)
+    assert dim == _pops.__native_dimension__
     # bool is a subclass of int in Python; pin to a plain int so True / 2.0 / "2" cannot pass.
     assert isinstance(dim, int) and not isinstance(dim, bool), \
         "capabilities()['dimension'] should be a plain int scalar, got %r" % (dim,)
@@ -99,6 +90,8 @@ def test_dimension_invariant_2d():
 
 
 def test_runtime_environment_and_precision_facts():
+    from pops import _pops
+
     caps = capabilities()
     precision = caps["precision"]
     assert precision["real"] == "double"
@@ -106,7 +99,7 @@ def test_runtime_environment_and_precision_facts():
     assert precision["supports_single_precision"] is False
     assert precision["supports_mixed_precision"] is False
     env = caps["runtime_environment"]
-    assert env["dimension"] == 2
+    assert env["dimension"] == _pops.__native_dimension__
     assert env["amr_refinement_ratio"] == 2
     assert env["precision"] == "double"
     assert env["supports_custom_communicator"] is False
@@ -126,43 +119,13 @@ def test_regrid_prepared_graph_contract_advertised():
         "prepared not/any/all bytecode; no scalar threshold fallback"
 
 
-def test_aux_named_surface_and_limit_parity():
-    # ADC-291: named aux is advertised on System (cartesian + polar) AND AMR (single + multi block),
-    # no longer "cartesian System only". The remaining compile-time limit (kAuxMaxExtra) is published
-    # as an introspectable scalar and MUST match BOTH the C++ source (_pops.__aux_max_extra__) and the
-    # DSL mirror (AUX_NAMED_MAX) -- this pins the hand-maintained Python<->C++ mirror so it cannot
-    # silently drift (the historical #51-class risk the issue calls out).
-    from pops import _pops
-    named = capabilities()["aux"]["named"]
-    assert set(named["backends"]) >= {"system_cartesian", "system_polar", "amr_single_block",
-                                      "amr_multi_block"}, named["backends"]
-    # the limit is the SINGLE C++ source, mirrored by the DSL constant.
-    assert named["limit"] == _pops.__aux_max_extra__ == AUX_NAMED_MAX, \
-        "aux named limit drift: caps=%r, C++=%r, dsl=%r" % (
-            named["limit"], _pops.__aux_max_extra__, AUX_NAMED_MAX)
-    # the aux ghost width is explicit (the configurable-radius mechanism is a documented follow-up).
-    assert named["halo_radius"] == 1, named["halo_radius"]
-    # the other mirrored aux constants stay coherent C++ <-> DSL.
-    assert _pops.__aux_named_base__ == AUX_NAMED_BASE, "AUX_NAMED_BASE drift"
-    assert _pops.__aux_base_comps__ == AUX_BASE_COMPS, "AUX_BASE_COMPS drift"
-    assert _pops.__aux_max_comps__ == _pops.__aux_named_base__ + _pops.__aux_max_extra__
-    # the C++ canonical name->component table mirrors the Python AUX_CANONICAL exactly.
-    assert dict(_pops.__aux_canonical__) == dict(AUX_CANONICAL), \
-        "C++ aux_names table != Python AUX_CANONICAL: %r vs %r" % (
-            dict(_pops.__aux_canonical__), dict(AUX_CANONICAL))
-    # no stale "cartesian System only" claim survives in the aux surface.
-    blob = repr(capabilities()["aux"]).lower()
-    assert "cartesian system only" not in blob, "stale 'cartesian System only' aux claim"
-
-
 if __name__ == "__main__":
     test_top_level_keys_present()
     test_riemann_surface_matches_dispatch()
     test_backends_dsl_flags_match_backend_caps()
-    test_polar_stability_bounds_advertised_wired()
-    test_dimension_invariant_2d()
+    test_retired_polar_system_is_absent_from_runtime_capabilities()
+    test_dimension_matches_selected_native_specialization()
     test_runtime_environment_and_precision_facts()
     test_regrid_prepared_graph_contract_advertised()
-    test_aux_named_surface_and_limit_parity()
-    print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "
-          "2D dimension, prepared regrid graph, aux named surface + limit parity)")
+    print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar retirement, "
+          "native dimension and prepared regrid graph)")

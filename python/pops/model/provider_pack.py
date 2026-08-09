@@ -256,6 +256,50 @@ class ProviderPack:
                 (owner_qid, sorted(missing)))
         return self.select(keys)
 
+    def select_components(
+        self,
+        *,
+        owner_qid: str,
+        spaces: Iterable[tuple[str, str]],
+        components: Iterable[str],
+    ) -> ProviderPack:
+        """Select exact components from declared spaces without a bare-name fallback.
+
+        Component spelling is only a filter inside the already-qualified owner/space set.  A
+        missing component or the same spelling in two selected spaces is rejected rather than
+        guessed, so an operator that needs one of two homonymous fields must qualify its input
+        space more narrowly.
+        """
+        _non_empty(owner_qid, "ProviderPack selection owner_qid")
+        requested_spaces = set(spaces)
+        requested_components = tuple(components)
+        if any(not isinstance(name, str) or not name for name in requested_components):
+            raise TypeError(
+                "ProviderPack components must contain non-empty strings"
+            )
+        if len(set(requested_components)) != len(requested_components):
+            raise ValueError("ProviderPack components contains a duplicate")
+        candidates = [
+            key for key in self
+            if key.owner_qid == owner_qid
+            and (key.space_kind, key.space_name) in requested_spaces
+        ]
+        selected = []
+        for component in requested_components:
+            matches = [key for key in candidates if key.component == component]
+            if not matches:
+                raise MissingInputProvider(
+                    "missing component %r in qualified provider spaces %r for owner %r"
+                    % (component, sorted(requested_spaces), owner_qid)
+                )
+            if len(matches) != 1:
+                raise MissingInputProvider(
+                    "ambiguous component %r in qualified provider spaces %r for owner %r"
+                    % (component, sorted(requested_spaces), owner_qid)
+                )
+            selected.append(matches[0])
+        return self.select(selected)
+
     def to_data(self) -> dict[str, Any]:
         rows = []
         for key in sorted(self._entries):
@@ -329,7 +373,12 @@ def build_provider_pack(module: Any) -> ProviderPack:
                 # FieldProviderPack's authority and are never guessed here.
                 producer = "field_provider_set:[%s]" % ",".join(resolved_producers)
             else:
-                producer = "initial_state" if space_kind == "state" else None
+                # An unproduced FieldSpace is an explicit runtime input, not a
+                # missing numerical value.  The case/bind plan supplies or
+                # rejects it later; retaining that provider identity lets the
+                # compiler allocate its exact auxiliary slot without a name
+                # based fallback.
+                producer = "initial_state" if space_kind == "state" else "runtime_input"
             for slot, component in enumerate(space.components):
                 rows.append((
                     ComponentKey(owner_qid, space_kind, space.name, component),
@@ -338,12 +387,25 @@ def build_provider_pack(module: Any) -> ProviderPack:
                     ProviderEntry(producer, producer is not None,
                                   slot if producer is not None else None),
                 ))
+    aux_producers = module.aux_providers()
     for slot, aux in enumerate(module.aux().values()):
+        declared = aux_producers.get(aux.name)
+        if declared is None:
+            producer = "runtime_input"
+        elif declared.producer_kind == "input":
+            producer = "runtime_input"
+        elif declared.producer_kind == "derived":
+            producer = "derived:%s" % aux.name
+        else:
+            raise TypeError(
+                "auxiliary component %r has unsupported producer descriptor %s"
+                % (aux.name, type(declared).__name__)
+            )
         rows.append((
             ComponentKey(owner_qid, "aux", aux.name, aux.name),
             ComponentContract(
                 aux.representation, aux.centering, aux.unit, aux.centering, aux.kind),
-            ProviderEntry("runtime_input", True, slot),
+            ProviderEntry(producer, True, slot),
         ))
     return ProviderPack(rows)
 
@@ -361,9 +423,29 @@ def build_operator_provider_pack(module: Any, operator: Any) -> ProviderPack:
     for input_space in operator.signature.inputs:
         if getattr(input_space, "kind", None) == "field":
             spaces.append(("field", input_space.name))
+    owner_qid = str(module.owner_path.canonical())
+    requirements = getattr(operator, "requirements", {})
+    required_components = requirements.get("aux", ())
+    if required_components:
+        selected = []
+        for component in required_components:
+            matches = [
+                key for key in full
+                if key.owner_qid == owner_qid
+                and key.space_kind in {"aux", "field"}
+                and key.component == component
+            ]
+            if len(matches) != 1:
+                detail = "missing" if not matches else "ambiguous"
+                raise MissingInputProvider(
+                    "%s auxiliary component %r for operator %r; declare one exact "
+                    "AuxSpace or FieldSpace route" % (detail, component, operator.name)
+                )
+            selected.append(matches[0])
+        return full.select(selected)
     if not spaces:
         return ProviderPack(capacity=full.capacity)
-    return full.select_spaces(owner_qid=str(module.owner_path.canonical()), spaces=spaces)
+    return full.select_spaces(owner_qid=owner_qid, spaces=spaces)
 
 
 __all__ = ["ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",

@@ -1,449 +1,548 @@
-// ADC-632: program-forward seam of the System facade -- the thin delegations to the compiled
-// ProgramRuntimeState (install_program_step, cadence, substeps/stride, the block_* rhs/flux/source
-// evaluators, program block map, block_project, program diagnostics and params, installed hash and
-// poisson_solver). This TU is a subdivision of system.cpp isolating the Program forwards.
-// Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+/// @file
+/// @brief Exact-ranked Program forwarding seam of the uniform System facade.
+
+#include "system_impl.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <utility>
 
 namespace pops {
+namespace {
 
-runtime::program::ProgramRuntimeState& System::program_runtime_state_() {
+template <int Dim>
+typename SystemBlockStore<Dim>::EmbeddedResidualFamily& select_embedded_residual_family(
+    typename SystemBlockStore<Dim>::BlockState& block,
+    runtime::system::PreparedEmbeddedBoundaryMode mode) {
+  switch (mode) {
+    case runtime::system::PreparedEmbeddedBoundaryMode::staircase:
+      return block.staircase_residuals;
+    case runtime::system::PreparedEmbeddedBoundaryMode::cut_cell:
+      return block.cutcell_residuals;
+    case runtime::system::PreparedEmbeddedBoundaryMode::inactive:
+      break;
+  }
+  throw std::logic_error("inactive embedded-boundary mode has no residual family");
+}
+
+template <int Dim>
+void require_embedded_residual_route(const SystemBlockStore<Dim>& blocks,
+                                     const typename SystemBlockStore<Dim>::BlockState& block,
+                                     int block_index, bool available,
+                                     const char* operation) {
+  if (block.boundary)
+    throw std::runtime_error(std::string(operation) +
+                             " requires an EB-qualified hyperbolic boundary provider");
+  if (blocks.has_interfaces(block_index))
+    throw std::runtime_error(std::string(operation) +
+                             " requires an EB-qualified shared-interface provider");
+  if (!available)
+    throw std::runtime_error(std::string(operation) +
+                             " has no exact provider for the selected EB mode and model");
+}
+
+}  // namespace
+
+template <int Dim>
+runtime::program::ProgramRuntimeState<Dim>& System<Dim>::program_runtime_state_() {
   return p_->program_;
 }
 
-namespace {
-void require_cartesian_boundary_linearization(bool embedded_boundary_set, GeometryMode mode) {
-  if (embedded_boundary_set && mode != GeometryMode::None)
-    throw std::runtime_error(
-        "System embedded-boundary Program operators cannot execute an additive boundary "
-        "residual/JVP: that component pair has no signed-mask or cut-cell metric contract");
-}
-}  // namespace
-
-// Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
-// body and reaches per-block storage through these accessors (Impl is private to this TU).
-void System::install_program_step(std::function<void(double)> step) {
+template <int Dim>
+void System<Dim>::install_program_step(std::function<void(double)> step) {
   p_->program_.install_unverified_step(std::move(step));
 }
-// Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
-// program closure (cf. SystemProgramDriver::step). Kept separate from install_program so the .so ABI is
-// untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
-void System::set_program_cadence(int substeps, int stride) {
-  require_assembling(p_->lifecycle_,
-                     "set_program_cadence");  // frozen once pops.bind completes (ADC-592)
-  // Program subsystem owns the cadence validation + storage (ADC-594): the guard message names
-  // "System::set_program_cadence" verbatim (unchanged wording), keeping the pinned error intact.
+
+template <int Dim>
+void System<Dim>::set_program_cadence(int substeps, int stride) {
+  require_assembling(p_->lifecycle_, "set_program_cadence");
   p_->program_.set_cadence(substeps, stride, "System");
 }
-// Read the installed GLOBAL cadence (ADC-594): the tiny const getters the ProgramRuntimeReport reads
-// through the bindings (there was no Python-visible getter before). Default 1/1 with no program.
-int System::program_substeps() const {
+
+template <int Dim>
+int System<Dim>::program_substeps() const {
   return p_->program_.substeps_;
 }
-int System::program_stride() const {
+
+template <int Dim>
+int System<Dim>::program_stride() const {
   return p_->program_.stride_;
 }
-double System::program_cadence_window_dt() const {
+
+template <int Dim>
+double System<Dim>::program_cadence_window_dt() const {
   return p_->program_.cadence_window_dt_;
 }
-int System::program_cadence_window_steps() const {
+
+template <int Dim>
+int System<Dim>::program_cadence_window_steps() const {
   return p_->program_.cadence_window_steps_;
 }
-double System::program_cadence_window_start_time() const {
+
+template <int Dim>
+double System<Dim>::program_cadence_window_start_time() const {
   return p_->program_.cadence_window_start_time_;
 }
-double System::program_last_dt() const {
+
+template <int Dim>
+double System<Dim>::program_last_dt() const {
   return static_cast<double>(p_->program_.last_dt_);
 }
-void System::restore_program_cadence_window(double accumulated_dt, int held_steps,
-                                            double window_start_time, double accepted_last_dt,
-                                            double accepted_time, int macro_step) {
+
+template <int Dim>
+void System<Dim>::restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                                 double window_start_time, double accepted_last_dt,
+                                                 double accepted_time, int macro_step) {
   p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
                                       accepted_last_dt, accepted_time, macro_step, "System");
 }
-int System::n_blocks() const {
-  return static_cast<int>(p_->sp.size());
+
+template <int Dim>
+int System<Dim>::n_blocks() const {
+  return p_->blocks_.size();
 }
 
-std::size_t System::apply_coupling_operators(Real dt,
-                                             const std::vector<MultiFab*>& candidate_states) {
+template <int Dim>
+std::size_t System<Dim>::apply_coupling_operators(
+    Real dt, const std::vector<MultiFab<Dim>*>& candidate_states) {
   if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
     throw std::invalid_argument(
         "System::apply_coupling_operators requires a finite non-negative dt");
   if (candidate_states.size() != p_->sp.size())
     throw std::invalid_argument(
         "System::apply_coupling_operators requires one candidate state per block");
+
   for (std::size_t block = 0; block < candidate_states.size(); ++block) {
-    const MultiFab* candidate = candidate_states[block];
+    const MultiFab<Dim>* candidate = candidate_states[block];
     if (candidate == nullptr)
       throw std::invalid_argument(
           "System::apply_coupling_operators received a null candidate state");
-    const MultiFab& live = p_->sp[block].U;
-    if (candidate->box_array().boxes() != live.box_array().boxes() ||
-        candidate->dmap().ranks() != live.dmap().ranks() || candidate->ncomp() != live.ncomp() ||
-        candidate->n_grow() != live.n_grow())
+    const MultiFab<Dim>& live = p_->sp[block].U;
+    if (candidate->layout() != live.layout() || candidate->distribution() != live.distribution() ||
+        candidate->local_rank() != live.local_rank() || candidate->ncomp() != live.ncomp() ||
+        candidate->ghosts() != live.ghosts())
       throw std::invalid_argument(
           "System::apply_coupling_operators candidate layout differs from its block");
-    for (const auto& accepted : p_->sp)
+    for (const typename Impl::Species& accepted : p_->sp)
       if (candidate == &accepted.U)
         throw std::invalid_argument(
             "System::apply_coupling_operators cannot mutate accepted live states");
-    for (std::size_t other = 0; other < block; ++other)
-      if (candidate_states[other] == candidate)
+    for (std::size_t previous = 0; previous < block; ++previous)
+      if (candidate_states[previous] == candidate)
         throw std::invalid_argument(
             "System::apply_coupling_operators cannot alias two block candidates");
   }
   return p_->coupling_.apply(dt, candidate_states);
 }
 
-MultiFab& System::block_state(int b) {
-  return p_->sp[static_cast<std::size_t>(b)].U;
+template <int Dim>
+MultiFab<Dim>& System<Dim>::block_state(int block) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System::block_state block index is out of range");
+  return p_->sp[static_cast<std::size_t>(block)].U;
 }
-void System::block_rhs_into(int b, MultiFab& U, MultiFab& R) {
-  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+
+template <int Dim>
+void System<Dim>::block_rhs_into(int block, MultiFab<Dim>& state, MultiFab<Dim>& residual) {
+  if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System::block_rhs_into block index is out of range");
-  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None)
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.full),
+                                         "System::block_rhs_into");
+    family.full(state, residual, *p_->embedded_boundary_);
+    return;
+  }
+  if (selected.boundary)
     throw std::runtime_error(
-        "System::block_rhs_into: the unqualified residual entry point has no stage/clock "
-        "authority for embedded-boundary execution; use block_rhs_into_at or a compiled Program");
-  p_->sp[static_cast<std::size_t>(b)].rhs_into(U, R);
+        "System::block_rhs_into requires an exact evaluation point for a prepared boundary");
+  if (!selected.rhs_into)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' lacks a dimension-qualified residual provider");
+  selected.rhs_into(state, residual);
 }
-void System::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                               MultiFab& U, MultiFab& R) {
-  block_rhs_group(point, {b}, {&U}, {&R}, {0});
+
+template <int Dim>
+void System<Dim>::block_rhs_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    int block, MultiFab<Dim>& state, MultiFab<Dim>& residual) {
+  block_rhs_group(point, {block}, {&state}, {&residual}, {0});
 }
-void System::block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                             const std::vector<int>& requested_blocks,
-                             const std::vector<MultiFab*>& requested_states,
-                             const std::vector<MultiFab*>& requested_rhs,
-                             const std::vector<int>& requested_flux_only) {
+
+template <int Dim>
+void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  const std::vector<int>& requested_blocks,
+                                  const std::vector<MultiFab<Dim>*>& requested_states,
+                                  const std::vector<MultiFab<Dim>*>& requested_residuals,
+                                  const std::vector<int>& requested_flux_only) {
   if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
-      requested_blocks.size() != requested_rhs.size() ||
+      requested_blocks.size() != requested_residuals.size() ||
       requested_blocks.size() != requested_flux_only.size())
     throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
-  std::vector<MultiFab*> states(p_->sp.size(), nullptr);
-  std::vector<MultiFab*> rhs(p_->sp.size(), nullptr);
+
+  std::vector<MultiFab<Dim>*> states(p_->sp.size(), nullptr);
+  std::vector<MultiFab<Dim>*> residuals(p_->sp.size(), nullptr);
   std::vector<int> flux_only(p_->sp.size(), 0);
   for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
     const int block = requested_blocks[request];
-    if (block < 0 || block >= static_cast<int>(p_->sp.size()))
+    if (block < 0 || block >= p_->blocks_.size())
       throw std::out_of_range("System::block_rhs_group block index is out of range");
     const std::size_t index = static_cast<std::size_t>(block);
     if (states[index] != nullptr || requested_states[request] == nullptr ||
-        requested_rhs[request] == nullptr ||
+        requested_residuals[request] == nullptr ||
         (requested_flux_only[request] != 0 && requested_flux_only[request] != 1))
       throw std::invalid_argument(
           "System::block_rhs_group requires unique blocks, non-null storage and boolean modes");
     states[index] = requested_states[request];
-    rhs[index] = requested_rhs[request];
+    residuals[index] = requested_residuals[request];
     flux_only[index] = requested_flux_only[request];
   }
-  struct StageStateScope {
-    std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
-    ~StageStateScope() {
-      if (slot != nullptr)
-        slot->reset();
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+      const int block = requested_blocks[request];
+      typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+      auto& family =
+          select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      auto& closure = requested_flux_only[request] != 0 ? family.flux_only : family.full;
+      require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                           static_cast<bool>(closure),
+                                           "System::block_rhs_group");
+      closure(*requested_states[request], *requested_residuals[request],
+              *p_->embedded_boundary_);
     }
-  } stage_scope;
-  if (!p_->block_state_identities_.empty()) {
-    if (p_->boundary_stage_states_)
-      throw std::runtime_error("System boundary stage-state registry is already active");
-    for (std::size_t index = 0; index < p_->sp.size(); ++index) {
-      const auto& identity = p_->sp[index].state_identity;
-      if (identity.empty())
-        throw std::runtime_error("System materialized block has no exact qualified state identity");
-    }
-    p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, &states, -1, nullptr});
-    stage_scope.slot = &p_->boundary_stage_states_;
+    return;
   }
-  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
-  p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only, geometry_mode);
+  p_->blocks_.evaluate_rhs_with_interfaces(point, states, residuals, flux_only);
 }
 
-bool System::block_has_boundary_linearization(int b) const {
-  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
-    throw std::out_of_range("System boundary linearization block index is out of range");
-  const auto& block = p_->sp[static_cast<std::size_t>(b)];
-  const auto plan = p_->boundary_plans_.find(block.name);
-  const bool has_pair =
-      plan != p_->boundary_plans_.end() && plan->second->has_boundary_linearization();
-  if (has_pair && p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None)
-    throw std::runtime_error(
-        "System embedded-boundary Program operators cannot linearize an additive boundary "
-        "component: its residual/JVP pair has no signed-mask or cut-cell metric contract");
-  return has_pair;
-}
-
-void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                    int b, MultiFab& U, MultiFab& R, bool flux_only) {
-  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+template <int Dim>
+void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                         int block, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                                         bool flux_only) {
+  if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System core RHS block index is out of range");
-  const auto block = static_cast<std::size_t>(b);
-  struct StageStateScope {
-    std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
-    ~StageStateScope() {
-      if (slot != nullptr)
-        slot->reset();
-    }
-  } stage_scope;
-  if (!p_->block_state_identities_.empty()) {
-    if (p_->boundary_stage_states_)
-      throw std::runtime_error("System boundary stage-state registry is already active");
-    const auto& identity = p_->sp[block].state_identity;
-    if (identity.empty())
-      throw std::runtime_error("System core RHS block has no exact qualified state identity");
-    p_->boundary_stage_states_.emplace(Impl::BoundaryStageStateView{point, nullptr, b, &U});
-    stage_scope.slot = &p_->boundary_stage_states_;
-  }
-  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
-  p_->blocks_.evaluate_rhs_core(point, block, U, R, flux_only, geometry_mode);
-}
-
-void System::block_rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                    int b, MultiFab& U, MultiFab& R, bool flux_only,
-                                    const PreparedGridBoundarySession& boundary) {
-  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
-    throw std::out_of_range("System prepared core RHS block index is out of range");
-  const auto block = static_cast<std::size_t>(b);
-  const auto expected_plan = p_->boundary_plans_.find(p_->sp[block].name);
-  const PreparedBoundaryPlan* expected =
-      expected_plan == p_->boundary_plans_.end() ? nullptr : expected_plan->second.get();
-  if (boundary.resolved_plan() != expected)
-    throw std::invalid_argument("System prepared core RHS boundary authority differs from block");
-  // This single-block prepared route is explicitly rejected for a shared interface above the
-  // closure boundary. Its boundary registry therefore binds U directly for the exact owner and the
-  // accepted live state for every other dependency; it must not mutate the System-wide grouped-RHS
-  // staging slot, which would couple otherwise independent Krylov execution lanes.
-  const GeometryMode geometry_mode = p_->eb_set_ ? p_->geometry_mode_ : GeometryMode::None;
-  p_->blocks_.evaluate_rhs_core_prepared(point, block, U, R, flux_only, boundary, geometry_mode);
-}
-
-void System::block_boundary_residual_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C) {
-  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
-  if (!block_has_boundary_linearization(b))
-    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
-  auto& block = p_->sp[static_cast<std::size_t>(b)];
-  if (block.boundary_session) {
-    if (!block.boundary_residual_at_point_prepared)
-      throw std::runtime_error("System block lacks its prepared boundary residual closure");
-    block.boundary_residual_at_point_prepared(point, U, C, *block.boundary_session);
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    auto& closure = flux_only ? family.flux_only : family.full;
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(closure),
+                                         "System::block_rhs_core_into_at");
+    closure(state, residual, *p_->embedded_boundary_);
     return;
   }
-  auto& closure = block.boundary_residual_at_point;
-  if (!closure)
-    throw std::runtime_error("System block lacks its boundary residual closure");
-  closure(point, U, C);
+  p_->blocks_.evaluate_rhs_core(point, static_cast<std::size_t>(block), state, residual, flux_only);
 }
 
-void System::block_boundary_residual_into_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab& U, MultiFab& C,
-    const PreparedGridBoundarySession& boundary) {
-  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
-  if (!block_has_boundary_linearization(b))
-    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
-  const auto& block = p_->sp[static_cast<std::size_t>(b)];
-  const auto expected_plan = p_->boundary_plans_.find(block.name);
-  if (expected_plan == p_->boundary_plans_.end() ||
-      boundary.resolved_plan() != expected_plan->second.get())
-    throw std::invalid_argument("System prepared boundary residual authority differs from block");
-  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_residual_at_point_prepared;
-  if (!closure)
-    throw std::runtime_error("System block lacks its prepared boundary residual closure");
-  closure(point, U, C, boundary);
+template <int Dim>
+void System<Dim>::block_prepare_generated_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+    MultiFab<Dim>& state) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System generated-state block index is out of range");
+  p_->blocks_.prepare_generated_state(point, static_cast<std::size_t>(block), state);
 }
 
-void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                        int b, MultiFab& U, const MultiFab& V, MultiFab& J) {
-  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
-  if (!block_has_boundary_linearization(b))
-    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
-  auto& block = p_->sp[static_cast<std::size_t>(b)];
-  if (block.boundary_session) {
-    if (!block.boundary_jvp_at_point_prepared)
-      throw std::runtime_error("System block lacks its prepared boundary JVP closure");
-    block.boundary_jvp_at_point_prepared(point, U, V, J, *block.boundary_session);
+template <int Dim>
+void System<Dim>::block_neg_div_flux_into(int block, MultiFab<Dim>& state,
+                                          MultiFab<Dim>& residual) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System flux-only block index is out of range");
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.flux_only),
+                                         "System::block_neg_div_flux_into");
+    family.flux_only(state, residual, *p_->embedded_boundary_);
     return;
   }
-  auto& closure = block.boundary_jvp_at_point;
-  if (!closure)
-    throw std::runtime_error("System block lacks its boundary JVP closure");
-  closure(point, U, V, J);
-}
-void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                        int b, MultiFab& U, const MultiFab& V, MultiFab& J,
-                                        const PreparedGridBoundarySession& boundary) {
-  require_cartesian_boundary_linearization(p_->eb_set_, p_->geometry_mode_);
-  if (!block_has_boundary_linearization(b))
-    throw std::runtime_error("System block has no executable boundary residual/JVP pair");
-  const auto& block = p_->sp[static_cast<std::size_t>(b)];
-  const auto expected_plan = p_->boundary_plans_.find(block.name);
-  if (expected_plan == p_->boundary_plans_.end() ||
-      boundary.resolved_plan() != expected_plan->second.get())
-    throw std::invalid_argument("System prepared boundary JVP authority differs from block");
-  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_jvp_at_point_prepared;
-  if (!closure)
-    throw std::runtime_error("System block lacks its prepared boundary JVP closure");
-  closure(point, U, V, J, boundary);
-}
-// FLUX-ONLY residual R <- -div F(U) (ADC-425): the block's SourceFreeModel<Model> rhs path (built in
-// build_block), bit-identical to rhs_into minus the default source. Fails loud on a block installed
-// without this closure instead of silently leaking the source.
-void System::block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R) {
-  Impl::Species& s = p_->sp[static_cast<std::size_t>(b)];
-  if (!s.rhs_flux_only)
-    throw std::runtime_error(
-        "System::block_neg_div_flux_into: block '" + s.name +
-        "' was installed without a flux-only residual closure; a flux-only RHS "
-        "requires add_block or a Production compiled block");
-  s.rhs_flux_only(U, R);
-}
-void System::block_neg_div_flux_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                        int b, MultiFab& U, MultiFab& R) {
-  block_rhs_group(point, {b}, {&U}, {&R}, {1});
-}
-// SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the block's SourceInto<Model> path (built in
-// build_block), the exact mirror of block_neg_div_flux_into and bit-identical to the source half of
-// rhs_into. Fails loud on a block installed without this closure instead of silently leaking the
-// flux.
-void System::block_source_into(int b, MultiFab& U, MultiFab& R) {
-  Impl::Species& s = p_->sp[static_cast<std::size_t>(b)];
-  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
-    if (!s.source_only_masked)
-      throw std::runtime_error("System::block_source_into: embedded-boundary block '" + s.name +
-                               "' was installed without an active-cell source closure");
-    s.source_only_masked(U, R);
-    return;
-  }
-  if (!s.source_only)
-    throw std::runtime_error(
-        "System::block_source_into: block '" + s.name +
-        "' was installed without a source-only residual closure; a source-only RHS "
-        "requires add_block or a Production compiled block");
-  s.source_only(U, R);
+  if (!selected.rhs_flux_only)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' lacks a dimension-qualified flux-only provider");
+  selected.rhs_flux_only(state, residual);
 }
 
-void System::require_cartesian_generated_operator(int b, const std::string& operation) const {
-  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+template <int Dim>
+void System<Dim>::block_neg_div_flux_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state,
+    MultiFab<Dim>& residual) {
+  block_rhs_group(point, {block}, {&state}, {&residual}, {1});
+}
+
+template <int Dim>
+void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Dim>& residual) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System source-only block index is out of range");
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.source_only),
+                                         "System::block_source_into");
+    family.source_only(state, residual, *p_->embedded_boundary_);
+    return;
+  }
+  if (!selected.source_only)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' lacks a dimension-qualified source-only provider");
+  selected.source_only(state, residual);
+}
+
+template <int Dim>
+void System<Dim>::require_cartesian_generated_operator(int block,
+                                                       const std::string& operation) const {
+  if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System generated Program operator block index is out of range");
-  if (!p_->eb_set_ || p_->geometry_mode_ == GeometryMode::None)
-    return;
-  const auto& block = p_->sp[static_cast<std::size_t>(b)];
-  throw std::runtime_error("System embedded-boundary Program cannot execute generated operator '" +
-                           operation + "' for block '" + block.name +
-                           "': the provider has no active-cell or cut-cell metric contract");
+  if (operation.empty())
+    throw std::invalid_argument("System generated Program operator identity cannot be empty");
 }
-// Max |wave speed| of block b on U: the SAME BlockState::max_speed closure step_cfl reads (set at
-// add_block time -- HasStabilitySpeed / max_wave_speed of the model). REUSES it, does not recompute.
-Real System::block_max_speed(int b, const MultiFab& U) const {
-  return p_->sp[static_cast<std::size_t>(b)].max_speed(U);
+
+template <int Dim>
+Real System<Dim>::block_max_speed(int block, const MultiFab<Dim>& state) const {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System maximum-speed block index is out of range");
+  const typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (!selected.max_speed)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' lacks a dimension-qualified stability-speed provider");
+  return selected.max_speed(state);
 }
-// MIN physical cell size of the grid: Cartesian min(dx, dy) / polar min(dr, r_min*dtheta), the exact
-// formula SystemProgramDriver::cfl_grid_h uses for the native CFL (kept consistent so a Program dt bound and
-// the native CFL share the same hmin).
-Real System::cfl_min_dx() const {
-  return p_->polar_ ? std::min(p_->pgeom_.dr(), p_->pgeom_.r_min * p_->pgeom_.dtheta())
-                    : std::min(p_->geom.dx(), p_->geom.dy());
+
+template <int Dim>
+Real System<Dim>::cfl_min_dx() const {
+  Real result = p_->geom.spacing(0);
+  for (int axis = 1; axis < Dim; ++axis)
+    result = std::min(result, p_->geom.spacing(axis));
+  return result;
 }
-bool System::program_is_polar() const {
-  return p_->polar_;
-}
-PolarGeometry System::program_polar_geometry() const {
-  if (!p_->polar_)
-    throw std::runtime_error(
-        "System::program_polar_geometry: the installed Program is not bound to a polar mesh");
-  return p_->pgeom_;
-}
-std::string System::installed_program_hash() const {
+
+template <int Dim>
+std::string System<Dim>::installed_program_hash() const {
   return p_->program_.installed_hash_;
 }
-// Configured field (Poisson) solver token, owned by SystemFieldSolver (p_solver, geometry-specific
-// default "geometric_mg" Cartesian / "polar" on a ring). Read by install_program (Spec criterion 24,
-// solver requirement) and exposed for introspection. Returns the last set_poisson solver, never
-// empty (the default stands).
-std::string System::poisson_solver() const {
-  return p_->fields_.p_solver;
+
+template <int Dim>
+std::string System<Dim>::poisson_solver() const {
+  return p_->poisson_solver_;
 }
-// NAME-based block binding seam (Spec 3 criterion 23, ADC-457). install_program builds the map after
-// matching the .so's block names; ProgramContext reads it to translate a Program block index to the
-// name-matched System block index. POPS_EXPORT: resolved by the generated .so across the dlopen boundary.
-void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
-  for (std::size_t program = 0; program < prog_to_sys.size(); ++program) {
-    for (std::size_t previous = 0; previous < program; ++previous) {
-      if (prog_to_sys[program] == prog_to_sys[previous])
-        throw std::invalid_argument(
-            "System::set_program_block_map: Program blocks " + std::to_string(previous) +
-            " and " + std::to_string(program) + " both map to System block " +
-            std::to_string(prog_to_sys[program]));
-    }
+
+template <int Dim>
+void System<Dim>::set_program_block_map(const std::vector<int>& program_to_system) {
+  for (std::size_t program = 0; program < program_to_system.size(); ++program) {
+    const int block = program_to_system[program];
+    if (block < 0 || block >= p_->blocks_.size())
+      throw std::out_of_range("System::set_program_block_map block index is out of range");
+    for (std::size_t previous = 0; previous < program; ++previous)
+      if (block == program_to_system[previous])
+        throw std::invalid_argument("System::set_program_block_map has duplicate block routes");
   }
-  p_->program_.block_map_ = prog_to_sys;
+  p_->program_.block_map_ = program_to_system;
 }
-const std::vector<int>& System::program_block_map() const {
+
+template <int Dim>
+const std::vector<int>& System<Dim>::program_block_map() const {
   return p_->program_.block_map_;
 }
-bool System::program_owns_operator_authority(
+
+template <int Dim>
+bool System<Dim>::program_owns_operator_authority(
     const std::array<std::uint64_t, 4>& authority) const noexcept {
   return std::find(p_->program_.operator_authorities_.begin(),
                    p_->program_.operator_authorities_.end(),
                    authority) != p_->program_.operator_authorities_.end();
 }
-// Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
-// spec op 21). REUSES the block's own projection closure and rejects an absent capability.
-void System::block_project(int b, MultiFab& u) {
-  auto& block = p_->sp[static_cast<std::size_t>(b)];
-  std::function<void(MultiFab&)>& proj = block.project;
-  if (!proj)
-    throw std::runtime_error(
-        "System::block_project: owning block declares no pointwise projection");
-  if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
-    if (!block.project_masked)
-      throw std::runtime_error(
-          "System::block_project: embedded-boundary block was installed without an active-cell "
-          "projection closure");
-    block.project_masked(u);
+
+template <int Dim>
+void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
+  if (block < 0 || block >= p_->blocks_.size())
+    throw std::out_of_range("System projection block index is out of range");
+  typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.project),
+                                         "System::block_project");
+    family.project(state, *p_->embedded_boundary_);
     return;
   }
-  proj(u);
+  if (!selected.project)
+    throw std::runtime_error("System block '" + selected.name +
+                             "' has no dimension-qualified projection provider");
+  selected.project(state);
 }
-// Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars
-// via P.record_scalar (ProgramContext::record_scalar); Python reads them after the step. Delegated to
-// the extracted Program subsystem (ADC-594); the read keeps the "System::program_diagnostic" wording.
-void System::record_program_diagnostic(const std::string& name, Real value) {
+
+template <int Dim>
+void System<Dim>::record_program_diagnostic(const std::string& name, Real value) {
   p_->program_.record_diagnostic(name, value);
 }
-Real System::program_diagnostic(const std::string& name) const {
+
+template <int Dim>
+void System<Dim>::record_program_balance_term(const std::string& route, const std::string& term,
+                                              Real value) {
+  p_->program_.record_balance_term(route, term, value, "System");
+}
+
+template <int Dim>
+bool System<Dim>::program_balance_consumer_is_due(const std::string& contract,
+                                                  const std::string& route, int every_n) const {
+  return p_->program_.balance_consumer_is_due(contract, route, every_n, "System");
+}
+
+template <int Dim>
+Real System<Dim>::program_diagnostic(const std::string& name) const {
   return p_->program_.diagnostic(name, "System");
 }
-std::map<std::string, Real> System::program_diagnostics() const {
+
+template <int Dim>
+std::map<std::string, Real> System<Dim>::program_diagnostics() const {
   return p_->program_.diagnostics();
 }
-void System::begin_step_projection_report() {
+
+template <int Dim>
+std::map<std::string, Real> System<Dim>::accepted_balance_terms(const std::string& route) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_accepted_balance_terms requires an active uncommitted external step transaction");
+  return p_->program_.accepted_balance_terms(route, "System");
+}
+
+template <int Dim>
+std::map<std::string, Real> System<Dim>::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  const int runtime_block = p_->index(block);
+  if (component < 0 || component >= p_->find(block).ncomp)
+    throw std::out_of_range("System balance component is out of range");
+  if (levels.size() != 1 || levels.front() != 0)
+    throw std::invalid_argument("System balance selection requires exactly uniform level zero");
+  return p_->program_.selected_accepted_balance_terms(route, runtime_block, component, levels,
+                                                      automatic_terms, "System");
+}
+
+template <int Dim>
+void System<Dim>::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();
 }
-void System::note_step_projection(const std::string& name) {
+
+template <int Dim>
+void System<Dim>::note_step_projection(const std::string& name) {
   p_->program_.note_step_projection(name);
 }
-std::vector<std::string> System::consume_step_projections() {
+
+template <int Dim>
+std::vector<std::string> System<Dim>::consume_step_projections() {
   return p_->program_.consume_step_projections();
 }
-// COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
-// RuntimeParams the installed step closure reads through ProgramContext::program_params. Delegated to
-// the extracted Program subsystem (ADC-594): the store lives in program_ so a value change reaches the
-// captured ctx -- the Program parameter carrier is independent from immutable model-package params. The fail-loud
-// messages keep the "System::set_program_params" wording (unchanged). install_program seeds the
-// defaults; Python installs the resolved Program vector (validated against the .so metadata).
-void System::seed_program_params(int prog_block, const std::vector<double>& defaults) {
-  p_->program_.seed_params(prog_block, defaults);  // idempotent: re-seeding resets to the baseline
+
+template <int Dim>
+void System<Dim>::seed_program_params(int program_block, const std::vector<double>& defaults) {
+  p_->program_.seed_params(program_block, defaults);
 }
-void System::set_program_params(int prog_block, const std::vector<double>& values) {
-  p_->program_.set_params(prog_block, values, "System");
+
+template <int Dim>
+void System<Dim>::set_program_params(int program_block, const std::vector<double>& values) {
+  p_->program_.set_params(program_block, values, "System");
 }
-RuntimeParams System::program_params(int prog_block) const {
-  return p_->program_.params(prog_block);
+
+template <int Dim>
+RuntimeParams System<Dim>::program_params(int program_block) const {
+  return p_->program_.params(program_block);
 }
+
+template runtime::program::ProgramRuntimeState<kNativeDimension>&
+System<kNativeDimension>::program_runtime_state_();
+template void System<kNativeDimension>::install_program_step(std::function<void(double)>);
+template void System<kNativeDimension>::set_program_cadence(int, int);
+template int System<kNativeDimension>::program_substeps() const;
+template int System<kNativeDimension>::program_stride() const;
+template double System<kNativeDimension>::program_cadence_window_dt() const;
+template int System<kNativeDimension>::program_cadence_window_steps() const;
+template double System<kNativeDimension>::program_cadence_window_start_time() const;
+template double System<kNativeDimension>::program_last_dt() const;
+template void System<kNativeDimension>::restore_program_cadence_window(double, int, double, double,
+                                                                       double, int);
+template int System<kNativeDimension>::n_blocks() const;
+template std::size_t System<kNativeDimension>::apply_coupling_operators(
+    Real, const std::vector<MultiFab<kNativeDimension>*>&);
+template MultiFab<kNativeDimension>& System<kNativeDimension>::block_state(int);
+template void System<kNativeDimension>::block_rhs_into(int, MultiFab<kNativeDimension>&,
+                                                       MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::block_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::block_rhs_group(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::vector<int>&,
+    const std::vector<MultiFab<kNativeDimension>*>&,
+    const std::vector<MultiFab<kNativeDimension>*>&, const std::vector<int>&);
+template void System<kNativeDimension>::block_rhs_core_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&, bool);
+template void System<kNativeDimension>::block_prepare_generated_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int,
+    MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::block_neg_div_flux_into(int, MultiFab<kNativeDimension>&,
+                                                                MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::block_neg_div_flux_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
+    MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::block_source_into(int, MultiFab<kNativeDimension>&,
+                                                          MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::require_cartesian_generated_operator(
+    int, const std::string&) const;
+template Real System<kNativeDimension>::block_max_speed(int,
+                                                        const MultiFab<kNativeDimension>&) const;
+template Real System<kNativeDimension>::cfl_min_dx() const;
+template std::string System<kNativeDimension>::installed_program_hash() const;
+template std::string System<kNativeDimension>::poisson_solver() const;
+template void System<kNativeDimension>::set_program_block_map(const std::vector<int>&);
+template const std::vector<int>& System<kNativeDimension>::program_block_map() const;
+template bool System<kNativeDimension>::program_owns_operator_authority(
+    const std::array<std::uint64_t, 4>&) const noexcept;
+template void System<kNativeDimension>::block_project(int, MultiFab<kNativeDimension>&);
+template void System<kNativeDimension>::record_program_diagnostic(const std::string&, Real);
+template void System<kNativeDimension>::record_program_balance_term(const std::string&,
+                                                                    const std::string&, Real);
+template bool System<kNativeDimension>::program_balance_consumer_is_due(const std::string&,
+                                                                        const std::string&,
+                                                                        int) const;
+template Real System<kNativeDimension>::program_diagnostic(const std::string&) const;
+template std::map<std::string, Real> System<kNativeDimension>::program_diagnostics() const;
+template std::map<std::string, Real> System<kNativeDimension>::accepted_balance_terms(
+    const std::string&) const;
+template std::map<std::string, Real> System<kNativeDimension>::selected_accepted_balance_terms(
+    const std::string&, const std::string&, int, const std::vector<int>&,
+    const std::vector<std::string>&) const;
+template void System<kNativeDimension>::begin_step_projection_report();
+template void System<kNativeDimension>::note_step_projection(const std::string&);
+template std::vector<std::string> System<kNativeDimension>::consume_step_projections();
+template void System<kNativeDimension>::seed_program_params(int, const std::vector<double>&);
+template void System<kNativeDimension>::set_program_params(int, const std::vector<double>&);
+template RuntimeParams System<kNativeDimension>::program_params(int) const;
 
 }  // namespace pops

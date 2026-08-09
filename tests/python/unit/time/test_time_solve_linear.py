@@ -76,8 +76,7 @@ def _krylov(method, *, max_iter, rel_tol=None, restart=None, preconditioner=None
 def _precond(scheme):
     """Map a preconditioner name to its TYPED pops.solvers.preconditioners descriptor."""
     from pops.solvers import preconditioners
-    return {"identity": preconditioners.Identity,
-            "geometric_mg": preconditioners.GeometricMG}[scheme]()
+    return {"identity": preconditioners.Identity}[scheme]()
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
@@ -117,11 +116,17 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="cg"))
-    for frag in ("pops::PreparedAffineOperatorSessionFactory make_apply_A", "ctx.laplacian",
-                 "return pops::PreparedAffineOperatorSessionCallbacks{",
+    for frag in (
+                 "pops::PreparedAffineOperatorSessionFactory<pops::kNativeDimension> "
+                 "make_apply_A",
+                 "ctx.laplacian",
+                 "return pops::PreparedAffineOperatorSessionCallbacks<"
+                 "pops::kNativeDimension>{",
                  "ctx.solve_prepared_linear",
-                 "pops::PreparedAffineLinearProblem", "pops::KrylovWorkspace",
-                 "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
+                 "pops::PreparedAffineLinearProblem<pops::kNativeDimension>",
+                 "pops::KrylovWorkspace<pops::kNativeDimension>",
+                 "std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                 "ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
 
@@ -160,41 +165,14 @@ def test_solve_outcome_is_consumed_before_graph_publication(t):
 def test_bicgstab_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="bicgstab"))
     assert "ctx.solve_prepared_linear" in src, src
-    assert "PreparedLinearPreconditioner::identity()" in src, src
+    assert (
+        "PreparedLinearPreconditioner<pops::kNativeDimension>::identity()" in src
+    ), src
 
 
 def test_richardson_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="richardson"))
     assert "ctx.solve_prepared_linear" in src, src
-
-
-# ---- (A') GeometricMG preconditioner (ADC-516): the complete non-identity route ----
-def _solve_call(src):
-    """The single generic context solve line of @p src."""
-    return [ln for ln in src.splitlines() if "ctx.solve_prepared_linear(" in ln][0]
-
-
-def test_gmres_gmg_precond_codegen(t):
-    # GMRES + GeometricMG lowers to a real workspace-session factory, not an identity callback.
-    # Every factory invocation creates a private GeometricMgPreconditioner state whose prepare/apply
-    # callbacks are captured together; mutable V-cycle storage is never shared between workspaces.
-    src = emit_cpp_program(_solve_program(t, method="gmres", preconditioner=_precond("geometric_mg")))
-    assert "pops::runtime::program::GeometricMgPreconditioner" in src, (
-        "the MG V-cycle preconditioner state must be emitted\n%s" % src)
-    assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
-    assert "->prepare(ctx," in src, "MG must be built before the Krylov loop\n%s" % src
-    assert "pops::PreparedLinearPreconditionerSessionFactory make_precond_mg_session" in src, (
-        "a named native session factory must be emitted\n%s" % src)
-    assert "return pops::PreparedLinearPreconditionerSessionCallbacks{" in src, src
-    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
-
-
-def test_bicgstab_gmg_precond_codegen(t):
-    src = emit_cpp_program(_solve_program(t, method="bicgstab",
-                         preconditioner=_precond("geometric_mg")))
-    assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
-    assert "->apply(ctx," in src, src
-    assert "pops::PreparedLinearPreconditioner(*sf_sol" in src, src
 
 
 def test_identity_precond_byte_identical(t):
@@ -204,31 +182,20 @@ def test_identity_precond_byte_identical(t):
     src_identity = emit_cpp_program(_solve_program(t, method="gmres",
                                   preconditioner=_precond("identity")))
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
-    assert "PreparedLinearPreconditioner::identity()" in src_default
+    assert (
+        "PreparedLinearPreconditioner<pops::kNativeDimension>::identity()" in src_default
+    )
     assert "PreparedLinearPreconditionerSessionFactory" not in src_default
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"
 
 
-def test_cg_gmg_precond_rejected(t):
-    # The provider contract rejects methods that do not authenticate a supported placement.  Keep the
-    # assertion capability-based: the registry core must not recover a hard-coded method-name list.
-    for method in ("cg", "richardson"):
-        try:
-            _solve_program(t, method=method, preconditioner=_precond("geometric_mg"))
-        except ValueError as exc:
-            assert (
-                "preconditioner 'geometric_mg'" in str(exc)
-                and "method preconditioning placement" in str(exc)
-            ), str(exc)
-        else:
-            raise AssertionError("%s + GeometricMG must raise ValueError" % method)
-
-
 def test_unwired_preconditioners_are_not_published(t):
+    del t
     from pops.solvers import preconditioners
 
     assert not hasattr(preconditioners, "Jacobi")
     assert not hasattr(preconditioners, "BlockJacobi")
+    assert not hasattr(preconditioners, "GeometricMG")
 
 
 def test_string_precond_rejected(t):
@@ -249,12 +216,6 @@ def test_string_precond_rejected(t):
         raise AssertionError("a string preconditioner must raise TypeError")
 
 
-def test_gmg_precond_validates(t):
-    P = _solve_program(t, method="gmres", preconditioner=_precond("geometric_mg"))
-    assert P.validate() is True, "the gmres+GeometricMG Program must validate"
-    assert P._ir_hash(), "the IR must serialize to a stable hash"
-
-
 def test_solve_validates(t):
     P = _solve_program(t)
     assert P.validate() is True, "the typed linear-solve Program must validate"
@@ -263,8 +224,10 @@ def test_solve_validates(t):
 
 def test_prepared_codegen_has_frozen_snapshot_and_no_context_algebra_in_apply(t):
     src = emit_cpp_program(_solve_program(t, method="cg", operator_uses_dt=True))
-    apply_body = src.split("pops::ApplyFn apply = ", 1)[1].split(
-        "return pops::PreparedAffineOperatorSessionCallbacks", 1
+    apply_body = src.split(
+        "pops::ApplyFn<pops::kNativeDimension> apply = ", 1
+    )[1].split(
+        "return pops::PreparedAffineOperatorSessionCallbacks<pops::kNativeDimension>", 1
     )[0]
     assert "operator_evaluation_snapshot" in src
     assert "probe_operator_evaluation" in src
@@ -415,8 +378,7 @@ def test_native_compiled_cg_matches_offline_periodic_helmholtz(t):
     def passive_model(name):
         m = Model(name)
         (rho,) = m.conservative_vars("rho")
-        u = m.primitive("u", 0.0 * rho)
-        m.primitive_vars(rho=rho, u=u)
+        m.primitive_vars(rho)
         m.conservative_from([rho])
         m.flux(x=[0.0 * rho], y=[0.0 * rho])
         m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
@@ -468,81 +430,3 @@ def test_native_compiled_cg_matches_offline_periodic_helmholtz(t):
     assert err <= 1e-6, "compiled matrix-free CG == offline numpy CG (max|d| = %.2e)" % err
     assert moved > 1e-6, "the solve must change the state from U0 (max|d| = %.2e)" % moved
     assert iters > 1, "the offline (and compiled) solve must take > 1 iteration, got %d" % iters
-
-
-def test_native_gmres_geometric_mg_matches_offline_periodic_helmholtz(t):
-    """(B') GMRES + GeometricMG preconditioner convergence (ADC-516), Kokkos/_pops-gated.
-
-    Solves the SAME periodic Helmholtz system as (B) -- (I - alpha*Lap) phi = U -- but with GMRES
-    preconditioned by ONE GeometricMG V-cycle, and checks the compiled matrix-free solve recovers the
-    SAME phi as the offline numpy CG (parity == convergence: a correctly-preconditioned GMRES converges
-    to the unique solution). Self-skips (exit 0) without numpy / _pops / install_program / a compiler /
-    a visible Kokkos -- the .so build needs ADC_KOKKOS_ROOT, not available host-only on this Mac, so the
-    real preconditioned convergence run is confirmed on ROMEO/CI."""
-    try:
-        import numpy as np
-
-        import pops.runtime._engine_descriptors as engine
-        from pops.runtime._system import System
-    except Exception as exc:  # noqa: BLE001
-        require_native_or_skip(
-            "-- (B') skipped: pops/numpy unavailable: %s --" % exc,
-            optional_skip=pytest.skip,
-        )
-        return None
-
-    n = 16
-    sim = System(n=n, L=1.0, periodicity=(True, True))
-    if not hasattr(sim, "install_program"):
-        require_native_or_skip(
-            "-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --",
-            optional_skip=pytest.skip,
-        )
-        return None
-
-    from pops.physics._facade import Model
-    from pops.solvers import preconditioners
-
-    def passive_model(name):
-        m = Model(name)
-        (rho,) = m.conservative_vars("rho")
-        u = m.primitive("u", 0.0 * rho)
-        m.primitive_vars(rho=rho, u=u)
-        m.conservative_from([rho])
-        m.flux(x=[0.0 * rho], y=[0.0 * rho])
-        m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-        return m
-
-    tol = 1e-10
-    prog = _solve_program(t, name="solve_gmg", method="gmres", tol=tol, max_iter=200,
-                          preconditioner=preconditioners.GeometricMG())
-    try:
-        compiled = compile_drivers.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
-        compiled_model = passive_model("solve_gmg_block").compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        require_native_or_skip(
-            "-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200],
-            optional_skip=pytest.skip,
-        )
-        return None
-
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
-    sim.install_program(compiled.so_path)
-    sim.step(0.05)
-    out = np.array(sim.get_state("blk"))[0]
-
-    apply = _discrete_helmholtz(n, _ALPHA)
-    phi_ref, iters = _np_cg(apply, rho0, tol=tol)
-    err = float(np.abs(out - phi_ref).max())
-    moved = float(np.abs(out - rho0).max())
-    print("  gmres+GeometricMG parity: max|compiled - offline| = %.2e  max|phi - U0| = %.2e"
-          % (err, moved))
-    # Convergence: the preconditioned GMRES reaches the SAME solution (unique) as the offline CG.
-    assert err <= 1e-6, "compiled gmres+GeometricMG == offline solution (max|d| = %.2e)" % err
-    assert moved > 1e-6, "the preconditioned solve must change the state (max|d| = %.2e)" % moved

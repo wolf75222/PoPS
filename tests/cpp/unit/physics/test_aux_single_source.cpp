@@ -1,133 +1,142 @@
-// Source UNIQUE de la disposition aux (X-macro POPS_AUX_FIELDS, pops/core/state.hpp). Ce test
-// prouve que la GENERATION couvre TOUS les champs extra et ferme le trou #51 (T_e oublie dans
-// le marshaling) : un champ ne peut plus etre lu sur un chemin et muet sur l'autre, car les deux
-// derivent de la meme table. On verifie a la compilation ET a l'execution :
-//
-//   (A) CHEMIN DEVICE (load_aux<NComp>) : pour CHAQUE champ de POPS_AUX_FIELDS, on remplit la
-//       SEULE composante a son indice et on verifie que load_aux la depose dans le BON membre
-//       de Aux. La boucle est elle-meme generee par POPS_AUX_FIELDS -> un nouveau champ ajoute a
-//       la table est teste automatiquement, sans toucher ce fichier.
-//   (B) CHEMIN MARSHALING (host) : la disposition composante-majeur AUX[idx*nn + k] reproduite
-//       depuis la MEME table donne, apres load via la table, exactement les memes valeurs ->
-//       impossible d'avoir un champ lu cote device mais oublie cote host (le bug #51).
-//   (C) RETRO-COMPAT : load_aux<kAuxBaseComps> (defaut) n'ecrit AUCUN champ extra (tous a 0),
-//       quelle que soit la valeur parasite des composantes >= 3.
-//
-// Aucun parallelisme ici : on appelle load_aux sur un Fab2D mono-box, c'est le coeur de la
-// lecture device, mais le test reste pur hote (CPU).
+// Exact compact provider packs: no physical slot prefix or globally named auxiliary state.
 
 #include <gtest/gtest.h>
 
+#include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/core/foundation/types.hpp>
-#include <pops/mesh/index/box2d.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/numerics/spatial_operator.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
+#include <pops/physics/bricks/hyperbolic.hpp>
+#include <pops/physics/bricks/source.hpp>
+#include <pops/physics/composition/composite.hpp>
 
-#include <vector>
+#include <type_traits>
 
 using namespace pops;
 
-// Nombre de champs EXTRA et largeur aux totale, DERIVES de la table (et non codes en dur).
-static constexpr int kNExtra = [] {
-  int n = 0;
-#define POPS_AUX_COUNT(name, idx) ++n;
-  POPS_AUX_FIELDS(POPS_AUX_COUNT)
-#undef POPS_AUX_COUNT
-  return n;
-}();
-// Largeur necessaire pour lire TOUS les champs extra : max(idx)+1 (>= kAuxBaseComps).
-static constexpr int kFullWidth = [] {
-  int w = kAuxBaseComps;
-#define POPS_AUX_WIDTH(name, idx) w = (idx) + 1 > w ? (idx) + 1 : w;
-  POPS_AUX_FIELDS(POPS_AUX_WIDTH)
-#undef POPS_AUX_WIDTH
-  return w;
-}();
+namespace {
 
-// Accesseur membre genere : permet de lire a.<name> via une fonction indexee par la table,
-// donc de boucler sur les champs sans citer leurs noms a la main dans le corps du test.
-static Real aux_member(const Aux& a, int idx) {
-  Real v = 0;
-#define POPS_AUX_GET(name, ix) \
-  if ((idx) == (ix))           \
-    v = a.name;
-  POPS_AUX_FIELDS(POPS_AUX_GET)
-#undef POPS_AUX_GET
-  return v;
+template <int Dim, int Count>
+struct ProviderModel {
+  using State = StateVec<1>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 1;
+  static constexpr int n_providers = Count;
+
+  POPS_HD State flux(const State&, const auto&, int) const { return {}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
+  POPS_HD State source(const State&, const auto&) const { return {}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+};
+
+template <int Dim>
+void check_gradient_force() {
+  using Slots = ProviderSlots<2, 0, 1>;
+  using Force = PotentialForceND<Dim, Slots>;
+  static_assert(Force::n_providers == 3);
+  static_assert(Force::gradient_slots::template slot<0>() == 2);
+  static_assert(Force::gradient_slots::template slot<1>() == 0);
+  static_assert(Force::gradient_slots::template slot<2>() == 1);
+
+  ProviderValues<3> providers{};
+  providers[0] = Real(20);
+  providers[1] = Real(30);
+  providers[2] = Real(10);
+  StateVec<Dim + 2> state{};
+  state[0] = Real(2);
+  for (int axis = 0; axis < Dim; ++axis)
+    state[axis + 1] = Real(axis + 3);
+
+  const auto source = Force{Real(0.5)}.apply(state, providers);
+  EXPECT_EQ(source[1], Real(-10));
+  EXPECT_EQ(source[2], Real(-20));
+  EXPECT_EQ(source[3], Real(-30));
 }
 
-// (A)+(B) : chemin device (load_aux) et chemin marshaling host, tous deux lus sur LE MEME etat
-// seede (100+c) -- (B) compare au chemin (A), donc pipeline unique.
-TEST(AuxSingleSource, DeviceAndHostMarshalingAgree) {
-  ASSERT_TRUE(kNExtra >= 1) << "table_non_vide";
-  ASSERT_TRUE(kFullWidth >= kAuxBaseComps + 1) << "largeur_pleine_coherente";
+struct OwnerAlpha {
+  static constexpr int dimension = 2;
+  static constexpr int n_providers = 1;
+};
+struct OwnerBeta {
+  static constexpr int dimension = 2;
+  static constexpr int n_providers = 1;
+};
 
-  // Fab mono-box 1x1, kFullWidth composantes : canal aux complet pour une cellule.
-  const Box2D b = Box2D::from_extents(1, 1);
-  Fab2D fab(b, kFullWidth, 0);
-  const Array4 w = fab.array();
-  const ConstArray4 a = fab.const_array();
-
-  // --- (A) chemin device : chaque champ extra est lu au bon membre ---
-  // On met une valeur DISTINCTE par composante extra, puis on verifie pour chaque champ que
-  // load_aux<kFullWidth> a depose AUX[idx] dans aux_member(.,idx) (i.e. le bon membre nomme).
-  for (int c = 0; c < kFullWidth; ++c)
-    w(0, 0, c) = Real(100 + c);  // 100,101,... distincts
-  {
-    const Aux x = load_aux<kFullWidth>(a, 0, 0);
-    EXPECT_TRUE(x.phi == Real(100) && x.grad_x == Real(101) && x.grad_y == Real(102))
-        << "base_phi_grad_lus";
-#define POPS_AUX_CHECK_READ(name, idx) \
-  EXPECT_TRUE(aux_member(x, idx) == Real(100 + (idx))) << "device_lit_" #name "_au_bon_indice";
-    POPS_AUX_FIELDS(POPS_AUX_CHECK_READ)
-#undef POPS_AUX_CHECK_READ
-  }
-
-  // --- (B) chemin marshaling host : meme table -> memes valeurs que load_aux ---
-  // Reproduit la disposition composante-majeur AUX[idx*nn + k] (nn=1, k=0) du marshaling de
-  // python/system.cpp, GENEREE depuis POPS_AUX_FIELDS, et compare champ par champ a load_aux.
-  {
-    const std::size_t nn = 1, k = 0;
-    std::vector<double> AUX(static_cast<std::size_t>(kFullWidth));
-    for (int c = 0; c < kFullWidth; ++c)
-      AUX[static_cast<std::size_t>(c) * nn + k] = 100 + c;
-    Aux host{};
-    host.phi = AUX[k];
-    host.grad_x = AUX[nn + k];
-    host.grad_y = AUX[2 * nn + k];
-#define POPS_AUX_MARSHAL(name, idx)   \
-  if (AUX.size() >= ((idx) + 1) * nn) \
-    host.name = AUX[(idx) * nn + k];
-    POPS_AUX_FIELDS(POPS_AUX_MARSHAL)
-#undef POPS_AUX_MARSHAL
-    const Aux dev = load_aux<kFullWidth>(a, 0, 0);
-    EXPECT_TRUE(host.phi == dev.phi && host.grad_x == dev.grad_x && host.grad_y == dev.grad_y)
-        << "host_base_egal_device";
-#define POPS_AUX_CHECK_EQ(name, idx) \
-  EXPECT_TRUE(host.name == dev.name) << "host_egal_device_" #name;
-    POPS_AUX_FIELDS(POPS_AUX_CHECK_EQ)
-#undef POPS_AUX_CHECK_EQ
-  }
+template <int Dim>
+void check_exb_slots_are_permutable() {
+  using Slots = ProviderSlots<1, 0>;
+  using ExB = ExBVelocityND<Dim, Slots>;
+  static_assert(ExB::n_providers == 2);
+  ProviderValues<2> providers{};
+  providers[0] = Real(4);   // gradient along axis 1
+  providers[1] = Real(-6);  // gradient along axis 0
+  const ExB law{Real(2)};
+  const StateVec<1> state{Real(3)};
+  EXPECT_EQ(law.template velocity<0>(providers), Real(-2));
+  EXPECT_EQ(law.template velocity<1>(providers), Real(-3));
+  EXPECT_EQ(law.template flux<0>(state, providers)[0], Real(-6));
+  EXPECT_EQ(law.template flux<1>(state, providers)[0], Real(-9));
 }
 
-// (C) retro-compat : largeur de base n'ecrit aucun champ extra. Independant de (A)/(B) : etat
-// reseede a 999 (tout parasite) sur un Fab2D dedie.
-TEST(AuxSingleSource, BaseWidthIgnoresExtraFields) {
-  const Box2D b = Box2D::from_extents(1, 1);
-  Fab2D fab(b, kFullWidth, 0);
-  const Array4 w = fab.array();
-  const ConstArray4 a = fab.const_array();
+}  // namespace
 
-  for (int c = 0; c < kFullWidth; ++c)
-    w(0, 0, c) = Real(999);  // tout parasite
-  {
-    const Aux x = load_aux<kAuxBaseComps>(a, 0, 0);
-    EXPECT_TRUE(x.phi == Real(999) && x.grad_x == Real(999) && x.grad_y == Real(999))
-        << "base_lit_phi_grad";
-#define POPS_AUX_CHECK_ZERO(name, idx) \
-  EXPECT_TRUE(aux_member(x, idx) == Real(0)) << "base_ignore_" #name;
-    POPS_AUX_FIELDS(POPS_AUX_CHECK_ZERO)
-#undef POPS_AUX_CHECK_ZERO
-  }
+static_assert(ProviderValues<0>::size == 0);
+static_assert(ProviderValues<3>::size == 3);
+static_assert(std::is_trivially_copyable_v<ProviderValues<0>>);
+static_assert(std::is_trivially_copyable_v<ProviderValues<7>>);
+static_assert(PhysicalModelFor<ProviderModel<1, 0>, 1>);
+static_assert(PhysicalModelFor<ProviderModel<2, 0>, 2>);
+static_assert(PhysicalModelFor<ProviderModel<3, 0>, 3>);
+static_assert(PhysicalModelFor<ProviderModel<1, 4>, 1>);
+static_assert(!PhysicalModelFor<ProviderModel<1, 0>, 2>);
+static_assert(!std::is_same_v<BoundFluxProviders<OwnerAlpha>, BoundFluxProviders<OwnerBeta>>);
+static_assert(MagneticLorentzForceND<3, 2>::n_providers == 3);
+static_assert(!MagneticLorentzForceND<1>::planar_capability);
+static_assert(MagneticLorentzForceND<2>::planar_capability);
+
+TEST(ProviderValues, EmptyPackIsAFirstClassDeviceCarrier) {
+  const ProviderValues<0> providers{};
+  EXPECT_EQ(decltype(providers)::size, 0);
+}
+
+TEST(ProviderValues, QualifiedConsumersDoNotAliasBySpelling) {
+  FluxProviderValues<OwnerAlpha> alpha_values{};
+  FluxProviderValues<OwnerBeta> beta_values{};
+  alpha_values[0] = Real(2);
+  beta_values[0] = Real(7);
+  const auto alpha = bind_flux_providers<OwnerAlpha>(alpha_values);
+  const auto beta = bind_flux_providers<OwnerBeta>(beta_values);
+  EXPECT_EQ(alpha.template provider<0>(), Real(2));
+  EXPECT_EQ(beta.template provider<0>(), Real(7));
+}
+
+TEST(ProviderValues, GradientSourcesUseExplicitPermutedSlotsInEveryRank) {
+  check_gradient_force<3>();
+}
+
+TEST(ProviderValues, ExBUsesExplicitPermutedGradientSlots) {
+  check_exb_slots_are_permutable<2>();
+}
+
+TEST(ProviderValues, LorentzUsesItsExplicitMagneticProvider) {
+  ProviderValues<3> providers{};
+  providers[0] = Real(99);
+  providers[2] = Real(2);
+  const StateVec<5> state{Real(1), Real(3), Real(-4), Real(7), Real(11)};
+  const auto source = MagneticLorentzForceND<3, 2>{Real(0.5)}.apply(state, providers);
+  EXPECT_EQ(source[1], Real(-4));
+  EXPECT_EQ(source[2], Real(-3));
+  EXPECT_EQ(source[3], Real(0));
+  EXPECT_EQ(source[4], Real(0));
+}
+
+TEST(ProviderValues, CompositePropagatesItsExactProviderCount) {
+  using Model = CompositeModel<IsothermalFluxND<2>, MagneticLorentzForceND<2, 2>, NoElliptic>;
+  static_assert(Model::n_providers == 3);
+  ProviderValues<Model::n_providers> providers{};
+  providers[0] = Real(4);
+  providers[1] = Real(-6);
+  providers[2] = Real(5);
+  const Model model{};
+  const StateVec<3> fluid{Real(1), Real(3), Real(-4)};
+  EXPECT_EQ(model.source(fluid, providers)[1], Real(-20));
 }

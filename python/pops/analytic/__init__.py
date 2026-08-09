@@ -25,9 +25,11 @@ from ._functions import (
     radius,
     sin,
     sqrt,
+    time,
     where,
     x,
     y,
+    z,
 )
 from ._model import (
     AnalyticTruthValueError,
@@ -69,7 +71,9 @@ __all__ = [
     "radius",
     "sin",
     "sqrt",
+    "time",
     "where",
     "x",
     "y",
+    "z",
 ]

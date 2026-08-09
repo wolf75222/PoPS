@@ -19,6 +19,9 @@ from pops.runtime._bricks_time_imex import (  # noqa: F401
 class Role:
     """Stable physical roles shared by descriptors and symbolic Program authoring."""
 
+    AxialX = "axial_x"
+    AxialY = "axial_y"
+    AxialZ = "axial_z"
     Density = "density"
     MomentumX = "momentum_x"
     MomentumY = "momentum_y"

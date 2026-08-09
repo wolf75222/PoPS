@@ -1,234 +1,231 @@
 /// @file
-/// @brief MultiFab: a field DISTRIBUTED over a level (equivalent of AMReX's MultiFab).
-///
-/// Carries the decomposition (BoxArray), the distribution (DistributionMapping), the component and
-/// ghost counts, and allocates only the Fab2D OWNED by this rank. This is where data parallelism
-/// lives; the physics layer never sees it. Iteration runs over the LOCAL fabs:
-/// for (int li = 0; li < mf.local_size(); ++li) { auto a = mf.fab(li).array(); for_each_cell(...); }.
-/// sync_host()/sync_device() encode the access intent (data residence, see for_each.hpp); under
-/// unified memory sync_host = a targeted device_fence(), sync_device = no-op. sum() reduces over all
-/// ranks (all_reduce): Kokkos::Sum reassociates per tile (deterministic/idempotent, not bit-identical
-/// to a lexicographic sum).
+/// @brief Owning compile-time-ranked field collection over an exact distributed patch layout.
 
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
-#include <pops/core/foundation/validation.hpp>
-#include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
-#include <pops/mesh/storage/fab2d.hpp>
-#include <pops/mesh/execution/for_each.hpp>      // device_fence, sync_host, sync_device
-#include <pops/mesh/boundary/halo_schedule.hpp>  // memoized fill_boundary schedule (ADC-260)
-#include <pops/mesh/layout/copy_schedule.hpp>    // memoized parallel_copy schedule (ADC-607)
-#include <pops/parallel/comm.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
+#include <pops/mesh/storage/fab.hpp>
 
-#include <memory>
+#include <cstddef>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace pops {
 
-/// Field distributed over a level: decomposition (BoxArray) + distribution (DistributionMapping) +
-/// ncomp components + ngrow ghosts. Allocates only the fabs owned by THIS rank; iteration runs over
-/// local_size() (LOCAL indices). global_index/local_index_of bridge local <-> global.
+/// Capabilities of the canonical ND MultiFab storage foundation.
+///
+/// Communication remains deliberately unavailable until dimension-specialized halo, copy, and MPI
+/// schedules are promoted.  Callers can inspect this value during preparation and must not infer a
+/// legacy two-dimensional fallback from the presence of distributed metadata.
+struct MultiFabCapabilities {
+  bool local_storage = false;
+  bool halo_exchange = false;
+  bool parallel_copy = false;
+  bool mpi_exchange = false;
+
+  constexpr bool operator==(const MultiFabCapabilities&) const = default;
+};
+
+/// Deep-owning local storage selected from an exact ND layout and coordinate distribution.
+///
+/// Global patch order is retained in `layout()`. `local_global_indices()` records the ordered
+/// subset materialized at `local_rank()`, while `global_index()` and `local_index_of()` make the two
+/// index spaces explicit.  No process-global rank lookup or communication policy is hidden in this
+/// type.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class MultiFab {
  public:
+  static_assert(Dim >= 1 && Dim <= 3, "pops::MultiFab only supports dimensions 1, 2, and 3");
+
+  static constexpr int dimension = Dim;
+  static constexpr std::size_t not_local = std::numeric_limits<std::size_t>::max();
+
+  using memory_space = MemorySpace;
+  using fab_type = Fab<Dim, MemorySpace>;
+  using box_type = Box<Dim>;
+  using layout_type = mesh::BoxArray<Dim>;
+  using distribution_type = mesh::Distribution<Dim>;
+  using rank_space_type = mesh::RankSpace<Dim>;
+  using rank_type = Index<Dim>;
+  using ghost_type = Extent<Dim>;
+
   MultiFab() = default;
 
-  /// Builds the field: allocates one Fab2D (ncomp components, ngrow ghosts) for EACH box that this
-  /// rank owns according to dm. Boxes belonging to other ranks are not allocated here.
-  MultiFab(BoxArray ba, DistributionMapping dm, int ncomp, int ngrow)
-      : ba_(std::move(ba)),
-        dm_(std::move(dm)),
+  MultiFab(layout_type layout, distribution_type distribution, rank_type local_rank, int ncomp,
+           ghost_type ghosts)
+      : layout_(std::move(layout)),
+        distribution_(std::move(distribution)),
+        local_rank_(local_rank),
         ncomp_(ncomp),
-        ngrow_(ngrow),
-        local_index_(ba_.size(), -1) {
-    validate_layout();
-    const int me = my_rank();
-    for (int i = 0; i < ba_.size(); ++i) {
-      if (dm_[i] == me) {
-        local_index_[i] = static_cast<int>(fabs_.size());
-        global_of_local_.push_back(i);
-        fabs_.emplace_back(ba_[i], ncomp_, ngrow_);
-      }
+        ghosts_(ghosts) {
+    validate_metadata_();
+
+    local_global_indices_ = distribution_.local_box_indices(local_rank_);
+    global_to_local_.assign(layout_.size(), not_local);
+
+    std::vector<fab_type> allocated;
+    allocated.reserve(local_global_indices_.size());
+    for (const std::size_t global : local_global_indices_) {
+      const std::size_t local = allocated.size();
+      global_to_local_[global] = local;
+      allocated.emplace_back(layout_[global], ncomp_, ghosts_);
     }
+    fabs_ = std::move(allocated);
   }
 
-  /// GLOBAL decomposition of the level (all boxes, all ranks).
-  const BoxArray& box_array() const { return ba_; }
-  /// GLOBAL distribution (owner rank per box).
-  const DistributionMapping& dmap() const { return dm_; }
-  /// Number of components.
-  int ncomp() const { return ncomp_; }
-  /// Number of ghost layers.
-  int n_grow() const { return ngrow_; }
+  MultiFab(const MultiFab&) = default;
+  MultiFab& operator=(const MultiFab&) = default;
 
-  /// Whether two field objects expose at least one identical owned buffer on this rank. MultiFab
-  /// storage is deep-owned, so exact buffer identity is the native alias contract; the object check
-  /// also remains true on an MPI rank owning no boxes. Prepared solvers use this at their public
-  /// boundary and keep it out of numerical loops.
-  bool shares_storage_with(const MultiFab& other) const { return this == &other; }
+  MultiFab(MultiFab&& other) noexcept { move_from_(std::move(other)); }
 
-  /// Number of fabs OWNED by this rank (bound on local indices).
-  int local_size() const { return static_cast<int>(fabs_.size()); }
-  /// Local fab at index li (0 <= li < local_size()), for writing.
-  Fab2D& fab(int li) {
-    validate_local_index(li, "MultiFab::fab");
-    return fabs_[li];
-  }
-  /// Local fab at index li, for reading.
-  const Fab2D& fab(int li) const {
-    validate_local_index(li, "MultiFab::fab const");
-    return fabs_[li];
-  }
-  /// VALID box of local fab li.
-  const Box2D& box(int li) const {
-    validate_local_index(li, "MultiFab::box");
-    return fabs_[li].box();
-  }
-  /// GLOBAL index (in box_array) of local fab li.
-  int global_index(int li) const {
-    validate_local_index(li, "MultiFab::global_index");
-    return global_of_local_[li];
-  }
-  /// LOCAL index of the global box @p global, or -1 if it is not owned by this rank.
-  int local_index_of(int global) const {
-    if (global < 0 || global >= static_cast<int>(local_index_.size()))
-      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab::local_index_of",
-                             "global box index in [0.." +
-                                 std::to_string(static_cast<int>(local_index_.size()) - 1) + "]",
-                             "global=" + std::to_string(global));
-    return local_index_[global];
-  }
-
-  /// Makes the HOST residence valid (before a host access: operator(), loop, set_val). Under unified
-  /// memory = a targeted device_fence().
-  void sync_host() const { pops::sync_host(); }
-  /// Marks a DEVICE residence (before a kernel). No-op under unified memory.
-  void sync_device() const { pops::sync_device(); }
-
-  /// Fills all cells (valid + ghosts) of every local Fab with v through the canonical Kokkos
-  /// execution seam.  Launch every local Fab first and fence once, so CUDA keeps the field resident
-  /// on device while preserving the historical completed-on-return contract.
-  void set_val(Real v) {
-    for (auto& f : fabs_) {
-      const Box2D grown = f.grown_box();
-      if (!grown.empty())
-        for_each_cell(grown, detail::SetFabValueKernel{f.array(), f.ncomp(), v});
+  MultiFab& operator=(MultiFab&& other) noexcept {
+    if (this != &other) {
+      reset_moved_from_();
+      move_from_(std::move(other));
     }
-    device_fence();
+    return *this;
   }
 
-  /// Internal (ADC-260): memoized halo-exchange schedule used by fill_boundary. Lazily created on
-  /// first use. The schedule is a pure function of (box_array, dmap, n_grow) for a given
-  /// (Periodicity, domain); since none of ba_/dm_/ngrow_ has an in-place setter, the cache can only
-  /// go stale through whole-object (re)assignment (e.g. AMR regrid builds a fresh MultiFab and
-  /// move-assigns it over the level slot), which drops the cache with the object. It is shared on
-  /// copy (a copy has the same layout), which keeps copies consistent. Not part of the public
-  /// numerical API. Returned by reference so fill_boundary can populate it.
-  HaloScheduleCache& halo_cache() const {
-    if (!halo_cache_)
-      halo_cache_ = std::make_shared<HaloScheduleCache>();
-    return *halo_cache_;
+  static constexpr MultiFabCapabilities capabilities() noexcept {
+    return MultiFabCapabilities{/*local_storage=*/true, /*halo_exchange=*/false,
+                                /*parallel_copy=*/false, /*mpi_exchange=*/false};
   }
 
-  /// Share the immutable-layout halo plan and its reusable communication-buffer pool. Prepared
-  /// solver work vectors have the same box/distribution/ghost layout and execute exchanges
-  /// sequentially, so one warmed cache removes lazy schedule and MPI-buffer allocation from the
-  /// iteration without introducing a global registry.
-  void share_halo_cache_from(const MultiFab& prototype) const {
-    if (ba_.boxes() != prototype.ba_.boxes() || dm_.ranks() != prototype.dm_.ranks() ||
-        ngrow_ != prototype.ngrow_)
-      throw_validation_error("pops/mesh/storage/multifab.hpp: share_halo_cache_from",
-                             "identical box, distribution, and ghost layout", "layout mismatch");
-    prototype.halo_cache();
-    halo_cache_ = prototype.halo_cache_;
+  /// Fail closed when a caller reaches a communication path before an ND schedule is installed.
+  [[noreturn]] static void require_communication(std::string_view operation) {
+    const std::string requested =
+        operation.empty() ? "unspecified operation" : std::string(operation);
+    throw std::logic_error(
+        "pops::MultiFab<Dim>: " + requested +
+        " requires a prepared ND communication schedule; no halo, parallel-copy, "
+        "or MPI schedule is available in the storage foundation");
   }
 
-  /// Detach communication scratch after a value-preserving copy is promoted to an independent
-  /// concurrent execution session. MultiFab copy construction deliberately shares these caches for
-  /// sequential iso-layout use; a workspace-private clone must instead rebuild and warm its own
-  /// buffers before publication.
-  void detach_communication_caches() const noexcept {
-    halo_cache_.reset();
-    copy_cache_.reset();
+  const layout_type& layout() const noexcept { return layout_; }
+  const layout_type& box_array() const noexcept { return layout_; }
+  const distribution_type& distribution() const noexcept { return distribution_; }
+  const rank_space_type& rank_space() const noexcept { return distribution_.rank_space(); }
+  const rank_type& local_rank() const noexcept { return local_rank_; }
+  int ncomp() const noexcept { return ncomp_; }
+  const ghost_type& ghosts() const noexcept { return ghosts_; }
+
+  std::size_t local_size() const noexcept { return fabs_.size(); }
+  const std::vector<std::size_t>& local_global_indices() const noexcept {
+    return local_global_indices_;
   }
 
-  /// Internal (ADC-607): memoized redistribution schedule used by parallel_copy when THIS MultiFab
-  /// is the DESTINATION. Lazily created on first use. Unlike halo_cache_ the schedule depends on the
-  /// SRC layout too, so each entry is keyed on a src-layout fingerprint (src BoxArray +
-  /// DistributionMapping); the DST layout is implicit (this fab's ba_/dm_). Since none of ba_/dm_ has
-  /// an in-place setter, the cache can only go stale for the DST through whole-object (re)assignment
-  /// (e.g. AMR regrid builds a fresh dst and move-assigns it), which drops the cache with the object;
-  /// a changed SRC is caught by the fingerprint. Shared on copy (a copy has the same dst layout, and
-  /// the src-fingerprint keys still discriminate). Not part of the public numerical API. Returned by
-  /// reference so parallel_copy can populate it.
-  CopyScheduleCache& copy_cache() const {
-    if (!copy_cache_)
-      copy_cache_ = std::make_shared<CopyScheduleCache>();
-    return *copy_cache_;
+  bool contains_local(std::size_t global) const noexcept {
+    return global < global_to_local_.size() && global_to_local_[global] != not_local;
+  }
+
+  std::size_t global_index(std::size_t local) const {
+    require_local_index_(local);
+    return local_global_indices_[local];
+  }
+
+  /// Return the local offset for a valid global patch, or `not_local` for a remote patch.
+  std::size_t local_index_of(std::size_t global) const {
+    require_global_index_(global);
+    return global_to_local_[global];
+  }
+
+  fab_type& fab(std::size_t local) {
+    require_local_index_(local);
+    return fabs_[local];
+  }
+
+  const fab_type& fab(std::size_t local) const {
+    require_local_index_(local);
+    return fabs_[local];
+  }
+
+  fab_type& fab_global(std::size_t global) { return fabs_[require_local_global_index_(global)]; }
+
+  const fab_type& fab_global(std::size_t global) const {
+    return fabs_[require_local_global_index_(global)];
+  }
+
+  const box_type& box(std::size_t local) const { return fab(local).box(); }
+
+  /// Storage is always deep-owned; only the same object can expose the same owned allocation set.
+  bool shares_storage_with(const MultiFab& other) const noexcept { return this == &other; }
+
+  /// Fill valid and ghost cells in the selected memory space through Kokkos deep copies.
+  void set_val(Real value) {
+    for (fab_type& local_fab : fabs_)
+      local_fab.set_val(value);
   }
 
  private:
-  BoxArray ba_{};
-  DistributionMapping dm_{};
-  int ncomp_{1};
-  int ngrow_{0};
-  std::vector<Fab2D> fabs_{};           // locally owned fabs
-  std::vector<int> local_index_{};      // global box -> local index (-1 otherwise)
-  std::vector<int> global_of_local_{};  // local index -> global box
-  // Memoized fill_boundary schedule (ADC-260). mutable: caching is logically const; lazily built.
-  mutable std::shared_ptr<HaloScheduleCache> halo_cache_{};
-  // Memoized parallel_copy schedule (ADC-607), keyed per src layout. mutable: caching is logically
-  // const; lazily built. This MultiFab is the DST; the SRC layout rides in the entry key.
-  mutable std::shared_ptr<CopyScheduleCache> copy_cache_{};
-
-  void validate_layout() const {
+  void validate_metadata_() const {
+    if (!distribution_.matches_layout(layout_))
+      throw std::invalid_argument(
+          "pops::MultiFab: distribution layout does not exactly match the field layout");
+    if (!distribution_.rank_space().contains(local_rank_))
+      throw std::out_of_range("pops::MultiFab: local rank is outside the distribution rank space");
     if (ncomp_ < 1)
-      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab",
-                             "ncomp >= 1 for every allocated Fab2D",
-                             "ncomp=" + std::to_string(ncomp_));
-    if (ngrow_ < 0)
-      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab", "ghost width ngrow >= 0",
-                             "ngrow=" + std::to_string(ngrow_));
-    if (dm_.size() != ba_.size())
-      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab",
-                             "DistributionMapping size equals BoxArray size",
-                             "box_array.size=" + std::to_string(ba_.size()) +
-                                 ", dmap.size=" + std::to_string(dm_.size()));
-    const int nr = n_ranks();
-    const std::vector<int>& ranks = dm_.ranks();
-    for (int i = 0; i < static_cast<int>(ranks.size()); ++i) {
-      if (ranks[static_cast<std::size_t>(i)] < 0 || ranks[static_cast<std::size_t>(i)] >= nr)
-        throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab",
-                               "owner rank in [0.." + std::to_string(nr - 1) + "] for every box",
-                               "box=" + std::to_string(i) +
-                                   ", owner=" + std::to_string(ranks[static_cast<std::size_t>(i)]) +
-                                   ", n_ranks=" + std::to_string(nr));
-    }
+      throw std::invalid_argument("pops::MultiFab: ncomp must be positive");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (ghosts_[axis] < 0)
+        throw std::invalid_argument("pops::MultiFab: ghost extents must be non-negative");
   }
 
-  void validate_local_index(int li, const char* op) const {
-    if (li < 0 || li >= static_cast<int>(fabs_.size()))
-      throw_validation_error(
-          "pops/mesh/storage/multifab.hpp: " + std::string(op),
-          "local index in [0.." + std::to_string(static_cast<int>(fabs_.size()) - 1) + "]",
-          "li=" + std::to_string(li) + ", local_size=" + std::to_string(fabs_.size()));
+  void require_local_index_(std::size_t local) const {
+    if (local >= fabs_.size())
+      throw std::out_of_range("pops::MultiFab: local patch index is outside local storage");
   }
+
+  void require_global_index_(std::size_t global) const {
+    if (global >= layout_.size())
+      throw std::out_of_range("pops::MultiFab: global patch index is outside the layout");
+  }
+
+  std::size_t require_local_global_index_(std::size_t global) const {
+    require_global_index_(global);
+    const std::size_t local = global_to_local_[global];
+    if (local == not_local)
+      throw std::out_of_range("pops::MultiFab: global patch is not materialized on this rank");
+    return local;
+  }
+
+  void reset_moved_from_() noexcept {
+    layout_ = layout_type{};
+    distribution_ = distribution_type{};
+    local_rank_ = rank_type{};
+    ncomp_ = 0;
+    ghosts_ = ghost_type{};
+    local_global_indices_.clear();
+    global_to_local_.clear();
+    fabs_.clear();
+  }
+
+  void move_from_(MultiFab&& other) noexcept {
+    layout_ = std::move(other.layout_);
+    distribution_ = std::move(other.distribution_);
+    local_rank_ = other.local_rank_;
+    ncomp_ = other.ncomp_;
+    ghosts_ = other.ghosts_;
+    local_global_indices_ = std::move(other.local_global_indices_);
+    global_to_local_ = std::move(other.global_to_local_);
+    fabs_ = std::move(other.fabs_);
+    other.reset_moved_from_();
+  }
+
+  layout_type layout_{};
+  distribution_type distribution_{};
+  rank_type local_rank_{};
+  int ncomp_ = 0;
+  ghost_type ghosts_{};
+  std::vector<std::size_t> local_global_indices_{};
+  std::vector<std::size_t> global_to_local_{};
+  std::vector<fab_type> fabs_{};
 };
-
-/// Sum of the VALID cells of component comp, reduced over ALL ranks (all_reduce). COLLECTIVE under
-/// MPI. FP NOTE: Kokkos::Sum reassociates per tile (deterministic/idempotent, not bit-identical to a
-/// lexicographic sum).
-inline Real sum(const MultiFab& mf, int comp = 0) {
-  Real s = 0;
-  for (int li = 0; li < mf.local_size(); ++li) {
-    const ConstArray4 a = mf.fab(li).const_array();
-    s += for_each_cell_reduce_sum(mf.box(li),
-                                  [a, comp] POPS_HD(int i, int j) { return a(i, j, comp); });
-  }
-  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
-}
 
 }  // namespace pops

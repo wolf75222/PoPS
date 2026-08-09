@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -45,38 +46,29 @@ def model_hash(model: Any, params: Any = None) -> str:
     # package which is stdlib-only (no C extension).
     from pops.identity.scalar import scalar_data
     from pops._ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
+    from pops._cartesian_axes import canonical_axis_mapping
 
     def _scalar_token(value: Any) -> str:
         return json.dumps(scalar_data(value), sort_keys=True, separators=(",", ":"))
 
-    # --- lazy helpers: resolve at call time, not at import time ---
-    def _aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
-        # Mirrors pops.dsl.aux_total_n_aux without importing dsl.
-        _AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
-        _AUX_BASE_COMPS = 3
-        _AUX_NAMED_BASE = 5
-        w = _AUX_BASE_COMPS
-        for nm in aux_names:
-            if nm not in _AUX_CANONICAL:
-                raise ValueError("unknown aux field %r" % (nm,))
-            w = max(w, _AUX_CANONICAL[nm] + 1)
-        if aux_extra_names:
-            w = max(w, _AUX_NAMED_BASE + len(aux_extra_names))
-        return w
+    def _axis_names(mapping: Any, *, where: str) -> tuple[str, ...]:
+        if not mapping:
+            return ()
+        return tuple(canonical_axis_mapping(mapping, where=where))
 
     def _role_of(name: Any) -> str:
         _CANONICAL_ROLES = {
-            "rho": "Density", "n": "Density", "density": "Density",
-            "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-            "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-            "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-            "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-            "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-            "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-            "p": "Pressure", "pressure": "Pressure",
-            "T": "Temperature", "temperature": "Temperature",
+            "rho": "density", "n": "density", "density": "density",
+            "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
+            "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
+            "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
+            "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
+            "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
+            "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
+            "p": "pressure", "pressure": "pressure",
+            "T": "temperature", "temperature": "temperature",
         }
-        return _CANONICAL_ROLES.get(name, "Custom")
+        return _CANONICAL_ROLES.get(name, "custom")
 
     def _roles_for(names: Any, override: Any = None) -> list:
         if override is None:
@@ -93,7 +85,16 @@ def model_hash(model: Any, params: Any = None) -> str:
     parts.append("prim_state=%s" % ",".join(m.prim_state))
     parts.append("proles=%s" % ",".join(_roles_for(m.prim_state, m.prim_roles)))
     parts.append("prim=%s" % ";".join("%s=%r" % (k, m.prim_defs[k]) for k in m.prim_defs))
-    for d in ("x", "y"):
+    recovery_constraints = getattr(m, "_recovery_admissibility", None)
+    if recovery_constraints:
+        parts.append("recovery_admissibility=%s" % ";".join(
+            "%s=%r" % (name, recovery_constraints[name])
+            for name in m.prim_state if name in recovery_constraints))
+    flux_axes = _axis_names(m._flux, where="model_hash flux")
+    eig_axes = _axis_names(m._eig, where="model_hash eigenvalues") if m._eig else ()
+    if eig_axes and eig_axes != flux_axes:
+        raise ValueError("model_hash eigenvalue axes differ from physical flux axes")
+    for d in flux_axes:
         parts.append("flux_%s=%s" % (d, ";".join(repr(e) for e in m._flux.get(d, []))))
         parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in m._eig.get(d, []))))
     parts.append("source=%s" % (";".join(repr(e) for e in m._source) if m._source else ""))
@@ -114,9 +115,18 @@ def model_hash(model: Any, params: Any = None) -> str:
             for k in sorted(m._local_transforms)))
     if getattr(m, "_flux_terms", None):
         parts.append("flux_terms=%s" % ";".join(
-            "%s:x[%s]:y[%s]" % (k,
-                                ",".join(repr(e) for e in m._flux_terms[k]["x"]),
-                                ",".join(repr(e) for e in m._flux_terms[k]["y"]))
+            "%s:%s" % (
+                k,
+                ":".join(
+                    "%s[%s]" % (
+                        axis,
+                        ",".join(repr(e) for e in m._flux_terms[k][axis]),
+                    )
+                    for axis in _axis_names(
+                        m._flux_terms[k], where="model_hash named flux %r" % k
+                    )
+                ),
+            )
             for k in sorted(m._flux_terms)))
     parts.append("cons_from=%s" % (";".join(repr(e) for e in m.cons_from) if m.cons_from else ""))
     parts.append("elliptic=%s" % (repr(m._elliptic) if m._elliptic is not None else ""))
@@ -135,33 +145,54 @@ def model_hash(model: Any, params: Any = None) -> str:
                                  if m._src_jac is not None else ""))
     if getattr(m, "_proj", None) is not None:
         parts.append("proj=%s" % ";".join(repr(e) for e in m._proj))
+    from pops.numerics.riemann.providers import authoring_provider_evidence
+
+    riemann_evidence = authoring_provider_evidence(m)
     parts.append("hllc=%d" % (1 if m._hllc else 0))
+    if riemann_evidence.hllc_provider is not None:
+        parts.append("hllc_provider=%s" % riemann_evidence.hllc_provider)
     forms = getattr(m, "_riemann_hook_forms", None)
     if forms:
         parts.append("riemann_hooks=%s" % ";".join(
             "%s=%r" % (k, forms[k]) for k in sorted(forms)))
     parts.append("roe=%d" % (1 if getattr(m, "_roe", False) else 0))
+    if riemann_evidence.roe_provider is not None:
+        parts.append("roe_provider=%s" % riemann_evidence.roe_provider)
+        parts.append("roe_entropy_policy=%s" % riemann_evidence.roe_entropy_policy)
+        if riemann_evidence.roe_entropy_delta is not None:
+            parts.append("roe_entropy_delta=%s" % riemann_evidence.roe_entropy_delta)
     if getattr(m, "_roe_rows", None) is not None:
-        parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
+        roe_axes = _axis_names(m._roe_rows, where="model_hash Roe rows")
+        parts.append("roe_rows=%s" % ";".join(repr(e) for k in roe_axes
                                               for e in m._roe_rows[k]))
     if getattr(m, "_roe_jacobian", None) is not None:
-        parts.append("roe_jac=%s" % ";".join(repr(e) for k in ("x", "y")
+        from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
+        if has_characteristic_no_inflow_provider(m):
+            parts.append("characteristic_no_inflow=flux_jacobian_v1")
+        roe_jac_axes = _axis_names(
+            {key: value for key, value in m._roe_jacobian.items()
+             if key in ("x", "y", "z")},
+            where="model_hash Roe Jacobian",
+        )
+        parts.append("roe_jac=%s" % ";".join(repr(e) for k in roe_jac_axes
                                              for row in m._roe_jacobian[k] for e in row))
         entropy_fix = m._roe_jacobian.get("entropy_fix")
         if entropy_fix is not None:
             parts.append("roe_jac_entropy_fix=%s" % _scalar_token(entropy_fix))
     if getattr(m, "_wave_speeds", None) is not None:
-        parts.append("wave_speeds=%s" % ";".join(repr(e) for k in ("x", "y")
+        wave_axes = _axis_names(m._wave_speeds, where="model_hash wave speeds")
+        parts.append("wave_speeds=%s" % ";".join(repr(e) for k in wave_axes
                                                  for e in m._wave_speeds[k]))
     if getattr(m, "_ws_jacobian", None) is not None:
         # Model validation guarantees the closed Jacobian carrier shape.  Keep that runtime
         # authority intact while making the mapping contract explicit to the type checker.
         ws = cast(Mapping[str, Any], m._ws_jacobian)
+        ws_axes = _axis_names(ws["blocks"], where="model_hash wave-speed blocks")
         parts.append("ws_jac=%s|%s|%s" % (
             ws["eig"],
             "//".join(";".join(",".join(str(i) for i in b) for b in ws["blocks"][k])
-                      for k in ("x", "y")),
-            ";".join(repr(e) for k in ("x", "y") for row in ws["rows"][k] for e in row)
+                      for k in ws_axes),
+            ";".join(repr(e) for k in ws_axes for row in ws["rows"][k] for e in row)
             if ws["rows"] is not None else ""))
         # ADC-617: fd_eps is EMITTED into the eig='fd' Jacobian, so it MUST enter the model hash or two
         # models differing only in fd_eps would collide on the same cached .so and serve wrong numerics.
@@ -179,9 +210,13 @@ def model_hash(model: Any, params: Any = None) -> str:
             parts.append("ws_jac_eig_max_iter=%d" % int(ws["eig_max_iter"]))
         if ws.get("im_tol") is not None:
             parts.append("ws_jac_im_tol=%s" % _scalar_token(ws["im_tol"]))
-    parts.append("n_aux=%d" % _aux_total_n_aux(m.aux_names, m.aux_extra_names))
-    if m.aux_extra_names:
-        parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
+    provider_metadata = getattr(m, "_auxiliary_provider_metadata", None)
+    if provider_metadata is None:
+        raise ValueError(
+            "model_hash requires the exact auxiliary ProviderPack; compile through Module"
+        )
+    parts.append("aux_provider_pack=%s" % json.dumps(
+        provider_metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     parts.append("gamma=%s" % ("None" if m.gamma is None else _scalar_token(m.gamma)))
     params = params or {}
     param_rows = []
@@ -232,6 +267,307 @@ def _emit_route_manifest(symbol_name: Any) -> str:
             % (symbol_name, route_registry_signature()))
 
 
+def _emit_auxiliary_route_registration(model: Any) -> str:
+    """Emit one DSO hook that registers, but never seals, auxiliary routes.
+
+    The host calls this hook for *every* package, then seals the one global
+    registry and only afterwards installs prepared blocks.  That ordering is
+    essential for dependencies and consumer plans spanning multiple blocks.
+    """
+    pack = getattr(model, "_auxiliary_provider_metadata", None)
+    plans = getattr(model, "_component_operator_consumer_plans", None)
+    flux_plan = getattr(model, "_component_flux_consumer_plan", None)
+    if pack is None or plans is None or flux_plan is None:
+        raise ValueError("native auxiliary route emission requires resolved ProviderPack metadata")
+    if not isinstance(pack, Mapping) or not isinstance(pack.get("entries"), list):
+        raise TypeError("auxiliary ProviderPack metadata has an invalid schema")
+    routes = getattr(model, "_auxiliary_provider_routes", None)
+    if routes is None:
+        raise ValueError("native auxiliary route emission requires resolved typed producer routes")
+
+    def route_key(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
+        value = row["key"]
+        return tuple(value[name] for name in (
+            "owner_qid", "space_kind", "space_name", "component",
+        ))
+
+    typed_routes = {
+        (key.owner_qid, key.space_kind, key.space_name, key.component): value
+        for key, value in routes.items()
+    }
+
+    def literal(value: Any) -> str:
+        return json.dumps(value)
+
+    def optional(value: Any) -> str:
+        if value is None:
+            return "std::nullopt"
+        return "std::optional<std::string>{%s}" % literal(value)
+
+    def key(row: Mapping[str, Any]) -> str:
+        value = row["key"]
+        return "Key{%s, %s, %s, %s}" % tuple(
+            literal(value[name])
+            for name in ("owner_qid", "space_kind", "space_name", "component")
+        )
+
+    def contract(row: Mapping[str, Any]) -> str:
+        value = row["contract"]
+        return "Contract{%s, %s, %s, %s, %s}" % (
+            literal(value["representation"]), literal(value["centering"]),
+            optional(value["unit"]), literal(value["layout"]), optional(value["value_kind"]),
+        )
+
+    def shape_for(route: Mapping[str, Any] | None) -> str:
+        boundary = None if route is None else route.get("boundary")
+        width = 0 if boundary is None else boundary.width
+        return (
+            "Shape{pops::kNativeDimension, 1, [] { pops::Index<pops::kNativeDimension> halo{}; "
+            "for (int axis = 0; axis < pops::kNativeDimension; ++axis) halo[axis] = %d; return halo; }()}"
+            % width
+        )
+
+    def boundary_for(route: Mapping[str, Any] | None) -> str:
+        from pops.identity.scalar import scalar_cpp
+
+        boundary = None if route is None else route.get("boundary")
+        if boundary is None:
+            return "Boundary{BoundaryKind::inherit_topology, std::nullopt}"
+        kinds = {
+            "inherit": "BoundaryKind::inherit_topology",
+            "foextrap": "BoundaryKind::first_order_extrapolation",
+            "dirichlet": "BoundaryKind::dirichlet",
+        }
+        try:
+            kind = kinds[boundary.kind]
+        except KeyError:
+            raise ValueError("unsupported AuxiliaryBoundary kind %r" % boundary.kind) from None
+        value = (
+            "std::optional<pops::Real>{%s}" % scalar_cpp(boundary.value)
+            if boundary.kind == "dirichlet" else "std::nullopt"
+        )
+        return "Boundary{%s, %s}" % (kind, value)
+
+    def derived_expression_cpp(expression: Any, bindings: Mapping[str, str]) -> str:
+        """Lower the compact scalar Expr subset accepted by native aux kernels.
+
+        ``ValueExpr`` has intentionally no context-free C++ spelling.  Here it
+        is bound only through the exact dependency vector of the derived route;
+        free-name ``Var`` and state/parameter reads are rejected rather than
+        becoming a hidden carrier lookup.
+        """
+        from pops._ir.expr import Abs, Const, Div, Maximum, Minimum, Mul, Neg, Pow, Sqrt, Sub, Add
+        from pops._ir.handle_expr import ValueExpr
+
+        if isinstance(expression, Const):
+            return expression.to_cpp()
+        if isinstance(expression, ValueExpr):
+            try:
+                return bindings[expression.handle.qualified_id]
+            except KeyError:
+                raise ValueError(
+                    "DerivedAux expression reads undeclared dependency %s"
+                    % expression.handle.qualified_id
+                ) from None
+        binary = (Add, Sub, Mul, Div)
+        if isinstance(expression, binary):
+            return "(%s %s %s)" % (
+                derived_expression_cpp(expression.a, bindings), expression.op,
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Pow):
+            return "Kokkos::pow(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Minimum):
+            return "Kokkos::fmin(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Maximum):
+            return "Kokkos::fmax(%s, %s)" % (
+                derived_expression_cpp(expression.a, bindings),
+                derived_expression_cpp(expression.b, bindings),
+            )
+        if isinstance(expression, Neg):
+            return "(-%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, Sqrt):
+            return "Kokkos::sqrt(%s)" % derived_expression_cpp(expression.a, bindings)
+        if isinstance(expression, Abs):
+            return "Kokkos::abs(%s)" % derived_expression_cpp(expression.a, bindings)
+        raise TypeError(
+            "DerivedAux native lowering supports scalar constants, ValueExpr, and standard "
+            "pointwise arithmetic; got %s" % type(expression).__name__
+        )
+
+    def derived_launcher(identity: str, route: Mapping[str, Any]) -> str:
+        dependencies = route["dependencies"]
+        producer = route["producer"]
+        bindings = {
+            reference.qualified_id: "aux_dependency_%d" % index
+            for index, reference in enumerate(producer.expression.declaration_references())
+        }
+        expression = derived_expression_cpp(producer.expression, bindings)
+        dependency_rows = []
+        for key_value, contract_value in zip(dependencies, route["contracts"], strict=True):
+            dependency_rows.append(
+                "Dependency{%s, Contract{%s, %s, %s, %s, %s}, %s}" % (
+                    "Key{%s, %s, %s, %s}" % tuple(
+                        literal(value) for value in (
+                            key_value.owner_qid, key_value.space_kind,
+                            key_value.space_name, key_value.component,
+                        )
+                    ),
+                    literal(contract_value.representation), literal(contract_value.centering),
+                    optional(contract_value.unit), literal(contract_value.layout),
+                    optional(contract_value.value_kind),
+                    shape_for(typed_routes.get((
+                        key_value.owner_qid, key_value.space_kind,
+                        key_value.space_name, key_value.component,
+                    ))),
+                )
+            )
+        lines = [
+            "      std::vector<Dependency>{%s}," % ", ".join(dependency_rows),
+            "      Provider::launcher_type::trusted_extension(",
+            "          pops::PreparedProviderIdentity{%s, 1}, %s," % (
+                literal("pops.derived-aux." + identity), literal(identity),
+            ),
+            "          [](const pops::runtime::system::AuxiliaryKernelLaunchContext<"
+            "pops::kNativeDimension>& context) {",
+            "            if (context.outputs.size() != 1) throw std::logic_error(\"derived auxiliary route requires one output\");",
+            "            if (context.dependencies.size() != %d) throw std::logic_error(\"derived auxiliary route dependency mismatch\");" % len(dependencies),
+            "            auto* const candidate = context.storage.candidate;",
+            "            if (candidate == nullptr) throw std::logic_error(\"derived auxiliary route has no candidate storage groups\");",
+            "            auto* const output_group = candidate->find(context.outputs[0].address.group);",
+            "            if (output_group == nullptr) throw std::logic_error(\"derived auxiliary output group is absent\");",
+            "            const auto output_component = context.outputs[0].address.component;",
+        ]
+        for index in range(len(dependencies)):
+            lines.extend((
+                "            const auto* const dependency_group_%d = candidate->find(context.dependencies[%d].address.group);" % (index, index),
+                "            if (dependency_group_%d == nullptr || dependency_group_%d->layout() != output_group->layout() || dependency_group_%d->distribution() != output_group->distribution() || dependency_group_%d->local_rank() != output_group->local_rank()) throw std::logic_error(\"derived auxiliary dependency storage is not cell-compatible with its output\");" % (index, index, index, index),
+                "            const auto dependency_component_%d = context.dependencies[%d].address.component;" % (index, index),
+            ))
+        lines.extend((
+            "            for (std::size_t local_fab = 0; local_fab < output_group->local_size(); ++local_fab) {",
+            "              const auto output = output_group->fab(local_fab).view();",
+            "              std::size_t cells = 1;",
+            "              for (int axis = 0; axis < pops::kNativeDimension; ++axis) cells *= static_cast<std::size_t>(output.extents[axis]);",
+            "              Kokkos::parallel_for(\"pops_derived_aux\", Kokkos::RangePolicy<>(0, cells), KOKKOS_LAMBDA(const std::size_t linear) {",
+            "                std::size_t remainder = linear;",
+            "                pops::Index<pops::kNativeDimension> index{};",
+            "                for (int axis = 0; axis < pops::kNativeDimension; ++axis) {",
+            "                  index[axis] = output.origin[axis] + static_cast<int>(remainder % static_cast<std::size_t>(output.extents[axis]));",
+            "                  remainder /= static_cast<std::size_t>(output.extents[axis]);",
+            "                }",
+        ))
+        for index in range(len(dependencies)):
+            lines.append("                const auto dependency_%d = dependency_group_%d->fab(local_fab).view();" % (index, index))
+        for index in range(len(dependencies)):
+            lines.append("                const pops::Real aux_dependency_%d = dependency_%d(index, dependency_component_%d);" % (index, index, index))
+        lines.extend((
+            "                output(index, output_component) = %s;" % expression,
+            "              });",
+            "            }",
+            "          }))",
+        ))
+        return "\n".join(lines)
+    lines = [
+        "POPS_LOADER_API void pops_register_auxiliary_routes("
+        "pops::System<pops::kNativeDimension>* sys) {",
+        "  if (sys == nullptr) throw std::invalid_argument(\"auxiliary route installer received null System\");",
+        "  using namespace pops::runtime::system;",
+        "  using Key = AuxiliaryComponentKey;",
+        "  using Contract = AuxiliaryComponentContract;",
+        "  using Shape = AuxiliaryStorageShape<pops::kNativeDimension>;",
+        "  using Boundary = AuxiliaryBoundaryPolicy;",
+        "  using BoundaryKind = AuxiliaryBoundaryPolicy::Kind;",
+        "  using Output = AuxiliaryOutput<pops::kNativeDimension>;",
+        "  using Dependency = AuxiliaryDependency<pops::kNativeDimension>;",
+        "  using Provider = PreparedAuxiliaryProvider<pops::kNativeDimension>;",
+        "  using ConsumerValue = AuxiliaryConsumerValue<pops::kNativeDimension>;",
+        "  using ConsumerPlan = AuxiliaryConsumerProviderPlan<pops::kNativeDimension>;",
+    ]
+    owned_provider_qid = str(model.owner_path.canonical())
+    for row in pack["entries"]:
+        if row["key"]["owner_qid"] != owned_provider_qid:
+            # A package may consume a foreign owner-qualified component.  Its
+            # consumer plan below records that dependency, but only the owning
+            # DSO may publish the provider output into the global registry.
+            continue
+        value = row["provider"]
+        if value["slot"] is None or not value["availability"] or value["producer"] is None:
+            raise ValueError(
+                "auxiliary ProviderPack has an unavailable component; bind an exact producer before codegen"
+            )
+        producer = value["producer"]
+        route = typed_routes.get(route_key(row))
+        shape = shape_for(route)
+        if producer == "runtime_input":
+            kind = "AuxiliaryProviderKind::input"
+        elif row["key"]["space_kind"] == "field":
+            # FieldSpace is the sole authority for native field outputs.  The
+            # producer spelling is an opaque canonical operator identity (not
+            # a path syntax), therefore classify by the typed space rather
+            # than guessing from a slash or a historical field name.
+            kind = "AuxiliaryProviderKind::field_output"
+        elif producer == "derived" or producer.startswith("derived:"):
+            if route is None or route.get("kind") != "derived":
+                raise ValueError(
+                    "derived auxiliary provider %r has no exact typed lowering route"
+                    % row["key"]["component"]
+                )
+            kind = "AuxiliaryProviderKind::derived"
+        else:
+            raise ValueError(
+                "auxiliary provider %r has unsupported producer %r; "
+                "expected runtime_input, a FieldOperator/field-solve output, or a "
+                "lowered derived launcher"
+                % (row["key"]["component"], producer)
+            )
+        identity = "provider:%s:%s/%s/%s" % (
+            value["producer"], row["key"]["owner_qid"], row["key"]["space_name"],
+            row["key"]["component"],
+        )
+        policy = (
+            "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::before_residual, "
+            "AuxiliaryFreshness::evaluation}"
+            if kind == "AuxiliaryProviderKind::derived"
+            else "AuxiliaryEvaluationPolicy{AuxiliaryEvaluationEvent::initialization, "
+            "AuxiliaryFreshness::once}"
+        )
+        lines.extend((
+            "  sys->install_prepared_auxiliary_provider(Provider{",
+            "      %s, %s," % (literal(identity), kind),
+            "      %s," % policy,
+            "      std::vector<Output>{{%s, %s, %s, %s}}," % (
+                key(row), contract(row), shape, boundary_for(route)),
+        ))
+        if kind == "AuxiliaryProviderKind::derived":
+            lines.append(derived_launcher(identity, route) + ");")
+        else:
+            lines.append("      std::vector<Dependency>{}});")
+
+    owner_qid = owned_provider_qid
+
+    def emit_plan(identity: str, plan: Any) -> None:
+        lines.append("  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, std::vector<ConsumerValue>{"
+                     % literal(identity))
+        for value in plan:
+            lines.append("      ConsumerValue{Dependency{%s, %s, %s}, %d}," % (
+                key(value), contract(value),
+                shape_for(typed_routes.get(route_key(value))), value["consumer_slot"]))
+        lines.append("  }});")
+
+    emit_plan(owner_qid + "/physical_flux", flux_plan)
+    for operator, plan in plans.items():
+        emit_plan(owner_qid + "/operator/" + operator, plan)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Native source emitter
 # ---------------------------------------------------------------------------
@@ -257,13 +593,17 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     nm = _cpp_identifier(name or (m.name.capitalize() + "Gen"))
     ell_field_regs = _elliptic_field_registrations(m, nm)
-    head = ('#include <cmath>\n'
+    head = ('#include <Kokkos_Core.hpp>\n'
+            '#include <cmath>\n'
             '#include <vector>\n'
             '#include <array>\n'
             '#include <cstddef>\n'
+            '#include <optional>\n'
+            '#include <stdexcept>\n'
             '#include <string>\n'
             '#include <utility>\n'
             '#include <pops/runtime/dynamic/abi_key.hpp>\n'
+            '#include <pops/core/foundation/native_dimension.hpp>\n'
             '#include <pops/runtime/builders/compiled/model_runtime_params.hpp>\n'
             '#include <pops/physics/bricks/bricks.hpp>\n'
             '#include <pops/core/state/variables.hpp>\n')
@@ -285,12 +625,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     # must exist before set_block_elliptic_field is called.
     ell_field_prepare_lines = ""
     ell_field_attach_lines = ""
-    for index, (fld, brick, phi_c, gx_c, gy_c) in enumerate(ell_field_regs):
+    for index, (fld, brick, output_keys) in enumerate(ell_field_regs):
         gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
         if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % fld)
-        if gx_c < 0 and gradient_sign != 1:
+        if len(output_keys) == 1 and gradient_sign != 1:
             raise ValueError(
                 "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % fld)
         ell_field_prepare_lines += (
@@ -301,10 +641,26 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n'
             % (index, brick, index, index, index)
         )
+        key_values = ", ".join(
+            'pops::runtime::system::AuxiliaryComponentKey{%s, %s, %s, %s}' % tuple(
+                json.dumps(value)
+                for value in (
+                    key.owner_qid, key.space_kind, key.space_name, key.component,
+                )
+            )
+            for key in output_keys
+        )
         ell_field_attach_lines += (
-            '  s->register_elliptic_field(name, "%s", %d, %d, %d, %d);\n'
+            '  s->register_elliptic_field(name, "%s", '
+            'std::vector<pops::runtime::system::AuxiliaryComponentKey>{%s}, %d);\n'
             '  s->set_block_elliptic_field(name, "%s", std::move(named_elliptic_rhs_%d));\n'
-            % (fld, phi_c, gx_c, gy_c, gradient_sign, fld, index)
+            % (
+                fld,
+                key_values,
+                gradient_sign,
+                fld,
+                index,
+            )
         )
     if m._elliptic is not None:
         ell_field_prepare_lines += (
@@ -320,11 +676,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                    const char* time, double gamma, int substeps,\n'
                    '                                    int evolve, int stride, const double* params,\n'
                    '                                    int nparams, double pos_floor) {\n'
-                   '  pops::System* s = reinterpret_cast<pops::System*>(sys);\n'
+                   '  using NativeSystem = pops::System<pops::kNativeDimension>;\n'
+                   '  auto* s = reinterpret_cast<NativeSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
+                   '  pops::add_compiled_model<pops::kNativeDimension>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, evolve != 0, stride,\n'
                    '                                                    pos_floor);\n'
@@ -342,16 +699,18 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                        const double* params, int nparams,\n'
                    '                                        double pos_floor, double weno_epsilon,\n'
                    '                                        bool wave_speed_cache) {\n'
-                   '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
+                   '  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n'
+                   '  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
+                   '  pops::add_compiled_model<pops::kNativeDimension>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
                    '                                                    /*implicit_roles=*/{}, pos_floor,\n'
-                   '                                                    weno_epsilon, wave_speed_cache);\n'
+                   '                                                    weno_epsilon, wave_speed_cache, %s);\n'
+                   % json.dumps(str(m.owner_path.canonical()) + "/physical_flux")
                    + ell_field_attach_lines +
                    '}\n')
     install += ('POPS_LOADER_API int pops_compiled_nparams() {\n'
@@ -359,10 +718,25 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                 '}\n'
                 'POPS_LOADER_API const char* pops_compiled_param_names() { return "%s"; }\n'
                 % ",".join(node.name for node in m.runtime_param_nodes()))
+    package_preparer = ""
+    if target == "system":
+        package_preparer = (
+            '\nnamespace pops_generated {\n'
+            'static_assert(ProdModel::dimension == pops::kNativeDimension,\n'
+            '              "generated model rank differs from the selected native artifact");\n'
+            'inline pops::PreparedSystemBlock<pops::kNativeDimension> prepare_exact_system_block(\n'
+            '    pops::CompiledSystemBlockPreparation<pops::kNativeDimension, ProdModel> request) {\n'
+            '  return pops::prepare_generated_system_block(std::move(request));\n'
+            '}\n'
+            '}  // namespace pops_generated\n'
+        )
+    auxiliary_routes = _emit_auxiliary_route_registration(m) if target == "system" else ""
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
+            + package_preparer
             + key
             + install
+            + auxiliary_routes
             + _emit_metadata(m, "pops_generated::ProdModel")
             + _emit_route_manifest("pops_compiled_route_manifest"))

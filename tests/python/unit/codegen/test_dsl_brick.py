@@ -58,8 +58,8 @@ int main() {
 
 def build_exb_brick():
     """Transport scalaire par derive E x B (B0=1) : flux qui DEPEND des champs auxiliaires (grad phi).
-    Sert a verifier que la brique generee emet bien des locals aux (a.grad_x / a.grad_y) dans flux et
-    max_wave_speed, et reproduit la brique manuelle pops::ExBVelocity{B0=1}."""
+    Sert a verifier que la brique generee lit le pack provider exact dans flux et max_wave_speed,
+    et reproduit la brique manuelle pops::ExBVelocity{B0=1}."""
     e = HyperbolicModel("exb")
     (n,) = e.conservative_vars("n")
     gx = e.aux("grad_x")
@@ -91,7 +91,7 @@ int main() {
   for (int k=0;k<4;++k){
     pops::StateVec<1> u{}; u[0]=S[k];
     for (int j=0;j<4;++j){
-      pops::Aux a{}; a.grad_x=A[j][0]; a.grad_y=A[j][1];
+      pops::Aux a{}; a.gradient<0>()=A[j][0]; a.gradient<1>()=A[j][1];
       for (int dir=0; dir<2; ++dir){
         upd(ref.flux(u,a,dir)[0], gen.flux(u,a,dir)[0]);
         upd(ref.max_wave_speed(u,a,dir), gen.max_wave_speed(u,a,dir));
@@ -139,8 +139,10 @@ def main():
     # (2) brique a flux dependant des AUXILIAIRES (ExB) : les locals aux doivent etre emis dans
     # flux ET max_wave_speed, et la brique doit egaler pops::ExBVelocity ecrite a la main.
     exb = build_exb_brick().emit_cpp_brick(name="ExBGen")
-    assert exb.count("const pops::Real grad_x = a.grad_x;") >= 2, "locals aux absents (flux/vitesse)"
-    assert "flux(const State& U, const Aux& a, int dir)" in exb, "parametre Aux non nomme dans le flux"
+    assert exb.count("const pops::Real grad_x = a.template flux_provider<1>();") >= 2, \
+        "lectures provider absentes (flux/vitesse)"
+    assert "flux(const State& U, const auto& a, int dir)" in exb, \
+        "parametre provider exact non nomme dans le flux"
     prog2 = EXB_HARNESS % exb
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "exb.cpp")

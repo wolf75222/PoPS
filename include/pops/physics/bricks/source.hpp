@@ -1,150 +1,270 @@
 #pragma once
 
-#include <pops/core/model/physical_model.hpp>  // aux_comps<>: propagates the aux channel of a composite source
-#include <pops/core/state/state.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/model/physical_model.hpp>
+#include <pops/core/state/state.hpp>
+#include <pops/physics/composition/exact_brick_contract.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
 
 /// @file
-/// @brief SOURCE bricks S(U, aux): local term, generic over state size (acts on
-///        energy if 4 variables). NoSource, PotentialForce ((q/m) rho E), GravityForce (rho g),
-///        MagneticLorentzForce (q v x B_z). Composable as the Source parameter of a CompositeModel
-///        (physics/composite.hpp); CompositeSource<A, B> SUMS two sources (electrostatic +
-///        Lorentz). INTER-species sources (ionization, collision) live at the system level
-///        (operator-split).
+/// @brief Exact-ranked local source bricks S(U, aux).
 
 namespace pops {
 
-// OPTIONAL CONTRACT frequency(U, aux) -> Real (audit 2026-06, step_cfl work): a source brick
-// may declare its local FREQUENCY mu [1/s] (relaxation/collision/reaction rate). When the brick
-// exposes it, CompositeModel forwards it (source_frequency) and System::step_cfl enforces the
-// bound dt <= cfl * substeps / (stride * max_cells(mu)) -- the meeting's "second CFL" (source),
-// distinct from the transport CFL (no h: a source is bounded in 1/time). A brick WITHOUT
-// frequency (all of those in this file today) does not constrain the step (historical). Must be
-// POPS_HD (evaluated inside a reduction kernel).
+namespace source_detail {
 
-/// No source: S(U, aux) = 0. Neutral brick (model without potential/gravity coupling).
-/// Device-callable, no internal state.
+template <int Dim>
+struct DefaultGradientProviderSlots;
+
+template <>
+struct DefaultGradientProviderSlots<1> {
+  using type = ProviderSlots<0>;
+};
+template <>
+struct DefaultGradientProviderSlots<2> {
+  using type = ProviderSlots<0, 1>;
+};
+template <>
+struct DefaultGradientProviderSlots<3> {
+  using type = ProviderSlots<0, 1, 2>;
+};
+
+/// Exact-ranked component map used by source bricks after host-side role binding.
+///
+/// A source compiled for `Dim` owns exactly `Dim` momentum indices.  There are no dormant y/z
+/// fields in lower-rank artifacts and no axis-name branch in device code.
+template <int Dim>
+struct MomentumComponents {
+  static_assert(Dim >= 1 && Dim <= 3, "source momentum components support dimensions 1..3");
+
+  static constexpr int dimension = Dim;
+  int values[Dim]{};
+
+  POPS_HD constexpr MomentumComponents() {
+    for (int axis = 0; axis < Dim; ++axis)
+      values[axis] = axis + 1;
+  }
+
+  POPS_HD constexpr int& operator[](int axis) { return values[axis]; }
+  POPS_HD constexpr int operator[](int axis) const { return values[axis]; }
+};
+
+static_assert(std::is_trivially_copyable_v<MomentumComponents<1>> &&
+                  std::is_trivially_copyable_v<MomentumComponents<2>> &&
+                  std::is_trivially_copyable_v<MomentumComponents<3>>,
+              "ranked source component maps must remain device-copyable");
+static_assert(sizeof(MomentumComponents<1>) == sizeof(int) &&
+                  sizeof(MomentumComponents<2>) == 2 * sizeof(int) &&
+                  sizeof(MomentumComponents<3>) == 3 * sizeof(int),
+              "ranked source component maps must not retain inactive axes");
+
+template <int Axis, int Dim, class Force, class State, class Providers>
+POPS_HD void apply_gradient_force(const Force& force, const State& state,
+                                  const Providers& providers, Real coefficient, State& source,
+                                  Real& work) {
+  static_assert(Axis >= 0 && Axis < Dim, "source gradient axis is outside the spatial rank");
+  const int momentum = force.momentum_components[Axis];
+  constexpr int provider_slot = Force::gradient_slots::template slot<Axis>();
+  const Real field = -provider_value<provider_slot>(providers);
+  source[momentum] = coefficient * state[force.c_rho] * field;
+  if constexpr (State::size() == Dim + 2)
+    work += coefficient * state[momentum] * field;
+  if constexpr (Axis + 1 < Dim)
+    apply_gradient_force<Axis + 1, Dim>(force, state, providers, coefficient, source, work);
+}
+
+template <class Source>
+consteval int declared_dimension() {
+  if constexpr (requires { Source::dimension; })
+    return static_cast<int>(Source::dimension);
+  return 0;
+}
+
+}  // namespace source_detail
+
+/// Neutral source. The auxiliary rank is deduced from the exact pointwise carrier.
 struct NoSource {
-  template <class State>
-  POPS_HD State apply(const State&, const Aux&) const {
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.none", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder&) const {}
+
+  template <class State, class Providers>
+  POPS_HD State apply(const State&, const Providers&) const {
     return State{};
   }
 };
 
-/// Electrostatic potential force (q/m) rho E on momentum (+ work on energy if 4 variables).
-/// E = -grad phi = -(aux.grad_x, aux.grad_y).
+/// Electrostatic force `(q/m) rho (-grad phi)` on every momentum axis of `Dim`.
 ///
-/// CONTRACT: pointwise SOURCE brick, device-callable (POPS_HD), no global state.
-/// Formula: s[c_mx] += qom*rho*Ex, s[c_my] += qom*rho*Ey, s[c_E] += qom*(rho_u*Ex + rho_v*Ey)
-/// (the c_E work term is active only if State::size() == 4: compressible Euler).
-///
-/// ROLE-AWARE (audit section 5): the component indices (density c_rho, momentum c_mx/c_my,
-/// energy c_E) are MEMBERS, defaulting to the CANONICAL fluid layout (rho=0, m_x=1, m_y=2, E=3).
-/// model_factory RESOLVES them at construction (host) via TR::conservative_vars().index_of(role);
-/// for any NATIVE transport (Euler/Isothermal, canonical roles) the resolved indices == these
-/// defaults -> STRICTLY bit-identical. POD integers -> apply stays device-clean (reads u[c_rho],
-/// never resolves on device). No new user parameter: automatic, transparent resolution.
-struct PotentialForce {
-  // Energy is a conditional role: this brick also serves the three-component isothermal state and
-  // touches energy only for a four-component state (see apply).  The host role binder therefore
-  // resolves c_E when present and requires it only for the four-component specialization.
-  static constexpr bool requires_energy_role(int state_size) { return state_size == 4; }
-  Real qom = 1;                                // q/m (sign included)
-  int c_rho = 0, c_mx = 1, c_my = 2, c_E = 3;  // defaults = canonical fluid layout (bit-identical)
-  template <class State>
-  POPS_HD State apply(const State& u, const Aux& a) const {
-    const Real Ex = -a.grad_x, Ey = -a.grad_y;
-    State s{};
-    s[c_mx] = qom * u[c_rho] * Ex;
-    s[c_my] = qom * u[c_rho] * Ey;
-    if constexpr (State::size() == 4)
-      s[c_E] = qom * (u[c_mx] * Ex + u[c_my] * Ey);
-    return s;
+/// Canonical states contain density, exactly `Dim` momentum components, and optionally energy.
+/// The host role binder may replace every canonical component index before device execution.
+template <int Dim, class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
+struct PotentialForceND {
+  static_assert(Dim >= 1 && Dim <= 3, "PotentialForceND supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+  using gradient_slots = GradientSlots;
+  static_assert(gradient_slots::count == Dim,
+                "PotentialForceND requires exactly one explicit gradient slot per axis");
+  static constexpr int n_providers = gradient_slots::required_count();
+  static constexpr bool requires_energy_role(int state_size) { return state_size == Dim + 2; }
+
+  Real qom = Real(1);
+  int c_rho = 0;
+  source_detail::MomentumComponents<Dim> momentum_components{};
+  int c_E = Dim + 1;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.potential-force-nd", 2};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(qom).scalar(std::int32_t{c_rho});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
+    contract.scalar(std::int32_t{c_E});
+  }
+
+  template <class State, class Providers>
+  POPS_HD State apply(const State& state, const Providers& providers) const {
+    static_assert(State::size() >= Dim + 1,
+                  "PotentialForceND requires density and one momentum component per axis");
+    State source{};
+    Real work = Real(0);
+    source_detail::apply_gradient_force<0, Dim>(*this, state, providers, qom, source, work);
+    if constexpr (State::size() == Dim + 2)
+      source[c_E] = work;
+    return source;
   }
 };
 
-/// Gravitational force rho g (+ work if 4 variables). g = -grad phi.
-///
-/// CONTRACT: pointwise SOURCE brick, device-callable (POPS_HD), no global state.
-/// Formula: s[c_mx] += rho*gx, s[c_my] += rho*gy, s[c_E] += rho_u*gx + rho_v*gy
-/// (the c_E work term is active only if State::size() == 4: compressible Euler).
-/// No q/m coefficient (unlike PotentialForce): g is gravity directly.
-///
-/// ROLE-AWARE (audit section 5): c_rho/c_mx/c_my/c_E are members, defaults = canonical layout
-/// (rho=0, m_x=1, m_y=2, E=3), resolved by model_factory via the transport roles. Canonical
-/// indices == defaults for any native transport -> bit-identical. See PotentialForce for the
-/// full contract.
-struct GravityForce {
-  static constexpr bool requires_energy_role(int state_size) { return state_size == 4; }
-  int c_rho = 0, c_mx = 1, c_my = 2, c_E = 3;  // defaults = canonical fluid layout (bit-identical)
-  template <class State>
-  POPS_HD State apply(const State& u, const Aux& a) const {
-    const Real gx = -a.grad_x, gy = -a.grad_y;
-    State s{};
-    s[c_mx] = u[c_rho] * gx;
-    s[c_my] = u[c_rho] * gy;
-    if constexpr (State::size() == 4)
-      s[c_E] = u[c_mx] * gx + u[c_my] * gy;
-    return s;
+/// Gravitational force `rho (-grad phi)` on every momentum axis of `Dim`.
+template <int Dim, class GradientSlots = typename source_detail::DefaultGradientProviderSlots<Dim>::type>
+struct GravityForceND {
+  static_assert(Dim >= 1 && Dim <= 3, "GravityForceND supports dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+  using gradient_slots = GradientSlots;
+  static_assert(gradient_slots::count == Dim,
+                "GravityForceND requires exactly one explicit gradient slot per axis");
+  static constexpr int n_providers = gradient_slots::required_count();
+  static constexpr bool requires_energy_role(int state_size) { return state_size == Dim + 2; }
+
+  int c_rho = 0;
+  source_detail::MomentumComponents<Dim> momentum_components{};
+  int c_E = Dim + 1;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.gravity-force-nd", 2};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(std::int32_t{c_rho});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{gradient_slots::values[static_cast<std::size_t>(axis)]});
+    contract.scalar(std::int32_t{c_E});
+  }
+
+  template <class State, class Providers>
+  POPS_HD State apply(const State& state, const Providers& providers) const {
+    static_assert(State::size() >= Dim + 1,
+                  "GravityForceND requires density and one momentum component per axis");
+    State source{};
+    Real work = Real(0);
+    source_detail::apply_gradient_force<0, Dim>(*this, state, providers, Real(1), source, work);
+    if constexpr (State::size() == Dim + 2)
+      source[c_E] = work;
+    return source;
   }
 };
 
-/// MAGNETIC Lorentz force q (v x B) on momentum, field B = B_z z_hat out of plane.
-/// EXPLICIT regime (moderate omega_c): ALGEBRAIC pointwise term (no derivative), coded once for
-/// BOTH geometries because it is INVARIANT under orientation of the local orthonormal frame (x,y)
-/// or (e_r, e_theta):
-///   (rho v_x, rho v_y) x B_z z_hat = (+B_z rho v_y, -B_z rho v_x) = (+B_z m_y, -B_z m_x)  [cartesian]
-///   (rho v_r, rho v_th) x B_z z_hat = (+B_z rho v_th, -B_z rho v_r) = (+B_z m_th, -B_z m_r)  [polar]
-/// So s[1] = +qom*B_z*m[2], s[2] = -qom*B_z*m[1] with m[1]=u[1] (1st momentum component),
-/// m[2]=u[2] (2nd). v x B is PERPENDICULAR to v: the work F . v = 0 -> s[3] (energy) stays ZERO
-/// even at 4 variables (the magnetic force does not change kinetic energy). qom = q/m (sign
-/// included, consistent with PotentialForce); the gyration sense (cyclotron) follows the sign
-/// of qom*B_z.
+/// Explicit Lorentz force for an out-of-plane `B_z` field.
 ///
-/// CONTRACT: pointwise SOURCE brick, device-callable (POPS_HD), no global state. Reads B_z from the
-/// aux (canonical component 3, as set_magnetic_field populates it) -> declares n_aux = 4 so the aux
-/// channel is sized and load_aux fills a.B_z. The STIFF regime (large omega_c) goes through the
-/// condensed Schur (ElectrostaticLorentzCondensation), NOT through this explicit brick.
-/// PRECONDITION: requires a fluid transport >= 3 variables (momentum on 2 axes); moot on a scalar.
-struct MagneticLorentzForce {
-  Real qom = 1;                    // q/m (sign included)
-  static constexpr int n_aux = 4;  // reads B_z (extra aux channel, canonical index 3)
-  // ROLE-AWARE (audit section 5): only the MOMENTUM components are read/written (the magnetic
-  // force touches neither density nor energy -- zero work). c_mx/c_my are members, defaults =
-  // canonical layout (m_x=1, m_y=2), resolved by model_factory via the transport roles. Canonical
-  // == defaults -> bit-identical. POD integers -> device-clean.
-  int c_mx = 1, c_my = 2;
-  template <class State>
-  POPS_HD State apply(const State& u, const Aux& a) const {
-    static_assert(
-        State::size() >= 3,
-        "MagneticLorentzForce : requires a fluid transport >= 3 variables (momentum on 2 axes)");
-    const Real c = qom * a.B_z;
-    State s{};
-    s[c_mx] = c * u[c_my];   // +qom B_z m_(y/theta)
-    s[c_my] = -c * u[c_mx];  // -qom B_z m_(x/r)
-    // energy stays 0: v x B is perpendicular to v, zero work.
-    return s;
+/// This capability needs the x-y plane. In 3D it rotates the x/y momenta and leaves z unchanged;
+/// in 2D the same algebra applies to Cartesian or to the local `(e_r, e_theta)` polar basis.
+template <int Dim, int MagneticComponent = 0>
+struct MagneticLorentzForceND {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "MagneticLorentzForceND supports build dimensions 1, 2, and 3");
+  static constexpr int dimension = Dim;
+  static constexpr bool planar_capability = Dim >= 2;
+  static_assert(MagneticComponent >= 0, "magnetic provider slot cannot be negative");
+  static constexpr int magnetic_component = MagneticComponent;
+  static constexpr int n_providers = magnetic_component + 1;
+
+  Real qom = Real(1);
+  source_detail::MomentumComponents<Dim> momentum_components{};
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.physics.source.magnetic-lorentz-force-nd", 2};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.scalar(std::int32_t{Dim}).scalar(qom).scalar(std::int32_t{magnetic_component});
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(std::int32_t{momentum_components[axis]});
+  }
+
+  template <class State, class Providers>
+  POPS_HD State apply(const State& state, const Providers& providers) const {
+    static_assert(Dim >= 2,
+                  "MagneticLorentzForceND requires an explicit two-axis planar capability");
+    static_assert(State::size() >= Dim + 1,
+                  "MagneticLorentzForceND requires one momentum component per spatial axis");
+    const Real rotation = qom * provider_value<magnetic_component>(providers);
+    State source{};
+    source[momentum_components[0]] = rotation * state[momentum_components[1]];
+    source[momentum_components[1]] = -rotation * state[momentum_components[0]];
+    return source;
   }
 };
 
-/// SUM of two source bricks: S(U, aux) = A.apply(U, aux) + B.apply(U, aux). Allows COMPOSING
-/// several pointwise forces in the SINGLE Source slot of CompositeModel (e.g. electrostatic
-/// PotentialForce + magnetic MagneticLorentzForce for a magnetized E x B plasma). Generic over state size
-/// (StateVec addition is defined component-wise, cf. core/state.hpp).
-///
-/// CONTRACT: pointwise SOURCE brick, device-callable (POPS_HD), no global state beyond the two
-/// sub-bricks (themselves POD). PROPAGATES the aux channel: n_aux = max(aux_comps<A>, aux_comps<B>)
-/// -> if a sub-brick reads B_z (n_aux=4), the composite exposes it and CompositeModel raises it to
-/// the system.
+using PotentialForce = PotentialForceND<kNativeDimension>;
+using GravityForce = GravityForceND<kNativeDimension>;
+using MagneticLorentzForce = MagneticLorentzForceND<kNativeDimension>;
+
+/// Sum of two source bricks over one authenticated auxiliary rank.
 template <class A, class B>
 struct CompositeSource {
+  static constexpr int a_dimension = source_detail::declared_dimension<A>();
+  static constexpr int b_dimension = source_detail::declared_dimension<B>();
+  static_assert(a_dimension == 0 || b_dimension == 0 || a_dimension == b_dimension,
+                "CompositeSource cannot mix source bricks from different spatial ranks");
+  static constexpr int dimension =
+      a_dimension != 0 ? a_dimension : (b_dimension != 0 ? b_dimension : kNativeDimension);
+
   A a{};
   B b{};
-  static constexpr int n_aux = aux_comps<A>() > aux_comps<B>() ? aux_comps<A>() : aux_comps<B>();
-  template <class State>
-  POPS_HD State apply(const State& u, const Aux& ax) const {
-    return a.apply(u, ax) + b.apply(u, ax);
+  static constexpr int n_providers = provider_count_for<A, dimension>() >
+                                             provider_count_for<B, dimension>()
+                                         ? provider_count_for<A, dimension>()
+                                         : provider_count_for<B, dimension>();
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept
+    requires(physics_contract_detail::ExactPhysicsBrickContract<A> &&
+             physics_contract_detail::ExactPhysicsBrickContract<B>)
+  {
+    return {"pops.physics.source.composite", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const
+    requires(physics_contract_detail::ExactPhysicsBrickContract<A> &&
+             physics_contract_detail::ExactPhysicsBrickContract<B>)
+  {
+    contract.text("pops.physics.composite-source-parameters")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{dimension})
+        .scalar(std::int32_t{n_providers});
+    physics_contract_detail::append_exact_brick(contract, "left", a);
+    physics_contract_detail::append_exact_brick(contract, "right", b);
+  }
+
+  template <class State, class Providers>
+  POPS_HD State apply(const State& state, const Providers& providers) const {
+    return a.apply(state, providers) + b.apply(state, providers);
   }
 };
 

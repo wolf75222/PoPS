@@ -26,162 +26,218 @@
 #include <utility>
 
 namespace pops {
+template <int Dim>
 class PreparedKrylovSolveContext;
+template <int Dim>
 class PreparedKrylovInvocation;
 namespace detail {
 
-PreparedKrylovInvocation prepare_krylov_solve_in_place(const PreparedAffineLinearProblem&,
-                                                       KrylovWorkspace&, MultiFab&, const MultiFab&,
-                                                       const KrylovControls&,
-                                                       bool staged_publication = false);
-SolveReport solve_prepared_affine_in_place(const PreparedAffineLinearProblem&, KrylovWorkspace&,
-                                           MultiFab&, const MultiFab&, const KrylovControls&);
+template <int Dim>
+PreparedKrylovInvocation<Dim> prepare_krylov_solve_in_place(const PreparedAffineLinearProblem<Dim>&,
+                                                            KrylovWorkspace<Dim>&, MultiFab<Dim>&,
+                                                            const MultiFab<Dim>&,
+                                                            const KrylovControls<Dim>&,
+                                                            bool staged_publication = false);
+template <int Dim>
+SolveReport solve_prepared_affine_in_place(const PreparedAffineLinearProblem<Dim>&,
+                                           KrylovWorkspace<Dim>&, MultiFab<Dim>&,
+                                           const MultiFab<Dim>&, const KrylovControls<Dim>&);
 
 struct PreparedKrylovInvocationAccess {
-  static SolveReport execute(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
-                             MultiFab& iterate, const MultiFab& rhs,
-                             const KrylovControls& controls);
+  template <int Dim>
+  static SolveReport execute(const PreparedAffineLinearProblem<Dim>& problem,
+                             KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                             const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls);
 };
 
 /// The algorithms are the sole consumers of persistent workspace storage. Keeping this access
 /// object private to detail prevents callers from replacing warmed fields or scalar buffers while
 /// still letting every Krylov method share the same allocation-free storage.
 struct KrylovWorkspaceAccess {
-  static MultiFab& field(KrylovWorkspace& workspace, std::size_t index) {
+  template <int Dim>
+  static MultiFab<Dim>& field(KrylovWorkspace<Dim>& workspace, std::size_t index) {
     return workspace.field(index);
   }
-  static Real& h(KrylovWorkspace& workspace, int row, int column, int basis_extent) {
+  template <int Dim>
+  static Real& h(KrylovWorkspace<Dim>& workspace, int row, int column, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.real_value(static_cast<std::size_t>(row) * extent +
                                 static_cast<std::size_t>(column));
   }
-  static Real& cosine(KrylovWorkspace& workspace, int index, int basis_extent) {
+  template <int Dim>
+  static Real& cosine(KrylovWorkspace<Dim>& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.real_value((extent + 1u) * extent + static_cast<std::size_t>(index));
   }
-  static Real& sine(KrylovWorkspace& workspace, int index, int basis_extent) {
+  template <int Dim>
+  static Real& sine(KrylovWorkspace<Dim>& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.real_value((extent + 1u) * extent + extent + static_cast<std::size_t>(index));
   }
-  static Real& rotated_rhs(KrylovWorkspace& workspace, int index, int basis_extent) {
+  template <int Dim>
+  static Real& rotated_rhs(KrylovWorkspace<Dim>& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.real_value((extent + 1u) * extent + 2u * extent +
                                 static_cast<std::size_t>(index));
   }
-  static Real& solution_coefficient(KrylovWorkspace& workspace, int index, int basis_extent) {
+  template <int Dim>
+  static Real& solution_coefficient(KrylovWorkspace<Dim>& workspace, int index, int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.real_value((extent + 1u) * extent + 3u * extent + 1u +
                                 static_cast<std::size_t>(index));
   }
-  static ScaledScalar& scaled_h(KrylovWorkspace& workspace, int row, int column, int basis_extent) {
+  template <int Dim>
+  static ScaledScalar& scaled_h(KrylovWorkspace<Dim>& workspace, int row, int column,
+                                int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.scaled_value(static_cast<std::size_t>(row) * extent +
                                   static_cast<std::size_t>(column));
   }
-  static ScaledScalar& scaled_rotated_rhs(KrylovWorkspace& workspace, int index, int basis_extent) {
+  template <int Dim>
+  static ScaledScalar& scaled_rotated_rhs(KrylovWorkspace<Dim>& workspace, int index,
+                                          int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.scaled_value((extent + 1u) * extent + static_cast<std::size_t>(index));
   }
-  static ScaledScalar& scaled_solution_coefficient(KrylovWorkspace& workspace, int index,
+  template <int Dim>
+  static ScaledScalar& scaled_solution_coefficient(KrylovWorkspace<Dim>& workspace, int index,
                                                    int basis_extent) {
     const std::size_t extent = static_cast<std::size_t>(basis_extent);
     return workspace.scaled_value((extent + 1u) * extent + extent + 1u +
                                   static_cast<std::size_t>(index));
   }
-  static double* gmres_reduction_data(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static double* gmres_reduction_data(KrylovWorkspace<Dim>& workspace) {
     return workspace.collective_data();
   }
-  static double* gmres_robust_reduction_data(KrylovWorkspace& workspace, int basis_extent) {
+  template <int Dim>
+  static double* gmres_robust_reduction_data(KrylovWorkspace<Dim>& workspace, int basis_extent) {
     return workspace.collective_data() + static_cast<std::size_t>(basis_extent) + 1u;
   }
-  static double* distribution_reduction_data(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static double* distribution_reduction_data(KrylovWorkspace<Dim>& workspace) {
     return workspace.distribution_reduction_data();
   }
-  static std::size_t distribution_reduction_size(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::size_t distribution_reduction_size(const KrylovWorkspace<Dim>& workspace) {
     return workspace.distribution_reduction_size();
   }
-  static char* distribution_validation_data(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static char* distribution_validation_data(KrylovWorkspace<Dim>& workspace) {
     return workspace.distribution_validation_data();
   }
-  static std::size_t distribution_validation_size(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::size_t distribution_validation_size(const KrylovWorkspace<Dim>& workspace) {
     return workspace.distribution_validation_size();
   }
-  static std::span<double> metric_reduction_scratch(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::span<double> metric_reduction_scratch(KrylovWorkspace<Dim>& workspace) {
     return {workspace.metric_reduction_data(), workspace.metric_reduction_size()};
   }
-  static std::span<char> distribution_validation_scratch(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::span<char> distribution_validation_scratch(KrylovWorkspace<Dim>& workspace) {
     return {workspace.distribution_validation_data(), workspace.distribution_validation_size()};
   }
-  static std::span<double> gauge_coefficients(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::span<double> gauge_coefficients(KrylovWorkspace<Dim>& workspace) {
     return workspace.gauge_coefficients();
   }
-  static PreparedLinearPreconditionerSession& preconditioner_session(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static PreparedLinearPreconditionerSession<Dim>& preconditioner_session(
+      KrylovWorkspace<Dim>& workspace) {
     return workspace.preconditioner_session();
   }
-  static PreparedAffineOperatorSession& operator_session(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static PreparedAffineOperatorSession<Dim>& operator_session(KrylovWorkspace<Dim>& workspace) {
     return workspace.operator_session();
   }
-  static const ExecutionLane& execution_lane(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static const ExecutionLane& execution_lane(const KrylovWorkspace<Dim>& workspace) {
     return workspace.execution_lane();
   }
-  static const MultiFab& preconditioner_constant(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static const MultiFab<Dim>& preconditioner_constant(const KrylovWorkspace<Dim>& workspace) {
     return workspace.preconditioner_constant();
   }
-  static std::size_t gmres_reduction_size(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::size_t gmres_reduction_size(const KrylovWorkspace<Dim>& workspace) {
     return workspace.collective_data_size();
   }
-  static std::size_t metric_robust_payload_width(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::size_t metric_robust_payload_width(const KrylovWorkspace<Dim>& workspace) {
     return workspace.metric_robust_payload_width();
   }
-  static std::size_t initial_residual_field(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static std::size_t initial_residual_field(const KrylovWorkspace<Dim>& workspace) {
     return workspace.requirements_.initial_residual_field;
   }
-  static bool provider_report_agrees(KrylovWorkspace& workspace, const SolveReport& report) {
+  template <int Dim>
+  static bool provider_report_agrees(KrylovWorkspace<Dim>& workspace, const SolveReport& report) {
     return workspace.provider_report_agrees_(report);
   }
-  static bool try_reserve_solve(KrylovWorkspace& workspace) noexcept {
+  template <int Dim>
+  static bool try_reserve_solve(KrylovWorkspace<Dim>& workspace) noexcept {
     return workspace.try_reserve_solve_();
   }
-  static void release_solve(KrylovWorkspace& workspace) noexcept { workspace.release_solve_(); }
-  static MultiFab& publication_candidate(KrylovWorkspace& workspace) {
+  template <int Dim>
+  static void release_solve(KrylovWorkspace<Dim>& workspace) noexcept {
+    workspace.release_solve_();
+  }
+  template <int Dim>
+  static MultiFab<Dim>& publication_candidate(KrylovWorkspace<Dim>& workspace) {
     return workspace.publication_candidate_field_();
   }
-  static void arm_publication(KrylovWorkspace& workspace,
-                              const PreparedAffineLinearProblem& problem,
-                              MultiFab& destination) noexcept {
+  template <int Dim>
+  static void arm_publication(KrylovWorkspace<Dim>& workspace,
+                              const PreparedAffineLinearProblem<Dim>& problem,
+                              MultiFab<Dim>& destination) noexcept {
     workspace.arm_publication_(problem, destination);
   }
-  static void publish_candidate(KrylovWorkspace& workspace) { workspace.publish_candidate_(); }
-  static void validate_publication(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static void publish_candidate(KrylovWorkspace<Dim>& workspace) {
+    workspace.publish_candidate_();
+  }
+  template <int Dim>
+  static void validate_publication(const KrylovWorkspace<Dim>& workspace) {
     workspace.validate_publication_();
   }
-  static void release_publication(KrylovWorkspace& workspace) noexcept {
+  template <int Dim>
+  static void release_publication(KrylovWorkspace<Dim>& workspace) noexcept {
     workspace.release_publication_();
   }
-  static void reset_provider_apply_status(KrylovWorkspace& workspace) noexcept {
+  template <int Dim>
+  static void reset_provider_apply_status(KrylovWorkspace<Dim>& workspace) noexcept {
     workspace.reset_provider_apply_status_();
   }
-  static void latch_provider_apply_status(KrylovWorkspace& workspace,
+  template <int Dim>
+  static void latch_provider_apply_status(KrylovWorkspace<Dim>& workspace,
                                           const PreparedApplyResult& result) noexcept {
     workspace.latch_provider_apply_status_(result);
   }
-  static bool provider_apply_succeeded(const KrylovWorkspace& workspace) noexcept {
+  template <int Dim>
+  static bool provider_apply_succeeded(const KrylovWorkspace<Dim>& workspace) noexcept {
     return workspace.provider_apply_succeeded_();
   }
-  static PreparedApplyResult collective_provider_apply_result(const KrylovWorkspace& workspace) {
+  template <int Dim>
+  static PreparedApplyResult collective_provider_apply_result(
+      const KrylovWorkspace<Dim>& workspace) {
     return workspace.collective_provider_apply_result_();
   }
-  static void republish_provider_apply_failure(KrylovWorkspace& workspace, MultiFab& out) noexcept {
+  template <int Dim>
+  static void republish_provider_apply_failure(KrylovWorkspace<Dim>& workspace,
+                                               MultiFab<Dim>& out) noexcept {
     workspace.republish_provider_apply_failure_(out);
   }
-  static void append_collective_state(const KrylovWorkspace& workspace,
+  template <int Dim>
+  static void append_collective_state(const KrylovWorkspace<Dim>& workspace,
                                       KrylovCollectivePayload& payload) noexcept {
     workspace.append_collective_state_(payload);
   }
-  static long local_binding_failure(const KrylovWorkspace& workspace,
-                                    const PreparedAffineLinearProblem& problem,
-                                    const KrylovControls& controls) noexcept {
-    const auto& problem_snapshot = PreparedProblemAccess::stored_snapshot(problem);
+  template <int Dim>
+  static long local_binding_failure(const KrylovWorkspace<Dim>& workspace,
+                                    const PreparedAffineLinearProblem<Dim>& problem,
+                                    const KrylovControls<Dim>& controls) noexcept {
+    const auto& problem_snapshot = PreparedProblemAccess<Dim>::stored_snapshot(problem);
     if (!workspace.snapshot_ || !problem_snapshot || *workspace.snapshot_ != *problem_snapshot)
       return 23;
     if (!workspace.vector_distribution_layout_valid_ ||
@@ -199,10 +255,11 @@ struct KrylovWorkspaceAccess {
 /// Own the gap between local atomic reservation and a fully materialized invocation.  In
 /// particular, MPI failures in the control-plane consensus must not leave either the workspace or
 /// the prepared problem permanently reserved.
+template <int Dim>
 class PendingPreparedKrylovReservations final {
  public:
-  PendingPreparedKrylovReservations(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, bool problem_reserved,
+  PendingPreparedKrylovReservations(const PreparedAffineLinearProblem<Dim>& problem,
+                                    KrylovWorkspace<Dim>& workspace, bool problem_reserved,
                                     bool workspace_reserved) noexcept
       : problem_(problem_reserved ? &problem : nullptr),
         workspace_(workspace_reserved ? &workspace : nullptr) {}
@@ -220,20 +277,21 @@ class PendingPreparedKrylovReservations final {
     if (workspace_ != nullptr)
       KrylovWorkspaceAccess::release_solve(*workspace_);
     if (problem_ != nullptr)
-      PreparedProblemAccess::release_use(*problem_);
+      PreparedProblemAccess<Dim>::release_use(*problem_);
   }
 
-  const PreparedAffineLinearProblem* problem_ = nullptr;
-  KrylovWorkspace* workspace_ = nullptr;
+  const PreparedAffineLinearProblem<Dim>* problem_ = nullptr;
+  KrylovWorkspace<Dim>* workspace_ = nullptr;
 };
 
 inline bool finite(Real value) {
   return std::isfinite(static_cast<double>(value));
 }
 
-inline void reduce_batched_inner_products(const PreparedAffineLinearProblem& problem,
-                                          KrylovWorkspace& workspace, double* values, int count,
-                                          const char* quantity) {
+template <int Dim>
+inline void reduce_batched_inner_products(const PreparedAffineLinearProblem<Dim>& problem,
+                                          KrylovWorkspace<Dim>& workspace, double* values,
+                                          int count, const char* quantity) {
   reduce_prepared_vector_values_inplace(
       problem.vector_distribution(), values, count,
       KrylovWorkspaceAccess::distribution_reduction_data(workspace),
@@ -241,33 +299,37 @@ inline void reduce_batched_inner_products(const PreparedAffineLinearProblem& pro
       KrylovWorkspaceAccess::execution_lane(workspace));
 }
 
-inline Real workspace_inner_product(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, const MultiFab& left,
-                                    const MultiFab& right) {
-  return PreparedProblemAccess::inner_product(
+template <int Dim>
+inline Real workspace_inner_product(const PreparedAffineLinearProblem<Dim>& problem,
+                                    KrylovWorkspace<Dim>& workspace, const MultiFab<Dim>& left,
+                                    const MultiFab<Dim>& right) {
+  return PreparedProblemAccess<Dim>::inner_product(
       problem, left, right, KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
       KrylovWorkspaceAccess::execution_lane(workspace));
 }
 
-inline Real workspace_residual_norm(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, const MultiFab& value) {
-  return PreparedProblemAccess::residual_norm(
+template <int Dim>
+inline Real workspace_residual_norm(const PreparedAffineLinearProblem<Dim>& problem,
+                                    KrylovWorkspace<Dim>& workspace, const MultiFab<Dim>& value) {
+  return PreparedProblemAccess<Dim>::residual_norm(
       problem, value, KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
       KrylovWorkspaceAccess::execution_lane(workspace));
 }
 
-inline void require_exact_scientific_boundary(const PreparedAffineLinearProblem& problem,
-                                              KrylovWorkspace& workspace, const MultiFab& value,
-                                              const char* where) {
+template <int Dim>
+inline void require_exact_scientific_boundary(const PreparedAffineLinearProblem<Dim>& problem,
+                                              KrylovWorkspace<Dim>& workspace,
+                                              const MultiFab<Dim>& value, const char* where) {
   problem.vector_distribution().require_exact_values(
       value, KrylovWorkspaceAccess::distribution_validation_scratch(workspace), where,
       KrylovWorkspaceAccess::execution_lane(workspace));
 }
 
-inline void workspace_apply_linear(const PreparedAffineLinearProblem& problem,
-                                   KrylovWorkspace& workspace, MultiFab& out,
-                                   const MultiFab& direction, Real equation_scale) {
-  const PreparedApplyResult status = PreparedProblemAccess::apply_linear(
+template <int Dim>
+inline void workspace_apply_linear(const PreparedAffineLinearProblem<Dim>& problem,
+                                   KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& out,
+                                   const MultiFab<Dim>& direction, Real equation_scale) {
+  const PreparedApplyResult status = PreparedProblemAccess<Dim>::apply_linear(
       problem, KrylovWorkspaceAccess::operator_session(workspace), out, direction, equation_scale);
   KrylovWorkspaceAccess::latch_provider_apply_status(workspace, status);
   // Every rank still executes every provider callback to preserve its collective trace. Re-publish
@@ -276,29 +338,31 @@ inline void workspace_apply_linear(const PreparedAffineLinearProblem& problem,
   KrylovWorkspaceAccess::republish_provider_apply_failure(workspace, out);
 }
 
-inline void workspace_apply_preconditioner(const PreparedAffineLinearProblem& problem,
-                                           KrylovWorkspace& workspace, MultiFab& out,
-                                           const MultiFab& in) {
-  const PreparedApplyResult status = PreparedProblemAccess::apply_preconditioner(
+template <int Dim>
+inline void workspace_apply_preconditioner(const PreparedAffineLinearProblem<Dim>& problem,
+                                           KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& out,
+                                           const MultiFab<Dim>& in) {
+  const PreparedApplyResult status = PreparedProblemAccess<Dim>::apply_preconditioner(
       problem, KrylovWorkspaceAccess::preconditioner_session(workspace),
       KrylovWorkspaceAccess::preconditioner_constant(workspace), out, in);
   KrylovWorkspaceAccess::latch_provider_apply_status(workspace, status);
   KrylovWorkspaceAccess::republish_provider_apply_failure(workspace, out);
 }
 
-inline void workspace_true_residual(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, MultiFab& out, const MultiFab& rhs,
-                                    const MultiFab& iterate) {
-  const PreparedApplyResult status = PreparedProblemAccess::true_residual_physical(
+template <int Dim>
+inline void workspace_true_residual(const PreparedAffineLinearProblem<Dim>& problem,
+                                    KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& out,
+                                    const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate) {
+  const PreparedApplyResult status = PreparedProblemAccess<Dim>::true_residual_physical(
       problem, KrylovWorkspaceAccess::operator_session(workspace), out, rhs, iterate);
   KrylovWorkspaceAccess::latch_provider_apply_status(workspace, status);
   KrylovWorkspaceAccess::republish_provider_apply_failure(workspace, out);
 }
 
-template <class RightAt>
-inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearProblem& problem,
-                                                    KrylovWorkspace& workspace,
-                                                    const MultiFab& left, double* reduced,
+template <int Dim, class RightAt>
+inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearProblem<Dim>& problem,
+                                                    KrylovWorkspace<Dim>& workspace,
+                                                    const MultiFab<Dim>& left, double* reduced,
                                                     int count, int basis_extent,
                                                     RightAt&& right_at) {
   bool needs_repair = false;
@@ -314,7 +378,7 @@ inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearPr
   for (int index = 0; index < count; ++index) {
     if (finite(static_cast<Real>(reduced[index])))
       continue;
-    PreparedProblemAccess::local_robust_inner_product_payload(
+    PreparedProblemAccess<Dim>::local_robust_inner_product_payload(
         problem, left, right_at(index),
         std::span<double>(payload + static_cast<std::size_t>(index) * width, width));
   }
@@ -326,7 +390,7 @@ inline bool repair_nonfinite_batched_inner_products(const PreparedAffineLinearPr
     if (finite(static_cast<Real>(reduced[index])))
       continue;
     reduced[index] =
-        static_cast<double>(PreparedProblemAccess::inner_product_from_global_robust_payload(
+        static_cast<double>(PreparedProblemAccess<Dim>::inner_product_from_global_robust_payload(
             problem,
             std::span<const double>(payload + static_cast<std::size_t>(index) * width, width)));
     finite_result = finite_result && finite(static_cast<Real>(reduced[index]));
@@ -390,7 +454,8 @@ inline ScaledScalar scaled_difference(const ScaledScalar& left, const ScaledScal
   return ScaledScalar::difference(left, right);
 }
 
-inline void validate_controls(const KrylovControls& controls) {
+template <int Dim>
+inline void validate_controls(const KrylovControls<Dim>& controls) {
   const KrylovMethodValidation validation = controls.method.validate_controls(
       KrylovMethodControls{controls.rel_tol, controls.abs_tol, controls.max_iterations});
   if (!validation.accepted())
@@ -399,7 +464,8 @@ inline void validate_controls(const KrylovControls& controls) {
                                 "' rejected controls: " + std::string(validation.reason));
 }
 
-inline long controls_failure(const KrylovControls& controls) noexcept {
+template <int Dim>
+inline long controls_failure(const KrylovControls<Dim>& controls) noexcept {
   if (!controls.method)
     return 19;
   return controls.method
@@ -443,25 +509,30 @@ inline long controls_failure(const KrylovControls& controls) noexcept {
   }
 }
 
+template <int Dim>
 inline void append_controls(KrylovCollectivePayload& payload,
-                            const KrylovControls& controls) noexcept {
+                            const KrylovControls<Dim>& controls) noexcept {
   payload.append(controls.method.fingerprint());
   payload.append(std::bit_cast<std::uint64_t>(controls.rel_tol));
   payload.append(std::bit_cast<std::uint64_t>(controls.abs_tol));
   payload.append(controls.max_iterations);
 }
 
-inline void append_field_shape(KrylovCollectivePayload& payload, const MultiFab& field) noexcept {
+template <int Dim>
+inline void append_field_shape(KrylovCollectivePayload& payload,
+                               const MultiFab<Dim>& field) noexcept {
   payload.append(field.ncomp());
-  payload.append(field.n_grow());
+  payload.append(field.ghosts());
 }
 
-inline void collective_solve_preflight(const PreparedAffineLinearProblem& problem,
-                                       KrylovWorkspace& workspace, const MultiFab& iterate,
-                                       const MultiFab& rhs, const KrylovControls& controls,
+template <int Dim>
+inline void collective_solve_preflight(const PreparedAffineLinearProblem<Dim>& problem,
+                                       KrylovWorkspace<Dim>& workspace,
+                                       const MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs,
+                                       const KrylovControls<Dim>& controls,
                                        const ExecutionLane& control_lane) {
   KrylovCollectivePayload payload;
-  long local_failure = PreparedProblemAccess::append_collective_state(problem, payload);
+  long local_failure = PreparedProblemAccess<Dim>::append_collective_state(problem, payload);
   KrylovWorkspaceAccess::append_collective_state(workspace, payload);
   append_controls(payload, controls);
   append_field_shape(payload, iterate);
@@ -470,16 +541,16 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem& proble
 
   if (local_failure == 0)
     local_failure = controls_failure(controls);
-  if (local_failure == 0 && (!PreparedProblemAccess::matches_vector_space(problem, iterate) ||
-                             iterate.n_grow() != problem.footprint().input_ghosts))
+  if (local_failure == 0 && (!PreparedProblemAccess<Dim>::matches_vector_space(problem, iterate) ||
+                             iterate.ghosts() != problem.footprint().input_ghosts))
     local_failure = 20;
-  if (local_failure == 0 && !PreparedProblemAccess::matches_vector_space(problem, rhs))
+  if (local_failure == 0 && !PreparedProblemAccess<Dim>::matches_vector_space(problem, rhs))
     local_failure = 21;
   if (local_failure == 0 && iterate.shares_storage_with(rhs))
     local_failure = 22;
   if (local_failure == 0)
     local_failure = KrylovWorkspaceAccess::local_binding_failure(workspace, problem, controls);
-  const KrylovMethodProblemFacts method_facts{
+  const KrylovMethodProblemFacts<Dim> method_facts{
       problem.properties(),          problem.footprint(),
       problem.vector_distribution(), problem.metric().robust_payload_width(),
       problem.has_nullspace(),       problem.has_preconditioner()};
@@ -519,7 +590,7 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem& proble
   // The problem and workspace authenticated their exact vector-space layout during prepare/bind.
   // At solve entry, allocation-free local vector-space checks above bind both arguments to that
   // cached contract.  Only value consensus remains dynamic for a provider (for example replicas).
-  const PreparedVectorDistribution& distribution = problem.vector_distribution();
+  const PreparedVectorDistribution<Dim>& distribution = problem.vector_distribution();
   char* storage = KrylovWorkspaceAccess::distribution_validation_data(workspace);
   const std::size_t storage_size = KrylovWorkspaceAccess::distribution_validation_size(workspace);
   distribution.require_exact_values(iterate, std::span<char>(storage, storage_size),
@@ -532,7 +603,9 @@ inline Real reference_denominator(Real reference) {
   return reference > Real(0) ? reference : Real(1);
 }
 
-inline bool provider_solve_report_agrees(const SolveReport& report, KrylovWorkspace& workspace) {
+template <int Dim>
+inline bool provider_solve_report_agrees(const SolveReport& report,
+                                         KrylovWorkspace<Dim>& workspace) {
   return KrylovWorkspaceAccess::provider_report_agrees(workspace, report);
 }
 
@@ -543,8 +616,9 @@ struct SolveNormalization {
   Real physical_threshold = Real(0);
 };
 
+template <int Dim>
 inline SolveNormalization make_normalization(Real reference, Real scale,
-                                             const KrylovControls& controls) {
+                                             const KrylovControls<Dim>& controls) {
   if (!finite(reference) || reference < Real(0) || !finite(scale) || !(scale > Real(0)))
     throw std::invalid_argument("invalid prepared Krylov equation normalization");
   const Real relative_physical =
@@ -558,7 +632,8 @@ inline SolveNormalization make_normalization(Real reference, Real scale,
   };
 }
 
-inline Real physical_stopping_threshold(Real reference, const KrylovControls& controls) {
+template <int Dim>
+inline Real physical_stopping_threshold(Real reference, const KrylovControls<Dim>& controls) {
   const Real relative =
       reference > Real(0) ? rescale_product(controls.rel_tol, reference, Real(1)) : Real(0);
   return std::max(relative, controls.abs_tol);
@@ -568,8 +643,9 @@ inline Real physical_stopping_threshold(Real reference, const KrylovControls& co
 /// threshold remains the recurrence fast path, but one final division avoids a false failure when
 /// the rounded product ``rel_tol * reference`` lands one ULP below the equivalently rounded
 /// ``residual / reference`` comparison reported to users.
+template <int Dim>
 inline bool satisfies_stopping_controls(Real residual, Real reference,
-                                        const KrylovControls& controls) {
+                                        const KrylovControls<Dim>& controls) {
   if (!finite(residual) || residual < Real(0))
     return false;
   if (residual <= controls.abs_tol)
@@ -592,25 +668,11 @@ inline SolveReport report_physical(const SolveNormalization& normalization, Real
                                    int iterations, SolveStatus status) {
   SolveReport result;
   result.iters = iterations;
-  // Invalid evaluation means that no trustworthy residual may exist. SolveReport nevertheless has
-  // one uniform, publishable scalar schema, so represent an unavailable norm with finite zero
-  // evidence instead of leaking NaN through the outcome boundary. Every other status must retain
-  // its exact measured values so a malformed provider report is still rejected by the wrapper.
-  if (status == SolveStatus::kInvalidEvaluation &&
-      (!finite(normalization.reference) || normalization.reference < Real(0) ||
-       !finite(physical_residual) || physical_residual < Real(0))) {
-    const SolveNormalization finite_normalization{
-        finite(normalization.reference) && normalization.reference >= Real(0)
-            ? normalization.reference
-            : Real(0),
-        Real(1),
-        Real(0),
-        Real(0),
-    };
-    set_report_physical_residuals(result, finite_normalization, Real(0));
-  } else {
-    set_report_physical_residuals(result, normalization, physical_residual);
-  }
+  // Preserve the provider's measured values until the common SolveReport authority sees the final
+  // status. `mark_failed(kInvalidEvaluation)` alone canonicalizes unavailable evidence; every other
+  // status retains its exact measurements so the publication boundary still rejects malformed
+  // provider reports.
+  set_report_physical_residuals(result, normalization, physical_residual);
   if (status == SolveStatus::kSolved)
     result.mark_solved();
   else
@@ -656,9 +718,10 @@ inline SolveReport prepared_apply_failure_report(const SolveNormalization& norma
   return result;
 }
 
-inline Real physical_true_residual_norm(const PreparedAffineLinearProblem& problem,
-                                        KrylovWorkspace& workspace, MultiFab& scratch,
-                                        const MultiFab& rhs, const MultiFab& iterate) {
+template <int Dim>
+inline Real physical_true_residual_norm(const PreparedAffineLinearProblem<Dim>& problem,
+                                        KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& scratch,
+                                        const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate) {
   workspace_true_residual(problem, workspace, scratch, rhs, iterate);
   return workspace_residual_norm(problem, workspace, scratch);
 }
@@ -672,9 +735,10 @@ struct ResidualMeasurement {
 /// deliberately left in physical units: a caller that is actually going to restart a recurrence
 /// can then choose its next cycle scale from this authoritative measurement, without first losing a
 /// representable component through division by the old cycle scale.
+template <int Dim>
 inline ResidualMeasurement physical_true_residual_measurement(
-    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& scratch,
-    const MultiFab& rhs, const MultiFab& iterate) {
+    const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
+    MultiFab<Dim>& scratch, const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate) {
   const Real physical = physical_true_residual_norm(problem, workspace, scratch, rhs, iterate);
   return {physical, std::numeric_limits<Real>::quiet_NaN()};
 }
@@ -683,7 +747,9 @@ inline ResidualMeasurement physical_true_residual_measurement(
 /// threshold remain those in `report_normalization`; reports therefore cannot change meaning when
 /// an extreme residual forces a numerical restart.  This operation consumes a residual field that
 /// is still in physical units and needs no additional reduction.
-inline void rebase_cycle_residual(MultiFab& physical_residual, ResidualMeasurement& measurement,
+template <int Dim>
+inline void rebase_cycle_residual(MultiFab<Dim>& physical_residual,
+                                  ResidualMeasurement& measurement,
                                   const SolveNormalization& report_normalization,
                                   SolveNormalization& cycle_normalization) {
   if (!finite(measurement.physical) ||
@@ -733,9 +799,10 @@ inline SolveReport terminal_candidate_report(const SolveNormalization& normaliza
 /// c=1e+/-200.  The first nonzero preconditioned direction fixes one solve-local positive scale;
 /// every later application reuses it, so the mathematical preconditioner changes only by a single
 /// constant factor and no allocation or per-iteration norm reduction is introduced.
-inline Real apply_scaled_preconditioner(const PreparedAffineLinearProblem& problem, MultiFab& out,
-                                        const MultiFab& in, KrylovWorkspace& workspace,
-                                        Real& solve_scale) {
+template <int Dim>
+inline Real apply_scaled_preconditioner(const PreparedAffineLinearProblem<Dim>& problem,
+                                        MultiFab<Dim>& out, const MultiFab<Dim>& in,
+                                        KrylovWorkspace<Dim>& workspace, Real& solve_scale) {
   workspace_apply_preconditioner(problem, workspace, out, in);
   if (solve_scale == Real(0))
     solve_scale = PreparedFieldAlgebra::max_abs(
@@ -749,17 +816,20 @@ inline Real apply_scaled_preconditioner(const PreparedAffineLinearProblem& probl
   return solve_scale;
 }
 
-inline MultiFab& initial_residual_field(KrylovWorkspace& workspace, const KrylovControls&) {
+template <int Dim>
+inline MultiFab<Dim>& initial_residual_field(KrylovWorkspace<Dim>& workspace,
+                                             const KrylovControls<Dim>&) {
   return KrylovWorkspaceAccess::field(workspace,
                                       KrylovWorkspaceAccess::initial_residual_field(workspace));
 }
 
-inline SolveReport solve_richardson(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, MultiFab& iterate,
-                                    const MultiFab& rhs, const KrylovControls& controls,
+template <int Dim>
+inline SolveReport solve_richardson(const PreparedAffineLinearProblem<Dim>& problem,
+                                    KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                                    const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
                                     Real relaxation, const SolveNormalization& normalization,
                                     ResidualMeasurement measurement) {
-  MultiFab& residual = KrylovWorkspaceAccess::field(workspace, 1);
+  MultiFab<Dim>& residual = KrylovWorkspaceAccess::field(workspace, 1);
   SolveNormalization cycle_normalization = normalization;
   for (int completed = 0; completed < controls.max_iterations; ++completed) {
     const int iteration = completed + 1;
@@ -788,13 +858,15 @@ inline SolveReport solve_richardson(const PreparedAffineLinearProblem& problem,
                          SolveStatus::kIterationLimit);
 }
 
-inline SolveReport solve_cg(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
-                            MultiFab& iterate, const MultiFab& rhs, const KrylovControls& controls,
+template <int Dim>
+inline SolveReport solve_cg(const PreparedAffineLinearProblem<Dim>& problem,
+                            KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                            const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
                             const SolveNormalization& normalization,
                             ResidualMeasurement measurement) {
-  MultiFab& residual = KrylovWorkspaceAccess::field(workspace, 1);
-  MultiFab& direction = KrylovWorkspaceAccess::field(workspace, 2);
-  MultiFab& applied = KrylovWorkspaceAccess::field(workspace, 3);
+  MultiFab<Dim>& residual = KrylovWorkspaceAccess::field(workspace, 1);
+  MultiFab<Dim>& direction = KrylovWorkspaceAccess::field(workspace, 2);
+  MultiFab<Dim>& applied = KrylovWorkspaceAccess::field(workspace, 3);
   SolveNormalization cycle_normalization = normalization;
   PreparedFieldAlgebra::copy(direction, residual);
   Real squared = workspace_inner_product(problem, workspace, residual, residual);
@@ -871,20 +943,21 @@ inline SolveReport solve_cg(const PreparedAffineLinearProblem& problem, KrylovWo
                                    SolveStatus::kIterationLimit);
 }
 
-inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
-                                  KrylovWorkspace& workspace, MultiFab& iterate,
-                                  const MultiFab& rhs, const KrylovControls& controls,
+template <int Dim>
+inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem<Dim>& problem,
+                                  KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                                  const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
                                   const SolveNormalization& normalization,
                                   ResidualMeasurement measurement) {
-  MultiFab& residual = KrylovWorkspaceAccess::field(workspace, 1);
-  MultiFab& shadow = KrylovWorkspaceAccess::field(workspace, 2);
-  MultiFab& direction = KrylovWorkspaceAccess::field(workspace, 3);
-  MultiFab& applied = KrylovWorkspaceAccess::field(workspace, 4);
-  MultiFab& intermediate = KrylovWorkspaceAccess::field(workspace, 5);
-  MultiFab& second_applied = KrylovWorkspaceAccess::field(workspace, 6);
-  MultiFab& prepared_direction =
+  MultiFab<Dim>& residual = KrylovWorkspaceAccess::field(workspace, 1);
+  MultiFab<Dim>& shadow = KrylovWorkspaceAccess::field(workspace, 2);
+  MultiFab<Dim>& direction = KrylovWorkspaceAccess::field(workspace, 3);
+  MultiFab<Dim>& applied = KrylovWorkspaceAccess::field(workspace, 4);
+  MultiFab<Dim>& intermediate = KrylovWorkspaceAccess::field(workspace, 5);
+  MultiFab<Dim>& second_applied = KrylovWorkspaceAccess::field(workspace, 6);
+  MultiFab<Dim>& prepared_direction =
       problem.has_preconditioner() ? KrylovWorkspaceAccess::field(workspace, 7) : direction;
-  MultiFab& prepared_intermediate =
+  MultiFab<Dim>& prepared_intermediate =
       problem.has_preconditioner() ? KrylovWorkspaceAccess::field(workspace, 8) : intermediate;
 
   SolveNormalization cycle_normalization = normalization;
@@ -1070,8 +1143,9 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
                                    SolveStatus::kIterationLimit);
 }
 
-inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column, const ScaledScalar& value,
-                         int basis_extent) {
+template <int Dim>
+inline bool set_scaled_h(KrylovWorkspace<Dim>& workspace, int row, int column,
+                         const ScaledScalar& value, int basis_extent) {
   Real materialized = Real(0);
   if (!value.is_finite() || !value.try_materialize(materialized))
     return false;
@@ -1080,20 +1154,23 @@ inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column, const 
   return true;
 }
 
-inline bool set_scaled_h(KrylovWorkspace& workspace, int row, int column, Real value,
+template <int Dim>
+inline bool set_scaled_h(KrylovWorkspace<Dim>& workspace, int row, int column, Real value,
                          int basis_extent) {
   return set_scaled_h(workspace, row, column, ScaledScalar::from(value), basis_extent);
 }
 
-inline void set_scaled_rotated_rhs(KrylovWorkspace& workspace, int index, const ScaledScalar& value,
-                                   int basis_extent) {
+template <int Dim>
+inline void set_scaled_rotated_rhs(KrylovWorkspace<Dim>& workspace, int index,
+                                   const ScaledScalar& value, int basis_extent) {
   KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, index, basis_extent) = value;
   Real materialized = Real(0);
   KrylovWorkspaceAccess::rotated_rhs(workspace, index, basis_extent) =
       value.try_materialize(materialized) ? materialized : std::numeric_limits<Real>::quiet_NaN();
 }
 
-inline void set_scaled_solution_coefficient(KrylovWorkspace& workspace, int index,
+template <int Dim>
+inline void set_scaled_solution_coefficient(KrylovWorkspace<Dim>& workspace, int index,
                                             const ScaledScalar& value, int basis_extent) {
   KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, index, basis_extent) = value;
   Real materialized = Real(0);
@@ -1101,7 +1178,8 @@ inline void set_scaled_solution_coefficient(KrylovWorkspace& workspace, int inde
       value.try_materialize(materialized) ? materialized : std::numeric_limits<Real>::quiet_NaN();
 }
 
-inline void reset_gmres_scalars(KrylovWorkspace& workspace, int restart) {
+template <int Dim>
+inline void reset_gmres_scalars(KrylovWorkspace<Dim>& workspace, int restart) {
   for (int row = 0; row <= restart; ++row) {
     set_scaled_rotated_rhs(workspace, row, ScaledScalar::zero(), restart);
     if (row < restart) {
@@ -1114,7 +1192,8 @@ inline void reset_gmres_scalars(KrylovWorkspace& workspace, int restart) {
   }
 }
 
-inline bool solve_gmres_upper(KrylovWorkspace& workspace, int dimension, int basis_extent) {
+template <int Dim>
+inline bool solve_gmres_upper(KrylovWorkspace<Dim>& workspace, int dimension, int basis_extent) {
   for (int row = dimension - 1; row >= 0; --row) {
     ScaledScalar value = KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, row, basis_extent);
     for (int column = row + 1; column < dimension; ++column)
@@ -1135,17 +1214,18 @@ inline bool solve_gmres_upper(KrylovWorkspace& workspace, int dimension, int bas
   return true;
 }
 
-inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
-                               KrylovWorkspace& workspace, MultiFab& iterate, const MultiFab& rhs,
-                               const KrylovControls& controls, int restart,
-                               const SolveNormalization& normalization,
+template <int Dim>
+inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
+                               KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                               const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
+                               int restart, const SolveNormalization& normalization,
                                ResidualMeasurement measurement) {
-  const auto basis = [&workspace](int index) -> MultiFab& {
+  const auto basis = [&workspace](int index) -> MultiFab<Dim>& {
     return KrylovWorkspaceAccess::field(workspace, static_cast<std::size_t>(index) + 1u);
   };
-  MultiFab& applied_or_residual =
+  MultiFab<Dim>& applied_or_residual =
       KrylovWorkspaceAccess::field(workspace, static_cast<std::size_t>(restart) + 2u);
-  MultiFab* prepared_vector =
+  MultiFab<Dim>* prepared_vector =
       problem.has_preconditioner()
           ? &KrylovWorkspaceAccess::field(workspace, static_cast<std::size_t>(restart) + 3u)
           : nullptr;
@@ -1157,7 +1237,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
   SolveNormalization cycle_normalization = normalization;
   Real preconditioner_scale = Real(0);
   while (iterations < controls.max_iterations) {
-    MultiFab* initial_vector = &applied_or_residual;
+    MultiFab<Dim>* initial_vector = &applied_or_residual;
     if (prepared_vector != nullptr) {
       const Real scale = apply_scaled_preconditioner(problem, *prepared_vector, applied_or_residual,
                                                      workspace, preconditioner_scale);
@@ -1197,7 +1277,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
     for (int column = 0; column < restart && iterations < controls.max_iterations; ++column) {
       workspace_apply_linear(problem, workspace, applied_or_residual, basis(column),
                              cycle_normalization.scale);
-      MultiFab* arnoldi_vector = &applied_or_residual;
+      MultiFab<Dim>* arnoldi_vector = &applied_or_residual;
       if (prepared_vector != nullptr) {
         const Real scale = apply_scaled_preconditioner(
             problem, *prepared_vector, applied_or_residual, workspace, preconditioner_scale);
@@ -1214,15 +1294,15 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
       double* reductions = KrylovWorkspaceAccess::gmres_reduction_data(workspace);
       for (int row = 0; row <= column; ++row)
         reductions[row] = static_cast<double>(
-            PreparedProblemAccess::local_inner_product(problem, *arnoldi_vector, basis(row)));
-      reductions[column + 1] = static_cast<double>(
-          PreparedProblemAccess::local_inner_product(problem, *arnoldi_vector, *arnoldi_vector));
+            PreparedProblemAccess<Dim>::local_inner_product(problem, *arnoldi_vector, basis(row)));
+      reductions[column + 1] = static_cast<double>(PreparedProblemAccess<Dim>::local_inner_product(
+          problem, *arnoldi_vector, *arnoldi_vector));
       reduce_batched_inner_products(problem, workspace, reductions, column + 2,
                                     "prepared GMRES Arnoldi projections");
 
       bool finite_column = repair_nonfinite_batched_inner_products(
           problem, workspace, *arnoldi_vector, reductions, column + 1, restart,
-          [&basis](int row) -> const MultiFab& { return basis(row); });
+          [&basis](int row) -> const MultiFab<Dim>& { return basis(row); });
 
       const Real raw_square = static_cast<Real>(reductions[column + 1]);
       const bool finite_raw_square = finite(raw_square) && raw_square >= Real(0);
@@ -1251,14 +1331,14 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
           (!finite_raw_square || (raw_square > Real(0) &&
                                   arnoldi_norm <= kReorthogonalizeRatio * std::sqrt(raw_square)))) {
         for (int row = 0; row <= column; ++row)
-          reductions[row] = static_cast<double>(
-              PreparedProblemAccess::local_inner_product(problem, *arnoldi_vector, basis(row)));
+          reductions[row] = static_cast<double>(PreparedProblemAccess<Dim>::local_inner_product(
+              problem, *arnoldi_vector, basis(row)));
         reduce_batched_inner_products(problem, workspace, reductions, column + 1,
                                       "prepared GMRES DGKS projections");
         finite_column = finite_column &&
                         repair_nonfinite_batched_inner_products(
                             problem, workspace, *arnoldi_vector, reductions, column + 1, restart,
-                            [&basis](int row) -> const MultiFab& { return basis(row); });
+                            [&basis](int row) -> const MultiFab<Dim>& { return basis(row); });
         for (int row = 0; row <= column; ++row) {
           const Real correction = static_cast<Real>(reductions[row]);
           finite_column = finite_column && finite(correction);
@@ -1385,15 +1465,16 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
 /// Allocation-free execution view passed to one prepared method provider.  It exposes only the
 /// already-authenticated problem, persistent workspace pools, and primitive field operations; a
 /// provider cannot trigger lazy storage construction through this interface.
+template <int Dim>
 class PreparedKrylovSolveContext {
  public:
-  [[nodiscard]] const KrylovControls& controls() const noexcept { return controls_; }
+  [[nodiscard]] const KrylovControls<Dim>& controls() const noexcept { return controls_; }
   [[nodiscard]] const LinearOperatorProperties& operator_properties() const noexcept {
     return problem_.properties();
   }
   [[nodiscard]] bool has_nullspace() const noexcept { return problem_.has_nullspace(); }
   [[nodiscard]] bool has_preconditioner() const noexcept { return problem_.has_preconditioner(); }
-  [[nodiscard]] const PreparedVectorDistribution& vector_distribution() const noexcept {
+  [[nodiscard]] const PreparedVectorDistribution<Dim>& vector_distribution() const noexcept {
     return problem_.vector_distribution();
   }
   /// Communicator authority for every provider collective. Providers must never fall back to
@@ -1410,12 +1491,12 @@ class PreparedKrylovSolveContext {
     return initial_measurement_.physical;
   }
 
-  [[nodiscard]] MultiFab& iterate() noexcept { return iterate_; }
-  [[nodiscard]] const MultiFab& rhs() const noexcept { return rhs_; }
-  [[nodiscard]] MultiFab& field(std::size_t index) {
+  [[nodiscard]] MultiFab<Dim>& iterate() noexcept { return iterate_; }
+  [[nodiscard]] const MultiFab<Dim>& rhs() const noexcept { return rhs_; }
+  [[nodiscard]] MultiFab<Dim>& field(std::size_t index) {
     return detail::KrylovWorkspaceAccess::field(workspace_, index);
   }
-  [[nodiscard]] MultiFab& initial_residual() {
+  [[nodiscard]] MultiFab<Dim>& initial_residual() {
     return field(detail::KrylovWorkspaceAccess::initial_residual_field(workspace_));
   }
   [[nodiscard]] Real& real_value(std::size_t index) { return workspace_.real_value(index); }
@@ -1432,50 +1513,50 @@ class PreparedKrylovSolveContext {
     return workspace_.metric_robust_payload_width();
   }
 
-  void zero(MultiFab& value) const { detail::PreparedFieldAlgebra::zero(value); }
-  void copy(MultiFab& out, const MultiFab& in) const {
+  void zero(MultiFab<Dim>& value) const { detail::PreparedFieldAlgebra::zero(value); }
+  void copy(MultiFab<Dim>& out, const MultiFab<Dim>& in) const {
     detail::PreparedFieldAlgebra::copy(out, in);
   }
-  void divide(MultiFab& value, Real denominator) const {
+  void divide(MultiFab<Dim>& value, Real denominator) const {
     detail::PreparedFieldAlgebra::divide(value, denominator);
   }
-  void axpy(MultiFab& out, Real coefficient, const MultiFab& in) const {
+  void axpy(MultiFab<Dim>& out, Real coefficient, const MultiFab<Dim>& in) const {
     detail::PreparedFieldAlgebra::axpy(out, coefficient, in);
   }
-  void add_physical_direction(MultiFab& out, Real coefficient,
-                              const MultiFab& normalized_direction) const {
+  void add_physical_direction(MultiFab<Dim>& out, Real coefficient,
+                              const MultiFab<Dim>& normalized_direction) const {
     detail::ScaledFieldAlgebra::axpy(out, detail::scaled_product(coefficient, normalization_.scale),
                                      normalized_direction);
   }
-  void apply_linear(MultiFab& out, const MultiFab& direction, Real equation_scale) const {
+  void apply_linear(MultiFab<Dim>& out, const MultiFab<Dim>& direction, Real equation_scale) const {
     detail::workspace_apply_linear(problem_, workspace_, out, direction, equation_scale);
   }
-  void apply_linear(MultiFab& out, const MultiFab& direction) const {
+  void apply_linear(MultiFab<Dim>& out, const MultiFab<Dim>& direction) const {
     apply_linear(out, direction, normalization_.scale);
   }
-  void apply_preconditioner(MultiFab& out, const MultiFab& in) const {
+  void apply_preconditioner(MultiFab<Dim>& out, const MultiFab<Dim>& in) const {
     detail::workspace_apply_preconditioner(problem_, workspace_, out, in);
   }
-  [[nodiscard]] Real inner_product(const MultiFab& left, const MultiFab& right) const {
+  [[nodiscard]] Real inner_product(const MultiFab<Dim>& left, const MultiFab<Dim>& right) const {
     return detail::workspace_inner_product(problem_, workspace_, left, right);
   }
-  [[nodiscard]] Real residual_norm(const MultiFab& value) const {
+  [[nodiscard]] Real residual_norm(const MultiFab<Dim>& value) const {
     return detail::workspace_residual_norm(problem_, workspace_, value);
   }
-  void local_robust_inner_product_payload(const MultiFab& left, const MultiFab& right,
+  void local_robust_inner_product_payload(const MultiFab<Dim>& left, const MultiFab<Dim>& right,
                                           std::span<double> payload) const {
-    detail::PreparedProblemAccess::local_robust_inner_product_payload(problem_, left, right,
-                                                                      payload);
+    detail::PreparedProblemAccess<Dim>::local_robust_inner_product_payload(problem_, left, right,
+                                                                           payload);
   }
   [[nodiscard]] Real inner_product_from_global_robust_payload(
       std::span<const double> payload) const {
-    return detail::PreparedProblemAccess::inner_product_from_global_robust_payload(problem_,
-                                                                                   payload);
+    return detail::PreparedProblemAccess<Dim>::inner_product_from_global_robust_payload(problem_,
+                                                                                        payload);
   }
   void reduce_inner_products(double* values, int count, const char* quantity) {
     detail::reduce_batched_inner_products(problem_, workspace_, values, count, quantity);
   }
-  [[nodiscard]] Real true_residual_norm(MultiFab& scratch) const {
+  [[nodiscard]] Real true_residual_norm(MultiFab<Dim>& scratch) const {
     return detail::physical_true_residual_norm(problem_, workspace_, scratch, rhs_, iterate_);
   }
   [[nodiscard]] SolveReport report(Real physical_residual, int iterations,
@@ -1484,8 +1565,9 @@ class PreparedKrylovSolveContext {
   }
 
  private:
-  PreparedKrylovSolveContext(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
-                             MultiFab& iterate, const MultiFab& rhs, const KrylovControls& controls,
+  PreparedKrylovSolveContext(const PreparedAffineLinearProblem<Dim>& problem,
+                             KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                             const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
                              detail::SolveNormalization normalization,
                              detail::ResidualMeasurement initial_measurement)
       : problem_(problem),
@@ -1496,39 +1578,42 @@ class PreparedKrylovSolveContext {
         normalization_(normalization),
         initial_measurement_(initial_measurement) {}
 
-  friend class detail::CgKrylovMethodProvider;
-  friend class detail::BicgstabKrylovMethodProvider;
-  friend class detail::GmresKrylovMethodProvider;
-  friend class detail::RichardsonKrylovMethodProvider;
+  friend class detail::CgKrylovMethodProvider<Dim>;
+  friend class detail::BicgstabKrylovMethodProvider<Dim>;
+  friend class detail::GmresKrylovMethodProvider<Dim>;
+  friend class detail::RichardsonKrylovMethodProvider<Dim>;
   friend struct detail::PreparedKrylovInvocationAccess;
-  friend SolveReport detail::solve_prepared_affine_in_place(const PreparedAffineLinearProblem&,
-                                                            KrylovWorkspace&, MultiFab&,
-                                                            const MultiFab&, const KrylovControls&);
+  friend SolveReport detail::solve_prepared_affine_in_place<Dim>(
+      const PreparedAffineLinearProblem<Dim>&, KrylovWorkspace<Dim>&, MultiFab<Dim>&,
+      const MultiFab<Dim>&, const KrylovControls<Dim>&);
 
-  const PreparedAffineLinearProblem& problem_;
-  KrylovWorkspace& workspace_;
-  MultiFab& iterate_;
-  const MultiFab& rhs_;
-  const KrylovControls& controls_;
+  const PreparedAffineLinearProblem<Dim>& problem_;
+  KrylovWorkspace<Dim>& workspace_;
+  MultiFab<Dim>& iterate_;
+  const MultiFab<Dim>& rhs_;
+  const KrylovControls<Dim>& controls_;
   detail::SolveNormalization normalization_;
   detail::ResidualMeasurement initial_measurement_;
 };
 
-inline SolveReport detail::CgKrylovMethodProvider::solve(PreparedKrylovSolveContext& context,
-                                                         const PreparedProviderOptions&) const {
+template <int Dim>
+inline SolveReport detail::CgKrylovMethodProvider<Dim>::solve(
+    PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions&) const {
   return detail::solve_cg(context.problem_, context.workspace_, context.iterate_, context.rhs_,
                           context.controls_, context.normalization_, context.initial_measurement_);
 }
 
-inline SolveReport detail::BicgstabKrylovMethodProvider::solve(
-    PreparedKrylovSolveContext& context, const PreparedProviderOptions&) const {
+template <int Dim>
+inline SolveReport detail::BicgstabKrylovMethodProvider<Dim>::solve(
+    PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions&) const {
   return detail::solve_bicgstab(context.problem_, context.workspace_, context.iterate_,
                                 context.rhs_, context.controls_, context.normalization_,
                                 context.initial_measurement_);
 }
 
-inline SolveReport detail::GmresKrylovMethodProvider::solve(
-    PreparedKrylovSolveContext& context, const PreparedProviderOptions& options) const {
+template <int Dim>
+inline SolveReport detail::GmresKrylovMethodProvider<Dim>::solve(
+    PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions& options) const {
   const std::int64_t* restart =
       detail::exact_int_option(options, detail::kGmresOptionsSchema, "restart");
   if (restart == nullptr)
@@ -1538,8 +1623,9 @@ inline SolveReport detail::GmresKrylovMethodProvider::solve(
                              context.initial_measurement_);
 }
 
-inline SolveReport detail::RichardsonKrylovMethodProvider::solve(
-    PreparedKrylovSolveContext& context, const PreparedProviderOptions& options) const {
+template <int Dim>
+inline SolveReport detail::RichardsonKrylovMethodProvider<Dim>::solve(
+    PreparedKrylovSolveContext<Dim>& context, const PreparedProviderOptions& options) const {
   const double* relaxation =
       detail::exact_real_option(options, detail::kRichardsonOptionsSchema, "relaxation");
   if (relaxation == nullptr)
@@ -1549,45 +1635,51 @@ inline SolveReport detail::RichardsonKrylovMethodProvider::solve(
                                   context.normalization_, context.initial_measurement_);
 }
 
-inline std::shared_ptr<PreparedKrylovMethodRegistry>
+template <int Dim>
+inline std::shared_ptr<PreparedKrylovMethodRegistry<Dim>>
 make_default_krylov_method_provider_registry() {
-  auto registry = std::make_shared<PreparedKrylovMethodRegistry>();
-  registry->add(std::make_shared<detail::CgKrylovMethodProvider>());
-  registry->add(std::make_shared<detail::BicgstabKrylovMethodProvider>());
-  registry->add(std::make_shared<detail::GmresKrylovMethodProvider>());
-  registry->add(std::make_shared<detail::RichardsonKrylovMethodProvider>());
+  auto registry = std::make_shared<PreparedKrylovMethodRegistry<Dim>>();
+  registry->add(std::make_shared<detail::CgKrylovMethodProvider<Dim>>());
+  registry->add(std::make_shared<detail::BicgstabKrylovMethodProvider<Dim>>());
+  registry->add(std::make_shared<detail::GmresKrylovMethodProvider<Dim>>());
+  registry->add(std::make_shared<detail::RichardsonKrylovMethodProvider<Dim>>());
   return registry;
 }
 
 namespace detail {
-inline const PreparedKrylovMethodRegistry& default_krylov_method_registry() {
-  static const std::shared_ptr<PreparedKrylovMethodRegistry> registry =
-      make_default_krylov_method_provider_registry();
+template <int Dim>
+inline const PreparedKrylovMethodRegistry<Dim>& default_krylov_method_registry() {
+  static const std::shared_ptr<PreparedKrylovMethodRegistry<Dim>> registry =
+      make_default_krylov_method_provider_registry<Dim>();
   return *registry;
 }
 }  // namespace detail
 
-inline PreparedKrylovMethod cg_krylov_method() {
-  return detail::default_krylov_method_registry().resolve(
+template <int Dim>
+inline PreparedKrylovMethod<Dim> cg_krylov_method() {
+  return detail::default_krylov_method_registry<Dim>().resolve(
       "pops.krylov.cg", PreparedProviderOptions{std::string(detail::kCgOptionsSchema), {}});
 }
-inline PreparedKrylovMethod bicgstab_krylov_method() {
-  return detail::default_krylov_method_registry().resolve(
+template <int Dim>
+inline PreparedKrylovMethod<Dim> bicgstab_krylov_method() {
+  return detail::default_krylov_method_registry<Dim>().resolve(
       "pops.krylov.bicgstab",
       PreparedProviderOptions{std::string(detail::kBicgstabOptionsSchema), {}});
 }
-inline PreparedKrylovMethod gmres_krylov_method(int restart) {
+template <int Dim>
+inline PreparedKrylovMethod<Dim> gmres_krylov_method(int restart) {
   if (restart < 1)
     throw std::invalid_argument("prepared GMRES restart must be positive");
-  return detail::default_krylov_method_registry().resolve(
+  return detail::default_krylov_method_registry<Dim>().resolve(
       "pops.krylov.gmres",
       PreparedProviderOptions{std::string(detail::kGmresOptionsSchema),
                               {{"restart", static_cast<std::int64_t>(restart)}}});
 }
-inline PreparedKrylovMethod richardson_krylov_method(Real relaxation) {
+template <int Dim>
+inline PreparedKrylovMethod<Dim> richardson_krylov_method(Real relaxation) {
   if (!detail::finite(relaxation) || !(relaxation > Real(0)))
     throw std::invalid_argument("prepared Richardson relaxation must be finite and positive");
-  return detail::default_krylov_method_registry().resolve(
+  return detail::default_krylov_method_registry<Dim>().resolve(
       "pops.krylov.richardson",
       PreparedProviderOptions{std::string(detail::kRichardsonOptionsSchema),
                               {{"relaxation", static_cast<double>(relaxation)}}});
@@ -1596,12 +1688,13 @@ inline PreparedKrylovMethod richardson_krylov_method(Real relaxation) {
 /// Solve one explicitly prepared affine problem with persistent workspace.  There are no legacy raw
 /// callback overloads: preparation, property checks, exact snapshot binding, and memory footprint are
 /// mandatory parts of the API rather than optional caller conventions.
+template <int Dim>
 inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
-    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& iterate,
-    const MultiFab& rhs, const KrylovControls& controls) {
-  MultiFab& compatibility_rhs = detail::KrylovWorkspaceAccess::field(workspace, 0);
+    const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
+    MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls) {
+  MultiFab<Dim>& compatibility_rhs = detail::KrylovWorkspaceAccess::field(workspace, 0);
   const PreparedEquationReference equation =
-      detail::PreparedProblemAccess::prepare_compatibility_rhs(
+      detail::PreparedProblemAccess<Dim>::prepare_compatibility_rhs(
           problem, compatibility_rhs, rhs,
           detail::KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
           detail::KrylovWorkspaceAccess::execution_lane(workspace));
@@ -1621,7 +1714,7 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
   // gauge or an iterative operator application. The typed status keeps authored outcome/action
   // handling on the SolveReport path instead of leaking a generic exception past it.
   try {
-    detail::PreparedProblemAccess::require_nullspace_compatible(
+    detail::PreparedProblemAccess<Dim>::require_nullspace_compatible(
         problem, compatibility_rhs,
         detail::KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
         detail::KrylovWorkspaceAccess::execution_lane(workspace));
@@ -1658,12 +1751,12 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
     return invalid;
   }
   if (problem.has_nullspace())
-    detail::PreparedProblemAccess::apply_nullspace_gauge(
+    detail::PreparedProblemAccess<Dim>::apply_nullspace_gauge(
         problem, iterate, detail::KrylovWorkspaceAccess::gauge_coefficients(workspace),
         detail::KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
         detail::KrylovWorkspaceAccess::execution_lane(workspace));
 
-  MultiFab& initial_residual = detail::initial_residual_field(workspace, controls);
+  MultiFab<Dim>& initial_residual = detail::initial_residual_field(workspace, controls);
   detail::workspace_true_residual(problem, workspace, initial_residual, rhs, iterate);
   const PreparedApplyResult initial_apply_failure =
       detail::KrylovWorkspaceAccess::collective_provider_apply_result(workspace);
@@ -1696,8 +1789,8 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
   const detail::ResidualMeasurement initial_measurement{initial_physical,
                                                         initial_physical / solve_scale};
 
-  PreparedKrylovSolveContext method_context(problem, workspace, iterate, rhs, controls,
-                                            normalization, initial_measurement);
+  PreparedKrylovSolveContext<Dim> method_context(problem, workspace, iterate, rhs, controls,
+                                                 normalization, initial_measurement);
   std::optional<SolveReport> provider_result;
   long provider_exception_local = 0;
   try {
@@ -1747,7 +1840,7 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
   // provider that returns a false Solved/NaN report or leaves the iterate unchanged, without a
   // per-solve allocation or a method-name branch in the core.
   if (problem.has_nullspace()) {
-    detail::PreparedProblemAccess::apply_nullspace_gauge(
+    detail::PreparedProblemAccess<Dim>::apply_nullspace_gauge(
         problem, iterate, detail::KrylovWorkspaceAccess::gauge_coefficients(workspace),
         detail::KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
         detail::KrylovWorkspaceAccess::execution_lane(workspace));
@@ -1797,6 +1890,7 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
 /// problem/workspace/input contract. Once materialized, distinct invocations may execute
 /// concurrently: every numerical collective, provider callback and halo exchange stays on the
 /// invocation's workspace-private ExecutionLane.
+template <int Dim>
 class PreparedKrylovInvocation final {
  public:
   PreparedKrylovInvocation(const PreparedKrylovInvocation&) = delete;
@@ -1849,16 +1943,17 @@ class PreparedKrylovInvocation final {
     // once on the invocation-private lane after the complete provider trace and before publishing
     // the result. This rejects external state mutation without adding a control collective to each
     // matrix-vector product or coupling concurrent invocations through the preparation lane.
-    detail::PreparedProblemAccess::require_current(*problem_, lane);
+    detail::PreparedProblemAccess<Dim>::require_current(*problem_, lane);
     return std::move(*result);
   }
 
  private:
   struct MaterializedToken {};
 
-  PreparedKrylovInvocation(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
-                           MultiFab& iterate, MultiFab* publication_destination,
-                           const MultiFab& rhs, KrylovControls controls, MaterializedToken)
+  PreparedKrylovInvocation(const PreparedAffineLinearProblem<Dim>& problem,
+                           KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& iterate,
+                           MultiFab<Dim>* publication_destination, const MultiFab<Dim>& rhs,
+                           KrylovControls<Dim> controls, MaterializedToken)
       : problem_(&problem),
         workspace_(&workspace),
         iterate_(&iterate),
@@ -1882,23 +1977,25 @@ class PreparedKrylovInvocation final {
     if (!owns_reservation_)
       return;
     detail::KrylovWorkspaceAccess::release_solve(*workspace_);
-    detail::PreparedProblemAccess::release_use(*problem_);
+    detail::PreparedProblemAccess<Dim>::release_use(*problem_);
     owns_reservation_ = false;
   }
 
-  friend PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
-      const PreparedAffineLinearProblem&, KrylovWorkspace&, MultiFab&, const MultiFab&,
-      const KrylovControls&, bool);
-  friend SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem&,
-                                                    KrylovWorkspace&, MultiFab&, const MultiFab&,
-                                                    const KrylovControls&);
+  friend PreparedKrylovInvocation<Dim> detail::prepare_krylov_solve_in_place<Dim>(
+      const PreparedAffineLinearProblem<Dim>&, KrylovWorkspace<Dim>&, MultiFab<Dim>&,
+      const MultiFab<Dim>&, const KrylovControls<Dim>&, bool);
+  template <int OtherDim>
+  friend SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem<OtherDim>&,
+                                                    KrylovWorkspace<OtherDim>&, MultiFab<OtherDim>&,
+                                                    const MultiFab<OtherDim>&,
+                                                    const KrylovControls<OtherDim>&);
 
-  const PreparedAffineLinearProblem* problem_ = nullptr;
-  KrylovWorkspace* workspace_ = nullptr;
-  MultiFab* iterate_ = nullptr;
-  MultiFab* publication_destination_ = nullptr;
-  const MultiFab* rhs_ = nullptr;
-  KrylovControls controls_{};
+  const PreparedAffineLinearProblem<Dim>* problem_ = nullptr;
+  KrylovWorkspace<Dim>* workspace_ = nullptr;
+  MultiFab<Dim>* iterate_ = nullptr;
+  MultiFab<Dim>* publication_destination_ = nullptr;
+  const MultiFab<Dim>* rhs_ = nullptr;
+  KrylovControls<Dim> controls_{};
   bool consumed_ = false;
   bool owns_reservation_ = false;
 };
@@ -1907,14 +2004,16 @@ class PreparedKrylovInvocation final {
 /// This is the generic MPI matching boundary: a communicator cannot diagnose ranks selecting
 /// different communicators after a collective has already begun, so selection is authenticated on
 /// the common control communicator first and numerical execution only then enters private lanes.
-inline PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
-    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& iterate,
-    const MultiFab& rhs, const KrylovControls& controls, bool staged_publication) {
+template <int Dim>
+inline PreparedKrylovInvocation<Dim> detail::prepare_krylov_solve_in_place(
+    const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
+    MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls,
+    bool staged_publication) {
   const bool workspace_reserved = detail::KrylovWorkspaceAccess::try_reserve_solve(workspace);
-  const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_use(problem);
-  detail::PendingPreparedKrylovReservations pending_reservations(
+  const bool problem_reserved = detail::PreparedProblemAccess<Dim>::try_reserve_use(problem);
+  detail::PendingPreparedKrylovReservations<Dim> pending_reservations(
       problem, workspace, problem_reserved, workspace_reserved);
-  const ExecutionLane& control_lane = detail::PreparedProblemAccess::preparation_lane(problem);
+  const ExecutionLane& control_lane = detail::PreparedProblemAccess<Dim>::preparation_lane(problem);
   const detail::PreparedProblemControlConsensus reservation_consensus =
       detail::coordinate_prepared_problem_control(
           detail::PreparedProblemControlOperation::MaterializeSolve, workspace_reserved,
@@ -1934,11 +2033,11 @@ inline PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
         "its external execution context");
   }
 
-  MultiFab* solve_iterate = &iterate;
+  MultiFab<Dim>* solve_iterate = &iterate;
   if (staged_publication) {
     long staging_failure_local = 0;
     try {
-      MultiFab& candidate = detail::KrylovWorkspaceAccess::publication_candidate(workspace);
+      MultiFab<Dim>& candidate = detail::KrylovWorkspaceAccess::publication_candidate(workspace);
       detail::PreparedFieldAlgebra::copy(candidate, iterate);
       solve_iterate = &candidate;
     } catch (...) {
@@ -1951,9 +2050,9 @@ inline PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
 
   detail::collective_solve_preflight(problem, workspace, *solve_iterate, rhs, controls,
                                      control_lane);
-  PreparedKrylovInvocation invocation(problem, workspace, *solve_iterate,
-                                      staged_publication ? &iterate : nullptr, rhs, controls,
-                                      PreparedKrylovInvocation::MaterializedToken{});
+  PreparedKrylovInvocation<Dim> invocation(
+      problem, workspace, *solve_iterate, staged_publication ? &iterate : nullptr, rhs, controls,
+      typename PreparedKrylovInvocation<Dim>::MaterializedToken{});
   pending_reservations.transfer_to_invocation();
   return invocation;
 }
@@ -1961,10 +2060,11 @@ inline PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
 /// Internal in-place numerical primitive. Public/runtime callers use
 /// solve_prepared_affine_outcome(); only prepared solver implementations and contract tests name
 /// this detail route explicitly.
+template <int Dim>
 inline SolveReport detail::solve_prepared_affine_in_place(
-    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& iterate,
-    const MultiFab& rhs, const KrylovControls& controls) {
-  PreparedKrylovInvocation invocation =
+    const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
+    MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs, const KrylovControls<Dim>& controls) {
+  PreparedKrylovInvocation<Dim> invocation =
       prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls);
   return invocation.execute();
 }
@@ -1973,11 +2073,12 @@ inline SolveReport detail::solve_prepared_affine_in_place(
 /// point above remains the provider-level in-place report API. This route solves into a persistent
 /// workspace-private candidate, keeps the workspace/problem reserved, and copies the candidate to
 /// @p iterate only when the outcome is accepted on the workspace's exact execution lane.
-inline SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem& problem,
-                                                  KrylovWorkspace& workspace, MultiFab& iterate,
-                                                  const MultiFab& rhs,
-                                                  const KrylovControls& controls) {
-  PreparedKrylovInvocation invocation =
+template <int Dim>
+inline SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem<Dim>& problem,
+                                                  KrylovWorkspace<Dim>& workspace,
+                                                  MultiFab<Dim>& iterate, const MultiFab<Dim>& rhs,
+                                                  const KrylovControls<Dim>& controls) {
+  PreparedKrylovInvocation<Dim> invocation =
       detail::prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls,
                                             /*staged_publication=*/true);
   SolveReport report = invocation.execute();
@@ -1987,17 +2088,17 @@ inline SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProb
       SolveOutcome::PublicationHooks{&workspace,
                                      [](void* context) noexcept {
                                        detail::KrylovWorkspaceAccess::publish_candidate(
-                                           *static_cast<KrylovWorkspace*>(context));
+                                           *static_cast<KrylovWorkspace<Dim>*>(context));
                                      },
                                      nullptr,
                                      [](void* context) noexcept {
                                        detail::KrylovWorkspaceAccess::release_publication(
-                                           *static_cast<KrylovWorkspace*>(context));
+                                           *static_cast<KrylovWorkspace<Dim>*>(context));
                                      },
                                      {},
                                      [](void* context) {
                                        detail::KrylovWorkspaceAccess::validate_publication(
-                                           *static_cast<KrylovWorkspace*>(context));
+                                           *static_cast<KrylovWorkspace<Dim>*>(context));
                                      }});
 }
 

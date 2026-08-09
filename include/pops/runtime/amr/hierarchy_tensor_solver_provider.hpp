@@ -1,13 +1,18 @@
+/// @file
+/// @brief Exact-ranked prepared provider protocol for hierarchy tensor elliptic solves.
+
 #pragma once
 
-/// @file
-/// @brief Provider-neutral prepared hierarchy tensor-solver protocol for compiled AMR Programs.
-
+#include <pops/amr/refinement_ratio.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/core/identity/prepared_provider_options.hpp>
-#include <pops/mesh/layout/field_distribution.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
@@ -15,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <map>
@@ -25,11 +31,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops {
-
-class AmrRuntime;
-
-namespace runtime::program {
+namespace pops::runtime::program {
 
 struct HierarchyTensorSolveControls {
   Real relative_tolerance = Real(0);
@@ -37,13 +39,30 @@ struct HierarchyTensorSolveControls {
   int maximum_iterations = 0;
 };
 
+/// Exact immutable spatial request for one materialized hierarchy level.
+template <int Dim>
+struct HierarchyTensorLevelBuildRequest {
+  static_assert(Dim >= 1 && Dim <= 3);
+
+  Geometry<Dim> geometry;
+  PhysicalBoundaryConditions<Dim> boundary;
+  mesh::BoxArray<Dim> layout;
+  mesh::Distribution<Dim> distribution;
+  Index<Dim> local_rank{};
+};
+
+/// Provider-neutral build request. Spatial rank is a template argument, never a payload tag.
+template <int Dim>
 struct HierarchyTensorSolverBuildRequest {
-  AmrRuntime* runtime = nullptr;
-  int block = -1;
+  static_assert(Dim >= 1 && Dim <= 3);
+
+  static constexpr int dimension = Dim;
+  using level_type = HierarchyTensorLevelBuildRequest<Dim>;
+
+  std::size_t block = 0;
   int components = 0;
-  int levels = 0;
-  std::vector<bool> level_populated;
-  std::vector<FieldDistribution> level_distributions;
+  std::vector<level_type> levels;
+  std::vector<::pops::amr::RefinementRatio<Dim>> ratios;
   std::string plan_identity;
   std::string operator_contract_identity;
   std::vector<std::string> assembly_field_slots;
@@ -51,224 +70,355 @@ struct HierarchyTensorSolverBuildRequest {
   PreparedProviderOptions options;
 };
 
-/// Provider-selected execution path for the materialized request.  This is deliberately a small
-/// protocol distinction, not a solver-family enumeration: the core only needs to know whether the
-/// separately prepared level-local Krylov program owns execution, or whether the selected hierarchy
-/// provider owns storage, solve and publication itself.
 enum class HierarchyTensorSolverExecutionPath : std::uint8_t {
   PreparedKrylovFallback,
   DirectProvider,
 };
 
-/// Fully materialized tensor solve.  The Program context owns only this interface; concrete solver
-/// storage, redistribution schedules and iteration policy remain provider-private.
+namespace hierarchy_tensor_detail {
+
+template <int Dim>
+Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = ratio[axis];
+  return result;
+}
+
+template <int Dim>
+void validate_request(const HierarchyTensorSolverBuildRequest<Dim>& request) {
+  if (request.components < 1 || request.levels.empty() || request.plan_identity.empty() ||
+      request.operator_contract_identity.empty() || request.solution_field_slot.empty())
+    throw std::invalid_argument("hierarchy tensor request has an incomplete operator envelope");
+  if (request.ratios.size() + 1 != request.levels.size())
+    throw std::invalid_argument("hierarchy tensor request ratios do not cover every level edge");
+  if (request.assembly_field_slots.empty() ||
+      std::any_of(request.assembly_field_slots.begin(), request.assembly_field_slots.end(),
+                  [](const std::string& slot) { return slot.empty(); }))
+    throw std::invalid_argument("hierarchy tensor request has invalid assembly field slots");
+  std::vector<std::string> ordered_slots = request.assembly_field_slots;
+  std::sort(ordered_slots.begin(), ordered_slots.end());
+  if (std::adjacent_find(ordered_slots.begin(), ordered_slots.end()) != ordered_slots.end())
+    throw std::invalid_argument("hierarchy tensor request field slots must be unique");
+
+  const auto& rank_space = request.levels.front().distribution.rank_space();
+  const Index<Dim> local_rank = request.levels.front().local_rank;
+  for (std::size_t level = 0; level < request.levels.size(); ++level) {
+    const auto& current = request.levels[level];
+    for (int axis = 0; axis < Dim; ++axis)
+      if (current.boundary.spacing()[axis] != current.geometry.spacing(axis))
+        throw std::invalid_argument(
+            "hierarchy tensor boundary spacing differs from its exact geometry");
+    if (!current.distribution.matches_layout(current.layout) ||
+        current.distribution.rank_space() != rank_space || current.local_rank != local_rank ||
+        !rank_space.contains(current.local_rank))
+      throw std::invalid_argument(
+          "hierarchy tensor level layout, distribution, and process coordinate disagree");
+    for (const Box<Dim>& patch : current.layout.boxes())
+      if (patch.intersect(current.geometry.domain()) != patch)
+        throw std::invalid_argument("hierarchy tensor patch lies outside its exact geometry");
+    if (level != 0) {
+      const Geometry<Dim> expected =
+          request.levels[level - 1].geometry.refine(ratio_extent(request.ratios[level - 1]));
+      if (current.geometry != expected)
+        throw std::invalid_argument("hierarchy tensor geometry is not the exact parent refinement");
+    }
+  }
+}
+
+template <int Dim>
+std::string request_contract(const HierarchyTensorSolverBuildRequest<Dim>& request) {
+  validate_request(request);
+  ExactContractBuilder contract;
+  contract.text("pops.hierarchy.tensor-solver-request")
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
+      .scalar(static_cast<std::uint64_t>(request.block))
+      .scalar(request.components)
+      .text(request.plan_identity)
+      .text(request.operator_contract_identity)
+      .sequence(request.assembly_field_slots,
+                [](ExactContractBuilder& item, const std::string& slot) { item.text(slot); })
+      .text(request.solution_field_slot)
+      .bytes(request.options.exact_contract())
+      .scalar(static_cast<std::uint64_t>(request.levels.size()));
+  for (const auto& level : request.levels) {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(level.geometry.domain().lo[axis])
+          .scalar(level.geometry.domain().hi[axis])
+          .scalar(level.geometry.lower()[axis])
+          .scalar(level.geometry.upper()[axis])
+          .scalar(level.distribution.rank_space().origin()[axis])
+          .scalar(level.distribution.rank_space().extent()[axis]);
+    for (int axis = 0; axis < Dim; ++axis)
+      for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
+        const Face<Dim> face{axis, side};
+        const PhysicalBoundaryFace& law = level.boundary.at(face);
+        contract.scalar(level.boundary.topology().is_periodic(face))
+            .scalar(law.kind)
+            .scalar(law.value)
+            .scalar(law.alpha)
+            .scalar(law.beta);
+      }
+    contract.scalar(level.distribution.mode())
+        .sequence(level.layout.boxes(),
+                  [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                    for (int axis = 0; axis < Dim; ++axis)
+                      item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
+                  })
+        .sequence(level.distribution.owners(),
+                  [](ExactContractBuilder& item, const Index<Dim>& owner) {
+                    for (int axis = 0; axis < Dim; ++axis)
+                      item.scalar(owner[axis]);
+                  });
+  }
+  contract.scalar(static_cast<std::uint64_t>(request.ratios.size()));
+  for (const auto& ratio : request.ratios)
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(ratio[axis]);
+  return std::move(contract).release();
+}
+
+template <int Dim>
+struct CopyAllocatedKernel {
+  FieldView<Real, Dim> destination;
+  FieldView<const Real, Dim> source;
+  int component = 0;
+
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, component) = source(index, component);
+  }
+};
+
+template <int Dim, class MemorySpace>
+bool same_field_shape(const MultiFab<Dim, MemorySpace>& left,
+                      const MultiFab<Dim, MemorySpace>& right) noexcept {
+  return left.layout() == right.layout() && left.distribution() == right.distribution() &&
+         left.local_rank() == right.local_rank() && left.ncomp() == right.ncomp() &&
+         left.ghosts() == right.ghosts() && left.local_size() == right.local_size();
+}
+
+template <int Dim, class MemorySpace>
+void copy_allocated(MultiFab<Dim, MemorySpace>& destination,
+                    const MultiFab<Dim, MemorySpace>& source) {
+  if (!same_field_shape(destination, source))
+    throw std::invalid_argument("hierarchy tensor publication fields have different shapes");
+  for (std::size_t local = 0; local < destination.local_size(); ++local) {
+    const FieldView<Real, Dim> output = destination.fab(local).view();
+    const FieldView<const Real, Dim> input = std::as_const(source.fab(local)).view();
+    for (int component = 0; component < destination.ncomp(); ++component)
+      for_each_cell(destination.fab(local).grown_box(),
+                    CopyAllocatedKernel<Dim>{output, input, component});
+  }
+  Kokkos::fence();
+}
+
+}  // namespace hierarchy_tensor_detail
+
+/// A prepared hierarchy solver owns one immutable native spatial specialization.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class PreparedHierarchyTensorSolver {
  public:
+  static_assert(Dim >= 1 && Dim <= 3);
+  using field_type = MultiFab<Dim, MemorySpace>;
+
   virtual ~PreparedHierarchyTensorSolver() = default;
-  [[nodiscard]] virtual std::string_view provider_identity() const noexcept = 0;
-  [[nodiscard]] virtual std::uint64_t provider_version() const noexcept = 0;
-  [[nodiscard]] virtual std::string_view exact_prepared_contract() const noexcept = 0;
-  [[nodiscard]] virtual HierarchyTensorSolverExecutionPath execution_path() const noexcept = 0;
-  [[nodiscard]] virtual int level_count() const noexcept = 0;
-  /// Resolve a provider-owned prepared field slot. The core treats the stable identity as opaque;
-  /// a new operator envelope may add slots without modifying this protocol.
-  virtual MultiFab& assembly_target(std::string_view field_slot_identity, int level) = 0;
-  virtual MultiFab& solution(int level) = 0;
-  virtual void stage_initial_guess(int level, const MultiFab* guess) = 0;
+  virtual std::string_view provider_identity() const noexcept = 0;
+  virtual std::uint64_t provider_version() const noexcept = 0;
+  virtual std::string_view exact_prepared_contract() const noexcept = 0;
+  virtual HierarchyTensorSolverExecutionPath execution_path() const noexcept = 0;
+  virtual int level_count() const noexcept = 0;
+  virtual field_type& assembly_target(std::string_view field_slot_identity, int level) = 0;
+  virtual field_type& solution(int level) = 0;
+  virtual void stage_initial_guess(int level, const field_type* guess) = 0;
 
- protected:
-  /// Provider execution is reachable only through the collective SolveOutcome publication seam.
-  /// Return only after recomputing the true residual defined by exact_prepared_contract().
-  virtual SolveReport solve(const HierarchyTensorSolveControls& controls) = 0;
-
- private:
-  friend SolveOutcome solve_prepared_hierarchy_tensor_collectively(
-      PreparedHierarchyTensorSolver&, const HierarchyTensorSolveControls&);
-
-  static bool same_publication_layout_(const MultiFab& lhs, const MultiFab& rhs) noexcept {
-    return lhs.box_array().boxes() == rhs.box_array().boxes() &&
-           lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
-           lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
+  FieldView<Real, Dim> assembly_target_view(std::string_view field_slot_identity, int level,
+                                            std::size_t local_patch) {
+    return assembly_target(field_slot_identity, level).fab(local_patch).view();
+  }
+  FieldView<Real, Dim> solution_view(int level, std::size_t local_patch) {
+    return solution(level).fab(local_patch).view();
   }
 
-  void capture_publication_(std::vector<MultiFab>& storage) {
+  /// Materialize both rollback images during preparation, never on the solve hot path.
+  void seal_preparation() {
+    if (preparation_sealed_)
+      throw std::logic_error("hierarchy tensor solver preparation is already sealed");
     const int levels = level_count();
     if (levels < 0)
       throw std::logic_error("hierarchy tensor provider has a negative level count");
-    storage.resize(static_cast<std::size_t>(levels));
+    accepted_publication_.reserve(static_cast<std::size_t>(levels));
+    candidate_publication_.reserve(static_cast<std::size_t>(levels));
     for (int level = 0; level < levels; ++level) {
-      MultiFab& live = solution(level);
-      MultiFab& saved = storage[static_cast<std::size_t>(level)];
-      if (!same_publication_layout_(saved, live))
-        saved = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
-      PureFieldAlgebra::copy_allocated(saved, live);
+      field_type& live = solution(level);
+      accepted_publication_.emplace_back(live.layout(), live.distribution(), live.local_rank(),
+                                         live.ncomp(), live.ghosts());
+      candidate_publication_.emplace_back(live.layout(), live.distribution(), live.local_rank(),
+                                          live.ncomp(), live.ghosts());
     }
+    preparation_sealed_ = true;
   }
 
-  void restore_publication_(const std::vector<MultiFab>& storage) {
-    if (storage.size() != static_cast<std::size_t>(level_count()))
-      throw std::logic_error("hierarchy tensor publication depth changed during a solve");
-    for (int level = 0; level < level_count(); ++level)
-      PureFieldAlgebra::copy_allocated(solution(level), storage[static_cast<std::size_t>(level)]);
+  SolveOutcome execute_collectively(const HierarchyTensorSolveControls& controls) {
+    const bool invalid_controls =
+        !std::isfinite(controls.relative_tolerance) || controls.relative_tolerance < Real(0) ||
+        !std::isfinite(controls.absolute_tolerance) || controls.absolute_tolerance < Real(0) ||
+        controls.maximum_iterations < 0;
+    if (all_reduce_max(invalid_controls || !preparation_sealed_ ? 1L : 0L) != 0)
+      throw std::invalid_argument(
+          "hierarchy tensor solve requires valid controls and a sealed preparation");
+    if (all_reduce_max(publication_active_ ? 1L : 0L) != 0)
+      throw std::logic_error(
+          "hierarchy tensor solve is reserved until its prior outcome is consumed");
+
+    if (!collective_capture_(accepted_publication_))
+      throw std::runtime_error(
+          "hierarchy tensor accepted-state snapshot failed on at least one MPI rank");
+    publication_active_ = true;
+
+    SolveReport report;
+    long solve_failed = 0;
+    try {
+      report = solve(controls);
+    } catch (...) {
+      solve_failed = 1;
+    }
+    if (all_reduce_max(solve_failed) != 0) {
+      restore_or_terminate_(accepted_publication_);
+      release_publication_();
+      throw std::runtime_error("hierarchy tensor provider failed on at least one MPI rank");
+    }
+    if (all_reduce_max(
+            !solve_report_is_publishable(report, controls.maximum_iterations) ? 1L : 0L) != 0) {
+      restore_or_terminate_(accepted_publication_);
+      release_publication_();
+      throw std::runtime_error("hierarchy tensor provider published a malformed SolveReport");
+    }
+    ExactSolveReportConsensusScratch report_consensus;
+    if (!report_consensus.agrees(report)) {
+      restore_or_terminate_(accepted_publication_);
+      release_publication_();
+      throw std::runtime_error("hierarchy tensor provider report differs between MPI ranks");
+    }
+    if (!report.solved_value_available()) {
+      restore_or_terminate_(accepted_publication_);
+      release_publication_();
+      return SolveOutcome::collective_world(std::move(report));
+    }
+    if (!collective_capture_(candidate_publication_)) {
+      restore_or_terminate_(accepted_publication_);
+      release_publication_();
+      throw std::runtime_error("hierarchy tensor candidate staging failed collectively");
+    }
+    restore_or_terminate_(accepted_publication_);
+    return SolveOutcome::collective_world(
+        std::move(report),
+        SolveOutcome::PublicationHooks{
+            this,
+            [](void* context) noexcept {
+              auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
+              prepared->restore_or_terminate_(prepared->candidate_publication_);
+            },
+            nullptr,
+            [](void* context) noexcept {
+              static_cast<PreparedHierarchyTensorSolver*>(context)->release_publication_();
+            },
+            {},
+            [](void* context) {
+              static_cast<PreparedHierarchyTensorSolver*>(context)
+                  ->validate_candidate_publication_();
+            }});
+  }
+
+ protected:
+  virtual SolveReport solve(const HierarchyTensorSolveControls& controls) = 0;
+
+ private:
+  bool collective_capture_(std::vector<field_type>& storage) {
+    long failure = 0;
+    try {
+      if (storage.size() != static_cast<std::size_t>(level_count()))
+        throw std::logic_error("hierarchy tensor publication depth changed after preparation");
+      for (int level = 0; level < level_count(); ++level)
+        hierarchy_tensor_detail::copy_allocated(storage[static_cast<std::size_t>(level)],
+                                                solution(level));
+    } catch (...) {
+      failure = 1;
+    }
+    return all_reduce_max(failure) == 0;
+  }
+
+  void restore_or_terminate_(const std::vector<field_type>& storage) noexcept {
+    try {
+      if (storage.size() != static_cast<std::size_t>(level_count()))
+        std::terminate();
+      for (int level = 0; level < level_count(); ++level)
+        hierarchy_tensor_detail::copy_allocated(solution(level),
+                                                storage[static_cast<std::size_t>(level)]);
+    } catch (...) {
+      std::terminate();
+    }
   }
 
   void validate_candidate_publication_() {
     if (candidate_publication_.size() != static_cast<std::size_t>(level_count()))
       throw std::logic_error("hierarchy tensor publication depth changed before Accept");
     for (int level = 0; level < level_count(); ++level)
-      if (!same_publication_layout_(solution(level),
-                                    candidate_publication_[static_cast<std::size_t>(level)]))
-        throw std::logic_error("hierarchy tensor publication layout changed before Accept");
+      if (!hierarchy_tensor_detail::same_field_shape(
+              solution(level), candidate_publication_[static_cast<std::size_t>(level)]))
+        throw std::logic_error("hierarchy tensor publication shape changed before Accept");
   }
 
   void release_publication_() noexcept { publication_active_ = false; }
 
-  std::vector<MultiFab> accepted_publication_;
-  std::vector<MultiFab> candidate_publication_;
+  std::vector<field_type> accepted_publication_;
+  std::vector<field_type> candidate_publication_;
+  bool preparation_sealed_ = false;
   bool publication_active_ = false;
 };
 
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class HierarchyTensorSolverProvider {
  public:
+  using request_type = HierarchyTensorSolverBuildRequest<Dim>;
+  using solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
+
   virtual ~HierarchyTensorSolverProvider() = default;
-  [[nodiscard]] virtual std::string_view identity() const noexcept = 0;
-  [[nodiscard]] virtual std::uint64_t interface_version() const noexcept = 0;
-  [[nodiscard]] virtual std::string_view collective_contract() const noexcept = 0;
-  /// Opaque, inspectable declarations owned by this provider. The registry authenticates their exact
-  /// bytes but never assigns semantics to individual entries.
-  [[nodiscard]] virtual std::vector<std::string> capability_contracts() const = 0;
-  [[nodiscard]] virtual PreparedProviderOptions default_options() const = 0;
-  [[nodiscard]] virtual PreparedProviderSupport accepts_options(
+  virtual std::string_view identity() const noexcept = 0;
+  virtual std::uint64_t interface_version() const noexcept = 0;
+  virtual std::string_view collective_contract() const noexcept = 0;
+  virtual std::vector<std::string> capability_contracts() const = 0;
+  virtual PreparedProviderOptions default_options() const = 0;
+  virtual PreparedProviderSupport accepts_options(
       const PreparedProviderOptions& options) const noexcept = 0;
-  [[nodiscard]] virtual PreparedProviderSupport supports(
-      const HierarchyTensorSolverBuildRequest& request) const noexcept = 0;
-  [[nodiscard]] virtual PreparedProviderSupport accepts_execution(
-      const HierarchyTensorSolverBuildRequest& request,
-      HierarchyTensorSolverExecutionPath execution) const noexcept = 0;
-  [[nodiscard]] virtual std::string expected_prepared_contract(
-      const HierarchyTensorSolverBuildRequest& request) const = 0;
-  [[nodiscard]] virtual std::unique_ptr<PreparedHierarchyTensorSolver> prepare(
-      const HierarchyTensorSolverBuildRequest& request) const = 0;
+  virtual PreparedProviderSupport supports(const request_type& request) const noexcept = 0;
+  virtual PreparedProviderSupport accepts_execution(
+      const request_type& request, HierarchyTensorSolverExecutionPath execution) const noexcept = 0;
+  virtual std::string expected_prepared_contract(const request_type& request) const = 0;
+  virtual std::unique_ptr<solver_type> prepare(const request_type& request) const = 0;
 };
 
-/// Execute one provider-owned hierarchy solve behind a collective publication boundary.  The exact
-/// operator and scientific residual remain provider-owned, while the core guarantees that an
-/// exception, malformed report or rank-divergent report rejects publication on every rank.
-inline SolveOutcome solve_prepared_hierarchy_tensor_collectively(
-    PreparedHierarchyTensorSolver& solver, const HierarchyTensorSolveControls& controls) {
-  const bool invalid_controls =
-      !std::isfinite(controls.relative_tolerance) || controls.relative_tolerance < Real(0) ||
-      !std::isfinite(controls.absolute_tolerance) || controls.absolute_tolerance < Real(0) ||
-      controls.maximum_iterations < 0;
-  if (all_reduce_max(invalid_controls ? 1L : 0L) != 0)
-    throw std::invalid_argument("hierarchy tensor solve controls are invalid");
-  if (all_reduce_max(solver.publication_active_ ? 1L : 0L) != 0)
-    throw std::logic_error(
-        "hierarchy tensor solve is reserved until its prior outcome is consumed");
-
-  long snapshot_failed_local = 0;
-  try {
-    solver.capture_publication_(solver.accepted_publication_);
-  } catch (...) {
-    snapshot_failed_local = 1;
-  }
-  if (all_reduce_max(snapshot_failed_local) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor accepted-state snapshot failed on at least one MPI rank");
-  solver.publication_active_ = true;
-
-  SolveReport report;
-  bool solve_failed = false;
-  try {
-    report = solver.solve(controls);
-  } catch (...) {
-    solve_failed = true;
-  }
-  if (all_reduce_max(solve_failed ? 1L : 0L) != 0) {
-    try {
-      solver.restore_publication_(solver.accepted_publication_);
-    } catch (...) {
-      std::terminate();
-    }
-    solver.release_publication_();
-    throw std::runtime_error("hierarchy tensor-solver provider failed on at least one MPI rank");
-  }
-  const bool malformed = !solve_report_is_publishable(report, controls.maximum_iterations);
-  if (all_reduce_max(malformed ? 1L : 0L) != 0) {
-    try {
-      solver.restore_publication_(solver.accepted_publication_);
-    } catch (...) {
-      std::terminate();
-    }
-    solver.release_publication_();
-    throw std::runtime_error("hierarchy tensor-solver provider published a malformed SolveReport");
-  }
-  ExactSolveReportConsensusScratch report_consensus;
-  if (!report_consensus.agrees(report)) {
-    try {
-      solver.restore_publication_(solver.accepted_publication_);
-    } catch (...) {
-      std::terminate();
-    }
-    solver.release_publication_();
-    throw std::runtime_error("hierarchy tensor-solver provider report differs between MPI ranks");
-  }
-  if (!report.solved_value_available()) {
-    try {
-      solver.restore_publication_(solver.accepted_publication_);
-    } catch (...) {
-      std::terminate();
-    }
-    solver.release_publication_();
-    return SolveOutcome::collective_world(std::move(report));
-  }
-
-  long candidate_failed_local = 0;
-  try {
-    solver.capture_publication_(solver.candidate_publication_);
-    solver.restore_publication_(solver.accepted_publication_);
-  } catch (...) {
-    candidate_failed_local = 1;
-  }
-  if (all_reduce_max(candidate_failed_local) != 0) {
-    try {
-      solver.restore_publication_(solver.accepted_publication_);
-    } catch (...) {
-      std::terminate();
-    }
-    solver.release_publication_();
-    throw std::runtime_error("hierarchy tensor candidate staging failed on at least one MPI rank");
-  }
-  return SolveOutcome::collective_world(
-      std::move(report),
-      SolveOutcome::PublicationHooks{
-          &solver,
-          [](void* context) noexcept {
-            auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
-            prepared->restore_publication_(prepared->candidate_publication_);
-          },
-          nullptr,
-          [](void* context) noexcept {
-            static_cast<PreparedHierarchyTensorSolver*>(context)->release_publication_();
-          },
-          {},
-          [](void* context) {
-            static_cast<PreparedHierarchyTensorSolver*>(context)->validate_candidate_publication_();
-          }});
+template <int Dim, class MemorySpace>
+SolveOutcome solve_prepared_hierarchy_tensor_collectively(
+    PreparedHierarchyTensorSolver<Dim, MemorySpace>& solver,
+    const HierarchyTensorSolveControls& controls) {
+  return solver.execute_collectively(controls);
 }
 
-inline std::string exact_hierarchy_tensor_solver_provider_declaration(
-    const HierarchyTensorSolverProvider& provider) {
+template <int Dim, class MemorySpace>
+std::string exact_hierarchy_tensor_solver_provider_declaration(
+    const HierarchyTensorSolverProvider<Dim, MemorySpace>& provider) {
   std::vector<std::string> capabilities = provider.capability_contracts();
   std::sort(capabilities.begin(), capabilities.end());
   if (std::any_of(capabilities.begin(), capabilities.end(),
                   [](const std::string& value) { return value.empty(); }) ||
       std::adjacent_find(capabilities.begin(), capabilities.end()) != capabilities.end())
     throw std::invalid_argument(
-        "hierarchy tensor-solver provider capabilities require unique exact identities");
+        "hierarchy tensor provider capabilities require unique exact identities");
   ExactContractBuilder contract;
   contract.text("pops.hierarchy.tensor-solver-provider-declaration")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
+      .scalar(std::int32_t{Dim})
       .text(provider.identity())
       .scalar(provider.interface_version())
       .text(provider.collective_contract())
@@ -278,169 +428,129 @@ inline std::string exact_hierarchy_tensor_solver_provider_declaration(
   return std::move(contract).release();
 }
 
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class HierarchyTensorSolverProviderRegistry {
  public:
-  void add(std::shared_ptr<const HierarchyTensorSolverProvider> provider) {
+  using provider_type = HierarchyTensorSolverProvider<Dim, MemorySpace>;
+
+  void add(std::shared_ptr<const provider_type> provider) {
     if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
         provider->collective_contract().empty())
-      throw std::invalid_argument("hierarchy tensor-solver provider requires exact identities");
+      throw std::invalid_argument("hierarchy tensor registry requires a complete provider");
     const std::string identity(provider->identity());
-    // Validate and canonicalize the complete declaration before mutating the append-only registry.
-    // A malformed provider must not reserve its identity and poison a later valid registration.
     (void)exact_hierarchy_tensor_solver_provider_declaration(*provider);
     if (!providers_.emplace(identity, std::move(provider)).second)
-      throw std::invalid_argument("duplicate hierarchy tensor-solver provider identity '" +
-                                  identity + "'");
+      throw std::invalid_argument("duplicate hierarchy tensor provider identity '" + identity +
+                                  "'");
   }
 
-  /// Install a provider from a compiled Program component. Program installation is collective, but
-  /// each rank owns an independent registry; authenticate the complete declaration before mutating
-  /// any of them. Reinstalling the exact same declaration is idempotent because one component may be
-  /// referenced by multiple level-program instances. A same-name/different-contract replacement is
-  /// always rejected.
-  void add_collectively(std::shared_ptr<const HierarchyTensorSolverProvider> provider) {
+  void add_collectively(std::shared_ptr<const provider_type> provider) {
     std::string identity;
     std::string declaration;
-    bool local_invalid = false;
+    long invalid = 0;
     try {
-      if (!provider || provider->identity().empty() || provider->interface_version() == 0 ||
-          provider->collective_contract().empty())
-        throw std::invalid_argument("hierarchy tensor-solver provider requires exact identities");
+      if (!provider)
+        throw std::invalid_argument("null hierarchy tensor provider");
       identity = std::string(provider->identity());
       declaration = exact_hierarchy_tensor_solver_provider_declaration(*provider);
     } catch (...) {
-      local_invalid = true;
+      invalid = 1;
     }
-    if (all_reduce_max(local_invalid || declaration.empty() ? 1L : 0L) != 0)
-      throw std::runtime_error(
-          "hierarchy tensor-solver component published an invalid provider declaration");
+    if (all_reduce_max(invalid) != 0)
+      throw std::runtime_error("hierarchy tensor provider declaration failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"hierarchy-tensor-component-provider", declaration}}))
-      throw std::runtime_error(
-          "hierarchy tensor-solver component provider differs across MPI ranks");
-
+            {{"hierarchy-tensor-provider-declaration", declaration}}))
+      throw std::runtime_error("hierarchy tensor provider declaration differs across MPI ranks");
     const auto existing = providers_.find(identity);
-    const long local_exists = existing == providers_.end() ? 0L : 1L;
-    if (all_reduce_min(local_exists) != all_reduce_max(local_exists))
-      throw std::runtime_error(
-          "hierarchy tensor-solver provider registry differs across MPI ranks");
-    if (local_exists != 0) {
-      std::string existing_declaration;
-      bool existing_invalid = false;
-      try {
-        existing_declaration =
-            exact_hierarchy_tensor_solver_provider_declaration(*existing->second);
-      } catch (...) {
-        existing_invalid = true;
-      }
-      const bool existing_mismatch = existing_declaration != declaration;
-      if (all_reduce_max(existing_invalid || existing_mismatch ? 1L : 0L) != 0)
-        throw std::invalid_argument("conflicting hierarchy tensor-solver provider identity '" +
-                                    identity + "'");
+    const long present = existing == providers_.end() ? 0L : 1L;
+    if (all_reduce_min(present) != all_reduce_max(present))
+      throw std::runtime_error("hierarchy tensor provider registry differs across MPI ranks");
+    if (present != 0) {
+      if (exact_hierarchy_tensor_solver_provider_declaration(*existing->second) != declaration)
+        throw std::invalid_argument("conflicting hierarchy tensor provider identity '" + identity +
+                                    "'");
       return;
     }
     providers_.emplace(std::move(identity), std::move(provider));
   }
 
-  [[nodiscard]] std::shared_ptr<const HierarchyTensorSolverProvider> resolve(
-      std::string_view identity) const {
+  std::shared_ptr<const provider_type> resolve(std::string_view identity) const {
     const auto found = providers_.find(std::string(identity));
     if (found == providers_.end())
-      throw std::invalid_argument("unknown hierarchy tensor-solver provider '" +
-                                  std::string(identity) + "'");
+      throw std::invalid_argument("unknown hierarchy tensor provider '" + std::string(identity) +
+                                  "'");
     return found->second;
   }
 
  private:
-  std::map<std::string, std::shared_ptr<const HierarchyTensorSolverProvider>> providers_;
+  std::map<std::string, std::shared_ptr<const provider_type>> providers_;
 };
 
-inline std::unique_ptr<PreparedHierarchyTensorSolver> prepare_hierarchy_tensor_solver_collectively(
-    const HierarchyTensorSolverProviderRegistry& registry, std::string_view provider_identity,
-    HierarchyTensorSolverBuildRequest request) {
-  std::shared_ptr<const HierarchyTensorSolverProvider> provider;
-  std::string declaration_contract;
-  std::string option_support_contract;
-  std::string request_support_contract;
+template <int Dim, class MemorySpace>
+std::unique_ptr<PreparedHierarchyTensorSolver<Dim, MemorySpace>>
+prepare_hierarchy_tensor_solver_collectively(
+    const HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>& registry,
+    std::string_view provider_identity, HierarchyTensorSolverBuildRequest<Dim> request) {
+  using solver_type = PreparedHierarchyTensorSolver<Dim, MemorySpace>;
+  std::shared_ptr<const HierarchyTensorSolverProvider<Dim, MemorySpace>> provider;
+  std::string declaration;
+  std::string request_contract;
+  std::string support_contract;
   std::string expected_contract;
-  PreparedProviderSupport option_support;
-  PreparedProviderSupport request_support;
-  bool declaration_failed = false;
+  PreparedProviderSupport support;
+  long inspection_failure = 0;
   try {
+    hierarchy_tensor_detail::validate_request(request);
+    const auto& rank_space = request.levels.front().distribution.rank_space();
+    const Index<Dim>& local_rank = request.levels.front().local_rank;
+    if (rank_space.size() != static_cast<std::size_t>(n_ranks()) ||
+        rank_space.linear_rank(local_rank) != static_cast<std::size_t>(my_rank()))
+      throw std::invalid_argument(
+          "hierarchy tensor local process coordinate differs from MPI world");
     provider = registry.resolve(provider_identity);
-    declaration_contract = exact_hierarchy_tensor_solver_provider_declaration(*provider);
-    option_support = provider->accepts_options(request.options);
-    request_support = provider->supports(request);
-    option_support_contract = exact_prepared_provider_support(option_support);
-    request_support_contract = exact_prepared_provider_support(request_support);
-    if (option_support.accepted() && request_support.accepted())
+    declaration = exact_hierarchy_tensor_solver_provider_declaration(*provider);
+    request_contract = hierarchy_tensor_detail::request_contract(request);
+    support = provider->supports(request);
+    support_contract = exact_prepared_provider_support(support);
+    if (support.accepted())
       expected_contract = provider->expected_prepared_contract(request);
   } catch (...) {
-    declaration_failed = true;
+    inspection_failure = 1;
   }
-  if (all_reduce_max(declaration_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor-solver provider support inspection failed on at least one MPI rank");
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"hierarchy-tensor-provider", declaration_contract},
-           {"hierarchy-tensor-option-support", option_support_contract},
-           {"hierarchy-tensor-request-support", request_support_contract},
-           {"hierarchy-tensor-expected-contract", expected_contract}}))
-    throw std::runtime_error(
-        "hierarchy tensor-solver declaration or support decision differs across MPI ranks");
-  if (!option_support.accepted())
-    throw std::invalid_argument("hierarchy tensor-solver provider rejected options (code " +
-                                std::to_string(option_support.code) +
-                                "): " + std::string(option_support.reason));
-  if (!request_support.accepted())
-    throw std::invalid_argument("hierarchy tensor-solver provider rejected request (code " +
-                                std::to_string(request_support.code) +
-                                "): " + std::string(request_support.reason));
-  if (all_reduce_max(expected_contract.empty() ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor-solver provider accepted the request without an exact contract");
+  if (all_reduce_max(inspection_failure) != 0)
+    throw std::runtime_error("hierarchy tensor support inspection failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"hierarchy-tensor-provider", declaration},
+                                                 {"hierarchy-tensor-request", request_contract},
+                                                 {"hierarchy-tensor-support", support_contract},
+                                                 {"hierarchy-tensor-expected", expected_contract}}))
+    throw std::runtime_error("hierarchy tensor preparation contracts differ across MPI ranks");
+  if (!support.accepted())
+    throw std::invalid_argument("hierarchy tensor provider rejected request (code " +
+                                std::to_string(support.code) + "): " + std::string(support.reason));
 
-  std::unique_ptr<PreparedHierarchyTensorSolver> prepared;
-  bool preparation_failed = false;
+  std::unique_ptr<solver_type> prepared;
+  long preparation_failure = 0;
   try {
     prepared = provider->prepare(request);
+    if (!prepared || prepared->exact_prepared_contract() != expected_contract ||
+        prepared->provider_identity() != provider->identity() ||
+        prepared->provider_version() != provider->interface_version())
+      throw std::runtime_error("hierarchy tensor provider returned an unauthenticated solver");
+    const PreparedProviderSupport execution =
+        provider->accepts_execution(request, prepared->execution_path());
+    if (!execution.accepted())
+      throw std::invalid_argument("hierarchy tensor provider rejected its execution path");
+    prepared->seal_preparation();
   } catch (...) {
-    preparation_failed = true;
+    preparation_failure = 1;
   }
-  if (all_reduce_max(preparation_failed || !prepared ? 1L : 0L) != 0)
-    throw std::runtime_error("hierarchy tensor-solver preparation failed on at least one rank");
-  PreparedProviderSupport execution_support;
-  std::string execution_support_contract;
-  bool execution_inspection_failed = false;
-  try {
-    execution_support = provider->accepts_execution(request, prepared->execution_path());
-    execution_support_contract = exact_prepared_provider_support(execution_support);
-  } catch (...) {
-    execution_inspection_failed = true;
-  }
-  if (all_reduce_max(execution_inspection_failed ? 1L : 0L) != 0)
-    throw std::runtime_error(
-        "hierarchy tensor-solver execution support inspection failed on at least one MPI rank");
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"hierarchy-tensor-execution-support", execution_support_contract}}))
-    throw std::runtime_error("hierarchy tensor-solver execution support differs across MPI ranks");
-  if (!execution_support.accepted())
-    throw std::invalid_argument(
-        "hierarchy tensor-solver provider rejected prepared execution path (code " +
-        std::to_string(execution_support.code) + "): " + std::string(execution_support.reason));
-  const bool mismatch = prepared->provider_identity() != provider->identity() ||
-                        prepared->provider_version() != provider->interface_version() ||
-                        prepared->exact_prepared_contract() != expected_contract;
-  if (all_reduce_max(mismatch ? 1L : 0L) != 0)
-    throw std::runtime_error("hierarchy tensor-solver published an invalid prepared contract");
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"hierarchy-tensor-actual-contract", prepared->exact_prepared_contract()}}))
-    throw std::runtime_error("prepared hierarchy tensor solver differs across MPI ranks");
+  if (all_reduce_max(preparation_failure) != 0)
+    throw std::runtime_error("hierarchy tensor preparation failed on at least one MPI rank");
   return prepared;
 }
 
-std::shared_ptr<HierarchyTensorSolverProviderRegistry>
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+std::shared_ptr<HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>>
 make_default_hierarchy_tensor_solver_provider_registry();
 
-}  // namespace runtime::program
-}  // namespace pops
+}  // namespace pops::runtime::program

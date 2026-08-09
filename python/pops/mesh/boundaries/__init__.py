@@ -21,17 +21,17 @@ from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerCondition,
     CornerConstraint, CornerMode, CornerPolicy, GhostCoverageManifest, GhostDepthCapability,
     GhostDepthRequirement, GhostRegion, GhostStencilManifest, InterfaceAffineMapping,
-    InterfacePermutation, InterfaceSide, InterfaceTraceOperation, MultiBlockInterface,
-    TangentialOrientation)
+    InterfacePermutation, InterfaceSide, InterfaceTraceOperation, MultiBlockInterface)
 from .component_binding import BoundaryComponentBinding
-from .interface_authoring import BlockInterfaceSide, ConservativeInterface
+from .interface_authoring import BlockInterfaceSide, ConservativeInterface, TangentialTransform
 from .ports import (
     BoundaryDependencies, BoundaryPort, CharacteristicClosure, ClosureMode,
     ConstraintResidual, ExteriorTrace, GhostState, IncomingMultiplicity, NumericalFlux,
     RepresentationFlow, SignDependence, SonicPolicy)
 from .providers import (
-    BoundaryProvider, BoundaryProviderRegistry, DirectionalTransport, Dirichlet, GhostFormula,
-    Inflow, Mixed, Neumann, NoFlux, Outflow, ResolvedBoundaryBinding, ResolvedBoundaryPlan)
+    BoundaryProvider, BoundaryProviderKind, BoundaryProviderRegistry, DirectionalTransport,
+    Dirichlet, GhostFormula, Inflow, Mixed, Neumann, NoFlux, Outflow, PostRiemannFlux,
+    ResolvedBoundaryBinding, ResolvedBoundaryPlan)
 from .topology import (
     BoundaryHandle, BoundaryOrientation, BoundarySide, BoundaryTopology,
     PeriodicIdentification, PeriodicOrientation)
@@ -122,17 +122,18 @@ __all__ = [
     "PeriodicIdentification", "PeriodicOrientation", "BoundaryDependencies", "BoundaryPort",
     "CharacteristicClosure", "ClosureMode", "ConstraintResidual", "ExteriorTrace", "GhostState",
     "IncomingMultiplicity", "NumericalFlux", "RepresentationFlow", "SignDependence",
-    "SonicPolicy", "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport",
-    "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
+    "SonicPolicy", "BoundaryProvider", "BoundaryProviderKind", "BoundaryProviderRegistry",
+    "DirectionalTransport", "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann",
+    "NoFlux", "Outflow", "PostRiemannFlux",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
     "BoundaryComponentBinding", "BoundaryLinearizationContribution",
     "BoundaryResidualContribution",
-    "BlockInterfaceSide", "ConservativeInterface",
+    "BlockInterfaceSide", "ConservativeInterface", "TangentialTransform",
     "CoarseFineInterpolation", "CornerCondition", "CornerConstraint", "CornerMode",
     "CornerPolicy", "GhostCoverageManifest", "GhostDepthCapability", "GhostDepthRequirement",
     "GhostProducer", "GhostProducerPlan", "GhostProducerRegistry", "GhostProduction",
     "GhostRegion", "GhostStencilManifest", "InterfaceAffineMapping", "InterfaceGhost",
     "InterfacePermutation", "InterfaceSide", "InterfaceTraceOperation", "MultiBlockInterface",
     "NumericalClosure",
-    "PeriodicGhost", "PhysicalGhost", "SameLevelHaloMPI", "TangentialOrientation",
+    "PeriodicGhost", "PhysicalGhost", "SameLevelHaloMPI",
 ]

@@ -23,7 +23,9 @@ from pops.codegen.program_emit_kernels import (
     _deref,
     _emit_cell_compare_kernel,
     _emit_where_kernel,
+    _model_impl,
     _named_fluxes,
+    program_provider_consumer_qid,
 )
 from pops.codegen.program_emit_model_kernels import (
     _emit_apply_kernel,
@@ -169,29 +171,27 @@ def _append_local_nonlinear_report(
             lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
         else:
             lines.append("const pops::Real %s = %s;" % (token, expression))
-    encoded = "%s_failure_location" % report
+    location = "%s_failure_location" % report
+    reported_failure = "%s_reported_failure" % report
     failed_count = "%s_failed_count" % report
-    failed_i = "%s_failed_i" % report
-    failed_j = "%s_failed_j" % report
-    failed_component = "%s_failed_component" % report
-    encoded_priority = "%s_encoded_priority" % report
     lines += [
-        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
         "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
-        "int %s = 0;" % encoded_priority,
-        "int %s = -1;" % failed_i,
-        "int %s = -1;" % failed_j,
-        "int %s = -1;" % failed_component,
+        "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
-        "  pops::detail::decode_ranked_local_nonlinear_failure("
-        "%s, %s, %s, %s, %s);" % (encoded, encoded_priority, failed_i, failed_j, failed_component),
-        "if (%s > pops::Real(0) && %s != %s)" % (failed_count, encoded_priority, priority),
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
+        % (location, status, priority),
+        "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
+        % (failed_count, location, location, priority),
         "  throw std::runtime_error("
         '"local nonlinear collective status/location precedence mismatch");',
+        "const pops::SolveFailureLocation %s = %s.found ? "
+        "pops::SolveFailureLocation::from<pops::kNativeDimension>(%s.index, %s.component) : "
+        "pops::SolveFailureLocation{};"
+        % (reported_failure, location, location, location),
     ]
     lines.append(
         "pops::SolveReport %s = pops::local_nonlinear_solve_report("
-        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
         % (
             report,
             reduced["status"],
@@ -202,9 +202,7 @@ def _append_local_nonlinear_report(
             reduced["step"],
             reduced["condition"],
             reduced["safeguard_steps"],
-            failed_i,
-            failed_j,
-            failed_component,
+            reported_failure,
             failure_action,
         )
     )
@@ -220,7 +218,8 @@ def _append_local_nonlinear_report(
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
-             field_plans: Any = None) -> None:
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -235,6 +234,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     from pops.codegen.program_models import model_for_node
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model
+    provider_plans = var.get(("program_provider_plans",))
     # PER-NODE PROFILING (ADC-459): bracket this op's emitted C++ with a steady_clock pair
     # recorded under "node:<v.name>" (shown by sim.profile_report next to the coarse phases). A
     # now() + ctx.profile_record pair (NOT a RAII ProfileScope { }) keeps the emitted declarations
@@ -244,7 +244,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     _profile_start = len(lines)
     if v.op == "state":
         var[v.id] = "u%d" % v.id
-        lines.append("pops::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.state(%d);" % (var[v.id], bidx))
     elif v.op == "synchronize":
         (source,) = v.inputs
         relation = v.attrs.get("relation")
@@ -295,7 +295,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                     % (coordinate, depth))
             var[v.id] = "u%d" % v.id
             lines.append(
-                "pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                 % (var[v.id], int(v.id), var[source.id]))
             lines.append(
                 "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
@@ -389,7 +389,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # once -- the component formulas reference cons vars from MULTIPLE input states, so the
         # blocks cannot be lowered as independent single-block rates. Allocate one rate scratch per
         # block (shaped like that block's state, via rhs_scratch_like), emit the shared kernel that
-        # binds each input state's Array4 + cons names and writes all block scratches, and record
+        # binds each input state's exact-ranked FieldView + conservative names and writes all block
+        # scratches, and record
         # each block's scratch name so the coupled_rate_out for that block aliases it. All input
         # states are co-located (same ba/dm as the System aux), so a single shared loop is sound
         # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
@@ -405,7 +406,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         scratch = {}
         for subslot, blk in enumerate(components):   # bundle / expr block order
             scratch[blk] = "cr%d_%s" % (v.id, block_name(blk))
-            lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, %d, %s);"
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, %d, %s);"
                          % (scratch[blk], int(v.id), subslot, var[by_block[blk].id]))
         lines += _emit_coupled_rate_kernel(components, by_block, var, scratch)
         # Per-block names live in this emission's local token table. Codegen is a pure read of the
@@ -431,12 +432,12 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         scratch = {}
         for subslot, block in enumerate(components):
             scratch[block] = "ci%d_%s" % (v.id, block_name(block))
-            lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, %d, %s);"
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
                          % (scratch[block], int(v.id), subslot, var[by_block[block].id]))
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
@@ -458,20 +459,20 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         var[v.id] = "h%d" % v.id
         if "ncomp" in v.attrs:
             if target == "amr_system" and bidx is not None:
-                lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d, %d);"
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
                                 int(v.attrs["ncomp"]), bidx))
             else:
-                lines.append("pops::MultiFab& %s = ctx.history_zero_start(%s, %d, %d);"
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
                                 int(v.attrs["ncomp"])))
         else:
             if target == "amr_system":
-                lines.append("pops::MultiFab& %s = ctx.history(%s, %d, %d);"
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]),
                                 int(v.attrs["lag"]), bidx))
             else:
-                lines.append("pops::MultiFab& %s = ctx.history(%s, %d);"
+                lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history(%s, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"])))
     elif v.op == "store_history":
         # Side-effect: copy the value into the current slot of the history (the cold-start fill on
@@ -516,19 +517,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status_resource = "transform_status_resource_%d" % v.id
         active_mask = "transform_active_mask_%d" % v.id
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.scratch_state_like(ctx.state(%d)));"
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.scratch_state_like(ctx.state(%d)));"
             % (state_resource, bidx))
         prelude.append(
-            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 0));"
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(1, 0));"
             % status_resource)
-        lines.append("pops::MultiFab& %s = *%s;" % (var[v.id], state_resource))
-        lines.append("pops::MultiFab& %s = *%s;" % (status, status_resource))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
-            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, var[v.id]))
         lines += _emit_local_transform_kernel(
             node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
-            active_mask, bidx)
+            active_mask, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         reduced = "transform_failed_%d" % v.id
         lines.append(
             "const pops::Real %s = ctx.pointwise_status_max(%d, %s, %s);"
@@ -546,7 +550,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # `where` op selects on); no aux / model needed -- it reads component 0 of the input field.
         (field_in,) = v.inputs
         var[v.id] = "m%d" % v.id
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 1);"
                      % (var[v.id], int(v.id), var[field_in.id]))
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
                                            v.attrs["value"])
@@ -556,7 +560,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # ternary is decided per cell inside the kernel (NOT the scalar lazy ``branch`` op).
         mask_in, a_in, b_in = v.inputs
         var[v.id] = "w%d" % v.id
-        lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[a_in.id]))
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
     elif v.op == "record_scalar":
@@ -566,6 +570,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (scalar_in,) = v.inputs
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
+        var[v.id] = var[scalar_in.id]
+    elif v.op == "record_balance_term":
+        # Dedicated, non-bindable sink for a validated Program.record_balance term. Ordinary
+        # record_scalar names cannot enter the reserved native attempt mailbox.
+        from pops.codegen.program_balance_due import balance_record_due_expression
+
+        (scalar_in,) = v.inputs
+        due = balance_record_due_expression(var, v.id)
+        if due != "false":
+            lines.append(
+                "if (%s) { ctx.record_balance_term(%s, %s, %s); }"
+                % (
+                    due,
+                    json.dumps(v.attrs["route"]),
+                    json.dumps(v.attrs["term"]),
+                    var[scalar_in.id],
+                )
+            )
         var[v.id] = var[scalar_in.id]
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
@@ -578,8 +600,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps(operation)))
-        lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
+                     "ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
+        named_source_subslot = 3
         want_flux = v.attrs.get("flux", True)
         # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
         # caller did NOT exclude it -- i.e. sources is None (the legacy default) OR "default" is in
@@ -625,30 +649,55 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                              % (bidx, var[state_in.id], var[v.id], int(v.id)))
         else:
             # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
-            # the flux expressions per direction into two n_cons scratch fields (fx / fy) by a
-            # per-cell kernel, then take the negated centered FV divergence into R. Linear in the
-            # named pieces -> splitting the physical flux into named pieces that sum to it gives the
-            # SAME -div (to round-off). Distinct stencil from rhs_into (centered FV vs Riemann), so
-            # this path is NEVER mixed with the default (guarded by _named_fluxes).
-            fx = "%s_fx" % var[v.id]
-            fy = "%s_fy" % var[v.id]
-            lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 1, %s);"
-                         % (fx, int(v.id), var[state_in.id]))
-            lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 2, %s);"
-                         % (fy, int(v.id), var[state_in.id]))
-            divc = "%s_div" % var[v.id]
-            lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
-                         % (divc, int(v.id), var[v.id]))
-            lines += _emit_flux_kernel(node_model, named_fluxes, var[state_in.id], fx, fy, bidx)
-            lines.append("ctx.neg_div_flux_into(%s, %s, %s, %s);"
-                         % (var[v.id], fx, fy, divc))
-        for source_subslot, s in enumerate(named, start=3):
+            # the flux expressions into one exact-ranked scratch field per authored x[/y[/z] axis.
+            # The retained block package first fills state/aux halos; one generic centered stencil
+            # then accumulates every axis. There is no 2D fx/fy execution route.
+            impl = _model_impl(node_model)
+            axes = tuple(impl._flux_terms[named_fluxes[0]])
+            flux_vars = {axis: "%s_f%s" % (var[v.id], axis) for axis in axes}
+            lines.append("ctx.prepare_generated_state(%d, %s, %d);"
+                         % (bidx, var[state_in.id], int(v.id)))
+            for axis_index, axis in enumerate(axes):
+                lines.append(
+                    "pops::MultiFab<pops::kNativeDimension>& %s = "
+                    "ctx.rhs_scratch(%d, %d, %s);"
+                    % (flux_vars[axis], int(v.id), axis_index + 1, var[state_in.id])
+                )
+            lines.append(
+                "ctx.neg_div_named_flux_into(%s, {%s});"
+                % (var[v.id], ", ".join("&%s" % flux_vars[axis] for axis in axes))
+            )
+            named_source_subslot = 1 + len(axes)
+        plan_exprs = []
+        if named_fluxes is not None:
+            for flux_name in named_fluxes:
+                for axis_terms in impl._flux_terms[flux_name].values():
+                    plan_exprs.extend(axis_terms)
+        for source_name in named:
+            plan_exprs.extend(_model_impl(node_model)._source_terms[source_name])
+        consumer_qid = (
+            program_provider_consumer_qid(node_model, v.id) if plan_exprs else None
+        )
+        if named_fluxes is not None:
+            # The named-flux kernel and named sources below are one Program node:
+            # their shared plan is the first-use union, not an operator plan.
+            lines += _emit_flux_kernel(
+                node_model, named_fluxes, var[state_in.id], flux_vars, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
+        for source_subslot, s in enumerate(named, start=named_source_subslot):
             # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
             # the standalone 'source' op) and axpy it onto R.
             ssrc = "%s_%s" % (var[v.id], s)
-            lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, %d, %s);"
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = "
+                         "ctx.rhs_scratch(%d, %d, %s);"
                          % (ssrc, int(v.id), source_subslot, var[state_in.id]))
-            lines += _emit_source_kernel(node_model, s, var[state_in.id], ssrc, bidx)
+            lines += _emit_source_kernel(
+                node_model, s, var[state_in.id], ssrc, bidx,
+                provider_plans=provider_plans, consumer_qid=consumer_qid,
+                plan_exprs=plan_exprs,
+            )
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
@@ -657,10 +706,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("named_source")))
-        lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_source_kernel(
-            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
+            node_model, v.attrs["source"], var[state_in.id], var[v.id], bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
@@ -668,10 +720,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("linear_source_apply")))
-        lines.append("pops::MultiFab& %s = ctx.rhs_scratch(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         lines += _emit_apply_kernel(node_model, v.attrs["linear_source"], var[state_in.id], var[v.id],
-                                    bidx)
+                                    bidx, provider_plans=provider_plans,
+                                    consumer_qid=program_provider_consumer_qid(node_model, v.id))
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
@@ -680,13 +733,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_linear")))
-        lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
                      % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
-            var[rhs_in.id], var[v.id], status, bidx)
+            var[rhs_in.id], var[v.id], status, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
@@ -699,16 +755,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_nonlinear")))
-        lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
+        lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
                      % (status, int(v.id), var[base.id]))
         active_mask = "local_solve_active_mask_%d" % v.id
         lines.append(
-            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+        )
         report = "ln_report_%d" % v.id
         outcome = _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(
@@ -725,8 +784,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         sp = "sf%d" % v.id
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
-        prelude.append("auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
+        prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>(ctx.alloc_scalar_field(%d, 1));"
                        % (sp, ncomp))
+    elif v.op == "vector_field":
+        if prelude is None:
+            raise NotImplementedError(
+                "vector_field is only lowerable at the top level / step body or inside a "
+                "matrix_free_operator apply sub-block")
+        sp = "sf%d" % v.id
+        var[v.id] = "(*%s)" % sp
+        ncomp = int(v.attrs["ncomp"])
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, 1));" % (sp, ncomp))
+        sources = ", ".join("&%s" % _deref(var[value.id]) for value in v.inputs)
+        lines.append(
+            "ctx.pack_vector(*%s, std::array<const pops::MultiFab<"
+            "pops::kNativeDimension>*, pops::kNativeDimension>{%s});"
+            % (sp, sources))
     elif v.op == "laplacian":
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
@@ -738,18 +813,23 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":
-        o, fx, fy = v.inputs
-        lines.append("ctx.divergence(%s, %s, %s);"
-                     % (_deref(var[o.id]), _deref(var[fx.id]), _deref(var[fy.id])))
+        o, flux = v.inputs
+        lines.append("ctx.divergence(%s, %s);"
+                     % (_deref(var[o.id]), _deref(var[flux.id])))
         var[v.id] = var[o.id]
     elif v.op in ("condensed_coeffs", "condensed_rhs", "condensed_reconstruct", "condensed_energy"):
         # GENERIC condensed-implicit solve (ADC-637): the tensor coefficient A = I + c*rho*M^{-1} bundle,
         # the fused RHS -Lap(phi^n) - g*div(M^{-1}(m)), the velocity reconstruction and the kinetic-energy
-        # increment, emitted INLINE via pops::detail::block_inverse<2> from an authored J (M = I -
+        # increment, emitted INLINE via pops::detail::block_inverse<Dim> from an authored J (M = I -
         # th_dt*J) on a momentum subset -- no coupling/schur call. The thin dispatch lives in
         # program_emit_condensed to keep this router (and its budget) small; condensed_coeffs allocates
-        # its four persistent coeff fields there.
-        emit_condensed_op(v, var, node_model, lines, prelude)
+        # its persistent row-major tensor field there.
+        emit_condensed_op(
+            v, var, node_model, lines, prelude,
+            provider_plans=provider_plans,
+            consumer_qid=program_provider_consumer_qid(node_model, v.id),
+            program_block=bidx,
+        )
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
@@ -758,7 +838,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
         # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
         _emit_matrix_free_operator(
-            program, v, var, prelude, lines, field_plans=field_plans)
+            program, v, var, prelude, lines, field_plans=field_plans, target=target,
+            has_shared_interface_implicit_jacvec=(
+                has_shared_interface_implicit_jacvec
+            ))
     elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
         # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
         # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
@@ -789,12 +872,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
         if kind == "norm2":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm2(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm2(%d, %s)" % (owner, var[u.id])
         elif kind == "norm_inf":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm_inf(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
         elif kind in ("sum", "max", "min", "abs_sum"):
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
@@ -804,12 +885,25 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "min": "min_component",
                 "abs_sum": "abs_sum_component",
             }[kind]
-            lines.append("const pops::Real %s = ctx.%s(%d, %s, %d);"
-                         % (var[v.id], context_op, owner, var[u.id], comp))
+            reduction = "ctx.%s(%d, %s, %d)" % (
+                context_op,
+                owner,
+                var[u.id],
+                comp,
+            )
         else:  # dot
             a, b = v.inputs
-            lines.append("const pops::Real %s = ctx.dot(%d, %s, %s);"
-                         % (var[v.id], owner, var[a.id], var[b.id]))
+            reduction = "ctx.dot(%d, %s, %s)" % (
+                owner,
+                var[a.id],
+                var[b.id],
+            )
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            reduction = "(%s) ? (%s) : pops::Real(0)" % (due, reduction)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
     elif v.op == "cfl":
         # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
@@ -838,8 +932,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             else:  # a literal constant
                 toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
-        lines.append("const pops::Real %s = (%s %s %s);"
-                     % (var[v.id], toks[0], cppop, toks[1]))
+        expression = "(%s %s %s)" % (toks[0], cppop, toks[1])
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
     elif v.op == "compare":
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).
@@ -888,7 +987,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}
             acc = "acc%d" % v.id
-            lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                          % (acc, int(v.id), var[base.id]))
             for inp, coeff in terms:
                 if inp.id == base.id:
@@ -908,7 +1007,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # base block-state to shape the scratch: template it on the FIRST scalar input instead (a
             # 1-component field, same (ba, dm)). A State combine shapes it on the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
-            lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                          % (var[v.id], int(v.id), template))
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"

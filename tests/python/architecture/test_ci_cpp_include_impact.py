@@ -239,7 +239,7 @@ def test_two_leaf_headers_select_the_union(tmp_path):
         tmp_path,
         [
             "include/pops/numerics/time/schemes/splitting.hpp",
-            "include/pops/numerics/time/integrators/ssprk.hpp",
+            "include/pops/numerics/time/integrators/time_steppers.hpp",
         ],
     )
     assert outputs["cpp_mode"] == "subset"
@@ -375,6 +375,35 @@ def test_cpp_duration_catalog_inventory_rejects_invalid_weights(
         sel.validate_cpp_duration_catalogs(["test_alpha"])
 
 
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    (
+        ({"target_count": 2, "estimated_targets": []}, "target_count"),
+        (
+            {"target_count": 1, "estimated_targets": ["test_missing"]},
+            "estimated_targets orphaned",
+        ),
+        (
+            {"target_count": 1, "estimated_targets": ["test_alpha", "test_alpha"]},
+            "estimated_targets must be sorted unique",
+        ),
+    ),
+)
+def test_cpp_duration_catalog_inventory_authenticates_metadata(
+    tmp_path, monkeypatch, metadata, message,
+):
+    build_path = tmp_path / "build.json"
+    test_path = tmp_path / "test.json"
+    catalog = {"_meta": metadata, "test_alpha": 1.0}
+    build_path.write_text(json.dumps(catalog), encoding="utf-8")
+    test_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(sel, "CPP_BUILD_DURATIONS_JSON", build_path)
+    monkeypatch.setattr(sel, "CPP_DURATIONS_JSON", test_path)
+
+    with pytest.raises(SystemExit, match=message):
+        sel.validate_cpp_duration_catalogs(["test_alpha"])
+
+
 def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
     """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
     output = _run_plan_cpp_shard(
@@ -401,8 +430,8 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     assert max(len(shard) for shard in shards) == 2
     assert sum(len(shard) == 2 for shard in shards) == len(very_heavy) - 7
 
-    # Eleven five-minute TUs leave four paired shards. LPT must leave enough room around each pair:
-    # <= 650 s of modeled target build + parallel CTest load stays comfortably inside the
+    # Fourteen five-minute TUs pair every shard. LPT must leave enough room around each pair:
+    # <= 750 s of modeled target build + parallel CTest load stays comfortably inside the
     # workflow's 18 min build watchdog, while CTest alone must remain below its 7 min watchdog.
     full_shards = sel.cpp_target_shards(sorted(build), 7)
     weights = sel.cpp_target_weights(sorted(build))
@@ -416,7 +445,7 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     openmp_test_loads = [
         sum(tests[target] for target in shard) / 2.0 for shard in full_shards
     ]
-    assert max(modeled_loads) <= 650.0
+    assert max(modeled_loads) <= 750.0
     assert max(test_loads) <= 7.0 * 60.0
     assert max(openmp_test_loads) <= 7.0 * 60.0
 
@@ -687,10 +716,10 @@ def test_unmapped_path_fails_safe_to_all(tmp_path):
 def test_seam_template_is_a_build_input_selecting_all(tmp_path):
     """A runtime-builder seam ``.cpp.in`` template is a build input -> FULL."""
     outputs, _targets, plan = _run_plan_cpp_explain(
-        tmp_path, ["src/runtime/builders/templates/system_flux_seam.cpp.in"]
+        tmp_path, ["src/runtime/builders/templates/amr_block_flux_seam.cpp.in"]
     )
     assert outputs["cpp_mode"] == "all"
-    assert plan["impact"]["src/runtime/builders/templates/system_flux_seam.cpp.in"]["reason"] == (
+    assert plan["impact"]["src/runtime/builders/templates/amr_block_flux_seam.cpp.in"]["reason"] == (
         "runtime-build-input"
     )
 

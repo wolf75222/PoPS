@@ -13,6 +13,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -115,6 +116,34 @@ class ExecutionCommunicator {
 
 class ExecutionLane {
  public:
+  /// Non-copyable stable-address pin for a borrower that retains a lane pointer.  A lane with an
+  /// active pin cannot be moved or destroyed: moving would invalidate the borrowed object address
+  /// even though its communicator remains valid.
+  class ImmutableBorrow {
+   public:
+    ImmutableBorrow() = delete;
+    ImmutableBorrow(const ImmutableBorrow&) = delete;
+    ImmutableBorrow& operator=(const ImmutableBorrow&) = delete;
+
+    ImmutableBorrow(ImmutableBorrow&& other) noexcept
+        : lane_(std::exchange(other.lane_, nullptr)) {}
+    ImmutableBorrow& operator=(ImmutableBorrow&&) = delete;
+
+    ~ImmutableBorrow() {
+      if (lane_ != nullptr)
+        lane_->release_immutable_borrow_();
+    }
+
+   private:
+    friend class ExecutionLane;
+
+    explicit ImmutableBorrow(const ExecutionLane& lane) noexcept : lane_(&lane) {
+      lane_->acquire_immutable_borrow_();
+    }
+
+    const ExecutionLane* lane_ = nullptr;
+  };
+
   /// Collective-lifetime object. Owning lanes must be materialized and destroyed in the same
   /// canonical order on every parent rank. PoPS runtime owners keep them in deterministic object
   /// graphs and convert every post-duplication construction failure into a uniform collective
@@ -124,6 +153,7 @@ class ExecutionLane {
   /// the same values are safe in concurrent lanes without a process-global tag allocator.
   static constexpr int halo_message_tag = 0;
   static constexpr int parallel_copy_message_tag = 1;
+  static constexpr int translation_message_tag = 2;
 
   /// Non-owning sequential view of MPI_COMM_WORLD for preparation/control paths. This explicitly
   /// initializes or validates MPI, but its destructor never frees the process communicator.
@@ -258,11 +288,16 @@ class ExecutionLane {
   ExecutionLane& operator=(const ExecutionLane&) = delete;
 
   ExecutionLane(ExecutionLane&& other) noexcept { move_from_(std::move(other)); }
+  /// Replacement preserves the historical movable-lane API only while neither object is borrowed.
+  /// A borrowed lane has a stable address contract, so replacing either endpoint fails closed.
   ExecutionLane& operator=(ExecutionLane&& other) noexcept {
-    if (this != &other) {
-      release_();
-      move_from_(std::move(other));
-    }
+    if (this == &other)
+      return *this;
+    if (immutable_borrow_count_.load(std::memory_order_acquire) != 0 ||
+        other.immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
+    release_();
+    move_from_(std::move(other));
     return *this;
   }
 
@@ -279,6 +314,16 @@ class ExecutionLane {
 #endif
   }
   [[nodiscard]] bool active() const noexcept { return communicator().active(); }
+  /// True only for a collectively duplicated MPI communicator. World and serial lanes borrow none.
+  [[nodiscard]] bool owns_communicator() const noexcept {
+#ifdef POPS_HAS_MPI
+    return owns_communicator_;
+#else
+    return false;
+#endif
+  }
+  /// Pins this exact lane object against move/destruction until the returned guard dies.
+  [[nodiscard]] ImmutableBorrow borrow_immutably() const noexcept { return ImmutableBorrow(*this); }
   [[nodiscard]] int rank() const { return communicator().rank(); }
   [[nodiscard]] int size() const { return communicator().size(); }
 
@@ -323,6 +368,8 @@ class ExecutionLane {
 #endif
 
   void move_from_(ExecutionLane&& other) noexcept {
+    if (other.immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
     identity_ = std::move(other.identity_);
     static_identity_ = std::exchange(other.static_identity_, std::string_view{});
 #ifdef POPS_HAS_MPI
@@ -332,6 +379,8 @@ class ExecutionLane {
   }
 
   void release_() noexcept {
+    if (immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
 #ifdef POPS_HAS_MPI
     if (communicator_ != MPI_COMM_NULL && owns_communicator_) {
       if (detail::comm_active_unlocked())
@@ -342,8 +391,26 @@ class ExecutionLane {
 #endif
   }
 
+  void acquire_immutable_borrow_() const noexcept {
+    std::size_t current = immutable_borrow_count_.load(std::memory_order_relaxed);
+    for (;;) {
+      if (current == std::numeric_limits<std::size_t>::max())
+        std::terminate();
+      if (immutable_borrow_count_.compare_exchange_weak(
+              current, current + 1, std::memory_order_acq_rel, std::memory_order_relaxed))
+        return;
+    }
+  }
+
+  void release_immutable_borrow_() const noexcept {
+    const std::size_t previous = immutable_borrow_count_.fetch_sub(1, std::memory_order_acq_rel);
+    if (previous == 0)
+      std::terminate();
+  }
+
   std::string identity_;
   std::string_view static_identity_;
+  mutable std::atomic<std::size_t> immutable_borrow_count_{0};
 #ifdef POPS_HAS_MPI
   MPI_Comm communicator_ = MPI_COMM_NULL;
   bool owns_communicator_ = false;
@@ -560,11 +627,20 @@ class ObserverMpiLane {
       throw std::out_of_range("observer collective root is outside the lane");
     const int me = lane.rank();
 
-    std::optional<std::vector<std::string>> result;
+    long length_overflow = 0;
+    if constexpr (sizeof(std::size_t) > sizeof(unsigned long long)) {
+      if (payload.size() > static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max()))
+        length_overflow = 1;
+    }
+    if (all_reduce_max(length_overflow, lane) != 0)
+      throw std::overflow_error("consumer gather payload exceeds the MPI length domain");
+    const unsigned long long local_length = static_cast<unsigned long long>(payload.size());
+
+    std::vector<unsigned long long> lengths;
     long allocation_failed = 0;
     if (me == root) {
       try {
-        result.emplace(static_cast<std::size_t>(ranks));
+        lengths.resize(static_cast<std::size_t>(ranks), 0ULL);
       } catch (const std::bad_alloc&) {
         allocation_failed = 1;
       } catch (const std::length_error&) {
@@ -572,25 +648,94 @@ class ObserverMpiLane {
       }
     }
     if (all_reduce_max(allocation_failed, lane) != 0)
-      throw std::runtime_error("observer root could not allocate gathered results");
+      throw std::runtime_error("consumer root could not allocate gathered lengths");
+    detail::require_mpi_success(
+        MPI_Gather(&local_length, 1, MPI_UNSIGNED_LONG_LONG, me == root ? lengths.data() : nullptr,
+                   1, MPI_UNSIGNED_LONG_LONG, root, lane.native_handle()),
+        "MPI_Gather(consumer payload lengths)");
 
-    for (int source = 0; source < ranks; ++source) {
-      std::string source_payload;
-      long copy_failed = 0;
-      if (me == source) {
-        try {
-          source_payload = payload;
-        } catch (const std::bad_alloc&) {
-          copy_failed = 1;
-        } catch (const std::length_error&) {
-          copy_failed = 1;
+    unsigned long long maximum_length = local_length;
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, &maximum_length, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX,
+                      lane.native_handle()),
+        "MPI_Allreduce(maximum consumer gather length)");
+
+    std::optional<std::vector<std::string>> result;
+    std::vector<int> counts;
+    std::vector<int> displacements;
+    allocation_failed = 0;
+    if (me == root) {
+      try {
+        result.emplace(static_cast<std::size_t>(ranks));
+        counts.resize(static_cast<std::size_t>(ranks), 0);
+        displacements.resize(static_cast<std::size_t>(ranks), 0);
+        for (int rank = 0; rank < ranks; ++rank) {
+          const unsigned long long length = lengths[static_cast<std::size_t>(rank)];
+          if (length > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+            allocation_failed = 1;
+            break;
+          }
+          (*result)[static_cast<std::size_t>(rank)].resize(static_cast<std::size_t>(length));
+        }
+      } catch (const std::bad_alloc&) {
+        allocation_failed = 1;
+      } catch (const std::length_error&) {
+        allocation_failed = 1;
+      }
+    }
+    if (all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("consumer root could not allocate gathered payloads");
+
+    const int capacity = detail::chunk_capacity(ranks);
+    for (unsigned long long offset = 0; offset < maximum_length;
+         offset += static_cast<unsigned long long>(capacity)) {
+      int total = 0;
+      if (me == root) {
+        for (int rank = 0; rank < ranks; ++rank) {
+          const unsigned long long length = lengths[static_cast<std::size_t>(rank)];
+          const int count = offset < length
+                                ? static_cast<int>(std::min<unsigned long long>(
+                                      length - offset, static_cast<unsigned long long>(capacity)))
+                                : 0;
+          counts[static_cast<std::size_t>(rank)] = count;
+          displacements[static_cast<std::size_t>(rank)] = total;
+          total += count;
         }
       }
-      if (all_reduce_max(copy_failed, lane) != 0)
-        throw std::runtime_error("an observer rank could not stage its gather payload");
-      std::string received = broadcast_bytes(std::move(source_payload), source);
-      if (me == root)
-        (*result)[static_cast<std::size_t>(source)] = std::move(received);
+      std::vector<char> round;
+      long round_allocation_failed = 0;
+      if (me == root) {
+        try {
+          round.resize(static_cast<std::size_t>(total));
+        } catch (const std::bad_alloc&) {
+          round_allocation_failed = 1;
+        } catch (const std::length_error&) {
+          round_allocation_failed = 1;
+        }
+      }
+      if (all_reduce_max(round_allocation_failed, lane) != 0)
+        throw std::runtime_error("consumer root could not allocate a gathered chunk");
+      const int send_count =
+          offset < local_length
+              ? static_cast<int>(std::min<unsigned long long>(
+                    local_length - offset, static_cast<unsigned long long>(capacity)))
+              : 0;
+      detail::require_mpi_success(
+          MPI_Gatherv(detail::chunk_pointer(payload, offset, send_count), send_count, MPI_BYTE,
+                      me == root ? round.data() : nullptr, me == root ? counts.data() : nullptr,
+                      me == root ? displacements.data() : nullptr, MPI_BYTE, root,
+                      lane.native_handle()),
+          "MPI_Gatherv(consumer payload chunk)");
+      if (me != root)
+        continue;
+      for (int rank = 0; rank < ranks; ++rank) {
+        const int count = counts[static_cast<std::size_t>(rank)];
+        if (count == 0)
+          continue;
+        std::copy_n(
+            round.data() + displacements[static_cast<std::size_t>(rank)], count,
+            (*result)[static_cast<std::size_t>(rank)].data() + static_cast<std::size_t>(offset));
+      }
     }
     return result;
 #else

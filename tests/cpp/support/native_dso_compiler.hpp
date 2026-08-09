@@ -5,6 +5,10 @@
 #include <cstdlib>
 #include <string>
 
+#if !defined(POPS_NATIVE_DIM)
+#error "native DSO tests require the host target's exact POPS_NATIVE_DIM"
+#endif
+
 namespace pops::test::native_dso {
 
 inline std::string shell_quote(const std::string& value) {
@@ -92,6 +96,7 @@ inline CompileResult compile_shared(const std::string& source_path, const std::s
   std::string command = shell_quote(result.compiler) +
                         " -shared -fPIC -std=" + std::string(POPS_TEST_CXX_STD) + " -O2 -I" +
                         shell_quote(POPS_TEST_INCLUDE);
+  command += " -DPOPS_NATIVE_DIM=" + std::to_string(POPS_NATIVE_DIM);
 #if defined(POPS_TEST_HEADER_SIG)
   command += " -D" + shell_quote(std::string("POPS_HEADER_SIG=\"") + POPS_TEST_HEADER_SIG + "\"");
 #endif

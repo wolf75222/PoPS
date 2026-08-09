@@ -3,9 +3,9 @@
 // test_external_brick.cpp covers the host identity registry in isolation. THIS test closes the
 // deferred half of ADC-463 (Spec 3 section 21-22, criterion 20): an external brick shipped in a
 // standalone .so is dlopen'd and its flux DISPATCHED into the finite-volume machinery in the SAME
-// type system as a native flux -- statically (build_block<Limiter, UserFlux> inside the .so), never a
-// per-cell string lookup. It mirrors test_amr_native_loader.cpp: the brick source is written and
-// compiled to a .so at run time (so no committed binary), then loaded.
+// exact-ranked type system as a native flux, never through a per-cell string lookup. It mirrors
+// test_amr_native_loader.cpp: the brick source is written and compiled to a .so at run time (so no
+// committed binary), then loaded.
 //
 // VALIDATIONS:
 //   1. ExternalBrickHandle dlopens the .so, reads its manifest, and exposes the brick's id +
@@ -63,7 +63,7 @@ struct UserRusanov {
 };
 
 namespace user_brick {
-using Model = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
+using Model = pops::nd::IdealGasEuler<pops::kNativeDimension>;
 }
 
 POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
@@ -104,7 +104,78 @@ std::vector<double> euler_state(int n) {
   return U;
 }
 
-using RefModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
+using RefModel = pops::nd::IdealGasEuler<pops::kNativeDimension>;
+
+template <int Dim>
+struct ExactRankedAdvection {
+  using Schema = pops::nd::ScalarStateSchema<Dim>;
+  using State = typename Schema::Conservative;
+  using Primitive = typename Schema::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = 1;
+
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return {state, Kokkos::isfinite(state[0]) ? pops::nd::StateConversionStatus::Success
+                                              : pops::nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return {primitive, Kokkos::isfinite(primitive[0])
+                           ? pops::nd::StateConversionStatus::Success
+                           : pops::nd::StateConversionStatus::NonFiniteState};
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return recover(state).status;
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return State{static_cast<pops::Real>(Axis + 1) * state[0]};
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State&) const {
+    return static_cast<pops::Real>(Axis + 1);
+  }
+};
+
+struct ForwardRusanov {
+  template <pops::PhysicalFlux Physical>
+  POPS_HD pops::FluxEvaluation<typename Physical::State> operator()(
+      const Physical& physical, const typename Physical::Trace& left,
+      const typename Physical::Trace& right, const pops::FaceContext& face) const {
+    return pops::RusanovFlux{}(physical, left, right, face);
+  }
+};
+
+template <int Dim>
+void check_exact_ranked_flat_residual() {
+  std::array<int, Dim> shape{};
+  std::array<double, Dim> spacing{};
+  std::array<int, Dim> periodic{};
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[static_cast<std::size_t>(axis)] = 10 + axis;
+    spacing[static_cast<std::size_t>(axis)] = 1.0 / shape[static_cast<std::size_t>(axis)];
+    periodic[static_cast<std::size_t>(axis)] = 1;
+    cells *= static_cast<std::size_t>(shape[static_cast<std::size_t>(axis)]);
+  }
+  std::vector<double> state(cells);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    state[cell] = 1.0 + 0.2 * std::sin(0.17 * static_cast<double>(cell));
+  std::vector<double> external(cells, 0.0), native(cells, 0.0);
+  pops::runtime::program::detail::external_residual<Dim, ExactRankedAdvection<Dim>, ForwardRusanov>(
+      state.data(), external.data(), nullptr, shape.data(), spacing.data(), periodic.data(),
+      "minmod", false, 0.0);
+  pops::runtime::program::detail::external_residual<Dim, ExactRankedAdvection<Dim>,
+                                                    pops::RusanovFlux>(
+      state.data(), native.data(), nullptr, shape.data(), spacing.data(), periodic.data(), "minmod",
+      false, 0.0);
+  double magnitude = 0.0;
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    EXPECT_EQ(external[cell], native[cell]);
+    EXPECT_TRUE(std::isfinite(external[cell]));
+    magnitude = std::max(magnitude, std::fabs(external[cell]));
+  }
+  EXPECT_GT(magnitude, 1e-8);
+}
 
 }  // namespace
 
@@ -128,6 +199,7 @@ static int pops_run_test_external_riemann_dispatch() {
   ExternalBrickHandle handle(so, "my_riemann", {}, RefModel::n_vars, pops::aux_comps<RefModel>(),
                              "test.euler-rusanov.v1");
   chk(handle.id() == "my_riemann", "handle_id");
+  chk(handle.dimension() == pops::kNativeDimension, "native_dimension_authenticated");
   chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
       "requirements_surface");
   chk(handle.residual() != nullptr, "residual_resolved");
@@ -148,23 +220,28 @@ static int pops_run_test_external_riemann_dispatch() {
   // (2) BIT-IDENTICAL dispatch: external brick residual == native rusanov residual.
   const int n = 48;
   const double dx = 1.0 / n, dy = 1.0 / n;
+  const std::array<int, 2> shape{n, n};
+  const std::array<double, 2> spacing{dx, dy};
   const std::vector<double> U = euler_state(n);
   const std::size_t nn = static_cast<std::size_t>(n) * n;
   std::vector<double> Rext(4 * nn, 0.0), Rnat(4 * nn, 0.0);
 
-  const std::array<pops::Periodicity, 4> topologies{
-      {{false, false}, {true, false}, {false, true}, {true, true}}};
+  const std::array<std::array<int, 2>, 4> topologies{{
+      {{0, 0}},
+      {{1, 0}},
+      {{0, 1}},
+      {{1, 1}},
+  }};
   std::vector<double> residual_x_only, residual_y_only;
-  for (const auto periodicity : topologies) {
+  for (const auto& periodic : topologies) {
     std::fill(Rext.begin(), Rext.end(), 0.0);
     std::fill(Rnat.begin(), Rnat.end(), 0.0);
-    // External brick: v2 carries x/y independently into the exact same static native leaf.
-    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy, periodicity.x ? 1 : 0,
-                      periodicity.y ? 1 : 0, "minmod",
-                      /*recon_prim=*/0, /*pos_floor=*/0.0);
-    pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
-        U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, periodicity, "minmod",
-        /*recon_prim=*/false, /*pos_floor=*/0.0);
+    handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, shape.data(), spacing.data(),
+                      periodic.data(), "minmod", /*recon_prim=*/0, /*pos_floor=*/0.0,
+                      static_cast<double>(pops::kWenoEpsilon));
+    pops::runtime::program::detail::external_residual<2, RefModel, pops::RusanovFlux>(
+        U.data(), Rnat.data(), /*aux=*/nullptr, shape.data(), spacing.data(), periodic.data(),
+        "minmod", /*recon_prim=*/false, /*pos_floor=*/0.0);
     double dmax = 0.0, nrm = 0.0;
     for (std::size_t k = 0; k < Rext.size(); ++k) {
       dmax = std::max(dmax, std::fabs(Rext[k] - Rnat[k]));
@@ -172,9 +249,9 @@ static int pops_run_test_external_riemann_dispatch() {
     }
     chk(nrm > 1e-8, "native_residual_nontrivial");
     chk(dmax == 0.0, "external_dispatch_bit_identical_to_native_rusanov");
-    if (periodicity.x && !periodicity.y)
+    if (periodic[0] != 0 && periodic[1] == 0)
       residual_x_only = Rext;
-    if (!periodicity.x && periodicity.y)
+    if (periodic[0] == 0 && periodic[1] != 0)
       residual_y_only = Rext;
   }
   double mixed_axis_difference = 0.0;
@@ -223,4 +300,10 @@ TEST(test_external_riemann_dispatch, Runs) {
   EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_riemann_dispatch,
                                     "test_external_riemann_dispatch"),
             0);
+}
+
+TEST(test_external_riemann_dispatch, ExactRankedResidualRunsInOneTwoAndThreeDimensions) {
+  check_exact_ranked_flat_residual<1>();
+  check_exact_ranked_flat_residual<2>();
+  check_exact_ranked_flat_residual<3>();
 }

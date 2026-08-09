@@ -2,7 +2,7 @@
 
 Spec 5 names a diagnostic with a TYPED object, not the string form
 ``diagnostics.norm(kind="l2")``. :class:`Norm` / :class:`Integral` / :class:`MinMax` /
-:class:`ConservationCheck` are those objects -- inert descriptors that DESCRIBE a scalar
+:class:`Balance` / :class:`ConservationCheck` are those objects -- inert descriptors that DESCRIBE a scalar
 reduction over a block (and an optional model role): the reduction kind, whether it needs an
 MPI reduction, its cadence slot and its AMR / multi-level compatibility, all carried as
 METADATA. They compute nothing; the C++ / Kokkos / MPI runtime evaluates the reduction.
@@ -22,6 +22,8 @@ from typing import Any
 
 from pops.descriptors import Availability, Descriptor
 from pops.linalg.norms import _Norm
+
+from .balance import BalanceLedger
 
 
 def _ref_name(value: Any) -> Any:
@@ -52,14 +54,21 @@ def _role_name(value: Any) -> str | None:
         ) from exc
 
 
-def _operation(name: str, reduction: str, *, transform: str = "identity",
-               metric_weighted: bool = False) -> dict[str, Any]:
+def _operation(
+    name: str,
+    reduction: str,
+    *,
+    transform: str = "identity",
+    metric_weighted: bool = False,
+    coefficient: float = 1.0,
+) -> dict[str, Any]:
     """Build one callback-free native scalar-reduction instruction."""
     return {
         "name": name,
         "reduction": reduction,
         "transform": transform,
         "metric_weighted": metric_weighted,
+        "coefficient": coefficient.hex(),
     }
 
 
@@ -214,7 +223,7 @@ class Norm(_Measure):
         if kind is None:
             raise ValueError("typed norm descriptor has no canonical kind")
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [operations[kind]],
             "conservation": None,
@@ -250,7 +259,7 @@ class StepChangeNorm(_Measure):
 
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": None,
             "operations": [
                 _operation("step_change_l2", "step_change_l2"),
@@ -263,19 +272,52 @@ class Integral(_Measure):
     """A typed domain-integral reduction over a block: ``Integral(role=Density())``.
 
     Sums the (role-selected) quantity over the block volume; ``mass`` is
-    ``Integral(role=Density())``. Lowers to the native ``integral`` reduction.
+    ``Integral(role=Density())``. ``coefficient`` applies one exact finite scalar after the
+    collective reduction, so signed contributions such as charge remain owner-qualified without
+    copying or transforming fields in Python. Lowers to the native ``integral`` reduction.
     """
 
     category = "diagnostic_integral"
     scheme = "integral"
     reduction = "sum"
 
+    def __init__(
+        self,
+        block: Any = None,
+        role: Any = None,
+        cadence: Any = None,
+        *,
+        coefficient: float = 1.0,
+    ) -> None:
+        super().__init__(block=block, role=role, cadence=cadence)
+        if isinstance(coefficient, bool) or not isinstance(coefficient, (int, float)):
+            raise TypeError("Integral coefficient must be a finite real number")
+        try:
+            normalized = float(coefficient)
+        except OverflowError as exc:
+            raise ValueError("Integral coefficient must be finite") from exc
+        if not math.isfinite(normalized):
+            raise ValueError("Integral coefficient must be finite")
+        if normalized == 0.0:
+            raise ValueError("Integral coefficient must be nonzero")
+        self.coefficient = normalized
+
+    def options(self) -> dict:
+        options = super().options()
+        options["coefficient"] = self.coefficient.hex()
+        return options
+
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [
-                _operation("integral", "sum", metric_weighted=True),
+                _operation(
+                    "integral",
+                    "sum",
+                    metric_weighted=True,
+                    coefficient=self.coefficient,
+                ),
             ],
             "conservation": None,
         }
@@ -294,11 +336,70 @@ class MinMax(_Measure):
 
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [
                 _operation("min", "min"),
                 _operation("max", "max"),
+            ],
+            "conservation": None,
+        }
+
+
+class Balance(_Measure):
+    """Accepted five-term discrete balance produced by the native time Program.
+
+    ``Balance`` never reconstructs terms from output arrays.  The matching
+    :class:`BalanceLedger` must be populated with ``Program.record_balance`` during
+    the same native attempt.  The runtime then consumes exactly storage change,
+    outward boundary flux, sources, reflux and projection while its accepted-state
+    transaction still retains the pre-step image. The residual convention is storage
+    change plus outward flux, minus sources, reflux and projection.
+    """
+
+    category = "diagnostic_balance"
+    scheme = "discrete_balance"
+    reduction = "accepted_balance"
+
+    def __init__(
+        self,
+        ledger: Any,
+        *,
+        block: Any,
+        cadence: Any = None,
+    ) -> None:
+        if type(ledger) is not BalanceLedger:
+            raise TypeError(
+                "Balance(ledger=...) requires an exact pops.diagnostics.BalanceLedger"
+            )
+        if block is None:
+            raise TypeError("Balance(block=...) requires an exact physics BlockHandle")
+        super().__init__(block=block, role=ledger.role, cadence=cadence)
+        self.ledger = ledger
+
+    def options(self) -> dict:
+        options = super().options()
+        options["ledger"] = self.ledger.to_data()
+        return options
+
+    def diagnostic_execution(self) -> dict[str, Any]:
+        route = self.ledger.route_identity(self.block)
+        return {
+            "schema_version": 2,
+            "role": _role_name(self.ledger.role),
+            "operations": [
+                {
+                    **_operation("balance", "accepted_balance"),
+                    "balance_route": route.token,
+                    **(
+                        {
+                            "automatic_terms": list(self.ledger.automatic_terms),
+                            "balance_component": self.ledger.component,
+                        }
+                        if self.ledger.automatic_terms
+                        else {}
+                    ),
+                },
             ],
             "conservation": None,
         }
@@ -373,15 +474,20 @@ class ConservationCheck(Descriptor):
             raise TypeError(
                 "ConservationCheck quantity must implement diagnostic_execution()")
         plan = provider()
-        if type(plan) is not dict or plan.get("schema_version") != 1:
+        if type(plan) is not dict or plan.get("schema_version") != 2:
             raise TypeError("ConservationCheck quantity returned an invalid execution plan")
         operations = plan.get("operations")
         if not isinstance(operations, list) or len(operations) != 1:
             raise ValueError(
                 "ConservationCheck requires one scalar diagnostic quantity; "
                 "a multi-valued MinMax check is ambiguous")
+        if operations[0].get("reduction") == "accepted_balance":
+            raise ValueError(
+                "ConservationCheck cannot wrap an open-domain Balance; inspect its explicit "
+                "five-term residual instead"
+            )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": plan.get("role"),
             "operations": [dict(operations[0])],
             "conservation": {"tolerance": self.tolerance.hex()},
@@ -425,4 +531,11 @@ class ConservationCheck(Descriptor):
         return info
 
 
-__all__ = ["Norm", "Integral", "MinMax", "ConservationCheck"]
+__all__ = [
+    "Balance",
+    "Norm",
+    "Integral",
+    "MinMax",
+    "ConservationCheck",
+    "StepChangeNorm",
+]
