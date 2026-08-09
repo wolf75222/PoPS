@@ -1019,6 +1019,11 @@ sources = ["tests/cpp/unit/runtime/test_analytic_level_set.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_exact_aux_registry_nd"
+sources = ["tests/cpp/unit/runtime/test_exact_aux_registry_nd.cpp"]
+labels = ["unit", "runtime", "fast", "nd"]
+
+[[cpp.suite]]
 name = "test_program_context_schur_free"
 sources = ["tests/cpp/unit/runtime/test_program_context_schur_free.cpp"]
 labels = ["unit", "runtime", "fast"]

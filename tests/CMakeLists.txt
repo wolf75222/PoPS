@@ -420,6 +420,7 @@ endif()
 set(POPS_CPP_STANDARD_TESTS
   test_analytic_expression
   test_analytic_level_set
+  test_exact_aux_registry_nd
   test_profiler
   test_cache_manager
   test_checkpoint_cache

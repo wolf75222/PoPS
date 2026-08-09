@@ -261,6 +261,8 @@ api pops/runtime/runtime_environment.hpp
 sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
+sdk-support pops/runtime/system/derived_aux_provider.hpp
+sdk-support pops/runtime/system/exact_aux_registry.hpp
 sdk-support pops/runtime/system/exact_field_marshaling.hpp
 sdk-support pops/runtime/system/exact_field_solver_backend.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
