@@ -106,9 +106,10 @@ void fill_ic(std::vector<double>& U, int n) {
 void add_gas(NativeSystem& system) {
   GasModel model{};
   model.hyp = GasLaw::prepare(static_cast<Real>(kGamma));
+  system.install_block_state_route("gas", "test:program-loader/gas/state");
   add_compiled_model(system, "gas", std::move(model), "minmod", "rusanov", "conservative",
                      "explicit", kGamma);
-  system.set_poisson("charge_density", "geometric_mg");
+  system.set_poisson("charge_density", "cartesian_cg");
 }
 
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
@@ -117,15 +118,17 @@ void add_gas(NativeSystem& system) {
 std::string loader_source(bool include_block_identities = true, bool install_step = true,
                           bool incomplete_dt_bound = false,
                           const std::string& dynamic_boundary_slot = {},
-                          bool register_history = false) {
+                          bool register_history = false, bool boundary_install_throws = false) {
   // clang-format off
   std::string source = R"CPP(
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/route_ids.hpp>
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <cstdint>
+#include <stdexcept>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
@@ -225,6 +228,17 @@ extern "C" void pops_install_field_boundaries(pops::System<pops::kNativeDimensio
           "test:program-boundary", "test:program-boundary-residual",
           "test:program-boundary-jvp", prepare_boundary_residual,
           prepare_boundary_jvp, add_boundary_residual, add_boundary_jvp, false});
+)CPP";
+    if (boundary_install_throws) {
+      source += "  ctx.set_field_logical_timepoint(\"" + dynamic_boundary_slot +
+                "\", pops::FieldLogicalTimePoint{0.375, 0.025, 2, 1, 3, 0, 7, 1, 4});\n";
+      source += "  ctx.set_field_boundary_parameters(\"" + dynamic_boundary_slot +
+                "\", std::vector<double>{0.125, 0.25});\n";
+      source += R"CPP(
+  throw std::runtime_error("injected boundary publication failure");
+)CPP";
+    }
+    source += R"CPP(
 }
 )CPP";
   }
@@ -269,6 +283,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   const std::string incomplete_dt_so = tmp + "_incomplete_dt.so";
   const std::string dynamic_boundary_src = tmp + "_dynamic_boundary.cpp";
   const std::string dynamic_boundary_so = tmp + "_dynamic_boundary.so";
+  const std::string failing_boundary_src = tmp + "_failing_boundary.cpp";
+  const std::string failing_boundary_so = tmp + "_failing_boundary.so";
   {
     std::ofstream f(src);
     f << loader_source();
@@ -288,6 +304,10 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   {
     std::ofstream f(dynamic_boundary_src);
     f << loader_source(true, true, false, "program-boundary-field", true);
+  }
+  {
+    std::ofstream f(failing_boundary_src);
+    f << loader_source(true, true, false, "program-boundary-field", true, true);
   }
   const auto package = pops::test::native_dso::compile_shared(src, so);
   if (!package.ok) {
@@ -318,6 +338,13 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   if (!dynamic_boundary_package.ok) {
     pops::test::native_dso::report_compile_failure("test_program_loader dynamic-boundary package",
                                                    dynamic_boundary_package);
+    return 1;
+  }
+  const auto failing_boundary_package =
+      pops::test::native_dso::compile_shared(failing_boundary_src, failing_boundary_so);
+  if (!failing_boundary_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader failing-boundary package",
+                                                   failing_boundary_package);
     return 1;
   }
 
@@ -404,16 +431,22 @@ static int pops_run_test_program_loader(int argc, char** argv) {
 
   // Program-owned field-boundary kernels are an artifact overlay, not durable System authoring.
   // Replacing artifact A (dynamic boundary export) with artifact B (no export) must therefore
-  // restore the static baseline. The FFT provider is a useful witness: it rejects A's dynamic
-  // boundary, but accepts the same periodic field plan once B has removed that overlay.
+  // restore the static baseline while retaining the exact configured backend route.
   {
     NativeSystem replacement(cfg);
     add_gas(replacement);
     constexpr const char* slot = "program-boundary-field";
+    constexpr const char* backend = "program-boundary-cartesian-cg";
+    replacement.register_configured_field_solver_provider(
+        "cartesian_cg", backend,
+        PreparedProviderOptions{"pops.system.cartesian-cg-options@1",
+                                {{"abs_tol", 0.0},
+                                 {"max_iterations", std::int64_t{200}},
+                                 {"rel_tol", 1.0e-8}}});
     replacement.set_field_solver_plan(
         slot, "test:program-boundary-plan", "test:program-boundary-provider", "test:gas", "gas",
         "program-boundary-potential", {"test:gas/program-boundary-rhs"}, {"gas"},
-        {"program-boundary-potential"}, {1.0}, "fft");
+        {"program-boundary-potential"}, {1.0}, backend);
     replacement.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                              "test:periodic-cartesian",
                                              "test:periodic-cartesian:v1");
@@ -436,15 +469,48 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
     replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
     try {
-      (void)consume_solve_outcome(
+      const SolveReport report = consume_solve_outcome(
           replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
-      std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
-      ++fails;
-    } catch (const std::exception& e) {
-      if (std::string(e.what()).find("dynamic boundary") == std::string::npos) {
-        std::printf("FAIL unexpected dynamic-boundary rejection: %s\\n", e.what());
+      if (!report.solved()) {
+        std::printf("FAIL dynamic-boundary field solve returned %s\\n", report.status_name());
         ++fails;
       }
+    } catch (const std::exception& e) {
+      std::printf("FAIL dynamic-boundary artifact was not executable: %s\\n", e.what());
+      ++fails;
+    }
+
+    // A later artifact that stages a valid overlay and then throws must publish neither its
+    // boundary nor its Program/history/cache image. Artifact A remains the accepted owner and its
+    // function pointers remain backed by the still-live accepted DSO.
+    try {
+      replacement.install_program(failing_boundary_so);
+      std::printf("FAIL partially failing boundary artifact was accepted\\n");
+      ++fails;
+    } catch (const std::runtime_error& e) {
+      if (std::string(e.what()).find("injected boundary publication failure") ==
+          std::string::npos) {
+        std::printf("FAIL partial boundary rollback diagnostic: %s\\n", e.what());
+        ++fails;
+      }
+    }
+    if (replacement.history_names() != std::vector<std::string>{"artifact.history"} ||
+        replacement.program_cache_nodes() != std::vector<int>{11} ||
+        replacement.program_diagnostics() !=
+            std::map<std::string, Real>{{"artifact-A-diagnostic", Real(1)}}) {
+      std::printf("FAIL partial boundary artifact mutated accepted Program state\\n");
+      ++fails;
+    }
+    try {
+      const SolveReport report = consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
+      if (!report.solved()) {
+        std::printf("FAIL accepted boundary after rollback returned %s\\n", report.status_name());
+        ++fails;
+      }
+    } catch (const std::exception& e) {
+      std::printf("FAIL accepted boundary was lost after rollback: %s\\n", e.what());
+      ++fails;
     }
 
     replacement.install_program(so);
