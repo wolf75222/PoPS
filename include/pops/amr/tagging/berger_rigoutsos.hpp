@@ -51,8 +51,11 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     for (const Box<Dim>& box : raw) {
       const std::size_t chopped = chopped_count_(box, options.max_box_size);
       work.require_output(chopped);
+      Extent<Dim> maximum{};
+      for (int axis = 0; axis < Dim; ++axis)
+        maximum[axis] = options.max_box_size[static_cast<std::size_t>(axis)];
       const mesh::BoxArray<Dim> pieces =
-          mesh::BoxArray<Dim>::from_domain(box, options.max_box_size);
+          mesh::BoxArray<Dim>::from_domain(box, maximum);
       boxes.insert(boxes.end(), pieces.boxes().begin(), pieces.boxes().end());
     }
     std::sort(boxes.begin(), boxes.end(), lexicographic_less_);
