@@ -50,17 +50,15 @@ concept LevelSetDomain = requires(const D d, Real x, Real y) {
 namespace detail {
 
 /// CIRCLE / DISC level-set domain: the canonical instance of the contract and the SINGLE SOURCE of
-/// truth for the active circular domain (a disc of radius R; see docs/HOFFART_FIDELITY.md for the
-/// reference scenario it was validated against). It is the "transport" counterpart of the Poisson
-/// conductor wall: the wall acts only on the
-/// elliptic part (cf. runtime/wall_predicate.hpp / geometric_mg cut_cell), whereas this descriptor
-/// drives a cell-centered DOMAIN MASK / cut-cell aperture so the FV transport is disc-aware (the
-/// "Cartesian-ring-edge lock", cf. docs/HOFFART_FIDELITY.md).
+/// truth for the active circular transport domain (a disc of radius R; see
+/// docs/HOFFART_FIDELITY.md for the reference scenario it was validated against). This descriptor
+/// drives the cell-centered DOMAIN MASK / cut-cell aperture that makes the FV transport disc-aware
+/// (the "Cartesian-ring-edge lock", cf. docs/HOFFART_FIDELITY.md). It is not an elliptic
+/// coefficient provider: exact-ranked elliptic solvers authenticate their own supported geometry.
 ///
-/// REUSES EXACTLY the conductor-wall level set (geometric_mg.hpp):
+/// Level-set convention:
 ///   ls(x, y) = hypot(x - cx, y - cy) - R, < 0 INSIDE. A cell is ACTIVE when its CENTER is inside
-/// (ls < 0), exactly like GeometricMG's inside predicate. The default center (cx, cy) = (L/2, L/2)
-/// coincides with that of wall_predicate("circle", ...).
+/// (ls < 0). The default center is (cx, cy) = (L/2, L/2).
 ///
 /// CONTRACT (inert by default): this descriptor changes NOTHING in the default behavior. It is
 /// materialized (mask MultiFab, mask-aware transport) only on explicit opt-in
@@ -71,14 +69,13 @@ struct DiscDomain {
   double cy = 0.0;  ///< center y (default L/2 when built from L)
   double R = 0.0;   ///< disc radius
 
-  /// Disc centered in a square box [0, L]^2 with radius @p radius (same center as
-  /// wall_predicate("circle", radius, L): (L/2, L/2)).
+  /// Disc centered in a square box [0, L]^2 with radius @p radius.
   static DiscDomain centered_in_box(double L, double radius) {
     return DiscDomain{0.5 * L, 0.5 * L, radius};
   }
 
   /// Level set ls(x, y) = hypot(x - cx, y - cy) - R: < 0 inside, 0 at the boundary, > 0 outside.
-  /// Identical to the conductor-wall convention (geometric_mg cut_cell).
+  /// Negative inside, zero on the boundary, and positive outside.
   POPS_HD Real level_set(Real x, Real y) const {
     return static_cast<Real>(std::hypot(static_cast<double>(x) - cx, static_cast<double>(y) - cy) -
                              R);

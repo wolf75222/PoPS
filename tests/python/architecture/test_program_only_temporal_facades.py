@@ -516,3 +516,31 @@ def test_gpu_amr_program_harness_retains_the_bz_device_probe():
         "gpu_amrsys_facade_validate.cpp",
     ):
         assert not (ROOT / "tests/gpu/romeo" / retired_harness).exists()
+
+
+def test_gpu_geometric_mg_harness_proves_only_the_exact_ranked_operator_family():
+    source = (ROOT / "tests/gpu/romeo/gpu_epm_validate.cpp").read_text(encoding="utf-8")
+    for required in (
+        "pops::kNativeDimension",
+        "GeometricMG<kDim>",
+        "options.reaction = kReaction",
+        "manufactured error decreases under refinement",
+    ):
+        assert required in source
+    for retired in (
+        "Box2D",
+        "Array4",
+        "BCRec",
+        "SpatialProvider2D",
+        "set_epsilon(",
+        "set_epsilon_anisotropic(",
+    ):
+        assert retired not in source
+
+
+def test_legacy_2d_elliptic_spatial_provider_headers_stay_retired():
+    for retired in (
+        "include/pops/numerics/elliptic/interface/spatial_provider.hpp",
+        "include/pops/runtime/context/wall_predicate.hpp",
+    ):
+        assert not (ROOT / retired).exists()

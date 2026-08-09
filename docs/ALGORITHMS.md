@@ -27,7 +27,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [8. Parabolic term: diffusion as face flux](#8-parabolic-term-diffusion-as-face-flux)
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
 - [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
-- [11. Extended elliptic: eps(x), screened/Helmholtz, anisotropic](#11-extended-elliptic-epsx-screenedhelmholtz-anisotropic)
+- [11. Exact-ranked scalar GeometricMG](#11-exact-ranked-scalar-geometricmg)
 - [12. Full-tensor elliptic: matrix-free Krylov (BiCGStab)](#12-full-tensor-elliptic-matrix-free-krylov-bicgstab)
 - [13. Condensed implicit Program authoring](#13-condensed-implicit-program-authoring)
 - [14. Embedded boundary: Shortley-Weller cut-cell](#14-embedded-boundary-shortley-weller-cut-cell)
@@ -1035,27 +1035,22 @@ rank and desynchronizes the MPI fluxes). The `replicated` mode replicates each l
 ranks (per-fab V-cycle without communication), which is what the AMR coupler expects (level 0 replicated).
 
 **Code.** [`numerics/elliptic/geometric_mg.hpp`](../include/pops/numerics/elliptic/mg/geometric_mg.hpp):
-`GeometricMG` models the `EllipticSolver` concept (`rhs()`, `phi()`, `solve()`, `residual()`);
-`vcycle_rec` is the recursion, `solve(rel_tol, max_cycles)` iterates the cycles with warm-start (`phi`
-kept between calls, 1-2 V-cycles in the established regime). The 5-point Laplacian and the smoother are
-the shared bricks of [`numerics/elliptic/poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp)
-(`poisson_residual`, `gs_smooth` -> `gs_rb_sweep` -> `detail::gs_color`, named POPS_HD functors
-device-clean). Restriction / prolongation reuse the AMR transfer operators `average_down`
-/ `interpolate` of [`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp). `solve_robust`
-adds an anti-divergence safeguard (cf. below).
+`GeometricMG<Dim>` models the `EllipticSolver` concept (`rhs()`, `phi()`, `solve()`, `residual()`).
+`v_cycle_` recurses through the immutable hierarchy and `solve()` returns a consumed `SolveReport`.
+The $2\,Dim+1$ constant-scalar operator and damped-Jacobi smoother are shared bricks of
+[`numerics/elliptic/poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp)
+(`poisson_residual_valid`, `damped_jacobi_update_valid`). Restriction and prolongation reuse the
+exact-ranked AMR transfer operators in
+[`mesh/refinement.hpp`](../include/pops/mesh/layout/refinement.hpp).
 
-**Constraints / remarks.** Fully on-device (the V-cycle goes through `for_each_cell`),
-AMR-compatible, accepts any `n`. No CFL constraint (stationary solver), but the
-GS-5-point V-cycle assumes a diagonally dominant operator: it stays contracting for a
-symmetric positive-definite operator (Poisson, $\epsilon > 0$, $\kappa \ge 0$), and can diverge on a
-strongly non-symmetric operator (cross terms, cf. sections 11 and 12). At the embedded boundary at
-high resolution, the non-Galerkin coarsening and the per-level re-evaluated mask sometimes make the
-cycle non-contracting (spectral radius $> 1$): `solve_robust` detects true divergence (final
-residual $>$ initial residual), hardens the smoothing locally to the solve ($\nu$ doubles up to 64) and
-restarts cold ($\phi = 0$), strictly bit-identical when the solver already converges or stagnates.
-**Validation.** `test_geometric_mg` (fast convergence nearly independent of the mesh on
-manufactured solutions), `test_poisson_convergence` (quantitative order 2 of the 5-point Laplacian),
-`test_solve_robust` (the anti-divergence safeguard).
+**Constraints / remarks.** Fully on-device (the V-cycle goes through `for_each_cell`) and without a
+CFL constraint (stationary solve). The concrete capability is the symmetric positive-definite
+constant-scalar Cartesian operator, optionally with one non-negative constant reaction. Variable
+diagonal coefficients, cross tensors and embedded boundaries are not silently approximated by this
+engine; preparation must select another qualified provider.
+**Validation.** `test_geometric_mg_nd` proves the hierarchy, capability refusal and exact-rank
+execution in 1D/2D/3D. `test_poisson_convergence` proves quantitative order two for the native
+specialization.
 
 ## 10. Elliptic: exact-rank-two discrete Poisson FFT
 
@@ -1107,77 +1102,29 @@ under MPI `test_mpi_fft_distributed` proves ordered slabs. `test_elliptic_operat
 operator `poisson_residual` to the MG and FFT solutions: residuals at roundoff (`~1e-14`) and solutions
 identical to `~1e-16`, so both provably invert the same discrete Laplacian.
 
-## 11. Extended elliptic: eps(x), screened/Helmholtz, anisotropic
+## 11. Exact-ranked scalar GeometricMG
 
-**Intuition.** The same multigrid operator covers three generalizations of the Laplacian, all
-opt-in and bit-identical to the historical path when not activated (the corresponding coefficient
-pointer stays `nullptr`):
+**Supported operator.** `GeometricMG<Dim>` owns one compile-time-ranked Cartesian operator,
 
-- **variable permittivity** $\mathrm{div}(\epsilon(x)\,\mathrm{grad}\,\phi) = f$: each face carries
-  the harmonic mean of the two adjacent centers of the $\epsilon$ field;
-- **screened / Helmholtz operator** $\mathrm{div}(\epsilon\,\mathrm{grad}\,\phi) - \kappa\phi = f$:
-  a reaction term $\kappa \ge 0$ (Debye screening $\kappa = 1/\lambda_D^2$), diagonal, which
-  makes the operator more diagonally dominant (multigrid converges at least as well);
-- **anisotropic permittivity** $\mathrm{div}(\mathrm{diag}(\epsilon_x, \epsilon_y)\,\mathrm{grad}\,\phi) = f$:
-  the faces normal to $x$ read $\epsilon_x$, the faces normal to $y$ read $\epsilon_y$ (a diagonal
-  tensor medium).
+$$A\phi = -\Delta_h\phi + \kappa\phi, \qquad \kappa \ge 0,$$
 
-**Formula / discretization.** Face permittivity by harmonic mean (continuity of the normal flux
-at an interface, resistances in series, correct even for a discontinuous $\epsilon$):
+with a constant unit diffusion coefficient and one constant scalar reaction supplied in the immutable
+`GeometricMultigridOptions`. The stencil visits the two neighbours of every axis, so the same
+algorithm is instantiated in dimensions one, two and three. Setting `reaction = 0` gives Poisson;
+a positive value gives the supported screened/Helmholtz form.
 
-$$\epsilon_{i+1/2,j} = \frac{2\,\epsilon_{ij}\,\epsilon_{i+1,j}}{\epsilon_{ij} + \epsilon_{i+1,j}}$$
+**Capability boundary.** The concrete solver reports
+`scalar_constant_coefficient=true` and `scalar_reaction=true`. Variable diagonal coefficients,
+cross tensors and embedded boundaries are explicitly `false`; there is no `SpatialProvider2D`,
+`set_epsilon`, anisotropic setter or hidden 2D fallback. A requested operator outside this family
+must select a separately prepared provider (for example the hierarchy tensor/FAC route) or fail
+before solver construction.
 
-The discrete 5-point operator with variable face coefficient, with reaction, on cell $(i,j)$:
-
-$$L\phi_{ij} = w^x_+\phi_{i+1,j} + w^x_-\phi_{i-1,j} + w^y_+\phi_{i,j+1} + w^y_-\phi_{i,j-1}
-            - (w^x_+ + w^x_- + w^y_+ + w^y_-)\phi_{ij} - \kappa_{ij}\phi_{ij}$$
-
-with $w^x_\pm = \epsilon^x_{i\pm1/2,j} / \Delta x^2$ ($\epsilon_x$ field) and
-$w^y_\pm = \epsilon^y_{i,j\pm1/2} / \Delta y^2$ ($\epsilon_y$ field; in isotropic mode $\epsilon_y$ points
-to the same field as $\epsilon_x$). The GS smoother gains $+\kappa_{ij}$ on its diagonal
-($\kappa \ge 0$ => more dominant). Cut-cell + $\epsilon$ combination: each Shortley-Weller face weight
-$w_{\bullet}$ is multiplied by its face permittivity, the diagonal stays the
-sum of the face weights.
-
-```
-function ApplyLaplacianKernel(i, j):               # L = div(eps grad phi) - kappa phi, foncteur POPS_HD
-    if he (eps actif):
-        ec  = eps_x(i,j); ecy = eps_y(i,j)         # eps_y == eps_x en isotrope
-        exm = harmonic(ec,  eps_x(i-1,j)); exp = harmonic(ec,  eps_x(i+1,j))
-        eym = harmonic(ecy, eps_y(i,j-1)); eyp = harmonic(ecy, eps_y(i,j+1))
-        if hc (cut-cell):  wxm,wxp,wym,wyp = coef[0..3] * (exm,exp,eym,eyp)   # poids SW * eps_face
-        else:              wxm,wxp = exm,exp / dx^2 ;  wym,wyp = eym,eyp / dy^2
-        L(i,j) = wxp*p(i+1,j)+wxm*p(i-1,j)+wyp*p(i,j+1)+wym*p(i,j-1) - (wxm+wxp+wym+wyp)*p(i,j)
-    else if hc:  L(i,j) = coef[1]*p(i+1,j)+coef[0]*p(i-1,j)+coef[3]*p(i,j+1)+coef[2]*p(i,j-1)-coef[4]*p(i,j)
-    else:        L(i,j) = (p(i+1,j)-2p(i,j)+p(i-1,j))/dx^2 + (p(i,j+1)-2p(i,j)+p(i,j-1))/dy^2
-    if hxy or hyx:  L(i,j) += cross_div(...)        # tenseur plein (section 12) : flux croises additifs
-    if hk (kappa actif):  L(i,j) -= kappa(i,j) * p(i,j)
-```
-
-**Code.** [`numerics/elliptic/geometric_mg.hpp`](../include/pops/numerics/elliptic/mg/geometric_mg.hpp):
-`GeometricMG::set_epsilon(eps_fn | eps_fine)`, `set_reaction(kappa_fn | kappa_fine)`,
-`set_epsilon_anisotropic(eps_x, eps_y)`. Each field exists in two overloads: analytic
-(`std::function`, evaluated per level over the whole hierarchy -> exact permittivity at the coarse,
-order 2 preserved) and already-discretized (`MultiFab` of the fine level, component-0 copy by
-`detail::CopyComp0Kernel` then restricted by `average_down`, entry point for the wiring from
-`System`). The $\kappa$ term (0 ghost, diagonal), the $\epsilon$ / $\epsilon_y$ fields (1 ghost,
-ghosts filled by `eps_bc`: periodic preserved, physical boundary by zero-gradient extrapolation)
-live in the POPS_HD `for_each_cell` of the smoother, the residual and the apply
-([`poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp):
-`ApplyLaplacianKernel`, `PoissonResidualKernel`, `GsColorKernel`, `eps_harmonic`) -> device. The
-fine-level coefficient pointers are also exposed (`op_eps`, `op_kappa`, `op_eps_y`, ...)
-so the Krylov solver reuses an operator consistent with the MG residual.
-
-**Constraints / remarks.** The three extensions are composable: $\epsilon(x)$ and $\kappa(x)$
-together, or $\mathrm{diag}(\epsilon_x, \epsilon_y)$ with $\kappa$. Giving $\epsilon_x \equiv \epsilon_y$ gives back the isotropic; not calling `set_reaction` gives back pure Poisson; no call =>
-the historical path strictly bit-identical. The harmonic choice (and not arithmetic) for the face
-preserves the continuity of the normal flux at a medium jump and stays order 2 for a smooth
-$\epsilon$. The per-level sampling (instead of restricting from the fine) gives the
-exact coefficient at each coarse resolution, which preserves the order 2 of the V-cycle.
-**Validation.** `test_variable_epsilon` ($\epsilon(x)$, MMS order 2), `test_screened_poisson`
-(Helmholtz / screened, MMS order 2), `test_anisotropic_epsilon` (anisotropic $\epsilon_x \neq \epsilon_y$, MMS order 2). The three paths are also exercised on the Python side (`test_poisson_eps`,
-`test_poisson_screened`, `test_poisson_eps_aniso`) and validated bit-identical on GH200
-(cf. GPU_RUNTIME_PORT.md, round 2).
+**Validation.** `test_geometric_mg_nd` exercises the one algorithm in exact dimensions 1/2/3 and
+checks the fail-closed capability matrix. `test_poisson_convergence` proves second-order convergence
+of the native specialization. `tests/gpu/romeo/gpu_epm_validate.cpp` repeats a manufactured
+constant-reaction solve on the selected Kokkos device and records the dimension and refinement
+ratios; it does not advertise the retired variable/tensor/EB families.
 
 
 ---
@@ -2374,7 +2321,7 @@ of this page. The goal is not to present a partial capability as complete.
 | stiff source (Lorentz, relaxation) | local IMEX, or global Schur condensation | implicit, no exploding time step (section 5, 13) |
 | periodic Poisson, $n = 2^k$ | `poisson_fft_solver` | direct, $O(N \log N)$ (section 10) |
 | uniform constant-coefficient Cartesian Poisson | `CartesianCG` | exact-ranked 1D/2D/3D CG; static periodic/Dirichlet/Neumann BC (section 12) |
-| AMR Poisson / variable $\varepsilon(x)$ | `GeometricMG` + FAC | genuine multigrid hierarchy, not an alias for uniform CG (section 9, 11) |
+| AMR constant-scalar Poisson / reaction | `GeometricMG` + FAC | genuine exact-ranked multigrid hierarchy, not an alias for uniform CG (section 9, 11) |
 | full-tensor Cartesian operator | prepared GMRES or BiCGStab with an explicit provider | generic, no matrix assembly (section 12) |
 | full-tensor polar operator | dedicated metric-aware polar Krylov solver | polar measure and radial line preconditioner (section 16) |
 | localized feature (front, ring) | structured `pops.layouts.AMR` descriptor | adaptive refinement, conservative reflux (section 17 to 19) |

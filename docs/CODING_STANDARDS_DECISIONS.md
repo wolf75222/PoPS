@@ -101,7 +101,7 @@ recommends them to signal failure (E.2, E.3).
 Repository practice: host exceptions dominant (`throw std::runtime_error`: 134 in `include/pops`,
 305 including Python bindings; 3 `std::invalid_argument`, zero `std::logic_error`); message prefixed
 by a context then ` : `
-(`runtime/native_loader.hpp:210`, `runtime/wall_predicate.hpp:33`). Zero `std::expected`,
+(`runtime/dynamic/native_loader.hpp`, `runtime/system/system_install.cpp`). Zero `std::expected`,
 `std::optional` marginal (3).
 
 Proposed decision: exceptions allowed and idiomatic on the host path (config validation,

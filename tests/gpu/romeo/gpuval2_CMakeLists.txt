@@ -1,17 +1,22 @@
-# Build des harness de validation device "round 2" (features post-#48 a chemin device).
+# Build des harness de validation device "round 2".
 # Usage (sur le noeud armgpu, cf. romeo_gpuval2_build.sh) :
 #   cmake -S . -B build -DCMAKE_CXX_COMPILER=<nvcc_wrapper> -DKokkos_ROOT=<kinstall> \
 #         -DPOPS_INCLUDE=<include> -DCMAKE_BUILD_TYPE=Release
-# Les harness sont HEADER-ONLY (assemble_rhs / GeometricMG via for_each POPS_HD).
-# Le MEME source compile aussi en Serial pur (g++ -DPOPS_HAS_KOKKOS off) pour l'oracle hote.
+# Chaque target reçoit l'unique spécialisation spatiale POPS_NATIVE_DIM. GeometricMG s'exécute via
+# Kokkos; seuls les harness explicitement portables sans Kokkos gardent un oracle hôte séparé.
 cmake_minimum_required(VERSION 3.16)
 project(gpuval2 CXX)
+set(POPS_NATIVE_DIM "" CACHE STRING "PoPS compile-time spatial specialization (1, 2, or 3)")
+if(NOT "${POPS_NATIVE_DIM}" MATCHES "^[123]$")
+  message(FATAL_ERROR "POPS_NATIVE_DIM must select exactly one spatial dimension: 1, 2, or 3")
+endif()
+add_compile_definitions(POPS_NATIVE_DIM=${POPS_NATIVE_DIM})
 find_package(Kokkos REQUIRED)
 # MPI OPTIONNEL : seul gpu_dsl_production_validate l'utilise (np=1/2/4 du chemin natif System). Quiet
 # pour ne pas casser un environnement sans MPI ; le target ne le lie que si MPI::MPI_CXX existe.
 find_package(MPI QUIET COMPONENTS CXX)
 
-# (2)+(3) EPM ecrante (Helmholtz) + anisotrope : header-only.
+# Exact-ranked constant-scalar GeometricMG MMS with its supported reaction term.
 add_executable(gpu_epm_validate gpu_epm_validate.cpp)
 target_include_directories(gpu_epm_validate PRIVATE ${POPS_INCLUDE})
 target_compile_definitions(gpu_epm_validate PRIVATE POPS_HAS_KOKKOS)
