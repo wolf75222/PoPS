@@ -1,506 +1,263 @@
-// STRONG-SCALING AMR : grossier REPARTI cable dans AmrSystem (deliverable C, perf full-device).
-//
-// test_mpi_amr_compiled_parity valide la hierarchie AMR + MPI + modele compile avec le grossier
-// REPLIQUE (defaut) : le Poisson grossier et le transport grossier sont REDONDANTS sur chaque rang,
-// donc le run NE SCALE PAS (cf docs/GPU_RUNTIME_PORT.md phase 10). Ce test exerce le MODE SCALABLE
-// (AmrSystemConfig::distribute_coarse=true) : le niveau grossier devient MULTI-BOX (BoxArray::from_domain)
-// REPARTI round-robin sur les rangs, le Poisson grossier (GeometricMG multi-box) et le transport
-// grossier se DISTRIBUENT. C'est le chemin du strong-scaling AMR.
-//
-// Ce qu'on verifie (criteres d'HONNETETE du deliverable) :
-//   (1) CORRECTION PHYSIQUE : le grossier reparti donne le MEME champ que le grossier replique a
-//       l'arrondi pres. On construit DEUX AmrSystem dans le meme binaire (replique = oracle,
-//       reparti) avec exactement la meme init et la meme sequence de pas, et on compare la densite
-//       grossiere finale. La densite est reconstruite GLOBALEMENT (chaque rang n'a que ses tuiles ->
-//       coupler_read_coarse all_reduce les boites disjointes), donc dens.size()==n*n sur chaque rang.
-//   (2) MAX CROSS-RANG BIT-IDENTIQUE : cmax (reduction max, INSENSIBLE a l'ordre de sommation) doit
-//       etre identique a tous les np. C'est le critere bit-exact que la doc exige pour le reparti
-//       (les sommes additives, elles, dependent de l'ordre de reduction FMA quand le grossier est
-//       genuinement decoupe -- documente pour #59 ; on ne l'exige donc PAS bit a bit ici).
-//   (3) CONSERVATION : masse conservee a l'arrondi (reflux conservatif + all_reduce_sum).
-//   (4) GLOBAL ACCESSORS: the replicated coarse is never summed over ranks (which would multiply
-//       it by np); the distributed coarse reconstructs the exact global state/potential. The
-//       checkpoint views are compared to the independent density()/potential() production reads.
-//   (5) MG CONVERGE : phi reste fini et le champ non trivial (pas de divergence du multigrille
-//       geometrique sur le grossier multi-box). Couvert par (1) : un MG diverge -> NaN -> echec.
-//
-// Independant du backend : Kokkos Serial (CI, CPU) et Cuda (GH200). Le CTest rank-parity relance le
-// MEME binaire en np=1/2/4 et compare sa signature cmax (bit-identique attendu).
+/// @file
+/// @brief MPI proof for exact-ranked transfers on a partitioned AMR hierarchy.
+
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler
-#include <pops/coupling/amr/amr_regrid_coupler.hpp>
-#include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
-#include <pops/runtime/amr/composite_reduction.hpp>
-#include <pops/runtime/amr_system.hpp>
-
-#include "amr_tagging_test_authority.hpp"
+#include <pops/amr/hierarchy/amr_hierarchy.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/parallel/comm.hpp>
-#include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/prepared_load_balance.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
 
+#include <Kokkos_Core.hpp>
+
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+namespace {
 
-using namespace pops;
-using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
+namespace hierarchy = pops::amr::hierarchy;
+namespace transfer = pops::amr::transfer;
+namespace time_amr = pops::numerics::time::amr;
 
-// Direct proof for the qualified-field reduction kernel used by pops.output.composite_integrals.
-// Both levels are split into two global boxes, hence np=2 owns a non-trivial disjoint partition.
-// The 4x4 fine patch covers four coarse cells: 12*(1/4)^2*1 + 16*(1/8)^2*2 = 1.25.
-static double native_composite_field_error() {
-  const BoxArray coarse_boxes({Box2D{{0, 0}, {1, 3}}, Box2D{{2, 0}, {3, 3}}});
-  const BoxArray fine_boxes({Box2D{{2, 2}, {3, 5}}, Box2D{{4, 2}, {5, 5}}});
-  MultiFab coarse(coarse_boxes, DistributionMapping(coarse_boxes.size(), n_ranks()), 1, 0);
-  MultiFab fine(fine_boxes, DistributionMapping(fine_boxes.size(), n_ranks()), 1, 0);
-  coarse.set_val(Real(1));
-  fine.set_val(Real(2));
-  const std::vector<const MultiFab*> values{&coarse, &fine};
-  const std::vector<std::pair<Real, Real>> metrics{{Real(0.25), Real(0.25)},
-                                                   {Real(0.125), Real(0.125)}};
-  const double integral =
-      runtime::amr::composite_reduce_fields(values, metrics, false, "sum", 0, {0, 1});
-  return std::fabs(integral - 1.25);
+constexpr pops::mesh::BoxArrayValidationBudget kLayoutBudget{64, 2'048};
+constexpr hierarchy::HierarchyValidationBudget kHierarchyBudget{2, 4'096};
+
+template <int Dim>
+pops::Extent<Dim> filled_extent(int value) {
+  pops::Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = value;
+  return result;
 }
 
-static bool bootstrap_volume_average_replicates_parent() {
-  const Box2D coarse_domain = Box2D::from_extents(4, 4);
-  const Box2D fine_domain = coarse_domain.refine(2);
-  const BoxArray coarse_boxes({coarse_domain});
-  const BoxArray fine_boxes({fine_domain});
+template <int Dim>
+pops::Index<Dim> rank_coordinate(int rank) {
+  pops::Index<Dim> result{};
+  result[0] = rank;
+  return result;
+}
 
-  // The bootstrap level-zero contract is one parent copy per rank.  Its rank-local mapping is
-  // intentionally different on every rank, whereas the child mapping is globally identical.
-  MultiFab coarse(coarse_boxes, DistributionMapping({my_rank()}), 1, 0);
-  MultiFab fine(fine_boxes, DistributionMapping(fine_boxes.size(), n_ranks()), 1, 0);
-  coarse.set_val(Real(-1));
-  fine.set_val(Real(7));
+template <int Dim>
+pops::amr::RefinementRatio<Dim> refinement_ratio(int value) {
+  std::array<int, Dim> values{};
+  values.fill(value);
+  return pops::amr::RefinementRatio<Dim>(values);
+}
 
-  const auto restriction = runtime::amr::prepare_volume_average();
-  restriction.spatial(fine, coarse,
-                      runtime::amr::SpatialTransferContext{
-                          0, 1, 1,
-                          runtime::amr::IndexTransform{{coarse_domain.lo[0], coarse_domain.lo[1]},
-                                                       {fine_domain.lo[0], fine_domain.lo[1]},
-                                                       {2, 2}},
-                          coarse_domain, fine_domain, true});
+template <int Dim>
+std::shared_ptr<const pops::PreparedLoadBalanceAuthority<Dim>> load_balance() {
+  return std::make_shared<const pops::PreparedLoadBalanceAuthority<Dim>>(
+      pops::prepare_load_balance_authority<Dim>(
+          "space_filling_curve", "test.mpi-amr-distributed-coarse.sfc",
+          pops::PreparedProviderOptions{"pops.amr.load-balance.space-filling-curve@1", {}}));
+}
 
-  double local_error = 0.0;
-  if (coarse.local_size() != 1) {
-    local_error = std::numeric_limits<double>::infinity();
-  } else {
-    const auto values = coarse.fab(0).const_array();
-    for (int j = coarse_domain.lo[1]; j <= coarse_domain.hi[1]; ++j)
-      for (int i = coarse_domain.lo[0]; i <= coarse_domain.hi[0]; ++i)
-        local_error =
-            std::fmax(local_error, std::fabs(static_cast<double>(values(i, j, 0) - Real(7))));
+template <int Dim>
+pops::runtime::amr::AmrRuntime<Dim> make_partitioned_runtime(int ranks, int rank) {
+  pops::Index<Dim> coarse_lower{};
+  pops::Index<Dim> coarse_upper{};
+  coarse_lower[0] = -2;
+  coarse_upper[0] = coarse_lower[0] + 4 * ranks - 1;
+  for (int axis = 1; axis < Dim; ++axis) {
+    coarse_lower[axis] = -1 - axis;
+    coarse_upper[axis] = coarse_lower[axis] + 3;
   }
-  return all_reduce_max(local_error) == 0.0;
-}
+  const pops::Box<Dim> coarse_domain{coarse_lower, coarse_upper};
+  const auto ratio = refinement_ratio<Dim>(2);
+  const pops::Box<Dim> fine_domain = hierarchy::refine_box(coarse_domain, ratio);
 
-// A regrid may preserve the exact BoxArray while assigning a patch to another rank.  Its old-fine
-// carry-over is a global overlap copy, not a rank-local copy: every new owner must receive the
-// previous fine value before the remapped field is published.
-static bool regrid_owner_change_preserves_old_fine() {
-  const int np = n_ranks();
-  const int fine_box_width = 4;
-  const int fine_height = 8;
-  std::vector<Box2D> fine_boxes;
-  std::vector<int> old_owners;
-  std::vector<int> new_owners;
-  fine_boxes.reserve(static_cast<std::size_t>(np));
-  old_owners.reserve(static_cast<std::size_t>(np));
-  new_owners.reserve(static_cast<std::size_t>(np));
-  for (int rank = 0; rank < np; ++rank) {
-    fine_boxes.push_back(
-        Box2D{{rank * fine_box_width, 0}, {(rank + 1) * fine_box_width - 1, fine_height - 1}});
-    old_owners.push_back(rank);
-    new_owners.push_back((rank + 1) % np);
+  std::vector<pops::Box<Dim>> coarse_patches;
+  std::vector<pops::Box<Dim>> fine_patches;
+  std::vector<pops::Index<Dim>> owners;
+  coarse_patches.reserve(static_cast<std::size_t>(ranks));
+  fine_patches.reserve(static_cast<std::size_t>(ranks));
+  owners.reserve(static_cast<std::size_t>(ranks));
+  for (int owner = 0; owner < ranks; ++owner) {
+    pops::Index<Dim> patch_lower = coarse_lower;
+    pops::Index<Dim> patch_upper = coarse_upper;
+    patch_lower[0] = coarse_lower[0] + 4 * owner;
+    patch_upper[0] = patch_lower[0] + 3;
+    const pops::Box<Dim> patch{patch_lower, patch_upper};
+    coarse_patches.push_back(patch);
+    fine_patches.push_back(hierarchy::refine_box(patch, ratio));
+    owners.push_back(rank_coordinate<Dim>(owner));
   }
 
-  const Box2D coarse_domain = Box2D::from_extents((np * fine_box_width) / 2, fine_height / 2);
-  MultiFab parent(BoxArray({coarse_domain}), DistributionMapping({my_rank()}), 1, 0);
-  MultiFab old_fine(BoxArray(fine_boxes), DistributionMapping(std::move(old_owners)), 1, 0);
-  parent.set_val(Real(-1));
-  old_fine.set_val(Real(7));
+  const pops::mesh::BoxArray<Dim> coarse_layout(std::move(coarse_patches));
+  const pops::mesh::BoxArray<Dim> fine_layout(std::move(fine_patches));
+  pops::Extent<Dim> rank_extent = filled_extent<Dim>(1);
+  rank_extent[0] = ranks;
+  const pops::mesh::RankSpace<Dim> rank_space(pops::Index<Dim>{}, rank_extent);
+  const auto coarse_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(coarse_layout, rank_space, owners);
+  const auto fine_distribution =
+      pops::mesh::Distribution<Dim>::partitioned(fine_layout, rank_space, owners);
+  const pops::Index<Dim> local_rank = rank_coordinate<Dim>(rank);
 
-  const auto prepared = runtime::amr::prepare_conservative_linear();
-  const RegridProlongation prolong = [&prepared](const MultiFab& coarse, MultiFab& fine,
-                                                 int parent_level, int ratio,
-                                                 bool replicated_parent, const CommunicatorView&) {
-    const Box2D coarse_box = coarse.box_array().bounding_box();
-    const Box2D fine_domain = coarse_box.refine(ratio);
-    prepared.spatial(coarse, fine,
-                     runtime::amr::SpatialTransferContext{
-                         parent_level, parent_level + 1, fine.ncomp(),
-                         runtime::amr::IndexTransform{{coarse_box.lo[0], coarse_box.lo[1]},
-                                                      {fine_domain.lo[0], fine_domain.lo[1]},
-                                                      {ratio, ratio}},
-                         coarse_box, fine_domain, replicated_parent});
-  };
-  MultiFab remapped = regrid_field_on_layout_with_provider(
-      BoxArray(std::move(fine_boxes)), DistributionMapping(std::move(new_owners)), parent, old_fine,
-      /*pk=*/0, /*ngf=*/0, prolong, world_communicator_view(),
-      /*coarse_replicated=*/true, /*refinement_ratio=*/2);
-  device_fence();
+  hierarchy::LevelLayout<Dim> coarse_level(0, coarse_domain, coarse_layout, coarse_distribution,
+                                           pops::amr::RefinementRatio<Dim>{}, kLayoutBudget);
+  hierarchy::LevelLayout<Dim> fine_level(1, fine_domain, fine_layout, fine_distribution, ratio,
+                                         kLayoutBudget);
+  pops::MultiFab<Dim> coarse(coarse_layout, coarse_distribution, local_rank, 1,
+                             filled_extent<Dim>(2));
+  pops::MultiFab<Dim> fine(fine_layout, fine_distribution, local_rank, 1, filled_extent<Dim>(2));
+  std::vector<hierarchy::AmrLevelState<Dim>> levels;
+  levels.emplace_back(std::move(coarse_level), std::move(coarse));
+  levels.emplace_back(std::move(fine_level), std::move(fine));
+  return pops::runtime::amr::AmrRuntime<Dim>(
+      hierarchy::AmrHierarchy<Dim>(std::move(levels), kHierarchyBudget), load_balance<Dim>(),
+      "test.mpi-amr-distributed-coarse.spatial");
+}
 
-  double local_error = 0.0;
-  for (int local = 0; local < remapped.local_size(); ++local) {
-    const ConstArray4 values = remapped.fab(local).const_array();
-    const Box2D valid = remapped.box(local);
-    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-        local_error =
-            std::fmax(local_error, std::fabs(static_cast<double>(values(i, j, 0) - Real(7))));
+template <int Dim>
+POPS_HD pops::Real affine_parent(const pops::Index<Dim>& cell,
+                                 const transfer::IndexMapping<Dim>& mapping) {
+  pops::Real value = pops::Real(2.5);
+  for (int axis = 0; axis < Dim; ++axis)
+    value += pops::Real(0.125 * (axis + 1)) * pops::Real(cell[axis] - mapping.coarse_origin[axis]);
+  return value;
+}
+
+template <int Dim>
+POPS_HD pops::Real affine_child(const pops::Index<Dim>& cell,
+                                const pops::amr::RefinementRatio<Dim>& ratio,
+                                const transfer::IndexMapping<Dim>& mapping) {
+  pops::Real value = pops::Real(2.5);
+  for (int axis = 0; axis < Dim; ++axis) {
+    const pops::Real relative = pops::Real(cell[axis] - mapping.fine_origin[axis]);
+    const pops::Real parent_coordinate =
+        (relative + pops::Real(0.5)) / pops::Real(ratio[axis]) - pops::Real(0.5);
+    value += pops::Real(0.125 * (axis + 1)) * parent_coordinate;
   }
-  return all_reduce_max(local_error) == 0.0;
+  return value;
 }
 
-static std::vector<double> four_bubbles(int n) {
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  const double cx[4] = {0.25, 0.75, 0.25, 0.75};
-  const double cy[4] = {0.25, 0.25, 0.75, 0.75};
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      double r = 1.0;
-      for (int b = 0; b < 4; ++b) {
-        const double dx = x - cx[b], dy = y - cy[b];
-        r += 0.5 * std::exp(-(dx * dx + dy * dy) / 0.004);
-      }
-      rho[static_cast<std::size_t>(j) * n + i] = r;
-    }
-  // Periodic self-gravity requires an RHS orthogonal to the constant nullspace. Preserve the four
-  // non-trivial peaks but encode their neutralizing background in the fixture; no solver-side
-  // projection is permitted.
-  double mean = 0.0;
-  for (double value : rho)
-    mean += value;
-  mean /= static_cast<double>(rho.size());
-  for (double& value : rho)
-    value += 1.0 - mean;
-  return rho;
-}
+template <int Dim>
+struct FillAffineParent {
+  pops::FieldView<pops::Real, Dim> values{};
+  transfer::IndexMapping<Dim> mapping{};
 
-// Construit un AmrSystem (4 bulles, euler_poisson compile), avance nsteps, rend la densite grossiere
-// GLOBALE (n*n) + masse finale + m0. distribute => grossier multi-box reparti (sinon replique).
-struct Result {
-  std::vector<double> dens;
-  std::vector<double> state;
-  std::vector<OutputPiece<2>> output_local_pieces;
-  std::vector<OutputPiece<2>> output_root_pieces;
-  std::vector<double> phi;
-  std::vector<double> phi_global;
-  double mass, m0;
-  int npf;
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    values(cell) = affine_parent(cell, mapping);
+  }
 };
 
-struct OutputPieceCheck {
-  long failures = 0;
-  long cells = 0;
-  double value_error = 0.0;
+template <int Dim>
+struct ParentError {
+  pops::FieldView<const pops::Real, Dim> values{};
+  transfer::IndexMapping<Dim> mapping{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real difference = values(cell) - affine_parent(cell, mapping);
+    return difference < pops::Real(0) ? -difference : difference;
+  }
 };
 
-static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece<2>>& pieces,
-                                            const std::vector<double>& global, int n,
-                                            bool replicated, bool require_local_owner = true) {
-  OutputPieceCheck check;
-  const std::size_t cells = static_cast<std::size_t>(n) * n;
-  if (cells == 0 || global.size() % cells != 0) {
-    check.failures = 1;
-    return check;
-  }
-  const int ncomp = static_cast<int>(global.size() / cells);
-  for (const OutputPiece<2>& piece : pieces) {
-    const int nx = static_cast<int>(piece.box.length(0));
-    const int ny = static_cast<int>(piece.box.length(1));
-    check.failures += piece.level != 0;
-    check.failures += piece.box.lo[0] < 0 || piece.box.lo[1] < 0 || piece.box.hi[0] >= n ||
-                      piece.box.hi[1] >= n || nx < 1 || ny < 1;
-    check.failures += piece.global_box_index < 0;
-    check.failures += require_local_owner ? piece.owner_rank != my_rank()
-                                          : (piece.owner_rank < 0 || piece.owner_rank >= n_ranks());
-    check.failures += piece.replicated != replicated;
-    check.failures += piece.ncomp != ncomp;
-    const std::size_t expected_size = static_cast<std::size_t>(ncomp) * ny * nx;
-    check.failures += piece.values.size() != expected_size;
-    if (piece.values.size() != expected_size)
-      continue;
-    check.cells += static_cast<long>(nx) * ny;
-    for (int component = 0; component < ncomp; ++component)
-      for (int j = piece.box.lo[1]; j <= piece.box.hi[1]; ++j)
-        for (int i = piece.box.lo[0]; i <= piece.box.hi[0]; ++i) {
-          const std::size_t local = static_cast<std::size_t>(component) * ny * nx +
-                                    static_cast<std::size_t>(j - piece.box.lo[1]) * nx +
-                                    static_cast<std::size_t>(i - piece.box.lo[0]);
-          const std::size_t full =
-              static_cast<std::size_t>(component) * cells + static_cast<std::size_t>(j) * n + i;
-          check.value_error =
-              std::fmax(check.value_error, std::fabs(piece.values[local] - global[full]));
-        }
-  }
-  return check;
-}
+template <int Dim>
+struct ChildError {
+  pops::FieldView<const pops::Real, Dim> values{};
+  pops::amr::RefinementRatio<Dim> ratio{};
+  transfer::IndexMapping<Dim> mapping{};
 
-static double max_abs_difference(const std::vector<double>& a, const std::vector<double>& b) {
-  if (a.size() != b.size())
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real difference = values(cell) - affine_child(cell, ratio, mapping);
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
+double prove_partitioned_transfers(int ranks, int rank) {
+  auto runtime = make_partitioned_runtime<Dim>(ranks, rank);
+  auto& coarse = runtime.hierarchy().state(0);
+  auto& fine = runtime.hierarchy().state(1);
+  if (coarse.local_size() != 1 || fine.local_size() != 1)
     return std::numeric_limits<double>::infinity();
-  double dmax = 0.0;
-  for (std::size_t i = 0; i < a.size(); ++i)
-    dmax = std::fmax(dmax, std::fabs(a[i] - b[i]));
-  return dmax;
-}
 
-static double component_zero_difference(const std::vector<double>& state,
-                                        const std::vector<double>& density) {
-  if (state.size() < density.size())
+  const auto ratio = runtime.hierarchy().layout(1).ratio_from_parent();
+  const transfer::IndexMapping<Dim> mapping{runtime.hierarchy().layout(0).domain().lo,
+                                            runtime.hierarchy().layout(1).domain().lo};
+  pops::for_each_cell(coarse.fab(0).grown_box(),
+                      FillAffineParent<Dim>{coarse.fab(0).view(), mapping});
+
+  const transfer::PreparedTransfer<Dim> prolongation = time_amr::prepare_linear_prolongation(
+      runtime, 0, std::as_const(coarse.fab(0)).view(), fine.fab(0).view(), fine.box(0), mapping);
+  if (prolongation.kind() != transfer::TransferKind::LinearProlongation ||
+      prolongation.refinement_ratio() != ratio)
     return std::numeric_limits<double>::infinity();
-  double dmax = 0.0;
-  for (std::size_t i = 0; i < density.size(); ++i)
-    dmax = std::fmax(dmax, std::fabs(state[i] - density[i]));
-  return dmax;
+  time_amr::execute_prepared_transfer(prolongation);
+  pops::Real local_error = pops::for_each_cell_reduce_max(
+      fine.box(0), ChildError<Dim>{std::as_const(fine.fab(0)).view(), ratio, mapping});
+
+  pops::MultiFab<Dim> restricted(coarse.layout(), coarse.distribution(), coarse.local_rank(), 1,
+                                 coarse.ghosts());
+  const transfer::PreparedTransfer<Dim> restriction =
+      time_amr::prepare_average_down(runtime, 1, std::as_const(fine.fab(0)).view(),
+                                     restricted.fab(0).view(), coarse.box(0), mapping);
+  if (restriction.kind() != transfer::TransferKind::ConservativeRestriction ||
+      restriction.refinement_ratio() != ratio)
+    return std::numeric_limits<double>::infinity();
+  time_amr::execute_prepared_transfer(restriction);
+  local_error = std::fmax(
+      local_error,
+      pops::for_each_cell_reduce_max(
+          coarse.box(0), ParentError<Dim>{std::as_const(restricted.fab(0)).view(), mapping}));
+
+  pops::Box<Dim> ghost_region = fine.box(0);
+  ghost_region.hi[0] = ghost_region.lo[0] - 1;
+  ghost_region.lo[0] = ghost_region.hi[0];
+  const transfer::PreparedTransfer<Dim> fill_patch = time_amr::prepare_fill_patch(
+      runtime, 0, std::as_const(coarse.fab(0)).view(), fine.fab(0).view(), ghost_region, mapping);
+  if (fill_patch.kind() != transfer::TransferKind::CoarseFineGhostInterpolation ||
+      fill_patch.refinement_ratio() != ratio)
+    return std::numeric_limits<double>::infinity();
+  time_amr::execute_prepared_transfer(fill_patch);
+  local_error = std::fmax(
+      local_error,
+      pops::for_each_cell_reduce_max(
+          ghost_region, ChildError<Dim>{std::as_const(fine.fab(0)).view(), ratio, mapping}));
+  return pops::all_reduce_max(static_cast<double>(local_error));
 }
 
-static Result run(int n, int nsteps, double dt, bool distribute) {
-  const std::vector<double> rho = four_bubbles(n);
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  cfg.regrid_every = 4;
-  cfg.distribute_coarse = distribute;  // <-- le mode scalable cable dans AmrSystem
-  // coarse_max_grid = 0 -> n/2 (decoupage 2x2, le moins agressif pour le MG geometrique).
-
-  AmrSystem sys(cfg);
-  sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
-  sys.set_poisson("charge_density", "geometric_mg");
-  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
-  sys.set_density("gas", rho);
-  test::install_forward_euler_program(sys);
-
-  Result R;
-  R.m0 = sys.mass();
-  for (int s = 0; s < nsteps; ++s)
-    sys.step(dt);
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::fence();
-#endif
-  R.dens = sys.density();
-  // The density/potential paths reconstruct their global coarse fields independently of the
-  // checkpoint accessors below. They are the oracle for the replicated-vs-distributed ownership
-  // contract of level_{state,potential}_global(0).
-  R.state = sys.level_state_global(0);
-  R.output_local_pieces = sys.output_state_local_pieces("gas", 0);
-  auto output_lane =
-      ObserverMpiLane::duplicate_world_collectively("test/amr-distributed-coarse/root-output");
-  R.output_root_pieces = sys.output_state_root_pieces(output_lane, "gas", 0);
-  output_lane.close_collectively();
-  R.phi = sys.potential();
-  R.phi_global = sys.level_potential_global(0);
-  R.mass = sys.mass();
-  R.npf = sys.n_patches();
-  return R;
+int run_partitioned_transfer_proof(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
+  int result = 0;
+  {
+    Kokkos::ScopeGuard kokkos(argc, argv);
+    try {
+      const double error =
+          prove_partitioned_transfers<pops::kNativeDimension>(pops::n_ranks(), pops::my_rank());
+      EXPECT_LT(error, 2e-13);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "rank %d exact transfer proof failed: %s\n", pops::my_rank(),
+                   error.what());
+      result = 1;
+    }
+    result = static_cast<int>(
+        pops::all_reduce_max(static_cast<long>(result || ::testing::Test::HasFailure())));
+    if (pops::my_rank() == 0 && result == 0)
+      std::printf(
+          "POPS_MPI_PARITY_SIGNATURE_test_mpi_amr_distributed_coarse="
+          "exact-ranked-partitioned-transfers\n");
+  }
+  pops::comm_finalize();
+  return result;
 }
 
-static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
-  comm_init(&argc, &argv);
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  const int me = my_rank(), np = n_ranks();
-  const int n = 64;
-  const int nsteps = 16;
-  const double dt = 1e-3;
+}  // namespace
 
-  const bool bootstrap_restriction_ok = bootstrap_volume_average_replicates_parent();
-  const bool regrid_owner_change_ok = regrid_owner_change_preserves_old_fine();
-  const double composite_field_error = native_composite_field_error();
-  const Result rep = run(n, nsteps, dt, /*distribute=*/false);  // oracle : grossier replique
-  const Result dis = run(n, nsteps, dt, /*distribute=*/true);   // mode scalable : grossier reparti
-
-  // (1) ecart REPARTI vs REPLIQUE sur la densite grossiere globale (n*n sur chaque rang).
-  double dmax = std::numeric_limits<double>::infinity();
-  if (dis.dens.size() == rep.dens.size()) {
-    dmax = 0.0;
-    for (std::size_t k = 0; k < dis.dens.size(); ++k)
-      dmax = std::fmax(dmax, std::fabs(dis.dens[k] - rep.dens[k]));
-  }
-
-  // checksums du champ reparti.
-  double csum = 0, csumsq = 0, cmax = 0;
-  for (double v : dis.dens) {
-    csum += v;
-    csumsq += v * v;
-    const double a = std::fabs(v);
-    if (a > cmax)
-      cmax = a;
-  }
-  // (2) cmax cross-rang : max insensible a l'ordre -> doit etre identique sur tous les rangs.
-  const double xmax = all_reduce_max(cmax), xmin = -all_reduce_max(-cmax);
-  const double cmax_spread = xmax - xmin;
-  // dmax reduit sur les rangs (chaque rang a le meme champ global reconstruit, mais on est defensif).
-  const double dmax_g = all_reduce_max(dmax);
-  const double rep_state_dmax = component_zero_difference(rep.state, rep.dens);
-  const double dis_state_dmax = component_zero_difference(dis.state, dis.dens);
-  const double rep_phi_dmax = max_abs_difference(rep.phi_global, rep.phi);
-  const double dis_phi_dmax = max_abs_difference(dis.phi_global, dis.phi);
-  // Full-state / potential parity between ownership policies verifies that the distributed gather
-  // exposes the same physical global field rather than a rank-local fragment.
-  const double state_mode_dmax = max_abs_difference(rep.state, dis.state);
-  const double phi_mode_dmax = max_abs_difference(rep.phi_global, dis.phi_global);
-  const OutputPieceCheck rep_output =
-      check_output_pieces(rep.output_local_pieces, rep.state, n, true);
-  const OutputPieceCheck dis_output =
-      check_output_pieces(dis.output_local_pieces, dis.state, n, false);
-  const OutputPieceCheck rep_root_output =
-      check_output_pieces(rep.output_root_pieces, rep.state, n, true, false);
-  const OutputPieceCheck dis_root_output =
-      check_output_pieces(dis.output_root_pieces, dis.state, n, false, false);
-  const double output_piece_error =
-      all_reduce_max(std::fmax(rep_output.value_error, dis_output.value_error));
-  const long output_piece_failures = static_cast<long>(
-      std::llround(all_reduce_sum(static_cast<double>(rep_output.failures + dis_output.failures))));
-  const long distributed_output_cells =
-      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(dis_output.cells))));
-  const double replicated_cells_max = all_reduce_max(static_cast<double>(rep_output.cells));
-  const double replicated_cells_min = -all_reduce_max(-static_cast<double>(rep_output.cells));
-  const double root_output_piece_error =
-      all_reduce_max(std::fmax(rep_root_output.value_error, dis_root_output.value_error));
-  const long root_output_piece_failures = static_cast<long>(std::llround(
-      all_reduce_sum(static_cast<double>(rep_root_output.failures + dis_root_output.failures))));
-  const long replicated_root_cells =
-      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(rep_root_output.cells))));
-  const long distributed_root_cells =
-      static_cast<long>(std::llround(all_reduce_sum(static_cast<double>(dis_root_output.cells))));
-
-  int fails = 0;
-  if (me == 0) {
-    if (!bootstrap_restriction_ok) {
-      std::printf("FAIL volume-average bootstrap absent d'une copie grossiere repliquee\n");
-      ++fails;
-    }
-    if (!regrid_owner_change_ok) {
-      std::printf("FAIL regrid: carry-over fine perdu lors d'un changement de proprietaire MPI\n");
-      ++fails;
-    }
-    if (!(composite_field_error < 1e-14)) {
-      std::printf("FAIL reduction composite native du champ (error=%.3e)\n", composite_field_error);
-      ++fails;
-    }
-    // Only cmax is promised bit-identical across rank counts for the genuinely distributed coarse
-    // path. Additive reductions may differ in their last bits, so they remain per-launch checks.
-    std::printf("POPS_MPI_PARITY_SIGNATURE_test_mpi_amr_distributed_coarse cmax=%.17e\n", cmax);
-    std::printf(
-        "AMRDIST np=%d distribute_npf=%d replicated_npf=%d | cmax=%.17e | "
-        "dist_vs_repl_dmax=%.3e | cmax_crossrank_spread=%.3e | "
-        "state_rep=%.3e state_dist=%.3e phi_rep=%.3e phi_dist=%.3e\n",
-        np, dis.npf, rep.npf, cmax, dmax_g, cmax_spread, rep_state_dmax, dis_state_dmax,
-        rep_phi_dmax, dis_phi_dmax);
-#if defined(POPS_HAS_KOKKOS)
-    const char* space = Kokkos::DefaultExecutionSpace::name();
-#else
-    const char* space = "Serial(host)";
-#endif
-    std::printf(
-        "AMRDIST exec=%s | conservation: dm_dist=%.3e dm_repl=%.3e | csum=%.17e csumsq=%.17e\n",
-        space, std::fabs(dis.mass - dis.m0), std::fabs(rep.mass - rep.m0), csum, csumsq);
-
-    if (!(dis.dens.size() == static_cast<std::size_t>(n) * n &&
-          rep.dens.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL densite repartie ou repliquee de mauvaise taille\n");
-      ++fails;
-    }
-    if (!(rep_state_dmax == 0.0 && rep_phi_dmax == 0.0)) {
-      std::printf("FAIL les vues globales repliquees ont ete reduites (state=%.3e phi=%.3e)\n",
-                  rep_state_dmax, rep_phi_dmax);
-      ++fails;
-    }
-    if (!(dis_state_dmax == 0.0 && dis_phi_dmax == 0.0)) {
-      std::printf(
-          "FAIL les vues globales distribuees ne reconstituent pas la reference (state=%.3e "
-          "phi=%.3e)\n",
-          dis_state_dmax, dis_phi_dmax);
-      ++fails;
-    }
-    if (output_piece_failures != 0 || output_piece_error != 0.0 ||
-        distributed_output_cells != static_cast<long>(n) * n ||
-        replicated_cells_min != static_cast<double>(n * n) ||
-        replicated_cells_max != static_cast<double>(n * n)) {
-      std::printf(
-          "FAIL pieces output AMR invalides (metadata=%ld value=%.3e distributed_cells=%ld "
-          "replicated_cells=[%.0f,%.0f])\n",
-          output_piece_failures, output_piece_error, distributed_output_cells, replicated_cells_min,
-          replicated_cells_max);
-      ++fails;
-    }
-    if (root_output_piece_failures != 0 || root_output_piece_error != 0.0 ||
-        replicated_root_cells != static_cast<long>(n) * n ||
-        distributed_root_cells != static_cast<long>(n) * n) {
-      std::printf(
-          "FAIL gather ROOT natif des pieces AMR (metadata=%ld value=%.3e "
-          "replicated_cells=%ld distributed_cells=%ld)\n",
-          root_output_piece_failures, root_output_piece_error, replicated_root_cells,
-          distributed_root_cells);
-      ++fails;
-    }
-    if (!(cmax > 1e-6)) {
-      std::printf("FAIL densite repartie triviale\n");
-      ++fails;
-    }
-    if (!std::isfinite(cmax) || !std::isfinite(csum)) {
-      std::printf("FAIL champ non fini (MG diverge ?)\n");
-      ++fails;
-    }
-    // (4) MG converge => champ fini ET proche du replique : le grossier reparti doit retrouver le
-    // meme physique a l'arrondi pres (la difference vient de l'ordre de reduction du Poisson +
-    // transport multi-box, pas d'un schema different). Seuil large mais ferme : un MG qui diverge
-    // ou un transport casse exploserait bien au-dela.
-    if (!(dmax_g < 1e-9)) {
-      std::printf("FAIL reparti != replique au-dela de l'arrondi (dmax=%.3e)\n", dmax_g);
-      ++fails;
-    }
-    if (!(state_mode_dmax < 1e-9 && phi_mode_dmax < 1e-9)) {
-      std::printf("FAIL checkpoint global reparti != replique (state=%.3e phi=%.3e)\n",
-                  state_mode_dmax, phi_mode_dmax);
-      ++fails;
-    }
-    // (3) conservation des deux modes.
-    if (!(std::fabs(dis.mass - dis.m0) < 1e-10)) {
-      std::printf("FAIL conservation grossier reparti (dm=%.3e)\n", std::fabs(dis.mass - dis.m0));
-      ++fails;
-    }
-    // (2) cmax bit-identique cross-rang.
-    if (!(cmax_spread == 0.0)) {
-      std::printf("FAIL cmax non bit-identique entre rangs (spread=%.3e)\n", cmax_spread);
-      ++fails;
-    }
-    if (fails == 0)
-      std::printf(
-          "OK test_mpi_amr_distributed_coarse np=%d (grossier reparti == replique a "
-          "l'arrondi, cmax bit-identique cross-rang, masse conservee)\n",
-          np);
-  }
-  comm_finalize();
-  return fails ? 1 : 0;
-}
-
-TEST(test_mpi_amr_distributed_coarse, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_distributed_coarse,
-                                    "test_mpi_amr_distributed_coarse"),
-            0);
+TEST(test_mpi_amr_distributed_coarse, RunsExactRankedPartitionedTransfers) {
+  EXPECT_EQ(
+      pops::test::RunTestBody(&run_partitioned_transfer_proof, "test_mpi_amr_distributed_coarse"),
+      0);
 }

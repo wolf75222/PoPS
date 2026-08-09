@@ -183,7 +183,6 @@ sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 api pops/runtime/amr/hierarchy_tensor_solver_provider.hpp
 api pops/runtime/amr/hierarchy_policy_authority.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
-sdk-support pops/runtime/amr/bootstrap_transfer_registry.hpp
 sdk-support pops/runtime/amr/composite_reduction.hpp
 sdk-support pops/runtime/amr/coarse_fine_ghost_schedule.hpp
 api pops/runtime/amr/exact_field_solver_provider.hpp
