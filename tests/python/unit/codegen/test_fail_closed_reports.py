@@ -89,7 +89,7 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]
     assert weno.layout == "uniform|amr"
-    assert "ratio-2 2D AMR" in weno.limitation
+    assert "ratio-2 AMR in the compile-selected native rank" in weno.limitation
     assert "order-5" in weno.limitation
     for feature in ("limiter:mc", "limiter:superbee"):
         limiter = routes[feature]

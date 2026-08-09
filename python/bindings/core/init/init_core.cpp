@@ -244,14 +244,14 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
       throw std::runtime_error(
           "serial RuntimeBackendManifest requested while native MPI_COMM_WORLD is active");
     }
-    evidence = "pops.native.2d-float64.serial.v2";
+    evidence = "pops.native." + std::to_string(pops::kNativeDimension) + "d-float64.serial.v2";
   } else if (communicator == "MPI_COMM_WORLD") {
     if (!runtime.mpi_compiled || !runtime.mpi_active || runtime.communicator != "MPI_COMM_WORLD") {
       throw std::runtime_error(
           "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
           "MPI world launch");
     }
-    evidence = "pops.native.2d-float64.mpi-world.v2";
+    evidence = "pops.native." + std::to_string(pops::kNativeDimension) + "d-float64.mpi-world.v2";
   } else {
     throw std::invalid_argument("runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
   }
@@ -738,7 +738,7 @@ void init_core(py::module_& m) {
 
   m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
         py::arg("target"), py::arg("communicator"),
-        "Explicit 2D/float64 RuntimeBackendManifest derived from the installed Kokkos "
+        "Explicit native-rank/float64 RuntimeBackendManifest derived from the installed Kokkos "
         "DefaultExecutionSpace/SharedSpace and serial or active exact MPI_COMM_WORLD route. "
         "Custom communicators are rejected.");
 

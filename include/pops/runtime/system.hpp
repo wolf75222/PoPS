@@ -477,21 +477,21 @@ class System {
   /// signed level set raises an explicit error (the mode alone has no geometry to apply).
   void set_geometry_mode(const std::string& mode);
 
-  /// @return the 0/1 cell-centered domain mask, ny*nx row-major (j slow, i fast). Without
+  /// @return the 0/1 cell-centered domain mask over the exact-ranked flattened layout. Without
   /// a level-set installation, returns an ALL-ACTIVE mask (only 1.0): the transport sub-domain is
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> disc_mask() const;
 
-  /// Sets an out-of-plane magnetic field B_z(x, y) SHARED by the blocks, n*n row-major. Populates the
-  /// extra aux component (B_z channel) read by the models that declare it (n_aux > 3);
+  /// Sets a B_z field over the exact-ranked flattened layout, shared by all blocks. Populates the
+  /// canonical B_z aux component read by models that declare it;
   /// inert if no block reads B_z (aux channel stays at base width). B_z is static
   /// (external to the elliptic): derive_aux does not touch it. Call after having added the block
   /// (or before: the value is kept and applied when the aux channel widens).
   void set_magnetic_field(const std::vector<double>& bz);
 
-  /// Designates a COMPRESSIBLE fluid block (4 var) as the source of the electron temperature T_e:
+  /// Designates an exact-ranked COMPRESSIBLE fluid block (Dim+2 variables) as the source of T_e:
   /// the T_e aux channel (next canonical component) is filled with T = p/rho of this block, RECOMPUTED
-  /// at each solve_fields. Has effect only if a block declares it reads T_e (n_aux > 4); otherwise stored
+  /// at each solve_fields. Has effect only if a block declares the T_e component; otherwise stored
   /// and inert. It is the second EXTRA aux field (after B_z), populated by DERIVATION from a
   /// block (and not supplied by the user as B_z is).
   void set_electron_temperature_from(const std::string& name);
@@ -503,8 +503,8 @@ class System {
   /// POPS_EXPORT: called by add_compiled_model (header) -> must be exported for the loader .so.
   POPS_EXPORT void ensure_aux_width(int ncomp);
 
-  /// Sets a NAMED aux field (ADC-70 phase 1) on the canonical component @p comp (>= kAuxNamedBase
-  /// = 5), flattened over the exact ranked cell layout. The System does NOT know the
+  /// Sets a NAMED aux field (ADC-70 phase 1) on a component @p comp >= kAuxNamedBase,
+  /// flattened over the exact-ranked cell layout. The System does NOT know the
   /// names: the FACADE (pops.System.set_aux_field) resolves name -> comp via the block's table (from
   /// CompiledModel.aux_extra_names) and calls this. PERSISTENT STATIC field: stored (re-applied
   /// after a channel reallocation) and populated right away if the channel is wide enough. @throws if
@@ -1245,8 +1245,8 @@ class System {
   /// Supported names are ``pops_active`` (binary cell mask), ``pops_phi`` (signed level set), and
   /// ``pops_kappa`` (cell volume fraction).  A System without a prepared embedded boundary fails
   /// explicitly so a non-owning MPI rank cannot be confused with an absent sidecar.
-  std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(
-      const std::string& name, int level) const;
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_local_pieces(const std::string& name,
+                                                                      int level) const;
   /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
   /// zero receives complete pieces and every non-root rank receives an empty vector.
   std::vector<OutputPiece<Dim>> output_state_root_pieces(const ObserverMpiLane& lane,
@@ -1254,8 +1254,9 @@ class System {
   std::vector<OutputPiece<Dim>> output_field_root_pieces(const ObserverMpiLane& lane,
                                                          const std::string& provider_slot,
                                                          int level);
-  std::vector<OutputPiece<Dim>> output_embedded_boundary_root_pieces(
-      const ObserverMpiLane& lane, const std::string& name, int level) const;
+  std::vector<OutputPiece<Dim>> output_embedded_boundary_root_pieces(const ObserverMpiLane& lane,
+                                                                     const std::string& name,
+                                                                     int level) const;
   /// @}
 
   /// @name LOCAL per-fab accessors -- exact native ownership inspection

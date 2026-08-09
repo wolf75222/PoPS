@@ -215,14 +215,17 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "no C++ route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv, "none", "mpi",
           mpi, gpu, "communicator != MPI_COMM_WORLD", "MPI_COMM_WORLD or serial",
           "use ExecutionContext.mpi_world() or a serial context"),
-      capability_route("layout:Uniform", "available", "2D single-level Cartesian/Polar layout",
-                       "uniform", "module", "host", mpi, gpu),
+      capability_route(
+          "layout:Uniform", "available",
+          "exact native-rank single-level Cartesian layout; polar is a rank-2 provider", "uniform",
+          "module", "host", mpi, gpu),
       capability_route("layout:AMR", status_from_bool(caps.supports_amr),
                        "resource-policy-controlled depth and native ratio=2", "amr", "production",
                        "host", mpi, gpu, "AMR(ratio!=2)", "AMR(ratio=2)",
                        "use Uniform or the native AMR envelope"),
-      capability_route("spatial:finite_volume", "available", "2D finite-volume production route",
-                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
+      capability_route("spatial:finite_volume", "available",
+                       "exact native-rank finite-volume production route", kLayoutRouteTokensCsv,
+                       "production", "host", mpi, gpu),
       capability_route("riemann:rusanov", "available", "requires model max_wave_speed",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:hll", "available", "requires physical_flux and wave_speeds",
@@ -240,7 +243,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route(
           "reconstruction:weno5", "available",
-          "ghost_depth=3; uniform and ratio-2 2D AMR routes are native; AMR selects the "
+          "ghost_depth=3; uniform and ratio-2 AMR routes use the compile-selected native rank; "
+          "AMR selects the "
           "conservative order-5 coarse/fine provider for cell averages from resolved capabilities",
           kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("limiter:mc", "available",
@@ -253,8 +257,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "exact-ranked constant-coefficient conjugate gradient", "uniform",
                        "production", "host", mpi, gpu),
       capability_route("elliptic:geometric_mg", "available",
-                       "native multigrid/FAC route; supports variable epsilon", "amr",
-                       "production", "host", mpi, gpu),
+                       "native multigrid/FAC route; supports variable epsilon", "amr", "production",
+                       "host", mpi, gpu),
       capability_route("elliptic:fft", "available",
                        "exact Dim=2, periodic, constant coefficient, power-of-two uniform grid, "
                        "canonical ordered MPI slabs",
@@ -320,8 +324,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "amr:shared_interface_implicit_jacvec_pair", "unavailable",
           "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated compile "
           "route exist, but no generated Program executes the implicit solve/matvec end to end",
-          "amr", "none", "host", false, false,
-          "generated shared-interface implicit JVP solve",
+          "amr", "none", "host", false, false, "generated shared-interface implicit JVP solve",
           "native host/serial pair primitive plus compile-only generated route",
           "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof before "
           "advertising a production route"),

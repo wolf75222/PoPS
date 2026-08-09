@@ -432,7 +432,9 @@ inline RuntimeBackendManifest proven_native_backend(
 
 inline PlatformManifest proven_serial_platform(const std::string& backend,
                                                const std::string& target, const std::string& abi) {
-  return proven_host_platform(backend, target, abi, "serial", "pops.native.2d-float64-host.v1");
+  return proven_host_platform(
+      backend, target, abi, "serial",
+      "pops.native." + std::to_string(kNativeDimension) + "d-float64-host.v1");
 }
 
 inline RuntimeBackendManifest proven_host_backend(const std::string& backend,
@@ -447,7 +449,9 @@ inline RuntimeBackendManifest proven_host_backend(const std::string& backend,
 inline RuntimeBackendManifest proven_serial_backend(const std::string& backend,
                                                     const std::string& target,
                                                     const std::string& abi) {
-  return proven_host_backend(backend, target, abi, "serial", "pops.native.2d-float64-host.v1");
+  return proven_host_backend(
+      backend, target, abi, "serial",
+      "pops.native." + std::to_string(kNativeDimension) + "d-float64-host.v1");
 }
 
 }  // namespace pops::platform

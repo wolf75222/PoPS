@@ -20,7 +20,7 @@
 ///
 /// This header is deliberately LIGHT (no numerical dependency): it carries only strings and
 /// integers, not the Limiter / Flux types. It thus stays included early and cost-free. The
-/// capability NEEDS of the fluxes (hll: signed waves; hllc/roe: 2D Euler structure or model
+/// capability NEEDS of the fluxes (hll: signed waves; hllc/roe: provider-owned contact/Roe
 /// capability) are DOCUMENTED in kRiemanns but the real guard stays an `if constexpr` PER MODEL at
 /// the call-site (capabilities depend on the Model type, unavailable here).
 

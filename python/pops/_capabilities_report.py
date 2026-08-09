@@ -851,7 +851,9 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="2D single-level Cartesian/Polar layout",
+            limitation=(
+                "exact native-rank single-level Cartesian layout; polar is a rank-2 provider"
+            ),
             source=source,
         ),
         _row(
@@ -876,7 +878,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="2D finite-volume production route",
+            limitation="exact native-rank finite-volume production route",
             source=source,
         ),
         _row(
@@ -1001,7 +1003,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             layout="uniform|amr",
             backend="production",
             limitation=(
-                "ghost_depth=3; ratio-2 2D AMR selects the conservative order-5 "
+                "ghost_depth=3; ratio-2 AMR in the compile-selected native rank selects the "
+                "conservative order-5 "
                 "cell-average provider from resolved spatial capabilities"
             ),
             source=source,

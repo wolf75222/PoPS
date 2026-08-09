@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/runtime/config/platform_manifest.hpp>
 
+#include <cstddef>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -26,8 +29,20 @@ ExecutionContext context() {
 }
 
 FieldViewDescriptor field() {
-  return {"state",   2,      {16, 12},  {12, 1}, "cell",    {{0, 0}, {0, 0}},
-          "float64", "host", "patch-0", "right", "borrowed"};
+  std::vector<std::size_t> extents(static_cast<std::size_t>(pops::kNativeDimension));
+  std::vector<std::ptrdiff_t> strides(static_cast<std::size_t>(pops::kNativeDimension));
+  std::vector<std::pair<int, int>> ghosts(static_cast<std::size_t>(pops::kNativeDimension),
+                                          {0, 0});
+  std::size_t stride = 1;
+  for (int axis = pops::kNativeDimension - 1; axis >= 0; --axis) {
+    const std::size_t slot = static_cast<std::size_t>(axis);
+    extents[slot] = static_cast<std::size_t>(16 - 2 * axis);
+    strides[slot] = static_cast<std::ptrdiff_t>(stride);
+    stride *= extents[slot];
+  }
+  return {"state", pops::kNativeDimension, std::move(extents), std::move(strides),
+          "cell",  std::move(ghosts),      "float64",        "host",
+          "patch-0", "right",             "borrowed"};
 }
 
 }  // namespace
@@ -53,18 +68,23 @@ TEST(PlatformManifest, EveryCompatibilityFactChangesIdentity) {
   }
 }
 
-TEST(PlatformManifest, UnknownIsMissingProofAndThreeDimensionsRemainRepresentable) {
+TEST(PlatformManifest, UnknownIsMissingProofAndForeignRanksRemainRepresentable) {
   auto missing = platform();
   missing.device = pops::platform::CapabilityProof::unknown();
   EXPECT_THROW(pops::platform::validate_launch(missing, context(), {field()}),
                pops::platform::ContractError);
 
-  auto three_d = field();
-  three_d.dimension = 3;
-  three_d.extents = {8, 8, 8};
-  three_d.strides = {64, 8, 1};
-  three_d.ghosts = {{0, 0}, {0, 0}, {0, 0}};
-  EXPECT_THROW(pops::platform::validate_launch(platform(), context(), {three_d}),
+  auto foreign_rank = field();
+  foreign_rank.dimension = pops::kNativeDimension == 3 ? 2 : 3;
+  foreign_rank.extents.assign(static_cast<std::size_t>(foreign_rank.dimension), 8);
+  foreign_rank.strides.resize(static_cast<std::size_t>(foreign_rank.dimension));
+  foreign_rank.ghosts.assign(static_cast<std::size_t>(foreign_rank.dimension), {0, 0});
+  std::ptrdiff_t stride = 1;
+  for (int axis = foreign_rank.dimension - 1; axis >= 0; --axis) {
+    foreign_rank.strides[static_cast<std::size_t>(axis)] = stride;
+    stride *= foreign_rank.extents[static_cast<std::size_t>(axis)];
+  }
+  EXPECT_THROW(pops::platform::validate_launch(platform(), context(), {foreign_rank}),
                pops::platform::ContractError);
 }
 
@@ -93,13 +113,13 @@ TEST(PlatformManifest, FieldAndCommunicatorMismatchesRefuseBeforeKernel) {
     else if (variant == 1)
       actual.scalar = "float32";
     else if (variant == 2)
-      actual.extents = {15, 12};
+      --actual.extents.front();
     else if (variant == 3)
       actual.memory_space = "device";
     else if (variant == 4)
-      actual.strides = {1, 16};
+      ++actual.strides.front();
     else if (variant == 5)
-      actual.ghosts = {{1, 0}, {0, 0}};
+      actual.ghosts.front() = {1, 0};
     else if (variant == 6)
       actual.patch = "patch-1";
     else if (variant == 7)
@@ -163,7 +183,7 @@ TEST(PlatformManifest, FieldGhostsMustLeavePositiveInterior) {
                pops::platform::ContractError);
 }
 
-TEST(PlatformManifest, GenericTwoDimensionalDoubleRouteLaunches) {
+TEST(PlatformManifest, GenericNativeRankDoubleRouteLaunches) {
   int launches = 0;
   EXPECT_EQ(pops::platform::launch_checked(platform(), context(), {field()},
                                            [&](const auto&, const auto& fields) {
