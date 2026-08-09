@@ -525,7 +525,7 @@ TEST(GeneratedAmrSystemBlock,
 
   ASSERT_EQ(system.n_levels(), 2);
   const auto fine_active = system.output_embedded_boundary_local_pieces("pops_active", 1);
-  ASSERT_FALSE(fine_active.empty());
+  EXPECT_GT(pops::all_reduce_sum(static_cast<long>(fine_active.size())), 0L);
   const auto rematerialized_report = system.effective_options_report();
   EXPECT_EQ(rematerialized_report.eb.semantic_digest, initial_report.eb.semantic_digest);
   EXPECT_NE(rematerialized_report.eb.materialization_digest,
@@ -708,13 +708,17 @@ TEST(GeneratedAmrSystemBlock, DefaultFieldPublishesOnlyAfterSolveOutcomeAcceptan
   context->configure_primary_clock("test-clock");
   context->begin_step(0.01);
   pops::SolveOutcome outcome = context->solve_default_field_on_coarse_level();
-  ASSERT_TRUE(outcome.report().solved_value_available());
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  if (!outcome.report().solved_value_available()) {
+    const pops::SolveReport rejected = outcome.consume(pops::SolveConsumption::kFailRun);
+    FAIL() << rejected.reason;
+  }
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_NEAR(static_cast<double>(pops::reduce_max(system.prepared_amr_level_auxiliary(0), 0)), 0.0,
-              1.0e-8);
+  EXPECT_NEAR(
+      static_cast<double>(pops::reduce_max_local(system.prepared_amr_level_auxiliary(0), 0)), 0.0,
+      1.0e-8);
   EXPECT_EQ(system.field_provider_levels("pops.amr.default-field"), 1);
   EXPECT_EQ(system.field_provider_slots(), std::vector<std::string>{"pops.amr.default-field"});
 }
@@ -753,9 +757,9 @@ TEST(GeneratedAmrSystemBlock, NamedFieldConsumesExactStageWithoutPublishingState
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(point<Dim>(0), "field/tracer", 0, stage);
   ASSERT_TRUE(outcome.report().solved_value_available());
-  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
   (void)outcome.consume(pops::SolveConsumption::kAccept);
-  EXPECT_EQ(pops::reduce_max(context->state(0), 0), pops::Real(1));
+  EXPECT_EQ(pops::reduce_max_local(context->state(0), 0), pops::Real(1));
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
 }
 
@@ -804,15 +808,17 @@ TEST(GeneratedAmrSystemBlock,
   EXPECT_THROW(
       (void)context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state),
       std::runtime_error);
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
+    EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
 
   RuntimeFieldBoundaryProbe<Dim>::force_failure = false;
   pops::SolveOutcome outcome =
       context->solve_fields_from_state_at(evaluation, "field/tracer", 0, stage_state);
   ASSERT_TRUE(outcome.report().solved_value_available()) << outcome.report().reason;
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  EXPECT_EQ(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
+  EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
+    EXPECT_EQ(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_residual_calls, 0);
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::prepare_jvp_calls, 0);
   EXPECT_GT(RuntimeFieldBoundaryProbe<Dim>::residual_calls, 0);
@@ -826,8 +832,9 @@ TEST(GeneratedAmrSystemBlock,
 
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
-  EXPECT_NE(pops::reduce_min(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
-  EXPECT_NE(pops::reduce_min(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
+  EXPECT_NE(pops::reduce_min_local(system.prepared_amr_level_auxiliary(0), 0), pops::Real(7));
+  if (system.prepared_amr_level_auxiliary(1).local_size() != 0)
+    EXPECT_NE(pops::reduce_min_local(system.prepared_amr_level_auxiliary(1), 0), pops::Real(7));
 }
 
 TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEveryLiveLevel) {

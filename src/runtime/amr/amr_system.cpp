@@ -93,9 +93,9 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
 }
 
 template <int Dim>
-mesh::RankSpace<Dim> process_rank_space() {
+mesh::RankSpace<Dim> process_rank_space(const ExecutionLane& lane) {
   Extent<Dim> shape = runtime_config_detail::filled_extent<Dim>(1);
-  shape[0] = n_ranks();
+  shape[0] = lane.size();
   return mesh::RankSpace<Dim>(Index<Dim>{}, shape);
 }
 
@@ -2325,6 +2325,7 @@ struct AmrSystem<Dim>::Impl {
   }
 
   void ensure_engine() const {
+    const ExecutionLane world_lane = ExecutionLane::world();
     const long materialized = engine ? 1L : 0L;
     if (all_reduce_min(materialized) != all_reduce_max(materialized))
       throw std::runtime_error("AmrSystem hierarchy materialization differs between MPI ranks");
@@ -2346,13 +2347,15 @@ struct AmrSystem<Dim>::Impl {
       const BlockSpec& block = blocks.front();
       const Box<Dim> domain = cfg.index_domain();
       const mesh::BoxArray<Dim> patches(cfg.materialized_boxes());
-      const mesh::RankSpace<Dim> ranks = process_rank_space<Dim>();
-      const Index<Dim> local_rank = ranks.coordinate(static_cast<std::size_t>(my_rank()));
+      const mesh::RankSpace<Dim> ranks = process_rank_space<Dim>(world_lane);
+      const Index<Dim> local_rank =
+          ranks.coordinate(static_cast<std::size_t>(world_lane.rank()));
       mesh::Distribution<Dim> distribution;
       if (cfg.distribute_coarse) {
         const parallel::LoadBalancePreparationBudget budget{patches.size(), ranks.size(),
                                                             checked_layout_cells(patches)};
-        distribution = load_balance->prepare(patches, ranks, budget).plan().distribution();
+        distribution =
+            load_balance->prepare(patches, ranks, budget, {}, world_lane).plan().distribution();
       } else {
         distribution = mesh::Distribution<Dim>::replicated(patches, ranks);
       }
