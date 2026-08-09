@@ -10,12 +10,51 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace pops {
+
+/// Exact spatial location attached to a failed solve when one cell is authoritative.
+///
+/// `SolveReport` is shared by spatial and non-spatial solvers, so its ABI owns a fixed maximum
+/// rank while authenticating the active rank explicitly. Unused coordinates are canonical zeroes;
+/// negative valid-cell coordinates remain representable because presence never relies on a sentinel.
+struct SolveFailureLocation {
+  static constexpr int maximum_rank = 3;
+
+  bool found = false;
+  int rank = 0;
+  std::array<int, maximum_rank> index{};
+  int component = -1;
+
+  template <int Dim, class RankedIndex>
+  static SolveFailureLocation from(const RankedIndex& source, int failed_component) {
+    static_assert(Dim >= 1 && Dim <= maximum_rank);
+    SolveFailureLocation location;
+    location.found = true;
+    location.rank = Dim;
+    for (int axis = 0; axis < Dim; ++axis)
+      location.index[static_cast<std::size_t>(axis)] = source[axis];
+    location.component = failed_component;
+    return location;
+  }
+
+  [[nodiscard]] bool valid() const noexcept {
+    if (!found)
+      return rank == 0 && index == std::array<int, maximum_rank>{} && component == -1;
+    if (rank < 1 || rank > maximum_rank)
+      return false;
+    for (int axis = rank; axis < maximum_rank; ++axis)
+      if (index[static_cast<std::size_t>(axis)] != 0)
+        return false;
+    return component >= -1;
+  }
+};
 
 /// Explicit solve status. Only kSolved publishes a candidate; every other status is a failed solve
 /// report that callers must consume while leaving the live state unchanged.
@@ -89,15 +128,15 @@ struct SolveReport {
   Real residual_norm = 0;            ///< exact final norm tested for convergence
   Real step_norm = 0;                ///< final scaled update norm
   Real condition_evidence = 0;       ///< largest/smallest accepted pivot magnitude
-  int failed_i = -1;                 ///< first failing cell coordinate, when available
-  int failed_j = -1;                 ///< first failing cell coordinate, when available
-  int failed_component = -1;         ///< first failing equation/component, when available
+  SolveFailureLocation failure{};    ///< exact-ranked failing cell, when available
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
   std::string reason = "iteration_limit";
 
   bool valid() const {
-    return !reason.empty() && (status == SolveStatus::kSolved) == (action == SolveAction::kNone);
+    return !reason.empty() && failure.valid() &&
+           (status == SolveStatus::kSolved) == (action == SolveAction::kNone) &&
+           (status != SolveStatus::kSolved || !failure.found);
   }
   bool solved() const { return valid() && status == SolveStatus::kSolved; }
   bool solved_value_available() const { return solved(); }
@@ -106,6 +145,7 @@ struct SolveReport {
   const char* action_name() const { return solve_action_name(action); }
 
   void mark_solved(std::string solve_reason = {}) {
+    failure = {};
     status = SolveStatus::kSolved;
     action = SolveAction::kNone;
     reason = solve_reason.empty() ? solve_status_name(status) : std::move(solve_reason);

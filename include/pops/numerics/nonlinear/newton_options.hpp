@@ -44,9 +44,7 @@ struct NewtonReport {
   Real max_residual = Real(0);
   Real max_iters_used = Real(0);
   double n_failed = 0;
-  double failed_i = -1;
-  double failed_j = -1;
-  double failed_comp = -1;
+  SolveFailureLocation failure{};
   SolveReport solve{};
   RuntimeDiagnosticsReport diagnostics =
       make_runtime_diagnostics_report("pops.numerics.time.prepared_local_nonlinear");

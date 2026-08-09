@@ -48,9 +48,9 @@ POPS_HD inline bool model_is_implicit(int component) {
   return true;
 }
 
-template <class Model>
-concept HasSourceJacobian =
-    requires(const Model model, const typename Model::State state, const Aux aux,
+template <class Model, class Auxiliary>
+concept HasSourceJacobianFor =
+    requires(const Model model, const typename Model::State state, const Auxiliary aux,
              Real (&jacobian)[Model::n_vars][Model::n_vars]) {
       model.source_jacobian(state, aux, jacobian);
     };
@@ -86,15 +86,16 @@ struct ImplicitEvaluationResult {
   POPS_HD constexpr bool succeeded() const { return status == ImplicitEvaluationStatus::kOk; }
 };
 
-template <class Model>
-concept HasFallibleSourceEvaluation = requires(const Model model, const typename Model::State state,
-                                               const Aux aux, typename Model::State& output) {
-  { model.evaluate_source(state, aux, output) } -> std::same_as<ImplicitEvaluationResult>;
-};
+template <class Model, class Auxiliary>
+concept HasFallibleSourceEvaluationFor =
+    requires(const Model model, const typename Model::State state, const Auxiliary aux,
+             typename Model::State& output) {
+      { model.evaluate_source(state, aux, output) } -> std::same_as<ImplicitEvaluationResult>;
+    };
 
-template <class Model>
-concept HasFallibleSourceJacobianEvaluation =
-    requires(const Model model, const typename Model::State state, const Aux aux,
+template <class Model, class Auxiliary>
+concept HasFallibleSourceJacobianEvaluationFor =
+    requires(const Model model, const typename Model::State state, const Auxiliary aux,
              Real (&jacobian)[Model::n_vars][Model::n_vars]) {
       {
         model.evaluate_source_jacobian(state, aux, jacobian)
@@ -151,24 +152,24 @@ POPS_HD inline LocalNonlinearStatus local_status(ImplicitEvaluationResult result
   return local_evaluation_failure(evaluation.status);
 }
 
-template <class Model>
+template <class Model, class Auxiliary>
 POPS_HD inline ImplicitEvaluationResult evaluate_implicit_source(const Model& model,
                                                                  const typename Model::State& state,
-                                                                 const Aux& aux,
+                                                                 const Auxiliary& aux,
                                                                  typename Model::State& output) {
-  if constexpr (HasFallibleSourceEvaluation<Model>)
+  if constexpr (HasFallibleSourceEvaluationFor<Model, Auxiliary>)
     return sanitize_implicit_evaluation(model.evaluate_source(state, aux, output));
   output = model.source(state, aux);
   return ImplicitEvaluationResult::ok();
 }
 
-template <class Model>
+template <class Model, class Auxiliary>
 struct ImplicitSourceResidual {
   static constexpr int N = Model::n_vars;
   Model model;
   typename Model::State initial;
   typename Model::State explicit_target;
-  Aux aux;
+  Auxiliary aux;
   Real dt = Real(0);
   ImplicitMask<N> mask{};
 
@@ -190,11 +191,11 @@ struct ImplicitSourceResidual {
   }
 };
 
-template <class Model>
+template <class Model, class Auxiliary>
 struct ImplicitSourceAnalyticJacobian {
   static constexpr int N = Model::n_vars;
   Model model;
-  Aux aux;
+  Auxiliary aux;
   Real dt = Real(0);
   ImplicitMask<N> mask{};
 
@@ -204,7 +205,7 @@ struct ImplicitSourceAnalyticJacobian {
     for (int component = 0; component < N; ++component)
       state[component] = candidate[component];
     Real source_jacobian[N][N];
-    if constexpr (HasFallibleSourceJacobianEvaluation<Model>) {
+    if constexpr (HasFallibleSourceJacobianEvaluationFor<Model, Auxiliary>) {
       const ImplicitEvaluationResult evaluation =
           sanitize_implicit_evaluation(model.evaluate_source_jacobian(state, aux, source_jacobian));
       if (!evaluation.succeeded())
@@ -235,11 +236,11 @@ POPS_HD inline PreparedLocalNonlinearControls prepared_controls(const NewtonOpti
   return controls;
 }
 
-template <class Model>
+template <class Model, class Auxiliary>
 POPS_HD inline auto prepare_implicit_source_problem(const Model& model,
                                                     const typename Model::State& initial,
                                                     const typename Model::State& initial_source,
-                                                    const Aux& aux, Real dt,
+                                                    const Auxiliary& aux, Real dt,
                                                     const NewtonOptions& options,
                                                     const ImplicitMask<Model::n_vars>& mask) {
   constexpr int N = Model::n_vars;
@@ -248,12 +249,15 @@ POPS_HD inline auto prepare_implicit_source_problem(const Model& model,
     if (!is_implicit_component<Model>(mask, component))
       explicit_target[component] = initial[component] + dt * initial_source[component];
 
-  const ImplicitSourceResidual<Model> residual{model, initial, explicit_target, aux, dt, mask};
+  const ImplicitSourceResidual<Model, Auxiliary> residual{model, initial, explicit_target,
+                                                          aux,   dt,      mask};
   const PreparedLocalNonlinearControls controls = prepared_controls(options);
-  if constexpr (HasSourceJacobian<Model> || HasFallibleSourceJacobianEvaluation<Model>) {
-    const ImplicitSourceAnalyticJacobian<Model> jacobian{model, aux, dt, mask};
+  if constexpr (HasSourceJacobianFor<Model, Auxiliary> ||
+                HasFallibleSourceJacobianEvaluationFor<Model, Auxiliary>) {
+    const ImplicitSourceAnalyticJacobian<Model, Auxiliary> jacobian{model, aux, dt, mask};
     return prepare_local_nonlinear_problem<N>(
-        residual, AnalyticLocalJacobian<N, ImplicitSourceAnalyticJacobian<Model>>{jacobian},
+        residual,
+        AnalyticLocalJacobian<N, ImplicitSourceAnalyticJacobian<Model, Auxiliary>>{jacobian},
         AcceptAllLocalCandidates<N>{}, controls);
   } else {
     return prepare_local_nonlinear_problem<N>(residual, FiniteDifferenceLocalJacobian<N>{},
@@ -285,7 +289,7 @@ struct PreparedImplicitSourceKernel {
       return;
     }
 
-    const Aux cell_aux = load_aux<aux_comps<Model>()>(aux, index);
+    const AuxState<Dim> cell_aux = load_aux<aux_comps_for<Model, Dim>()>(aux, index);
     typename Model::State initial_source{};
     bool requires_initial_source = false;
     for (int component = 0; component < N; ++component)
@@ -413,9 +417,8 @@ inline SolveAction implicit_failure_action(LocalNonlinearStatus status) {
   return SolveAction::kFailRun;
 }
 
-template <int Dim>
 NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve,
-                           double failed_cells, const LocalNonlinearFailureLocation<Dim>& failure) {
+                           double failed_cells) {
   NewtonReport staged = current != nullptr ? *current : NewtonReport{};
   staged.enabled = true;
   staged.solve = solve;
@@ -424,9 +427,7 @@ NewtonReport staged_report(const NewtonReport* current, const SolveReport& solve
   staged.n_failed += failed_cells;
   if (!solve.solved()) {
     staged.converged = false;
-    staged.failed_i = solve.failed_i;
-    staged.failed_j = solve.failed_j;
-    staged.failed_comp = failure.component;
+    staged.failure = solve.failure;
   }
   return staged;
 }
@@ -477,7 +478,8 @@ template <int Dim, class Model, class MemorySpace>
     return state.layout() == other.layout() && state.distribution() == other.distribution() &&
            state.local_rank() == other.local_rank() && state.local_size() == other.local_size();
   };
-  if (state.ncomp() != Model::n_vars || aux.ncomp() < aux_comps<Model>() || !layout_matches(aux))
+  if (state.ncomp() != Model::n_vars || aux.ncomp() < aux_comps_for<Model, Dim>() ||
+      !layout_matches(aux))
     throw std::invalid_argument(
         "Implicit source state and auxiliary ranked layouts or components differ");
   if (active_cells != nullptr && (active_cells->ncomp() != 1 || !layout_matches(*active_cells)))
@@ -521,13 +523,11 @@ template <int Dim, class Model, class MemorySpace>
   const double failed_cells = detail::collective_sum_component(statistics, 9);
 
   LocalNonlinearFailureLocation<Dim> failure{};
-  int failed_component = -1;
   std::uint32_t reason_code = 0;
   if (failed_cells > 0) {
     failure = collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8);
     if (!failure.found || failure.priority != status_priority)
       throw std::runtime_error("implicit source collective status/location precedence mismatch");
-    failed_component = failure.component;
     const int reason_high =
         static_cast<int>(detail::collective_reason(statistics, status_code, failure.index, 10));
     const int reason_low = static_cast<int>(
@@ -536,16 +536,12 @@ template <int Dim, class Model, class MemorySpace>
         (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
   }
 
-  int legacy_coordinates[2] = {-1, -1};
-  if (failure.found)
-    for (int axis = 0; axis < Dim && axis < 2; ++axis)
-      legacy_coordinates[axis] = failure.index[axis];
-  const int failed_i = legacy_coordinates[0];
-  const int failed_j = legacy_coordinates[1];
-  SolveReport solve =
-      local_nonlinear_solve_report(status_code, iterations, evaluations, reference_residual,
-                                   residual, step, condition, safeguard_steps, failed_i, failed_j,
-                                   failed_component, detail::implicit_failure_action(status));
+  const SolveFailureLocation solve_failure =
+      failure.found ? SolveFailureLocation::from<Dim>(failure.index, failure.component)
+                    : SolveFailureLocation{};
+  SolveReport solve = local_nonlinear_solve_report(
+      status_code, iterations, evaluations, reference_residual, residual, step, condition,
+      safeguard_steps, solve_failure, detail::implicit_failure_action(status));
   if (!solve.solved()) {
     solve.reason = std::string("implicit_source_") + local_nonlinear_status_name(status);
     if (reason_code != 0)
@@ -569,7 +565,7 @@ template <int Dim, class Model, class MemorySpace>
     throw std::runtime_error(message.str());
   }
 
-  const NewtonReport staged = detail::staged_report(diagnostics, solve, failed_cells, failure);
+  const NewtonReport staged = detail::staged_report(diagnostics, solve, failed_cells);
   using Publication = detail::ImplicitSourcePublication<Dim, MemorySpace>;
   auto publication =
       std::make_shared<Publication>(Publication{&state, std::move(candidate), diagnostics, staged});

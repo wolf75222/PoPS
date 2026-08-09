@@ -568,9 +568,21 @@ void init_core(py::module_& m) {
       .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
       .def_readonly("step_norm", &pops::SolveReport::step_norm)
       .def_readonly("condition_evidence", &pops::SolveReport::condition_evidence)
-      .def_readonly("failed_i", &pops::SolveReport::failed_i)
-      .def_readonly("failed_j", &pops::SolveReport::failed_j)
-      .def_readonly("failed_component", &pops::SolveReport::failed_component)
+      .def_property_readonly("failure_index",
+                             [](const pops::SolveReport& report) -> py::object {
+                               if (!report.failure.found)
+                                 return py::none();
+                               py::tuple coordinates(report.failure.rank);
+                               for (int axis = 0; axis < report.failure.rank; ++axis)
+                                 coordinates[axis] =
+                                     report.failure.index[static_cast<std::size_t>(axis)];
+                               return coordinates;
+                             })
+      .def_property_readonly("failure_component",
+                             [](const pops::SolveReport& report) -> py::object {
+                               return report.failure.found ? py::cast(report.failure.component)
+                                                           : py::none();
+                             })
       .def_property_readonly("status",
                              [](const pops::SolveReport& report) { return report.status_name(); })
       .def_property_readonly("action",

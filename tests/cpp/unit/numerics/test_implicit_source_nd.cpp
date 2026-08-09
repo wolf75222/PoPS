@@ -54,8 +54,10 @@ void expect_valid_value(const Fab<Dim>& field, Real expected) {
   }
 }
 
+template <int Dim>
 struct RankedLinearImplicitModel {
   using State = StateVec<1>;
+  using Aux = AuxState<Dim>;
   static constexpr int n_vars = 1;
 
   POPS_HD State source(const State& state, const Aux&) const {
@@ -71,15 +73,15 @@ struct RankedLinearImplicitModel {
 
 template <int Dim>
 void check_ranked_implicit_provider() {
+  using Model = RankedLinearImplicitModel<Dim>;
   const Box<Dim> box = Box<Dim>::from_extents(uniform_extent<Dim>(2));
-  auto state = one_patch_field(box, RankedLinearImplicitModel::n_vars);
-  auto aux = one_patch_field(box, aux_comps<RankedLinearImplicitModel>());
+  auto state = one_patch_field(box, Model::n_vars);
+  auto aux = one_patch_field(box, aux_comps_for<Model, Dim>());
   state.set_val(Real(2));
   aux.set_val(Real(0));
 
   NewtonOptions options{};
-  auto outcome =
-      backward_euler_source(RankedLinearImplicitModel{}, aux, state, Real(0.25), options);
+  auto outcome = backward_euler_source(Model{}, aux, state, Real(0.25), options);
   ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
   const SolveReport accepted = outcome.consume(SolveConsumption::kAccept);
   EXPECT_TRUE(accepted.solved());
@@ -117,6 +119,18 @@ void check_ranked_failure_collective() {
   EXPECT_EQ(location.component, 4);
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(location.index[axis], selected[axis]);
+
+  const SolveFailureLocation reported =
+      SolveFailureLocation::from<Dim>(location.index, location.component);
+  const SolveReport solve = local_nonlinear_solve_report(
+      local_nonlinear_status_code(LocalNonlinearStatus::kInvalidEvaluation), 2, 3, Real(1),
+      Real(0.5), Real(0.25), Real(1), 0, reported, SolveAction::kFailRun);
+  ASSERT_TRUE(solve.valid());
+  ASSERT_TRUE(solve.failure.found);
+  EXPECT_EQ(solve.failure.rank, Dim);
+  EXPECT_EQ(solve.failure.component, 4);
+  for (int axis = 0; axis < SolveFailureLocation::maximum_rank; ++axis)
+    EXPECT_EQ(solve.failure.index[static_cast<std::size_t>(axis)], axis < Dim ? selected[axis] : 0);
 }
 
 }  // namespace

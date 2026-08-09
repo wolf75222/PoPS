@@ -171,13 +171,11 @@ def _append_local_nonlinear_report(
         else:
             lines.append("const pops::Real %s = %s;" % (token, expression))
     location = "%s_failure_location" % report
+    reported_failure = "%s_reported_failure" % report
     failed_count = "%s_failed_count" % report
-    failed_i = "%s_failed_i" % report
-    failed_j = "%s_failed_j" % report
-    failed_component = "%s_failed_component" % report
     lines += [
         "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
-        "pops::LocalNonlinearFailureLocation %s;" % location,
+        "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
         "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
         % (location, status, priority),
@@ -185,13 +183,14 @@ def _append_local_nonlinear_report(
         % (failed_count, location, location, priority),
         "  throw std::runtime_error("
         '"local nonlinear collective status/location precedence mismatch");',
-        "const int %s = %s.i;" % (failed_i, location),
-        "const int %s = %s.j;" % (failed_j, location),
-        "const int %s = %s.component;" % (failed_component, location),
+        "const pops::SolveFailureLocation %s = %s.found ? "
+        "pops::SolveFailureLocation::from<pops::kNativeDimension>(%s.index, %s.component) : "
+        "pops::SolveFailureLocation{};"
+        % (reported_failure, location, location, location),
     ]
     lines.append(
         "pops::SolveReport %s = pops::local_nonlinear_solve_report("
-        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
         % (
             report,
             reduced["status"],
@@ -202,9 +201,7 @@ def _append_local_nonlinear_report(
             reduced["step"],
             reduced["condition"],
             reduced["safeguard_steps"],
-            failed_i,
-            failed_j,
-            failed_component,
+            reported_failure,
             failure_action,
         )
     )

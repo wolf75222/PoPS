@@ -182,9 +182,8 @@ class _SolveReport:
     residual_norm: float
     step_norm: float
     condition_evidence: float
-    failed_i: int
-    failed_j: int
-    failed_component: int
+    failure_index: tuple[int, ...] | None
+    failure_component: int | None
     status: str
     action: str
     reason: str

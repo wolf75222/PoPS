@@ -783,8 +783,7 @@ inline SolveStatus solve_status(LocalNonlinearStatus status) {
 inline SolveReport local_nonlinear_solve_report(
     int status_code, int iterations, int evaluations, Real reference_residual_norm,
     Real residual_norm, Real step_norm, Real condition_evidence, int safeguard_steps,
-    int failing_i = -1, int failing_j = -1, int failing_component = -1,
-    SolveAction failure_action = SolveAction::kFailRun) {
+    SolveFailureLocation failure = {}, SolveAction failure_action = SolveAction::kFailRun) {
   if (status_code < local_nonlinear_status_code(LocalNonlinearStatus::kConverged) ||
       status_code > local_nonlinear_status_code(LocalNonlinearStatus::kEvaluationFailed))
     throw std::invalid_argument("local nonlinear provider returned an unknown status code");
@@ -803,9 +802,7 @@ inline SolveReport local_nonlinear_solve_report(
   report.step_norm = step_norm;
   report.condition_evidence = condition_evidence;
   report.safeguard_steps = safeguard_steps;
-  report.failed_i = failing_i;
-  report.failed_j = failing_j;
-  report.failed_component = failing_component;
+  report.failure = failure;
   if (local_status == LocalNonlinearStatus::kConverged)
     report.mark_solved("local_nonlinear_converged");
   else
