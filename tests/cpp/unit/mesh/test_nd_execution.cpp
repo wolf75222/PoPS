@@ -33,9 +33,7 @@ template <int Dim>
 struct ReadCellValue {
   pops::FieldView<const pops::Real, Dim> values;
 
-  POPS_HD pops::Real operator()(const pops::CellIndex<Dim>& index) const {
-    return values(index);
-  }
+  POPS_HD pops::Real operator()(const pops::CellIndex<Dim>& index) const { return values(index); }
 };
 
 template <int Dim, int Axis>
@@ -55,10 +53,14 @@ void expect_cell_and_product_execution() {
   Kokkos::DefaultExecutionSpace execution;
 
   pops::for_each_cell(execution, cells, SetCellValue<Dim>{field.view(), pops::Real(2)});
-  EXPECT_EQ(pops::for_each_cell_reduce_sum(
-                execution, cells,
-                ReadCellValue<Dim>{static_cast<const pops::Fab<Dim>&>(field).view()}),
-            static_cast<pops::Real>(2 * cells.numPts()));
+  EXPECT_EQ(
+      pops::for_each_cell_reduce_sum(
+          execution, cells, ReadCellValue<Dim>{static_cast<const pops::Fab<Dim>&>(field).view()}),
+      static_cast<pops::Real>(2 * cells.numPts()));
+  EXPECT_EQ(
+      pops::for_each_cell_reduce_max(
+          execution, cells, ReadCellValue<Dim>{static_cast<const pops::Fab<Dim>&>(field).view()}),
+      pops::Real(2));
 
   pops::for_each_product(cells, SetCellValue<Dim>{field.view(), pops::Real(3)});
   EXPECT_EQ(pops::for_each_product_reduce_sum(
@@ -85,7 +87,7 @@ void expect_face_execution() {
 
 }  // namespace
 
-TEST(test_nd_execution, cell_and_product_facades_share_static_1d_2d_3d_policies) {
+TEST(test_nd_execution, cell_and_product_facades_share_one_exact_ranked_policy) {
   static_assert(std::is_same_v<pops::CellIndex<2>, pops::Index<2>>);
   static_assert(std::is_trivially_copyable_v<pops::FaceIndex<3, 2>>);
 
@@ -105,7 +107,6 @@ TEST(test_nd_execution, face_axis_is_compile_time_and_each_dimension_has_exact_f
 
 TEST(test_nd_execution, empty_and_non_addressable_face_domains_fail_deterministically) {
   EXPECT_TRUE(pops::face_box<0>(pops::Box<1>{}).empty());
-  const pops::Box<1> overflow{pops::Index<1>{0},
-                              pops::Index<1>{std::numeric_limits<int>::max()}};
+  const pops::Box<1> overflow{pops::Index<1>{0}, pops::Index<1>{std::numeric_limits<int>::max()}};
   EXPECT_THROW((void)pops::face_box<0>(overflow), std::overflow_error);
 }

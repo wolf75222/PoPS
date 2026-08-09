@@ -7,7 +7,7 @@
 /// a typed Index<Dim>; it captures field views by value (POD), never the Fab nor anything virtual:
 /// exactly the constraint of a device kernel. The on-node target (sequential = Kokkos Serial, CPU
 /// multi-thread = Kokkos OpenMP, GPU = Kokkos Cuda/HIP) is chosen AT KOKKOS INSTALLATION, not
-/// by a PoPS flag: one rank-specialized for_each_cell call
+/// by a PoPS flag: one rank-generic for_each_cell call
 /// covers all three. The CPU -> GPU switch therefore does NOT change the call sites.
 /// FP CHOICE: the SUM reduction (Kokkos::Sum) reassociates the addition per tile -> DETERMINISTIC per
 /// tile (idempotent: same data, same backend -> same bits) but NOT bit-identical to a lexicographic
@@ -47,7 +47,7 @@ namespace pops {
 // its first kokkos_malloc, otherwise the Kokkos build crashes when constructing a Fab).
 
 // SERIAL FALLBACK THRESHOLD for for_each_cell (#165). Under a HOST Kokkos execution space
-// (Serial/OpenMP), launching a Kokkos::parallel_for(MDRangePolicy) on a tiny box pays a
+// (Serial/OpenMP), launching a Kokkos::parallel_for on a tiny box pays a
 // fork/join (and the policy construction) that OVERWHELMS the useful work. The multigrid
 // V-cycle descends down to ~2x2/4x4 grids; on those levels the GS smoother, the residual,
 // the restriction/prolongation and the copies chain dozens of parallel_for over a few
@@ -60,7 +60,7 @@ namespace pops {
 // in the same call (the GS smoother is RED-BLACK colored -- one color only reads
 // the other; residual/restriction/prolongation/copies/saxpy write a destination
 // distinct from the source). The result is therefore INDEPENDENT OF the traversal ORDER:
-// the sequential loop yields exactly the same bits as the matching static-rank Kokkos policy.
+// the sequential loop yields exactly the same bits as the matching flattened Kokkos policy.
 // The threshold touches ONLY for_each_cell (not the reductions for_each_cell_reduce_*:
 // the Kokkos parallel sum reassociates the addition, so switching them to serial would
 // NOT be bit-identical -- we leave them intact; the max is exact but the smoother itself
@@ -166,31 +166,31 @@ inline bool foreach_small_box(const Box<Dim>& box, std::int64_t threshold) noexc
   return true;
 }
 
+template <int Dim>
+POPS_HD CellIndex<Dim> cell_index_from_ordinal(const Index<Dim>& lower, const Extent<Dim>& extent,
+                                               std::int64_t ordinal) {
+  CellIndex<Dim> index{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    index[axis] = lower[axis] + static_cast<int>(ordinal % extent[axis]);
+    ordinal /= extent[axis];
+  }
+  return index;
+}
+
 template <class ExecutionSpace, int Dim, class F>
 void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
                         F f) {
   static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
                 "PoPS iteration requires a Kokkos execution-space instance");
-  if constexpr (Dim == 1) {
-    Kokkos::parallel_for(
-        label,
-        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, box.lo[0],
-                                                                    box.hi[0] + 1),
-        KOKKOS_LAMBDA(const int i) { f(CellIndex<1>{i}); });
-  } else if constexpr (Dim == 2) {
-    Kokkos::parallel_for(
-        label,
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-            execution, {box.lo[0], box.lo[1]}, {box.hi[0] + 1, box.hi[1] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j) { f(CellIndex<2>{i, j}); });
-  } else {
-    Kokkos::parallel_for(
-        label,
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            execution, {box.lo[0], box.lo[1], box.lo[2]},
-            {box.hi[0] + 1, box.hi[1] + 1, box.hi[2] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k) { f(CellIndex<3>{i, j, k}); });
-  }
+  const Index<Dim> lower = box.lo;
+  const Extent<Dim> extent = box.extent();
+  Kokkos::parallel_for(
+      label,
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           box.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal) {
+        f(cell_index_from_ordinal(lower, extent, ordinal));
+      });
 }
 
 template <int Dim, int Axis, class F>
@@ -227,16 +227,12 @@ void for_each_cell(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
     return;
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
-  if constexpr (Dim == 1)
-    detail::launch_index_space(execution, b, "pops_for_each_cell_1d", f);
-  else if constexpr (Dim == 2)
-    detail::launch_index_space(execution, b, "pops_for_each_cell_2d", f);
-  else
-    detail::launch_index_space(execution, b, "pops_for_each_cell_3d", f);
+  detail::launch_index_space(execution, b, "pops_for_each_cell", f);
 }
 
 /// Applies @p f to every index of a compile-time-ranked box.  The functor is passed by value and
-/// receives CellIndex<Dim>; the selected Kokkos policy has the same static rank as the box.
+/// receives CellIndex<Dim>; one flattened policy decodes the box's compile-time rank without a
+/// dimension-specific launch branch.
 template <int Dim, class F>
 void for_each_cell(const Box<Dim>& b, F f) {
   if (b.empty())
@@ -245,19 +241,10 @@ void for_each_cell(const Box<Dim>& b, F f) {
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
     if (detail::foreach_small_box(b, detail::foreach_serial_threshold())) {
       record_fallback(FallbackCounter::kForeachSerialSmallBox);
-      if constexpr (Dim == 1) {
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          f(CellIndex<1>{i});
-      } else if constexpr (Dim == 2) {
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            f(CellIndex<2>{i, j});
-      } else {
-        for (int k = b.lo[2]; k <= b.hi[2]; ++k)
-          for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-            for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-              f(CellIndex<3>{i, j, k});
-      }
+      const Extent<Dim> extent = b.extent();
+      const std::int64_t point_count = b.numPts();
+      for (std::int64_t ordinal = 0; ordinal < point_count; ++ordinal)
+        f(detail::cell_index_from_ordinal(b.lo, extent, ordinal));
       return;
     }
   }
@@ -303,32 +290,16 @@ Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = 0;
-  if constexpr (Dim == 1) {
-    Kokkos::parallel_reduce(
-        "pops_reduce_sum_index_1d",
-        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, b.lo[0],
-                                                                    b.hi[0] + 1),
-        KOKKOS_LAMBDA(const int i, Real& accumulator) { accumulator += f(Index<1>{i}); },
-        Kokkos::Sum<Real>{result});
-  } else if constexpr (Dim == 2) {
-    Kokkos::parallel_reduce(
-        "pops_reduce_sum_index_2d",
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-            execution, {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
-          accumulator += f(Index<2>{i, j});
-        },
-        Kokkos::Sum<Real>{result});
-  } else {
-    Kokkos::parallel_reduce(
-        "pops_reduce_sum_index_3d",
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            execution, {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
-          accumulator += f(Index<3>{i, j, k});
-        },
-        Kokkos::Sum<Real>{result});
-  }
+  const Index<Dim> lower = b.lo;
+  const Extent<Dim> extent = b.extent();
+  Kokkos::parallel_reduce(
+      "pops_reduce_sum_index",
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           b.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+        accumulator += f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+      },
+      Kokkos::Sum<Real>{result});
   return result;
 }
 
@@ -352,40 +323,18 @@ Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b
   detail::require_iterable_box(b);
   detail::ensure_kokkos_initialized();
   Real result = std::numeric_limits<Real>::lowest();
-  if constexpr (Dim == 1) {
-    Kokkos::parallel_reduce(
-        "pops_reduce_max_index_1d",
-        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, b.lo[0],
-                                                                    b.hi[0] + 1),
-        KOKKOS_LAMBDA(const int i, Real& accumulator) {
-          const Real value = f(Index<1>{i});
-          if (value > accumulator)
-            accumulator = value;
-        },
-        Kokkos::Max<Real>{result});
-  } else if constexpr (Dim == 2) {
-    Kokkos::parallel_reduce(
-        "pops_reduce_max_index_2d",
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
-            execution, {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
-          const Real value = f(Index<2>{i, j});
-          if (value > accumulator)
-            accumulator = value;
-        },
-        Kokkos::Max<Real>{result});
-  } else {
-    Kokkos::parallel_reduce(
-        "pops_reduce_max_index_3d",
-        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            execution, {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
-          const Real value = f(Index<3>{i, j, k});
-          if (value > accumulator)
-            accumulator = value;
-        },
-        Kokkos::Max<Real>{result});
-  }
+  const Index<Dim> lower = b.lo;
+  const Extent<Dim> extent = b.extent();
+  Kokkos::parallel_reduce(
+      "pops_reduce_max_index",
+      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::int64_t>>(execution, 0,
+                                                                           b.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal, Real& accumulator) {
+        const Real value = f(detail::cell_index_from_ordinal(lower, extent, ordinal));
+        if (value > accumulator)
+          accumulator = value;
+      },
+      Kokkos::Max<Real>{result});
   return result;
 }
 
