@@ -87,6 +87,7 @@ def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():
     """Prepared field-solver façades own the supported solve/consumption boundary."""
     manifest = packaging.read_manifest(ROOT)
     raw_engines = {
+        PurePosixPath("pops/numerics/elliptic/amr/composite_fac_poisson.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/composite_fac_nlevel.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/composite_fac_poisson.hpp"),
         PurePosixPath("pops/numerics/elliptic/mg/geometric_mg.hpp"),
