@@ -1,5 +1,5 @@
 /// @file
-/// @brief Prepared full-tensor composite FAC kernel for the exact two-dimensional hierarchy route.
+/// @brief Prepared full-tensor composite FAC kernel for exact-ranked Cartesian hierarchies.
 
 #pragma once
 
@@ -31,19 +31,20 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-namespace pops::runtime::program::tensor_fac_2d {
+namespace pops::runtime::program::tensor_fac {
 
-template <class MemorySpace>
+template <int Dim, class MemorySpace>
 struct LevelBinding {
-  const Geometry<2>* geometry = nullptr;
-  const PhysicalBoundaryConditions<2>* boundary = nullptr;
-  std::array<MultiFab<2, MemorySpace>*, 4> coefficients{};
-  MultiFab<2, MemorySpace>* rhs = nullptr;
-  MultiFab<2, MemorySpace>* initial_guess = nullptr;
-  MultiFab<2, MemorySpace>* solution = nullptr;
+  const Geometry<Dim>* geometry = nullptr;
+  const PhysicalBoundaryConditions<Dim>* boundary = nullptr;
+  std::array<MultiFab<Dim, MemorySpace>*, static_cast<std::size_t>(Dim* Dim)> coefficients{};
+  MultiFab<Dim, MemorySpace>* rhs = nullptr;
+  MultiFab<Dim, MemorySpace>* initial_guess = nullptr;
+  MultiFab<Dim, MemorySpace>* solution = nullptr;
 };
 
 struct Controls {
@@ -70,25 +71,37 @@ inline std::size_t checked_sum(std::size_t left, std::size_t right, const char* 
   return left + right;
 }
 
-inline Extent<2> one_ghost() {
-  return Extent<2>{1, 1};
+template <int Dim>
+Extent<Dim> one_ghost() {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = 1;
+  return result;
 }
 
-inline Extent<2> ratio_extent(const ::pops::amr::RefinementRatio<2>& ratio) {
-  return Extent<2>{ratio[0], ratio[1]};
+template <int Dim>
+Extent<Dim> ratio_extent(const ::pops::amr::RefinementRatio<Dim>& ratio) {
+  Extent<Dim> result{};
+  for (int axis = 0; axis < Dim; ++axis)
+    result[axis] = ratio[axis];
+  return result;
 }
 
-inline mesh::BoxArrayValidationBudget exact_layout_budget(const mesh::BoxArray<2>& layout) {
+template <int Dim>
+mesh::BoxArrayValidationBudget exact_layout_budget(const mesh::BoxArray<Dim>& layout) {
   const std::size_t boxes = layout.size();
   const std::size_t pairs =
       boxes < 2 ? 0 : checked_product(boxes, boxes - 1, "tensor FAC layout budget overflow") / 2;
   return {boxes, pairs};
 }
 
-inline HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<2>& layout, const Box<2>& domain) {
+template <int Dim>
+HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<Dim>& layout, const Box<Dim>& domain) {
   const std::size_t boxes = layout.size();
   const std::size_t pairs = checked_product(boxes, boxes, "tensor FAC halo pair overflow");
-  constexpr std::size_t images = 9;
+  std::size_t images = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    images = checked_product(images, std::size_t{3}, "tensor FAC halo image overflow");
   const std::size_t work = checked_product(pairs, images, "tensor FAC halo work overflow");
   const std::size_t jobs = checked_product(work, 4, "tensor FAC halo job overflow");
   const std::int64_t signed_cells = domain.numPts();
@@ -96,7 +109,7 @@ inline HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<2>& layout, con
     throw std::invalid_argument("tensor FAC halo domain is empty");
   const std::size_t elements = checked_product(jobs, static_cast<std::size_t>(signed_cells),
                                                "tensor FAC halo element overflow");
-  return {exact_layout_budget(layout),
+  return {exact_layout_budget<Dim>(layout),
           work,
           jobs,
           images,
@@ -106,19 +119,24 @@ inline HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<2>& layout, con
           elements};
 }
 
-inline BoundaryScheduleBudget exact_boundary_budget() {
-  return {8};
+template <int Dim>
+BoundaryScheduleBudget exact_boundary_budget() {
+  std::size_t entries = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    entries = checked_product(entries, std::size_t{3}, "tensor FAC boundary budget overflow");
+  return {entries - 1};
 }
 
-inline PhysicalBoundaryConditions<2> boundary_with_values(
-    const PhysicalBoundaryConditions<2>& source, const Geometry<2>& geometry, bool homogeneous,
-    bool coefficient) {
-  std::array<PhysicalBoundaryFace, 4> faces{};
-  RealVector<2> spacing{};
-  for (int axis = 0; axis < 2; ++axis) {
+template <int Dim>
+PhysicalBoundaryConditions<Dim> boundary_with_values(const PhysicalBoundaryConditions<Dim>& source,
+                                                     const Geometry<Dim>& geometry,
+                                                     bool homogeneous, bool coefficient) {
+  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
     spacing[axis] = geometry.spacing(axis);
     for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
-      const Face<2> face{axis, side};
+      const Face<Dim> face{axis, side};
       PhysicalBoundaryFace law = source.at(face);
       if (coefficient && !source.topology().is_periodic(face)) {
         law = PhysicalBoundaryFace{PhysicalBoundaryKind::constant_extrapolation};
@@ -128,27 +146,28 @@ inline PhysicalBoundaryConditions<2> boundary_with_values(
       faces[static_cast<std::size_t>(face.ordinal())] = law;
     }
   }
-  return PhysicalBoundaryConditions<2>{source.topology(), faces, spacing};
+  return PhysicalBoundaryConditions<Dim>{source.topology(), faces, spacing};
 }
 
-inline std::vector<Box<2>> subtract_box(const Box<2>& subject, const Box<2>& cut) {
-  const Box<2> overlap = subject.intersect(cut);
+template <int Dim>
+std::vector<Box<Dim>> subtract_box(const Box<Dim>& subject, const Box<Dim>& cut) {
+  const Box<Dim> overlap = subject.intersect(cut);
   if (overlap.empty())
-    return subject.empty() ? std::vector<Box<2>>{} : std::vector<Box<2>>{subject};
+    return subject.empty() ? std::vector<Box<Dim>>{} : std::vector<Box<Dim>>{subject};
   if (overlap == subject)
     return {};
-  std::vector<Box<2>> result;
-  result.reserve(4);
-  Box<2> remainder = subject;
-  for (int axis = 0; axis < 2; ++axis) {
+  std::vector<Box<Dim>> result;
+  result.reserve(static_cast<std::size_t>(2 * Dim));
+  Box<Dim> remainder = subject;
+  for (int axis = 0; axis < Dim; ++axis) {
     if (remainder.lo[axis] < overlap.lo[axis]) {
-      Box<2> lower = remainder;
+      Box<Dim> lower = remainder;
       lower.hi[axis] = overlap.lo[axis] - 1;
       result.push_back(lower);
       remainder.lo[axis] = overlap.lo[axis];
     }
     if (overlap.hi[axis] < remainder.hi[axis]) {
-      Box<2> upper = remainder;
+      Box<Dim> upper = remainder;
       upper.lo[axis] = overlap.hi[axis] + 1;
       result.push_back(upper);
       remainder.hi[axis] = overlap.hi[axis];
@@ -157,46 +176,53 @@ inline std::vector<Box<2>> subtract_box(const Box<2>& subject, const Box<2>& cut
   return result;
 }
 
-inline void subtract_from(std::vector<Box<2>>& regions, const Box<2>& cut) {
-  std::vector<Box<2>> next;
-  for (const Box<2>& region : regions) {
-    auto pieces = subtract_box(region, cut);
+template <int Dim>
+void subtract_from(std::vector<Box<Dim>>& regions, const Box<Dim>& cut) {
+  std::vector<Box<Dim>> next;
+  for (const Box<Dim>& region : regions) {
+    auto pieces = subtract_box<Dim>(region, cut);
     next.insert(next.end(), pieces.begin(), pieces.end());
   }
   regions = std::move(next);
 }
 
-inline Box<2> clipped_growth(const Box<2>& valid, const Box<2>& domain) {
+template <int Dim>
+Box<Dim> clipped_growth(const Box<Dim>& valid, const Box<Dim>& domain) {
   return valid.grow(1).intersect(domain);
 }
 
-template <class Value>
+template <int Dim, class Value>
 struct SetKernel {
-  FieldView<Value, 2> field{};
+  FieldView<Value, Dim> field{};
   Real value = Real(0);
-  POPS_HD void operator()(const Index<2>& index) const { field(index, 0) = value; }
+  POPS_HD void operator()(const Index<Dim>& index) const { field(index, 0) = value; }
 };
 
+template <int Dim>
 struct CopyKernel {
-  FieldView<Real, 2> destination{};
-  FieldView<const Real, 2> source{};
-  POPS_HD void operator()(const Index<2>& index) const { destination(index, 0) = source(index, 0); }
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    destination(index, 0) = source(index, 0);
+  }
 };
 
+template <int Dim>
 struct ActiveAddKernel {
-  FieldView<Real, 2> destination{};
-  FieldView<const Real, 2> correction{};
-  FieldView<const Real, 2> active{};
-  POPS_HD void operator()(const Index<2>& index) const {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> correction{};
+  FieldView<const Real, Dim> active{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
     if (active(index, 0) >= Real(0.5))
       destination(index, 0) += correction(index, 0);
   }
 };
 
+template <int Dim>
 struct MaskKernel {
-  FieldView<Real, 2> values{};
-  FieldView<const Real, 2> covered{};
-  POPS_HD void operator()(const Index<2>& index) const {
+  FieldView<Real, Dim> values{};
+  FieldView<const Real, Dim> covered{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
     if (covered(index, 0) >= Real(0.5))
       values(index, 0) = Real(0);
   }
@@ -207,87 +233,99 @@ POPS_HD inline Real harmonic(Real left, Real right) {
   return denominator != Real(0) ? Real(2) * left * right / denominator : Real(0);
 }
 
+template <int Dim>
 struct TensorStencil {
-  FieldView<const Real, 2> phi{};
-  std::array<FieldView<const Real, 2>, 4> coefficient{};
-  Real inverse_dx = Real(0);
-  Real inverse_dy = Real(0);
+  FieldView<const Real, Dim> phi{};
+  std::array<FieldView<const Real, Dim>, static_cast<std::size_t>(Dim* Dim)> coefficient{};
+  RealVector<Dim> inverse_dx{};
 
-  POPS_HD Real image(const Index<2>& cell) const {
-    const Index<2> xm{cell[0] - 1, cell[1]};
-    const Index<2> xp{cell[0] + 1, cell[1]};
-    const Index<2> ym{cell[0], cell[1] - 1};
-    const Index<2> yp{cell[0], cell[1] + 1};
-    const Index<2> xmym{cell[0] - 1, cell[1] - 1};
-    const Index<2> xmyp{cell[0] - 1, cell[1] + 1};
-    const Index<2> xpym{cell[0] + 1, cell[1] - 1};
-    const Index<2> xpyp{cell[0] + 1, cell[1] + 1};
-
-    const Real a_xx_p = harmonic(coefficient[0](cell, 0), coefficient[0](xp, 0));
-    const Real a_xx_m = harmonic(coefficient[0](xm, 0), coefficient[0](cell, 0));
-    const Real a_xy_p = Real(0.5) * (coefficient[1](cell, 0) + coefficient[1](xp, 0));
-    const Real a_xy_m = Real(0.5) * (coefficient[1](xm, 0) + coefficient[1](cell, 0));
-    const Real a_yx_p = Real(0.5) * (coefficient[2](cell, 0) + coefficient[2](yp, 0));
-    const Real a_yx_m = Real(0.5) * (coefficient[2](ym, 0) + coefficient[2](cell, 0));
-    const Real a_yy_p = harmonic(coefficient[3](cell, 0), coefficient[3](yp, 0));
-    const Real a_yy_m = harmonic(coefficient[3](ym, 0), coefficient[3](cell, 0));
-
-    const Real dx_phi_p = (phi(xp, 0) - phi(cell, 0)) * inverse_dx;
-    const Real dx_phi_m = (phi(cell, 0) - phi(xm, 0)) * inverse_dx;
-    const Real dy_at_xp =
-        (phi(yp, 0) - phi(ym, 0) + phi(xpyp, 0) - phi(xpym, 0)) * (Real(0.25) * inverse_dy);
-    const Real dy_at_xm =
-        (phi(xmyp, 0) - phi(xmym, 0) + phi(yp, 0) - phi(ym, 0)) * (Real(0.25) * inverse_dy);
-    const Real dy_phi_p = (phi(yp, 0) - phi(cell, 0)) * inverse_dy;
-    const Real dy_phi_m = (phi(cell, 0) - phi(ym, 0)) * inverse_dy;
-    const Real dx_at_yp =
-        (phi(xp, 0) - phi(xm, 0) + phi(xpyp, 0) - phi(xmyp, 0)) * (Real(0.25) * inverse_dx);
-    const Real dx_at_ym =
-        (phi(xpym, 0) - phi(xmym, 0) + phi(xp, 0) - phi(xm, 0)) * (Real(0.25) * inverse_dx);
-
-    const Real flux_x_p = a_xx_p * dx_phi_p + a_xy_p * dy_at_xp;
-    const Real flux_x_m = a_xx_m * dx_phi_m + a_xy_m * dy_at_xm;
-    const Real flux_y_p = a_yx_p * dx_at_yp + a_yy_p * dy_phi_p;
-    const Real flux_y_m = a_yx_m * dx_at_ym + a_yy_m * dy_phi_m;
-    return -(flux_x_p - flux_x_m) * inverse_dx - (flux_y_p - flux_y_m) * inverse_dy;
+  POPS_HD Real image(const Index<Dim>& cell) const {
+    Real value = Real(0);
+    for (int row = 0; row < Dim; ++row) {
+      Index<Dim> minus = cell;
+      Index<Dim> plus = cell;
+      --minus[row];
+      ++plus[row];
+      Real flux_plus = Real(0);
+      Real flux_minus = Real(0);
+      for (int column = 0; column < Dim; ++column) {
+        const auto& a = coefficient[static_cast<std::size_t>(row * Dim + column)];
+        const Real a_plus = row == column ? harmonic(a(cell, 0), a(plus, 0))
+                                          : Real(0.5) * (a(cell, 0) + a(plus, 0));
+        const Real a_minus = row == column ? harmonic(a(minus, 0), a(cell, 0))
+                                           : Real(0.5) * (a(minus, 0) + a(cell, 0));
+        Real gradient_plus = Real(0);
+        Real gradient_minus = Real(0);
+        if (row == column) {
+          gradient_plus = (phi(plus, 0) - phi(cell, 0)) * inverse_dx[column];
+          gradient_minus = (phi(cell, 0) - phi(minus, 0)) * inverse_dx[column];
+        } else {
+          Index<Dim> cell_minus = cell;
+          Index<Dim> cell_plus = cell;
+          Index<Dim> plus_minus = plus;
+          Index<Dim> plus_plus = plus;
+          Index<Dim> minus_minus = minus;
+          Index<Dim> minus_plus = minus;
+          --cell_minus[column];
+          ++cell_plus[column];
+          --plus_minus[column];
+          ++plus_plus[column];
+          --minus_minus[column];
+          ++minus_plus[column];
+          gradient_plus =
+              (phi(cell_plus, 0) - phi(cell_minus, 0) + phi(plus_plus, 0) - phi(plus_minus, 0)) *
+              (Real(0.25) * inverse_dx[column]);
+          gradient_minus =
+              (phi(minus_plus, 0) - phi(minus_minus, 0) + phi(cell_plus, 0) - phi(cell_minus, 0)) *
+              (Real(0.25) * inverse_dx[column]);
+        }
+        flux_plus += a_plus * gradient_plus;
+        flux_minus += a_minus * gradient_minus;
+      }
+      value -= (flux_plus - flux_minus) * inverse_dx[row];
+    }
+    return value;
   }
 
-  POPS_HD Real diagonal(const Index<2>& cell) const {
-    const Index<2> xm{cell[0] - 1, cell[1]};
-    const Index<2> xp{cell[0] + 1, cell[1]};
-    const Index<2> ym{cell[0], cell[1] - 1};
-    const Index<2> yp{cell[0], cell[1] + 1};
-    return (harmonic(coefficient[0](xm, 0), coefficient[0](cell, 0)) +
-            harmonic(coefficient[0](cell, 0), coefficient[0](xp, 0))) *
-               inverse_dx * inverse_dx +
-           (harmonic(coefficient[3](ym, 0), coefficient[3](cell, 0)) +
-            harmonic(coefficient[3](cell, 0), coefficient[3](yp, 0))) *
-               inverse_dy * inverse_dy;
+  POPS_HD Real diagonal(const Index<Dim>& cell) const {
+    Real value = Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> minus = cell;
+      Index<Dim> plus = cell;
+      --minus[axis];
+      ++plus[axis];
+      const auto& a = coefficient[static_cast<std::size_t>(axis * Dim + axis)];
+      value += (harmonic(a(minus, 0), a(cell, 0)) + harmonic(a(cell, 0), a(plus, 0))) *
+               inverse_dx[axis] * inverse_dx[axis];
+    }
+    return value;
   }
 };
 
+template <int Dim>
 struct ResidualKernel {
-  FieldView<Real, 2> residual{};
-  FieldView<const Real, 2> rhs{};
-  FieldView<const Real, 2> covered{};
-  TensorStencil stencil{};
+  FieldView<Real, Dim> residual{};
+  FieldView<const Real, Dim> rhs{};
+  FieldView<const Real, Dim> covered{};
+  TensorStencil<Dim> stencil{};
   bool mask_covered = true;
-  POPS_HD void operator()(const Index<2>& index) const {
+  POPS_HD void operator()(const Index<Dim>& index) const {
     residual(index, 0) = mask_covered && covered(index, 0) >= Real(0.5)
                              ? Real(0)
                              : rhs(index, 0) - stencil.image(index);
   }
 };
 
+template <int Dim>
 struct JacobiKernel {
-  FieldView<Real, 2> destination{};
-  FieldView<const Real, 2> iterate{};
-  FieldView<const Real, 2> rhs{};
-  FieldView<const Real, 2> covered{};
-  TensorStencil stencil{};
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> iterate{};
+  FieldView<const Real, Dim> rhs{};
+  FieldView<const Real, Dim> covered{};
+  TensorStencil<Dim> stencil{};
   Real relaxation = Real(0.65);
   bool mask_covered = true;
-  POPS_HD void operator()(const Index<2>& index) const {
+  POPS_HD void operator()(const Index<Dim>& index) const {
     if (mask_covered && covered(index, 0) >= Real(0.5)) {
       destination(index, 0) = iterate(index, 0);
       return;
@@ -298,16 +336,17 @@ struct JacobiKernel {
   }
 };
 
+template <int Dim>
 struct LinearInterpolationKernel {
-  FieldView<const Real, 2> coarse{};
-  FieldView<Real, 2> fine{};
-  Box<2> coarse_domain{};
-  Box<2> fine_domain{};
-  ::pops::amr::RefinementRatio<2> ratio{};
-  POPS_HD void operator()(const Index<2>& index) const {
-    Index<2> parent{};
-    Real offset[2]{};
-    for (int axis = 0; axis < 2; ++axis) {
+  FieldView<const Real, Dim> coarse{};
+  FieldView<Real, Dim> fine{};
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
+  POPS_HD void operator()(const Index<Dim>& index) const {
+    Index<Dim> parent{};
+    std::array<Real, static_cast<std::size_t>(Dim)> offset{};
+    for (int axis = 0; axis < Dim; ++axis) {
       const std::int64_t relative = static_cast<std::int64_t>(index[axis]) - fine_domain.lo[axis];
       std::int64_t quotient = relative / ratio[axis];
       if (relative % ratio[axis] < 0)
@@ -317,9 +356,9 @@ struct LinearInterpolationKernel {
                      (static_cast<Real>(quotient) + Real(0.5));
     }
     Real value = coarse(parent, 0);
-    for (int axis = 0; axis < 2; ++axis) {
-      Index<2> lower = parent;
-      Index<2> upper = parent;
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = parent;
+      Index<Dim> upper = parent;
       --lower[axis];
       ++upper[axis];
       Real slope = Real(0);
@@ -335,43 +374,51 @@ struct LinearInterpolationKernel {
   }
 };
 
+template <int Dim>
 struct RestrictionKernel {
-  FieldView<const Real, 2> fine{};
-  FieldView<Real, 2> coarse{};
-  Box<2> coarse_domain{};
-  Box<2> fine_domain{};
-  ::pops::amr::RefinementRatio<2> ratio{};
+  FieldView<const Real, Dim> fine{};
+  FieldView<Real, Dim> coarse{};
+  Box<Dim> coarse_domain{};
+  Box<Dim> fine_domain{};
+  ::pops::amr::RefinementRatio<Dim> ratio{};
   Real inverse_children = Real(1);
-  POPS_HD void operator()(const Index<2>& parent) const {
-    Index<2> base{};
-    for (int axis = 0; axis < 2; ++axis)
+  POPS_HD void operator()(const Index<Dim>& parent) const {
+    Index<Dim> base{};
+    for (int axis = 0; axis < Dim; ++axis)
       base[axis] = static_cast<int>(
           static_cast<std::int64_t>(fine_domain.lo[axis]) +
           (static_cast<std::int64_t>(parent[axis]) - coarse_domain.lo[axis]) * ratio[axis]);
     Real sum = Real(0);
-    for (int y = 0; y < ratio[1]; ++y)
-      for (int x = 0; x < ratio[0]; ++x)
-        sum += fine(Index<2>{base[0] + x, base[1] + y}, 0);
+    for (std::int64_t child = 0; child < ratio.child_count(); ++child) {
+      std::int64_t ordinal = child;
+      Index<Dim> fine_index = base;
+      for (int axis = 0; axis < Dim; ++axis) {
+        fine_index[axis] += static_cast<int>(ordinal % ratio[axis]);
+        ordinal /= ratio[axis];
+      }
+      sum += fine(fine_index, 0);
+    }
     coarse(parent, 0) = sum * inverse_children;
   }
 };
 
-inline void copy_region(FieldView<Real, 2> destination, FieldView<const Real, 2> source,
-                        const Box<2>& region) {
+template <int Dim>
+inline void copy_region(FieldView<Real, Dim> destination, FieldView<const Real, Dim> source,
+                        const Box<Dim>& region) {
   if (!region.empty())
-    for_each_cell(region, CopyKernel{destination, source});
+    for_each_cell(region, CopyKernel<Dim>{destination, source});
 }
 
-template <class MemorySpace>
-void copy_valid(MultiFab<2, MemorySpace>& destination, const MultiFab<2, MemorySpace>& source) {
+template <int Dim, class MemorySpace>
+void copy_valid(MultiFab<Dim, MemorySpace>& destination, const MultiFab<Dim, MemorySpace>& source) {
   if (destination.layout() != source.layout() ||
       destination.distribution() != source.distribution() ||
       destination.local_rank() != source.local_rank() || destination.ncomp() != 1 ||
       source.ncomp() != 1)
     throw std::invalid_argument("tensor FAC copy requires one exact scalar vector space");
   for (std::size_t local = 0; local < destination.local_size(); ++local)
-    copy_region(destination.fab(local).view(), std::as_const(source.fab(local)).view(),
-                destination.box(local));
+    copy_region<Dim>(destination.fab(local).view(), std::as_const(source.fab(local)).view(),
+                     destination.box(local));
   Kokkos::fence();
 }
 
@@ -390,24 +437,25 @@ inline void validate_controls(const Controls& controls) {
 
 }  // namespace detail
 
-/// A prepared rank-two FAC cycle for ``-div(A grad(phi)) = rhs``.
+/// A prepared dimension-generic FAC cycle for ``-div(A grad(phi)) = rhs``.
 ///
-/// The four coefficient fields are ordered ``Axx, Axy, Ayx, Ayy``.  The conservative flux stencil
-/// is genuinely nine-point when either cross coefficient is nonzero.  Same-level halos and every
-/// partitioned coarse/fine transfer own one duplicated ExecutionLane; replicated level zero is
-/// retained as an explicit capability and refined contributions are broadcast from their unique
-/// owners into that replicated parent.  No solve-time storage allocation is permitted.
-template <class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
-class TensorCompositeFac {
+/// Coefficients are row-major ``A[row * Dim + column]``.  The conservative flux stencil includes
+/// every cross derivative, so its support expands with the exact compile-time dimension.
+/// Same-level halos and every partitioned coarse/fine transfer own one duplicated ExecutionLane;
+/// replicated level zero is retained as an explicit capability and refined contributions are
+/// broadcast from their unique owners into that replicated parent.  No solve-time storage
+/// allocation is permitted.
+template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+class FullTensorCompositeFac {
  public:
-  using field_type = MultiFab<2, MemorySpace>;
+  using field_type = MultiFab<Dim, MemorySpace>;
 
-  TensorCompositeFac(std::span<const LevelBinding<MemorySpace>> bindings,
-                     std::span<const ::pops::amr::RefinementRatio<2>> ratios)
+  FullTensorCompositeFac(std::span<const LevelBinding<Dim, MemorySpace>> bindings,
+                         std::span<const ::pops::amr::RefinementRatio<Dim>> ratios)
       : bindings_(bindings.begin(), bindings.end()), ratios_(ratios.begin(), ratios.end()) {
     static_assert(
         Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, MemorySpace>::accessible,
-        "TensorCompositeFac requires DefaultExecutionSpace access to its memory space");
+        "FullTensorCompositeFac requires DefaultExecutionSpace access to its memory space");
     std::exception_ptr local_error;
     try {
       validate_bindings_();
@@ -426,24 +474,25 @@ class TensorCompositeFac {
     if (all_reduce_max(local_error ? 1L : 0L) != 0) {
       if (n_ranks() == 1 && local_error)
         std::rethrow_exception(local_error);
-      throw std::runtime_error("rank-two tensor FAC preparation failed collectively");
+      throw std::runtime_error("dimension-generic tensor FAC preparation failed collectively");
     }
 
     exact_contract_ = build_exact_contract_();
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"pops-rank2-tensor-fac", std::string_view(exact_contract_)}}))
-      throw std::invalid_argument("rank-two tensor FAC hierarchy differs between MPI ranks");
+            {{"pops-nd-tensor-fac", std::string_view(exact_contract_)}}))
+      throw std::invalid_argument(
+          "dimension-generic tensor FAC hierarchy differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection)
       if (!all_ranks_agree_exact_ordered_byte_pairs(
-              {{"pops-rank2-tensor-parent-gather",
+              {{"pops-nd-tensor-parent-gather",
                 std::string_view(connections_[connection]->gather_contract)},
-               {"pops-rank2-tensor-fine-restriction",
+               {"pops-nd-tensor-fine-restriction",
                 std::string_view(connections_[connection]->restriction_contract)}}))
         throw std::invalid_argument(
-            "rank-two tensor FAC coarse/fine schedule differs between MPI ranks");
+            "dimension-generic tensor FAC coarse/fine schedule differs between MPI ranks");
 
     lane_.emplace(
-        ExecutionLane::duplicate_world_collectively("pops.runtime.amr.rank2-tensor-composite-fac"));
+        ExecutionLane::duplicate_world_collectively("pops.runtime.amr.nd-tensor-composite-fac"));
     for (auto& connection : connections_)
       connection->attach_lane(*lane_);
     for (std::size_t level = 0; level < levels_.size(); ++level) {
@@ -458,10 +507,10 @@ class TensorCompositeFac {
     }
   }
 
-  TensorCompositeFac(const TensorCompositeFac&) = delete;
-  TensorCompositeFac& operator=(const TensorCompositeFac&) = delete;
-  TensorCompositeFac(TensorCompositeFac&&) = delete;
-  TensorCompositeFac& operator=(TensorCompositeFac&&) = delete;
+  FullTensorCompositeFac(const FullTensorCompositeFac&) = delete;
+  FullTensorCompositeFac& operator=(const FullTensorCompositeFac&) = delete;
+  FullTensorCompositeFac(FullTensorCompositeFac&&) = delete;
+  FullTensorCompositeFac& operator=(FullTensorCompositeFac&&) = delete;
 
   std::string_view exact_prepared_contract() const noexcept { return exact_contract_; }
 
@@ -494,12 +543,13 @@ class TensorCompositeFac {
   SolveReport solve(const Controls& controls) {
     detail::validate_controls(controls);
     for (std::size_t level = 0; level < levels_.size(); ++level)
-      detail::copy_valid(*levels_[level]->binding.solution, *levels_[level]->binding.initial_guess);
+      detail::copy_valid<Dim>(*levels_[level]->binding.solution,
+                              *levels_[level]->binding.initial_guess);
     fill_all_coefficient_ghosts_();
     if (!coefficients_are_elliptic_()) {
       SolveReport report;
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
-                         "rank2_tensor_fac_non_elliptic_coefficient");
+                         "nd_tensor_fac_non_elliptic_coefficient");
       return report;
     }
     average_solution_down_();
@@ -514,12 +564,12 @@ class TensorCompositeFac {
         std::max(controls.absolute_tolerance, controls.relative_tolerance * reference);
     if (!std::isfinite(static_cast<double>(reference))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
-                         "rank2_tensor_fac_non_finite_initial_residual");
+                         "nd_tensor_fac_non_finite_initial_residual");
       return report;
     }
     if (reference <= stop) {
       fill_all_solution_ghosts_();
-      report.mark_solved("rank2_tensor_fac_initial_residual");
+      report.mark_solved("nd_tensor_fac_initial_residual");
       return report;
     }
 
@@ -548,61 +598,62 @@ class TensorCompositeFac {
       report.rel_residual = report.residual_norm / reference;
       if (!std::isfinite(static_cast<double>(report.residual_norm))) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
-                           "rank2_tensor_fac_non_finite_iteration");
+                           "nd_tensor_fac_non_finite_iteration");
         return report;
       }
       if (report.residual_norm <= stop) {
         fill_all_solution_ghosts_();
-        report.mark_solved("rank2_tensor_fac_converged");
+        report.mark_solved("nd_tensor_fac_converged");
         return report;
       }
     }
     report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun,
-                       "rank2_tensor_fac_iteration_limit");
+                       "nd_tensor_fac_iteration_limit");
     return report;
   }
 
  private:
   struct Level {
-    LevelBinding<MemorySpace> binding;
+    LevelBinding<Dim, MemorySpace> binding;
     field_type residual;
     field_type scratch;
     field_type correction;
     field_type covered;
     field_type active;
-    HaloSchedule<2> halo_schedule;
-    PreparedPhysicalBoundary<2> physical_boundary;
-    PreparedPhysicalBoundary<2> homogeneous_boundary;
-    PreparedPhysicalBoundary<2> coefficient_boundary;
-    std::optional<HaloExchange<2, MemorySpace>> halo_exchange{};
+    HaloSchedule<Dim> halo_schedule;
+    PreparedPhysicalBoundary<Dim> physical_boundary;
+    PreparedPhysicalBoundary<Dim> homogeneous_boundary;
+    PreparedPhysicalBoundary<Dim> coefficient_boundary;
+    std::optional<HaloExchange<Dim, MemorySpace>> halo_exchange{};
 
-    Level(LevelBinding<MemorySpace> source, bool full_domain)
+    Level(LevelBinding<Dim, MemorySpace> source, bool full_domain)
         : binding(source),
           residual(source.solution->layout(), source.solution->distribution(),
-                   source.solution->local_rank(), 1, Extent<2>{}),
+                   source.solution->local_rank(), 1, Extent<Dim>{}),
           scratch(source.solution->layout(), source.solution->distribution(),
-                  source.solution->local_rank(), 1, Extent<2>{}),
+                  source.solution->local_rank(), 1, Extent<Dim>{}),
           correction(source.solution->layout(), source.solution->distribution(),
-                     source.solution->local_rank(), 1, detail::one_ghost()),
+                     source.solution->local_rank(), 1, detail::one_ghost<Dim>()),
           covered(source.solution->layout(), source.solution->distribution(),
-                  source.solution->local_rank(), 1, Extent<2>{}),
+                  source.solution->local_rank(), 1, Extent<Dim>{}),
           active(source.solution->layout(), source.solution->distribution(),
-                 source.solution->local_rank(), 1, Extent<2>{}),
+                 source.solution->local_rank(), 1, Extent<Dim>{}),
           halo_schedule(prepare_halo_schedule(
               *source.solution, source.geometry->domain(), source.boundary->topology(),
               full_domain ? HaloLayoutCoverage::full_domain : HaloLayoutCoverage::sparse_level,
-              detail::exact_halo_budget(source.solution->layout(), source.geometry->domain()))),
+              detail::exact_halo_budget<Dim>(source.solution->layout(),
+                                             source.geometry->domain()))),
           physical_boundary(prepare_physical_boundary(source.geometry->domain(),
-                                                      detail::one_ghost(), *source.boundary,
-                                                      detail::exact_boundary_budget())),
+                                                      detail::one_ghost<Dim>(), *source.boundary,
+                                                      detail::exact_boundary_budget<Dim>())),
           homogeneous_boundary(prepare_physical_boundary(
-              source.geometry->domain(), detail::one_ghost(),
-              detail::boundary_with_values(*source.boundary, *source.geometry, true, false),
-              detail::exact_boundary_budget())),
+              source.geometry->domain(), detail::one_ghost<Dim>(),
+              detail::boundary_with_values<Dim>(*source.boundary, *source.geometry, true, false),
+              detail::exact_boundary_budget<Dim>())),
           coefficient_boundary(prepare_physical_boundary(
-              source.geometry->domain(), detail::one_ghost(),
-              detail::boundary_with_values(*source.boundary, *source.geometry, false, true),
-              detail::exact_boundary_budget())) {
+              source.geometry->domain(), detail::one_ghost<Dim>(),
+              detail::boundary_with_values<Dim>(*source.boundary, *source.geometry, false, true),
+              detail::exact_boundary_budget<Dim>())) {
       residual.set_val(Real(0));
       scratch.set_val(Real(0));
       correction.set_val(Real(0));
@@ -612,24 +663,24 @@ class TensorCompositeFac {
   };
 
   struct Connection {
-    using transfer_job = elliptic::amr::partitioned_transfer::RegionTransferJob<2>;
-    using transfer_plan = elliptic::amr::partitioned_transfer::RegionTransferPlan<2>;
-    using transport_type = elliptic::amr::partitioned_transfer::RegionTransport<2, MemorySpace>;
-    using host_mirror_type = typename Fab<2, MemorySpace>::host_mirror_type;
+    using transfer_job = elliptic::amr::partitioned_transfer::RegionTransferJob<Dim>;
+    using transfer_plan = elliptic::amr::partitioned_transfer::RegionTransferPlan<Dim>;
+    using transport_type = elliptic::amr::partitioned_transfer::RegionTransport<Dim, MemorySpace>;
+    using host_mirror_type = typename Fab<Dim, MemorySpace>::host_mirror_type;
 
     struct ScratchPatch {
       std::size_t fine_patch = 0;
-      Fab<2, MemorySpace> parent_staging{};
-      Fab<2, MemorySpace> restricted{};
-      std::vector<Box<2>> ghost_regions{};
+      Fab<Dim, MemorySpace> parent_staging{};
+      Fab<Dim, MemorySpace> restricted{};
+      std::vector<Box<Dim>> ghost_regions{};
       std::optional<host_mirror_type> restricted_host{};
       std::vector<Real> broadcast_buffer{};
 
-      ScratchPatch(std::size_t patch, const Box<2>& staging, const Box<2>& restriction,
-                   std::vector<Box<2>> regions, bool broadcast)
+      ScratchPatch(std::size_t patch, const Box<Dim>& staging, const Box<Dim>& restriction,
+                   std::vector<Box<Dim>> regions, bool broadcast)
           : fine_patch(patch),
-            parent_staging(staging, 1, Extent<2>{}),
-            restricted(restriction, 1, Extent<2>{}),
+            parent_staging(staging, 1, Extent<Dim>{}),
+            restricted(restriction, 1, Extent<Dim>{}),
             ghost_regions(std::move(regions)) {
         if (broadcast) {
           restricted_host.emplace(restricted.create_host_mirror());
@@ -640,7 +691,7 @@ class TensorCompositeFac {
 
     Level* parent = nullptr;
     Level* child = nullptr;
-    ::pops::amr::RefinementRatio<2> ratio{};
+    ::pops::amr::RefinementRatio<Dim> ratio{};
     bool replicated_parent = false;
     std::vector<ScratchPatch> scratch{};
     std::vector<std::size_t> scratch_by_fine_patch{};
@@ -652,39 +703,39 @@ class TensorCompositeFac {
 
     static constexpr std::size_t no_scratch = std::numeric_limits<std::size_t>::max();
 
-    Connection(Level& parent_level, Level& child_level, ::pops::amr::RefinementRatio<2> level_ratio,
-               std::size_t ordinal)
+    Connection(Level& parent_level, Level& child_level,
+               ::pops::amr::RefinementRatio<Dim> level_ratio, std::size_t ordinal)
         : parent(&parent_level),
           child(&child_level),
           ratio(level_ratio),
           replicated_parent(parent_level.binding.solution->distribution().replicated()) {
-      const Extent<2> ratio_value = detail::ratio_extent(ratio);
+      const Extent<Dim> ratio_value = detail::ratio_extent<Dim>(ratio);
       const std::size_t fine_count = child->binding.solution->layout().size();
       scratch_by_fine_patch.assign(fine_count, no_scratch);
       scratch.reserve(replicated_parent ? fine_count : child->binding.solution->local_size());
       for (std::size_t fine_patch = 0; fine_patch < fine_count; ++fine_patch) {
         if (!replicated_parent && !child->binding.solution->contains_local(fine_patch))
           continue;
-        const Box<2>& valid = child->binding.solution->layout()[fine_patch];
-        const Box<2> staging =
-            coarsen(detail::clipped_growth(valid, child->binding.geometry->domain()), ratio_value)
+        const Box<Dim>& valid = child->binding.solution->layout()[fine_patch];
+        const Box<Dim> staging =
+            coarsen(detail::clipped_growth<Dim>(valid, child->binding.geometry->domain()),
+                    ratio_value)
                 .grow(1)
                 .intersect(parent->binding.geometry->domain());
-        const Box<2> restricted_box = coarsen(valid, ratio_value);
-        std::vector<Box<2>> pending{
-            detail::clipped_growth(valid, child->binding.geometry->domain())};
-        for (const Box<2>& peer : child->binding.solution->layout().boxes())
-          detail::subtract_from(pending, peer);
+        const Box<Dim> restricted_box = coarsen(valid, ratio_value);
+        std::vector<Box<Dim>> pending{
+            detail::clipped_growth<Dim>(valid, child->binding.geometry->domain())};
+        for (const Box<Dim>& peer : child->binding.solution->layout().boxes())
+          detail::subtract_from<Dim>(pending, peer);
         scratch_by_fine_patch[fine_patch] = scratch.size();
         scratch.emplace_back(fine_patch, staging, restricted_box, std::move(pending),
                              replicated_parent);
       }
 
       if (replicated_parent) {
-        gather_contract =
-            "pops.rank2-tensor-fac.replicated-parent-gather/" + std::to_string(ordinal);
+        gather_contract = "pops.nd-tensor-fac.replicated-parent-gather/" + std::to_string(ordinal);
         restriction_contract =
-            "pops.rank2-tensor-fac.replicated-parent-restriction/" + std::to_string(ordinal);
+            "pops.nd-tensor-fac.replicated-parent-restriction/" + std::to_string(ordinal);
         return;
       }
 
@@ -695,16 +746,17 @@ class TensorCompositeFac {
           detail::checked_product(fine_count, parent_count, "tensor FAC gather pair overflow"));
       restriction_jobs.reserve(gather_jobs.capacity());
       for (std::size_t fine_patch = 0; fine_patch < fine_count; ++fine_patch) {
-        const Box<2>& valid = child->binding.solution->layout()[fine_patch];
-        const Box<2> staging =
-            coarsen(detail::clipped_growth(valid, child->binding.geometry->domain()), ratio_value)
+        const Box<Dim>& valid = child->binding.solution->layout()[fine_patch];
+        const Box<Dim> staging =
+            coarsen(detail::clipped_growth<Dim>(valid, child->binding.geometry->domain()),
+                    ratio_value)
                 .grow(1)
                 .intersect(parent->binding.geometry->domain());
-        const Box<2> footprint = coarsen(valid, ratio_value);
+        const Box<Dim> footprint = coarsen(valid, ratio_value);
         std::int64_t gathered_cells = 0;
         std::int64_t restricted_cells = 0;
         for (std::size_t parent_patch = 0; parent_patch < parent_count; ++parent_patch) {
-          const Box<2> gathered =
+          const Box<Dim> gathered =
               staging.intersect(parent->binding.solution->layout()[parent_patch]);
           if (!gathered.empty()) {
             gathered_cells += gathered.numPts();
@@ -713,7 +765,7 @@ class TensorCompositeFac {
                 parent->binding.solution->distribution().owner(parent_patch),
                 child->binding.solution->distribution().owner(fine_patch), gathered, gathered});
           }
-          const Box<2> restricted_region =
+          const Box<Dim> restricted_region =
               footprint.intersect(parent->binding.solution->layout()[parent_patch]);
           if (!restricted_region.empty()) {
             restricted_cells += restricted_region.numPts();
@@ -725,7 +777,7 @@ class TensorCompositeFac {
         }
         if (gathered_cells != staging.numPts() || restricted_cells != footprint.numPts())
           throw std::invalid_argument(
-              "rank-two tensor FAC parent layout does not cover a refined footprint");
+              "dimension-generic tensor FAC parent layout does not cover a refined footprint");
       }
       const auto gather_budget = exact_transfer_budget_(gather_jobs);
       const auto restriction_budget = exact_transfer_budget_(restriction_jobs);
@@ -736,8 +788,8 @@ class TensorCompositeFac {
           parent->binding.solution->rank_space(), parent->binding.solution->local_rank(), 1,
           std::move(restriction_jobs), restriction_budget});
       gather_contract =
-          gather->plan().exact_contract("rank2-tensor-parent-gather/" + std::to_string(ordinal));
-      restriction_contract = restriction->plan().exact_contract("rank2-tensor-fine-restriction/" +
+          gather->plan().exact_contract("nd-tensor-parent-gather/" + std::to_string(ordinal));
+      restriction_contract = restriction->plan().exact_contract("nd-tensor-fine-restriction/" +
                                                                 std::to_string(ordinal));
     }
 
@@ -755,14 +807,18 @@ class TensorCompositeFac {
     }
 
     static std::size_t parent_rank_count_(const std::vector<transfer_job>& jobs) {
-      std::vector<Index<2>> ranks;
+      std::vector<Index<Dim>> ranks;
       ranks.reserve(detail::checked_product(jobs.size(), 2, "tensor FAC rank budget overflow"));
       for (const transfer_job& job : jobs) {
         ranks.push_back(job.source_rank);
         ranks.push_back(job.destination_rank);
       }
-      std::sort(ranks.begin(), ranks.end(), [](const Index<2>& left, const Index<2>& right) {
-        return left[1] < right[1] || (left[1] == right[1] && left[0] < right[0]);
+      std::sort(ranks.begin(), ranks.end(), [](const Index<Dim>& left, const Index<Dim>& right) {
+        for (int axis = Dim; axis-- > 0;) {
+          if (left[axis] != right[axis])
+            return left[axis] < right[axis];
+        }
+        return false;
       });
       ranks.erase(std::unique(ranks.begin(), ranks.end()), ranks.end());
       return std::max<std::size_t>(1, ranks.size());
@@ -779,7 +835,7 @@ class TensorCompositeFac {
     ScratchPatch& scratch_for(std::size_t fine_patch) {
       const std::size_t local = scratch_by_fine_patch.at(fine_patch);
       if (local == no_scratch)
-        throw std::out_of_range("rank-two tensor FAC scratch patch is not materialized");
+        throw std::out_of_range("dimension-generic tensor FAC scratch patch is not materialized");
       return scratch.at(local);
     }
 
@@ -789,7 +845,7 @@ class TensorCompositeFac {
           patch.parent_staging.set_val(Real(0));
           for (std::size_t parent_patch = 0; parent_patch < source.layout().size();
                ++parent_patch) {
-            const Box<2> region =
+            const Box<Dim> region =
                 patch.parent_staging.box().intersect(source.layout()[parent_patch]);
             detail::copy_region(patch.parent_staging.view(),
                                 std::as_const(source.fab_global(parent_patch)).view(), region);
@@ -798,10 +854,10 @@ class TensorCompositeFac {
         Kokkos::fence();
         return;
       }
-      auto source_view = [&source](const transfer_job& job) -> FieldView<const Real, 2> {
+      auto source_view = [&source](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(source.fab_global(job.source_patch)).view();
       };
-      auto destination_view = [this](const transfer_job& job) -> FieldView<Real, 2> {
+      auto destination_view = [this](const transfer_job& job) -> FieldView<Real, Dim> {
         return scratch_for(job.destination_patch).parent_staging.view();
       };
       gather->execute(source_view, destination_view);
@@ -813,8 +869,8 @@ class TensorCompositeFac {
           continue;
         const auto coarse = std::as_const(patch.parent_staging).view();
         auto fine = destination.fab_global(patch.fine_patch).view();
-        for (const Box<2>& region : patch.ghost_regions)
-          for_each_cell(region, detail::LinearInterpolationKernel{
+        for (const Box<Dim>& region : patch.ghost_regions)
+          for_each_cell(region, detail::LinearInterpolationKernel<Dim>{
                                     coarse, fine, parent->binding.geometry->domain(),
                                     child->binding.geometry->domain(), ratio});
       }
@@ -829,8 +885,8 @@ class TensorCompositeFac {
         auto fine = destination.fab_global(patch.fine_patch).view();
         for_each_cell(
             destination.fab_global(patch.fine_patch).box(),
-            detail::LinearInterpolationKernel{coarse, fine, parent->binding.geometry->domain(),
-                                              child->binding.geometry->domain(), ratio});
+            detail::LinearInterpolationKernel<Dim>{coarse, fine, parent->binding.geometry->domain(),
+                                                   child->binding.geometry->domain(), ratio});
       }
       Kokkos::fence();
     }
@@ -840,21 +896,21 @@ class TensorCompositeFac {
       for (ScratchPatch& patch : scratch) {
         if (!source.contains_local(patch.fine_patch))
           continue;
-        for_each_cell(
-            patch.restricted.box(),
-            detail::RestrictionKernel{std::as_const(source.fab_global(patch.fine_patch)).view(),
-                                      patch.restricted.view(), parent->binding.geometry->domain(),
-                                      child->binding.geometry->domain(), ratio, inverse_children});
+        for_each_cell(patch.restricted.box(),
+                      detail::RestrictionKernel<Dim>{
+                          std::as_const(source.fab_global(patch.fine_patch)).view(),
+                          patch.restricted.view(), parent->binding.geometry->domain(),
+                          child->binding.geometry->domain(), ratio, inverse_children});
       }
       Kokkos::fence();
       if (replicated_parent) {
         broadcast_and_publish_restriction_(destination);
         return;
       }
-      auto source_view = [this](const transfer_job& job) -> FieldView<const Real, 2> {
+      auto source_view = [this](const transfer_job& job) -> FieldView<const Real, Dim> {
         return std::as_const(scratch_for(job.source_patch).restricted).view();
       };
-      auto destination_view = [&destination](const transfer_job& job) -> FieldView<Real, 2> {
+      auto destination_view = [&destination](const transfer_job& job) -> FieldView<Real, Dim> {
         return destination.fab_global(job.destination_patch).view();
       };
       restriction->execute(source_view, destination_view);
@@ -862,9 +918,9 @@ class TensorCompositeFac {
 
     void broadcast_and_publish_restriction_(field_type& destination) {
       if (lane == nullptr)
-        throw std::logic_error("rank-two tensor FAC replicated restriction has no lane");
+        throw std::logic_error("dimension-generic tensor FAC replicated restriction has no lane");
       for (ScratchPatch& patch : scratch) {
-        const Index<2>& owner = child->binding.solution->distribution().owner(patch.fine_patch);
+        const Index<Dim>& owner = child->binding.solution->distribution().owner(patch.fine_patch);
         const int root = static_cast<int>(child->binding.solution->rank_space().linear_rank(owner));
         long packing_failure = 0;
         try {
@@ -872,7 +928,7 @@ class TensorCompositeFac {
               patch.broadcast_buffer.size() >
                   static_cast<std::size_t>(std::numeric_limits<int>::max()))
             throw std::overflow_error(
-                "rank-two tensor restriction has an invalid broadcast allocation");
+                "dimension-generic tensor restriction has an invalid broadcast allocation");
           if (lane->rank() == root) {
             patch.restricted.copy_to_host(*patch.restricted_host);
             for (std::size_t element = 0; element < patch.broadcast_buffer.size(); ++element)
@@ -883,7 +939,7 @@ class TensorCompositeFac {
         }
         if (all_reduce_max(packing_failure, lane->communicator()) != 0)
           throw std::runtime_error(
-              "rank-two tensor replicated restriction packing failed collectively");
+              "dimension-generic tensor replicated restriction packing failed collectively");
 #ifdef POPS_HAS_MPI
         if (lane->size() > 1) {
           const int code = MPI_Bcast(patch.broadcast_buffer.data(),
@@ -891,7 +947,7 @@ class TensorCompositeFac {
                                      root, lane->native_handle());
           if (all_reduce_max(code == MPI_SUCCESS ? 0L : 1L, lane->communicator()) != 0)
             throw std::runtime_error(
-                "rank-two tensor replicated restriction broadcast failed collectively");
+                "dimension-generic tensor replicated restriction broadcast failed collectively");
         }
 #endif
         long publication_failure = 0;
@@ -903,7 +959,7 @@ class TensorCompositeFac {
           }
           for (std::size_t parent_patch = 0; parent_patch < destination.layout().size();
                ++parent_patch) {
-            const Box<2> region =
+            const Box<Dim> region =
                 patch.restricted.box().intersect(destination.layout()[parent_patch]);
             detail::copy_region(destination.fab_global(parent_patch).view(),
                                 std::as_const(patch.restricted).view(), region);
@@ -914,44 +970,48 @@ class TensorCompositeFac {
         }
         if (all_reduce_max(publication_failure, lane->communicator()) != 0)
           throw std::runtime_error(
-              "rank-two tensor replicated restriction publication failed collectively");
+              "dimension-generic tensor replicated restriction publication failed collectively");
       }
     }
   };
 
   void validate_bindings_() const {
     if (bindings_.size() < 2 || ratios_.size() + 1 != bindings_.size())
-      throw std::invalid_argument("rank-two tensor FAC requires a populated refined hierarchy");
+      throw std::invalid_argument(
+          "dimension-generic tensor FAC requires a populated refined hierarchy");
     const auto& rank_space = bindings_.front().solution->rank_space();
-    const Index<2> local_rank = bindings_.front().solution->local_rank();
+    const Index<Dim> local_rank = bindings_.front().solution->local_rank();
     if (rank_space.size() != static_cast<std::size_t>(n_ranks()) ||
         rank_space.linear_rank(local_rank) != static_cast<std::size_t>(my_rank()))
-      throw std::invalid_argument("rank-two tensor FAC process space differs from MPI world");
+      throw std::invalid_argument(
+          "dimension-generic tensor FAC process space differs from MPI world");
     for (std::size_t level = 0; level < bindings_.size(); ++level) {
       const auto& binding = bindings_[level];
       if (binding.geometry == nullptr || binding.boundary == nullptr || binding.rhs == nullptr ||
           binding.initial_guess == nullptr || binding.solution == nullptr ||
           std::any_of(binding.coefficients.begin(), binding.coefficients.end(),
                       [](const field_type* value) { return value == nullptr; }))
-        throw std::invalid_argument("rank-two tensor FAC level binding is incomplete");
+        throw std::invalid_argument("dimension-generic tensor FAC level binding is incomplete");
       const field_type& solution = *binding.solution;
       if (solution.ncomp() != 1 || binding.rhs->ncomp() != 1 ||
           binding.initial_guess->ncomp() != 1 || solution.layout().empty() ||
           solution.rank_space() != rank_space || solution.local_rank() != local_rank ||
           !solution.distribution().matches_layout(solution.layout()) ||
-          !solution.layout().is_disjoint_within(binding.geometry->domain(),
-                                                detail::exact_layout_budget(solution.layout())))
-        throw std::invalid_argument("rank-two tensor FAC level has an invalid exact layout");
+          !solution.layout().is_disjoint_within(
+              binding.geometry->domain(), detail::exact_layout_budget<Dim>(solution.layout())))
+        throw std::invalid_argument(
+            "dimension-generic tensor FAC level has an invalid exact layout");
       if (level == 0 &&
           !solution.layout().tiles_exactly(binding.geometry->domain(),
-                                           detail::exact_layout_budget(solution.layout())))
-        throw std::invalid_argument("rank-two tensor FAC coarse layout must tile its domain");
-      for (int axis = 0; axis < 2; ++axis) {
+                                           detail::exact_layout_budget<Dim>(solution.layout())))
+        throw std::invalid_argument(
+            "dimension-generic tensor FAC coarse layout must tile its domain");
+      for (int axis = 0; axis < Dim; ++axis) {
         if (solution.ghosts()[axis] < 1 || binding.initial_guess->ghosts()[axis] < 1 ||
             binding.rhs->ghosts()[axis] != 0 ||
             binding.boundary->spacing()[axis] != binding.geometry->spacing(axis))
           throw std::invalid_argument(
-              "rank-two tensor FAC field ghosts or boundary spacing are incompatible");
+              "dimension-generic tensor FAC field ghosts or boundary spacing are incompatible");
       }
       const auto exact_shape = [&solution](const field_type& field, bool require_ghost) {
         if (field.layout() != solution.layout() ||
@@ -959,7 +1019,7 @@ class TensorCompositeFac {
             field.local_rank() != solution.local_rank() || field.ncomp() != 1)
           return false;
         if (require_ghost)
-          for (int axis = 0; axis < 2; ++axis)
+          for (int axis = 0; axis < Dim; ++axis)
             if (field.ghosts()[axis] < 1)
               return false;
         return true;
@@ -968,81 +1028,90 @@ class TensorCompositeFac {
           std::any_of(binding.coefficients.begin(), binding.coefficients.end(),
                       [&](const field_type* field) { return !exact_shape(*field, true); }))
         throw std::invalid_argument(
-            "rank-two tensor FAC coefficients and vectors do not share one exact level space");
-      for (int axis = 0; axis < 2; ++axis)
+            "dimension-generic tensor FAC coefficients and vectors do not share one exact level "
+            "space");
+      for (int axis = 0; axis < Dim; ++axis)
         for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
-          const Face<2> face{axis, side};
+          const Face<Dim> face{axis, side};
           if (!binding.boundary->topology().is_periodic(face) &&
               binding.boundary->at(face).kind == PhysicalBoundaryKind::external)
             throw std::invalid_argument(
-                "rank-two tensor FAC requires an authored law on every physical face");
+                "dimension-generic tensor FAC requires an authored law on every physical face");
         }
       if (level == 0)
         continue;
       if (solution.distribution().replicated())
         throw std::invalid_argument(
-            "rank-two tensor FAC refined levels require unique partitioned ownership");
-      const Extent<2> ratio = detail::ratio_extent(ratios_[level - 1]);
-      for (int axis = 0; axis < 2; ++axis)
+            "dimension-generic tensor FAC refined levels require unique partitioned ownership");
+      const Extent<Dim> ratio = detail::ratio_extent(ratios_[level - 1]);
+      for (int axis = 0; axis < Dim; ++axis)
         if (ratios_[level - 1][axis] < 2)
-          throw std::invalid_argument("rank-two tensor FAC refinement ratios must be at least two");
+          throw std::invalid_argument(
+              "dimension-generic tensor FAC refinement ratios must be at least two");
       if (*binding.geometry != bindings_[level - 1].geometry->refine(ratio) ||
           binding.boundary->topology() != bindings_[level - 1].boundary->topology())
         throw std::invalid_argument(
-            "rank-two tensor FAC adjacent geometry or topology is not an exact refinement");
-      for (const Box<2>& patch : solution.layout().boxes()) {
+            "dimension-generic tensor FAC adjacent geometry or topology is not an exact "
+            "refinement");
+      for (const Box<Dim>& patch : solution.layout().boxes()) {
         if (refine(coarsen(patch, ratio), ratio) != patch)
-          throw std::invalid_argument("rank-two tensor FAC fine patch is not refinement-aligned");
-        const Box<2> grown = patch.grow(1);
-        for (int axis = 0; axis < 2; ++axis)
+          throw std::invalid_argument(
+              "dimension-generic tensor FAC fine patch is not refinement-aligned");
+        const Box<Dim> grown = patch.grow(1);
+        for (int axis = 0; axis < Dim; ++axis)
           if ((grown.lo[axis] < binding.geometry->domain().lo[axis] ||
                grown.hi[axis] > binding.geometry->domain().hi[axis]) &&
-              binding.boundary->topology().is_periodic(Face<2>{axis, BoundarySide::lower}))
+              binding.boundary->topology().is_periodic(Face<Dim>{axis, BoundarySide::lower}))
             throw std::invalid_argument(
-                "rank-two tensor FAC periodic sparse patches may not cross the domain seam");
+                "dimension-generic tensor FAC periodic sparse patches may not cross the domain "
+                "seam");
       }
     }
   }
 
   std::string build_exact_contract_() const {
     ExactContractBuilder contract;
-    contract.text("pops.runtime.amr.rank2-tensor-composite-fac")
+    contract.text("pops.runtime.amr.nd-tensor-composite-fac")
         .scalar(std::uint32_t{1})
-        .scalar(std::int32_t{2})
+        .scalar(std::int32_t{Dim})
         .scalar(static_cast<std::uint64_t>(bindings_.size()));
     for (const auto& binding : bindings_) {
-      for (int axis = 0; axis < 2; ++axis)
+      for (int axis = 0; axis < Dim; ++axis)
         contract.scalar(binding.geometry->domain().lo[axis])
             .scalar(binding.geometry->domain().hi[axis])
             .scalar(binding.geometry->lower()[axis])
             .scalar(binding.geometry->upper()[axis]);
       contract.scalar(binding.solution->distribution().mode())
           .sequence(binding.solution->layout().boxes(),
-                    [](ExactContractBuilder& item, const Box<2>& patch) {
-                      for (int axis = 0; axis < 2; ++axis)
+                    [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                      for (int axis = 0; axis < Dim; ++axis)
                         item.scalar(patch.lo[axis]).scalar(patch.hi[axis]);
                     })
           .sequence(binding.solution->distribution().owners(),
-                    [](ExactContractBuilder& item, const Index<2>& owner) {
-                      item.scalar(owner[0]).scalar(owner[1]);
+                    [](ExactContractBuilder& item, const Index<Dim>& owner) {
+                      for (int axis = 0; axis < Dim; ++axis)
+                        item.scalar(owner[axis]);
                     });
     }
     contract.scalar(static_cast<std::uint64_t>(ratios_.size()));
     for (const auto& ratio : ratios_)
-      contract.scalar(ratio[0]).scalar(ratio[1]);
+      for (int axis = 0; axis < Dim; ++axis)
+        contract.scalar(ratio[axis]);
     return std::move(contract).release();
   }
 
   static void mark_coverage_(Level& parent, const Level& child,
-                             const ::pops::amr::RefinementRatio<2>& ratio) {
-    const Extent<2> ratio_value = detail::ratio_extent(ratio);
-    for (const Box<2>& fine_patch : child.binding.solution->layout().boxes()) {
-      const Box<2> footprint = coarsen(fine_patch, ratio_value);
+                             const ::pops::amr::RefinementRatio<Dim>& ratio) {
+    const Extent<Dim> ratio_value = detail::ratio_extent<Dim>(ratio);
+    for (const Box<Dim>& fine_patch : child.binding.solution->layout().boxes()) {
+      const Box<Dim> footprint = coarsen(fine_patch, ratio_value);
       for (std::size_t local = 0; local < parent.binding.solution->local_size(); ++local) {
-        const Box<2> region = parent.binding.solution->box(local).intersect(footprint);
+        const Box<Dim> region = parent.binding.solution->box(local).intersect(footprint);
         if (!region.empty()) {
-          for_each_cell(region, detail::SetKernel<Real>{parent.covered.fab(local).view(), Real(1)});
-          for_each_cell(region, detail::SetKernel<Real>{parent.active.fab(local).view(), Real(0)});
+          for_each_cell(region,
+                        detail::SetKernel<Dim, Real>{parent.covered.fab(local).view(), Real(1)});
+          for_each_cell(region,
+                        detail::SetKernel<Dim, Real>{parent.active.fab(local).view(), Real(0)});
         }
       }
     }
@@ -1057,11 +1126,11 @@ class TensorCompositeFac {
   }
 
   void fill_ghosts_(std::size_t level_index, field_type& field, const field_type* parent_field,
-                    const PreparedPhysicalBoundary<2>& boundary) {
+                    const PreparedPhysicalBoundary<Dim>& boundary) {
     Level& level = *levels_[level_index];
     if (level_index > 0) {
       if (parent_field == nullptr)
-        throw std::logic_error("rank-two tensor FAC fine fill has no parent field");
+        throw std::logic_error("dimension-generic tensor FAC fine fill has no parent field");
       Connection& connection = *connections_[level_index - 1];
       connection.gather_parent(*parent_field);
       connection.interpolate_ghosts(field);
@@ -1072,7 +1141,8 @@ class TensorCompositeFac {
 
   void fill_all_coefficient_ghosts_() {
     for (std::size_t level = 0; level < levels_.size(); ++level)
-      for (std::size_t coefficient = 0; coefficient < 4; ++coefficient) {
+      for (std::size_t coefficient = 0; coefficient < static_cast<std::size_t>(Dim * Dim);
+           ++coefficient) {
         const field_type* parent =
             level == 0 ? nullptr : levels_[level - 1]->binding.coefficients[coefficient];
         fill_ghosts_(level, *levels_[level]->binding.coefficients[coefficient], parent,
@@ -1099,28 +1169,31 @@ class TensorCompositeFac {
     long local_invalid = 0;
     for (const auto& level : levels_)
       for (std::size_t local = 0; local < level->binding.solution->local_size(); ++local) {
-        const auto xx = level->binding.coefficients[0]->fab(local).storage();
-        const auto xy = level->binding.coefficients[1]->fab(local).storage();
-        const auto yx = level->binding.coefficients[2]->fab(local).storage();
-        const auto yy = level->binding.coefficients[3]->fab(local).storage();
-        const std::size_t count = xx.extent(0);
+        using storage_type =
+            std::remove_cvref_t<decltype(level->binding.coefficients[0]->fab(local).storage())>;
+        std::array<storage_type, static_cast<std::size_t>(Dim * Dim)> coefficients{};
+        for (std::size_t slot = 0; slot < coefficients.size(); ++slot)
+          coefficients[slot] = level->binding.coefficients[slot]->fab(local).storage();
+        const std::size_t count = coefficients[0].extent(0);
         long patch_invalid = 0;
         Kokkos::parallel_reduce(
-            "pops_rank2_tensor_ellipticity", Kokkos::RangePolicy<>(0, count),
+            "pops_nd_tensor_ellipticity", Kokkos::RangePolicy<>(0, count),
             KOKKOS_LAMBDA(const std::size_t index, long& invalid) {
-              const Real a_xx = xx(index);
-              const Real a_xy = xy(index);
-              const Real a_yx = yx(index);
-              const Real a_yy = yy(index);
-              const Real symmetric_cross = Real(0.5) * (a_xy + a_yx);
-              const Real determinant = a_xx * a_yy - symmetric_cross * symmetric_cross;
               constexpr Real infinity = std::numeric_limits<Real>::infinity();
-              const bool finite = a_xx == a_xx && a_xy == a_xy && a_yx == a_yx && a_yy == a_yy &&
-                                  a_xx != infinity && a_xx != -infinity && a_xy != infinity &&
-                                  a_xy != -infinity && a_yx != infinity && a_yx != -infinity &&
-                                  a_yy != infinity && a_yy != -infinity;
-              if (!(a_xx > Real(0)) || !(a_yy > Real(0)) || !(determinant > Real(0)) || !finite)
-                invalid = 1;
+              for (int row = 0; row < Dim; ++row) {
+                const Real diagonal =
+                    coefficients[static_cast<std::size_t>(row * Dim + row)](index);
+                Real off_diagonal = Real(0);
+                bool finite = diagonal == diagonal && diagonal != infinity && diagonal != -infinity;
+                for (int column = 0; column < Dim; ++column) {
+                  const Real a = coefficients[static_cast<std::size_t>(row * Dim + column)](index);
+                  finite = finite && a == a && a != infinity && a != -infinity;
+                  if (column != row)
+                    off_diagonal += a < Real(0) ? -a : a;
+                }
+                if (!finite || !(diagonal > off_diagonal))
+                  invalid = 1;
+              }
             },
             Kokkos::Max<long>(patch_invalid));
         local_invalid = std::max(local_invalid, patch_invalid);
@@ -1129,15 +1202,16 @@ class TensorCompositeFac {
     return all_reduce_max(local_invalid, lane_->communicator()) == 0;
   }
 
-  detail::TensorStencil stencil_(const Level& level, std::size_t local,
-                                 const field_type& field) const {
-    detail::TensorStencil stencil;
+  detail::TensorStencil<Dim> stencil_(const Level& level, std::size_t local,
+                                      const field_type& field) const {
+    detail::TensorStencil<Dim> stencil;
     stencil.phi = std::as_const(field.fab(local)).view();
-    for (std::size_t coefficient = 0; coefficient < 4; ++coefficient)
+    for (std::size_t coefficient = 0; coefficient < static_cast<std::size_t>(Dim * Dim);
+         ++coefficient)
       stencil.coefficient[coefficient] =
           std::as_const(level.binding.coefficients[coefficient]->fab(local)).view();
-    stencil.inverse_dx = Real(1) / level.binding.geometry->spacing(0);
-    stencil.inverse_dy = Real(1) / level.binding.geometry->spacing(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      stencil.inverse_dx[axis] = Real(1) / level.binding.geometry->spacing(axis);
     return stencil;
   }
 
@@ -1150,13 +1224,13 @@ class TensorCompositeFac {
       fill_solution_ghosts_(level_index, iterate, homogeneous);
       for (std::size_t local = 0; local < iterate.local_size(); ++local)
         for_each_cell(iterate.box(local),
-                      detail::JacobiKernel{
+                      detail::JacobiKernel<Dim>{
                           level.scratch.fab(local).view(), std::as_const(iterate.fab(local)).view(),
                           std::as_const(rhs.fab(local)).view(),
                           std::as_const(level.covered.fab(local)).view(),
                           stencil_(level, local, iterate), Real(0.65), mask_covered});
       Kokkos::fence();
-      detail::copy_valid(iterate, level.scratch);
+      detail::copy_valid<Dim>(iterate, level.scratch);
     }
   }
 
@@ -1166,10 +1240,10 @@ class TensorCompositeFac {
     fill_solution_ghosts_(level_index, solution, false);
     for (std::size_t local = 0; local < solution.local_size(); ++local)
       for_each_cell(solution.box(local),
-                    detail::ResidualKernel{level.residual.fab(local).view(),
-                                           std::as_const(level.binding.rhs->fab(local)).view(),
-                                           std::as_const(level.covered.fab(local)).view(),
-                                           stencil_(level, local, solution), true});
+                    detail::ResidualKernel<Dim>{level.residual.fab(local).view(),
+                                                std::as_const(level.binding.rhs->fab(local)).view(),
+                                                std::as_const(level.covered.fab(local)).view(),
+                                                stencil_(level, local, solution), true});
     Kokkos::fence();
   }
 
@@ -1195,11 +1269,12 @@ class TensorCompositeFac {
       if ((sweep + 1) % 8 == 0 || sweep + 1 == controls.coarse_cycles) {
         fill_solution_ghosts_(0, coarse.correction, true);
         for (std::size_t local = 0; local < coarse.correction.local_size(); ++local)
-          for_each_cell(coarse.correction.box(local),
-                        detail::ResidualKernel{coarse.scratch.fab(local).view(),
-                                               std::as_const(coarse.residual.fab(local)).view(),
-                                               std::as_const(coarse.covered.fab(local)).view(),
-                                               stencil_(coarse, local, coarse.correction), false});
+          for_each_cell(
+              coarse.correction.box(local),
+              detail::ResidualKernel<Dim>{coarse.scratch.fab(local).view(),
+                                          std::as_const(coarse.residual.fab(local)).view(),
+                                          std::as_const(coarse.covered.fab(local)).view(),
+                                          stencil_(coarse, local, coarse.correction), false});
         Kokkos::fence();
         if (global_norm_inf_(coarse.scratch) <= stop)
           break;
@@ -1210,9 +1285,9 @@ class TensorCompositeFac {
   static void add_active_(Level& level, const field_type& correction) {
     for (std::size_t local = 0; local < level.binding.solution->local_size(); ++local)
       for_each_cell(level.binding.solution->box(local),
-                    detail::ActiveAddKernel{level.binding.solution->fab(local).view(),
-                                            std::as_const(correction.fab(local)).view(),
-                                            std::as_const(level.active.fab(local)).view()});
+                    detail::ActiveAddKernel<Dim>{level.binding.solution->fab(local).view(),
+                                                 std::as_const(correction.fab(local)).view(),
+                                                 std::as_const(level.active.fab(local)).view()});
     Kokkos::fence();
   }
 
@@ -1244,8 +1319,8 @@ class TensorCompositeFac {
     return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane_->communicator()));
   }
 
-  std::vector<LevelBinding<MemorySpace>> bindings_;
-  std::vector<::pops::amr::RefinementRatio<2>> ratios_;
+  std::vector<LevelBinding<Dim, MemorySpace>> bindings_;
+  std::vector<::pops::amr::RefinementRatio<Dim>> ratios_;
   // The owning lane must outlive HaloExchange and RegionTransport borrows. Member destruction is
   // reverse declaration order, so it deliberately precedes every prepared communication object.
   std::optional<ExecutionLane> lane_{};
@@ -1254,4 +1329,4 @@ class TensorCompositeFac {
   std::string exact_contract_{};
 };
 
-}  // namespace pops::runtime::program::tensor_fac_2d
+}  // namespace pops::runtime::program::tensor_fac

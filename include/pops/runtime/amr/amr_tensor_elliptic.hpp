@@ -4,7 +4,7 @@
 #pragma once
 
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
-#include <pops/runtime/amr/tensor_composite_fac_2d.hpp>
+#include <pops/runtime/amr/tensor_composite_fac.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
@@ -30,8 +30,8 @@ namespace tensor_elliptic_detail {
 inline constexpr std::string_view kCompositeTensorProvider = "pops.hierarchy.composite-tensor-fac";
 inline constexpr std::string_view kCompositeTensorOptionSchema =
     "pops.hierarchy.composite-tensor-fac.options@2";
-inline constexpr std::string_view kScalarTensorEllipticRank2Contract =
-    "pops.operator.scalar-tensor-elliptic.rank2@2";
+inline constexpr std::string_view kScalarTensorEllipticContract =
+    "pops.operator.scalar-tensor-elliptic.exact-rank@3";
 
 struct TensorFacControls {
   std::optional<int> fine_sweeps;
@@ -183,14 +183,11 @@ using PreparedHierarchyTensorKernel =
 
 /// Storage driver for an exact prepared tensor kernel.
 ///
-/// The mathematical builtin contract is intentionally rank two. The class remains templated so a
-/// provider declaration for Dim=1/3 can be compiled and rejected during preparation without a
-/// runtime dimension tag; only the provider's `if constexpr (Dim == 2)` route instantiates it.
+/// The builtin carries one compile-time dimension through allocation, preparation, and execution.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, MemorySpace> {
  public:
-  static_assert(Dim == 2,
-                "the registered full-tensor hierarchy operator is mathematically rank two");
+  static_assert(Dim >= 1 && Dim <= 3, "tensor FAC supports dimensions one through three");
   using request_type = HierarchyTensorSolverBuildRequest<Dim>;
   using field_type = MultiFab<Dim, MemorySpace>;
   using kernel_type = PreparedHierarchyTensorKernel<Dim, MemorySpace>;
@@ -207,7 +204,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     hierarchy_tensor_detail::validate_request(request_);
     tensor_elliptic_detail::validate_controls(controls_);
     if (prepared_contract_.empty() || request_.components != 1)
-      throw std::invalid_argument("rank-two tensor elliptic preparation is incomplete");
+      throw std::invalid_argument("dimension-generic tensor elliptic preparation is incomplete");
     levels_.reserve(request_.levels.size());
     for (const auto& level : request_.levels)
       levels_.emplace_back(level);
@@ -226,10 +223,10 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
       invocation_levels_.push_back(fields);
     }
     if (!kernel_ && request_.levels.size() > 1) {
-      std::vector<tensor_fac_2d::LevelBinding<MemorySpace>> bindings;
+      std::vector<tensor_fac::LevelBinding<Dim, MemorySpace>> bindings;
       bindings.reserve(levels_.size());
       for (std::size_t level = 0; level < levels_.size(); ++level) {
-        tensor_fac_2d::LevelBinding<MemorySpace> binding;
+        tensor_fac::LevelBinding<Dim, MemorySpace> binding;
         binding.geometry = &request_.levels[level].geometry;
         binding.boundary = &request_.levels[level].boundary;
         for (std::size_t coefficient = 0; coefficient < binding.coefficients.size(); ++coefficient)
@@ -239,8 +236,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
         binding.solution = &levels_[level].solution;
         bindings.push_back(binding);
       }
-      tensor_fac_ = std::make_unique<tensor_fac_2d::TensorCompositeFac<MemorySpace>>(
-          std::span<const tensor_fac_2d::LevelBinding<MemorySpace>>(bindings), request_.ratios);
+      tensor_fac_ = std::make_unique<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>>(
+          std::span<const tensor_fac::LevelBinding<Dim, MemorySpace>>(bindings), request_.ratios);
     }
   }
 
@@ -281,7 +278,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
       return storage.rhs;
     if (slot == "pops.tensor-elliptic.flux")
       return storage.flux;
-    throw std::invalid_argument("rank-two tensor elliptic received an unknown field slot");
+    throw std::invalid_argument("dimension-generic tensor elliptic received an unknown field slot");
   }
 
   field_type& solution(int level) override { return level_at_(level).solution; }
@@ -302,7 +299,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     if (!tensor_fac_)
       throw std::logic_error("flat tensor preparation delegates execution to prepared Krylov");
     CompositeFacOptions defaults;
-    tensor_fac_2d::Controls resolved;
+    tensor_fac::Controls resolved;
     resolved.relative_tolerance = controls.relative_tolerance;
     resolved.absolute_tolerance = controls.absolute_tolerance;
     resolved.maximum_iterations = controls.maximum_iterations;
@@ -346,7 +343,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
 
   LevelBuffers& level_at_(int level) {
     if (level < 0 || static_cast<std::size_t>(level) >= levels_.size())
-      throw std::out_of_range("rank-two tensor elliptic level is outside its hierarchy");
+      throw std::out_of_range("dimension-generic tensor elliptic level is outside its hierarchy");
     return levels_[static_cast<std::size_t>(level)];
   }
 
@@ -357,7 +354,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   std::vector<std::string> slots_;
   std::vector<LevelBuffers> levels_;
   std::vector<level_fields_type> invocation_levels_;
-  std::unique_ptr<tensor_fac_2d::TensorCompositeFac<MemorySpace>> tensor_fac_{};
+  std::unique_ptr<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>> tensor_fac_{};
 };
 
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
@@ -383,12 +380,12 @@ class CompositeTensorHierarchyProvider final
   std::uint64_t interface_version() const noexcept override { return 2; }
   std::string_view collective_contract() const noexcept override { return collective_contract_; }
   std::vector<std::string> capability_contracts() const override {
-    return {"pops.hierarchy.composite-tensor-fac.exact-rank@2",
-            "pops.hierarchy.composite-tensor-fac.flat-krylov@2",
-            "pops.hierarchy.composite-tensor-fac.preallocated-publication@2",
-            "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac@2",
-            "pops.hierarchy.composite-tensor-fac.partitioned-mpi@2",
-            "pops.hierarchy.composite-tensor-fac.rank2-only@2"};
+    return {"pops.hierarchy.composite-tensor-fac.exact-rank",
+            "pops.hierarchy.composite-tensor-fac.flat-krylov",
+            "pops.hierarchy.composite-tensor-fac.preallocated-publication",
+            "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac",
+            "pops.hierarchy.composite-tensor-fac.partitioned-mpi",
+            "pops.hierarchy.composite-tensor-fac.full-tensor-nd@3"};
   }
   PreparedProviderOptions default_options() const override {
     return tensor_elliptic_detail::default_options();
@@ -404,27 +401,21 @@ class CompositeTensorHierarchyProvider final
     }
   }
   PreparedProviderSupport supports(const request_type& request) const noexcept override {
-    if constexpr (Dim != 2) {
-      (void)request;
-      return PreparedProviderSupport::reject(
-          10, "the registered full-tensor hierarchy operator is compile-time rank two");
-    } else {
-      try {
-        hierarchy_tensor_detail::validate_request(request);
-        if (request.components != 1)
-          return PreparedProviderSupport::reject(12, "rank-two tensor operator is scalar");
-        if (request.operator_contract_identity !=
-            tensor_elliptic_detail::kScalarTensorEllipticRank2Contract)
-          return PreparedProviderSupport::reject(13, "tensor operator contract is incompatible");
-        if (request.assembly_field_slots != tensor_elliptic_detail::assembly_slots<Dim>() ||
-            request.solution_field_slot != "pops.tensor-elliptic.solution")
-          return PreparedProviderSupport::reject(14, "tensor field-slot contract is incompatible");
-        if (!accepts_options(request.options).accepted())
-          return PreparedProviderSupport::reject(15, "tensor provider options are incompatible");
-        return PreparedProviderSupport::accept();
-      } catch (...) {
-        return PreparedProviderSupport::reject(16, "tensor hierarchy metadata is invalid");
-      }
+    try {
+      hierarchy_tensor_detail::validate_request(request);
+      if (request.components != 1)
+        return PreparedProviderSupport::reject(12, "dimension-generic tensor operator is scalar");
+      if (request.operator_contract_identity !=
+          tensor_elliptic_detail::kScalarTensorEllipticContract)
+        return PreparedProviderSupport::reject(13, "tensor operator contract is incompatible");
+      if (request.assembly_field_slots != tensor_elliptic_detail::assembly_slots<Dim>() ||
+          request.solution_field_slot != "pops.tensor-elliptic.solution")
+        return PreparedProviderSupport::reject(14, "tensor field-slot contract is incompatible");
+      if (!accepts_options(request.options).accepted())
+        return PreparedProviderSupport::reject(15, "tensor provider options are incompatible");
+      return PreparedProviderSupport::accept();
+    } catch (...) {
+      return PreparedProviderSupport::reject(16, "tensor hierarchy metadata is invalid");
     }
   }
   PreparedProviderSupport accepts_execution(
@@ -455,13 +446,9 @@ class CompositeTensorHierarchyProvider final
   std::unique_ptr<solver_type> prepare(const request_type& request) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("tensor hierarchy provider rejected the build request");
-    if constexpr (Dim == 2) {
-      return std::make_unique<AmrTensorElliptic<Dim, MemorySpace>>(
-          request, kernel_, tensor_elliptic_detail::decode_controls(request.options),
-          expected_prepared_contract(request));
-    } else {
-      throw std::logic_error("non-rank-two tensor provider reached materialization");
-    }
+    return std::make_unique<AmrTensorElliptic<Dim, MemorySpace>>(
+        request, kernel_, tensor_elliptic_detail::decode_controls(request.options),
+        expected_prepared_contract(request));
   }
 
  private:

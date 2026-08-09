@@ -29,6 +29,7 @@ from pops.solvers import (
 )
 from pops.solvers.providers import (
     PreparedHierarchySolverNativeEmission,
+    PreparedHierarchySolverEmitRequest,
     prepared_hierarchy_solver_provider_from_attrs,
 )
 from pops.time import Program
@@ -109,12 +110,12 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert authority["provider_id"] == "pops.hierarchy.composite-tensor-fac"
     assert authority["interface_version"] == 2
     assert authority["capabilities"] == [
-        "pops.hierarchy.composite-tensor-fac.exact-rank@2",
-        "pops.hierarchy.composite-tensor-fac.flat-krylov@2",
-        "pops.hierarchy.composite-tensor-fac.partitioned-mpi@2",
-        "pops.hierarchy.composite-tensor-fac.preallocated-publication@2",
-        "pops.hierarchy.composite-tensor-fac.rank2-only@2",
-        "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac@2",
+        "pops.hierarchy.composite-tensor-fac.exact-rank",
+        "pops.hierarchy.composite-tensor-fac.flat-krylov",
+        "pops.hierarchy.composite-tensor-fac.partitioned-mpi",
+        "pops.hierarchy.composite-tensor-fac.preallocated-publication",
+        "pops.hierarchy.composite-tensor-fac.full-tensor-nd@3",
+        "pops.hierarchy.composite-tensor-fac.refined-full-tensor-fac",
     ]
     assert authority["flat_execution"]["mode"] == "prepared_krylov_fallback"
     assert authority["flat_execution"]["krylov"]["method_provider"]["provider_id"] == (
@@ -343,6 +344,30 @@ def test_hierarchy_provider_registry_is_append_only():
     )
     with pytest.raises(ValueError, match="already registered"):
         register_prepared_hierarchy_solver_provider(provider)
+
+
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_builtin_emission_carries_the_native_dimension_through_tensor_slots(dimension):
+    provider = prepared_hierarchy_solver_provider_by_id(
+        "pops.hierarchy.composite-tensor-fac"
+    )
+    request = PreparedHierarchySolverEmitRequest(
+        node=SimpleNamespace(attrs={"hierarchy_solver_identity": "nd-provider-token"}),
+        target="amr_system",
+        report_name="outcome",
+        solution_name="solution",
+        components=1,
+        block_index=0,
+        relative_tolerance_cpp="pops::Real(1e-8)",
+        absolute_tolerance_cpp="pops::Real(0)",
+        max_iterations=8,
+    )
+    emission = provider.emitter(request, provider, CompositeTensorFAC().canonical_options())
+    source = "\n".join(emission.configure)
+    assert dimension in (1, 2, 3)
+    assert "scalar-tensor-elliptic.exact-rank@3" in source
+    assert "Dim * Dim" in source
+    assert "coefficient.0.1" not in source
 
 
 def test_hierarchy_program_and_codegen_core_have_no_builtin_backend_branch():

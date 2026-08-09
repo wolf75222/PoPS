@@ -78,7 +78,7 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refi
   }
   result.plan_identity = "pops.test.tensor-plan";
   result.operator_contract_identity =
-      std::string(tensor_elliptic_detail::kScalarTensorEllipticRank2Contract);
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
   result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<Dim>();
   result.solution_field_slot = "pops.tensor-elliptic.solution";
   result.options = tensor_elliptic_detail::default_options();
@@ -177,9 +177,9 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<2> manufactured_reques
       HierarchyTensorLevelBuildRequest<2>{fine_geometry, homogeneous_dirichlet(fine_geometry),
                                           fine_layout, fine_distribution, Index<2>{0, 0}});
   result.ratios.push_back(ratio);
-  result.plan_identity = "pops.test.rank2-tensor-mms";
+  result.plan_identity = "pops.test.nd-tensor-mms";
   result.operator_contract_identity =
-      std::string(tensor_elliptic_detail::kScalarTensorEllipticRank2Contract);
+      std::string(tensor_elliptic_detail::kScalarTensorEllipticContract);
   result.assembly_field_slots = tensor_elliptic_detail::assembly_slots<2>();
   result.solution_field_slot = "pops.tensor-elliptic.solution";
   result.options = tensor_elliptic_detail::default_options();
@@ -218,12 +218,12 @@ pops::Real solve_manufactured_error(int coarse_cells) {
       *prepared, HierarchyTensorSolveControls{Real(8e-7), Real(1e-12), 60});
   const SolveReport report = outcome.consume(SolveConsumption::kAccept);
   if (!report.solved())
-    throw std::runtime_error("rank-two tensor MMS did not converge: " + report.reason);
+    throw std::runtime_error("dimension-generic tensor MMS did not converge: " + report.reason);
 
   const auto& fine = prepared->solution(1);
   Real error = Real(0);
   Kokkos::parallel_reduce(
-      "pops_rank2_tensor_mms_error", Kokkos::RangePolicy<std::int64_t>(0, comparison.numPts()),
+      "pops_nd_tensor_mms_error", Kokkos::RangePolicy<std::int64_t>(0, comparison.numPts()),
       ManufacturedError{geometries[1], std::as_const(fine.fab(0)).view(), comparison},
       Kokkos::Max<Real>(error));
   Kokkos::fence();
@@ -231,20 +231,74 @@ pops::Real solve_manufactured_error(int coarse_cells) {
 }
 
 template <int Dim>
-void expect_rank_rejected() {
+void expect_rank_accepted() {
   using namespace pops::runtime::program;
   CompositeTensorHierarchyProvider<Dim> provider;
-  const pops::PreparedProviderSupport support = provider.supports(request<Dim>());
-  EXPECT_FALSE(support.accepted());
-  EXPECT_EQ(support.code, 10u);
+  const pops::PreparedProviderSupport support = provider.supports(request<Dim>(true));
+  EXPECT_TRUE(support.accepted());
 }
 
-TEST(HierarchyTensorExactRank, OneAndThreeDimensionalRequestsFailAtPreparation) {
-  expect_rank_rejected<1>();
-  expect_rank_rejected<3>();
+TEST(HierarchyTensorExactRank, OneTwoAndThreeDimensionalRequestsPrepare) {
+  expect_rank_accepted<1>();
+  expect_rank_accepted<2>();
+  expect_rank_accepted<3>();
 }
 
-TEST(HierarchyTensorExactRank, RankTwoProvidesTheBuiltinFullTensorFacKernel) {
+template <int Dim>
+void expect_transactional_publication() {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  PreparedHierarchyTensorKernel<Dim> kernel{ExactIdentityTensorKernel<Dim>{}};
+  const auto registry = make_hierarchy_tensor_solver_provider_registry<Dim>(std::move(kernel));
+  auto prepared = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true));
+  EXPECT_EQ(prepared->assembly_target("pops.tensor-elliptic.flux", 0).ncomp(), Dim);
+  EXPECT_EQ(prepared->assembly_target(tensor_elliptic_detail::coefficient_slot(Dim - 1, Dim - 1), 0)
+                .ncomp(),
+            1);
+  prepared->assembly_target("pops.tensor-elliptic.rhs", 0).set_val(Real(2));
+  prepared->solution(0).set_val(Real(0));
+  SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
+      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4});
+  EXPECT_EQ(norm_inf(prepared->solution(0)), Real(0));
+  EXPECT_TRUE(outcome.consume(SolveConsumption::kAccept).solved());
+  EXPECT_EQ(norm_inf(prepared->solution(0)), Real(2));
+}
+
+TEST(HierarchyTensorExactRank, OneTwoAndThreeDimensionalPublicationIsTransactional) {
+  expect_transactional_publication<1>();
+  expect_transactional_publication<2>();
+  expect_transactional_publication<3>();
+}
+
+template <int Dim>
+void expect_direct_fac_zero_residual() {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>();
+  auto prepared = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true));
+  for (int level = 0; level < prepared->level_count(); ++level) {
+    for (int row = 0; row < Dim; ++row)
+      for (int column = 0; column < Dim; ++column)
+        prepared->assembly_target(tensor_elliptic_detail::coefficient_slot(row, column), level)
+            .set_val(row == column ? Real(1) : Real(0));
+    prepared->assembly_target("pops.tensor-elliptic.rhs", level).set_val(Real(0));
+    prepared->stage_initial_guess(level, nullptr);
+  }
+  EXPECT_TRUE(solve_prepared_hierarchy_tensor_collectively(
+                  *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4})
+                  .consume(SolveConsumption::kAccept)
+                  .solved());
+}
+
+TEST(HierarchyTensorExactRank, DirectFacUsesTheSameOperatorInOneTwoAndThreeDimensions) {
+  expect_direct_fac_zero_residual<1>();
+  expect_direct_fac_zero_residual<2>();
+  expect_direct_fac_zero_residual<3>();
+}
+
+TEST(HierarchyTensorExactRank, ExactRankProvidesTheBuiltinFullTensorFacKernel) {
   using namespace pops::runtime::program;
   const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>();
   const auto provider = registry->resolve(tensor_elliptic_detail::kCompositeTensorProvider);
@@ -252,7 +306,7 @@ TEST(HierarchyTensorExactRank, RankTwoProvidesTheBuiltinFullTensorFacKernel) {
   EXPECT_TRUE(support.accepted());
 }
 
-TEST(HierarchyTensorExactRank, RankTwoPublishesOnlyAfterSolveOutcomeAccept) {
+TEST(HierarchyTensorExactRank, ExactRankPublishesOnlyAfterSolveOutcomeAccept) {
   using namespace pops;
   using namespace pops::runtime::program;
 
@@ -278,7 +332,7 @@ TEST(HierarchyTensorExactRank, RankTwoPublishesOnlyAfterSolveOutcomeAccept) {
   EXPECT_EQ(norm_inf(prepared->solution(0)), Real(2));
 }
 
-TEST(HierarchyTensorExactRank, BuiltinRankTwoFacSolvesARealCrossTensorMms) {
+TEST(HierarchyTensorExactRank, BuiltinExactRankFacSolvesARealCrossTensorMms) {
   const pops::Real coarse_error = solve_manufactured_error(8);
   const pops::Real fine_error = solve_manufactured_error(16);
   ASSERT_GT(coarse_error, pops::Real(0));
