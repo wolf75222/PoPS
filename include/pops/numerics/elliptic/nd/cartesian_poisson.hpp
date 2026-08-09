@@ -22,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace pops::elliptic::nd {
 
@@ -273,6 +274,16 @@ class CartesianPoissonSolver {
 
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
     kernel.validate();
+    boundary_kernel_ = std::move(kernel);
+    boundary_context_storage_.reset();
+  }
+
+  /// Publish one already-validated generated boundary overlay.  The System loader performs every
+  /// fallible check before its registry commit; this final move cannot allocate and therefore cannot
+  /// leave the materialized solver out of sync with the committed plan.
+  void replace_boundary_kernel(std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept {
+    static_assert(
+        std::is_nothrow_move_assignable_v<std::optional<CompiledFieldBoundaryKernel<Dim>>>);
     boundary_kernel_ = std::move(kernel);
     boundary_context_storage_.reset();
   }

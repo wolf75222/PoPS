@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,6 +34,10 @@ class ExactFieldSolverBackend {
   virtual field_type& candidate() noexcept = 0;
   virtual const field_type& candidate() const noexcept = 0;
   virtual void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) = 0;
+  virtual void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const = 0;
+  virtual void replace_boundary_kernel(
+      std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept = 0;
   virtual void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) = 0;
   virtual void install_newton(FieldNewtonOptions options) = 0;
   virtual void install_nullspace(FieldNullspacePlan<Dim> plan,
@@ -66,6 +71,15 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
   const field_type& candidate() const noexcept override { return solver_.candidate(); }
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) override {
     solver_.install_boundary_kernel(std::move(kernel));
+  }
+  void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const override {
+    if (kernel)
+      kernel->validate();
+  }
+  void replace_boundary_kernel(
+      std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept override {
+    solver_.replace_boundary_kernel(std::move(kernel));
   }
   void set_boundary_context(const FieldBoundaryExecutionContext<Dim>& context) override {
     solver_.set_boundary_context(context);
@@ -147,6 +161,19 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim>) override {
     throw std::logic_error(
         "external exact field components must own their boundary closure in the component ABI");
+  }
+
+  void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const override {
+    if (kernel)
+      throw std::logic_error(
+          "external exact field components must own their boundary closure in the component ABI");
+  }
+
+  void replace_boundary_kernel(
+      std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept override {
+    if (kernel)
+      std::terminate();
   }
 
   void set_boundary_context(const FieldBoundaryExecutionContext<Dim>&) override {

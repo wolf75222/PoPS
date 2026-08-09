@@ -42,14 +42,17 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include <pops/core/foundation/types.hpp>          // Real
-#include <pops/mesh/storage/multifab.hpp>          // MultiFab (history ring element)
+#include <pops/core/foundation/types.hpp>  // Real
+#include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
+#include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
 #include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/profiler.hpp>       // Profiler (per-node / per-brick timing)
@@ -170,6 +173,29 @@ struct AutomaticBalanceKey {
   }
 };
 
+/// Exact-ranked Program-owned field-boundary overlay. Generated installers write one attempt-local
+/// stage; the Uniform loader commits it only after validating the complete registry. The durable
+/// baseline remains distinct so replacing A(dynamic) by B(no export) cannot retain A's DSO-owned
+/// function pointers.
+template <int Dim>
+struct ArtifactFieldBoundaryAuthority {
+  std::optional<CompiledFieldBoundaryKernel<Dim>> kernel;
+  std::optional<FieldLogicalTimePoint> point;
+  std::vector<Real> parameters;
+};
+
+template <int Dim>
+using ArtifactFieldBoundaryAuthorityRegistry =
+    std::map<std::string, ArtifactFieldBoundaryAuthority<Dim>>;
+
+template <int Dim>
+struct ArtifactFieldBoundaryStage {
+  ArtifactFieldBoundaryAuthorityRegistry<Dim> authorities;
+  std::set<std::string> kernel_slots;
+  std::set<std::string> point_slots;
+  std::set<std::string> parameter_slots;
+};
+
 /// The compiled time-Program runtime state, extracted from the System / AmrSystem god-object (ADC-594).
 ///
 /// A plain aggregate: the owning Impl embeds ONE instance and routes every Program seam through it. The
@@ -179,6 +205,10 @@ struct AutomaticBalanceKey {
 template <int Dim>
 struct ProgramRuntimeState {
   static_assert(Dim >= 1 && Dim <= 3, "ProgramRuntimeState only supports dimensions 1, 2, and 3");
+  /// Static field-boundary authoring image captured before the first successful artifact overlay.
+  std::optional<ArtifactFieldBoundaryAuthorityRegistry<Dim>> artifact_field_boundary_baseline_;
+  /// Candidate sink active only while pops_install_field_boundaries executes.
+  std::optional<ArtifactFieldBoundaryStage<Dim>> artifact_field_boundary_stage_;
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
   /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
   /// before mutation.

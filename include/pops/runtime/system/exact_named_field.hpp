@@ -93,6 +93,19 @@ class ExactNamedField final {
     has_boundary_kernel_ = true;
   }
 
+  void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const {
+    if (active_)
+      throw std::logic_error("cannot replace a named-field boundary while a solve is active");
+    solver_->validate_boundary_kernel_replacement(kernel);
+  }
+
+  void replace_boundary_kernel(std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept {
+    const bool installed = kernel.has_value();
+    solver_->replace_boundary_kernel(std::move(kernel));
+    has_boundary_kernel_ = installed;
+  }
+
   void install_newton(FieldNewtonOptions options) {
     if (active_)
       throw std::logic_error("cannot install named-field Newton while a solve is active");

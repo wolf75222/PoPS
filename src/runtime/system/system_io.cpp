@@ -624,13 +624,6 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
       pops::dynlib::sym(h, "pops_install_field_boundaries"));
-  if (install_boundaries) {
-    pops::dynlib::close(h);
-    throw std::runtime_error(
-        "System::install_program: this exact-ranked System artifact contains generated dynamic "
-        "field-boundary launchers, but no exact-ranked boundary publication transaction is "
-        "installed; rebuild the artifact with static field boundaries");
-  }
 
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
   // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
@@ -706,11 +699,201 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       }
     }
   }
-  // Dynamic field-boundary launchers are installed from the same problem.so that owns their direct
-  // function pointers.  Static-boundary artifacts export no entry and keep the historical fast path.
-  // Install only after ABI/requirements/block/parameter preflight has completed.
-  auto previous_install = p_->program_.capture_artifact_step_install();
+
+  // Program-owned dynamic boundary launchers are an overlay on the static field-plan registry.
+  // The generated entry receives the real exact-ranked facade, but its kernel, logical-timepoint,
+  // and parameter setters are redirected into this attempt-local stage. Nothing live is mutated
+  // until every authority has validated, all ranks agree on the ordered registry, and every
+  // already-materialized solver has confirmed that it can consume the candidate. A missing entry is
+  // meaningful: it selects the static baseline and therefore removes any overlay owned by the
+  // previous Program artifact.
+  using boundary_registry = runtime::program::ArtifactFieldBoundaryAuthorityRegistry<Dim>;
+  using kernel_registry = std::map<std::string, std::optional<CompiledFieldBoundaryKernel<Dim>>>;
+  using field_plan_registry = decltype(p_->field_plans_);
+  boundary_registry static_boundary_baseline;
+  kernel_registry materialized_candidate;
+  kernel_registry materialized_previous;
+  field_plan_registry candidate_field_plans;
+  std::string candidate_boundary_contract;
+  std::exception_ptr boundary_preparation_error;
+
+  // Baseline preparation and stage allocation finish collectively before the DSO entry is invoked.
+  // Otherwise one rank rejecting a changed registry could skip the ProgramContext communicator
+  // construction while a peer entered it.
   try {
+    if (p_->program_.artifact_field_boundary_stage_)
+      throw std::logic_error(
+          "System::install_program: a field-boundary artifact transaction is already active");
+    auto capture_authorities = [](const field_plan_registry& plans) {
+      boundary_registry result;
+      for (const auto& [slot, plan] : plans)
+        result.emplace(slot,
+                       runtime::program::ArtifactFieldBoundaryAuthority<Dim>{
+                           plan.boundary_kernel, plan.boundary_point, plan.boundary_parameters});
+      return result;
+    };
+    const boundary_registry current = capture_authorities(p_->field_plans_);
+    if (p_->program_.artifact_field_boundary_baseline_) {
+      static_boundary_baseline = *p_->program_.artifact_field_boundary_baseline_;
+      if (static_boundary_baseline.size() != current.size())
+        throw std::logic_error(
+            "System::install_program: field-plan registry changed after an artifact boundary "
+            "baseline was established; create a fresh runtime");
+      for (const auto& [slot, authority] : current) {
+        (void)authority;
+        if (!static_boundary_baseline.contains(slot))
+          throw std::logic_error(
+              "System::install_program: field-plan registry changed after an artifact boundary "
+              "baseline was established; create a fresh runtime");
+      }
+    } else {
+      static_boundary_baseline = current;
+    }
+
+    p_->program_.artifact_field_boundary_stage_.emplace();
+    p_->program_.artifact_field_boundary_stage_->authorities = static_boundary_baseline;
+  } catch (...) {
+    boundary_preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(boundary_preparation_error ? 1L : 0L) != 0) {
+    p_->program_.artifact_field_boundary_stage_.reset();
+    pops::dynlib::close(h);
+    if (n_ranks() == 1 && boundary_preparation_error)
+      std::rethrow_exception(boundary_preparation_error);
+    throw std::runtime_error(
+        "System::install_program: field-boundary baseline preparation failed collectively");
+  }
+
+  std::exception_ptr boundary_installer_error;
+  try {
+    if (install_boundaries)
+      install_boundaries(this);
+  } catch (...) {
+    boundary_installer_error = std::current_exception();
+  }
+  if (all_reduce_max(boundary_installer_error ? 1L : 0L) != 0) {
+    p_->program_.artifact_field_boundary_stage_.reset();
+    pops::dynlib::close(h);
+    if (n_ranks() == 1 && boundary_installer_error)
+      std::rethrow_exception(boundary_installer_error);
+    throw std::runtime_error(
+        "System::install_program: generated field-boundary installer failed collectively");
+  }
+
+  boundary_preparation_error = nullptr;
+  try {
+    candidate_field_plans = p_->field_plans_;
+    const auto& staged = p_->program_.artifact_field_boundary_stage_->authorities;
+    if (staged.size() != candidate_field_plans.size())
+      throw std::logic_error(
+          "System::install_program: artifact boundary candidate does not exactly cover the "
+          "field-plan registry");
+    for (const auto& [slot, authority] : staged) {
+      const auto plan = candidate_field_plans.find(slot);
+      if (plan == candidate_field_plans.end())
+        throw std::logic_error(
+            "System::install_program: artifact boundary candidate names an unknown field plan");
+      if (authority.kernel)
+        authority.kernel->validate();
+      if ((!plan->second.boundary_state_blocks.empty() ||
+           !plan->second.boundary_field_blocks.empty()) &&
+          !authority.kernel)
+        throw std::logic_error(
+            "System::install_program: field boundary dependencies require one complete generated "
+            "kernel authority");
+      plan->second.boundary_kernel = authority.kernel;
+      plan->second.boundary_point = authority.point;
+      plan->second.boundary_parameters = authority.parameters;
+    }
+
+    ExactContractBuilder contract;
+    contract.text("pops.system.artifact-field-boundary-registry")
+        .scalar(std::uint32_t{2})
+        .scalar(static_cast<std::uint32_t>(Dim))
+        .scalar(static_cast<std::uint64_t>(candidate_field_plans.size()));
+    for (const auto& [slot, plan] : candidate_field_plans) {
+      contract.text(slot).presence(plan.boundary_kernel.has_value());
+      if (plan.boundary_kernel)
+        contract.text(plan.boundary_kernel->identity)
+            .text(plan.boundary_kernel->residual_identity)
+            .text(plan.boundary_kernel->jvp_identity)
+            .presence(plan.boundary_kernel->observes_iteration);
+      contract.presence(plan.boundary_point.has_value());
+      if (plan.boundary_point)
+        contract.scalar(plan.boundary_point->time)
+            .scalar(plan.boundary_point->dt)
+            .scalar(plan.boundary_point->clock_slot)
+            .scalar(plan.boundary_point->partition_slot)
+            .scalar(plan.boundary_point->stage_slot)
+            .scalar(plan.boundary_point->level)
+            .scalar(plan.boundary_point->step)
+            .scalar(plan.boundary_point->substep)
+            .scalar(plan.boundary_point->iteration);
+      contract.sequence(plan.boundary_parameters);
+    }
+    candidate_boundary_contract = std::move(contract).release();
+
+    // Pre-copy both materialization images while failure is still harmless.  After the plan-registry
+    // swap these optionals are moved into the solvers through a noexcept publication seam.
+    for (const auto& [slot, field] : p_->named_fields_) {
+      const auto candidate = candidate_field_plans.find(slot);
+      const auto previous = p_->field_plans_.find(slot);
+      if (candidate == candidate_field_plans.end() || previous == p_->field_plans_.end())
+        throw std::logic_error(
+            "System::install_program: materialized field lacks its qualified field plan");
+      field->validate_boundary_kernel_replacement(candidate->second.boundary_kernel);
+      materialized_candidate.emplace(slot, candidate->second.boundary_kernel);
+      materialized_previous.emplace(slot, previous->second.boundary_kernel);
+    }
+  } catch (...) {
+    boundary_preparation_error = std::current_exception();
+  }
+  p_->program_.artifact_field_boundary_stage_.reset();
+  if (all_reduce_max(boundary_preparation_error ? 1L : 0L) != 0) {
+    pops::dynlib::close(h);
+    if (n_ranks() == 1 && boundary_preparation_error)
+      std::rethrow_exception(boundary_preparation_error);
+    throw std::runtime_error(
+        "System::install_program: field-boundary artifact preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-artifact-field-boundary-registry", candidate_boundary_contract}})) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "System::install_program: generated field-boundary authorities differ between MPI ranks");
+  }
+
+  // Install the boundary registry before the Program materializes any closure that may call a field
+  // solve.  candidate_field_plans retains the complete prior image after the noexcept swap and is
+  // therefore the rollback journal for every subsequent installer failure.
+  using artifact_install_snapshot = decltype(p_->program_.capture_artifact_step_install());
+  std::optional<artifact_install_snapshot> previous_install;
+  std::exception_ptr snapshot_error;
+  try {
+    previous_install.emplace(p_->program_.capture_artifact_step_install());
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
+    pops::dynlib::close(h);
+    if (n_ranks() == 1 && snapshot_error)
+      std::rethrow_exception(snapshot_error);
+    throw std::runtime_error(
+        "System::install_program: Program rollback snapshot failed collectively");
+  }
+  const bool previous_field_plan_consensus = p_->field_plan_consensus_verified_;
+  bool boundary_registry_published = false;
+  try {
+    p_->field_plans_.swap(candidate_field_plans);
+    p_->field_plan_consensus_verified_ = false;
+    for (auto& [slot, kernel] : materialized_candidate) {
+      const auto field = p_->named_fields_.find(slot);
+      if (field == p_->named_fields_.end())
+        std::terminate();
+      field->second->replace_boundary_kernel(std::move(kernel));
+    }
+    boundary_registry_published = true;
+
     p_->program_.reset_artifact_candidate_state();
     // The generated prelude may resolve blocks and parameters before ctx.install() publishes the
     // closure. Install the candidate image first; install_unverified_step then revokes it, and the
@@ -721,7 +904,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       seed_program_params(block, defaults);
     p_->program_.operator_authorities_ = operator_authorities;
     install(this);
-    p_->program_.require_exact_artifact_step_install(previous_install, "System::install_program:");
+    p_->program_.require_exact_artifact_step_install(*previous_install, "System::install_program:");
 
     p_->program_.block_map_ = std::move(program_block_map);
     for (const auto& [block, defaults] : program_param_defaults)
@@ -735,9 +918,22 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     }
     p_->program_.artifact_backed_ = true;
 
+    if (!p_->program_.artifact_field_boundary_baseline_)
+      p_->program_.artifact_field_boundary_baseline_.emplace(std::move(static_boundary_baseline));
+
   } catch (...) {
     const std::exception_ptr failure = std::current_exception();
-    p_->program_.rollback_artifact_step_install(std::move(previous_install));
+    p_->program_.rollback_artifact_step_install(std::move(*previous_install));
+    if (boundary_registry_published) {
+      p_->field_plans_.swap(candidate_field_plans);
+      p_->field_plan_consensus_verified_ = previous_field_plan_consensus;
+      for (auto& [slot, kernel] : materialized_previous) {
+        const auto field = p_->named_fields_.find(slot);
+        if (field == p_->named_fields_.end())
+          std::terminate();
+        field->second->replace_boundary_kernel(std::move(kernel));
+      }
+    }
     pops::dynlib::close(h);
     std::rethrow_exception(failure);
   }

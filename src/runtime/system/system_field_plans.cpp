@@ -295,11 +295,30 @@ template <int Dim>
 void System<Dim>::set_field_boundary_kernel(const std::string& provider_slot,
                                             const CompiledFieldBoundaryKernel<Dim>& kernel) {
   require_assembling(p_->lifecycle_, "set_field_boundary_kernel");
-  require_unmaterialized_field_plan(*p_, provider_slot, "set_field_boundary_kernel");
   const auto found = p_->field_plans_.find(provider_slot);
   if (found == p_->field_plans_.end())
     throw std::runtime_error("field boundary kernel names an unknown provider slot");
   kernel.validate();
+  // A generated DSO installer is an untrusted publication producer: while the loader owns a
+  // staging transaction this setter records only its candidate authority.  In particular it may
+  // target a field that was necessarily materialized by the block loader before install_program;
+  // the live plan and solver remain untouched until the complete artifact registry is validated.
+  if (p_->program_.artifact_field_boundary_stage_) {
+    auto& stage = *p_->program_.artifact_field_boundary_stage_;
+    const auto candidate = stage.authorities.find(provider_slot);
+    if (candidate == stage.authorities.end())
+      throw std::runtime_error(
+          "field boundary artifact candidate does not cover the complete field-plan registry");
+    if (!stage.kernel_slots.insert(provider_slot).second)
+      throw std::logic_error(
+          "field boundary artifact installed the same qualified provider slot more than once");
+    if (candidate->second.kernel)
+      throw std::logic_error(
+          "field boundary artifact cannot replace a statically authored boundary kernel");
+    candidate->second.kernel = kernel;
+    return;
+  }
+  require_unmaterialized_field_plan(*p_, provider_slot, "set_field_boundary_kernel");
   if (found->second.boundary_kernel)
     throw std::logic_error("field boundary kernel is already installed for this provider slot");
   found->second.boundary_kernel = kernel;
@@ -317,6 +336,25 @@ void System<Dim>::set_field_logical_timepoint(const std::string& provider_slot,
                        point.clock_slot < 0 || point.partition_slot < 0 || point.stage_slot < 0 ||
                        point.level != 0 || point.step < 0 || point.substep < 0 ||
                        point.iteration < 0;
+  // Artifact installation is deliberately non-collective inside the untrusted DSO callback: one
+  // rank may reject, omit, or duplicate a setter without stranding peers in a communicator call.
+  // The enclosing loader transaction performs the collective failure reduction and exact ordered
+  // candidate comparison after every rank has returned from the callback.
+  if (p_->program_.artifact_field_boundary_stage_) {
+    if (invalid)
+      throw std::invalid_argument(
+          "System field logical timepoint must be one complete level-zero coordinate");
+    auto& stage = *p_->program_.artifact_field_boundary_stage_;
+    const auto candidate = stage.authorities.find(provider_slot);
+    if (candidate == stage.authorities.end())
+      throw std::runtime_error(
+          "field boundary artifact timepoint does not cover the complete field-plan registry");
+    if (!stage.point_slots.insert(provider_slot).second)
+      throw std::logic_error(
+          "field boundary artifact installed the same logical timepoint more than once");
+    candidate->second.point = point;
+    return;
+  }
   if (all_reduce_max(invalid ? 1L : 0L) != 0)
     throw std::invalid_argument(
         "System field logical timepoint must be one complete level-zero coordinate");
@@ -350,6 +388,18 @@ void System<Dim>::set_field_boundary_parameters(const std::string& provider_slot
   const auto found = p_->field_plans_.find(provider_slot);
   if (found == p_->field_plans_.end())
     throw std::runtime_error("field boundary parameters name an unknown provider slot");
+  if (p_->program_.artifact_field_boundary_stage_) {
+    auto& stage = *p_->program_.artifact_field_boundary_stage_;
+    const auto candidate = stage.authorities.find(provider_slot);
+    if (candidate == stage.authorities.end())
+      throw std::runtime_error(
+          "field boundary artifact parameters do not cover the complete field-plan registry");
+    if (!stage.parameter_slots.insert(provider_slot).second)
+      throw std::logic_error(
+          "field boundary artifact installed the same parameter pack more than once");
+    candidate->second.parameters.assign(parameters.begin(), parameters.end());
+    return;
+  }
   require_unmaterialized_field_plan(*p_, provider_slot, "set_field_boundary_parameters");
   found->second.boundary_parameters.assign(parameters.begin(), parameters.end());
   p_->field_plan_consensus_verified_ = false;
