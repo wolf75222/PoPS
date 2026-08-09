@@ -800,6 +800,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_composite_fac_partitioned_nd 2)
+  set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
@@ -845,6 +847,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_program_reflux
     test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
+    test_mpi_composite_fac_partitioned_nd
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
     test_mpi_cell_temporal_program_refusal
