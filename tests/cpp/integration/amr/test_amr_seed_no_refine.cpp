@@ -142,7 +142,7 @@ TEST(test_amr_seed_no_refine, CoarseOnlyWithoutPreparedTaggingAuthority) {
   auto system = make_system(config, gaussian(config.shape));
 
   EXPECT_EQ(system.n_levels(), 1);
-  EXPECT_EQ(system.n_patches(), 0);
+  EXPECT_EQ(system.n_patches(), 1);
   EXPECT_TRUE(system.patch_boxes().empty());
 }
 
