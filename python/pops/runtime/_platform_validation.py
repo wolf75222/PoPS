@@ -81,7 +81,7 @@ def _initial_field(
             # field with its spatial axes reversed at the binding boundary.
             extents = tuple(reversed(candidates[0]))
             inferred_from_layout = True
-        elif dimension == 1:
+        elif len(shape) == dimension:
             extents = shape
         else:
             extents = (1,) * dimension
