@@ -205,7 +205,6 @@ sdk-support pops/runtime/analytic/level_set.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
 sdk-root pops/runtime/builders/compiled/amr_dsl_block.hpp
 sdk-root pops/runtime/builders/compiled/dsl_block.hpp
-sdk-support pops/runtime/builders/compiled/flat_grid.hpp
 sdk-support pops/runtime/builders/compiled/generated_amr_system_block.hpp
 sdk-support pops/runtime/builders/compiled/generated_system_block.hpp
 sdk-root pops/runtime/builders/compiled/model_runtime_params.hpp

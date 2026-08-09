@@ -2252,11 +2252,10 @@ code calls [`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/d
 grid context. This is an internal specialization of the same resolved plan, not a second user-facing
 registration API.
 
-[`runtime/flat_grid.hpp`](../include/pops/runtime/builders/compiled/flat_grid.hpp) remains only as the
-explicit local 2D flat-array adapter used by
+External numerical-flux packages execute through the exact-ranked fields and geometry carried by
 [`runtime/external_riemann_brick.hpp`](../include/pops/runtime/program/external_riemann_brick.hpp).
-It is neither the component ABI nor a Uniform/AMR/MPI fallback, and it confers no capability beyond
-that adapter's declared target.
+There is no local square-grid or flat-array adapter: the resolved native rank, patch layout and
+distribution remain authoritative across the component boundary.
 
 **Constraints / remarks.** A shared-object path alone proves nothing. Installation refuses a missing
 or unexpected symbol, digest, catalog version, interface, table prefix, platform identity or execution
