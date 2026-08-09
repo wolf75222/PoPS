@@ -133,17 +133,20 @@ class KokkosEnvironment : public ::testing::Environment {
 // ADC-299 : SystemConfig invalide rejetee AVANT la construction de Impl (allocation geom/ba/dm/aux).
 // ================================================================================================
 TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
-  {
-    NativeSystemConfig config = native_system_config(16);
-    config.shape[0] = 0;
-    EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
-        << "System(rank axis extent=0) rejects before Impl";
-  }
-  {
-    NativeSystemConfig config = native_system_config(16);
-    config.shape[0] = -4;
-    EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
-        << "System(rank axis extent<0) rejects";
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    SCOPED_TRACE(::testing::Message() << "axis=" << axis);
+    {
+      NativeSystemConfig config = native_system_config(16);
+      config.shape[axis] = 0;
+      EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
+          << "System(rank axis extent=0) rejects before Impl";
+    }
+    {
+      NativeSystemConfig config = native_system_config(16);
+      config.shape[axis] = -4;
+      EXPECT_TRUE(raises_with([&] { NativeSystem s(config); }, "strictly positive"))
+          << "System(rank axis extent<0) rejects before Box materialization";
+    }
   }
   {
     NativeSystemConfig config = native_system_config(16);
@@ -177,20 +180,25 @@ TEST(ConfigModelValidation, SystemConfigInvalidRejectedBeforeImpl) {
 // ADC-299 : AmrSystemConfig invalide rejetee AVANT Impl (parite avec System).
 // ================================================================================================
 TEST(ConfigModelValidation, AmrSystemConfigInvalidRejectedBeforeImpl) {
-  {
-    NativeAmrSystemConfig config = native_amr_config(32);
-    config.shape[0] = 0;
-    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"));
+  for (int axis = 0; axis < kTestDimension; ++axis) {
+    SCOPED_TRACE(::testing::Message() << "axis=" << axis);
+    {
+      NativeAmrSystemConfig config = native_amr_config(32);
+      config.shape[axis] = 0;
+      EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"))
+          << "AmrSystem(rank axis extent=0) rejects before Impl";
+    }
+    {
+      NativeAmrSystemConfig config = native_amr_config(32);
+      config.shape[axis] = -1;
+      EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"))
+          << "AmrSystem(rank axis extent<0) rejects before Box materialization";
+    }
   }
   {
     NativeAmrSystemConfig config = native_amr_config(32);
     config.upper[0] = Real(0);
     EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly increasing"));
-  }
-  {
-    NativeAmrSystemConfig config = native_amr_config(32);
-    config.shape[kTestDimension - 1] = -1;
-    EXPECT_TRUE(raises_with([&] { NativeAmrSystem a(config); }, "strictly positive"));
   }
   {
     NativeAmrSystemConfig config = native_amr_config(32);

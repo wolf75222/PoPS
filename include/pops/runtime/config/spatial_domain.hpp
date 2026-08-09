@@ -84,7 +84,6 @@ struct RuntimeSpatialDomain {
   }
 
   void validate_spatial_domain() const {
-    const Box<Dim> domain = index_domain();
     for (int axis = 0; axis < Dim; ++axis) {
       if (shape[axis] < 1)
         throw std::invalid_argument("native runtime shape must be strictly positive on every axis");
@@ -95,6 +94,7 @@ struct RuntimeSpatialDomain {
     }
     if (coordinate_system.empty())
       throw std::invalid_argument("native runtime coordinate-system identity must be non-empty");
+    const Box<Dim> domain = index_domain();
     const std::vector<Box<Dim>> materialized = materialized_boxes();
     const std::size_t box_count = materialized.size();
     if (box_count > 1 && box_count - 1 > std::numeric_limits<std::size_t>::max() / box_count)
