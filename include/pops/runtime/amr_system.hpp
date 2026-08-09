@@ -23,6 +23,7 @@
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
+#include <pops/runtime/system/exact_aux_registry.hpp>
 
 #include <array>
 #include <functional>
@@ -207,14 +208,6 @@ struct AmrBuildParams {
     bool has_state = false;
     std::vector<double> state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
   } initial;
-  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the
-  /// runtime block at build, like bz_field; re-applied each update (persist across regrid).
-  /// Both empty -> bit-identical.
-  struct NamedAux {
-    std::map<int, std::vector<double>>
-        fields;  ///< component (>= kAuxNamedBase) -> coarse field (ny*nx)
-    std::map<int, AuxHaloPolicy> halo_policies;  ///< component -> uniform boundary policy
-  } named_aux;
 };
 
 /// Frozen argument type of the rejected pre-final loader ABI. It remains only so an old shared
@@ -367,10 +360,6 @@ class AmrSystem {
   POPS_EXPORT Geometry<Dim> prepared_amr_level_geometry(int level) const;
   POPS_EXPORT BoundaryTopology<Dim> prepared_amr_boundary_topology() const;
   POPS_EXPORT Real prepared_amr_level_maximum_speed(int level, const MultiFab<Dim>& state) const;
-
-  /// Stable per-level auxiliary storage owned by the prepared hierarchy generation.
-  POPS_EXPORT MultiFab<Dim>& prepared_amr_level_auxiliary(int level);
-  POPS_EXPORT const MultiFab<Dim>& prepared_amr_level_auxiliary(int level) const;
 
   /// Accumulate the generated block's exact elliptic right-hand side on one live level.
   POPS_EXPORT void add_prepared_amr_poisson_rhs(int level, MultiFab<Dim>& rhs);
@@ -664,28 +653,24 @@ class AmrSystem {
                                                               int level);
   std::uint64_t bootstrap_cache_epoch(const std::string& subject) const;
 
-  /// Sets the magnetic field B_z(x, y) of the coarse level (ny*nx row-major), required by the Schur-condensed
-  /// source stage (Lorentz term Omega = B_z). AMR counterpart of System::set_magnetic_field.
-  /// Available on one- and multi-block AMR. The coarse field is published to every active level and
-  /// re-applied after field solves and regrids by the native shared-aux runtime.
-  /// @throws std::runtime_error if the system is already built or if bz is not of size ny*nx.
-  void set_magnetic_field(const std::vector<double>& bz);
-
-  /// Sets a model-NAMED aux field (ADC-291) at shared-channel component @p comp (>= kAuxNamedBase) from
-  /// a coarse base-level field @p field (ny*nx row-major). AMR counterpart of
-  /// System::set_aux_field_component: the field is STATIC (re-applied by the engine each update, so it
-  /// survives a regrid) and reaches every level via the coarse->fine aux injection. The Python facade
-  /// resolves the name to @p comp and reshapes the array. Mono-rank facade (same as set_density). @throws
-  /// if the system is
-  /// already built, if @p comp is reserved (< kAuxNamedBase), or if @p field is not of size ny*nx.
-  void set_aux_field_component(int comp, const std::vector<double>& field);
-
-  /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
-  /// @p bc_type is pops::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value. Seeded
-  /// onto the engine at build and applied after the shared coarse aux fill (overriding only that
-  /// component's physical-face ghosts; periodic faces keep their wrap). AMR counterpart of
-  /// System::set_aux_field_halo_component. @throws on a reserved component or an unsupported type.
-  void set_aux_field_halo_component(int comp, int bc_type, double value);
+  /// Register immutable owner-qualified auxiliary producers and native consumer views.  The graph
+  /// is sealed before hierarchy materialization; physical aliases and raw component indices are
+  /// intentionally absent from this interface.
+  POPS_EXPORT void install_prepared_auxiliary_provider(
+      runtime::system::PreparedAuxiliaryProvider<Dim> provider);
+  POPS_EXPORT void install_auxiliary_consumer_plan(
+      runtime::system::AuxiliaryConsumerProviderPlan<Dim> plan);
+  POPS_EXPORT void seal_auxiliary_providers();
+  POPS_EXPORT void stage_auxiliary_input(const runtime::system::AuxiliaryComponentKey& key,
+                                         const std::vector<double>& values);
+  POPS_EXPORT void refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point);
+  [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryStorageAddress<Dim> auxiliary_address(
+      const runtime::system::AuxiliaryComponentKey& key) const;
+  [[nodiscard]] POPS_EXPORT std::vector<double> auxiliary_component(
+      const runtime::system::AuxiliaryComponentKey& key, int level = 0) const;
+  [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
 
   /// @name Named multi-elliptic fields (ADC-428)
   /// Exact-ranked API for a SECOND elliptic solve on the AMR hierarchy. Installation is accepted
@@ -1121,17 +1106,11 @@ class AmrSystem {
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
   /// reproduces the LOCAL-fab iteration order.
   std::vector<int> level_owner_ranks(int k);
-  /// FULL shared aux of level @p k (ALL components, flat c*nf*nf+j*nf+i; _global = np>1 gather,
-  /// COLLECTIVE) + the owner-rank restore -- the v3 checkpoint aux payload (ADC-542).
-  std::vector<double> level_aux_flat(int k);
-  std::vector<double> level_aux_flat_global(int k);
-  void set_level_aux_flat(int k, const std::vector<double>& v);
-
   /// @name Multistep history-ring checkpoint / replay (ADC-631, Uniform System seam names)
   /// The compiled-Program AMR route carries per-level `keep_history` / `T.prev` ring slots on the
   /// AmrRuntime engine (remapped through regrid). These wrappers expose the SAME seam names as System
   /// so the shared _system_io_history.py serialize/restore is reused verbatim: history_global returns
-  /// the per-level slices concatenated into ONE flat buffer (level axis hidden, parity level_aux_flat),
+  /// the per-level slices concatenated into one exact rank-local replay image,
   /// restore_history scatters it back per level, rebuild_history_slots replays the policy-recomputed
   /// slots by re-stepping the installed Program.
   /// @{

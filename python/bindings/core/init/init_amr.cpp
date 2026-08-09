@@ -578,33 +578,39 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
-      // Python owns the array orientation: exact native spatial rank, then one explicit flattening
-      // at the vector-valued C++ boundary.
+      // Owner-qualified InputAux only.  The native hierarchy owns every per-level storage group,
+      // transfer, derived launch and halo phase; Python never selects a raw carrier component.
       .def(
-          "set_magnetic_field",
-          [](AmrSystem& s, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            require_amr_cell_array_shape(s, arr, "AmrSystem.set_magnetic_field");
-            s.set_magnetic_field(flat(arr));
-          },
-          py::arg("bz"), "Set the coarse magnetic field from one exact ranked cell array.")
-      // ADC-291: model-NAMED aux field at a resolved channel component (>= kAuxNamedBase). The Python
-      // facade resolves the name -> comp and flattens the exact ranked cell field.
-      .def(
-          "set_aux_field_component",
-          [](AmrSystem& s, int comp,
+          "stage_auxiliary_input",
+          [](AmrSystem& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component,
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            require_amr_cell_array_shape(s, arr, "AmrSystem.set_aux_field_component");
-            s.set_aux_field_component(comp, flat(arr));
+            require_amr_cell_array_shape(s, arr, "AmrSystem.stage_auxiliary_input");
+            s.stage_auxiliary_input({owner_qid, space_kind, space_name, component}, flat(arr));
           },
-          py::arg("comp"), py::arg("field"),
-          "Set one coarse auxiliary component from one exact ranked cell array.")
-      // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2).
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"), py::arg("values"))
       .def(
-          "set_aux_field_halo_component",
-          [](AmrSystem& s, int comp, int bc_type, double value) {
-            s.set_aux_field_halo_component(comp, bc_type, value);
+          "auxiliary_component",
+          [](const AmrSystem& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            return to_ranked_field(s.auxiliary_component(
+                                       {owner_qid, space_kind, space_name, component}),
+                                   s.spatial_shape());
           },
-          py::arg("comp"), py::arg("bc_type"), py::arg("value"))
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"))
+      .def(
+          "auxiliary_address",
+          [](const AmrSystem& s, const std::string& owner_qid, const std::string& space_kind,
+             const std::string& space_name, const std::string& component) {
+            const auto address = s.auxiliary_address(
+                {owner_qid, space_kind, space_name, component});
+            return py::make_tuple(address.group, address.component);
+          },
+          py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
+          py::arg("component"))
+      .def("auxiliary_registry_contract", &AmrSystem::auxiliary_registry_contract)
       .def(
           "set_density",
           [](AmrSystem& s, const std::string& name,
@@ -1133,21 +1139,6 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "level_owner_ranks", [](AmrSystem& s, int k) { return s.level_owner_ranks(k); },
           py::arg("k"))
-      // ADC-542: the FULL shared aux of a level (ALL components, flat c*nf*nf+j*nf+i) -- the v3
-      // checkpoint aux payload. _global gathers under np>1 (COLLECTIVE); the setter restores the
-      // valid cells owner-rank. Empty read / throwing write on the single-block coupler path.
-      .def(
-          "level_aux_flat", [](AmrSystem& s, int k) { return s.level_aux_flat(k); }, py::arg("k"))
-      .def(
-          "level_aux_flat_global", [](AmrSystem& s, int k) { return s.level_aux_flat_global(k); },
-          py::arg("k"))
-      .def(
-          "set_level_aux_flat",
-          [](AmrSystem& s, int k,
-             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-            s.set_level_aux_flat(k, flat(arr));
-          },
-          py::arg("k"), py::arg("aux"))
       // ADC-542: impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint. @p boxes are the
       // level-tagged exact-ranked patch signatures; @p owner_ranks is the per-box owner
       // rank aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt).
@@ -1213,8 +1204,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("checkpoint_transfer_routes", &AmrSystem::checkpoint_transfer_routes)
       // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
       // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.
-      // history_global returns the per-level slices concatenated into ONE flat buffer (level axis
-      // hidden inside the facade, parity level_aux_flat); restore_history flattens any C-contiguous
+      // history_global returns the per-level slices concatenated into one exact replay image;
+      // restore_history flattens any C-contiguous
       // array and scatters it back per level; rebuild_history_slots replays the recomputed slots.
       .def("history_names", &AmrSystem::history_names)
       .def("history_depth", &AmrSystem::history_depth, py::arg("name"))

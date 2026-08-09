@@ -422,12 +422,6 @@ class AmrProgramContext {
     return runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
   }
 
-  field_type& aux() const {
-    require_facade_execution_();
-    refresh_resources_();
-    return facade_->prepared_amr_level_auxiliary(active_level_);
-  }
-
   field_type rhs_scratch_like(const field_type& prototype) const {
     return make_scratch_(prototype, prototype.ncomp(), prototype.ghosts());
   }

@@ -476,12 +476,21 @@ struct AuxiliaryCarrierStorage {
     if (accepted == nullptr || candidate == nullptr)
       throw std::invalid_argument(
           "auxiliary native launch requires accepted and candidate carrier storage");
-    if (accepted->layout() != candidate->layout() ||
-        accepted->distribution() != candidate->distribution() ||
-        accepted->local_rank() != candidate->local_rank() ||
-        accepted->ncomp() != candidate->ncomp() || accepted->ghosts() != candidate->ghosts())
+    if (accepted->groups.size() != candidate->groups.size())
       throw std::invalid_argument(
-          "auxiliary accepted and candidate carriers must share one exact ranked layout");
+          "auxiliary accepted and candidate carriers must have identical storage groups");
+    for (const auto& [identity, accepted_group] : accepted->groups) {
+      const auto candidate_group = candidate->groups.find(identity);
+      if (candidate_group == candidate->groups.end() ||
+          accepted_group.layout() != candidate_group->second.layout() ||
+          accepted_group.distribution() != candidate_group->second.distribution() ||
+          accepted_group.local_rank() != candidate_group->second.local_rank() ||
+          accepted_group.local_size() != candidate_group->second.local_size() ||
+          accepted_group.ncomp() != candidate_group->second.ncomp() ||
+          accepted_group.ghosts() != candidate_group->second.ghosts())
+        throw std::invalid_argument(
+            "auxiliary accepted and candidate storage groups differ in exact ranked layout");
+    }
   }
 };
 
