@@ -318,6 +318,8 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   candidate.rhs_flux_only = std::move(prepared.closures.rhs_flux_only);
   candidate.source_only = std::move(prepared.closures.source_only);
   candidate.source_only_masked = std::move(prepared.closures.source_only_masked);
+  candidate.staircase_residuals = std::move(prepared.closures.staircase);
+  candidate.cutcell_residuals = std::move(prepared.closures.cut_cell);
   candidate.rhs_at_point = std::move(prepared.closures.rhs_at_point);
   candidate.rhs_flux_only_at_point = std::move(prepared.closures.rhs_flux_only_at_point);
   candidate.rhs_without_prepared_interfaces =

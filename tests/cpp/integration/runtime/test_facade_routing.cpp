@@ -191,12 +191,14 @@ ScalarModel scalar_transport_model() {
 }
 
 void add_periodic_transport(NativeSystem& system) {
+  system.install_block_state_route("n", "test:facade-routing/n/state");
   add_compiled_model(system, "n", scalar_transport_model(), "none", "rusanov", "conservative",
                      "explicit");
   system.set_poisson("composite", "cartesian_cg", "periodic");
 }
 
 void add_compressible(NativeSystem& system) {
+  system.install_block_state_route("gas", "test:facade-routing/gas/state");
   add_compiled_model(system, "gas", CompressibleModel::prepare(Real(1.4)), "none", "rusanov",
                      "conservative", "explicit", 1.4);
 }
@@ -208,6 +210,7 @@ void build_transport(NativeSystem& s) {
   // Higher-order stencils require geometry-aware neighbor reconstruction and are rejected rather
   // than reading inactive cells. The same provider is used in every mode so this test isolates only
   // residual routing.
+  s.install_block_state_route("n", "test:facade-routing/n/state");
   add_compiled_model(s, "n", scalar_transport_model(), "none", "rusanov", "conservative",
                      "explicit");
   // Le Program conserve son solve de champ exact-rank ; le modele scalaire fournit un RHS nul et
@@ -244,7 +247,7 @@ TEST(FacadeRouting, DiscModeRoutingBehavesAcrossNoneStaircaseCutcellAndSplitting
   const double cx = 0.5 * L, cy = 0.5 * L;
   const double dt = 2e-4;  // pas court, advection sous-CFL
   const int n_steps = 12;
-  const NativeSystemConfig config = native_config(n, L, false);
+  const NativeSystemConfig config = native_config(n, L, true);
   const NativeGeometry geometry = native_geometry(config);
   const std::vector<double> rho0 = ring_density(config);
 
@@ -388,7 +391,7 @@ TEST(FacadeRouting, GenericAnalyticLevelSetMatchesDiscSugarAfterBlockConstructio
   const double cx = 0.5;
   const double cy = 0.5;
   const double radius = 0.31;
-  const NativeSystemConfig config = native_config(n, L, false);
+  const NativeSystemConfig config = native_config(n, L, true);
   const std::vector<double> rho0 = ring_density(config);
 
   // Both transport closures are deliberately built before their geometry is installed. The stable

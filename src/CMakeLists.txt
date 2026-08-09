@@ -11,6 +11,7 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system.cpp
     runtime/system/system_install.cpp
     runtime/system/system_fields.cpp
+    runtime/system/system_embedded_boundary.cpp
     runtime/system/system_field_plans.cpp
     runtime/system/system_layout_transfer.cpp
     runtime/system/system_io.cpp

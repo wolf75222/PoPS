@@ -10,6 +10,7 @@
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
 #include <functional>
 #include <string>
@@ -42,6 +43,17 @@ struct SystemBlockClosures {
   using PointStatePreparation = std::function<void(const point_type&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const point_type&, field_type&, const boundary_type&)>;
+  using embedded_geometry_type = runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>;
+  using EmbeddedResidual =
+      std::function<void(field_type&, field_type&, const embedded_geometry_type&)>;
+  using EmbeddedProjection = std::function<void(field_type&, const embedded_geometry_type&)>;
+
+  struct EmbeddedResidualFamily {
+    EmbeddedResidual full;
+    EmbeddedResidual flux_only;
+    EmbeddedResidual source_only;
+    EmbeddedProjection project;
+  };
 
   Residual rhs_into;
   Residual rhs_flux_only;
@@ -71,6 +83,8 @@ struct SystemBlockClosures {
   std::function<void(const field_type&, Real&, Index<Dim>&)> hotspot;
   std::function<void(field_type&)> project;
   std::function<void(field_type&)> project_masked;
+  EmbeddedResidualFamily staircase;
+  EmbeddedResidualFamily cut_cell;
 };
 
 /// Complete immutable block image prepared by one dimension-qualified native package.

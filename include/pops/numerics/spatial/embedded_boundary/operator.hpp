@@ -107,14 +107,33 @@ class PreparedEmbeddedBoundaryOperator2D {
 
   PreparedEmbeddedBoundaryOperator2D(Model model, BaseMetric metric,
                                      Reconstruction reconstruction = {},
-                                     NumericalFlux numerical_flux = {})
+                                     NumericalFlux numerical_flux = {},
+                                     Real positivity_floor = Real(0))
       : model_(std::move(model)),
         metric_(std::move(metric)),
         reconstruction_(std::move(reconstruction)),
-        numerical_flux_(std::move(numerical_flux)) {}
+        numerical_flux_(std::move(numerical_flux)),
+        positivity_floor_(positivity_floor) {}
 
   template <class MemorySpace>
   void assemble_residual(const Fab<2, MemorySpace>& state, const Fab<2, MemorySpace>& active_cells,
+                         const Fab<2, MemorySpace>& inverse_volume_fraction,
+                         Fab<2, MemorySpace>& residual,
+                         BoundaryFaceOmission<2> omission = {}) const
+    requires(flux_provider_count<Model> == 0)
+  {
+    const auto cut_metric = PreparedEmbeddedBoundaryMetric2D<BaseMetric>::prepare(
+        metric_, inverse_volume_fraction, state.box());
+    PreparedMaskedCartesianOperator<2, Model, decltype(cut_metric), Reconstruction, NumericalFlux,
+                                    Variables>
+        masked(model_, cut_metric, reconstruction_, numerical_flux_, positivity_floor_);
+    masked.assemble_residual(state, active_cells, residual, omission);
+  }
+
+  template <class MemorySpace>
+  void assemble_residual(const Fab<2, MemorySpace>& state,
+                         const Fab<2, MemorySpace>& providers,
+                         const Fab<2, MemorySpace>& active_cells,
                          const Fab<2, MemorySpace>& inverse_volume_fraction,
                          Fab<2, MemorySpace>& residual,
                          BoundaryFaceOmission<2> omission = {}) const {
@@ -122,8 +141,8 @@ class PreparedEmbeddedBoundaryOperator2D {
         metric_, inverse_volume_fraction, state.box());
     PreparedMaskedCartesianOperator<2, Model, decltype(cut_metric), Reconstruction, NumericalFlux,
                                     Variables>
-        masked(model_, cut_metric, reconstruction_, numerical_flux_);
-    masked.assemble_residual(state, active_cells, residual, omission);
+        masked(model_, cut_metric, reconstruction_, numerical_flux_, positivity_floor_);
+    masked.assemble_residual(state, providers, active_cells, residual, omission);
   }
 
   template <class MemorySpace>
@@ -131,7 +150,9 @@ class PreparedEmbeddedBoundaryOperator2D {
                          const MultiFab<2, MemorySpace>& active_cells,
                          const MultiFab<2, MemorySpace>& inverse_volume_fraction,
                          MultiFab<2, MemorySpace>& residual,
-                         BoundaryFaceOmission<2> omission = {}) const {
+                         BoundaryFaceOmission<2> omission = {}) const
+    requires(flux_provider_count<Model> == 0)
+  {
     masked_operator_detail::require_same_multifab_layout(
         state, active_cells, "prepared EB state and active-mask layouts differ");
     masked_operator_detail::require_same_multifab_layout(
@@ -156,11 +177,45 @@ class PreparedEmbeddedBoundaryOperator2D {
     device_fence();
   }
 
+  template <class MemorySpace>
+  void assemble_residual(const MultiFab<2, MemorySpace>& state,
+                         const MultiFab<2, MemorySpace>& providers,
+                         const MultiFab<2, MemorySpace>& active_cells,
+                         const MultiFab<2, MemorySpace>& inverse_volume_fraction,
+                         MultiFab<2, MemorySpace>& residual,
+                         BoundaryFaceOmission<2> omission = {}) const {
+    masked_operator_detail::require_same_multifab_layout(
+        state, providers, "prepared EB state and provider layouts differ");
+    masked_operator_detail::require_same_multifab_layout(
+        state, active_cells, "prepared EB state and active-mask layouts differ");
+    masked_operator_detail::require_same_multifab_layout(
+        state, inverse_volume_fraction, "prepared EB state and inverse-volume layouts differ");
+    masked_operator_detail::require_same_multifab_layout(
+        state, residual, "prepared EB state and residual layouts differ");
+    if (providers.ncomp() < flux_provider_count<Model> || active_cells.ncomp() != 1 ||
+        inverse_volume_fraction.ncomp() != 1 || state.ncomp() != Model::n_vars ||
+        residual.ncomp() != Model::n_vars || state.shares_storage_with(residual))
+      throw std::invalid_argument("prepared EB MultiFab components differ or alias");
+
+    MultiFab<2, MemorySpace> candidate(residual.layout(), residual.distribution(),
+                                       residual.local_rank(), Model::n_vars, residual.ghosts());
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      assemble_residual(state.fab(local), providers.fab(local), active_cells.fab(local),
+                        inverse_volume_fraction.fab(local), candidate.fab(local), omission);
+    for (std::size_t local = 0; local < state.local_size(); ++local)
+      for_each_cell(state.box(local),
+                    cartesian_operator_detail::CopyCellField<2>{
+                        static_cast<const Fab<2, MemorySpace>&>(candidate.fab(local)).view(),
+                        residual.fab(local).view(), Model::n_vars});
+    device_fence();
+  }
+
  private:
   Model model_;
   BaseMetric metric_;
   Reconstruction reconstruction_;
   NumericalFlux numerical_flux_;
+  Real positivity_floor_ = Real(0);
 };
 
 template <class Model, class BaseMetric, class Reconstruction = NoSlope,
@@ -168,10 +223,12 @@ template <class Model, class BaseMetric, class Reconstruction = NoSlope,
           ReconstructionVariables Variables = ReconstructionVariables::Conservative>
 auto prepare_embedded_boundary_operator(Model model, BaseMetric metric,
                                         Reconstruction reconstruction = {},
-                                        NumericalFlux numerical_flux = {}) {
+                                        NumericalFlux numerical_flux = {},
+                                        Real positivity_floor = Real(0)) {
   return PreparedEmbeddedBoundaryOperator2D<Model, BaseMetric, Reconstruction, NumericalFlux,
                                             Variables>(
-      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux));
+      std::move(model), std::move(metric), std::move(reconstruction), std::move(numerical_flux),
+      positivity_floor);
 }
 
 }  // namespace pops::nd

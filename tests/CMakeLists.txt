@@ -463,6 +463,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_copy_schedule_cache
   test_physical_bc
   test_prepared_hyperbolic_boundary
+  test_prepared_embedded_boundary_nd
   test_prepared_stream_executor
   test_geometry
   test_nd_metric_provider
@@ -582,6 +583,7 @@ endforeach()
 target_link_libraries(test_amr_tensor_fac_provider PRIVATE pops_runtime_amr)
 target_link_libraries(test_generated_amr_system_block PRIVATE pops_runtime_amr)
 target_link_libraries(test_multiblock_interface_scheduler PRIVATE pops_runtime_amr)
+target_link_libraries(test_prepared_embedded_boundary_nd PRIVATE pops_runtime_system)
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)

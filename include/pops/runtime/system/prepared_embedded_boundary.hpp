@@ -61,6 +61,7 @@ class PreparedEmbeddedBoundaryGeometry final {
   [[nodiscard]] PreparedEmbeddedBoundaryMode mode() const noexcept { return mode_; }
   [[nodiscard]] const EbThresholds& thresholds() const noexcept { return thresholds_; }
   [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+  [[nodiscard]] const std::string& semantic_digest() const noexcept { return semantic_digest_; }
   [[nodiscard]] const std::string& digest() const noexcept { return digest_; }
 
   [[nodiscard]] const field_type& phi() const noexcept { return phi_; }
@@ -74,15 +75,16 @@ class PreparedEmbeddedBoundaryGeometry final {
   PreparedEmbeddedBoundaryGeometry(analytic::AnalyticProgram program, Geometry<Dim> geometry,
                                    BoundaryTopology<Dim> topology,
                                    PreparedEmbeddedBoundaryMode mode, EbThresholds thresholds,
-                                   std::uint64_t generation, std::string digest, field_type phi,
-                                   field_type active_mask, field_type volume_fraction,
-                                   field_type inverse_volume_fraction)
+                                   std::uint64_t generation, std::string semantic_digest,
+                                   std::string digest, field_type phi, field_type active_mask,
+                                   field_type volume_fraction, field_type inverse_volume_fraction)
       : program_(std::move(program)),
         geometry_(geometry),
         topology_(topology),
         mode_(mode),
         thresholds_(thresholds),
         generation_(generation),
+        semantic_digest_(std::move(semantic_digest)),
         digest_(std::move(digest)),
         phi_(std::move(phi)),
         active_mask_(std::move(active_mask)),
@@ -95,6 +97,7 @@ class PreparedEmbeddedBoundaryGeometry final {
   PreparedEmbeddedBoundaryMode mode_ = PreparedEmbeddedBoundaryMode::inactive;
   EbThresholds thresholds_{};
   std::uint64_t generation_ = 0;
+  std::string semantic_digest_;
   std::string digest_;
   field_type phi_;
   field_type active_mask_;

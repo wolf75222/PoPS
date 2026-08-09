@@ -10,6 +10,7 @@
 #include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
+#include <pops/runtime/system/prepared_embedded_boundary.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
@@ -62,6 +63,13 @@ struct System<Dim>::Impl {
   runtime::system::SystemCouplingRegistry<Dim> coupling_;
   runtime::system::SystemLifecycle lifecycle_;
   runtime::program::ProgramRuntimeState<Dim> program_;
+  using embedded_boundary_type = runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>;
+  std::shared_ptr<const embedded_boundary_type> embedded_boundary_;
+  std::optional<ExecutionLane> embedded_boundary_lane_;
+  std::vector<std::string> embedded_boundary_opcodes_;
+  std::vector<double> embedded_boundary_literals_;
+  EbThresholds embedded_boundary_thresholds_{};
+  std::uint64_t embedded_boundary_generation_ = 0;
 
   double t = 0.0;
   int macro_step_ = 0;

@@ -11,6 +11,40 @@
 #include <utility>
 
 namespace pops {
+namespace {
+
+template <int Dim>
+typename SystemBlockStore<Dim>::EmbeddedResidualFamily& select_embedded_residual_family(
+    typename SystemBlockStore<Dim>::BlockState& block,
+    runtime::system::PreparedEmbeddedBoundaryMode mode) {
+  switch (mode) {
+    case runtime::system::PreparedEmbeddedBoundaryMode::staircase:
+      return block.staircase_residuals;
+    case runtime::system::PreparedEmbeddedBoundaryMode::cut_cell:
+      return block.cutcell_residuals;
+    case runtime::system::PreparedEmbeddedBoundaryMode::inactive:
+      break;
+  }
+  throw std::logic_error("inactive embedded-boundary mode has no residual family");
+}
+
+template <int Dim>
+void require_embedded_residual_route(const SystemBlockStore<Dim>& blocks,
+                                     const typename SystemBlockStore<Dim>::BlockState& block,
+                                     int block_index, bool available,
+                                     const char* operation) {
+  if (block.boundary)
+    throw std::runtime_error(std::string(operation) +
+                             " requires an EB-qualified hyperbolic boundary provider");
+  if (blocks.has_interfaces(block_index))
+    throw std::runtime_error(std::string(operation) +
+                             " requires an EB-qualified shared-interface provider");
+  if (!available)
+    throw std::runtime_error(std::string(operation) +
+                             " has no exact provider for the selected EB mode and model");
+}
+
+}  // namespace
 
 template <int Dim>
 runtime::program::ProgramRuntimeState<Dim>& System<Dim>::program_runtime_state_() {
@@ -121,6 +155,17 @@ void System<Dim>::block_rhs_into(int block, MultiFab<Dim>& state, MultiFab<Dim>&
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System::block_rhs_into block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.full),
+                                         "System::block_rhs_into");
+    family.full(state, residual, *p_->embedded_boundary_);
+    return;
+  }
   if (selected.boundary)
     throw std::runtime_error(
         "System::block_rhs_into requires an exact evaluation point for a prepared boundary");
@@ -164,6 +209,23 @@ void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationP
     residuals[index] = requested_residuals[request];
     flux_only[index] = requested_flux_only[request];
   }
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+      const int block = requested_blocks[request];
+      typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+      auto& family =
+          select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      auto& closure = requested_flux_only[request] != 0 ? family.flux_only : family.full;
+      require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                           static_cast<bool>(closure),
+                                           "System::block_rhs_group");
+      closure(*requested_states[request], *requested_residuals[request],
+              *p_->embedded_boundary_);
+    }
+    return;
+  }
   p_->blocks_.evaluate_rhs_with_interfaces(point, states, residuals, flux_only);
 }
 
@@ -173,6 +235,19 @@ void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEval
                                          bool flux_only) {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System core RHS block index is out of range");
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    auto& closure = flux_only ? family.flux_only : family.full;
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(closure),
+                                         "System::block_rhs_core_into_at");
+    closure(state, residual, *p_->embedded_boundary_);
+    return;
+  }
   p_->blocks_.evaluate_rhs_core(point, static_cast<std::size_t>(block), state, residual, flux_only);
 }
 
@@ -191,6 +266,17 @@ void System<Dim>::block_neg_div_flux_into(int block, MultiFab<Dim>& state,
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System flux-only block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.flux_only),
+                                         "System::block_neg_div_flux_into");
+    family.flux_only(state, residual, *p_->embedded_boundary_);
+    return;
+  }
   if (!selected.rhs_flux_only)
     throw std::runtime_error("System block '" + selected.name +
                              "' lacks a dimension-qualified flux-only provider");
@@ -209,6 +295,17 @@ void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Di
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System source-only block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.source_only),
+                                         "System::block_source_into");
+    family.source_only(state, residual, *p_->embedded_boundary_);
+    return;
+  }
   if (!selected.source_only)
     throw std::runtime_error("System block '" + selected.name +
                              "' lacks a dimension-qualified source-only provider");
@@ -284,6 +381,17 @@ void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System projection block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
+  if (p_->embedded_boundary_ &&
+      p_->embedded_boundary_->mode() !=
+          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family =
+        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
+                                         static_cast<bool>(family.project),
+                                         "System::block_project");
+    family.project(state, *p_->embedded_boundary_);
+    return;
+  }
   if (!selected.project)
     throw std::runtime_error("System block '" + selected.name +
                              "' has no dimension-qualified projection provider");

@@ -48,6 +48,19 @@ using runtime::system::marshaling::gather_local_compact;
 using runtime::system::marshaling::storage_ordinal;
 using runtime::system::marshaling::write_global;
 
+template <int Dim>
+RelativeCellMeasure<Dim> embedded_cell_measure(
+    const std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>& embedded) {
+  RelativeCellMeasure<Dim> measure;
+  if (!embedded ||
+      embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+    return measure;
+  measure.active_cells = &embedded->active_mask();
+  if (embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+    measure.inverse_volume_fraction = &embedded->volume_fraction();
+  return measure;
+}
+
 template <int Dim, class Implementation>
 const MultiFab<Dim>& embedded_boundary_output_field(const Implementation& implementation,
                                                     std::string_view name) {
@@ -727,18 +740,19 @@ double System<Dim>::reduce_component(const std::string& block_name, const std::s
   if (component < 0 || component >= block.ncomp)
     throw std::out_of_range("System reduction component is outside the block state");
   const MultiFab<Dim>& values = block.U;
+  const RelativeCellMeasure<Dim> measure = embedded_cell_measure<Dim>(p_->embedded_boundary_);
   if (kind == "sum")
-    return static_cast<double>(reduce_sum(values, component));
+    return static_cast<double>(reduce_sum(values, component, measure));
   if (kind == "min")
-    return static_cast<double>(reduce_min(values, component));
+    return static_cast<double>(reduce_min(values, component, measure));
   if (kind == "max")
-    return static_cast<double>(reduce_max(values, component));
+    return static_cast<double>(reduce_max(values, component, measure));
   if (kind == "abs_sum")
-    return static_cast<double>(reduce_abs_sum(values, component));
+    return static_cast<double>(reduce_abs_sum(values, component, measure));
   if (kind == "sum_sq")
-    return static_cast<double>(dot(values, values, component));
+    return static_cast<double>(dot(values, values, component, measure));
   if (kind == "abs_max")
-    return static_cast<double>(reduce_norm_inf(values, component));
+    return static_cast<double>(reduce_norm_inf(values, component, measure));
   if (kind == "sum_all" || kind == "abs_sum_all" || kind == "abs_max_all") {
     double result = 0.0;
     for (int current = 0; current < block.ncomp; ++current) {
@@ -972,7 +986,8 @@ double System<Dim>::block_gamma(const std::string& name) const {
 
 template <int Dim>
 double System<Dim>::mass(const std::string& name) const {
-  return static_cast<double>(reduce_sum(p_->find(name).U, 0));
+  return static_cast<double>(
+      reduce_sum(p_->find(name).U, 0, embedded_cell_measure<Dim>(p_->embedded_boundary_)));
 }
 
 template <int Dim>

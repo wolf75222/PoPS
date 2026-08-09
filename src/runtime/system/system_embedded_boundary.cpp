@@ -3,6 +3,8 @@
 
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
+#include "system_impl.hpp"
+
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -121,21 +123,20 @@ inline void append_real(std::string& payload, Real value) {
 }
 
 template <int Dim>
-std::string canonical_request(const std::vector<std::string>& opcodes,
-                              const std::vector<double>& literals, const Geometry<Dim>& geometry,
-                              const BoundaryTopology<Dim>& topology, const MultiFab<Dim>& prototype,
-                              PreparedEmbeddedBoundaryMode mode, const EbThresholds& thresholds,
-                              std::uint64_t generation, std::string_view lane_identity) {
+std::string canonical_semantic_request(const std::vector<std::string>& opcodes,
+                                       const std::vector<double>& literals,
+                                       const Geometry<Dim>& geometry,
+                                       const BoundaryTopology<Dim>& topology,
+                                       PreparedEmbeddedBoundaryMode mode,
+                                       const EbThresholds& thresholds) {
   const analytic::AnalyticOpcodeRows opcode_rows{opcodes};
   const analytic::AnalyticLiteralRows literal_rows{literals};
   std::string payload = analytic::detail::canonical_analytic_request(
       "prepare_embedded_boundary_geometry", std::span<const analytic::AnalyticTextMetadata>{},
       std::span<const analytic::AnalyticRealMetadata>{}, opcode_rows, literal_rows);
-  analytic::detail::append_analytic_bytes(payload, "pops.prepared-eb-geometry.v1");
+  analytic::detail::append_analytic_bytes(payload, "pops.prepared-eb-semantic.v1");
   analytic::detail::append_analytic_u64(payload, static_cast<std::uint64_t>(Dim));
   analytic::detail::append_analytic_u64(payload, static_cast<std::uint64_t>(mode));
-  analytic::detail::append_analytic_u64(payload, generation);
-  analytic::detail::append_analytic_bytes(payload, lane_identity);
   append_real(payload, thresholds.kappa_min);
   append_real(payload, thresholds.face_open_eps);
   append_real(payload, thresholds.cut_theta_min);
@@ -150,6 +151,17 @@ std::string canonical_request(const std::vector<std::string>& opcodes,
     analytic::detail::append_analytic_u64(payload, static_cast<std::uint64_t>(face.kind));
     append_signed(payload, face.partner.ordinal());
   }
+  return payload;
+}
+
+template <int Dim>
+std::string canonical_request(std::string_view semantic, const MultiFab<Dim>& prototype,
+                              std::uint64_t generation, std::string_view lane_identity) {
+  std::string payload;
+  analytic::detail::append_analytic_bytes(payload, "pops.prepared-eb-materialization.v1");
+  analytic::detail::append_analytic_bytes(payload, semantic);
+  analytic::detail::append_analytic_u64(payload, generation);
+  analytic::detail::append_analytic_bytes(payload, lane_identity);
 
   analytic::detail::append_analytic_size(payload, prototype.layout().size());
   for (const Box<Dim>& box : prototype.layout().boxes())
@@ -177,6 +189,14 @@ std::string digest_request(std::string_view canonical) {
   for (const char value : canonical)
     bytes.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(value)));
   return "pops.prepared-eb-geometry.v1:sha256:" + identity::sha256_hex(bytes);
+}
+
+std::string semantic_digest_request(std::string_view canonical) {
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(canonical.size());
+  for (const char value : canonical)
+    bytes.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(value)));
+  return "pops.prepared-eb-semantic.v1:sha256:" + identity::sha256_hex(bytes);
 }
 
 bool finite(Real value) noexcept {
@@ -408,13 +428,16 @@ prepare_embedded_boundary_geometry_collectively(
     const MultiFab<Dim>& prototype, PreparedEmbeddedBoundaryMode mode,
     const EbThresholds& thresholds, std::uint64_t generation, const ExecutionLane& lane) {
   const CommunicatorView communicator = lane.communicator();
+  std::string semantic_canonical;
   std::string canonical;
   analytic::AnalyticProgram program = analytic::collectively_prepare_exact_analytic_request(
       "prepare_embedded_boundary_geometry",
       [&]() {
         validate_request(geometry, topology, prototype, mode, thresholds, generation, lane);
-        canonical = canonical_request(opcodes, literals, geometry, topology, prototype, mode,
-                                      thresholds, generation, lane.identity());
+        semantic_canonical =
+            canonical_semantic_request(opcodes, literals, geometry, topology, mode, thresholds);
+        canonical =
+            canonical_request(semantic_canonical, prototype, generation, lane.identity());
         std::vector<analytic::AnalyticProgram> programs =
             analytic::compile_component_programs({opcodes}, {literals});
         if (programs.size() != 1)
@@ -425,6 +448,9 @@ prepare_embedded_boundary_geometry_collectively(
       [&]() { return canonical; }, communicator);
   const std::string digest = collective_stage(
       "prepared EB digest", [&]() { return digest_request(canonical); }, communicator);
+  const std::string semantic_digest = collective_stage(
+      "prepared EB semantic digest",
+      [&]() { return semantic_digest_request(semantic_canonical); }, communicator);
 
   StagedFields<Dim> fields = collective_stage(
       "prepared EB field allocation", [&]() { return allocate_fields(prototype); }, communicator);
@@ -501,9 +527,9 @@ prepare_embedded_boundary_geometry_collectively(
       [&]() -> std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<Dim>> {
         return std::shared_ptr<const PreparedEmbeddedBoundaryGeometry<Dim>>(
             new PreparedEmbeddedBoundaryGeometry<Dim>(
-                std::move(program), geometry, topology, mode, thresholds, generation, digest,
-                std::move(fields.phi), std::move(fields.mask), std::move(fields.kappa),
-                std::move(fields.inverse)));
+                std::move(program), geometry, topology, mode, thresholds, generation,
+                semantic_digest, digest, std::move(fields.phi), std::move(fields.mask),
+                std::move(fields.kappa), std::move(fields.inverse)));
       },
       communicator);
 }
@@ -553,3 +579,135 @@ template void replace_prepared_embedded_boundary_geometry_collectively(
     PreparedEmbeddedBoundaryMode, const EbThresholds&, std::uint64_t, const ExecutionLane&);
 
 }  // namespace pops::runtime::system
+
+namespace pops {
+namespace {
+
+template <int Dim>
+struct CutCellSystemCapability {
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode mode) {
+    if (mode == runtime::system::PreparedEmbeddedBoundaryMode::cut_cell)
+      throw std::invalid_argument(
+          "cut-cell transport has no exact native provider for this spatial rank");
+  }
+};
+
+template <>
+struct CutCellSystemCapability<2> {
+  static void require(runtime::system::PreparedEmbeddedBoundaryMode) noexcept {}
+};
+
+template <int Dim>
+struct DiscLevelSetCapability {
+  static std::pair<std::vector<std::string>, std::vector<double>> make(double, double, double) {
+    throw std::invalid_argument("Disc is an exact rank-two authoring capability");
+  }
+};
+
+template <>
+struct DiscLevelSetCapability<2> {
+  static std::pair<std::vector<std::string>, std::vector<double>> make(double cx, double cy,
+                                                                       double radius) {
+    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(radius) || !(radius > 0.0))
+      throw std::invalid_argument("disc center and positive radius must be finite");
+    return {{"x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"},
+            {0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, radius, 0.0}};
+  }
+};
+
+EbThresholds resolved_eb_thresholds(double kappa_min, double face_open_eps,
+                                    double cut_theta_min) {
+  EbThresholds result;
+  if (kappa_min > 0.0)
+    result.kappa_min = static_cast<Real>(kappa_min);
+  if (face_open_eps > 0.0)
+    result.face_open_eps = static_cast<Real>(face_open_eps);
+  if (cut_theta_min > 0.0)
+    result.cut_theta_min = static_cast<Real>(cut_theta_min);
+  return result;
+}
+
+std::uint64_t next_embedded_boundary_generation(std::uint64_t current) {
+  if (current == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("System embedded-boundary generation overflow");
+  return current + 1;
+}
+
+}  // namespace
+
+template <int Dim>
+void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes,
+                                         const std::vector<double>& literals,
+                                         const std::string& mode, double kappa_min,
+                                         double face_open_eps, double cut_theta_min) {
+  require_assembling(p_->lifecycle_, "set_analytic_level_set");
+  const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
+  CutCellSystemCapability<Dim>::require(prepared_mode);
+  const EbThresholds thresholds =
+      resolved_eb_thresholds(kappa_min, face_open_eps, cut_theta_min);
+  const std::uint64_t generation =
+      next_embedded_boundary_generation(p_->embedded_boundary_generation_);
+
+  std::vector<std::string> staged_opcodes(opcodes);
+  std::vector<double> staged_literals(literals);
+  if (!p_->embedded_boundary_lane_)
+    p_->embedded_boundary_lane_.emplace(ExecutionLane::duplicate_world_collectively(
+        "pops.system.embedded-boundary"));
+  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  auto prepared = runtime::system::prepare_embedded_boundary_geometry_collectively(
+      staged_opcodes, staged_literals, p_->geom, topology, p_->aux, prepared_mode, thresholds,
+      generation, *p_->embedded_boundary_lane_);
+
+  p_->embedded_boundary_ = std::move(prepared);
+  p_->embedded_boundary_opcodes_ = std::move(staged_opcodes);
+  p_->embedded_boundary_literals_ = std::move(staged_literals);
+  p_->embedded_boundary_thresholds_ = thresholds;
+  p_->embedded_boundary_generation_ = generation;
+}
+
+template <int Dim>
+void System<Dim>::set_disc_domain(double cx, double cy, double radius, const std::string& mode,
+                                  double kappa_min, double face_open_eps,
+                                  double cut_theta_min) {
+  auto [opcodes, literals] = DiscLevelSetCapability<Dim>::make(cx, cy, radius);
+  set_analytic_level_set(opcodes, literals, mode, kappa_min, face_open_eps, cut_theta_min);
+}
+
+template <int Dim>
+void System<Dim>::set_geometry_mode(const std::string& mode) {
+  require_assembling(p_->lifecycle_, "set_geometry_mode");
+  const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
+  CutCellSystemCapability<Dim>::require(prepared_mode);
+  if (!p_->embedded_boundary_) {
+    if (prepared_mode == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+      return;
+    throw std::runtime_error("System geometry mode requires a prepared analytic level set");
+  }
+  const std::uint64_t generation =
+      next_embedded_boundary_generation(p_->embedded_boundary_generation_);
+  const BoundaryTopology<Dim> topology = BoundaryTopology<Dim>::axis_periodic(p_->periodicity);
+  auto prepared = runtime::system::prepare_embedded_boundary_geometry_collectively(
+      p_->embedded_boundary_opcodes_, p_->embedded_boundary_literals_, p_->geom, topology, p_->aux,
+      prepared_mode, p_->embedded_boundary_thresholds_, generation, *p_->embedded_boundary_lane_);
+  p_->embedded_boundary_ = std::move(prepared);
+  p_->embedded_boundary_generation_ = generation;
+}
+
+template <int Dim>
+std::vector<double> System<Dim>::disc_mask() const {
+  if (p_->embedded_boundary_)
+    return p_->blocks_.copy_comp0(p_->embedded_boundary_->active_mask());
+  MultiFab<Dim> active(p_->ba, p_->dm, p_->local_rank, 1, Extent<Dim>{});
+  active.set_val(Real(1));
+  return p_->blocks_.copy_comp0(active);
+}
+
+template void System<kNativeDimension>::set_analytic_level_set(
+    const std::vector<std::string>&, const std::vector<double>&, const std::string&, double, double,
+    double);
+template void System<kNativeDimension>::set_disc_domain(double, double, double, const std::string&,
+                                                        double, double, double);
+template void System<kNativeDimension>::set_geometry_mode(const std::string&);
+template std::vector<double> System<kNativeDimension>::disc_mask() const;
+
+}  // namespace pops

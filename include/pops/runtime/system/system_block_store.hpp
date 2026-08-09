@@ -55,18 +55,7 @@ class SystemBlockStore {
   using PreparedPointStatePreparation =
       std::function<void(const evaluation_point&, field_type&, const boundary_type&)>;
 
-  struct ResidualFamily {
-    PointResidual full;
-    PointResidual flux_only;
-    PointResidual without_prepared_interfaces;
-    PointResidual flux_only_without_prepared_interfaces;
-    PointResidual core;
-    PointResidual flux_only_core;
-    PreparedPointResidual full_prepared;
-    PreparedPointResidual flux_only_full_prepared;
-    PreparedPointResidual core_prepared;
-    PreparedPointResidual flux_only_core_prepared;
-  };
+  using EmbeddedResidualFamily = typename SystemBlockClosures<Dim>::EmbeddedResidualFamily;
 
   using InterfaceProvider = SystemInterfaceProvider<Dim>;
 
@@ -110,8 +99,8 @@ class SystemBlockStore {
     PreparedPointJvp boundary_jvp_at_point_prepared;
     PointStatePreparation prepare_generated_state_at_point;
     PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
-    ResidualFamily staircase_residuals;
-    ResidualFamily cutcell_residuals;
+    EmbeddedResidualFamily staircase_residuals;
+    EmbeddedResidualFamily cutcell_residuals;
 
     /// The one immutable model-qualified transport-boundary authority for this block.
     std::shared_ptr<const boundary_type> boundary;

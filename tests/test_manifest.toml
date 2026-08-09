@@ -1123,6 +1123,12 @@ sources = ["tests/cpp/unit/runtime/test_disc_domain_mask.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_embedded_boundary_nd"
+sources = ["tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp"]
+labels = ["unit", "runtime", "mesh", "mpi", "fast", "nd"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_eb_transport"
 sources = ["tests/cpp/unit/runtime/test_eb_transport.cpp"]
 labels = ["unit", "runtime", "fast"]

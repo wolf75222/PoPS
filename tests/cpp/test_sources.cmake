@@ -98,6 +98,7 @@ set(POPS_CPP_TEST_SOURCE_test_copy_schedule_cache "tests/cpp/unit/mesh/test_copy
 set(POPS_CPP_TEST_SOURCE_test_fill_boundary "tests/cpp/unit/mesh/test_fill_boundary.cpp")
 set(POPS_CPP_TEST_SOURCE_test_fill_boundary_cache "tests/cpp/unit/mesh/test_fill_boundary_cache.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_hyperbolic_boundary "tests/cpp/unit/mesh/test_prepared_hyperbolic_boundary.cpp")
+set(POPS_CPP_TEST_SOURCE_test_prepared_embedded_boundary_nd "tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp")
 set(POPS_CPP_TEST_SOURCE_test_prepared_stream_executor "tests/cpp/unit/runtime/test_prepared_stream_executor.cpp")
 set(POPS_CPP_TEST_SOURCE_test_flux_register "tests/cpp/integration/amr/test_flux_register.cpp")
 set(POPS_CPP_TEST_SOURCE_test_flux_interfaces "tests/cpp/unit/numerics/test_flux_interfaces.cpp")
