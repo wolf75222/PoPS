@@ -73,7 +73,6 @@ api pops/mesh/layout/box_array.hpp
 api pops/mesh/layout/copy_schedule.hpp
 api pops/mesh/layout/distribution.hpp
 api pops/mesh/layout/field_distribution.hpp
-api pops/mesh/layout/patch_box.hpp
 api pops/mesh/layout/rank_space.hpp
 api pops/mesh/layout/refinement.hpp
 api pops/mesh/storage/fab.hpp
@@ -82,6 +81,8 @@ api pops/mesh/storage/field_view.hpp
 api pops/mesh/storage/mf_arith.hpp
 api pops/mesh/storage/multifab.hpp
 api pops/mesh/topology/boundary_topology.hpp
+sdk-support pops/numerics/elliptic/amr/composite_fac_poisson.hpp
+sdk-support pops/numerics/elliptic/amr/partitioned_region_transfer.hpp
 api pops/numerics/elliptic/eb/cut_fraction.hpp
 api pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
@@ -97,7 +98,6 @@ api pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp
 api pops/numerics/elliptic/interface/field_nullspace_prepare.hpp
 api pops/numerics/elliptic/interface/field_nullspace_builtins.hpp
 api pops/numerics/elliptic/interface/field_provider.hpp
-api pops/numerics/elliptic/interface/spatial_provider.hpp
 api pops/numerics/elliptic/linear/generic_krylov.hpp
 api pops/numerics/elliptic/linear/krylov_method_provider.hpp
 api pops/numerics/elliptic/linear/krylov_workspace.hpp
@@ -222,7 +222,6 @@ api pops/runtime/config/spatial_domain.hpp
 api pops/runtime/multiblock/evaluation_point.hpp
 sdk-support pops/runtime/context/aux_layout.hpp
 sdk-support pops/runtime/context/field_context.hpp
-sdk-support pops/runtime/context/wall_predicate.hpp
 abi pops/runtime/dynamic/abi_key.hpp
 sdk-support pops/runtime/dynamic/component_consumers.hpp
 sdk-support pops/runtime/dynamic/component_loader.hpp
@@ -274,5 +273,3 @@ sdk-support pops/runtime/system/system_diagnostics_registry.hpp
 sdk-support pops/runtime/system/system_domain.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
-test-only pops/validation/numerics/geometric_mg.hpp
-test-only pops/validation/physics/advection_diffusion.hpp
