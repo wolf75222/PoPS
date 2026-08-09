@@ -463,10 +463,9 @@ def _compare_str(lines: Any, field: Any, manifest_value: Any, runtime_value: Any
 def operator_required_aux(manifest: Any) -> Any:
     """The aux fields a lowered OPERATOR requires, unioned from the module manifest (gate a / G1).
 
-    An aux a lowered operator reads must be supplied even when the model's ``aux_extra_names`` omits
-    it. The manifest's ``aux_required`` already unions the model-declared aux; a richer manifest that
-    records per-operator aux requirements (``operators`` -> ``aux``) widens the set. Returns a sorted
-    list of aux names the artifact requires at bind (a superset feeding the missing-argument check).
+    The manifest must carry exact ProviderPack input identities. This helper
+    only aggregates metadata; native installation verifies ComponentKey,
+    contract and producer kind.
     """
     required = set(getattr(manifest, "aux_required", None) or [])
     operators = getattr(manifest, "operators", None) or []
@@ -478,19 +477,19 @@ def operator_required_aux(manifest: Any) -> Any:
     return sorted(required)
 
 
-def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ()) -> Any:
+def validate_operator_aux(manifest: Any, aux: Any, provided_field_outputs: Any = ()) -> Any:
     """Refuse an aux a lowered operator requires but the bind omits (ADC-537 gate a / G1).
 
-    Unions the operator-required aux (:func:`operator_required_aux`) and refuses each name neither
-    supplied via ``pops.bind(aux=...)`` nor already declared on the sim. Returns one line per missing
-    required aux (empty list = ok)."""
+    Unions the operator-required routes and refuses each identity neither
+    supplied via ``pops.bind(aux={ComponentKey(...): ...})`` nor produced by a
+    resolved field plan. Returns one line per missing required route."""
     lines = []
-    supplied = set(aux or {}) | set(provided_named_aux or ())
+    supplied = set(aux or {}) | set(provided_field_outputs or ())
     for name in operator_required_aux(manifest):
         if name not in supplied:
             lines.append(
-                "aux field %r is required by a lowered operator but was not supplied; pass "
-                "pops.bind(aux={%r: <array>})" % (name, name)
+                "auxiliary route %r is required by a lowered operator but was not supplied; pass "
+                "pops.bind(aux={ComponentKey(...): <array>})" % name
             )
     return lines
 
@@ -610,7 +609,7 @@ def collect_missing_arguments(
     the SAME contract.
 
     Only entries whose ``required`` flag is true are enforced. ``provided_*`` are the supplied sets
-    (block names, parameter identities and aux names); a block already added on the engine counts as
+    (block names, parameter identities and exact auxiliary keys); a block already added on the engine counts as
     provided. Field solver providers are resolved into ``field_plans`` before bind and therefore are
     not arguments. Each line names exactly what is missing and the matching ``pops.bind`` keyword."""
     missing = []
@@ -627,7 +626,7 @@ def collect_missing_arguments(
             )
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
-            missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
+            missing.append("auxiliary input %r; pass pops.bind(aux={ComponentKey(...): <array>})" % name)
     return missing
 
 
@@ -648,16 +647,12 @@ def validate_install_arguments(
     if not callable(block_names):
         raise TypeError("pops.bind: runtime engine must expose callable block_names()")
     provided_blocks |= set(cast(Iterable[Any], block_names()))
-    # Named aux already declared on the sim (B_z has no queryable trace, so it must come via aux=).
-    provided_named_aux = set()
-    for table in getattr(sim, "_aux_field_index", {}).values():
-        provided_named_aux |= set(table)
     provided_param_ids = {getattr(handle, "qualified_id", handle) for handle in params}
     missing = collect_missing_arguments(
         args,
         provided_blocks,
         provided_param_ids,
-        set(aux) | provided_named_aux | set(field_plan_produced_aux(field_plans)),
+        set(aux) | set(field_plan_produced_aux(field_plans)),
     )
     if missing:
         raise ValueError(
@@ -722,7 +717,7 @@ def run_bind_gates(
     groups += [
         (
             "aux-required-by-operator",
-            validate_operator_aux(manifest, aux, provided_named_aux=field_produced_aux(compiled)),
+            validate_operator_aux(manifest, aux, provided_field_outputs=field_produced_aux(compiled)),
         ),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),

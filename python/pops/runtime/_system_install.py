@@ -3,7 +3,9 @@
 Holds the densest part of :class:`pops.runtime._system.System`: ``add_equation``
 (direct native versus compiled production-package installation),
 ``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
-inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
+inheritance; methods operate on ``self._s`` (the compiled facade).  Native packages are staged
+collectively; the uniform installer finalizes their one global auxiliary registry only after every
+block package has registered its routes.
 """
 
 from __future__ import annotations
@@ -92,7 +94,6 @@ class _SystemInstall(_System):
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.abi import check_compiled_matches_module
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import aux_layout
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
@@ -173,14 +174,6 @@ class _SystemInstall(_System):
                 "add_equation: names= has %d names but block '%s' has %d variables"
                 % (len(names), name, compiled.n_vars)
             )
-
-        # NAMED aux fields (ADC-70 phase 1): table name -> block component, from the ORDERED names of
-        # the compiled model (k-th name = component dsl.AUX_NAMED_BASE + k, mirror of the C++ emission).
-        # Consumed by set_aux_field / aux_field; the adders have already widened the aux channel
-        # (pops_compiled_naux -> ensure_aux_width), so the component exists.
-        extra = list(getattr(compiled, "aux_extra_names", []) or [])
-        named_base = aux_layout(compiled.native_dimension).named_base
-        self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
 
         backend = compiled.backend
         # Descriptor-owned model predicates are shared verbatim with AMR and availability.
@@ -279,7 +272,7 @@ class _SystemInstall(_System):
                 weno_epsilon,
             )
         else:
-            self._s._install_native_block(
+            self._s._register_native_package(
                 name,
                 compiled.so_path,
                 spatial.limiter,
@@ -293,6 +286,7 @@ class _SystemInstall(_System):
                 bind_values,
                 positivity_floor,
             )
+            self._pending_native_packages += 1
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

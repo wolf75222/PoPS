@@ -252,11 +252,7 @@ def capabilities() -> Any:
     brick cannot silently desync this matrix from the introspectable one.
     """
     from pops._native_selector import selected_native_module
-    from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
-
-    # ADC-291: read the aux limit from the selected SINGLE C++ source.
-    _pops_mod = selected_native_module(required=True)
-    aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
+    selected_native_module(required=True)
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
@@ -410,36 +406,10 @@ def capabilities() -> Any:
             "phi_gradient": "ordinary prepared field-gradient leaf",
         },
         "aux": {
-            "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "
-            "(set_electron_temperature_from), closed list POPS_AUX_FIELDS / AUX_CANONICAL "
-            "(C++ name table pops/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
-            "named": {
-                # Model-declared NAMED aux fields (ADC-70 phase 1 + ADC-291 phase 2): m.aux_field('name')
-                # reserves component AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k));
-                # set_aux_field(block, name, array) carries the static field. STATIC + persistent.
-                "backends": [
-                    "system_cartesian",
-                    "amr_single_block",
-                    "amr_multi_block",
-                ],
-                # The ONLY remaining compile-time aux limit, declarative + introspectable (= C++
-                # kAuxMaxExtra, mirrored by dsl.AUX_NAMED_MAX ; test_capabilities.py pins the match).
-                "limit": aux_max_extra,
-                # Aux ghost width is fixed at 1 cell (the halo EXCHANGE is already component-generic, so
-                # a named field participates ; a per-field CONFIGURABLE radius is a follow-up).
-                "halo_radius": 1,
-                "persistent": True,
-                # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
-                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces keep
-                # their wrap). Uniform over physical faces; per-face asymmetric BC is a follow-up.
-                # Default (no halo) inherits the shared aux BC, bit-identical.
-                "halo_policy": {
-                    "kinds": ["inherit", "foextrap", "dirichlet"],
-                    "faces": "uniform (non-periodic faces ; periodic faces keep their wrap)",
-                    "backends": ["system_cartesian", "amr_coarse"],
-                },
-            },
-            "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-            "AMR path needs target='amr_system'",
+            "authority": "owner-qualified ProviderPack ComponentKey routes; no reserved names or fixed width",
+            "inputs": "stage_auxiliary_input(ComponentKey(...), values) only for declared InputAux",
+            "derived": "native DerivedAux launchers publish transactionally from their exact dependency DAG",
+            "field_outputs": "FieldOperator/solve producers own their typed routes and storage groups",
+            "boundary": "per-output AuxiliaryBoundary: topology inheritance, first-order extrapolation, or dirichlet",
         },
     }

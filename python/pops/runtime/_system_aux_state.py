@@ -1,8 +1,9 @@
-"""System aux/state mixin (Spec-4 PR-F): named aux fields, disc domain, primitive state.
+"""System auxiliary-data, disc-domain, and primitive-state methods.
 
-Named-aux resolution + set/get, the disc transport-domain controls, and the primitive-variable
-state helpers of :class:`pops.runtime._system.System`. Mixed in via inheritance; methods operate
-on ``self._s`` and ``self._aux_field_index``.
+Auxiliary data crosses the runtime only through a complete
+``ComponentKey``.  Python neither assigns a carrier component nor attaches a
+physical-name special case: the sealed native ProviderPack/registry owns the
+address and accepts only declared ``InputAux`` routes.
 """
 
 from __future__ import annotations
@@ -16,71 +17,47 @@ else:
 
 
 class _SystemAuxState(_System):
-    """Named aux + disc domain + primitive state methods of System."""
+    """Exact auxiliary component + disc domain + primitive state methods."""
 
-    def _resolve_aux_field(self, block: Any, name: Any) -> Any:
-        """Resolve (block, NAMED aux field name) -> canonical component of the aux channel (ADC-70 phase 1).
-        Resolution rule: a CANONICAL name (phi/grad/B_z/T_e) is REJECTED here -- these fields have
-        their dedicated paths (B_z -> set_magnetic_field, T_e -> set_electron_temperature_from, phi/grad
-        derived by solve_fields). Otherwise look it up in the block table (filled at add_equation from
-        the compiled model). Raises ValueError with an actionable message on unknown block/name."""
-        from pops.physics.aux import AUX_CANONICAL_NAMES  # late import (physics <-> __init__ cycle)
+    @staticmethod
+    def _auxiliary_key(value: Any) -> Any:
+        """Normalize public ComponentKey data without a bare-name fallback."""
+        from pops.model.provider_pack import ComponentKey
 
-        if name == "B_z":
-            raise ValueError(
-                "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "
-                "NOT via set_aux_field (B_z is a canonical aux field, not a named field)."
-            )
-        if name == "T_e":
-            raise ValueError(
-                "set_aux_field: 'T_e' (electron temperature) is DERIVED from a fluid block via "
-                "sim.set_electron_temperature_from(block), NOT set via set_aux_field."
-            )
-        if name in AUX_CANONICAL_NAMES:
-            raise ValueError(
-                "set_aux_field: '%s' is a CANONICAL aux field (derived by the solver, not settable); "
-                "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name
-            )
-        table = self._aux_field_index.get(block)
-        if table is None:
-            raise ValueError(
-                "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name)
-            )
-        if name not in table:
-            known = sorted(table) if table else "(none)"
-            raise ValueError(
-                "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"
-                % (name, block, known)
-            )
-        return table[name]
+        if type(value) is ComponentKey:
+            return value
+        if isinstance(value, dict):
+            try:
+                return ComponentKey(**value)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "auxiliary component mapping must carry owner_qid, space_kind, space_name, component"
+                ) from exc
+        raise TypeError("auxiliary input requires an exact pops.model.ComponentKey")
 
-    def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
-        """Set a NAMED aux field (ADC-70 phase 1) of a block: @p name must have been declared by the
-        model via m.aux_field(name) (and the block added via add_equation). @p field: 2D array (ny, nx)
-        or flat (n*n), row-major. The field is STATIC (user-supplied, like B_z) and PERSISTS
-        from one step to the next (solve_fields never rewrites named components). For B_z / T_e,
-        use their dedicated paths (set_magnetic_field / set_electron_temperature_from).
+    def stage_auxiliary_input(self, key: Any, values: Any) -> None:
+        """Stage values for one declared owner-qualified ``InputAux`` component.
 
-        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's own ghost policy
-        (foextrap / dirichlet), applied to the non-periodic faces after the shared aux fill. Default
-        None inherits the shared aux BC (bit-identical)."""
+        The native registry validates that ``key`` is an input producer, owns
+        its group/component storage address, and publishes it transactionally
+        at the next auxiliary refresh.  ``DerivedAux`` and field outputs are
+        intentionally rejected by native code rather than overwritten here.
+        """
         import numpy as np
 
-        comp = self._resolve_aux_field(block, name)
-        arr = np.asarray(field, dtype=float)
-        self._s.set_aux_field_component(comp, arr.reshape(-1))
-        if halo is not None:
-            self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)
+        exact = self._auxiliary_key(key)
+        values_array = np.asarray(values, dtype=float)
+        self._s.stage_auxiliary_input(
+            exact.owner_qid, exact.space_kind, exact.space_name, exact.component,
+            values_array.reshape(-1),
+        )
 
-    def aux_field(self, block: Any, name: Any) -> Any:
-        """Read a NAMED aux field (ADC-70 phase 1) of a block -> 2D array (ny, nx). Equals 0 everywhere as
-        long as no set_aux_field has written it (aux channel initialized to zero, never rewritten by
-        solve_fields beyond the derived components). @p name: declared by m.aux_field(name)."""
-        import numpy as np
-
-        comp = self._resolve_aux_field(block, name)
-        return np.asarray(self._s.aux_field_component(comp), dtype=float)
+    def auxiliary_component(self, key: Any) -> Any:
+        """Read a declared owner-qualified auxiliary component after publication."""
+        exact = self._auxiliary_key(key)
+        return self._s.auxiliary_component(
+            exact.owner_qid, exact.space_kind, exact.space_name, exact.component,
+        )
 
     def set_disc_domain(self, domain: Any) -> Any:
         """Materialise a typed disc transport domain.

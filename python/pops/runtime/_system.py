@@ -115,12 +115,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # (lazy) here. Runtime thread environment must therefore be fixed before this allocation.
         _threading._first_system_built = True
         self._s = _System(config)
-        # Table of NAMED aux fields per block (ADC-70 phase 1): block -> {name: canonical component}.
-        # Filled by add_equation from CompiledModel.aux_extra_names (the component of the k-th name =
-        # dsl.AUX_NAMED_BASE + k). The FACADE holds the names: the C++ only manipulates component
-        # indices (set_aux_field_component / aux_field_component). Empty for a block without a
-        # named aux field. cf. set_aux_field / aux_field.
-        self._aux_field_index = {}
+        # Auxiliary storage is owned by the sealed global ProviderPack.  Python
+        # carries no block/name-to-component table: callers use ComponentKey and
+        # native code resolves its exact `{group, component}` address.
+        self._pending_native_packages = 0
         self._step_strategy = None
         self._step_transaction_plan = None
         self._step_controller = None
