@@ -173,8 +173,8 @@ class Spatial:
       every exact reconstructed face-trace pair, then reuses that interval from both adjacent residual
       cells. Net gain when wave_speeds is expensive (moment hierarchy). It is BIT-IDENTICAL to the
       direct HLL path for FirstOrder(), MUSCL and WENO reconstruction. False (default) = direct path
-      unchanged. Wired on the FULL cartesian advance only: refused if flux != HLL(), IMEX time, polar
-      geometry, or a staircase/cutcell disc transport mode is active (set_disc_domain / set_geometry_mode).
+      unchanged. Wired on the full Cartesian advance only: refused if flux != HLL(), IMEX time,
+      polar geometry, or a prepared staircase/cut-cell embedded boundary is active.
     """
 
     def __setattr__(self, name: str, value: Any) -> None:

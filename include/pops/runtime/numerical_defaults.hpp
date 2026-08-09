@@ -71,7 +71,7 @@ inline constexpr bool kFFTDirectDftFallback = true;
 inline constexpr Real kEbCutFractionFloor = Real(1e-3);
 inline constexpr Real kWenoEpsilon = Real(1e-40);
 // EB face-open / small-cell thresholds (ADC-615/643). SINGLE SOURCE: the numerics EB operator
-// (numerics/spatial/embedded_boundary/operator.hpp) consumes these via cut_fraction.hpp, exactly
+// (numerics/spatial/embedded_boundary/operator.hpp) consumes these through ranked cut geometry,
 // like kEbCutFractionFloor above, so the report, the typed pops.numerics.CutCell descriptor and the
 // FV kernels share one default.
 inline constexpr Real kEbFaceOpenEps = Real(1e-6);

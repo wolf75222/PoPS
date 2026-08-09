@@ -16,7 +16,7 @@ namespace pops {
 
 struct PreparedBoundaryRegion {
   PopsBoundaryRegionKindV1 kind = POPS_BOUNDARY_FACE_V1;
-  int dimension = 2;
+  int dimension = 0;
   int codimension = 1;
   std::vector<std::int32_t> axes;
   std::vector<std::int32_t> sides;

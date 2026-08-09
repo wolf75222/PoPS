@@ -9,6 +9,7 @@
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
@@ -64,26 +65,6 @@ void copy_field_outputs_to_provider_candidate(
                                          static_cast<int>(address.component));
   }
   Kokkos::fence();
-}
-
-template <int Dim>
-void require_finite_provider_groups(const runtime::system::AuxiliaryStorageGroups<Dim>& groups) {
-  long nonfinite = 0;
-  for (const auto& [_, carrier] : groups.groups)
-    for (std::size_t local = 0; local < carrier.local_size(); ++local) {
-      const Fab<Dim>& fab = carrier.fab(local);
-      auto host = fab.create_host_mirror();
-      fab.copy_to_host(host);
-      runtime::system::marshaling::for_each_host_index(
-          fab.box(), [&](const Index<Dim>& index, std::size_t) {
-            for (int component = 0; component < carrier.ncomp(); ++component)
-              if (!std::isfinite(static_cast<double>(
-                      host(runtime::system::marshaling::storage_ordinal(fab, index, component)))))
-                ++nonfinite;
-          });
-    }
-  if (all_reduce_sum(nonfinite) != 0)
-    throw std::runtime_error("System field-output publication contains non-finite provider values");
 }
 
 template <int Dim, class Implementation>
@@ -725,42 +706,108 @@ void System<Dim>::begin_field_publication_transaction() {
 
 template <int Dim>
 void System<Dim>::stage_field_publication_candidate() {
-  if (!p_->active_field_)
-    throw std::logic_error("System field solve did not stage an exact provider candidate");
-  p_->active_field_->validate_candidate();
-  const auto& output_keys = p_->active_field_->output_keys();
+  std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
+  std::string output_contract;
+  std::exception_ptr preflight_error;
+  try {
+    if (!p_->active_field_)
+      throw std::logic_error("System field solve did not stage an exact provider candidate");
+    p_->active_field_->validate_candidate();
+    output_keys = p_->active_field_->output_keys();
+    if (!output_keys.empty() && (!p_->auxiliary_registry_.sealed() || !p_->provider_carrier_))
+      throw std::logic_error("System named field output requires a sealed provider carrier");
+    if (p_->active_field_provider_candidate_ || p_->active_field_auxiliary_publication_)
+      throw std::logic_error("System field provider publication candidate is already active");
+    ExactContractBuilder exact;
+    exact.text("pops.system-field-output-publication")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(p_->active_field_->identity())
+        .sequence(output_keys,
+                  [](ExactContractBuilder& item, const auto& key) { key.serialize_exact(item); });
+    output_contract = std::move(exact).release();
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      preflight_error, nullptr,
+      "System field-output preflight failed collectively before transport preparation");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.system-field-output-publication"), output_contract}}))
+    throw std::invalid_argument(
+        "System field-output publication contract differs between communicator ranks");
   if (output_keys.empty())
     return;
-  if (!p_->auxiliary_registry_.sealed() || !p_->provider_carrier_)
-    throw std::logic_error("System named field output requires a sealed provider carrier");
-  if (p_->active_field_provider_candidate_ || p_->active_field_auxiliary_publication_)
-    throw std::logic_error("System field provider publication candidate is already active");
 
   std::vector<std::string> provider_identities;
-  provider_identities.reserve(output_keys.size());
-  for (const auto& key : output_keys) {
-    const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
-    if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
-      throw std::logic_error("System field output lost its field-output provider authority");
-    if (std::find(provider_identities.begin(), provider_identities.end(), provider.identity()) ==
-        provider_identities.end())
-      provider_identities.push_back(provider.identity());
-  }
-
-  p_->active_field_provider_candidate_ = *p_->provider_carrier_;
   try {
-    copy_field_outputs_to_provider_candidate(p_->active_field_->candidate_outputs(), output_keys,
-                                             p_->auxiliary_registry_,
-                                             *p_->active_field_provider_candidate_);
-    p_->active_field_auxiliary_publication_.emplace(
-        p_->auxiliary_registry_.begin_external_publication(field_output_evaluation_point<Dim>(*p_),
-                                                           provider_identities));
-    for (const std::string& identity : provider_identities)
-      p_->active_field_auxiliary_publication_->stage_external(identity);
+    std::exception_ptr materialization_error;
+    try {
+      provider_identities.reserve(output_keys.size());
+      for (const auto& key : output_keys) {
+        const auto& provider = p_->auxiliary_registry_.provider_for_key(key);
+        if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
+          throw std::logic_error("System field output lost its field-output provider authority");
+        if (std::find(provider_identities.begin(), provider_identities.end(),
+                      provider.identity()) == provider_identities.end())
+          provider_identities.push_back(provider.identity());
+      }
+      p_->active_field_provider_candidate_ = *p_->provider_carrier_;
+      copy_field_outputs_to_provider_candidate(p_->active_field_->candidate_outputs(), output_keys,
+                                               p_->auxiliary_registry_,
+                                               *p_->active_field_provider_candidate_);
+    } catch (...) {
+      materialization_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        materialization_error, nullptr,
+        "System field-output materialization failed collectively before transport preparation");
+
+    const auto evaluation_point = field_output_evaluation_point<Dim>(*p_);
+    std::exception_ptr publication_error;
+    try {
+      p_->active_field_auxiliary_publication_.emplace(
+          p_->auxiliary_registry_.begin_external_publication(evaluation_point,
+                                                             provider_identities));
+      for (const std::string& identity : provider_identities)
+        p_->active_field_auxiliary_publication_->stage_external(identity);
+    } catch (...) {
+      publication_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        publication_error, nullptr,
+        "System field-output publication staging failed collectively before transport preparation");
+    if (!p_->auxiliary_ghost_lane_)
+      p_->auxiliary_ghost_lane_.emplace(
+          ExecutionLane::duplicate_world_collectively("pops.system.auxiliary-ghosts"));
+    if (!p_->auxiliary_ghost_transport_)
+      p_->auxiliary_ghost_transport_.emplace(runtime::system::prepare_auxiliary_ghost_transport(
+          *p_->provider_carrier_, p_->auxiliary_registry_, p_->dom, p_->geom,
+          BoundaryTopology<Dim>::axis_periodic(p_->periodicity), &*p_->auxiliary_ghost_lane_));
+    const auto refresh_candidate_ghosts = [&] {
+      p_->auxiliary_ghost_transport_->execute(*p_->active_field_provider_candidate_);
+    };
+    refresh_candidate_ghosts();
     p_->active_field_auxiliary_publication_->launch_ready_native(
-        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_});
-    Kokkos::fence();
-    require_finite_provider_groups(*p_->active_field_provider_candidate_);
+        {&*p_->provider_carrier_, &*p_->active_field_provider_candidate_},
+        [&](const auto&, std::exception_ptr local_error) {
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              local_error, &*p_->auxiliary_ghost_lane_,
+              "System field-output auxiliary launch failed collectively before ghost fill");
+          refresh_candidate_ghosts();
+        });
+    std::exception_ptr fence_error;
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      fence_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        fence_error, &*p_->auxiliary_ghost_lane_,
+        "System field-output device fence failed collectively");
+    runtime::system::require_finite_auxiliary_groups(*p_->active_field_provider_candidate_,
+                                                     &*p_->auxiliary_ghost_lane_,
+                                                     "System field-output publication");
     p_->active_field_auxiliary_publication_->validate_complete();
     p_->active_field_stale_auxiliary_providers_ =
         p_->auxiliary_registry_.dependent_provider_identities(provider_identities);

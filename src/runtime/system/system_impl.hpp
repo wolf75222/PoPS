@@ -10,6 +10,7 @@
 #include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_named_field.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
@@ -68,6 +69,10 @@ struct System<Dim>::Impl {
   std::map<std::string, std::vector<double>> staged_auxiliary_inputs_;
   std::vector<std::string> dirty_auxiliary_providers_;
   bool auxiliary_registry_consensus_verified_ = false;
+  // The auxiliary carrier owns its own transport authority.  It cannot borrow an unrelated
+  // solver lane because a provider refresh may occur before any block is prepared.
+  std::optional<ExecutionLane> auxiliary_ghost_lane_;
+  std::optional<runtime::system::PreparedAuxiliaryGhostTransport<Dim>> auxiliary_ghost_transport_;
 
   /// One validated but not yet materialized native package.  It owns the local DSO handle through
   /// ``lifetime`` and therefore must outlive blocks (this member intentionally precedes blocks_).
@@ -241,6 +246,10 @@ struct System<Dim>::Impl {
     void restore(Impl& owner) const {
       owner.auxiliary_registry_ = auxiliary_registry;
       owner.provider_carrier_ = provider_carrier;
+      // The carrier/registry image above can have a different allocation or resolved component
+      // contract after a failed finalizer.  A prepared transport is therefore never rollback
+      // state: rebuild it from the restored authoritative carrier on the next refresh.
+      owner.auxiliary_ghost_transport_.reset();
       owner.active_field_provider_candidate_.reset();
       owner.active_field_auxiliary_publication_.reset();
       owner.active_field_stale_auxiliary_providers_.clear();

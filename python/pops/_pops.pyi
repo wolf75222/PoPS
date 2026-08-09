@@ -293,16 +293,6 @@ class AmrSystem:
         face_open_eps: float = 0.0,
         cut_theta_min: float = 0.0,
     ) -> None: ...
-    def set_disc_domain(
-        self,
-        cx: float,
-        cy: float,
-        R: float,
-        mode: str = "none",
-        kappa_min: float = 0.0,
-        face_open_eps: float = 0.0,
-        cut_theta_min: float = 0.0,
-    ) -> None: ...
     def set_geometry_mode(self, mode: str) -> None: ...
     def _consume_step_projections(self) -> list[str]: ...
     def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...

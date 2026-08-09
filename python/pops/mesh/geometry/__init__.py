@@ -423,58 +423,6 @@ def complement(geometry: Any) -> GeometryComposition:
     return GeometryComposition("complement", (_geometry(geometry, where="complement"),))
 
 
-class DiscDomain(_GeometryPreviewSurface, MeshDescriptor):
-    """A typed DISC TRANSPORT domain (Spec 5 sec.8.16): center + radius + transport mode.
-
-    ``mode`` must implement :class:`pops.mesh.masks.TransportMask`; strings are rejected at
-    construction. Inert: the runtime materialises the mask only after validation.
-    """
-
-    category = "disc_domain"
-
-    def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5, mode: Any = None) -> None:
-        self.center = _geometry_coordinates(center, where="DiscDomain(center=)")
-        if len(self.center) != 2:
-            raise ValueError(
-                "DiscDomain: center must contain exactly two coordinates (got %d)"
-                % len(self.center))
-        self.radius = _geometry_scalar(radius, where="DiscDomain(radius=)")
-        if self.radius <= 0.0:
-            raise ValueError("DiscDomain: radius must be > 0 (got %r)" % (self.radius,))
-        # Default mode = the inert NoMask (full Cartesian transport; only the mask is materialised).
-        if mode is None:
-            from ..masks import NoMask  # local: avoid importing the class set into this namespace
-            mode = NoMask()
-        lower_transport_mask(mode)
-        self.mode = mode
-
-    def options(self) -> dict:
-        return {"center": self.center, "radius": self.radius, "mode": self.mode.name}
-
-    def level_set(self, frame: Any) -> LevelSet:
-        return Disc(center=self.center, radius=self.radius).level_set(frame)
-
-    def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        margin = 1.25 * self.radius
-        return ((self.center[0] - margin, self.center[1] - margin),
-                (self.center[0] + margin, self.center[1] + margin))
-
-    def capabilities(self) -> Any:
-        return CapabilitySet({"transport_domain": "disc"})
-
-    def requirements(self) -> Any:
-        return self.mode.requirements()
-
-    def available(self, context: Any = None) -> Any:
-        """Defer to the chosen transport mode's explainable availability."""
-        return self.mode.available(context)
-
-    def lower(self, context: Any = None) -> Any:
-        """Lower to the native ``(cx, cy, R, mode_token)`` set_disc_domain arguments."""
-        cx, cy = self.center
-        return (cx, cy, self.radius, lower_transport_mask(self.mode))
-
-
 class EmbeddedBoundary(_GeometryPreviewSurface, MeshDescriptor):
     """An embedded boundary = geometry + transport metrics + an explicit boundary flux.
 
@@ -543,6 +491,5 @@ class EmbeddedBoundary(_GeometryPreviewSurface, MeshDescriptor):
 
 __all__ = [
     "Geometry", "GeometryComposition", "Disc", "NoWall", "HalfPlane", "LevelSet",
-    "DiscDomain",
     "EmbeddedBoundary", "complement", "difference", "intersection", "union",
 ]

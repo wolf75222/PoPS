@@ -82,7 +82,6 @@ api pops/mesh/storage/multifab.hpp
 api pops/mesh/topology/boundary_topology.hpp
 sdk-support pops/numerics/elliptic/amr/composite_fac_poisson.hpp
 sdk-support pops/numerics/elliptic/amr/partitioned_region_transfer.hpp
-api pops/numerics/elliptic/eb/cut_fraction.hpp
 api pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
@@ -129,7 +128,7 @@ api pops/numerics/nonlinear/local_nonlinear_collective.hpp
 api pops/numerics/nonlinear/newton_options.hpp
 api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/nonlinear/prepared_variable_recovery.hpp
-sdk-support pops/numerics/spatial/embedded_boundary/domain.hpp
+sdk-support pops/numerics/spatial/embedded_boundary/cut_geometry.hpp
 sdk-support pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp

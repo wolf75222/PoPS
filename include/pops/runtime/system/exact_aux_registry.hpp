@@ -61,6 +61,14 @@ class ExactAuxiliaryRegistry final {
     }
     [[nodiscard]] const AuxiliaryEvaluationPoint& point() const noexcept { return point_; }
 
+    /// Whether this exact transaction requires @p provider_identity to publish a candidate.
+    /// Runtimes use this authority for external InputAux/field routes so an explicitly dirtied
+    /// ``once`` provider is not accidentally skipped by re-evaluating freshness policy alone.
+    [[nodiscard]] bool requires_staging(std::string_view provider_identity) const {
+      ensure_active_();
+      return due_[registry_->provider_index_(provider_identity)];
+    }
+
     /// Stage one externally prepared input/field route.  Derived routes cannot bypass their typed
     /// native launcher, and routes not due at this exact point cannot be smuggled into a candidate.
     void stage_external(std::string_view provider_identity) {
@@ -80,6 +88,24 @@ class ExactAuxiliaryRegistry final {
     /// complete transaction.  The registry preserves an empty binding for contract-only tests;
     /// production runtime integration validates the binding before entering this method.
     void launch_ready_native(AuxiliaryCarrierStorage<Dim> storage = {}) {
+      launch_ready_native_(storage, [](const provider_type&, std::exception_ptr error) {
+        if (error)
+          std::rethrow_exception(error);
+      });
+    }
+
+    /// Variant for runtime-owned carrier transports. The completion hook runs on every rank after
+    /// each native launch attempt, carrying any rank-local exception, and before a dependent
+    /// provider can launch. The storage owner must collectively reject a local error before it
+    /// enters a halo exchange; this keeps a throwing rank from stranding its peers in MPI.
+    template <class Completion>
+    void launch_ready_native(AuxiliaryCarrierStorage<Dim> storage, Completion&& completion) {
+      launch_ready_native_(storage, std::forward<Completion>(completion));
+    }
+
+   private:
+    template <class Completion>
+    void launch_ready_native_(AuxiliaryCarrierStorage<Dim> storage, Completion&& completion) {
       ensure_active_();
       bool progressed = true;
       while (progressed) {
@@ -88,14 +114,23 @@ class ExactAuxiliaryRegistry final {
           if (!due_[index] || staged_[index] || !registry_->providers_[index].has_launcher() ||
               !dependencies_ready_(index))
             continue;
-          registry_->providers_[index].launch(
-              registry_->launch_context_(index, point_, candidate_generation_, storage));
+          std::exception_ptr local_error;
+          try {
+            registry_->providers_[index].launch(
+                registry_->launch_context_(index, point_, candidate_generation_, storage));
+          } catch (...) {
+            local_error = std::current_exception();
+          }
+          completion(registry_->providers_[index], local_error);
+          if (local_error)
+            std::rethrow_exception(local_error);
           staged_[index] = true;
           progressed = true;
         }
       }
     }
 
+   public:
     /// Atomically make the complete candidate generation visible in registry metadata.  The
     /// integrating owner must pair this with its own storage publication after this preflight; an
     /// incomplete graph, a stale point, or any earlier exception leaves accepted state unchanged.
@@ -358,7 +393,8 @@ class ExactAuxiliaryRegistry final {
   /// Immutable accepted publication provenance in canonical provider order.  Checkpoint owners
   /// persist these exact integer points together with @ref accepted_generation rather than trying
   /// to infer freshness from physical time or a carrier component number.
-  [[nodiscard]] const std::vector<std::optional<AuxiliaryEvaluationPoint>>& accepted_points() const {
+  [[nodiscard]] const std::vector<std::optional<AuxiliaryEvaluationPoint>>& accepted_points()
+      const {
     require_sealed_();
     return accepted_points_;
   }

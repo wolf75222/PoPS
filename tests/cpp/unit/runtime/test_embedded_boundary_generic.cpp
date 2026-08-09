@@ -1,5 +1,5 @@
 /// @file
-/// @brief Exact-ranked staircase transport and explicit two-dimensional cut-cell capability.
+/// @brief Exact-ranked staircase and cut-cell transport capability.
 
 #include <gtest/gtest.h>
 
@@ -10,8 +10,6 @@
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/eb/cut_fraction.hpp>
-#include <pops/numerics/spatial/embedded_boundary/domain.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
@@ -19,6 +17,7 @@
 #include <Kokkos_MathematicalFunctions.hpp>
 
 #include <cstddef>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -222,7 +221,10 @@ struct MaterializeCutMask {
 
   POPS_HD void operator()(const pops::Index<Dim>& cell) const {
     const auto point = metric.cell_center(cell);
-    active(cell) = point[0] < pops::Real(0.57) ? pops::Real(1) : pops::Real(0);
+    bool inside = true;
+    for (int axis = 0; axis < Dim; ++axis)
+      inside = inside && point[axis] > pops::Real(0.18) && point[axis] < pops::Real(0.82);
+    active(cell) = inside ? pops::Real(1) : pops::Real(0);
   }
 };
 
@@ -230,14 +232,20 @@ template <int Dim>
 struct MaterializeInverseVolume {
   pops::FieldView<pops::Real, Dim> inverse_volume{};
   CartesianMetric<Dim> metric;
+  int cut_axis = 0;
 
   POPS_HD void operator()(const pops::Index<Dim>& cell) const {
     const auto point = metric.cell_center(cell);
-    if (!(point[0] < pops::Real(0.57))) {
+    bool inside = true;
+    for (int axis = 0; axis < Dim; ++axis)
+      inside = inside && point[axis] > pops::Real(0.18) && point[axis] < pops::Real(0.82);
+    if (!inside) {
       inverse_volume(cell) = pops::Real(0);
       return;
     }
-    inverse_volume(cell) = point[0] > pops::Real(0.48) ? pops::Real(2) : pops::Real(1);
+    inverse_volume(cell) = point[cut_axis] < pops::Real(0.27) || point[cut_axis] > pops::Real(0.73)
+                               ? pops::Real(2)
+                               : pops::Real(1);
   }
 };
 
@@ -250,6 +258,41 @@ struct CountCutCells {
   }
 };
 
+template <int Dim>
+struct SumVolumeWeightedResidual {
+  pops::FieldView<const pops::Real, Dim> residual{};
+  pops::FieldView<const pops::Real, Dim> active{};
+  pops::FieldView<const pops::Real, Dim> inverse_volume{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    if (active(cell) < pops::Real(0.5))
+      return pops::Real(0);
+    return residual(cell) / inverse_volume(cell);
+  }
+};
+
+template <int Dim>
+struct SetOneNonFiniteCell {
+  pops::FieldView<pops::Real, Dim> state{};
+  pops::Index<Dim> target{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    if (cell == target)
+      state(cell) = std::numeric_limits<pops::Real>::quiet_NaN();
+  }
+};
+
+template <int Dim>
+struct MaximumSentinelDifference {
+  pops::FieldView<const pops::Real, Dim> values{};
+  pops::Real sentinel = pops::Real(0);
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real difference = values(cell) - sentinel;
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
 TEST(EmbeddedBoundaryGeneric, StaircaseKernelUsesOneExactAlgorithmInOneTwoAndThreeDimensions) {
   prove_staircase_operator<1>();
   prove_staircase_operator<2>();
@@ -259,18 +302,9 @@ TEST(EmbeddedBoundaryGeneric, StaircaseKernelUsesOneExactAlgorithmInOneTwoAndThr
 template <int Dim>
 void prove_cut_cell_operator() {
   ExactFixture<Dim> fixture(32);
-  auto active = fixture.make_field(1, 1);
-  auto inverse_volume = fixture.make_field(1, 0);
-  auto residual = fixture.make_field(1, 0);
-
   pops::for_each_cell(
       fixture.state.fab(0).grown_box(),
       FillSmoothState<Dim, CartesianMetric<Dim>>{fixture.state.fab(0).view(), fixture.metric});
-  pops::for_each_cell(active.fab(0).grown_box(),
-                      MaterializeCutMask<Dim>{active.fab(0).view(), fixture.metric});
-  pops::for_each_cell(fixture.domain,
-                      MaterializeInverseVolume<Dim>{inverse_volume.fab(0).view(), fixture.metric});
-
   const auto model = pops::nd::ScalarAdvection<Dim>::prepare(velocity<Dim>());
   const auto embedded = pops::nd::prepare_embedded_boundary_operator(model, fixture.metric);
   static_assert(decltype(embedded)::dimension == Dim);
@@ -278,22 +312,35 @@ void prove_cut_cell_operator() {
   static_assert(capabilities.centre_sampled_activity);
   static_assert(capabilities.binary_face_aperture);
   static_assert(capabilities.prepared_inverse_volume);
-  embedded.assemble_residual(fixture.state, active, inverse_volume, residual);
 
-  const auto active_view = std::as_const(active.fab(0)).view();
-  const auto inverse_view = std::as_const(inverse_volume.fab(0)).view();
-  const auto residual_view = std::as_const(residual.fab(0)).view();
-  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountActive<Dim>{active_view}),
-            pops::Real(0));
-  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountInactive<Dim>{active_view}),
-            pops::Real(0));
-  EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountCutCells<Dim>{inverse_view}),
-            pops::Real(0));
-  EXPECT_EQ(pops::for_each_cell_reduce_sum(fixture.domain, CountNonFinite<Dim>{residual_view}),
-            pops::Real(0));
-  EXPECT_EQ(pops::for_each_cell_reduce_max(fixture.domain,
-                                           MaximumInactiveResidual<Dim>{residual_view, active_view}),
-            pops::Real(0));
+  for (int cut_axis = 0; cut_axis < Dim; ++cut_axis) {
+    auto active = fixture.make_field(1, 1);
+    auto inverse_volume = fixture.make_field(1, 0);
+    auto residual = fixture.make_field(1, 0);
+    pops::for_each_cell(active.fab(0).grown_box(),
+                        MaterializeCutMask<Dim>{active.fab(0).view(), fixture.metric});
+    pops::for_each_cell(fixture.domain, MaterializeInverseVolume<Dim>{inverse_volume.fab(0).view(),
+                                                                      fixture.metric, cut_axis});
+    embedded.assemble_residual(fixture.state, active, inverse_volume, residual);
+
+    const auto active_view = std::as_const(active.fab(0)).view();
+    const auto inverse_view = std::as_const(inverse_volume.fab(0)).view();
+    const auto residual_view = std::as_const(residual.fab(0)).view();
+    EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountActive<Dim>{active_view}),
+              pops::Real(0));
+    EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountInactive<Dim>{active_view}),
+              pops::Real(0));
+    EXPECT_GT(pops::for_each_cell_reduce_sum(fixture.domain, CountCutCells<Dim>{inverse_view}),
+              pops::Real(0));
+    EXPECT_EQ(pops::for_each_cell_reduce_sum(fixture.domain, CountNonFinite<Dim>{residual_view}),
+              pops::Real(0));
+    EXPECT_EQ(pops::for_each_cell_reduce_max(
+                  fixture.domain, MaximumInactiveResidual<Dim>{residual_view, active_view}),
+              pops::Real(0));
+    const pops::Real balance = pops::for_each_cell_reduce_sum(
+        fixture.domain, SumVolumeWeightedResidual<Dim>{residual_view, active_view, inverse_view});
+    EXPECT_NEAR(balance, pops::Real(0), pops::Real(2e-10));
+  }
 
   auto all_active = fixture.make_field(1, 1);
   auto full_volume = fixture.make_field(1, 0);
@@ -306,7 +353,28 @@ void prove_cut_cell_operator() {
       .assemble_residual(fixture.state, cartesian);
   EXPECT_EQ(pops::for_each_cell_reduce_max(
                 fixture.domain, MaximumDifference<Dim>{std::as_const(embedded_no_cut.fab(0)).view(),
-                                                     std::as_const(cartesian.fab(0)).view()}),
+                                                       std::as_const(cartesian.fab(0)).view()}),
+            pops::Real(0));
+
+  auto active = fixture.make_field(1, 1);
+  auto inverse_volume = fixture.make_field(1, 0);
+  auto refused = fixture.make_field(1, 0);
+  pops::for_each_cell(active.fab(0).grown_box(),
+                      MaterializeCutMask<Dim>{active.fab(0).view(), fixture.metric});
+  pops::for_each_cell(fixture.domain, MaterializeInverseVolume<Dim>{inverse_volume.fab(0).view(),
+                                                                    fixture.metric, 0});
+  constexpr pops::Real sentinel = pops::Real(17);
+  refused.set_val(sentinel);
+  pops::Index<Dim> target{};
+  for (int axis = 0; axis < Dim; ++axis)
+    target[axis] = fixture.domain.length(axis) / 2;
+  pops::for_each_cell(fixture.domain,
+                      SetOneNonFiniteCell<Dim>{fixture.state.fab(0).view(), target});
+  EXPECT_THROW(embedded.assemble_residual(fixture.state, active, inverse_volume, refused),
+               std::runtime_error);
+  EXPECT_EQ(pops::for_each_cell_reduce_max(
+                fixture.domain,
+                MaximumSentinelDifference<Dim>{std::as_const(refused.fab(0)).view(), sentinel}),
             pops::Real(0));
 }
 

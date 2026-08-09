@@ -33,8 +33,10 @@
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system/system_boundary_registry.hpp>
 #include <pops/runtime/system/system_lifecycle.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -107,6 +109,20 @@ mesh::RankSpace<Dim> process_rank_space(const ExecutionLane& lane) {
   Extent<Dim> shape = runtime_config_detail::filled_extent<Dim>(1);
   shape[0] = lane.size();
   return mesh::RankSpace<Dim>(Index<Dim>{}, shape);
+}
+
+runtime::multiblock::BoundaryEvaluationPoint auxiliary_boundary_evaluation_point(
+    const runtime::system::AuxiliaryEvaluationPoint& point) {
+  if (point.accepted_step > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    throw std::overflow_error("AMR auxiliary accepted step exceeds boundary tick range");
+  runtime::multiblock::BoundaryEvaluationPoint result;
+  result.clock = point.clock;
+  result.tick = static_cast<std::int64_t>(point.accepted_step);
+  result.level = point.level;
+  result.substep = point.substep;
+  result.stage = point.stage;
+  result.stage_fraction = {0, 1};
+  return result;
 }
 
 EbThresholds resolved_amr_eb_thresholds(double kappa_min, double face_open_eps,
@@ -915,6 +931,22 @@ void copy_full_field_in_place(const MultiFab<Dim>& source, MultiFab<Dim>& destin
 }
 
 template <int Dim>
+void copy_auxiliary_groups_in_place(const runtime::system::AuxiliaryStorageGroups<Dim>& source,
+                                    runtime::system::AuxiliaryStorageGroups<Dim>& destination) {
+  if (source.groups.size() != destination.groups.size())
+    throw std::invalid_argument("AMR provider candidate has another resolved storage-group set");
+  for (const auto& [identity, source_group] : source.groups) {
+    const MultiFab<Dim>* destination_group = destination.find(identity);
+    if (destination_group == nullptr || !same_field_contract(source_group, *destination_group))
+      throw std::invalid_argument("AMR provider candidate lost one resolved storage group");
+  }
+  for (const auto& [identity, source_group] : source.groups) {
+    MultiFab<Dim>* destination_group = destination.find(identity);
+    copy_full_field_in_place(source_group, *destination_group);
+  }
+}
+
+template <int Dim>
 void restore_exact_field_collectively(std::optional<MultiFab<Dim>>& backup, MultiFab<Dim>& live,
                                       const CommunicatorView& communicator) {
   if (!backup)
@@ -1184,6 +1216,77 @@ PreparedRootAmrGhostFill<Dim> prepare_root_ghost_fill(MultiFab<Dim>& field, cons
 /// One prepared ghost route per resolved storage group.  Group identity is part of the retained
 /// contract, so a regrid cannot accidentally fill a similarly-shaped but differently-owned value.
 template <int Dim>
+void append_provider_groups_structure(ExactContractBuilder& exact,
+                                      const runtime::system::AuxiliaryStorageGroups<Dim>& groups,
+                                      std::string_view role) {
+  exact.text(role).scalar(static_cast<std::uint64_t>(groups.groups.size()));
+  for (const auto& [identity, group] : groups.groups) {
+    if (identity.empty() || group.ncomp() < 1)
+      throw std::invalid_argument(
+          "AMR provider-group ghost preparation requires named, non-empty storage groups");
+    exact.text(identity).scalar(std::int32_t{group.ncomp()});
+    for (int axis = 0; axis < Dim; ++axis)
+      exact.scalar(std::int64_t{group.ghosts()[axis]});
+    exact.sequence(group.layout().boxes(), [](ExactContractBuilder& item, const Box<Dim>& box) {
+      for (int axis = 0; axis < Dim; ++axis)
+        item.scalar(std::int64_t{box.lo[axis]}).scalar(std::int64_t{box.hi[axis]});
+    });
+    const auto& distribution = group.distribution();
+    exact.scalar(distribution.mode());
+    for (int axis = 0; axis < Dim; ++axis)
+      exact.scalar(std::int64_t{distribution.rank_space().origin()[axis]})
+          .scalar(std::int64_t{distribution.rank_space().extent()[axis]});
+    exact.sequence(distribution.owners(), [](ExactContractBuilder& item, const Index<Dim>& owner) {
+      for (int axis = 0; axis < Dim; ++axis)
+        item.scalar(std::int64_t{owner[axis]});
+    });
+  }
+}
+
+template <int Dim>
+std::string require_collective_provider_groups_structure(
+    const runtime::system::AuxiliaryStorageGroups<Dim>* coarse,
+    const runtime::system::AuxiliaryStorageGroups<Dim>& target, const ExecutionLane& lane,
+    std::string_view label) {
+  std::string contract;
+  std::exception_ptr local_error;
+  try {
+    if (coarse != nullptr) {
+      if (coarse->groups.size() != target.groups.size())
+        throw std::invalid_argument(
+            "AMR provider-group transfer requires one identical resolved group set");
+      for (const auto& [identity, child] : target.groups) {
+        const auto parent = coarse->groups.find(identity);
+        if (parent == coarse->groups.end())
+          throw std::invalid_argument(
+              "AMR provider-group transfer lost one resolved group identity");
+        (void)child;
+      }
+    }
+    ExactContractBuilder exact;
+    exact.text("pops.generated-amr-provider-groups-structure")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(label);
+    if (coarse != nullptr)
+      append_provider_groups_structure(exact, *coarse, "coarse");
+    append_provider_groups_structure(exact, target, "target");
+    contract = std::move(exact).release();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      local_error, &lane, "AMR provider-group structure preparation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("generated-amr-provider-groups-structure"),
+            std::string_view(contract)}},
+          lane.communicator()))
+    throw std::invalid_argument(
+        "AMR provider-group ordered structure differs across communicator ranks");
+  return contract;
+}
+
+template <int Dim>
 struct GeneratedProviderGroupsGhostSource {
   using groups_type = runtime::system::AuxiliaryStorageGroups<Dim>;
   using root_fill_type = PreparedRootAmrGhostFill<Dim>;
@@ -1191,23 +1294,53 @@ struct GeneratedProviderGroupsGhostSource {
 
   struct State {
     bool root = false;
+    const ExecutionLane* lane = nullptr;
     std::vector<std::string> identities;
+    std::vector<const MultiFab<Dim>*> carriers;
+    std::vector<int> component_counts;
+    std::vector<Extent<Dim>> ghosts;
+    std::vector<std::vector<const Real*>> storage;
     std::vector<root_fill_type> root_fills;
     std::vector<fine_fill_type> fine_fills;
     std::string contract;
 
     void execute(groups_type& groups,
                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-      if (identities.size() != (root ? root_fills.size() : fine_fills.size()))
-        throw std::logic_error("prepared AMR provider-group ghost state is malformed");
+      if (all_reduce_max(lane == nullptr ? 1L : 0L) != 0)
+        throw std::logic_error("prepared AMR provider-group ghost state lost its collective lane");
+      std::exception_ptr binding_error;
+      try {
+        const std::size_t count = identities.size();
+        if (groups.groups.size() != count || carriers.size() != count ||
+            component_counts.size() != count || ghosts.size() != count || storage.size() != count ||
+            count != (root ? root_fills.size() : fine_fills.size()))
+          throw std::logic_error("prepared AMR provider-group ghost state is malformed");
+        for (std::size_t index = 0; index < count; ++index) {
+          const auto* group = groups.find(identities[index]);
+          if (group == nullptr || group != carriers[index] ||
+              group->ncomp() != component_counts[index] || group->ghosts() != ghosts[index] ||
+              !field_storage_matches(*group, storage[index]))
+            throw std::logic_error(
+                "prepared AMR provider-group carrier lost one exact storage binding");
+        }
+      } catch (...) {
+        binding_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          binding_error, lane, "prepared AMR provider-group ghost binding failed collectively");
       for (std::size_t index = 0; index < identities.size(); ++index) {
-        auto* group = groups.find(identities[index]);
-        if (group == nullptr)
-          throw std::logic_error("prepared AMR provider-group carrier lost one exact storage group");
-        if (root)
-          root_fills[index](*group, point);
-        else
-          fine_fills[index](*group, point);
+        std::exception_ptr fill_error;
+        try {
+          auto* group = groups.find(identities[index]);
+          if (root)
+            root_fills[index](*group, point);
+          else
+            fine_fills[index](*group, point);
+        } catch (...) {
+          fill_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            fill_error, lane, "prepared AMR provider-group ghost phase failed collectively");
       }
     }
   };
@@ -1237,23 +1370,63 @@ PreparedProviderGroupsGhostFill<Dim> prepare_provider_groups_root_ghost_fill(
     std::uint64_t topology_generation, std::uint64_t materialization_generation,
     const ExecutionLane& lane) {
   using source_type = GeneratedProviderGroupsGhostSource<Dim>;
-  auto state = std::make_shared<typename source_type::State>();
-  state->root = true;
-  ExactContractBuilder exact;
-  exact.text("pops.generated-amr-provider-groups-root-ghost")
-      .scalar(std::uint32_t{1})
-      .text(identity)
-      .scalar(topology_generation)
-      .scalar(materialization_generation);
-  for (auto& [group_identity, group] : groups.groups) {
-    state->identities.push_back(group_identity);
-    state->root_fills.push_back(prepare_root_ghost_fill(
-        group, domain, topology, std::string(identity) + "/" + group_identity,
-        topology_generation, materialization_generation, lane));
-    exact.text(group_identity).bytes(state->root_fills.back().collective_contract());
+  const std::string group_structure = require_collective_provider_groups_structure(
+      static_cast<const runtime::system::AuxiliaryStorageGroups<Dim>*>(nullptr), groups, lane,
+      identity);
+  std::shared_ptr<typename source_type::State> state;
+  std::vector<std::string> route_identities;
+  std::exception_ptr metadata_error;
+  try {
+    state = std::make_shared<typename source_type::State>();
+    state->root = true;
+    state->lane = &lane;
+    const std::size_t count = groups.groups.size();
+    state->identities.reserve(count);
+    state->carriers.reserve(count);
+    state->component_counts.reserve(count);
+    state->ghosts.reserve(count);
+    state->storage.reserve(count);
+    state->root_fills.reserve(count);
+    route_identities.reserve(count);
+    for (auto& [group_identity, group] : groups.groups) {
+      state->identities.push_back(group_identity);
+      state->carriers.push_back(&group);
+      state->component_counts.push_back(group.ncomp());
+      state->ghosts.push_back(group.ghosts());
+      state->storage.push_back(field_storage_identity(group));
+      route_identities.push_back(std::string(identity) + "/" + group_identity);
+    }
+  } catch (...) {
+    metadata_error = std::current_exception();
   }
-  state->contract = std::move(exact).release();
-  return PreparedProviderGroupsGhostFill<Dim>{source_type{std::move(state)}};
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      metadata_error, &lane, "AMR root provider-group metadata preparation failed collectively");
+  for (std::size_t index = 0; index < state->identities.size(); ++index) {
+    auto group = groups.groups.find(state->identities[index]);
+    state->root_fills.emplace_back(
+        prepare_root_ghost_fill(group->second, domain, topology, std::move(route_identities[index]),
+                                topology_generation, materialization_generation, lane));
+  }
+  std::optional<PreparedProviderGroupsGhostFill<Dim>> prepared;
+  std::exception_ptr provider_error;
+  try {
+    ExactContractBuilder exact;
+    exact.text("pops.generated-amr-provider-groups-root-ghost")
+        .scalar(std::uint32_t{1})
+        .text(identity)
+        .scalar(topology_generation)
+        .scalar(materialization_generation)
+        .bytes(group_structure);
+    for (std::size_t index = 0; index < state->identities.size(); ++index)
+      exact.text(state->identities[index]).bytes(state->root_fills[index].collective_contract());
+    state->contract = std::move(exact).release();
+    prepared.emplace(source_type{state});
+  } catch (...) {
+    provider_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      provider_error, &lane, "AMR root provider-group authority failed collectively");
+  return std::move(*prepared);
 }
 
 template <int Dim>
@@ -1261,26 +1434,49 @@ PreparedProviderGroupsGhostFill<Dim> prepare_provider_groups_fine_ghost_fill(
     runtime::system::AuxiliaryStorageGroups<Dim>& coarse,
     runtime::system::AuxiliaryStorageGroups<Dim>& fine, const Box<Dim>& coarse_domain,
     const Box<Dim>& fine_domain, const amr::RefinementRatio<Dim>& ratio,
-    const BoundaryTopology<Dim>& topology, std::string_view identity,
-    int fine_level, std::uint64_t topology_generation, std::uint64_t materialization_generation,
+    const BoundaryTopology<Dim>& topology, std::string_view identity, int fine_level,
+    std::uint64_t topology_generation, std::uint64_t materialization_generation,
     const ExecutionLane& lane) {
   using source_type = GeneratedProviderGroupsGhostSource<Dim>;
-  if (coarse.groups.size() != fine.groups.size())
-    throw std::invalid_argument("AMR provider-group transfer requires one identical resolved group set");
-  auto state = std::make_shared<typename source_type::State>();
-  ExactContractBuilder exact;
-  exact.text("pops.generated-amr-provider-groups-fine-ghost")
-      .scalar(std::uint32_t{1})
-      .text(identity)
-      .scalar(topology_generation)
-      .scalar(materialization_generation);
-  for (auto& [group_identity, child] : fine.groups) {
-    auto parent = coarse.groups.find(group_identity);
-    if (parent == coarse.groups.end())
-      throw std::invalid_argument("AMR provider-group transfer lost one resolved group identity");
-    state->identities.push_back(group_identity);
-    state->fine_fills.push_back(runtime::amr::prepare_amr_ghost_fill(
-        parent->second, child,
+  const std::string group_structure =
+      require_collective_provider_groups_structure(&coarse, fine, lane, identity);
+  std::shared_ptr<typename source_type::State> state;
+  std::vector<std::string> route_identities;
+  std::vector<runtime::amr::AmrGhostFillBudget> budgets;
+  std::exception_ptr metadata_error;
+  try {
+    state = std::make_shared<typename source_type::State>();
+    state->lane = &lane;
+    const std::size_t count = fine.groups.size();
+    state->identities.reserve(count);
+    state->carriers.reserve(count);
+    state->component_counts.reserve(count);
+    state->ghosts.reserve(count);
+    state->storage.reserve(count);
+    state->fine_fills.reserve(count);
+    route_identities.reserve(count);
+    budgets.reserve(count);
+    for (auto& [group_identity, child] : fine.groups) {
+      auto parent = coarse.groups.find(group_identity);
+      state->identities.push_back(group_identity);
+      state->carriers.push_back(&child);
+      state->component_counts.push_back(child.ncomp());
+      state->ghosts.push_back(child.ghosts());
+      state->storage.push_back(field_storage_identity(child));
+      route_identities.push_back(std::string(identity) + "/" + group_identity);
+      budgets.push_back(
+          exact_amr_ghost_budget(parent->second, child, coarse_domain, fine_domain, topology));
+    }
+  } catch (...) {
+    metadata_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      metadata_error, &lane, "AMR fine provider-group metadata preparation failed collectively");
+  for (std::size_t index = 0; index < state->identities.size(); ++index) {
+    auto parent = coarse.groups.find(state->identities[index]);
+    auto child = fine.groups.find(state->identities[index]);
+    state->fine_fills.emplace_back(runtime::amr::prepare_amr_ghost_fill(
+        parent->second, child->second,
         runtime::amr::AmrGhostFillPreparation<Dim>{
             .fine_level = fine_level,
             .coarse_domain = coarse_domain,
@@ -1289,15 +1485,31 @@ PreparedProviderGroupsGhostFill<Dim> prepare_provider_groups_fine_ghost_fill(
             .topology = topology,
             .topology_generation = topology_generation,
             .materialization_generation = materialization_generation,
-            .field_identity = std::string(identity) + "/" + group_identity,
-            .budget = exact_amr_ghost_budget(parent->second, child, coarse_domain, fine_domain,
-                                             topology),
+            .field_identity = std::move(route_identities[index]),
+            .budget = budgets[index],
         },
         lane));
-    exact.text(group_identity).bytes(state->fine_fills.back().collective_contract());
   }
-  state->contract = std::move(exact).release();
-  return PreparedProviderGroupsGhostFill<Dim>{source_type{std::move(state)}};
+  std::optional<PreparedProviderGroupsGhostFill<Dim>> prepared;
+  std::exception_ptr provider_error;
+  try {
+    ExactContractBuilder exact;
+    exact.text("pops.generated-amr-provider-groups-fine-ghost")
+        .scalar(std::uint32_t{1})
+        .text(identity)
+        .scalar(topology_generation)
+        .scalar(materialization_generation)
+        .bytes(group_structure);
+    for (std::size_t index = 0; index < state->identities.size(); ++index)
+      exact.text(state->identities[index]).bytes(state->fine_fills[index].collective_contract());
+    state->contract = std::move(exact).release();
+    prepared.emplace(source_type{state});
+  } catch (...) {
+    provider_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      provider_error, &lane, "AMR fine provider-group authority failed collectively");
+  return std::move(*prepared);
 }
 
 void validate_variable_set(const VariableSet& variables, VariableKind expected, int ncomp,
@@ -1561,7 +1773,7 @@ struct AmrSystem<Dim>::Impl {
     std::unique_ptr<exact_field_solver_type> prepared_solver;
     std::vector<std::unique_ptr<field_type>> accepted_potential;
     std::vector<std::unique_ptr<field_type>> candidate_outputs;
-    std::vector<auxiliary_groups_type> candidate_provider_storage;
+    std::vector<auxiliary_groups_type*> candidate_provider_storage;
     std::vector<std::optional<auxiliary_publication_type>> candidate_provider_publications;
     std::vector<std::string> stale_auxiliary_providers;
     std::vector<std::unique_ptr<field_type>> contribution_scratch;
@@ -1605,7 +1817,13 @@ struct AmrSystem<Dim>::Impl {
     /// One independent carrier per hierarchy level.  Each carrier owns storage groups keyed by
     /// the sealed owner-qualified registry; there is no shared slab or canonical component order.
     std::vector<std::unique_ptr<auxiliary_groups_type>> provider_storage;
+    /// Stable transaction candidates own distinct allocations.  AMR coarse/fine kernels bind
+    /// their device views at hierarchy materialization, so candidates cannot be ephemeral copies.
+    std::vector<std::unique_ptr<auxiliary_groups_type>> provider_candidate_storage;
     std::vector<auxiliary_registry_type> auxiliary_registries;
+    std::vector<PreparedProviderGroupsGhostFill<Dim>> provider_candidate_ghost_fills;
+    std::vector<std::optional<runtime::system::PreparedAuxiliaryPhysicalBoundaries<Dim>>>
+        provider_candidate_physical_boundaries;
     std::vector<std::shared_ptr<const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>>>
         embedded_boundary;
     std::vector<std::shared_ptr<const field_type>> active_coverage;
@@ -1613,6 +1831,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<std::optional<evaluation_type>> evaluations;
     std::vector<std::vector<const Real*>> state_storage;
     std::vector<std::map<std::string, std::vector<const Real*>>> provider_storage_identity;
+    std::vector<std::map<std::string, std::vector<const Real*>>>
+        provider_candidate_storage_identity;
     std::vector<std::string> state_field_identities;
     std::vector<std::string> provider_storage_field_identities;
     std::string spatial_contract;
@@ -1636,6 +1856,10 @@ struct AmrSystem<Dim>::Impl {
             active_coverage.size() != live.hierarchy().num_levels() ||
             state_storage.size() != live.hierarchy().num_levels() ||
             provider_storage_identity.size() != provider_storage.size() ||
+            provider_candidate_storage.size() != provider_storage.size() ||
+            provider_candidate_storage_identity.size() != provider_storage.size() ||
+            provider_candidate_ghost_fills.size() != provider_storage.size() ||
+            provider_candidate_physical_boundaries.size() != provider_storage.size() ||
             provider_storage_field_identities.size() != provider_storage.size() ||
             auxiliary_registries.size() != provider_storage.size())
           return false;
@@ -1643,11 +1867,27 @@ struct AmrSystem<Dim>::Impl {
           if (!field_storage_matches(live.hierarchy().state(level), state_storage[level]) ||
               !provider_storage[level])
             return false;
+          if (provider_storage_identity[level].size() != provider_storage[level]->groups.size())
+            return false;
           for (const auto& [identity, storage] : provider_storage_identity[level]) {
             const auto* group = provider_storage[level]->find(identity);
             if (group == nullptr || !field_storage_matches(*group, storage))
               return false;
           }
+          if (!provider_candidate_storage[level])
+            return false;
+          if (provider_candidate_storage_identity[level].size() !=
+              provider_candidate_storage[level]->groups.size())
+            return false;
+          for (const auto& [identity, storage] : provider_candidate_storage_identity[level]) {
+            const auto* group = provider_candidate_storage[level]->find(identity);
+            if (group == nullptr || !field_storage_matches(*group, storage))
+              return false;
+          }
+          const bool has_groups = !provider_candidate_storage[level]->groups.empty();
+          if (static_cast<bool>(provider_candidate_ghost_fills[level]) != has_groups ||
+              provider_candidate_physical_boundaries[level].has_value() != has_groups)
+            return false;
         }
         return true;
       } catch (...) {
@@ -1891,11 +2131,10 @@ struct AmrSystem<Dim>::Impl {
     if (plan.output) {
       contract.scalar(plan.output->gradient_sign())
           .scalar(static_cast<std::uint64_t>(plan.output->component_count()))
-          .sequence(plan.output_keys,
-                    [](ExactContractBuilder& item,
-                       const runtime::system::AuxiliaryComponentKey& key) {
-                      key.serialize_exact(item);
-                    });
+          .sequence(plan.output_keys, [](ExactContractBuilder& item,
+                                         const runtime::system::AuxiliaryComponentKey& key) {
+            key.serialize_exact(item);
+          });
     }
     contract.presence(plan.use_prepared_level_rhs).presence(plan.boundary_kernel.has_value());
     if (plan.boundary_kernel)
@@ -2372,8 +2611,7 @@ struct AmrSystem<Dim>::Impl {
   }
 
   static void copy_field_outputs_to_provider_candidate(
-      const field_type& outputs,
-      const std::vector<runtime::system::AuxiliaryComponentKey>& keys,
+      const field_type& outputs, const std::vector<runtime::system::AuxiliaryComponentKey>& keys,
       const auxiliary_registry_type& registry, auxiliary_groups_type& candidate) {
     if (keys.size() != static_cast<std::size_t>(outputs.ncomp()))
       throw std::invalid_argument(
@@ -2381,8 +2619,8 @@ struct AmrSystem<Dim>::Impl {
     for (std::size_t slot = 0; slot < keys.size(); ++slot) {
       const auto address = registry.address_of(keys[slot]);
       field_type* destination = candidate.find(address.group);
-      if (destination == nullptr || address.component >=
-                                        static_cast<std::size_t>(destination->ncomp()))
+      if (destination == nullptr ||
+          address.component >= static_cast<std::size_t>(destination->ncomp()))
         throw std::logic_error(
             "AMR field-output candidate lacks its resolved provider storage address");
       if (destination->layout() != outputs.layout() ||
@@ -2575,48 +2813,129 @@ struct AmrSystem<Dim>::Impl {
         return report;
       }
       if (plan.output) {
-        plan.candidate_provider_storage.clear();
-        plan.candidate_provider_publications.clear();
-        plan.stale_auxiliary_providers.clear();
-        plan.candidate_provider_storage.reserve(engine->hierarchy().num_levels());
-        plan.candidate_provider_publications.reserve(engine->hierarchy().num_levels());
         std::vector<std::string> provider_identities;
-        provider_identities.reserve(plan.output_keys.size());
-        for (const auto& key : plan.output_keys) {
-          const auto& provider = auxiliary_registry.provider_for_key(key);
-          if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
-            throw std::logic_error("AMR field output lost its field-output provider authority");
-          if (std::find(provider_identities.begin(), provider_identities.end(),
-                        provider.identity()) == provider_identities.end())
-            provider_identities.push_back(provider.identity());
+        std::exception_ptr setup_error;
+        try {
+          plan.candidate_provider_storage.clear();
+          plan.candidate_provider_publications.clear();
+          plan.stale_auxiliary_providers.clear();
+          plan.candidate_provider_storage.reserve(engine->hierarchy().num_levels());
+          plan.candidate_provider_publications.reserve(engine->hierarchy().num_levels());
+          provider_identities.reserve(plan.output_keys.size());
+          for (const auto& key : plan.output_keys) {
+            const auto& provider = auxiliary_registry.provider_for_key(key);
+            if (provider.kind() != runtime::system::AuxiliaryProviderKind::field_output)
+              throw std::logic_error("AMR field output lost its field-output provider authority");
+            if (std::find(provider_identities.begin(), provider_identities.end(),
+                          provider.identity()) == provider_identities.end())
+              provider_identities.push_back(provider.identity());
+          }
+          if (!prepared_hierarchy->lane ||
+              prepared_hierarchy->provider_candidate_storage.size() !=
+                  engine->hierarchy().num_levels() ||
+              prepared_hierarchy->provider_candidate_ghost_fills.size() !=
+                  engine->hierarchy().num_levels() ||
+              prepared_hierarchy->provider_candidate_physical_boundaries.size() !=
+                  engine->hierarchy().num_levels())
+            throw std::logic_error("AMR field-output candidate authority is not materialized");
+        } catch (...) {
+          setup_error = std::current_exception();
         }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            setup_error, prepared_hierarchy->lane ? &*prepared_hierarchy->lane : nullptr,
+            "AMR field-output setup failed collectively before candidate transport");
         for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
-          if (!plan.candidate_outputs[level] ||
-              !prepared_hierarchy->provider_storage[level])
-            throw std::logic_error("AMR field output carrier is not materialized exactly");
-          field_type& output = *plan.candidate_outputs[level];
-          const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
-              engine->hierarchy().layout(level).domain(), cfg.lower, cfg.upper);
-          runtime::field::publish_named_field(
-              plan.prepared_solver->candidate_level(static_cast<int>(level)), output, geometry,
-              *plan.output);
-          plan.candidate_provider_storage.push_back(*prepared_hierarchy->provider_storage[level]);
+          auxiliary_groups_type* candidate_storage = nullptr;
+          std::exception_ptr materialization_error;
+          try {
+            if (!plan.candidate_outputs[level] || !prepared_hierarchy->provider_storage[level] ||
+                !prepared_hierarchy->provider_candidate_storage[level])
+              throw std::logic_error("AMR field output carrier is not materialized exactly");
+            field_type& output = *plan.candidate_outputs[level];
+            const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(
+                engine->hierarchy().layout(level).domain(), cfg.lower, cfg.upper);
+            runtime::field::publish_named_field(
+                plan.prepared_solver->candidate_level(static_cast<int>(level)), output, geometry,
+                *plan.output);
+            candidate_storage = prepared_hierarchy->provider_candidate_storage[level].get();
+            copy_auxiliary_groups_in_place(*prepared_hierarchy->provider_storage[level],
+                                           *candidate_storage);
+            auto& registry = prepared_hierarchy->auxiliary_registries[level];
+            copy_field_outputs_to_provider_candidate(output, plan.output_keys, registry,
+                                                     *candidate_storage);
+            plan.candidate_provider_storage.push_back(candidate_storage);
+          } catch (...) {
+            materialization_error = std::current_exception();
+          }
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              materialization_error, &*prepared_hierarchy->lane,
+              "AMR field-output materialization failed collectively before candidate transport");
+
           auto& registry = prepared_hierarchy->auxiliary_registries[level];
-          copy_field_outputs_to_provider_candidate(output, plan.output_keys, registry,
-                                                   plan.candidate_provider_storage.back());
-          plan.candidate_provider_publications.emplace_back(
-              registry.begin_external_publication(field_output_evaluation_point(level, evaluation_point),
-                                                  provider_identities));
+          const auto auxiliary_point = field_output_evaluation_point(level, evaluation_point);
+          runtime::multiblock::BoundaryEvaluationPoint boundary_point;
+          std::exception_ptr publication_error;
+          try {
+            boundary_point = auxiliary_boundary_evaluation_point(auxiliary_point);
+            plan.candidate_provider_publications.emplace_back(
+                registry.begin_external_publication(auxiliary_point, provider_identities));
+            auto& publication = *plan.candidate_provider_publications.back();
+            for (const std::string& identity : provider_identities)
+              publication.stage_external(identity);
+          } catch (...) {
+            publication_error = std::current_exception();
+          }
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              publication_error, &*prepared_hierarchy->lane,
+              "AMR field-output publication staging failed collectively before candidate "
+              "transport");
           auto& publication = *plan.candidate_provider_publications.back();
-          for (const std::string& identity : provider_identities)
-            publication.stage_external(identity);
-          publication.launch_ready_native({prepared_hierarchy->provider_storage[level].get(),
-                                           &plan.candidate_provider_storage.back()});
+          const auto refresh_candidate_ghosts = [&] {
+            PreparedProviderGroupsGhostFill<Dim>* fill = nullptr;
+            runtime::system::PreparedAuxiliaryPhysicalBoundaries<Dim>* physical = nullptr;
+            std::exception_ptr authority_error;
+            try {
+              auto& prepared_fill = prepared_hierarchy->provider_candidate_ghost_fills[level];
+              auto& prepared_physical =
+                  prepared_hierarchy->provider_candidate_physical_boundaries[level];
+              if (!prepared_fill || !prepared_physical)
+                throw std::logic_error("AMR field-output candidate ghost authority is incomplete");
+              fill = &prepared_fill;
+              physical = &*prepared_physical;
+            } catch (...) {
+              authority_error = std::current_exception();
+            }
+            runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+                authority_error, &*prepared_hierarchy->lane,
+                "AMR field-output candidate ghost authority failed collectively");
+            std::exception_ptr hierarchy_error;
+            try {
+              (*fill)(*candidate_storage, boundary_point);
+            } catch (...) {
+              hierarchy_error = std::current_exception();
+            }
+            runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+                hierarchy_error, &*prepared_hierarchy->lane,
+                "AMR field-output hierarchy ghost fill failed collectively");
+            physical->execute(*candidate_storage);
+          };
+          refresh_candidate_ghosts();
+          publication.launch_ready_native(
+              {prepared_hierarchy->provider_storage[level].get(), candidate_storage},
+              [&](const auto&, std::exception_ptr local_error) {
+                runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+                    local_error, &*prepared_hierarchy->lane,
+                    "AMR field-output auxiliary launch failed collectively before ghost fill");
+                refresh_candidate_ghosts();
+              });
+          runtime::system::require_finite_auxiliary_groups(
+              *candidate_storage, &*prepared_hierarchy->lane, "AMR field-output publication");
           publication.validate_complete();
-          for (const std::string& identity : registry.dependent_provider_identities(provider_identities))
+          for (const std::string& identity :
+               registry.dependent_provider_identities(provider_identities))
             if (std::find(plan.stale_auxiliary_providers.begin(),
-                          plan.stale_auxiliary_providers.end(), identity) ==
-                plan.stale_auxiliary_providers.end())
+                          plan.stale_auxiliary_providers.end(),
+                          identity) == plan.stale_auxiliary_providers.end())
               plan.stale_auxiliary_providers.push_back(identity);
         }
       }
@@ -2647,9 +2966,8 @@ struct AmrSystem<Dim>::Impl {
         plan.candidate_provider_publications.size() != prepared_hierarchy->provider_storage.size())
       throw std::logic_error("AMR field-output publication candidate is incomplete");
     for (std::size_t level = 0; level < plan.candidate_provider_storage.size(); ++level) {
-      runtime::system::AuxiliaryCarrierStorage<Dim>{prepared_hierarchy->provider_storage[level].get(),
-                                                    const_cast<auxiliary_groups_type*>(
-                                                        &plan.candidate_provider_storage[level])}
+      runtime::system::AuxiliaryCarrierStorage<Dim>{
+          prepared_hierarchy->provider_storage[level].get(), plan.candidate_provider_storage[level]}
           .validate();
       if (!plan.candidate_provider_publications[level])
         throw std::logic_error("AMR field-output publication metadata is absent");
@@ -2665,18 +2983,14 @@ struct AmrSystem<Dim>::Impl {
         copy_full_field_in_place(plan.prepared_solver->candidate_level(static_cast<int>(level)),
                                  *plan.accepted_potential[level]);
         if (plan.output) {
+          copy_auxiliary_groups_in_place(*plan.candidate_provider_storage[level],
+                                         *prepared_hierarchy->provider_storage[level]);
           plan.candidate_provider_publications[level]->accept();
-          *prepared_hierarchy->provider_storage[level] =
-              std::move(plan.candidate_provider_storage[level]);
-          auto& identities = prepared_hierarchy->provider_storage_identity[level];
-          identities.clear();
-          for (const auto& [identity, group] : prepared_hierarchy->provider_storage[level]->groups)
-            identities.emplace(identity, field_storage_identity(group));
         }
       }
       for (const std::string& identity : plan.stale_auxiliary_providers)
-        if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(), identity) ==
-            dirty_auxiliary_providers.end())
+        if (std::find(dirty_auxiliary_providers.begin(), dirty_auxiliary_providers.end(),
+                      identity) == dirty_auxiliary_providers.end())
           dirty_auxiliary_providers.push_back(identity);
       plan.candidate_provider_publications.clear();
       plan.candidate_provider_storage.clear();
@@ -2690,17 +3004,16 @@ struct AmrSystem<Dim>::Impl {
 
   void reject_field_candidate() noexcept {
     try {
-      if (!active_field_slot.empty())
-        {
-          FieldPlan& plan = field_plans.at(active_field_slot);
-          for (auto& publication : plan.candidate_provider_publications)
-            if (publication)
-              publication->reject();
-          plan.candidate_provider_publications.clear();
-          plan.candidate_provider_storage.clear();
-          plan.stale_auxiliary_providers.clear();
-          plan.candidate_ready = false;
-        }
+      if (!active_field_slot.empty()) {
+        FieldPlan& plan = field_plans.at(active_field_slot);
+        for (auto& publication : plan.candidate_provider_publications)
+          if (publication)
+            publication->reject();
+        plan.candidate_provider_publications.clear();
+        plan.candidate_provider_storage.clear();
+        plan.stale_auxiliary_providers.clear();
+        plan.candidate_ready = false;
+      }
       active_field_slot.clear();
     } catch (...) {
       std::terminate();
@@ -2757,12 +3070,16 @@ struct AmrSystem<Dim>::Impl {
       candidate->topology_epoch = candidate_engine.topology_epoch();
       candidate->materialization_generation = candidate_engine.materialization_generation();
       candidate->provider_storage.reserve(level_count);
+      candidate->provider_candidate_storage.reserve(level_count);
       candidate->auxiliary_registries.reserve(level_count);
+      candidate->provider_candidate_ghost_fills.resize(level_count);
+      candidate->provider_candidate_physical_boundaries.resize(level_count);
       candidate->embedded_boundary.resize(level_count);
       candidate->levels.reserve(level_count);
       candidate->evaluations.resize(level_count);
       candidate->state_storage.reserve(level_count);
       candidate->provider_storage_identity.reserve(level_count);
+      candidate->provider_candidate_storage_identity.reserve(level_count);
       candidate->state_field_identities.reserve(level_count);
       candidate->provider_storage_field_identities.reserve(level_count);
 
@@ -2786,15 +3103,14 @@ struct AmrSystem<Dim>::Impl {
         auto provider_storage = std::make_unique<auxiliary_groups_type>();
         if (auxiliary_registry.sealed())
           for (const auto& group : auxiliary_registry.storage_groups()) {
-          if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-            throw std::overflow_error("AMR auxiliary storage-group width exceeds int");
-          Extent<Dim> ghosts{};
-          for (int axis = 0; axis < Dim; ++axis)
-            ghosts[axis] = group.shape.halo[axis];
+            if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+              throw std::overflow_error("AMR auxiliary storage-group width exceeds int");
+            Extent<Dim> ghosts{};
+            for (int axis = 0; axis < Dim; ++axis)
+              ghosts[axis] = group.shape.halo[axis];
             provider_storage->groups.emplace(
-              group.identity,
-              field_type(state.layout(), state.distribution(), state.local_rank(),
-                         static_cast<int>(group.component_count), ghosts));
+                group.identity, field_type(state.layout(), state.distribution(), state.local_rank(),
+                                           static_cast<int>(group.component_count), ghosts));
           }
         const auto restore_provider_groups = [&](const auxiliary_groups_type& restored) {
           if (restored.groups.size() != provider_storage->groups.size())
@@ -2821,12 +3137,17 @@ struct AmrSystem<Dim>::Impl {
         candidate->state_field_identities.push_back(state_route + "/level/" +
                                                     std::to_string(level));
         candidate->provider_storage_field_identities.push_back(
-            prepared_block->provider_identity + "/provider-groups/level/" +
-            std::to_string(level));
+            prepared_block->provider_identity + "/provider-groups/level/" + std::to_string(level));
+        auto provider_candidate = std::make_unique<auxiliary_groups_type>(*provider_storage);
+        std::map<std::string, std::vector<const Real*>> candidate_storage_identity;
+        for (const auto& [identity, group] : provider_candidate->groups)
+          candidate_storage_identity.emplace(identity, field_storage_identity(group));
+        candidate->provider_candidate_storage_identity.push_back(
+            std::move(candidate_storage_identity));
+        candidate->provider_candidate_storage.push_back(std::move(provider_candidate));
         candidate->provider_storage.push_back(std::move(provider_storage));
         if (pending_provider_registry_restore)
-          candidate->auxiliary_registries.push_back(
-              (*pending_provider_registry_restore)[level]);
+          candidate->auxiliary_registries.push_back((*pending_provider_registry_restore)[level]);
         else if (previous != nullptr && level < previous->auxiliary_registries.size())
           candidate->auxiliary_registries.push_back(previous->auxiliary_registries[level]);
         else if (auxiliary_registry.sealed())
@@ -2878,6 +3199,7 @@ struct AmrSystem<Dim>::Impl {
       try {
         field_type& state = candidate_engine.hierarchy().state(level);
         auxiliary_groups_type& provider_storage = *candidate->provider_storage[level];
+        auxiliary_groups_type& provider_candidate = *candidate->provider_candidate_storage[level];
         const Box<Dim>& level_domain = candidate_engine.hierarchy().layout(level).domain();
         runtime::amr::PreparedAmrGhostFill<Dim> state_ghost_fill;
         PreparedProviderGroupsGhostFill<Dim> provider_ghost_fill;
@@ -2892,6 +3214,13 @@ struct AmrSystem<Dim>::Impl {
                 provider_storage, level_domain, exact_topology,
                 candidate->provider_storage_field_identities[level], candidate->topology_epoch,
                 candidate->materialization_generation, *candidate->lane);
+          if (!provider_candidate.groups.empty())
+            candidate->provider_candidate_ghost_fills[level] =
+                prepare_provider_groups_root_ghost_fill(
+                    provider_candidate, level_domain, exact_topology,
+                    candidate->provider_storage_field_identities[level] + "/candidate",
+                    candidate->topology_epoch, candidate->materialization_generation,
+                    *candidate->lane);
         } else {
           const Box<Dim>& coarse_domain = candidate_engine.hierarchy().layout(level - 1).domain();
           const auto& ratio = candidate_engine.hierarchy().layout(level).ratio_from_parent();
@@ -2915,22 +3244,35 @@ struct AmrSystem<Dim>::Impl {
             provider_ghost_fill = prepare_provider_groups_fine_ghost_fill(
                 *candidate->provider_storage[level - 1], provider_storage, coarse_domain,
                 level_domain, ratio, exact_topology,
-                candidate->provider_storage_field_identities[level],
-                static_cast<int>(level), candidate->topology_epoch,
-                candidate->materialization_generation, *candidate->lane);
+                candidate->provider_storage_field_identities[level], static_cast<int>(level),
+                candidate->topology_epoch, candidate->materialization_generation, *candidate->lane);
+          if (!provider_candidate.groups.empty())
+            candidate->provider_candidate_ghost_fills[level] =
+                prepare_provider_groups_fine_ghost_fill(
+                    *candidate->provider_candidate_storage[level - 1], provider_candidate,
+                    coarse_domain, level_domain, ratio, exact_topology,
+                    candidate->provider_storage_field_identities[level] + "/candidate",
+                    static_cast<int>(level), candidate->topology_epoch,
+                    candidate->materialization_generation, *candidate->lane);
         }
+        if (!provider_candidate.groups.empty())
+          candidate->provider_candidate_physical_boundaries[level].emplace(
+              runtime::system::prepare_auxiliary_physical_boundaries(
+                  provider_candidate, candidate->auxiliary_registries[level], level_domain,
+                  Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper), exact_topology,
+                  &*candidate->lane));
         GeneratedAmrLevelContext<Dim> context{
             .level = level,
             .geometry = Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper),
             .topology = exact_topology,
-            .provider_storage = prepared_block->provider_components == 0 ||
-                                        provider_storage.groups.empty()
-                                    ? nullptr
-                                    : &provider_storage,
-            .provider_plan = prepared_block->provider_components == 0
-                                 ? nullptr
-                                 : &auxiliary_registry.consumer_plan(
-                                       prepared_block->provider_consumer_qid),
+            .provider_storage =
+                prepared_block->provider_components == 0 || provider_storage.groups.empty()
+                    ? nullptr
+                    : &provider_storage,
+            .provider_plan =
+                prepared_block->provider_components == 0
+                    ? nullptr
+                    : &auxiliary_registry.consumer_plan(prepared_block->provider_consumer_qid),
             .state_ghost_fill = std::move(state_ghost_fill),
             .provider_ghost_fill = std::move(provider_ghost_fill),
             .root_state_ghost_fill = std::move(root_state_ghost_fill),
@@ -2979,6 +3321,14 @@ struct AmrSystem<Dim>::Impl {
           .scalar(static_cast<std::uint64_t>(candidate->levels.size()));
       for (const level_block_type& level : candidate->levels)
         contract.bytes(level.collective_contract());
+      for (std::size_t level = 0; level < candidate->provider_candidate_ghost_fills.size();
+           ++level) {
+        contract.optional_collective_contract(candidate->provider_candidate_ghost_fills[level]);
+        contract.presence(candidate->provider_candidate_physical_boundaries[level].has_value());
+        if (candidate->provider_candidate_physical_boundaries[level])
+          contract.bytes(
+              candidate->provider_candidate_physical_boundaries[level]->collective_contract());
+      }
       candidate->collective_contract = std::move(contract).release();
     } catch (...) {
       contract_failure = 1;
@@ -3097,8 +3447,8 @@ struct AmrSystem<Dim>::Impl {
         if (plan == field_plans.end() || !plan->second.output)
           throw std::invalid_argument("AMR tagging field leaf has no exact published output");
         const int output_index = tagging_spec->leaf_field_component_indices[leaf_index];
-        if (output_index < 0 || static_cast<std::size_t>(output_index) >=
-                                    plan->second.output_keys.size())
+        if (output_index < 0 ||
+            static_cast<std::size_t>(output_index) >= plan->second.output_keys.size())
           throw std::out_of_range("AMR tagging field output slot is outside its exact carrier");
         const auto address = auxiliary_registry.address_of(
             plan->second.output_keys[static_cast<std::size_t>(output_index)]);
@@ -3700,7 +4050,7 @@ AmrSystem<Dim>::prepared_amr_provider_storage_groups(int level) const {
 template <int Dim>
 const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
 AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid,
-                                                      int level) const {
+                                                     int level) const {
   p_->ensure_engine();
   if (level < 0 || !p_->prepared_hierarchy ||
       static_cast<std::size_t>(level) >= p_->prepared_hierarchy->auxiliary_registries.size())
@@ -3723,7 +4073,8 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
     if (groups.size() != registries.size())
-      throw std::logic_error("AMR auxiliary checkpoint hierarchy has mismatched groups and registries");
+      throw std::logic_error(
+          "AMR auxiliary checkpoint hierarchy has mismatched groups and registries");
     result.reserve(registries.size());
     ExactContractBuilder exact;
     exact.text("pops.amr-exact-auxiliary-checkpoint")
@@ -3736,8 +4087,8 @@ AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
       auto accepted = runtime::system::capture_auxiliary_checkpoint_state(registries[level]);
       runtime::system::require_auxiliary_checkpoint_storage(accepted, *groups[level]);
       const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(accepted);
-      exact.scalar(static_cast<std::uint64_t>(level)).bytes(
-          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+      exact.scalar(static_cast<std::uint64_t>(level))
+          .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
       result.push_back(std::move(accepted));
     }
     collective_contract = std::move(exact).release();
@@ -3757,7 +4108,8 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state(
     const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state) {
   p_->ensure_engine();
   if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
-    throw std::logic_error("AMR auxiliary checkpoint restore requires a materialized hierarchy lane");
+    throw std::logic_error(
+        "AMR auxiliary checkpoint restore requires a materialized hierarchy lane");
   const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
   long local_failure = 0;
   std::string collective_contract;
@@ -3765,7 +4117,8 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state(
     const auto& groups = p_->prepared_hierarchy->provider_storage;
     const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
     if (state.size() != groups.size() || state.size() != registries.size())
-      throw std::invalid_argument("AMR auxiliary checkpoint level count differs from the hierarchy");
+      throw std::invalid_argument(
+          "AMR auxiliary checkpoint level count differs from the hierarchy");
     ExactContractBuilder exact;
     exact.text("pops.amr-exact-auxiliary-checkpoint")
         .scalar(std::uint32_t{1})
@@ -3776,8 +4129,8 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state(
         throw std::logic_error("AMR auxiliary checkpoint restore has an empty level carrier");
       runtime::system::require_auxiliary_checkpoint_storage(state[level], *groups[level]);
       const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(state[level]);
-      exact.scalar(static_cast<std::uint64_t>(level)).bytes(
-          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+      exact.scalar(static_cast<std::uint64_t>(level))
+          .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
     }
     collective_contract = std::move(exact).release();
   } catch (...) {
@@ -3789,34 +4142,84 @@ void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state(
           {{std::string_view("pops.amr-auxiliary-checkpoint"), collective_contract}}, lane))
     throw std::runtime_error("AMR auxiliary checkpoint differs between communicator ranks");
 
-  const auto storage_snapshot = p_->snapshot_provider_storage();
-  const auto registry_snapshot = p_->snapshot_provider_registries();
-  const auto dirty_snapshot = p_->dirty_auxiliary_providers;
+  using storage_snapshot_type = std::vector<runtime::system::AuxiliaryStorageGroups<Dim>>;
+  using registry_snapshot_type = std::vector<runtime::system::ExactAuxiliaryRegistry<Dim>>;
+  std::optional<storage_snapshot_type> storage_snapshot;
+  std::optional<registry_snapshot_type> registry_snapshot;
+  decltype(p_->dirty_auxiliary_providers) dirty_snapshot;
+  std::exception_ptr snapshot_error;
+  try {
+    storage_snapshot.emplace();
+    storage_snapshot->reserve(p_->prepared_hierarchy->provider_storage.size());
+    for (const auto& level : p_->prepared_hierarchy->provider_storage) {
+      if (!level)
+        throw std::logic_error("AMR auxiliary checkpoint snapshot has an empty accepted carrier");
+      storage_snapshot->push_back(*level);
+    }
+    registry_snapshot.emplace(p_->prepared_hierarchy->auxiliary_registries);
+    dirty_snapshot = p_->dirty_auxiliary_providers;
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      snapshot_error, &lane,
+      "AMR auxiliary checkpoint snapshot failed collectively before registry mutation");
+
+  std::exception_ptr restore_error;
   try {
     for (std::size_t level = 0; level < state.size(); ++level)
       runtime::system::restore_auxiliary_checkpoint_state(
           state[level], p_->prepared_hierarchy->auxiliary_registries[level], lane);
-    p_->dirty_auxiliary_providers.clear();
+    for (std::size_t level = 0; level < p_->prepared_hierarchy->provider_storage.size(); ++level)
+      copy_auxiliary_groups_in_place(*p_->prepared_hierarchy->provider_storage[level],
+                                     *p_->prepared_hierarchy->provider_candidate_storage[level]);
   } catch (...) {
-    if (storage_snapshot && registry_snapshot) {
-      for (std::size_t level = 0; level < storage_snapshot->size(); ++level)
-        *p_->prepared_hierarchy->provider_storage[level] = (*storage_snapshot)[level];
-      p_->prepared_hierarchy->auxiliary_registries = *registry_snapshot;
-    }
-    p_->dirty_auxiliary_providers = dirty_snapshot;
-    throw;
+    restore_error = std::current_exception();
   }
+  const long restore_failed = all_reduce_max(restore_error ? 1L : 0L, lane.communicator());
+  if (restore_failed != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      for (std::size_t level = 0; level < storage_snapshot->size(); ++level)
+        copy_auxiliary_groups_in_place((*storage_snapshot)[level],
+                                       *p_->prepared_hierarchy->provider_storage[level]);
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    try {
+      for (std::size_t level = 0; level < storage_snapshot->size(); ++level)
+        copy_auxiliary_groups_in_place(*p_->prepared_hierarchy->provider_storage[level],
+                                       *p_->prepared_hierarchy->provider_candidate_storage[level]);
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    try {
+      p_->prepared_hierarchy->auxiliary_registries.swap(*registry_snapshot);
+      p_->dirty_auxiliary_providers.swap(dirty_snapshot);
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        rollback_error, &lane, "AMR auxiliary checkpoint rollback failed collectively");
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        restore_error, &lane, "AMR auxiliary checkpoint restore failed collectively");
+  }
+  p_->dirty_auxiliary_providers.clear();
 }
 
 template <int Dim>
 std::vector<double> AmrSystem<Dim>::auxiliary_component(
     const runtime::system::AuxiliaryComponentKey& key, int level) const {
   p_->ensure_engine();
-  if (level < 0 || static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
+  if (level < 0 ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
     throw std::out_of_range("AMR auxiliary component level lies outside the live hierarchy");
   const auto address = p_->auxiliary_registry.address_of(key);
-  const auto* group = p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)]
-                          ->find(address.group);
+  const auto* group =
+      p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)]->find(
+          address.group);
   if (group == nullptr || address.component >= static_cast<std::size_t>(group->ncomp()))
     throw std::logic_error("AMR auxiliary carrier lost its resolved storage address");
   const Box<Dim>& domain = p_->engine->hierarchy().layout(static_cast<std::size_t>(level)).domain();
@@ -3830,60 +4233,274 @@ template <int Dim>
 void AmrSystem<Dim>::refresh_auxiliary(const runtime::system::AuxiliaryEvaluationPoint& point) {
   seal_auxiliary_providers();
   p_->ensure_engine();
-  if (p_->prepared_hierarchy->auxiliary_registries.size() !=
-      p_->prepared_hierarchy->provider_storage.size())
-    throw std::logic_error("AMR auxiliary hierarchy lost its per-level registries");
-  for (std::size_t level = 0; level < p_->prepared_hierarchy->provider_storage.size(); ++level) {
-    auto& registry = p_->prepared_hierarchy->auxiliary_registries[level];
-    auto candidate = *p_->prepared_hierarchy->provider_storage[level];
-    auto level_point = point;
-    level_point.level = static_cast<int>(level);
-    auto transaction = registry.begin_publication(level_point, p_->dirty_auxiliary_providers);
+  std::exception_ptr hierarchy_error;
+  try {
+    if (!p_->prepared_hierarchy || p_->prepared_hierarchy->auxiliary_registries.size() !=
+                                       p_->prepared_hierarchy->provider_storage.size())
+      throw std::logic_error("AMR auxiliary hierarchy lost its per-level registries");
+    if (!p_->prepared_hierarchy->lane ||
+        p_->prepared_hierarchy->provider_candidate_storage.size() !=
+            p_->prepared_hierarchy->provider_storage.size() ||
+        p_->prepared_hierarchy->provider_candidate_ghost_fills.size() !=
+            p_->prepared_hierarchy->provider_storage.size() ||
+        p_->prepared_hierarchy->provider_candidate_physical_boundaries.size() !=
+            p_->prepared_hierarchy->provider_storage.size())
+      throw std::logic_error("AMR auxiliary candidate authorities are not materialized exactly");
+  } catch (...) {
+    hierarchy_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      hierarchy_error, nullptr, "AMR auxiliary hierarchy preflight failed collectively");
+  auto& hierarchy = *p_->prepared_hierarchy;
+  const ExecutionLane& lane = *hierarchy.lane;
+  using transaction_type =
+      typename runtime::system::ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
+  using storage_snapshot_type = std::vector<runtime::system::AuxiliaryStorageGroups<Dim>>;
+  using registry_snapshot_type = std::vector<runtime::system::ExactAuxiliaryRegistry<Dim>>;
+  std::optional<storage_snapshot_type> storage_snapshot;
+  std::optional<registry_snapshot_type> registry_snapshot;
+  std::vector<std::optional<transaction_type>> transactions;
+  decltype(p_->dirty_auxiliary_providers) dirty_snapshot;
+  const std::size_t level_count = hierarchy.provider_storage.size();
+  std::exception_ptr snapshot_error;
+  try {
+    storage_snapshot.emplace();
+    storage_snapshot->reserve(level_count);
+    for (const auto& level : hierarchy.provider_storage) {
+      if (!level)
+        throw std::logic_error("AMR auxiliary snapshot has an empty accepted carrier");
+      storage_snapshot->push_back(*level);
+    }
+    registry_snapshot.emplace(hierarchy.auxiliary_registries);
+    transactions.resize(level_count);
+    dirty_snapshot = p_->dirty_auxiliary_providers;
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      snapshot_error, &lane,
+      "AMR auxiliary snapshot failed collectively before multi-level publication");
+
+  const auto rollback_all_levels = [&]() -> std::exception_ptr {
+    for (auto& transaction : transactions)
+      if (transaction)
+        transaction->reject();
+    std::exception_ptr rollback_error;
     try {
-      for (std::size_t provider_index : registry.topological_order()) {
-        const auto& provider = registry.provider(provider_index);
-        if (provider.kind() != runtime::system::AuxiliaryProviderKind::input ||
-            !provider.policy().requires_evaluation(
-                registry.last_accepted_point(provider.identity()), level_point))
-          continue;
-        for (const auto& output : provider.outputs()) {
-          const auto staged = p_->staged_auxiliary_inputs.find(output.key.exact_key());
-          if (staged == p_->staged_auxiliary_inputs.end())
-            throw std::runtime_error("AMR InputAux provider is due but has no staged value");
-          const auto address = registry.address_of(output.key);
-          auto* group = candidate.find(address.group);
-          if (group == nullptr)
-            throw std::logic_error("AMR auxiliary candidate lacks a resolved storage group");
-          if (level == 0) {
-            write_component(*group, p_->engine->hierarchy().layout(0).domain(), staged->second,
-                            static_cast<int>(address.component));
-          } else {
-            const auto* parent = p_->prepared_hierarchy->provider_storage[level - 1]->find(address.group);
-            if (parent == nullptr)
-              throw std::logic_error("AMR auxiliary transfer lost a parent storage group");
-            auto transferred = transfer_regridded_state(
-                *parent, p_->engine->hierarchy().layout(level - 1),
-                p_->engine->hierarchy().layout(level),
-                std::optional<SparseFieldImage<Dim>>{},
-                p_->prepared_hierarchy->lane->communicator(), amr::transfer::TransferKind::ConstantInjection);
-            copy_full_field_in_place(transferred, *group);
+      for (std::size_t level = 0; level < level_count; ++level)
+        copy_auxiliary_groups_in_place((*storage_snapshot)[level],
+                                       *hierarchy.provider_storage[level]);
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    try {
+      for (std::size_t level = 0; level < level_count; ++level)
+        copy_auxiliary_groups_in_place(*hierarchy.provider_storage[level],
+                                       *hierarchy.provider_candidate_storage[level]);
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    try {
+      hierarchy.auxiliary_registries.swap(*registry_snapshot);
+      p_->dirty_auxiliary_providers.swap(dirty_snapshot);
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    return rollback_error;
+  };
+  const auto rollback_and_rethrow = [&](std::exception_ptr operation_error,
+                                        const char* operation_message) {
+    const std::exception_ptr rollback_error = rollback_all_levels();
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        rollback_error, &lane, "AMR auxiliary multi-level rollback failed collectively");
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(operation_error, &lane,
+                                                                        operation_message);
+  };
+
+  std::exception_ptr preparation_error;
+  try {
+    for (std::size_t level = 0; level < level_count; ++level) {
+      runtime::system::ExactAuxiliaryRegistry<Dim>* registry = nullptr;
+      runtime::system::AuxiliaryStorageGroups<Dim>* candidate = nullptr;
+      runtime::system::AuxiliaryEvaluationPoint level_point;
+      std::exception_ptr candidate_error;
+      try {
+        registry = &hierarchy.auxiliary_registries.at(level);
+        candidate = hierarchy.provider_candidate_storage.at(level).get();
+        if (candidate == nullptr)
+          throw std::logic_error("AMR auxiliary candidate carrier is empty");
+        level_point = point;
+        level_point.level = static_cast<int>(level);
+        transactions[level].emplace(
+            registry->begin_publication(level_point, p_->dirty_auxiliary_providers));
+      } catch (...) {
+        candidate_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          candidate_error, &lane,
+          "AMR auxiliary candidate preparation failed collectively before input staging");
+      auto& transaction = *transactions[level];
+      if (hierarchy.provider_storage[level]->groups.empty())
+        continue;
+
+      std::vector<std::size_t> due_inputs;
+      std::exception_ptr staging_error;
+      try {
+        copy_auxiliary_groups_in_place(*hierarchy.provider_storage[level], *candidate);
+        due_inputs.reserve(registry->topological_order().size());
+        for (std::size_t provider_index : registry->topological_order()) {
+          const auto& provider = registry->provider(provider_index);
+          if (provider.kind() != runtime::system::AuxiliaryProviderKind::input ||
+              !transaction.requires_staging(provider.identity()))
+            continue;
+          due_inputs.push_back(provider_index);
+          for (const auto& output : provider.outputs()) {
+            const auto staged = p_->staged_auxiliary_inputs.find(output.key.exact_key());
+            if (staged == p_->staged_auxiliary_inputs.end())
+              throw std::runtime_error("AMR InputAux provider is due but has no staged value");
+            const auto address = registry->address_of(output.key);
+            if (candidate->find(address.group) == nullptr)
+              throw std::logic_error("AMR auxiliary candidate lacks a resolved storage group");
+            if (level != 0 &&
+                hierarchy.provider_candidate_storage[level - 1]->find(address.group) == nullptr)
+              throw std::logic_error("AMR auxiliary transfer lost a parent candidate group");
           }
         }
-        transaction.stage_external(provider.identity());
+      } catch (...) {
+        staging_error = std::current_exception();
       }
-      transaction.launch_ready_native({p_->prepared_hierarchy->provider_storage[level].get(),
-                                       &candidate});
-      Kokkos::fence();
-      transaction.accept();
-      *p_->prepared_hierarchy->provider_storage[level] = std::move(candidate);
-      auto& identities = p_->prepared_hierarchy->provider_storage_identity[level];
-      identities.clear();
-      for (const auto& [identity, group] : p_->prepared_hierarchy->provider_storage[level]->groups)
-        identities.emplace(identity, field_storage_identity(group));
-    } catch (...) {
-      transaction.reject();
-      throw;
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          staging_error, &lane,
+          "AMR auxiliary input staging preflight failed collectively before ghost preparation");
+
+      for (std::size_t provider_index : due_inputs) {
+        const auto& provider = registry->provider(provider_index);
+        std::exception_ptr provider_staging_error;
+        try {
+          for (const auto& output : provider.outputs()) {
+            const auto staged = p_->staged_auxiliary_inputs.find(output.key.exact_key());
+            const auto address = registry->address_of(output.key);
+            auto* group = candidate->find(address.group);
+            if (level == 0) {
+              write_component(*group, p_->engine->hierarchy().layout(0).domain(), staged->second,
+                              static_cast<int>(address.component));
+            } else {
+              const auto* parent =
+                  hierarchy.provider_candidate_storage[level - 1]->find(address.group);
+              auto transferred = transfer_regridded_state(
+                  *parent, p_->engine->hierarchy().layout(level - 1),
+                  p_->engine->hierarchy().layout(level), std::optional<SparseFieldImage<Dim>>{},
+                  lane.communicator(), amr::transfer::TransferKind::ConstantInjection);
+              copy_full_field_in_place(transferred, *group);
+            }
+          }
+          transaction.stage_external(provider.identity());
+        } catch (...) {
+          provider_staging_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            provider_staging_error, &lane,
+            "AMR auxiliary input staging failed collectively before provider ghost fill");
+      }
+      runtime::multiblock::BoundaryEvaluationPoint boundary_point;
+      std::exception_ptr point_error;
+      try {
+        boundary_point = auxiliary_boundary_evaluation_point(level_point);
+      } catch (...) {
+        point_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          point_error, &lane,
+          "AMR auxiliary boundary point failed collectively before provider ghost fill");
+      const auto refresh_candidate_ghosts = [&] {
+        PreparedProviderGroupsGhostFill<Dim>* fill = nullptr;
+        runtime::system::PreparedAuxiliaryPhysicalBoundaries<Dim>* physical = nullptr;
+        std::exception_ptr authority_error;
+        try {
+          auto& prepared_fill = hierarchy.provider_candidate_ghost_fills[level];
+          auto& prepared_physical = hierarchy.provider_candidate_physical_boundaries[level];
+          if (!prepared_fill || !prepared_physical)
+            throw std::logic_error("AMR auxiliary candidate ghost authority is incomplete");
+          fill = &prepared_fill;
+          physical = &*prepared_physical;
+        } catch (...) {
+          authority_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            authority_error, &lane, "AMR auxiliary candidate ghost authority failed collectively");
+        std::exception_ptr hierarchy_ghost_error;
+        try {
+          (*fill)(*candidate, boundary_point);
+        } catch (...) {
+          hierarchy_ghost_error = std::current_exception();
+        }
+        runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+            hierarchy_ghost_error, &lane, "AMR auxiliary hierarchy ghost fill failed collectively");
+        physical->execute(*candidate);
+      };
+      refresh_candidate_ghosts();
+      transaction.launch_ready_native(
+          {hierarchy.provider_storage[level].get(), candidate},
+          [&](const auto&, std::exception_ptr local_error) {
+            runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+                local_error, &lane,
+                "AMR auxiliary native provider launch failed collectively before ghost fill");
+            refresh_candidate_ghosts();
+          });
+      std::exception_ptr fence_error;
+      try {
+        Kokkos::fence();
+      } catch (...) {
+        fence_error = std::current_exception();
+      }
+      runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+          fence_error, &lane, "AMR auxiliary device fence failed collectively");
+      runtime::system::require_finite_auxiliary_groups(*candidate, &lane,
+                                                       "AMR auxiliary publication");
     }
+    for (const auto& transaction : transactions)
+      transaction->validate_complete();
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  const long preparation_failed = all_reduce_max(preparation_error ? 1L : 0L, lane.communicator());
+  if (preparation_failed != 0) {
+    rollback_and_rethrow(preparation_error,
+                         "AMR auxiliary multi-level preparation failed collectively");
+    return;
+  }
+
+  std::exception_ptr storage_commit_error;
+  try {
+    for (std::size_t level = 0; level < level_count; ++level)
+      copy_auxiliary_groups_in_place(*hierarchy.provider_candidate_storage[level],
+                                     *hierarchy.provider_storage[level]);
+  } catch (...) {
+    storage_commit_error = std::current_exception();
+  }
+  const long storage_commit_failed =
+      all_reduce_max(storage_commit_error ? 1L : 0L, lane.communicator());
+  if (storage_commit_failed != 0) {
+    rollback_and_rethrow(storage_commit_error,
+                         "AMR auxiliary multi-level storage commit failed collectively");
+    return;
+  }
+
+  std::exception_ptr metadata_commit_error;
+  try {
+    for (auto& transaction : transactions)
+      transaction->accept();
+  } catch (...) {
+    metadata_commit_error = std::current_exception();
+  }
+  const long metadata_commit_failed =
+      all_reduce_max(metadata_commit_error ? 1L : 0L, lane.communicator());
+  if (metadata_commit_failed != 0) {
+    rollback_and_rethrow(metadata_commit_error,
+                         "AMR auxiliary multi-level metadata commit failed collectively");
+    return;
   }
   p_->dirty_auxiliary_providers.clear();
 }
@@ -4859,11 +5476,9 @@ void AmrSystem<Dim>::set_field_nullspace(const std::string& provider_slot,
 }
 
 template <int Dim>
-void AmrSystem<Dim>::register_elliptic_field(const std::string& block_name,
-                                             const std::string& provider_key,
-                                             const std::vector<
-                                                 runtime::system::AuxiliaryComponentKey>& output_keys,
-                                             int gradient_sign) {
+void AmrSystem<Dim>::register_elliptic_field(
+    const std::string& block_name, const std::string& provider_key,
+    const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign) {
   require_amr_assembling(p_->lifecycle, "register_elliptic_field");
   if (p_->engine)
     throw std::runtime_error(
@@ -6529,8 +7144,7 @@ template void AmrSystem<kNativeDimension>::stage_auxiliary_input(
 template void AmrSystem<kNativeDimension>::refresh_auxiliary(
     const runtime::system::AuxiliaryEvaluationPoint&);
 template runtime::system::AuxiliaryStorageAddress<kNativeDimension>
-AmrSystem<kNativeDimension>::auxiliary_address(
-    const runtime::system::AuxiliaryComponentKey&) const;
+AmrSystem<kNativeDimension>::auxiliary_address(const runtime::system::AuxiliaryComponentKey&) const;
 template std::vector<double> AmrSystem<kNativeDimension>::auxiliary_component(
     const runtime::system::AuxiliaryComponentKey&, int) const;
 template std::string AmrSystem<kNativeDimension>::auxiliary_registry_contract() const;
@@ -6602,11 +7216,9 @@ template void AmrSystem<kNativeDimension>::set_field_newton_plan(const std::stri
 template void AmrSystem<kNativeDimension>::set_field_nullspace(const std::string&,
                                                                const std::string&,
                                                                const PreparedProviderOptions&);
-template void AmrSystem<kNativeDimension>::register_elliptic_field(const std::string&,
-                                                                   const std::string&,
-                                                                   const std::vector<runtime::system::
-                                                                       AuxiliaryComponentKey>&,
-                                                                   int);
+template void AmrSystem<kNativeDimension>::register_elliptic_field(
+    const std::string&, const std::string&,
+    const std::vector<runtime::system::AuxiliaryComponentKey>&, int);
 template void AmrSystem<kNativeDimension>::set_block_elliptic_field(
     const std::string&, const std::string&,
     std::function<void(const MultiFab<kNativeDimension>&, MultiFab<kNativeDimension>&)>);

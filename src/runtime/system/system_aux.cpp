@@ -5,10 +5,10 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -117,26 +117,6 @@ std::vector<double> read_auxiliary_component(const MultiFab<Dim>& carrier, const
 }
 
 template <int Dim>
-void require_finite_auxiliary_candidate(const MultiFab<Dim>& candidate) {
-  using namespace runtime::system::marshaling;
-  long nonfinite = 0;
-  for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-    const Fab<Dim>& fab = candidate.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-      for (int component = 0; component < candidate.ncomp(); ++component)
-        if (!std::isfinite(static_cast<double>(host(storage_ordinal(fab, index, component)))))
-          ++nonfinite;
-    });
-  }
-  if (all_reduce_sum(nonfinite) != 0)
-    throw std::runtime_error(
-        "System auxiliary publication rejected: native provider candidate contains non-finite "
-        "values");
-}
-
-template <int Dim>
 void require_collective_auxiliary_point(const AuxiliaryEvaluationPoint& point) {
   ExactContractBuilder exact;
   point.serialize_exact(exact);
@@ -202,10 +182,27 @@ void System<Dim>::seal_auxiliary_providers() {
     return;
   }
 
-  auto candidate_registry = p_->auxiliary_registry_;
+  using registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
+  using carrier_type = runtime::system::AuxiliaryStorageGroups<Dim>;
+  std::optional<registry_type> candidate_registry;
+  std::optional<carrier_type> candidate_carrier;
   std::exception_ptr local_error;
   try {
-    candidate_registry.seal();
+    candidate_registry.emplace(p_->auxiliary_registry_);
+    candidate_registry->seal();
+    if (candidate_registry->slot_count() != 0) {
+      candidate_carrier.emplace();
+      for (const auto& group : candidate_registry->storage_groups()) {
+        if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+          throw std::overflow_error("System auxiliary storage-group width exceeds int");
+        Extent<Dim> ghosts{};
+        for (int axis = 0; axis < Dim; ++axis)
+          ghosts[axis] = group.shape.halo[axis];
+        candidate_carrier->groups.emplace(
+            group.identity, MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
+                                          static_cast<int>(group.component_count), ghosts));
+      }
+    }
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -215,26 +212,12 @@ void System<Dim>::seal_auxiliary_providers() {
     throw std::runtime_error("System auxiliary registry preparation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"system-auxiliary-registry", candidate_registry.collective_contract()}}))
+          {{"system-auxiliary-registry", candidate_registry->collective_contract()}}))
     throw std::runtime_error("System auxiliary registry differs across MPI ranks");
 
-  const std::size_t slots = candidate_registry.slot_count();
-  std::optional<runtime::system::AuxiliaryStorageGroups<Dim>> candidate_carrier;
-  if (slots != 0) {
-    candidate_carrier.emplace();
-    for (const auto& group : candidate_registry.storage_groups()) {
-      if (group.component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        throw std::overflow_error("System auxiliary storage-group width exceeds int");
-      Extent<Dim> ghosts{};
-      for (int axis = 0; axis < Dim; ++axis)
-        ghosts[axis] = group.shape.halo[axis];
-      candidate_carrier->groups.emplace(
-          group.identity, MultiFab<Dim>(p_->ba, p_->dm, p_->local_rank,
-                                        static_cast<int>(group.component_count), ghosts));
-    }
-  }
-  p_->auxiliary_registry_ = std::move(candidate_registry);
+  p_->auxiliary_registry_ = std::move(*candidate_registry);
   p_->provider_carrier_ = std::move(candidate_carrier);
+  p_->auxiliary_ghost_transport_.reset();
   p_->auxiliary_registry_consensus_verified_ = true;
 }
 
@@ -277,36 +260,83 @@ void System<Dim>::refresh_auxiliary(const AuxiliaryEvaluationPoint& point) {
     p_->dirty_auxiliary_providers_.clear();
     return;
   }
-  if (!p_->provider_carrier_)
-    throw std::logic_error("System sealed auxiliary registry has no compact carrier allocation");
-
-  runtime::system::AuxiliaryStorageGroups<Dim> candidate = *p_->provider_carrier_;
-  auto transaction =
-      p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_);
+  runtime::system::AuxiliaryStorageGroups<Dim> candidate;
+  using transaction_type =
+      typename runtime::system::ExactAuxiliaryRegistry<Dim>::PublicationTransaction;
+  std::optional<transaction_type> prepared_transaction;
+  std::exception_ptr candidate_error;
   try {
-    for (const std::size_t index : p_->auxiliary_registry_.topological_order()) {
-      const auto& provider = p_->auxiliary_registry_.provider(index);
-      if (provider.kind() != AuxiliaryProviderKind::input ||
-          !provider.policy().requires_evaluation(
-              p_->auxiliary_registry_.last_accepted_point(provider.identity()), point))
-        continue;
-      for (const auto& output : provider.outputs()) {
-        const auto staged = p_->staged_auxiliary_inputs_.find(output.key.exact_key());
-        if (staged == p_->staged_auxiliary_inputs_.end())
-          throw std::runtime_error(
-              "System auxiliary input provider is due but one output was never staged");
-        const auto address = p_->auxiliary_registry_.address_of(output.key);
-        auto* group = candidate.find(address.group);
-        if (group == nullptr)
-          throw std::logic_error("System auxiliary candidate lacks the resolved storage group");
-        write_auxiliary_component(*group, p_->dom, address.component, staged->second);
+    if (!p_->provider_carrier_)
+      throw std::logic_error("System sealed auxiliary registry has no compact carrier allocation");
+    candidate = *p_->provider_carrier_;
+    prepared_transaction.emplace(
+        p_->auxiliary_registry_.begin_publication(point, p_->dirty_auxiliary_providers_));
+  } catch (...) {
+    candidate_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      candidate_error, nullptr,
+      "System auxiliary candidate preparation failed collectively before lane duplication");
+  auto& transaction = *prepared_transaction;
+  try {
+    if (!p_->auxiliary_ghost_lane_)
+      p_->auxiliary_ghost_lane_.emplace(
+          ExecutionLane::duplicate_world_collectively("pops.system.auxiliary-ghosts"));
+    std::exception_ptr staging_error;
+    try {
+      for (const std::size_t index : p_->auxiliary_registry_.topological_order()) {
+        const auto& provider = p_->auxiliary_registry_.provider(index);
+        if (provider.kind() != AuxiliaryProviderKind::input ||
+            !transaction.requires_staging(provider.identity()))
+          continue;
+        for (const auto& output : provider.outputs()) {
+          const auto staged = p_->staged_auxiliary_inputs_.find(output.key.exact_key());
+          if (staged == p_->staged_auxiliary_inputs_.end())
+            throw std::runtime_error(
+                "System auxiliary input provider is due but one output was never staged");
+          const auto address = p_->auxiliary_registry_.address_of(output.key);
+          auto* group = candidate.find(address.group);
+          if (group == nullptr)
+            throw std::logic_error("System auxiliary candidate lacks the resolved storage group");
+          write_auxiliary_component(*group, p_->dom, address.component, staged->second);
+        }
+        transaction.stage_external(provider.identity());
       }
-      transaction.stage_external(provider.identity());
+    } catch (...) {
+      staging_error = std::current_exception();
     }
-    transaction.launch_ready_native({&*p_->provider_carrier_, &candidate});
-    Kokkos::fence();
-    for (const auto& [_, group] : candidate.groups)
-      require_finite_auxiliary_candidate(group);
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        staging_error, &*p_->auxiliary_ghost_lane_,
+        "System auxiliary input staging failed collectively before ghost preparation");
+    if (!p_->auxiliary_ghost_transport_)
+      p_->auxiliary_ghost_transport_.emplace(runtime::system::prepare_auxiliary_ghost_transport(
+          *p_->provider_carrier_, p_->auxiliary_registry_, p_->dom, p_->geom,
+          BoundaryTopology<Dim>::axis_periodic(p_->periodicity), &*p_->auxiliary_ghost_lane_));
+    const auto refresh_candidate_ghosts = [&] {
+      p_->auxiliary_ghost_transport_->execute(candidate);
+    };
+    // Inputs become dependency-visible only after their exact same-level/remote and physical
+    // ghosts exist.  Repeat after each derived launch so a stencil-valued derived provider never
+    // observes a predecessor's valid-only candidate image.
+    refresh_candidate_ghosts();
+    transaction.launch_ready_native(
+        {&*p_->provider_carrier_, &candidate}, [&](const auto&, std::exception_ptr local_error) {
+          runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+              local_error, &*p_->auxiliary_ghost_lane_,
+              "System auxiliary native provider launch failed collectively before ghost fill");
+          refresh_candidate_ghosts();
+        });
+    std::exception_ptr fence_error;
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      fence_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        fence_error, &*p_->auxiliary_ghost_lane_,
+        "System auxiliary device fence failed collectively");
+    runtime::system::require_finite_auxiliary_groups(candidate, &*p_->auxiliary_ghost_lane_,
+                                                     "System auxiliary publication");
     transaction.accept();
     p_->provider_carrier_ = std::move(candidate);
     p_->dirty_auxiliary_providers_.clear();
@@ -386,7 +416,8 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   try {
     if (state.groups.empty()) {
       if (p_->provider_carrier_)
-        throw std::invalid_argument("System auxiliary checkpoint storage groups differ from runtime");
+        throw std::invalid_argument(
+            "System auxiliary checkpoint storage groups differ from runtime");
     } else {
       if (!p_->provider_carrier_)
         throw std::invalid_argument("System auxiliary checkpoint requires live storage groups");
@@ -409,19 +440,63 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
           {{std::string_view("pops.uniform-auxiliary-checkpoint"), collective_contract}}))
     throw std::runtime_error("System auxiliary checkpoint differs between communicator ranks");
 
-  const auto registry_snapshot = p_->auxiliary_registry_;
-  const auto storage_snapshot = p_->provider_carrier_;
-  const auto staged_snapshot = p_->staged_auxiliary_inputs_;
-  const auto dirty_snapshot = p_->dirty_auxiliary_providers_;
+  using registry_type = runtime::system::ExactAuxiliaryRegistry<Dim>;
+  using carrier_type = runtime::system::AuxiliaryStorageGroups<Dim>;
+  std::optional<registry_type> registry_snapshot;
+  std::optional<carrier_type> storage_snapshot;
+  decltype(p_->staged_auxiliary_inputs_) staged_snapshot;
+  decltype(p_->dirty_auxiliary_providers_) dirty_snapshot;
+  const bool had_storage = p_->provider_carrier_.has_value();
+  std::exception_ptr snapshot_error;
+  try {
+    registry_snapshot.emplace(p_->auxiliary_registry_);
+    if (had_storage)
+      storage_snapshot.emplace(*p_->provider_carrier_);
+    staged_snapshot = p_->staged_auxiliary_inputs_;
+    dirty_snapshot = p_->dirty_auxiliary_providers_;
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      snapshot_error, nullptr,
+      "System auxiliary checkpoint snapshot failed collectively before registry mutation");
+
+  std::exception_ptr restore_error;
   try {
     runtime::system::restore_auxiliary_checkpoint_state(state, p_->auxiliary_registry_);
     p_->dirty_auxiliary_providers_.clear();
   } catch (...) {
-    p_->auxiliary_registry_ = registry_snapshot;
-    p_->provider_carrier_ = storage_snapshot;
-    p_->staged_auxiliary_inputs_ = staged_snapshot;
-    p_->dirty_auxiliary_providers_ = dirty_snapshot;
-    throw;
+    restore_error = std::current_exception();
+  }
+  const long restore_failed = all_reduce_max(restore_error ? 1L : 0L);
+  if (restore_failed != 0) {
+    std::exception_ptr rollback_error;
+    p_->auxiliary_ghost_transport_.reset();
+    try {
+      p_->auxiliary_registry_ = std::move(*registry_snapshot);
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    try {
+      if (had_storage)
+        p_->provider_carrier_ = std::move(*storage_snapshot);
+      else
+        p_->provider_carrier_.reset();
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    try {
+      p_->staged_auxiliary_inputs_.swap(staged_snapshot);
+      p_->dirty_auxiliary_providers_.swap(dirty_snapshot);
+    } catch (...) {
+      if (!rollback_error)
+        rollback_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        rollback_error, nullptr, "System auxiliary checkpoint rollback failed collectively");
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        restore_error, nullptr, "System auxiliary checkpoint restore failed collectively");
   }
 }
 

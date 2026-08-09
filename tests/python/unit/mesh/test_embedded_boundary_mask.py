@@ -1,33 +1,16 @@
 #!/usr/bin/env python3
-"""Chantier T2 : masque de domaine DISQUE conservatif (CONTRAT, inerte par defaut).
+"""Analytic embedded-boundary mask contract (inert by default).
 
-Cote Python on valide le CONTRAT du scaffolding (l'API existe, est inerte par defaut, et le masque
-materialise correspond bien au disque) :
-
-  (a) BIT-IDENTITE / inertie : tant que set_disc_domain n'est PAS appele, disc_mask() est TOUT ACTIF
-      (que des 1.0) et une advection step() est BYTE-IDENTIQUE a un run jumeau qui ne touche jamais
-      l'API disque. Construire / interroger la machinerie disque (defaut) ne perturbe pas la
-      trajectoire -- c'est l'invariant "inerte par defaut".
-
-  (b) Le masque materialise par set_disc_domain est le DISQUE attendu : 0/1 cellule-centre coincidant
-      AVEC le level set hypot(x-cx, y-cy) - R < 0 (meme convention que le mur conducteur du Poisson).
-      Et les garde-fous du contrat sont actifs (R > 0, cartesien seulement).
-
-ATTENTION : ce PR est un CONTRAT (geometrie option 2a). set_disc_domain CONSTRUIT le masque mais ne
-BRANCHE PAS encore le transport mask-aware dans step() -> la trajectoire reste celle du chemin
-cartesien plein. La conservation FV du sous-domaine actif est validee cote C++
-(tests/cpp/unit/runtime/test_disc_domain_mask.cpp, qui exerce assemble_rhs_masked).
-
-Lance comme un simple script python3 (pas pytest : la CI lance ces tests directement). Se saute
-proprement si le module _pops n'est pas importable (build absent).
+The native runtime owns one exact-rank signed LevelSet and materializes its active mask.  This
+script retains the useful checks: no geometry is bit-identical to Cartesian, a generic implicit
+surface produces the exact 0/1 cell-centred mask, and transport mode requires that geometry.
 """
 from tests.python.support.requirements import require_native_or_skip
 
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
-from pops.mesh.geometry import DiscDomain
-from pops.mesh.polar import PolarMesh
+from pops.mesh.masks import Staircase
 from tests.python.support.explicit_program import install_forward_euler_program
 
 import numpy as np
@@ -85,25 +68,41 @@ def _build(n, L):
     return sim
 
 
+def _install_half_space(sim, mode="staircase"):
+    from pops.analytic import coordinates
+    from pops.domain import CartesianDomain
+    from pops.mesh.geometry import LevelSet
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    frame = CartesianDomain("test-eb-mask", (0.0, 0.0), (1.0, 1.0)).frame()
+    level_set = LevelSet(coordinates(frame)[0] - 0.5)
+    ((opcodes, literals),) = lower_analytic_components(
+        (level_set.expression.to_data(),), frame_id=frame.canonical_id
+    )
+    sim._s._set_analytic_level_set(
+        list(opcodes), list(literals), mode, 0.0, 0.0, 0.0
+    )
+
+
 def test_inert_default():
     n, L = 40, 1.0
 
-    # disc_mask() est TOUT ACTIF tant que set_disc_domain n'est pas appele.
+    # No installed LevelSet means an all-active mask.
     sim = _build(n, L)
-    mk = np.array(sim.disc_mask())
+    mk = np.array(sim.embedded_boundary_mask())
     chk(mk.shape == (n, n),
-        "(a) disc_mask() a la forme (ny, nx) = (%d, %d) : recu %r" % (n, n, tuple(mk.shape)))
+        "(a) embedded_boundary_mask() has shape (ny, nx) = (%d, %d): got %r"
+        % (n, n, tuple(mk.shape)))
     chk(np.all(mk == 1.0),
         "(a) masque TOUT ACTIF par defaut (tous 1.0, sous-domaine = domaine entier) : min = %g, "
         "max = %g" % (float(mk.min()), float(mk.max())))
 
-    # Run jumeau : l'un INTERROGE disc_mask() a chaque pas (machinerie disque, defaut tout-actif),
-    # l'autre ne touche JAMAIS l'API disque. Trajectoires BYTE-IDENTIQUES.
+    # Querying the default sidecar must not perturb an otherwise identical Cartesian trajectory.
     sim_a = _build(n, L)
     sim_b = _build(n, L)
     dt = 0.2 * (L / n) / np.hypot(0.7, 0.4)
     for _ in range(30):
-        _ = sim_a.disc_mask()  # interroge la machinerie disque (defaut) a chaque pas
+        _ = sim_a.embedded_boundary_mask()
         sim_a.step(dt)
         sim_b.step(dt)
     ua = np.array(sim_a.density("s"))
@@ -111,7 +110,7 @@ def test_inert_default():
     max_diff = float(np.max(np.abs(ua - ub)))
     print("    [INERTIE] max|rho_avec_query - rho_sans_query| = %.3e (attendu 0)" % max_diff)
     chk(max_diff == 0.0,
-        "(a) interroger la machinerie disque (defaut) ne change pas la trajectoire d'un bit "
+        "(a) querying the default embedded-boundary mask does not change the trajectory "
         "(diff = 0) : invariant inerte par defaut")
     chk(np.max(np.abs(ua - 1.0)) > 1e-3,
         "(a) le transport a effectivement avance l'etat (test non trivial) : max dev = %.3e"
@@ -119,74 +118,61 @@ def test_inert_default():
 
 
 # ---------------------------------------------------------------------------
-# (b) le masque set_disc_domain est le DISQUE attendu (coincide avec le level set)
+# (b) a generic analytic LevelSet materializes the expected mask
 # ---------------------------------------------------------------------------
 
-def test_disc_mask_matches_levelset():
+def test_analytic_level_set_mask_matches_half_space():
     n, L = 48, 1.0
-    cx, cy, R = 0.5, 0.5, 0.3
     sim = _build(n, L)
-    sim.set_disc_domain(DiscDomain(center=(cx, cy), radius=R))
-    mk = np.array(sim.disc_mask())
+    _install_half_space(sim)
+    mk = np.array(sim.embedded_boundary_mask())
 
-    # Reference : level set hypot(x_cell - cx, y_cell - cy) - R < 0 au CENTRE des cellules.
-    # disc_mask() est (ny, nx) row-major (j lent, i rapide) ; x = i rapide -> meshgrid indexing 'xy'.
+    # phi = x - 1/2; active is the strict convention phi < 0.  x varies along columns.
     xc = (np.arange(n) + 0.5) * (L / n)
     yc = (np.arange(n) + 0.5) * (L / n)
-    XI, YJ = np.meshgrid(xc, yc, indexing="xy")  # XI varie sur l'axe i (colonnes), YJ sur j (lignes)
-    ls = np.hypot(XI - cx, YJ - cy) - R
+    XI, _ = np.meshgrid(xc, yc, indexing="xy")
+    ls = XI - 0.5
     expected = (ls < 0.0).astype(np.float64)
 
-    chk(mk.shape == (n, n), "(b) disc_mask() forme (ny, nx)")
+    chk(mk.shape == (n, n), "(b) embedded_boundary_mask() shape (ny, nx)")
     n_active = int(mk.sum())
     chk(0 < n_active < n * n,
-        "(b) le disque partitionne la grille (actives ET inactives) : %d actives sur %d"
+        "(b) the analytic LevelSet partitions active and inactive cells: %d active out of %d"
         % (n_active, n * n))
     chk(np.array_equal(mk, expected),
-        "(b) masque == indicatrice du level set hypot(x-cx, y-cy) - R < 0 (meme convention que "
-        "le mur conducteur) : %d cellules en desaccord"
+        "(b) mask == indicator of phi=x-1/2 < 0: %d mismatched cells"
         % int(np.sum(mk != expected)))
     chk(set(np.unique(mk).tolist()) <= {0.0, 1.0},
         "(b) masque strictement 0/1 (valeurs uniques %r)" % np.unique(mk).tolist())
 
 
 # ---------------------------------------------------------------------------
-# (c) garde-fous du contrat : R > 0, cartesien seulement
+# (c) transport mode requires a prepared analytic geometry
 # ---------------------------------------------------------------------------
 
-def test_guards():
+def test_geometry_mode_requires_level_set():
     n, L = 32, 1.0
     sim = _build(n, L)
     raised = False
     try:
-        sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.0))
+        sim.set_geometry_mode(Staircase())
     except Exception:
         raised = True
-    chk(raised, "(c) set_disc_domain(R=0) leve (rayon R > 0 requis)")
-
-    # Polaire : l'anneau est deja borne par ses parois radiales -> set_disc_domain doit lever.
-    raised_polar = False
-    try:
-        simp = System(mesh=PolarMesh(nr=16, ntheta=16, r_min=0.2, r_max=1.0))
-        simp.set_disc_domain(DiscDomain(center=(0.0, 0.0), radius=0.5))
-    except Exception:
-        raised_polar = True
-    chk(raised_polar,
-        "(c) set_disc_domain leve en geometrie polaire (anneau deja borne par ses parois radiales)")
+    chk(raised, "(c) staircase mode requires a prepared analytic LevelSet")
 
 
 def main():
-    print("(a) inertie / bit-identite (masque tout actif par defaut)")
+    print("(a) inertie / bit-identite (all-active default mask)")
     test_inert_default()
-    print("(b) masque set_disc_domain == indicatrice du level set disque")
-    test_disc_mask_matches_levelset()
-    print("(c) garde-fous du contrat (R > 0, cartesien seulement)")
-    test_guards()
+    print("(b) analytic LevelSet mask == cell-centred indicator")
+    test_analytic_level_set_mask_matches_half_space()
+    print("(c) geometry-mode guard")
+    test_geometry_mode_requires_level_set()
 
     if fails == 0:
-        print("test_disc_domain_mask : tout est vert")
+        print("test_embedded_boundary_mask: all checks passed")
     else:
-        raise SystemExit("test_disc_domain_mask : %d verification(s) en echec" % fails)
+        raise SystemExit("test_embedded_boundary_mask: %d check(s) failed" % fails)
 
 
 if __name__ == "__main__":

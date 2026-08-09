@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <pops/runtime/system/exact_aux_registry.hpp>
+#include <pops/runtime/system/auxiliary_ghost_fill.hpp>
 #include <pops/runtime/system/auxiliary_checkpoint.hpp>
+#include <pops/runtime/system/exact_field_marshaling.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -17,6 +20,7 @@ namespace {
 using pops::ExactContractBuilder;
 using pops::PreparedProviderIdentity;
 using pops::runtime::system::AuxiliaryComponentContract;
+using pops::runtime::system::AuxiliaryBoundaryPolicy;
 using pops::runtime::system::AuxiliaryConsumerProviderPlan;
 using pops::runtime::system::AuxiliaryConsumerValue;
 using pops::runtime::system::AuxiliaryComponentKey;
@@ -257,6 +261,42 @@ TEST(ExactAuxiliaryRegistryNd, OrdersNativeLaunchesAndPublishesOnlyCompleteCandi
   verifies_topology_and_transaction<3>();
 }
 
+template <int Dim>
+void verifies_explicit_dirty_input_uses_transaction_authority() {
+  const auto value = output<Dim>("owner", "restaged", "value", 0);
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("restaged-input", value));
+  registry.seal();
+
+  {
+    auto candidate = registry.begin_publication(
+        point("initial", 0, AuxiliaryEvaluationEvent::initialization, 0, 0, 0, 0));
+    EXPECT_TRUE(candidate.requires_staging("restaged-input"));
+    candidate.stage_external("restaged-input");
+    candidate.accept();
+  }
+  {
+    auto candidate = registry.begin_publication(
+        point("unchanged", 1, AuxiliaryEvaluationEvent::before_residual, 0, 0, 0, 1));
+    EXPECT_FALSE(candidate.requires_staging("restaged-input"));
+    candidate.accept();
+  }
+  {
+    auto candidate = registry.begin_publication(
+        point("restaged", 2, AuxiliaryEvaluationEvent::before_residual, 0, 0, 0, 2),
+        {"restaged-input"});
+    EXPECT_TRUE(candidate.requires_staging("restaged-input"));
+    candidate.stage_external("restaged-input");
+    candidate.accept();
+  }
+}
+
+TEST(ExactAuxiliaryRegistryNd, ExplicitDirtyInputIsRepublishedInOneTwoAndThreeDimensions) {
+  verifies_explicit_dirty_input_uses_transaction_authority<1>();
+  verifies_explicit_dirty_input_uses_transaction_authority<2>();
+  verifies_explicit_dirty_input_uses_transaction_authority<3>();
+}
+
 TEST(ExactAuxiliaryRegistryNd, RejectsInvalidProviderClassAndHaloBeforePublication) {
   auto calls = std::make_shared<std::vector<std::string>>();
   EXPECT_THROW((PreparedAuxiliaryProvider<2>{
@@ -307,8 +347,7 @@ void verifies_consumer_local_slots_resolve_independently_of_storage_slots() {
   ExactAuxiliaryRegistry<Dim> registry;
   registry.add(input<Dim>("first-input", first));
   registry.add(input<Dim>("second-input", second));
-  registry.add_consumer_plan({"consumer-a",
-                              {{dependency(second), 0}, {dependency(first), 1}}});
+  registry.add_consumer_plan({"consumer-a", {{dependency(second), 0}, {dependency(first), 1}}});
   registry.seal();
 
   const auto& plan = registry.consumer_plan("consumer-a");
@@ -362,8 +401,8 @@ void verifies_provider_storage_binding_is_compact_and_group_qualified() {
   }
   const Box<Dim> domain{lower, upper};
   const BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
-  const auto distribution = Distribution<Dim>::replicated(
-      layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
+  const auto distribution =
+      Distribution<Dim>::replicated(layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
   MultiFab<Dim> state(layout, distribution, Index<Dim>{}, 1, ghosts);
 
   AuxiliaryStorageGroups<Dim> groups;
@@ -391,8 +430,8 @@ void verifies_provider_storage_binding_is_compact_and_group_qualified() {
 
   auto invalid_component = plan;
   invalid_component.values[0].address.component = 1;
-  EXPECT_THROW(((void)pops::runtime::system::bind_provider_storage_view<Dim, 2>(
-                    &invalid_component, &groups, 0)),
+  EXPECT_THROW(((void)pops::runtime::system::bind_provider_storage_view<Dim, 2>(&invalid_component,
+                                                                                &groups, 0)),
                std::invalid_argument);
 
   auto non_scalar = plan;
@@ -402,8 +441,8 @@ void verifies_provider_storage_binding_is_compact_and_group_qualified() {
                std::invalid_argument);
 
   // Provider-free consumers never inspect a plan or a storage carrier owned by another consumer.
-  EXPECT_NO_THROW(((void)pops::runtime::system::bind_provider_storage_view<Dim, 0>(
-      nullptr, nullptr, 0)));
+  EXPECT_NO_THROW(
+      ((void)pops::runtime::system::bind_provider_storage_view<Dim, 0>(nullptr, nullptr, 0)));
   EXPECT_NO_THROW((pops::runtime::system::require_pointwise_provider_groups<Dim, 0>(
       state, &groups, &plan, "test provider-free binding")));
 }
@@ -412,6 +451,127 @@ TEST(ExactAuxiliaryRegistryNd, ProviderStorageBindingIsExactAcrossRanksAndGroups
   verifies_provider_storage_binding_is_compact_and_group_qualified<1>();
   verifies_provider_storage_binding_is_compact_and_group_qualified<2>();
   verifies_provider_storage_binding_is_compact_and_group_qualified<3>();
+}
+
+template <int Dim>
+void verifies_transactional_auxiliary_ghosts() {
+  using pops::BoundaryTopology;
+  using pops::Box;
+  using pops::Extent;
+  using pops::Geometry;
+  using pops::Index;
+  using pops::MultiFab;
+  using pops::Real;
+  using pops::RealVector;
+  using pops::mesh::BoxArray;
+  using pops::mesh::Distribution;
+  using pops::mesh::RankSpace;
+  using pops::runtime::system::AuxiliaryStorageGroups;
+
+  Index<Dim> lower{};
+  Index<Dim> upper{};
+  Extent<Dim> one_rank{};
+  Extent<Dim> ghosts{};
+  RealVector<Dim> physical_lower{};
+  RealVector<Dim> physical_upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    upper[axis] = 2;
+    one_rank[axis] = 1;
+    ghosts[axis] = 1;
+    physical_upper[axis] = Real(3);
+  }
+  const Box<Dim> domain{lower, upper};
+  const BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
+  const auto distribution =
+      Distribution<Dim>::replicated(layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
+  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, physical_lower, physical_upper);
+
+  auto declared = output<Dim>("ghost-owner", "ghost-space", "value", 0);
+  declared.boundary = {AuxiliaryBoundaryPolicy::Kind::dirichlet, Real(7)};
+  auto secondary = output<Dim>("ghost-owner", "ghost-space-secondary", "value", 1);
+  // A distinct layout contract makes this a second resolved storage group while retaining the
+  // same dimension-generic halo geometry.
+  secondary.contract.layout = "compact-secondary";
+  secondary.boundary = {AuxiliaryBoundaryPolicy::Kind::dirichlet, Real(11)};
+  ExactAuxiliaryRegistry<Dim> registry;
+  registry.add(input<Dim>("ghost-input", declared));
+  registry.add(input<Dim>("ghost-input-secondary", secondary));
+  registry.seal();
+  AuxiliaryStorageGroups<Dim> groups;
+  ASSERT_EQ(registry.storage_groups().size(), 2U);
+  for (const auto& resolved : registry.storage_groups())
+    groups.groups.emplace(resolved.identity,
+                          MultiFab<Dim>(layout, distribution, Index<Dim>{},
+                                        static_cast<int>(resolved.component_count), ghosts));
+
+  const auto populate = [&](const AuxiliaryOutput<Dim>& output, int boundary_axis, Real base) {
+    const auto address = registry.address_of(output.key);
+    auto& field = *groups.find(address.group);
+    auto& fab = field.fab(0);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    for (int ordinal = 0; ordinal < 3; ++ordinal) {
+      Index<Dim> index{};
+      index[boundary_axis] = ordinal;
+      host(pops::runtime::system::marshaling::storage_ordinal(
+          fab, index, static_cast<int>(address.component))) = base + Real(ordinal);
+    }
+    fab.copy_from_host(host);
+  };
+
+  const auto expect_boundary = [&](const AuxiliaryOutput<Dim>& output, int boundary_axis,
+                                   Real expected) {
+    const auto address = registry.address_of(output.key);
+    auto& fab = groups.find(address.group)->fab(0);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    Index<Dim> ghost{};
+    ghost[boundary_axis] = -1;
+    EXPECT_EQ(host(pops::runtime::system::marshaling::storage_ordinal(
+                  fab, ghost, static_cast<int>(address.component))),
+              expected);
+  };
+
+  const auto inject_nonfinite_ghost = [&](const AuxiliaryOutput<Dim>& output, int boundary_axis) {
+    const auto address = registry.address_of(output.key);
+    auto& fab = groups.find(address.group)->fab(0);
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    Index<Dim> ghost{};
+    ghost[boundary_axis] = -1;
+    host(pops::runtime::system::marshaling::storage_ordinal(
+        fab, ghost, static_cast<int>(address.component))) = std::numeric_limits<Real>::quiet_NaN();
+    fab.copy_from_host(host);
+  };
+
+  for (int boundary_axis = 0; boundary_axis < Dim; ++boundary_axis) {
+    populate(declared, boundary_axis, Real(1));
+    populate(secondary, boundary_axis, Real(9));
+
+    std::array<bool, Dim> periodic{};
+    periodic.fill(true);
+    pops::runtime::system::refresh_auxiliary_group_ghosts(
+        groups, registry, domain, geometry, BoundaryTopology<Dim>::axis_periodic(periodic));
+    expect_boundary(declared, boundary_axis, Real(3));
+    expect_boundary(secondary, boundary_axis, Real(11));
+
+    periodic.fill(false);
+    pops::runtime::system::refresh_auxiliary_group_ghosts(
+        groups, registry, domain, geometry, BoundaryTopology<Dim>::axis_periodic(periodic));
+    expect_boundary(declared, boundary_axis, Real(13));
+    expect_boundary(secondary, boundary_axis, Real(13));
+
+    inject_nonfinite_ghost(declared, boundary_axis);
+    EXPECT_THROW(pops::runtime::system::require_finite_auxiliary_groups(
+                     groups, nullptr, "serial auxiliary ghost proof"),
+                 std::runtime_error);
+  }
+}
+
+TEST(ExactAuxiliaryRegistryNd, TransactionalProviderGhostsAreExactInOneTwoAndThreeDimensions) {
+  verifies_transactional_auxiliary_ghosts<1>();
+  verifies_transactional_auxiliary_ghosts<2>();
+  verifies_transactional_auxiliary_ghosts<3>();
 }
 
 template <int Dim>
@@ -427,9 +587,9 @@ void verifies_external_field_publication_defers_and_then_refreshes_dependents() 
       {AuxiliaryEvaluationEvent::before_residual, AuxiliaryFreshness::accepted_step},
       {field_output},
       {}});
-  registry.add(derived<Dim>("derived-b", derived_output, {dependency(field_output)}, launches,
-                            {AuxiliaryEvaluationEvent::before_residual,
-                             AuxiliaryFreshness::evaluation}));
+  registry.add(
+      derived<Dim>("derived-b", derived_output, {dependency(field_output)}, launches,
+                   {AuxiliaryEvaluationEvent::before_residual, AuxiliaryFreshness::evaluation}));
   registry.add_consumer_plan({"consumer/b", {{dependency(derived_output), 0}}});
   registry.seal();
 
@@ -488,13 +648,17 @@ ExactAuxiliaryRegistry<Dim> accepted_registry_for_checkpoint(
   ExactAuxiliaryRegistry<Dim> registry;
   registry.add(input<Dim>("checkpoint/input", input_output));
   registry.add(PreparedAuxiliaryProvider<Dim>{
-      "checkpoint/field", AuxiliaryProviderKind::field_output,
-      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once}, {field_output}, {}});
+      "checkpoint/field",
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {field_output},
+      {}});
   registry.add(derived<Dim>("checkpoint/derived", derived_output, {dependency(input_output)},
                             std::move(launches)));
   registry.seal();
 
-  const auto initialization = point("checkpoint-clock", 0, AuxiliaryEvaluationEvent::initialization);
+  const auto initialization =
+      point("checkpoint-clock", 0, AuxiliaryEvaluationEvent::initialization);
   auto initial_publication = registry.begin_publication(initialization);
   initial_publication.stage_external("checkpoint/input");
   initial_publication.stage_external("checkpoint/field");
@@ -528,8 +692,8 @@ pops::runtime::system::AuxiliaryStorageGroups<Dim> storage_for_checkpoint(
     one_rank[axis] = 1;
   }
   const BoxArray<Dim> layout(std::vector<Box<Dim>>{{lower, upper}});
-  const auto distribution = Distribution<Dim>::replicated(
-      layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
+  const auto distribution =
+      Distribution<Dim>::replicated(layout, RankSpace<Dim>(Index<Dim>{}, one_rank));
   AuxiliaryStorageGroups<Dim> storage;
   for (const auto& group : state.groups) {
     Extent<Dim> ghosts{};
@@ -557,9 +721,9 @@ void verifies_auxiliary_checkpoint_is_exact_and_restart_atomic() {
   ASSERT_EQ(image.groups.size(), 2U);
   ASSERT_EQ(image.components.size(), 3U);
   ASSERT_EQ(image.providers.size(), 3U);
-  EXPECT_EQ(deserialize_auxiliary_checkpoint_state<Dim>(
-                serialize_auxiliary_checkpoint_state(image)),
-            image);
+  EXPECT_EQ(
+      deserialize_auxiliary_checkpoint_state<Dim>(serialize_auxiliary_checkpoint_state(image)),
+      image);
 
   auto storage = storage_for_checkpoint<Dim>(image);
   EXPECT_NO_THROW(require_auxiliary_checkpoint_storage(image, storage));
@@ -575,8 +739,11 @@ void verifies_auxiliary_checkpoint_is_exact_and_restart_atomic() {
   const auto derived_output = output<Dim>("checkpoint/derived-owner", "derived", "force", 2);
   empty_history.add(input<Dim>("checkpoint/input", input_output));
   empty_history.add(PreparedAuxiliaryProvider<Dim>{
-      "checkpoint/field", AuxiliaryProviderKind::field_output,
-      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once}, {field_output}, {}});
+      "checkpoint/field",
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {field_output},
+      {}});
   empty_history.add(derived<Dim>("checkpoint/derived", derived_output, {dependency(input_output)},
                                  restarted_launches));
   empty_history.seal();

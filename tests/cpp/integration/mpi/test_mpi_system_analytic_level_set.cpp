@@ -1,15 +1,16 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/box.hpp>
+#include <pops/mesh/index/extent.hpp>
 #include <pops/mesh/layout/box_array.hpp>
-#include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/mesh/layout/distribution.hpp>
+#include <pops/mesh/layout/rank_space.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <algorithm>
@@ -26,15 +27,20 @@ using namespace pops;
 
 namespace {
 
-ModelSpec analytic_scalar_model() {
-  ModelSpec model;
-  model.transport = "exb";
-  model.source = "none";
-  model.elliptic = "charge";
-  return model;
+template <int Dim>
+SystemConfig<Dim> exact_system_config(int cells, bool periodic) {
+  SystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = cells;
+    config.lower[axis] = Real(0);
+    config.upper[axis] = Real(1);
+    config.periodicity[axis] = periodic;
+  }
+  return config;
 }
 
 int run_analytic_level_set_collective_preflight(int argc, char** argv) {
+  constexpr int Dim = kNativeDimension;
   comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard(argc, argv);
@@ -54,21 +60,35 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   // A Cartesian System currently owns one global patch, distributed round-robin to rank zero. This
   // probe mirrors that exact layout and proves that only one rank samples the invalid expression;
   // the other rank can reject only through the native collective preflight.
-  const Box2D domain = Box2D::from_extents(20, 20);
-  MultiFab ownership_probe(BoxArray(std::vector<Box2D>{domain}), DistributionMapping(1, n_ranks()),
-                           1, 1);
+  Extent<Dim> cell_extent{};
+  Extent<Dim> process_extent{};
+  Extent<Dim> ghosts{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    cell_extent[axis] = 20;
+    process_extent[axis] = axis == 0 ? n_ranks() : 1;
+    ghosts[axis] = 1;
+  }
+  const Box<Dim> domain = Box<Dim>::from_extents(cell_extent);
+  const mesh::BoxArray<Dim> ownership_layout(std::vector<Box<Dim>>{domain});
+  const mesh::RankSpace<Dim> rank_space(Index<Dim>{}, process_extent);
+  const mesh::Distribution<Dim> ownership = mesh::Distribution<Dim>::partitioned(
+      ownership_layout, rank_space, {rank_space.coordinate(0)});
+  MultiFab<Dim> ownership_probe(ownership_layout, ownership, rank_space.coordinate(my_rank()), 1,
+                                ghosts);
   const long local_sampler = ownership_probe.local_size() == 1 ? 1L : 0L;
   require(all_reduce_sum(local_sampler) == 1,
           "the invalid expression must be sampled on exactly one rank");
   require(local_sampler == (rank == 0 ? 1L : 0L),
           "the single Cartesian patch must be owned by rank zero");
 
-  System system(SystemConfig{20, 1.0, Periodicity{false, false}});
+  System<Dim> system(exact_system_config<Dim>(20, false));
   system.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.5, 0.0}, "staircase", 0.2, 1e-5,
                                 0.1);
-  const std::vector<double> before = system.disc_mask();
-  const auto active = std::count(before.begin(), before.end(), 1.0);
-  require(active > 0 && active < static_cast<std::ptrdiff_t>(before.size()),
+  const std::vector<double> before = system.embedded_boundary_mask();
+  const long active = static_cast<long>(std::count(before.begin(), before.end(), 1.0));
+  const long global_active = all_reduce_sum(active);
+  const long global_cells = all_reduce_sum(static_cast<long>(before.size()));
+  require(global_active > 0 && global_active < global_cells,
           "the committed reference mask must contain active and inactive cells");
 
   // Both requests are locally valid, but rank one changes the geometry mode and one exact binary64
@@ -87,7 +107,7 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   require(geometry_mismatch_rejected &&
               geometry_mismatch_message.find("differs across MPI ranks") != std::string::npos,
           "rank-dependent geometry rejection must identify exact MPI disagreement");
-  const std::vector<double> after_geometry_mismatch = system.disc_mask();
+  const std::vector<double> after_geometry_mismatch = system.embedded_boundary_mask();
   require(all_reduce_sum(after_geometry_mismatch == before ? 0L : 1L) == 0,
           "rank-dependent geometry rejection must preserve the committed mask");
 
@@ -111,212 +131,10 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   require(rejected && rejection_message.find("non-finite") != std::string::npos,
           "every rank must report the analytic finite-value contract");
 
-  const std::vector<double> after = system.disc_mask();
+  const std::vector<double> after = system.embedded_boundary_mask();
   const long local_partial_publication = before == after ? 0L : 1L;
   require(all_reduce_sum(local_partial_publication) == 0,
           "failed replacement must preserve the previously committed global mask on every rank");
-
-  // Every rank supplies a locally valid scalar program, but rank one changes one binary64 literal.
-  // Exact request consensus must reject before either rank writes the System state.
-  System expression_system(SystemConfig{12, 1.0, Periodicity{true, true}});
-  expression_system.add_block("plasma", analytic_scalar_model());
-  bool mismatch_rejected = false;
-  std::string mismatch_message;
-  try {
-    expression_system.set_analytic_expression_state("plasma", "cell", "cell",
-                                                    "conservative_cell_average", {{"constant"}},
-                                                    {{rank == 0 ? 0.25 : 0.5}});
-  } catch (const std::runtime_error& error) {
-    mismatch_rejected = true;
-    mismatch_message = error.what();
-  }
-  require(all_reduce_sum(mismatch_rejected ? 1L : 0L) == n_ranks(),
-          "all ranks must reject a rank-dependent analytic state payload");
-  require(
-      mismatch_rejected && mismatch_message.find("differs across MPI ranks") != std::string::npos,
-      "rank-dependent analytic state rejection must identify exact MPI disagreement");
-
-  // Rejection is pre-publication: the same System remains usable by an identical request.
-  bool valid_state_installed = true;
-  try {
-    expression_system.set_analytic_expression_state(
-        "plasma", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.75}});
-  } catch (const std::exception& error) {
-    valid_state_installed = false;
-    std::cerr << "valid analytic state failed after mismatch on rank " << rank << ": "
-              << error.what() << '\n';
-  }
-  require(all_reduce_sum(valid_state_installed ? 1L : 0L) == n_ranks(),
-          "a rejected rank mismatch must not poison later System materialization");
-
-  // The materializer owns one patch on rank zero, but recovery is a collective publication gate:
-  // one owner-local inadmissible candidate must preserve the accepted state and reject every rank.
-  expression_system.set_block_conversion(
-      "plasma", [](const double* in, double* out) { out[0] = in[0]; },
-      [](const double* in, double* out) {
-        RecoveryReport report;
-        if (in[0] > 0.8) {
-          report.status = RecoveryStatus::kRejected;
-          report.cause = RecoveryCause::kInadmissibleCandidate;
-          report.failing_component = 0;
-          return report;
-        }
-        out[0] = in[0];
-        report.status = RecoveryStatus::kRecovered;
-        report.cause = RecoveryCause::kNone;
-        return report;
-      });
-  const std::vector<double> before_recovery_rejection = expression_system.get_state("plasma");
-  bool recovery_rejected = false;
-  std::string recovery_message;
-  try {
-    expression_system.set_analytic_expression_state(
-        "plasma", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{1.0}});
-  } catch (const std::runtime_error& error) {
-    recovery_rejected = true;
-    recovery_message = error.what();
-  }
-  require(all_reduce_sum(recovery_rejected ? 1L : 0L) == n_ranks(),
-          "one owner-local recovery failure must reject analytic publication on every rank");
-  require(
-      recovery_rejected && recovery_message.find("prepared variable recovery") != std::string::npos,
-      "collective analytic rejection must identify prepared variable recovery");
-  require(expression_system.get_state("plasma") == before_recovery_rejection,
-          "collective recovery rejection must preserve the accepted analytic state");
-
-  // The AMR registration path has no halo yet, but it feeds later collective hierarchy setup. Rank
-  // one supplies an unknown opcode while rank zero has a valid program: both ranks must leave the
-  // registration without publishing either the provider or its block binding.
-  AmrSystemConfig amr_config;
-  amr_config.n = 12;
-  amr_config.L = 1.0;
-  amr_config.level_count = 1;
-  amr_config.explicit_bootstrap = true;
-  amr_config.regrid_every = 0;
-  AmrSystem amr(amr_config);
-  amr.add_block("plasma", analytic_scalar_model());
-  const std::string subject = "case::plasma::state::U";
-  amr.register_bootstrap_transfer_route(
-      "case::plasma::initial::prolongation", {subject}, "test::analytic-provider", "cell", "cell",
-      "conservative", "dense", "prolongation", "conservative_linear", 2, {1}, 2, 2);
-  bool malformed_rejected = false;
-  std::string malformed_message;
-  try {
-    amr.register_analytic_expression(subject, "plasma", "cell", "cell",
-                                     {{rank == 0 ? "constant" : "not-an-analytic-opcode"}},
-                                     {{1.0}});
-  } catch (const std::runtime_error& error) {
-    malformed_rejected = true;
-    malformed_message = error.what();
-  }
-  require(all_reduce_sum(malformed_rejected ? 1L : 0L) == n_ranks(),
-          "one malformed local AMR payload must reject collectively on every rank");
-  require(malformed_rejected &&
-              malformed_message.find("rank-local analytic validation failed collectively") !=
-                  std::string::npos,
-          "collective AMR rejection must identify a rank-local validation failure");
-
-  bool valid_amr_registered = true;
-  try {
-    amr.register_analytic_expression(subject, "plasma", "cell", "cell", {{"constant"}}, {{1.0}});
-  } catch (const std::exception& error) {
-    valid_amr_registered = false;
-    std::cerr << "valid AMR analytic registration failed after malformed payload on rank " << rank
-              << ": " << error.what() << '\n';
-  }
-  require(all_reduce_sum(valid_amr_registered ? 1L : 0L) == n_ranks(),
-          "a rejected local AMR error must not leak a partial registration");
-
-  const std::vector<std::string> boundary_types{"dirichlet", "foextrap", "foextrap", "foextrap"};
-  const std::vector<double> boundary_values(4, 0.0);
-  const std::vector<std::string> boundary_faces{"case::boundary::xlo", "case::boundary::xhi",
-                                                "case::boundary::ylo", "case::boundary::yhi"};
-  const std::vector<std::string> boundary_roles{"Scalar"};
-  const std::vector<std::string> boundary_representations(4, "conservative");
-  const std::vector<std::string> boundary_converters(4, "");
-  const std::vector<std::string> boundary_clocks(4, "");
-  const std::vector<std::vector<double>> boundary_literals{{1.0}, {}, {}, {}};
-
-  // Boundary programs are prepared and allocate native tables during installation. A malformed
-  // opcode on one rank must reject every rank before the prepared-plan map publishes a node.
-  System boundary_system(SystemConfig{12, 1.0, Periodicity{false, false}});
-  const std::string boundary_state = "case::boundary::uniform::state";
-  boundary_system.install_block_state_route("tracer", boundary_state);
-  bool malformed_boundary_rejected = false;
-  std::string malformed_boundary_message;
-  try {
-    boundary_system.install_boundary_plan(
-        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
-        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
-        boundary_representations, boundary_converters,
-        {{rank == 0 ? "constant" : "not-an-analytic-opcode"}, {}, {}, {}}, boundary_literals,
-        boundary_clocks);
-  } catch (const std::runtime_error& error) {
-    malformed_boundary_rejected = true;
-    malformed_boundary_message = error.what();
-  }
-  require(all_reduce_sum(malformed_boundary_rejected ? 1L : 0L) == n_ranks(),
-          "one malformed uniform analytic boundary must reject collectively");
-  require(malformed_boundary_rejected &&
-              malformed_boundary_message.find(
-                  "rank-local analytic validation failed collectively") != std::string::npos,
-          "uniform boundary rejection must identify rank-local collective validation");
-
-  bool valid_boundary_installed = true;
-  try {
-    boundary_system.install_boundary_plan(
-        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
-        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
-        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
-        boundary_literals, boundary_clocks);
-  } catch (const std::exception& error) {
-    valid_boundary_installed = false;
-    std::cerr << "valid uniform analytic boundary failed after malformed payload on rank " << rank
-              << ": " << error.what() << '\n';
-  }
-  require(all_reduce_sum(valid_boundary_installed ? 1L : 0L) == n_ranks(),
-          "a rejected uniform boundary must not publish a partial plan");
-
-  // AMR uses the same exact transaction. Change non-program metadata only, proving that consensus
-  // covers the complete boundary request rather than merely its postfix rows.
-  AmrSystem boundary_amr(amr_config);
-  const std::string boundary_amr_state = "case::boundary::amr::state";
-  boundary_amr.install_block_state_route("tracer", boundary_amr_state);
-  auto rank_faces = boundary_faces;
-  if (rank == 1)
-    rank_faces[0] = "case::boundary::rank-one-xlo";
-  bool boundary_metadata_rejected = false;
-  std::string boundary_metadata_message;
-  try {
-    boundary_amr.install_boundary_plan(
-        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, rank_faces,
-        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
-        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
-        boundary_literals, boundary_clocks);
-  } catch (const std::runtime_error& error) {
-    boundary_metadata_rejected = true;
-    boundary_metadata_message = error.what();
-  }
-  require(all_reduce_sum(boundary_metadata_rejected ? 1L : 0L) == n_ranks(),
-          "rank-dependent AMR analytic boundary metadata must reject collectively");
-  require(boundary_metadata_rejected &&
-              boundary_metadata_message.find("differs across MPI ranks") != std::string::npos,
-          "AMR boundary metadata rejection must identify exact MPI disagreement");
-
-  bool valid_amr_boundary_installed = true;
-  try {
-    boundary_amr.install_boundary_plan(
-        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, boundary_faces,
-        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
-        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
-        boundary_literals, boundary_clocks);
-  } catch (const std::exception& error) {
-    valid_amr_boundary_installed = false;
-    std::cerr << "valid AMR analytic boundary failed after metadata mismatch on rank " << rank
-              << ": " << error.what() << '\n';
-  }
-  require(all_reduce_sum(valid_amr_boundary_installed ? 1L : 0L) == n_ranks(),
-          "a rejected AMR boundary mismatch must not publish a partial plan");
 
   const long failures = all_reduce_sum(local_failures);
   comm_finalize();

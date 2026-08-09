@@ -1,11 +1,16 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint.hpp>
+#include <pops/runtime/system/derived_aux_provider.hpp>
 
+#include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -89,8 +94,9 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
-pops::runtime::system::AuxiliaryComponentKey install_field_output(
-    pops::AmrSystem<Dim>& system, const std::string& owner, const std::string& field) {
+pops::runtime::system::AuxiliaryComponentKey install_field_output(pops::AmrSystem<Dim>& system,
+                                                                  const std::string& owner,
+                                                                  const std::string& field) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
@@ -137,6 +143,113 @@ pops::AmrSystemConfig<Dim> single_level_config() {
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
   return config;
+}
+
+template <int Dim>
+struct FineLevelFailingAuxiliaryLaunch {
+  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.auxiliary-fine-failure", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& exact) const {
+    exact.text("test.amr.auxiliary-fine-failure").scalar(std::uint32_t{1});
+  }
+  void operator()(const pops::runtime::system::AuxiliaryKernelLaunchContext<Dim>& context) const {
+    if (context.outputs.size() != 1 || context.storage.candidate == nullptr)
+      throw std::logic_error("AMR rollback test lost its exact auxiliary output binding");
+    const auto& output = context.outputs.front();
+    auto* group = context.storage.candidate->find(output.address.group);
+    if (group == nullptr || output.address.component != 0 || group->ncomp() != 1)
+      throw std::logic_error("AMR rollback test lost its scalar candidate group");
+    group->set_val(static_cast<pops::Real>(context.point.stage + 1));
+    if (context.point.level == 1 && context.point.stage == 1)
+      throw std::runtime_error("injected fine-level auxiliary publication failure");
+  }
+};
+
+template <int Dim>
+void verifies_auxiliary_publication_rolls_back_every_sparse_level() {
+  using namespace pops::runtime::system;
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 2;
+  config.regrid_every = 0;
+  config.periodicity.fill(true);
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 8;
+    config.transition_buffers.front()[axis] = 0;
+    config.transition_lookaheads.front()[axis] = 0;
+  }
+
+  pops::AmrSystem<Dim> system(config);
+  system.set_poisson();
+  AuxiliaryStorageShape<Dim> shape;
+  for (int axis = 0; axis < Dim; ++axis)
+    shape.halo[axis] = 1;
+  const AuxiliaryComponentKey key{"test.amr.auxiliary", "derived", "rollback", "value"};
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless",
+                                            "amr-auxiliary-rollback", "scalar"};
+  using Provider = PreparedAuxiliaryProvider<Dim>;
+  system.install_prepared_auxiliary_provider(
+      Provider{"test.amr.auxiliary.rollback-provider",
+               AuxiliaryProviderKind::derived,
+               {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::evaluation},
+               {{key, contract, shape}},
+               {},
+               typename Provider::launcher_type(FineLevelFailingAuxiliaryLaunch<Dim>{})});
+  system.install_block_state_route("tracer", "state/tracer");
+  pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+  std::vector<double> initial(cell_count(config.shape), 0.0);
+  initial[initial.size() / 2] = 1.0;
+  system.set_conservative_state("tracer", initial);
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
+                                               "test.amr.auxiliary.sparse-bootstrap@1");
+  system.set_program_block_map({0});
+
+  system.refresh_auxiliary(
+      {"test-amr-auxiliary", 0, 0, 0, 0, 0, 0, AuxiliaryEvaluationEvent::initialization});
+  ASSERT_EQ(system.n_levels(), 2);
+  const auto accepted_root = system.auxiliary_component(key, 0);
+  ASSERT_FALSE(accepted_root.empty());
+  for (const double value : accepted_root)
+    EXPECT_EQ(value, 1.0);
+  const auto accepted_fine = system.auxiliary_component(key, 1);
+  const auto accepted_metadata = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(accepted_metadata.size(), 2U);
+
+  const auto address = system.auxiliary_address(key);
+  const auto* fine_groups = system.prepared_amr_provider_storage_groups(1);
+  ASSERT_NE(fine_groups, nullptr);
+  const auto* fine = fine_groups->find(address.group);
+  ASSERT_NE(fine, nullptr);
+  std::int64_t sparse_cells = 0;
+  for (const auto& patch : fine->layout().boxes())
+    sparse_cells += patch.numPts();
+  std::int64_t full_fine_cells = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    full_fine_cells *= static_cast<std::int64_t>(2 * config.shape[axis]);
+  EXPECT_GT(sparse_cells, 0);
+  EXPECT_LT(sparse_cells, full_fine_cells);
+
+  EXPECT_THROW(system.refresh_auxiliary({"test-amr-auxiliary", 1, 0, 0, 0, 1, 0,
+                                         AuxiliaryEvaluationEvent::initialization}),
+               std::runtime_error);
+  EXPECT_EQ(system.auxiliary_component(key, 0), accepted_root)
+      << "a rejected fine publication must not expose its already-produced root candidate";
+  EXPECT_EQ(system.auxiliary_component(key, 1), accepted_fine);
+  const auto rolled_back_metadata = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(rolled_back_metadata.size(), accepted_metadata.size());
+  for (std::size_t level = 0; level < accepted_metadata.size(); ++level)
+    EXPECT_EQ(serialize_auxiliary_checkpoint_state(rolled_back_metadata[level]),
+              serialize_auxiliary_checkpoint_state(accepted_metadata[level]));
+
+  system.refresh_auxiliary(
+      {"test-amr-auxiliary", 2, 0, 0, 0, 2, 0, AuxiliaryEvaluationEvent::initialization});
+  const auto retried_root = system.auxiliary_component(key, 0);
+  for (const double value : retried_root)
+    EXPECT_EQ(value, 3.0);
+  const auto retried_metadata = system.capture_auxiliary_checkpoint_accepted_state();
+  ASSERT_EQ(retried_metadata.size(), 2U);
+  EXPECT_EQ(retried_metadata[0].accepted_generation, 2U);
+  EXPECT_EQ(retried_metadata[1].accepted_generation, 2U);
 }
 
 }  // namespace
@@ -205,4 +318,8 @@ TEST(test_amr_named_field, NamedPlanConsumesExactStageWithoutPublishingConservat
   EXPECT_EQ(system.field_provider_levels("field/tracer"), 1);
   EXPECT_EQ(observed_stage, pops::Real(3));
   EXPECT_EQ(system.auxiliary_component(output_key).size(), cell_count(config.shape));
+}
+
+TEST(test_amr_named_field, AuxiliaryPublicationRollsBackEverySparseHierarchyLevel) {
+  verifies_auxiliary_publication_rolls_back_every_sparse_level<pops::kNativeDimension>();
 }

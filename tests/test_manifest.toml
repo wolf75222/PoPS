@@ -527,11 +527,6 @@ labels = ["unit", "elliptic", "fast"]
 mpi_variants = [2]
 
 [[cpp.suite]]
-name = "test_cut_fraction"
-sources = ["tests/cpp/unit/elliptic/test_cut_fraction.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_elliptic_composite_rhs"
 sources = ["tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -792,6 +787,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_auxiliary_ghost_fill"
+sources = ["tests/cpp/integration/mpi/test_mpi_auxiliary_ghost_fill.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 3]
+
+[[cpp.suite]]
 name = "test_mpi_prepared_amr_ghost_fill"
 sources = ["tests/cpp/integration/mpi/test_mpi_prepared_amr_ghost_fill.cpp"]
 labels = ["backend", "mpi", "amr", "medium"]
@@ -963,20 +964,10 @@ sources = ["tests/cpp/unit/runtime/test_dense_eig.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
-name = "test_disc_domain_mask"
-sources = ["tests/cpp/unit/runtime/test_disc_domain_mask.cpp"]
-labels = ["unit", "runtime", "fast"]
-
-[[cpp.suite]]
 name = "test_prepared_embedded_boundary_nd"
 sources = ["tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp"]
 labels = ["unit", "runtime", "mesh", "mpi", "fast", "nd"]
 mpi_nproc = [2]
-
-[[cpp.suite]]
-name = "test_eb_transport"
-sources = ["tests/cpp/unit/runtime/test_eb_transport.cpp"]
-labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_embedded_boundary_generic"

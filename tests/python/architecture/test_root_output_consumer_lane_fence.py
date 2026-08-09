@@ -43,7 +43,6 @@ def test_amr_embedded_boundary_authoring_and_sidecars_are_bound_exactly():
 
     for method in (
         "_set_analytic_level_set",
-        "set_disc_domain",
         "set_geometry_mode",
         "output_embedded_boundary_local_pieces",
         "output_embedded_boundary_root_pieces",

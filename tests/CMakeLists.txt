@@ -488,7 +488,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_composite_fac_variable_eps
   test_composite_fac_tensor
   test_amr_composite_poisson
-  test_cut_fraction
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
@@ -516,8 +515,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_implicit_source_nd
   test_diffusion
   test_amr_spatial_parity
-  test_disc_domain_mask
-  test_eb_transport
   test_embedded_boundary_generic
   test_aux_halo
   test_aux_coupler_bz
@@ -797,6 +794,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_halo_exchange 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_auxiliary_ghost_fill 2 3)
   set(POPS_MPI_RANKS_test_mpi_prepared_amr_ghost_fill 3)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
@@ -842,6 +840,7 @@ if(POPS_HAS_MPI)
     test_mpi_multiblock_interface_scheduler
     test_mpi_nd_translation_exchange
     test_mpi_halo_exchange
+    test_mpi_auxiliary_ghost_fill
     test_mpi_prepared_amr_ghost_fill
     test_mpi_coupler_inject
     test_mpi_fft_distributed

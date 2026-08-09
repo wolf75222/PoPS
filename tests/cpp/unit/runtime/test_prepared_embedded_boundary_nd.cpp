@@ -5,6 +5,7 @@
 
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/numerics/spatial/embedded_boundary/cut_geometry.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 
 #include <cmath>
@@ -51,6 +52,56 @@ struct Fixture {
   pops::MultiFab<Dim> prototype{layout, distribution, pops::Index<Dim>{}, 1, pops::Extent<Dim>{}};
   pops::ExecutionLane lane = pops::ExecutionLane::world("test/prepared-eb");
 };
+
+template <int Dim>
+void prove_ranked_cut_geometry() {
+  pops::RealVector<Dim> lower_samples{};
+  pops::RealVector<Dim> upper_samples{};
+  pops::RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower_samples[axis] = pops::Real(-0.3);
+    upper_samples[axis] = pops::Real(-0.3);
+    spacing[axis] = pops::Real(0.2 * (axis + 1));
+  }
+  for (int cut_axis = 0; cut_axis < Dim; ++cut_axis) {
+    auto axis_samples = upper_samples;
+    axis_samples[cut_axis] = pops::Real(0.1);
+    const auto cut = pops::nd::cut_cell_fractions_from_samples<Dim>(pops::Real(-0.1), lower_samples,
+                                                                    axis_samples);
+    static_assert(decltype(cut)::dimension == Dim);
+    for (int axis = 0; axis < Dim; ++axis) {
+      EXPECT_DOUBLE_EQ(cut.lower[axis], pops::Real(1));
+      EXPECT_DOUBLE_EQ(cut.upper[axis], axis == cut_axis ? pops::Real(0.5) : pops::Real(1));
+    }
+    EXPECT_DOUBLE_EQ(cut.volume_fraction, pops::Real(0.75));
+
+    const auto stencil = pops::nd::shortley_weller_stencil(cut, spacing);
+    pops::Real expected_diagonal = pops::Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const pops::Real lower_distance = cut.lower[axis] * spacing[axis];
+      const pops::Real upper_distance = cut.upper[axis] * spacing[axis];
+      const pops::Real span = lower_distance + upper_distance;
+      EXPECT_DOUBLE_EQ(stencil.lower[axis], pops::Real(2) / (lower_distance * span));
+      EXPECT_DOUBLE_EQ(stencil.upper[axis], pops::Real(2) / (upper_distance * span));
+      expected_diagonal += pops::Real(2) / (lower_distance * upper_distance);
+    }
+    EXPECT_DOUBLE_EQ(stencil.diagonal, expected_diagonal);
+  }
+
+  for (int cut_axis = 0; cut_axis < Dim; ++cut_axis) {
+    auto grazing_samples = upper_samples;
+    grazing_samples[cut_axis] = pops::Real(0.2);
+    const auto grazing = pops::nd::cut_cell_fractions_from_samples<Dim>(
+        pops::Real(-1.0e-8), lower_samples, grazing_samples);
+    EXPECT_DOUBLE_EQ(grazing.upper[cut_axis], pops::kEbCutFractionFloor);
+  }
+}
+
+TEST(PreparedEmbeddedBoundaryND, CutGeometryUsesOneAxisLoopInOneTwoAndThreeDimensions) {
+  prove_ranked_cut_geometry<1>();
+  prove_ranked_cut_geometry<2>();
+  prove_ranked_cut_geometry<3>();
+}
 
 template <int Dim>
 void prove_staircase() {
