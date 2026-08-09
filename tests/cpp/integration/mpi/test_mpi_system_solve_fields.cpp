@@ -129,27 +129,25 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   sys.set_poisson("composite",
                   "cartesian_cg");  // f = somme des briques elliptiques (ici la charge)
 
-  // La box unique vit sur rang 0 (round-robin de 1 box). set_state / set_density écrivent la box ;
-  // on ne les appelle donc QUE sur le rang proprietaire. set_electron_temperature_from cable un
-  // INDICE (pas d'acces par cellule), inoffensif sur tous les rangs. La densite de charge a moyenne
-  // nulle (rho - rho0) pour que le Poisson periodique soit soluble : on met un creneau symetrique.
+  // La box unique vit sur rang 0 (round-robin de 1 box), mais set_state / set_density portent un
+  // contrat global COLLECTIF : chaque rang soumet donc le même buffer component-major. Cela prouve
+  // que l'initialisation ne dépend pas de la propriété locale. La densité de charge a moyenne nulle
+  // pour que le Poisson périodique soit soluble : on met un créneau symétrique.
   const std::size_t nn = cell_count(n);
   const bool owns = (me == 0);  // box 0 -> rang 0 sous le mapping round-robin exact
-  if (owns) {
-    std::vector<double> Ug(static_cast<std::size_t>(GasModel::n_vars) * nn, 0.0);
-    for (std::size_t k = 0; k < nn; ++k) {
-      Ug[0 * nn + k] = rho_gas;
-      Ug[static_cast<std::size_t>(NativeGasLaw::Schema::energy) * nn + k] = p_gas / (gamma - 1.0);
-    }
-    sys.set_state("gas", Ug);
-    // charge a moyenne nulle : +1 sur la moitie gauche, -1 sur la moitie droite (somme = 0).
-    std::vector<double> q(nn, 0.0);
-    for (std::size_t linear = 0; linear < nn; ++linear) {
-      const int first_axis = static_cast<int>(linear % static_cast<std::size_t>(n));
-      q[linear] = (first_axis < n / 2) ? 1.0 : -1.0;
-    }
-    sys.set_density("probe", q);
+  std::vector<double> Ug(static_cast<std::size_t>(GasModel::n_vars) * nn, 0.0);
+  for (std::size_t k = 0; k < nn; ++k) {
+    Ug[0 * nn + k] = rho_gas;
+    Ug[static_cast<std::size_t>(NativeGasLaw::Schema::energy) * nn + k] = p_gas / (gamma - 1.0);
   }
+  sys.set_state("gas", Ug);
+  // Charge à moyenne nulle : +1 sur la moitié basse du premier axe, -1 sur l'autre moitié.
+  std::vector<double> q(nn, 0.0);
+  for (std::size_t linear = 0; linear < nn; ++linear) {
+    const int first_axis = static_cast<int>(linear % static_cast<std::size_t>(n));
+    q[linear] = (first_axis < n / 2) ? 1.0 : -1.0;
+  }
+  sys.set_density("probe", q);
   sys.set_electron_temperature_from("gas");  // T_e <- p/rho du gaz, recalcule a chaque solve
 
   // L'APPEL CRITIQUE : sur tous les rangs. Le solve elliptique est collectif ; sans le fix, les
