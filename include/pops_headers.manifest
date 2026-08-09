@@ -141,7 +141,6 @@ api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
 sdk-support pops/numerics/spatial/operators/polar_operator.hpp
 sdk-support pops/numerics/spatial/primitives/face_flux.hpp
-sdk-support pops/numerics/spatial/primitives/finite.hpp
 sdk-support pops/numerics/spatial/primitives/positivity.hpp
 sdk-support pops/numerics/spatial/primitives/state_access.hpp
 sdk-support pops/numerics/spatial/primitives/wave_speed.hpp
