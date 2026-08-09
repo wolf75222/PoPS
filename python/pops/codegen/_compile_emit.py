@@ -267,13 +267,15 @@ def _emit_route_manifest(symbol_name: Any) -> str:
             % (symbol_name, route_registry_signature()))
 
 
-def _emit_auxiliary_route_registration(model: Any) -> str:
+def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") -> str:
     """Emit one DSO hook that registers, but never seals, auxiliary routes.
 
     The host calls this hook for *every* package, then seals the one global
     registry and only afterwards installs prepared blocks.  That ordering is
     essential for dependencies and consumer plans spanning multiple blocks.
     """
+    if target not in ("system", "amr_system"):
+        raise ValueError("auxiliary route emission target must be 'system' or 'amr_system'")
     pack = getattr(model, "_auxiliary_provider_metadata", None)
     plans = getattr(model, "_component_operator_consumer_plans", None)
     flux_plan = getattr(model, "_component_flux_consumer_plan", None)
@@ -474,10 +476,19 @@ def _emit_auxiliary_route_registration(model: Any) -> str:
             "          }))",
         ))
         return "\n".join(lines)
+    native_type = (
+        "pops::System<pops::kNativeDimension>"
+        if target == "system"
+        else "pops::AmrSystem<pops::kNativeDimension>"
+    )
+    hook = (
+        "pops_register_auxiliary_routes"
+        if target == "system"
+        else "pops_register_auxiliary_routes_amr"
+    )
     lines = [
-        "POPS_LOADER_API void pops_register_auxiliary_routes("
-        "pops::System<pops::kNativeDimension>* sys) {",
-        "  if (sys == nullptr) throw std::invalid_argument(\"auxiliary route installer received null System\");",
+        "POPS_LOADER_API void %s(%s* sys) {" % (hook, native_type),
+        "  if (sys == nullptr) throw std::invalid_argument(\"auxiliary route installer received null exact runtime\");",
         "  using namespace pops::runtime::system;",
         "  using Key = AuxiliaryComponentKey;",
         "  using Contract = AuxiliaryComponentContract;",
@@ -701,6 +712,7 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                        bool wave_speed_cache) {\n'
                    '  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n'
                    '  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n'
+                   '  pops_register_auxiliary_routes_amr(s);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +
@@ -730,13 +742,13 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '}\n'
             '}  // namespace pops_generated\n'
         )
-    auxiliary_routes = _emit_auxiliary_route_registration(m) if target == "system" else ""
+    auxiliary_routes = _emit_auxiliary_route_registration(m, target=target)
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
             + package_preparer
             + key
-            + install
             + auxiliary_routes
+            + install
             + _emit_metadata(m, "pops_generated::ProdModel")
             + _emit_route_manifest("pops_compiled_route_manifest"))

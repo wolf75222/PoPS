@@ -238,18 +238,21 @@ SolveReport make_consensus_report(SolveReportFault fault) {
 
 struct RankLocalFallibleSource {
   using State = StateVec<1>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 1;
+  static constexpr int n_providers = 1;
 
   ImplicitEvaluationStatus rank_one_status = ImplicitEvaluationStatus::kOk;
   std::uint32_t reason = 0;
 
-  POPS_HD State source(const State& state, const Aux&) const { return State{-state[0]}; }
+  POPS_HD State source(const State& state, const ProviderValues<1>&) const {
+    return State{-state[0]};
+  }
 
-  POPS_HD ImplicitEvaluationResult evaluate_source(const State& state, const Aux& aux,
+  POPS_HD ImplicitEvaluationResult evaluate_source(const State& state,
+                                                   const ProviderValues<1>& providers,
                                                    State& output) const {
     output = State{-state[0]};
-    if (aux.phi <= Real(0.5))
+    if (providers[0] <= Real(0.5))
       return ImplicitEvaluationResult::ok();
     switch (rank_one_status) {
       case ImplicitEvaluationStatus::kOk:
@@ -862,7 +865,7 @@ long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_fie
 
 long prove_exact_distributed_stage_pack() {
   constexpr int n = 8;
-  constexpr int phi_component = kAuxNamedBase;
+  constexpr int phi_component = 0;
   long failures = 0;
   const auto require = [&failures](bool condition, std::string_view label) {
     if (!condition) {
@@ -1187,7 +1190,7 @@ long prove_replicated_coarse_composite_jvp() {
     blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
                                                 "composite", stage_pack_density(n, 0.5),
                                                 /*has_density=*/true, 1.4, 1, false));
-    blocks.back().aux_ncomp = kAuxNamedBase + 1;
+    blocks.back().aux_ncomp = 1;
 
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
@@ -1394,8 +1397,14 @@ int run_field_plan_consensus(int argc, char** argv) {
       NewtonReport diagnostics;
       diagnostics.max_residual = Real(42);
 
+      const auto provider_at = [&aux](std::size_t local) {
+        ProviderStorageView<kNativeDimension, 1> view;
+        view.storage[0] = aux.fab(local).view();
+        view.storage_components[0] = 0;
+        return view;
+      };
       SolveOutcome outcome =
-          backward_euler_source(RankLocalFallibleSource{failure.status, reason}, aux, state,
+          backward_euler_source(RankLocalFallibleSource{failure.status, reason}, provider_at, state,
                                 Real(0.1), NewtonOptions{}, {}, &diagnostics);
       require(outcome.report().status == SolveStatus::kInvalidEvaluation);
       require(outcome.report().action == failure.action);

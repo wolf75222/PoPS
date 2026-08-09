@@ -50,6 +50,43 @@ using namespace pops;
 
 namespace {
 
+using runtime::system::AuxiliaryComponentContract;
+using runtime::system::AuxiliaryComponentKey;
+using runtime::system::AuxiliaryEvaluationEvent;
+using runtime::system::AuxiliaryEvaluationPolicy;
+using runtime::system::AuxiliaryFreshness;
+using runtime::system::AuxiliaryOutput;
+using runtime::system::AuxiliaryProviderKind;
+using runtime::system::AuxiliaryStorageShape;
+using runtime::system::PreparedAuxiliaryProvider;
+
+std::vector<AuxiliaryComponentKey> install_field_outputs(System& system, const std::string& owner,
+                                                         const std::string& field, int count) {
+  AuxiliaryStorageShape<kNativeDimension> shape;
+  for (int axis = 0; axis < kNativeDimension; ++axis)
+    shape.halo[axis] = 1;
+  const AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
+  std::vector<AuxiliaryOutput<kNativeDimension>> outputs;
+  std::vector<AuxiliaryComponentKey> keys;
+  outputs.reserve(static_cast<std::size_t>(count));
+  keys.reserve(static_cast<std::size_t>(count));
+  for (int component = 0; component < count; ++component) {
+    AuxiliaryComponentKey key{
+        owner, "field", field,
+        component == 0 ? "potential" : "gradient-" + std::to_string(component - 1)};
+    keys.push_back(key);
+    outputs.push_back({std::move(key), contract, shape});
+  }
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kNativeDimension>{
+      "test.field-output/" + owner + "/" + field,
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
+      std::move(outputs),
+      {}});
+  system.seal_auxiliary_providers();
+  return keys;
+}
+
 class DecoratedNullspaceProvider final : public FieldNullspaceProvider {
  public:
   DecoratedNullspaceProvider()
@@ -310,8 +347,9 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
       slot, "test.field-nullspace.decorated",
       PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
                               {{"gauge.value", 0.0}}});
-  system.ensure_aux_width(kAuxBaseComps + 1);
-  system.register_elliptic_field("n0", "potential", std::vector<int>{kAuxBaseComps}, 1);
+  const auto potential_key =
+      install_field_outputs(system, "test.qualified-coupled", "potential", 1);
+  system.register_elliptic_field("n0", "potential", potential_key, 1);
   system.set_block_elliptic_field("n0", "potential", [](const MultiFab& state, MultiFab& rhs) {
     add_scaled_component(state, Real(1), 0, rhs);
   });
@@ -431,14 +469,11 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   spec.q = 1.0;
   spec.B0 = 1.0;
   system.add_block("plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  system.ensure_aux_width(kAuxNamedBase + 3);
-  EXPECT_THROW(system.register_elliptic_field(
-                   "plasma", "potential",
-                   std::vector<int>{kAuxNamedBase, kAuxNamedBase + 1, kAuxNamedBase + 2}, 0),
+  const auto potential_outputs =
+      install_field_outputs(system, "test.gradient-sign", "potential", kNativeDimension + 1);
+  EXPECT_THROW(system.register_elliptic_field("plasma", "potential", potential_outputs, 0),
                std::invalid_argument);
-  system.register_elliptic_field(
-      "plasma", "potential", std::vector<int>{kAuxNamedBase, kAuxNamedBase + 1, kAuxNamedBase + 2},
-      -1);
+  system.register_elliptic_field("plasma", "potential", potential_outputs, -1);
   system.set_block_elliptic_field("plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
     add_scaled_component(state, Real(1), 0, rhs);
   });
@@ -448,8 +483,8 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
       consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(0)));
   ASSERT_TRUE(report.solved()) << report.status_name();
   const std::vector<double> phi = system.field_potential_global(slot);
-  const std::vector<double> gx = system.aux_field_component(kAuxNamedBase + 1);
-  const std::vector<double> gy = system.aux_field_component(kAuxNamedBase + 2);
+  const std::vector<double> gx = system.auxiliary_component(potential_outputs[1]);
+  const std::vector<double> gy = system.auxiliary_component(potential_outputs[2]);
   ASSERT_EQ(phi.size(), static_cast<std::size_t>(n) * n);
   ASSERT_EQ(gx.size(), phi.size());
   ASSERT_EQ(gy.size(), phi.size());

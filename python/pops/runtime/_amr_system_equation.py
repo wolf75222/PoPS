@@ -1,9 +1,8 @@
-"""AmrSystem equation/aux mixin (Spec-4 PR-F).
+"""AmrSystem equation mixin (Spec-4 PR-F).
 
-``add_equation`` (the AMR backend dispatcher) + the named-aux resolution / set of
-:class:`pops.runtime._amr_system.AmrSystem`, plus the module-level guard
+``add_equation`` (the AMR backend dispatcher) plus the module-level guard
 ``_reject_newton_amr_compiled`` used only by this path. Mixed in via inheritance; operates on
-``self._s`` and ``self._aux_field_index``.
+``self._s``.
 """
 
 from __future__ import annotations
@@ -136,7 +135,6 @@ class _AmrSystemEquation(_AmrSystem):
         guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
-        from pops.physics.aux import aux_layout
 
         spatial = self._lower_spatial(spatial)
         time = time if time is not None else Explicit()
@@ -359,55 +357,3 @@ class _AmrSystemEquation(_AmrSystem):
                 positivity_floor,
                 **spatial_options,
             )
-        # ADC-291: record the named aux fields the block declares (component of the k-th name =
-        # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
-        extra = list(getattr(compiled, "aux_extra_names", []) or [])
-        if extra:
-            named_base = aux_layout(compiled.native_dimension).named_base
-            self._aux_field_index[name] = {nm: named_base + k for k, nm in enumerate(extra)}
-
-    def _resolve_aux_field(self, block: Any, name: Any) -> Any:
-        """Resolve (block, named aux field) -> aux channel component (ADC-291). Mirror of
-        System._resolve_aux_field: a canonical name is redirected to its dedicated path; an unknown
-        block or an undeclared field raises (no silent component-0 fallback)."""
-        from pops.physics.aux import AUX_CANONICAL_NAMES
-
-        if name in AUX_CANONICAL_NAMES:
-            if name == "B_z":
-                raise ValueError(
-                    "set_aux_field: 'B_z' (magnetic field) is set via sim.set_magnetic_field(Bz), "
-                    "NOT via set_aux_field (B_z is a canonical aux field, not a named field)."
-                )
-            raise ValueError(
-                "set_aux_field: '%s' is a CANONICAL aux field (derived by the solver, not settable); "
-                "set_aux_field only carries the NAMED fields declared by m.aux_field(...)." % name
-            )
-        table = self._aux_field_index.get(block)
-        if table is None:
-            raise ValueError(
-                "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name)
-            )
-        if name not in table:
-            raise ValueError(
-                "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"
-                % (name, block, sorted(table))
-            )
-        return table[name]
-
-    def set_aux_field(self, block: Any, name: Any, field: Any, halo: Any = None) -> Any:
-        """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
-        hierarchy. AMR counterpart of System.set_aux_field. ``field`` is exactly one 2D
-        ``(ny, nx)`` array on the coarse level; it is static (re-applied each step, injected to the
-        fine levels, survives a regrid). Call before the first step (like ``set_density``).
-
-        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's coarse-level ghost
-        boundary policy (foextrap / dirichlet), applied to the non-periodic faces after the shared aux
-        fill. Default None inherits the shared aux BC (bit-identical)."""
-        import numpy as np
-
-        comp = self._resolve_aux_field(block, name)
-        arr = np.asarray(field, dtype=float)
-        self._s.set_aux_field_component(comp, arr)
-        if halo is not None:
-            self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)

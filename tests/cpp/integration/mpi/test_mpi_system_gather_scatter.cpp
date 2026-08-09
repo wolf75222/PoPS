@@ -62,11 +62,10 @@ using ScalarModel = CompositeModel<ExBVelocity, NoSource, NoEll>;
 
 struct DirectDtProbe {
   using State = StateVec<1>;
-  using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   Real value;
 
-  POPS_HD Real stability_dt(const State&, const Aux&) const { return value; }
+  POPS_HD Real stability_dt(const State&, const ProviderValues<0>&) const { return value; }
 };
 
 static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
@@ -171,21 +170,17 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   const BoxArray reduction_boxes(std::vector<Box2D>{reduction_box});
   const DistributionMapping reduction_owners(1, np);
   MultiFab reduction_state(reduction_boxes, reduction_owners, 1, 0);
-  MultiFab reduction_aux(reduction_boxes, reduction_owners, kAuxBaseComps, 0);
   reduction_state.set_val(Real(1));
-  reduction_aux.set_val(Real(0));
 
   bool rejected_invalid_dt = false;
   try {
-    (void)min_stability_dt_mf(DirectDtProbe{me == 0 ? Real(0) : Real(1)}, reduction_state,
-                              reduction_aux);
+    (void)min_stability_dt_mf(DirectDtProbe{me == 0 ? Real(0) : Real(1)}, reduction_state);
   } catch (const std::domain_error&) {
     rejected_invalid_dt = true;
   }
   chk(rejected_invalid_dt, "stability_dt_invalide_rejetee_collectivement");
 
-  const Real direct_dt =
-      min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state, reduction_aux);
+  const Real direct_dt = min_stability_dt_mf(DirectDtProbe{Real(0.25)}, reduction_state);
   chk(direct_dt == Real(0.25), "stability_dt_valide_diffusee_aux_rangs_vides");
 
 #ifdef POPS_HAS_MPI

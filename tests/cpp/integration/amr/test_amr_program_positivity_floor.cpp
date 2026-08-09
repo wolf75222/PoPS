@@ -51,7 +51,7 @@ struct DensityAdvection {
   POPS_HD Real max_wave_speed(const State&, const auto&, int direction) const {
     return direction == 0 ? Real(1) : Real(0);
   }
-  POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
+  POPS_HD State source(const State&, const ProviderValues<0>&) const { return State{Real(0)}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
   POPS_HD Prim to_primitive(const State& state) const { return state; }
   POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }

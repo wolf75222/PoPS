@@ -182,12 +182,12 @@ struct TemporalContractModel {
   POPS_HD Real max_wave_speed(const State& u, const auto&, int) const {
     return mode == 1 ? (u[0] < Real(0) ? -u[0] : u[0]) : Real(0);
   }
-  POPS_HD State source(const State& u, const Aux&) const { return State{u[0]}; }
+  POPS_HD State source(const State& u, const ProviderValues<0>&) const { return State{u[0]}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-  POPS_HD Real source_frequency(const State& u, const Aux&) const {
+  POPS_HD Real source_frequency(const State& u, const ProviderValues<0>&) const {
     return mode == 2 ? (u[0] < Real(0) ? -u[0] : u[0]) : Real(0);
   }
-  POPS_HD Real stability_dt(const State& u, const Aux&) const {
+  POPS_HD Real stability_dt(const State& u, const ProviderValues<0>&) const {
     const Real magnitude = u[0] < Real(0) ? -u[0] : u[0];
     return mode == 3 && magnitude > Real(0) ? Real(1) / magnitude
                                             : std::numeric_limits<Real>::infinity();

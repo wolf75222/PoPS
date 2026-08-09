@@ -4,8 +4,8 @@ The low-level ``pops.bind`` install seam of :class:`pops.runtime._amr_system.Amr
 ``_install_compiled`` (the native / compiled install orchestration) plus its resolved-field-plan
 and aux helpers (``_install_field_plan`` / ``_install_aux``). Split out of ``amr_system`` for the
 500-line cap; mixed into ``AmrSystem``
-via inheritance and operating on ``self._s`` (the native facade), ``self._aux_field_index`` and
-the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`` /
+via inheritance and operating on ``self._s`` (the native facade) and the other AmrSystem methods
+(``add_equation`` / ``set_density`` / ``set_poisson`` /
 ``_finish_program_install``).
 """
 
@@ -182,9 +182,8 @@ class _AmrSystemInstall(_AmrSystem):
         clear actionable error), then lowers to the AMR layer:
 
           - NATIVE install (``compiled=None``): wires each InstallPlan ``CompiledModel`` with
-            ``add_equation``, installs each resolved field plan,
-            the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
-            density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
+            ``add_equation``, installs each resolved field plan, stages exact
+            ``ComponentKey`` ``InputAux`` values, and registers each instance's initial density.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
             on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
@@ -200,8 +199,8 @@ class _AmrSystemInstall(_AmrSystem):
         @param params canonical block-qualified runtime values resolved by BindSchema. Complete
             per-package vectors are fixed before native closures are built; Program-owned values
             route independently through ``set_program_params``.
-        @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
-            any other -> set_aux_field on the declaring block.
+        @param aux dict {ComponentKey: array}: declared ``InputAux`` values only.  Derived and
+            field-output components have no upload path.
         @param field_plans resolved compile-time field discretizations keyed by field name.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
@@ -304,10 +303,10 @@ class _AmrSystemInstall(_AmrSystem):
         for field_plan in field_plans.values():
             self._install_field_method_runtime(field_plan, resolved_models, params)
 
-        # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
-        # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
-        for field_name, field in aux.items():
-            self._install_aux(field_name, field)
+        # (3) Stage authenticated InputAux values only.  The native registry resolves each exact
+        # owner-qualified ComponentKey; there is no block/name or raw-component fallback.
+        for key, field in aux.items():
+            self._install_aux(key, field)
 
         # (4) INITIAL state: register every bootstrap authority before hierarchy materialization.
         # Cell arrays are staged on the native block descriptors here; this does not build the
@@ -608,23 +607,6 @@ class _AmrSystemInstall(_AmrSystem):
             params,
         )
 
-    def _install_aux(self, field_name: Any, field: Any) -> Any:
-        """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any
-        other name -> set_aux_field on the block that declares it. Mirror of System._install_aux."""
-        if field_name == "B_z":
-            self.set_magnetic_field(field)
-            return
-        if field_name == "T_e":
-            raise ValueError(
-                "pops.bind: aux 'T_e' is DERIVED from a fluid block, not a static aux "
-                "field; use set_electron_temperature_from(block).")
-        block = None
-        for blk, table in self._aux_field_index.items():
-            if field_name in table:
-                block = blk
-                break
-        if block is None:
-            raise ValueError(
-                "pops.bind: aux field %r is not declared by any installed instance; add the "
-                "instance with a model declaring m.aux_field(%r)." % (field_name, field_name))
-        self.set_aux_field(block, field_name, field)
+    def _install_aux(self, key: Any, field: Any) -> None:
+        """Stage one exact externally supplied ``InputAux`` component."""
+        self.stage_auxiliary_input(key, field)

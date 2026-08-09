@@ -65,6 +65,16 @@ def test_native_package_registers_routes_without_sealing_the_global_registry() -
     assert "pops_compiled_aux_consumer_plans" in source
 
 
+def test_amr_native_package_registers_routes_through_its_typed_hook() -> None:
+    model = _model()
+    source = model.__pops_native_loader_source__(name="GenericAuxAmr", target="amr_system")
+
+    assert "pops_register_auxiliary_routes_amr" in source
+    assert "pops_register_auxiliary_routes_amr(s);" in source
+    assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
+    assert "seal_auxiliary_providers" not in source
+
+
 def test_native_package_accepts_an_empty_provider_pack() -> None:
     model = Model("no_aux")
     (density,) = model.conservative_vars("density")

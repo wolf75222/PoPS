@@ -105,7 +105,7 @@ struct StiffRelax {
     contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
   }
   template <class State>
-  POPS_HD State apply(const State& u, const Aux&) const {
+  POPS_HD State apply(const State& u, const ProviderValues<0>&) const {
     State s{};
     for (int c = 0; c < State::size(); ++c)
       s[c] = inv_eps * (u_eq[c] - u[c]);
@@ -190,7 +190,7 @@ struct StiffRelax {
     contract.scalar(inv_eps).scalar(u_eq[0]).scalar(u_eq[1]).scalar(u_eq[2]).scalar(u_eq[3]);
   }
   template <class State>
-  POPS_HD State apply(const State& u, const pops::Aux&) const {
+  POPS_HD State apply(const State& u, const pops::ProviderValues<0>&) const {
     State s{};
     for (int c = 0; c < State::size(); ++c) s[c] = inv_eps * (u_eq[c] - u[c]);
     return s;
@@ -276,9 +276,9 @@ void install_single_block_test_program(AmrSystem& system, Model model, bool impl
       if (implicit_source) {
         context->neg_div_flux_default_into(0, candidate, rate, 3000);
         context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
-        (void)consume_solve_outcome(backward_euler_source(model, context->aux(), candidate,
-                                                          Real(level_dt), NewtonOptions{},
-                                                          ImplicitMask<Model::n_vars>{}, nullptr));
+        (void)consume_solve_outcome(backward_euler_source(
+            model, [](std::size_t) { return ProviderStorageView<kNativeDimension, 0>{}; },
+            candidate, Real(level_dt), NewtonOptions{}, ImplicitMask<Model::n_vars>{}, nullptr));
       } else {
         context->rhs_into(0, candidate, rate, 3000);
         context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});

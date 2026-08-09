@@ -32,8 +32,11 @@ struct StiffLinearSource {
   using State = pops::StateVec<1>;
   static constexpr int n_vars = 1;
 
-  POPS_HD State source(const State& state, const pops::Aux&) const { return State{-state[0]}; }
-  POPS_HD void source_jacobian(const State&, const pops::Aux&, pops::Real (&jacobian)[1][1]) const {
+  POPS_HD State source(const State& state, const pops::ProviderValues<0>&) const {
+    return State{-state[0]};
+  }
+  POPS_HD void source_jacobian(const State&, const pops::ProviderValues<0>&,
+                               pops::Real (&jacobian)[1][1]) const {
     jacobian[0][0] = pops::Real(-1);
   }
 };
@@ -44,10 +47,8 @@ struct AdvectionModel {
   using Schema = typename Law::Schema;
   using State = typename Law::State;
   using Primitive = typename Law::Primitive;
-  using Aux = pops::AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
   Law law{};
 
@@ -85,7 +86,7 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
@@ -108,12 +109,11 @@ std::size_t cell_count(const pops::Extent<Dim>& shape) {
 TEST(test_amr_multiblock_imex, RankedImplicitSolveIsStableAndPublishesOnlyOnAcceptance) {
   constexpr int Dim = pops::kNativeDimension;
   auto state = one_patch_field<Dim>(2, 1);
-  auto auxiliary = one_patch_field<Dim>(2, pops::aux_comps<StiffLinearSource>());
   state.set_val(pops::Real(2));
-  auxiliary.set_val(pops::Real(0));
 
-  pops::SolveOutcome outcome = pops::backward_euler_source(StiffLinearSource{}, auxiliary, state,
-                                                           pops::Real(0.25), pops::NewtonOptions{});
+  pops::SolveOutcome outcome = pops::backward_euler_source(
+      StiffLinearSource{}, [](std::size_t) { return pops::ProviderStorageView<Dim, 0>{}; }, state,
+      pops::Real(0.25), pops::NewtonOptions{});
   ASSERT_TRUE(outcome.report().solved_value_available());
   EXPECT_EQ(pops::reduce_min_local(state), pops::Real(2));
   const pops::SolveReport accepted = outcome.consume(pops::SolveConsumption::kAccept);

@@ -19,10 +19,8 @@ struct AdvectionModel {
   using Schema = typename Law::Schema;
   using State = typename Law::State;
   using Primitive = typename Law::Primitive;
-  using Aux = pops::AuxState<Dim>;
   static constexpr int dimension = Dim;
   static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
   Law law{};
 
@@ -60,7 +58,7 @@ struct AdvectionModel {
   POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
     law.template wave_speeds<Axis>(state, lower, upper);
   }
-  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 

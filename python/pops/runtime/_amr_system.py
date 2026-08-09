@@ -1,7 +1,8 @@
 """AmrSystem : the refined runtime coupler (Spec-4 PR-F composed class).
 
 ``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
-``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (private accepted-state
+``_amr_system_equation`` (add_equation), ``_amr_system_aux_state`` (owner-qualified
+``InputAux`` / ``DerivedAux`` routes), ``_amr_system_io`` (private accepted-state
 codec and restore transaction), ``_amr_system_program`` (compiled time-Program install / params / transaction)
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
 mixins; this module composes them and keeps the constructor plus coupling glue.
@@ -21,6 +22,7 @@ from pops.runtime._lifecycle import (
     _LifecycleMixin,
 )
 from pops.runtime._amr_system_equation import _AmrSystemEquation
+from pops.runtime._amr_system_aux_state import _AmrSystemAuxState
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
@@ -68,7 +70,8 @@ class _AmrProfileSession:
 
 
 class AmrSystem(
-    _AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemProgram, _LifecycleMixin
+    _AmrSystemEquation, _AmrSystemAuxState, _AmrSystemInstall, _AmrSystemIO,
+    _AmrSystemProgram, _LifecycleMixin
 ):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
@@ -109,11 +112,6 @@ class AmrSystem(
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
         # (otherwise the post-restart regrid would re-diverge the hierarchy). Memorized for the restart guard.
         self._regrid_every = int(config.regrid_every)
-        # ADC-291: block name -> {aux field name -> channel component}, filled by add_equation from a
-        # CompiledModel.aux_extra_names (component of the k-th name = AUX_NAMED_BASE + k). Drives
-        # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
-        # System._aux_field_index.
-        self._aux_field_index = {}
         # RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System): "assembling" until _finalize_bind
         # flips it to "bound" (the LAST act of _install_compiled). The Python flag enforces the freeze
         # even under a prebuilt .so with no native mark_bound; _bound_snapshot is the BoundSnapshot of

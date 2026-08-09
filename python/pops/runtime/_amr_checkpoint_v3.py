@@ -35,7 +35,7 @@ class _PreparedAMRRestart:
     owner_ranks: tuple[int, ...]
     multi: bool
     state_payload: tuple[Any, ...]
-    aux_payload: tuple[Any, ...]
+    auxiliary_checkpoint_payload: tuple[bytes, ...]
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
     hierarchy_mode: str
@@ -205,12 +205,11 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
             [
                 "block_level_state_global" if multi else "level_state_global",
                 "level_potential_global",
-                "level_aux_flat_global",
             ]
         )
     else:
         required_collectives.extend(
-            ["block_level_state" if multi else "level_state", "level_potential", "level_aux_flat"]
+            ["block_level_state" if multi else "level_state", "level_potential"]
         )
     if field_slots:
         required_collectives.append("field_potential_level_global")
@@ -221,6 +220,8 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     )
     if missing_collectives:
         raise TypeError("checkpoint AMR engine lacks capture accessors %r" % missing_collectives)
+    if not callable(getattr(sim, "capture_auxiliary_checkpoint_accepted_state", None)):
+        raise TypeError("checkpoint AMR engine lacks exact auxiliary checkpoint capture")
     out = {
         "pops_amr_checkpoint_version": _VERSION,
         "t": time,
@@ -384,11 +385,18 @@ def _capture_v3(owner, sim, prepared):
             out["field_provider_phi_%d_%d" % (index, level)] = np.asarray(
                 sim.field_potential_level_global(slot, level), dtype=np.float64
             )
-    for level in range(prepared.levels):
-        out["aux_%d" % level] = np.asarray(
-            sim.level_aux_flat_global(level) if gather else sim.level_aux_flat(level),
-            dtype=np.float64,
+    auxiliary_checkpoint = sim.capture_auxiliary_checkpoint_accepted_state()
+    if type(auxiliary_checkpoint) is not list or len(auxiliary_checkpoint) != prepared.levels:
+        raise RuntimeError(
+            "native AMR exact auxiliary checkpoint has an invalid level-qualified image"
         )
+    for level, payload in enumerate(auxiliary_checkpoint):
+        if type(payload) is not bytes or not payload:
+            raise RuntimeError(
+                "native AMR exact auxiliary checkpoint level %d is not a non-empty bytes image"
+                % level
+            )
+        out["auxiliary_checkpoint_%d" % level] = np.frombuffer(payload, dtype=np.uint8).copy()
     capture_histories(sim, prepared.history_plan, out)
     identity = seal_checkpoint_payload(owner, out, runtime_kind="amr")
     return out, identity.token
@@ -709,34 +717,28 @@ def prepare_v3(
             levels.append(state)
         state_payload.append((block, levels))
 
-    aux_payload = []
     phi_payload = []
-    coarse_width = spatial.cells_at_level(0)
-    coarse_aux_size = len(sim.level_aux_flat(0))
-    if coarse_width < 1 or coarse_aux_size % coarse_width:
-        raise ValueError("restart: installed coarse auxiliary storage has an invalid shape")
-    aux_components = coarse_aux_size // coarse_width
+    auxiliary_checkpoint_payload = []
+    if not callable(getattr(sim, "restore_auxiliary_checkpoint_accepted_state", None)):
+        raise TypeError("restart: AMR engine lacks exact auxiliary checkpoint restore")
     for level in range(nlev):
-        aux_key = "aux_%d" % level
+        aux_key = "auxiliary_checkpoint_%d" % level
         phi_key = "phi_%d" % level
         if aux_key not in d or phi_key not in d:
             raise ValueError(
-                "restart: checkpoint lacks aux or potential payload for level %d" % level
+                "restart: checkpoint lacks exact auxiliary or potential payload for level %d" % level
             )
-        aux = np.asarray(d[aux_key], dtype=np.float64).ravel()
+        aux = np.asarray(d[aux_key], dtype=np.uint8).ravel()
+        if not aux.size:
+            raise ValueError("restart: exact auxiliary checkpoint level %d is empty" % level)
+        auxiliary_checkpoint_payload.append(aux.tobytes())
         expected_cells = spatial.cells_at_level(level)
-        expected_aux = aux_components * expected_cells
-        if aux.size != expected_aux:
-            raise ValueError(
-                "restart: level %d aux has size %d, expected %d" % (level, aux.size, expected_aux)
-            )
         phi = np.asarray(d[phi_key], dtype=np.float64).ravel()
         if phi.size != expected_cells:
             raise ValueError(
                 "restart: level %d potential has size %d, expected %d"
                 % (level, phi.size, expected_cells)
             )
-        aux_payload.append(aux)
         phi_payload.append(phi)
 
     _preflight_histories_v3(sim, d, current_ranks, spatial)
@@ -756,7 +758,7 @@ def prepare_v3(
         owner_ranks=tuple(int(rank) for rank in owner_ranks),
         multi=bool(multi),
         state_payload=tuple((block, tuple(levels)) for block, levels in state_payload),
-        aux_payload=tuple(aux_payload),
+        auxiliary_checkpoint_payload=tuple(auxiliary_checkpoint_payload),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
         hierarchy_mode=hierarchy_mode,
@@ -993,11 +995,9 @@ def apply_v3(owner, sim, prepared):
             else:
                 sim.set_level_state(level, state)
 
-    # (5) Restore shared aux only on the runtime route (the coupler deliberately persists an
-    # explicit empty aux payload), then all elliptic warm starts.
-    for level, aux in enumerate(prepared.aux_payload):
-        if aux.size:
-            sim.set_level_aux_flat(level, aux)
+    # (5) Restore the native owner-qualified accepted auxiliary image.  It carries exact groups,
+    # ComponentKeys and provider generations; Python never reconstructs a flat carrier.
+    sim.restore_auxiliary_checkpoint_accepted_state(list(prepared.auxiliary_checkpoint_payload))
     for level, phi in enumerate(prepared.potential_payload):
         sim.set_level_potential(level, phi)
     for slot, levels in prepared.field_payload:

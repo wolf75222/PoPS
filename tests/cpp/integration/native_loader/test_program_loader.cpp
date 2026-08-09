@@ -112,6 +112,25 @@ void add_gas(NativeSystem& system) {
   system.set_poisson("charge_density", "cartesian_cg");
 }
 
+runtime::system::AuxiliaryComponentKey install_field_output(NativeSystem& system,
+                                                            const std::string& owner,
+                                                            const std::string& field) {
+  using namespace runtime::system;
+  AuxiliaryStorageShape<kTestDimension> shape;
+  for (int axis = 0; axis < kTestDimension; ++axis)
+    shape.halo[axis] = 1;
+  AuxiliaryComponentKey key{owner, "field", field, "potential"};
+  AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "field", "scalar"};
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kTestDimension>{
+      "test.field-output/" + owner + "/" + field,
+      AuxiliaryProviderKind::field_output,
+      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::evaluation},
+      {{key, contract, shape}},
+      {}});
+  system.seal_auxiliary_providers();
+  return key;
+}
+
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
 // source the Phase 2c-ii codegen will emit (here hand-written for an autonomous C++ test). The ABI key
 // is the preprocessor LITERAL (not the inline abi_key_string(), which would be interposed via RTLD).
@@ -454,9 +473,9 @@ static int pops_run_test_program_loader(int argc, char** argv) {
                                                   "periodic");
     const std::vector<double> zero_faces(static_cast<std::size_t>(2 * kTestDimension), 0.0);
     replacement.set_field_boundary_plan(slot, periodic_faces, zero_faces, zero_faces, zero_faces);
-    replacement.ensure_aux_width(kAuxNamedBase + 1);
-    replacement.register_elliptic_field("gas", "program-boundary-potential",
-                                        std::vector<int>{kAuxNamedBase}, 1);
+    const auto field_output =
+        install_field_output(replacement, "test.program-boundary", "program-boundary-potential");
+    replacement.register_elliptic_field("gas", "program-boundary-potential", {field_output}, 1);
     replacement.set_block_elliptic_field("gas", "program-boundary-potential",
                                          [](const NativeField&, NativeField&) {});
     replacement.set_state("gas", U0);

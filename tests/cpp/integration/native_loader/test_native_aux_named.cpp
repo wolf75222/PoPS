@@ -32,13 +32,12 @@ std::string package_source() {
     struct NamedAuxModel {
       using State = pops::StateVec<1>;
       using Prim = pops::StateVec<1>;
-      using Aux = pops::Aux;
       static constexpr int n_vars = 1;
-      static constexpr int n_aux = pops::kAuxNamedBase + 1;
+      static constexpr int n_providers = 1;
       POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
       POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(0); }
-      POPS_HD State source(const State& u, const Aux& aux) const {
-        return State{aux.extra_field(0) * u[0]};
+      POPS_HD State source(const State& u, const pops::ProviderValues<1>& providers) const {
+        return State{providers[0] * u[0]};
       }
       POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
       POPS_HD Prim to_primitive(const State& u) const { return u; }
@@ -102,9 +101,24 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   config.periodicity = {true, true};
 
   System system(config);
+  using namespace runtime::system;
+  AuxiliaryStorageShape<kNativeDimension> shape;
+  AuxiliaryComponentKey input_key{"test.native-aux", "input", "coefficient", "kappa"};
+  AuxiliaryComponentContract contract{"cell-average", "cell", "unitless", "test-input", "scalar"};
+  system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<kNativeDimension>{
+      "test.native-aux.input",
+      AuxiliaryProviderKind::input,
+      {AuxiliaryEvaluationEvent::initialization, AuxiliaryFreshness::once},
+      {{input_key, contract, shape}},
+      {}});
+  system.install_auxiliary_consumer_plan(AuxiliaryConsumerProviderPlan<kNativeDimension>{
+      "scalar", {{{input_key, contract, shape}, 0}}});
+  system.seal_auxiliary_providers();
   system.add_native_block("scalar", library, "none", "rusanov", "conservative", "euler");
   system.set_state("scalar", std::vector<double>(cells, 1.0));
-  system.set_aux_field_component(kAuxNamedBase, std::vector<double>(cells, kappa));
+  system.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
+  system.refresh_auxiliary(AuxiliaryEvaluationPoint{"test.native-aux", 0, 0, 0, 0, 0, 0,
+                                                    AuxiliaryEvaluationEvent::initialization});
   const std::vector<double> residual = system.eval_rhs("scalar");
   double error = 0.0;
   for (double value : residual)
@@ -113,8 +127,8 @@ static int pops_run_test_native_aux_named(int argc, char** argv) {
   bool missing_provider_rejected = false;
   try {
     System empty(config);
-    empty.set_aux_field_component(kAuxNamedBase, std::vector<double>(cells, kappa));
-  } catch (const std::runtime_error&) {
+    empty.stage_auxiliary_input(input_key, std::vector<double>(cells, kappa));
+  } catch (const std::logic_error&) {
     missing_provider_rejected = true;
   }
 

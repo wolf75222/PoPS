@@ -9,8 +9,12 @@
 #include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <array>
+#include <cstdint>
 #include <limits>
+#include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 using AmrSystem = pops::AmrSystem<pops::kNativeDimension>;
 using AmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
@@ -626,6 +630,36 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
           py::arg("owner_qid"), py::arg("space_kind"), py::arg("space_name"),
           py::arg("component"))
       .def("auxiliary_registry_contract", &AmrSystem::auxiliary_registry_contract)
+      .def(
+          "capture_auxiliary_checkpoint_accepted_state",
+          [](const AmrSystem& s) {
+            py::list result;
+            for (const auto& state : s.capture_auxiliary_checkpoint_accepted_state()) {
+              const auto bytes = pops::runtime::system::serialize_auxiliary_checkpoint_state(state);
+              result.append(py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+            }
+            return result;
+          })
+      .def(
+          "restore_auxiliary_checkpoint_accepted_state",
+          [](AmrSystem& s, const py::sequence& payloads) {
+            std::vector<pops::runtime::system::AuxiliaryCheckpointAcceptedState<
+                pops::kNativeDimension>> states;
+            states.reserve(static_cast<std::size_t>(payloads.size()));
+            for (const py::handle payload : payloads) {
+              if (!PyBytes_CheckExact(payload.ptr()))
+                throw py::type_error(
+                    "AMR exact auxiliary checkpoint payloads must be bytes objects");
+              const std::string bytes = py::cast<std::string>(payload);
+              states.push_back(
+                  pops::runtime::system::deserialize_auxiliary_checkpoint_state<
+                      pops::kNativeDimension>(
+                      std::span<const std::uint8_t>(
+                          reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size())));
+            }
+            s.restore_auxiliary_checkpoint_accepted_state(states);
+          },
+          py::arg("payloads"))
       .def(
           "set_density",
           [](AmrSystem& s, const std::string& name,

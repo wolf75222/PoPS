@@ -62,6 +62,19 @@ def test_input_and_derived_aux_routes_are_exact_and_emit_native_launcher() -> No
     assert ", 0}}" not in source  # the package-local slot never crosses the DSO ABI
 
 
+def test_amr_auxiliary_hook_is_typed_and_distinct_from_the_system_hook() -> None:
+    module = _module()
+    packs = resolve_component_provider_packs(module)
+    carrier = SimpleNamespace(owner_path=module.owner_path)
+    packs.attach(carrier)
+
+    source = _emit_auxiliary_route_registration(carrier, target="amr_system")
+
+    assert "pops_register_auxiliary_routes_amr" in source
+    assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
+    assert "pops::System<pops::kNativeDimension>* sys" not in source
+
+
 def test_aux_producer_rejects_duplicate_target_and_foreign_handle() -> None:
     module = Module("auxiliary_provider_failures")
     field = module.aux_field("coefficient")

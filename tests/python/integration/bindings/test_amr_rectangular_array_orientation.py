@@ -4,6 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from pops.model.provider_pack import ComponentKey
+
 try:
     from pops.runtime._system import AmrSystem
 except ImportError as exc:  # native extension is installed by the Python integration gate
@@ -14,14 +16,17 @@ def _runtime() -> AmrSystem:
     return AmrSystem(n=6, ny=4, L=3.0, Ly=1.0, periodicity=(True, True))
 
 
+_INPUT_AUX = ComponentKey("test/orientation", "aux", "material", "coefficient")
+
+
 @pytest.mark.parametrize(
     "operation",
     [
         lambda runtime, value: runtime.set_density("rho", value),
         lambda runtime, value: runtime.set_magnetic_field(value),
-        lambda runtime, value: runtime.set_aux_field_component(5, value),
+        lambda runtime, value: runtime.stage_auxiliary_input(_INPUT_AUX, value),
     ],
-    ids=("density", "magnetic-field", "named-aux"),
+    ids=("density", "magnetic-field", "input-aux"),
 )
 def test_amr_cell_arrays_reject_transposed_rectangular_shape(operation) -> None:
     with pytest.raises(
@@ -36,9 +41,9 @@ def test_amr_cell_arrays_reject_transposed_rectangular_shape(operation) -> None:
     [
         lambda runtime, value: runtime.set_density("rho", value),
         lambda runtime, value: runtime.set_magnetic_field(value),
-        lambda runtime, value: runtime.set_aux_field_component(5, value),
+        lambda runtime, value: runtime.stage_auxiliary_input(_INPUT_AUX, value),
     ],
-    ids=("density", "magnetic-field", "named-aux"),
+    ids=("density", "magnetic-field", "input-aux"),
 )
 def test_amr_cell_arrays_reject_flat_python_input(operation) -> None:
     with pytest.raises(

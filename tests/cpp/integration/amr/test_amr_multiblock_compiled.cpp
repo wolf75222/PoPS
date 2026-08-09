@@ -89,7 +89,7 @@ struct StiffMomentumRelax {
     contract.scalar(inv_eps);
   }
   template <class State>
-  POPS_HD State apply(const State& u, const Aux&) const {
+  POPS_HD State apply(const State& u, const ProviderValues<0>&) const {
     State s{};
     if (State::size() > 1)
       s[1] = -inv_eps * u[1];  // -mx / eps
