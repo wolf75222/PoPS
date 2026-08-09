@@ -1,188 +1,131 @@
-// Critere de regrid AMR configure par graphe prepare et variable qualifiee par bloc. La couche
-// moteur resout chaque feuille par NOM exact (STRICT : un bloc sans ce nom leve une erreur au build,
-// jamais de repli silencieux vers la composante 0).
-//
-// On verrouille DEUX niveaux :
-//   (1) le resolveur detail::resolve_selected_component (logique pure, deterministe), y compris le cas
-//       d'acceptation cle "densite NON situee a la composante 0" ;
-//   (2) la facade multi-blocs : refiner sur l'energie (composante 3 de l'Euler compressible) deplace le
-//       patch fin vers la bosse d'energie, la ou le selecteur par defaut (densite uniforme) garde le
-//       seed central -> les deux layouts DIFFERENT, preuve que la composante lue a change.
 #include <gtest/gtest.h>
-
-#include "explicit_amr_program.hpp"
-#include <pops/physics/fluids/euler.hpp>   // Euler::conservative_vars (rho, rho_u, rho_v, E)
-#include <pops/core/state/variables.hpp>   // VariableSet, VariableRole, VariableKind
-#include <pops/mesh/layout/patch_box.hpp>  // PatchBox (signature index-espace des patchs fins)
-#include <pops/runtime/amr_system.hpp>     // AmrSystem, AmrSystemConfig
-#include <pops/runtime/builders/factory/model_factory.hpp>  // detail::resolve_selected_component (ADC-296)
-#include <pops/runtime/config/model_spec.hpp>
 
 #include "amr_tagging_test_authority.hpp"
 
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/amr_patch.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+
 #include <algorithm>
 #include <climits>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+namespace {
 
-using namespace pops;
+template <int Dim>
+struct EulerModel {
+  using Law = pops::nd::IdealGasEuler<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  using Aux = pops::AuxState<Dim>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
-// Euler compressible pur (sans source), elliptique de fond trivial (alpha=0) : meme spec que
-// test_amr_riemann_native / test_amr_weno5_native -> Poisson a second membre nul, aucune contrainte de
-// solvabilite periodique a gerer (le regrid tague sur le champ conservatif, independant de phi).
-static ModelSpec comp_spec() {
-  ModelSpec s;
-  s.transport = "compressible";
-  s.source = "none";
-  s.elliptic = "background";
-  s.gamma = 1.4;
-  s.alpha = 0.0;
-  s.n0 = 0.0;
-  return s;
+  Law law = Law::prepare(pops::Real(1.4));
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr-regrid-variable.euler", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    law.serialize_exact_parameters(contract);
+  }
+  static pops::VariableSet conservative_vars() { return Law::conservative_vars(); }
+  static pops::VariableSet primitive_vars() { return Law::primitive_vars(); }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
 }
 
-// Etat conservatif (rho, rho_u, rho_v, E) component-major U[c*nn + j*n + i], au repos (mom=0), avec la
-// composante @p bump_comp portee a @p bump_val dans la boite grossiere bas-gauche [lo, hi)^2 (en dehors
-// du seed fin central [n/4, 3n/4)). Energie/pression positives au repos (u=0 -> E > 0 suffit).
-static std::vector<double> make_state(int n, double rho, double E, int bump_comp, double bump_val,
-                                      int lo, int hi) {
-  const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
-  std::vector<double> U(4 * nn, 0.0);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;
-      U[0 * nn + k] = rho;
-      U[3 * nn + k] = E;
-      if (i >= lo && i < hi && j >= lo && j < hi)
-        U[static_cast<std::size_t>(bump_comp) * nn + k] = bump_val;
+template <int Dim>
+std::vector<double> energy_bump(const pops::Extent<Dim>& shape) {
+  const std::size_t cells = cell_count(shape);
+  std::vector<double> state(static_cast<std::size_t>(Dim + 2) * cells, 0.0);
+  for (std::size_t linear = 0; linear < cells; ++linear) {
+    state[linear] = 1.0;
+    state[static_cast<std::size_t>(Dim + 1) * cells + linear] = 2.5;
+    std::size_t remainder = linear;
+    bool inside = true;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      const int coordinate = static_cast<int>(remainder % width);
+      remainder /= width;
+      inside = inside && coordinate >= 2 && coordinate < 8;
     }
-  return U;
-}
-
-// Plus petit coin (min(ilo, jlo)) sur les boites FINES (level >= 1) : un patch suivant la bosse
-// bas-gauche a un coin << au seed central (dont le coin fin vaut n/2). INT_MAX si aucune boite fine.
-static int min_fine_corner(const std::vector<PatchBox>& boxes) {
-  int m = INT_MAX;
-  for (const auto& b : boxes)
-    if (b.level >= 1)
-      m = std::min(m, std::min(b.ilo, b.jlo));
-  return m;
-}
-
-static bool same_boxes(const std::vector<PatchBox>& a, const std::vector<PatchBox>& b) {
-  if (a.size() != b.size())
-    return false;
-  for (std::size_t i = 0; i < a.size(); ++i) {
-    if (a[i].level != b[i].level || a[i].ilo != b[i].ilo || a[i].jlo != b[i].jlo ||
-        a[i].ihi != b[i].ihi || a[i].jhi != b[i].jhi)
-      return false;
+    if (inside)
+      state[static_cast<std::size_t>(Dim + 1) * cells + linear] = 6.0;
   }
-  return true;
+  return state;
 }
 
-// Monte un systeme multi-blocs compressible (regrid d'union actif), seed les deux blocs, avance et
-// renvoie la signature des patchs fins. Bloc 0 porte l'etat d'interet ; bloc 1 est uniforme (jamais
-// tague) : l'union est donc pilotee par la composante selectionnee du bloc 0.
-static std::vector<PatchBox> run_case(int N, double thr, const std::string& variable,
-                                      const std::vector<double>& s0) {
-  AmrSystemConfig cfg;
-  cfg.n = N;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  cfg.regrid_every = 1;  // regrid a chaque pas -> le patch suit le champ tague des le 1er pas
-  AmrSystem sim(cfg);
-  sim.set_temporal_relations({2}, {1}, {"integral_only"});
-  sim.add_block("gas0", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.add_block("gas1", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-  sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_threshold_union(sim, {{"gas0", variable, thr}, {"gas1", variable, thr}});
-  sim.set_conservative_state("gas0", s0);
-  sim.set_conservative_state("gas1", make_state(N, 1.0, 2.0, 0, 1.0, 0, 0));  // uniforme
-  test::install_forward_euler_program(sim);
-  for (int s = 0; s < 4; ++s)
-    sim.step(1e-3);
-  return sim.patch_boxes();
+template <int Dim>
+std::vector<pops::AmrPatch<Dim>> run_selector(const std::string& variable) {
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 32;
+  config.regrid_every = 1;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("gas", "state/gas");
+  pops::add_compiled_model<Dim>(system, "gas", EulerModel<Dim>{});
+  system.set_conservative_state("gas", energy_bump(config.shape));
+  pops::test::install_prepared_threshold_union(system, {{"gas", variable, 4.0}});
+  return system.patch_boxes();
 }
 
-TEST(test_amr_regrid_variable, Runs) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
+template <int Dim>
+int minimum_fine_corner(const std::vector<pops::AmrPatch<Dim>>& patches) {
+  int result = INT_MAX;
+  for (const pops::AmrPatch<Dim>& patch : patches)
+    if (patch.level > 0)
+      for (int axis = 0; axis < Dim; ++axis)
+        result = std::min(result, patch.box.lo[axis]);
+  return result;
+}
 
-  // ============================================================================================
-  // (1) RESOLVEUR PUR detail::resolve_selected_component : nom exact -> composante, STRICT.
-  // ============================================================================================
-  {
-    // Layout Euler canonique : rho(0) rho_u(1) rho_v(2) E(3).
-    const VariableSet cv = Euler::conservative_vars();
-    EXPECT_EQ(detail::resolve_selected_component("prepared AMR tagging", "gas", cv, "E", ""), 3)
-        << "resolver_name_E_is_comp3";
-    EXPECT_EQ(detail::resolve_selected_component("prepared AMR tagging", "gas", cv, "rho", ""), 0)
-        << "resolver_name_rho_is_comp0";
-    EXPECT_THROW(detail::resolve_selected_component("prepared AMR tagging", "gas", cv, "bogus", ""),
-                 std::runtime_error)
-        << "resolver_unknown_name_throws";
+}  // namespace
 
-    // CAS D'ACCEPTATION CLE : densite NON situee a la composante 0. Le nom exact la retrouve sans
-    // supposer l'index 0 (ce que l'ancien `a(i, j, 0)` ne pouvait pas).
-    const VariableSet weird{VariableKind::Conservative,
-                            {"phi_aux", "mx", "rho", "E"},
-                            4,
-                            {VariableRole::Scalar, VariableRole::MomentumX, VariableRole::Density,
-                             VariableRole::Energy}};
-    EXPECT_EQ(detail::resolve_selected_component("prepared AMR tagging", "weird", weird, "rho", ""),
-              2)
-        << "resolver_density_not_at_comp0_name";
-  }
+TEST(test_amr_regrid_variable, AuthoredVariableSelectsTheExactConservativeComponent) {
+  constexpr int Dim = pops::kNativeDimension;
+  const std::vector<pops::AmrPatch<Dim>> density = run_selector<Dim>("rho");
+  const std::vector<pops::AmrPatch<Dim>> energy = run_selector<Dim>("E");
 
-  // ============================================================================================
-  // (2) FACADE MULTI-BLOCS : refiner sur l'energie (comp 3) suit la bosse, le defaut (densite) non.
-  // ============================================================================================
-  const int N = 64;
-  // Bosse d'ENERGIE en bas-gauche (boite grossiere [4, 20)^2, hors du seed central [16, 48)) ; densite
-  // UNIFORME (=1). E base=2, bosse=12, seuil=6 : seule l'energie depasse, et seulement en bas-gauche.
-  const std::vector<double> s_energy =
-      make_state(N, 1.0, 2.0, /*bump_comp=*/3, /*bump_val=*/12.0, 4, 20);
+  EXPECT_TRUE(density.empty()) << "uniform rho must not inherit the E selector";
+  ASSERT_FALSE(energy.empty()) << "the E bump must activate exact ranked refinement";
+  EXPECT_LT(minimum_fine_corner(energy), 16)
+      << "the prepared E selector must refine the lower-corner bump";
+}
 
-  const std::vector<PatchBox> density = run_case(N, 6.0, "rho", s_energy);
-  const std::vector<PatchBox> energy = run_case(N, 6.0, "E", s_energy);
-
-  // Le defaut (densite uniforme < seuil) ne tague rien -> regrid no-op -> seed central conserve
-  // (coin fin = n/2 = 32). Refiner sur l'energie deplace le patch vers la bosse bas-gauche (coin << 32).
-  EXPECT_LT(min_fine_corner(energy), min_fine_corner(density)) << "name_E_patch_reaches_lower_left";
-  EXPECT_FALSE(same_boxes(energy, density)) << "name_E_layout_differs_from_density";
-
-  // NON-REGRESSION composante 0 : sur une bosse de DENSITE (comp 0) en bas-gauche, le selecteur par
-  // defaut raffine bien la densite (le chemin historique reste fonctionnel).
-  const std::vector<double> s_density =
-      make_state(N, 1.0, 2.0, /*bump_comp=*/0, /*bump_val=*/3.0, 4, 20);
-  const std::vector<PatchBox> dens = run_case(N, 2.0, "rho", s_density);
-  EXPECT_LT(min_fine_corner(dens), 32) << "prepared_rho_leaf_refines_on_density_comp0";
-
-  // ============================================================================================
-  // (3) ERREURS STRICTES : variable absente du bloc -> erreur au build.
-  // ============================================================================================
-  EXPECT_THROW(run_case(N, 6.0, "temperature", s_energy), std::runtime_error)
-      << "absent_variable_throws_at_build_no_silent_comp0";
-  // SINGLE-BLOCK : le meme descripteur VariableSet alimente le graphe prepare.
-  EXPECT_NO_THROW({
-    AmrSystemConfig cfg;
-    cfg.n = N;
-    cfg.L = 1.0;
-    cfg.regrid_every = 1;
-    AmrSystem sim(cfg);
-    sim.set_temporal_relations({2}, {1}, {"integral_only"});
-    sim.add_block("solo", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-    sim.set_poisson("charge_density", "geometric_mg", "periodic");
-    test::install_prepared_threshold_union(sim, {{"solo", "E", 6.0}});
-    sim.set_density("solo", std::vector<double>(static_cast<std::size_t>(N) * N, 1.0));
-    (void)sim.n_patches();
-  }) << "single_block_selector_uses_prepared_runtime_descriptor";
+TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
+  constexpr int Dim = pops::kNativeDimension;
+  EXPECT_THROW((void)run_selector<Dim>("not_a_conservative_variable"), std::invalid_argument);
 }

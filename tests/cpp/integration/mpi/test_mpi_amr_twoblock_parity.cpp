@@ -1,320 +1,186 @@
-// PARITE MPI du capstone AMR MULTI-BLOCS (PR1). Pendant multi-blocs de test_mpi_amr_compiled_parity :
-// DEUX blocs EXPLICITES a schemas DIFFERENTS co-localises sur UNE hierarchie AMR PARTAGEE (Poisson de
-// systeme a second membre SOMME q0 n0 + q1 n1), DISTRIBUES sur n_ranks(). Propriete verifiee :
-//   (1) CONSISTANCE CROSS-RANG : le grossier etant REPLIQUE, la masse de CHAQUE bloc, la densite de
-//       chaque bloc et le potentiel de systeme sont des grandeurs GLOBALES identiques sur tous les
-//       rangs (spread max reduit == 0). Un bug de halo / Poisson somme / aux distant le casserait.
-//   (2) PARITE AU NB DE RANGS : on imprime des checksums (par bloc + potentiel) ; le script de build
-//       relance le MEME binaire en np=1/2/4 et DIFF (np=1 = oracle ; np=2/4 BIT-IDENTIQUES).
-//   (3) REDUCTIONS COMPOSITES : le chemin AmrRuntime multi-bloc doit distinguer le grossier
-//       replique (deja global sur chaque rang, donc jamais re-somme) du grossier distribue (somme
-//       des proprietaires). Pour sum / abs_sum / sum_sq, les deux politiques doivent retrouver la
-//       meme grandeur physique qu'un parcours independant de tous les niveaux avec le masque des
-//       cellules grossieres couvertes.
-//
-// Hierarchie FIGEE (regrid_every=0) : multi-blocs PR1 n'a pas de regrid (AmrRuntime ; le regrid
-// d'union des tags est une PR ulterieure). On exerce neanmoins le grossier replique + le patch fin
-// central multi-patch + le Poisson somme co-localise distribues. Independant du backend (Kokkos
-// Serial CI, Kokkos Cuda GH200).
 #include <gtest/gtest.h>
 
-#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
+#include "test_harness.hpp"
+
+#include <pops/core/foundation/native_dimension.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+
+#include <Kokkos_Core.hpp>
 
 #include <cmath>
 #include <cstdio>
-#include <string>
+#include <stdexcept>
 #include <vector>
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+namespace {
 
-using namespace pops;
+template <int Dim>
+struct AdvectionModel {
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  using Aux = pops::AuxState<Dim>;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+  static constexpr int n_aux = pops::aux_comps_for<Law, Dim>();
 
-static ModelSpec exb_charge(double q, double B0) {
-  ModelSpec s;
-  s.transport = "exb";
-  s.source = "none";
-  s.elliptic = "charge";
-  s.q = q;
-  s.B0 = B0;
-  return s;
-}
+  Law law{};
 
-// creneau lisse a moyenne (offset) nulle, n*n row-major (charge totale solvable en periodique).
-static std::vector<double> bump(int n, double amp) {
-  std::vector<double> r(static_cast<std::size_t>(n) * n, 1.0);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double dx = x - 0.5, dy = y - 0.5;
-      r[static_cast<std::size_t>(j) * n + i] = 1.0 + amp * std::exp(-(dx * dx + dy * dy) / 0.01);
-    }
-  // retire l'offset moyen -> Sum q n a moyenne nulle (Poisson periodique solvable).
-  double mean = 0;
-  for (double v : r)
-    mean += v;
-  mean /= static_cast<double>(r.size());
-  for (double& v : r)
-    v += (1.0 - mean);
-  return r;
-}
-
-struct CompositeReductions {
-  double sum = 0.0;
-  double abs_sum = 0.0;
-  double sum_sq = 0.0;
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.mpi-amr-package-parity.scalar-advection", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const Aux&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
 };
 
-// Independent composite reference for component zero. This deliberately does not use density(): it
-// walks the public per-level checkpoint views and applies the AMR covered-cell rule itself. Thus
-// abs_sum and sum_sq remain valid when a fine state differs from its coarse average.
-static CompositeReductions composite_oracle(AmrSystem& system, const char* block, int base_n,
-                                            std::vector<int> selected = {}) {
-  CompositeReductions result;
-  const int n_levels = system.n_levels();
-  if (selected.empty())
-    for (int level = 0; level < n_levels; ++level)
-      selected.push_back(level);
-  const std::vector<PatchBox> boxes = system.patch_boxes();
-  for (std::size_t selected_index = 0; selected_index < selected.size(); ++selected_index) {
-    const int level = selected[selected_index];
-    const int next = selected_index + 1 < selected.size() ? selected[selected_index + 1] : -1;
-    const std::size_t width = static_cast<std::size_t>(base_n) << level;
-    const std::vector<double> state = system.block_level_state_global(block, level);
-    if (state.size() < width * width)
-      continue;
-    const double dx = 1.0 / static_cast<double>(width);
-    const double cell = dx * dx;
-    for (std::size_t j = 0; j < width; ++j)
-      for (std::size_t i = 0; i < width; ++i) {
-        bool covered = false;
-        for (const PatchBox& fine : boxes) {
-          if (fine.level != next)
-            continue;
-          const int shift = next - level;
-          if (static_cast<int>(i) >= (fine.ilo >> shift) &&
-              static_cast<int>(i) <= (fine.ihi >> shift) &&
-              static_cast<int>(j) >= (fine.jlo >> shift) &&
-              static_cast<int>(j) <= (fine.jhi >> shift)) {
-            covered = true;
-            break;
-          }
-        }
-        if (covered)
-          continue;
-        const double value = state[j * width + i];
-        result.sum += cell * value;
-        result.abs_sum += cell * std::fabs(value);
-        result.sum_sq += cell * value * value;
-      }
-  }
+template <int Dim>
+AdvectionModel<Dim> advection_model() {
+  pops::RealVector<Dim> velocity{};
+  return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
   return result;
 }
 
-static CompositeReductions composite_reductions(const AmrSystem& system, const char* block,
-                                                const std::vector<int>& levels = {}) {
-  return {system.composite_reduce(block, "sum", 0, levels),
-          system.composite_reduce(block, "abs_sum", 0, levels),
-          system.composite_reduce(block, "sum_sq", 0, levels)};
-}
-
-static double composite_reduction_error(const CompositeReductions& actual,
-                                        const CompositeReductions& expected) {
-  return std::fmax(std::fabs(actual.sum - expected.sum),
-                   std::fmax(std::fabs(actual.abs_sum - expected.abs_sum),
-                             std::fabs(actual.sum_sq - expected.sum_sq)));
+template <int Dim>
+std::vector<double> gaussian(const pops::Extent<Dim>& shape) {
+  std::vector<double> values(cell_count(shape));
+  for (std::size_t linear = 0; linear < values.size(); ++linear) {
+    std::size_t remainder = linear;
+    double radius_squared = 0.0;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto width = static_cast<std::size_t>(shape[axis]);
+      const int coordinate = static_cast<int>(remainder % width);
+      remainder /= width;
+      const double offset = (coordinate + 0.5) / static_cast<double>(shape[axis]) - 0.5;
+      radius_squared += offset * offset;
+    }
+    values[linear] = 1.0 + 0.4 * std::exp(-radius_squared / 0.02);
+  }
+  return values;
 }
 
 struct RunResult {
-  std::vector<double> ions;
-  std::vector<double> electrons;
-  std::vector<double> potential;
-  CompositeReductions ions_reduce;
-  CompositeReductions electrons_reduce;
-  CompositeReductions ions_oracle;
-  CompositeReductions electrons_oracle;
-  CompositeReductions coarse_reduce;
-  CompositeReductions coarse_oracle;
-  CompositeReductions fine_reduce;
-  CompositeReductions fine_oracle;
-  double initial_ions_mass = 0.0;
-  double initial_electrons_mass = 0.0;
-  double ions_mass = 0.0;
-  double electrons_mass = 0.0;
+  std::vector<double> state;
+  double mass = 0.0;
+  bool second_package_refused = false;
 };
 
-static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
-  comm_init(&argc, &argv);
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  const int me = my_rank(), np = n_ranks();
-  const int n = 32;
-  const double B0 = 1.0, q0 = +1.0, q1 = -1.0;
-  const std::vector<double> rho0 = bump(n, 0.40);
-  const std::vector<double> rho1 = bump(n, 0.20);
-
-  const double dt = 1e-3;
-  const auto run_mode = [&](bool distribute_coarse) {
-    AmrSystemConfig cfg;
-    cfg.n = n;
-    cfg.L = 1.0;
-    cfg.periodicity = {true, true};
-    cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie FIGEE
-    cfg.distribute_coarse = distribute_coarse;
-    cfg.coarse_max_grid = distribute_coarse ? n / 2 : 0;
-
-    AmrSystem sys(cfg);
-    sys.set_temporal_relations({2}, {1}, {"integral_only"});
-    sys.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
-    sys.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
-                  1);  // SCHEMA DIFFERENT
-    sys.set_poisson("charge_density", "geometric_mg", "periodic");
-    sys.set_density("ions", rho0);
-    sys.set_density("electrons", rho1);
-    test::install_forward_euler_program(sys);
-
-    RunResult result;
-    result.initial_ions_mass = sys.mass("ions");  // declenche le runtime multi-bloc paresseux
-    result.initial_electrons_mass = sys.mass("electrons");
-    for (int s = 0; s < 16; ++s)
-      sys.step(dt);
-
-#if defined(POPS_HAS_KOKKOS)
-    Kokkos::fence();
-#endif
-    result.ions = sys.density("ions");
-    result.electrons = sys.density("electrons");
-    result.potential = sys.potential();
-    result.ions_mass = sys.mass("ions");
-    result.electrons_mass = sys.mass("electrons");
-    result.ions_reduce = composite_reductions(sys, "ions");
-    result.electrons_reduce = composite_reductions(sys, "electrons");
-    result.ions_oracle = composite_oracle(sys, "ions", n);
-    result.electrons_oracle = composite_oracle(sys, "electrons", n);
-    result.coarse_reduce = composite_reductions(sys, "ions", {0});
-    result.coarse_oracle = composite_oracle(sys, "ions", n, {0});
-    if (sys.n_levels() > 1) {
-      result.fine_reduce = composite_reductions(sys, "ions", {1});
-      result.fine_oracle = composite_oracle(sys, "ions", n, {1});
-    }
-    return result;
-  };
-
-  const RunResult replicated = run_mode(false);
-  const RunResult distributed = run_mode(true);
-  const std::vector<double>& di = replicated.ions;
-  const std::vector<double>& de = replicated.electrons;
-  const std::vector<double>& phi = replicated.potential;
-  const double mi = replicated.ions_mass, mass_e = replicated.electrons_mass;
-  const double m0i = replicated.initial_ions_mass, m0e = replicated.initial_electrons_mass;
-  const double replicated_ions_reduce_error =
-      composite_reduction_error(replicated.ions_reduce, replicated.ions_oracle);
-  const double replicated_electrons_reduce_error =
-      composite_reduction_error(replicated.electrons_reduce, replicated.electrons_oracle);
-  const double distributed_ions_reduce_error =
-      composite_reduction_error(distributed.ions_reduce, distributed.ions_oracle);
-  const double distributed_electrons_reduce_error =
-      composite_reduction_error(distributed.electrons_reduce, distributed.electrons_oracle);
-  const double replicated_coarse_error =
-      composite_reduction_error(replicated.coarse_reduce, replicated.coarse_oracle);
-  const double distributed_coarse_error =
-      composite_reduction_error(distributed.coarse_reduce, distributed.coarse_oracle);
-  const double replicated_fine_error =
-      composite_reduction_error(replicated.fine_reduce, replicated.fine_oracle);
-  const double distributed_fine_error =
-      composite_reduction_error(distributed.fine_reduce, distributed.fine_oracle);
-
-  auto checksum = [](const std::vector<double>& v) {
-    double s = 0;
-    for (double x : v)
-      s += x * x;
-    return s;
-  };
-  const double ci = checksum(di), ce = checksum(de), cp = checksum(phi);
-
-  // (1) CONSISTANCE CROSS-RANG : grossier replique -> chaque grandeur globale identique sur tout
-  // rang. spread = max(max - min) sur les checksums + masses ; == 0 ssi bit-identique cross-rang.
-  auto spread = [](double x) { return all_reduce_max(x) - (-all_reduce_max(-x)); };
-  const double sp = std::fmax(std::fmax(spread(ci), spread(ce)),
-                              std::fmax(spread(cp), std::fmax(spread(mi), spread(mass_e))));
-
-  int fails = 0;
-  if (me == 0) {
-    std::printf(
-        "AMRMB np=%d | mass_ions=%.17e mass_elec=%.17e | csum_ions=%.17e csum_elec=%.17e "
-        "csum_phi=%.17e | crossrank_spread=%.3e | composite_rep=(%.3e,%.3e) "
-        "composite_dist=(%.3e,%.3e)\n",
-        np, mi, mass_e, ci, ce, cp, sp, replicated_ions_reduce_error,
-        replicated_electrons_reduce_error, distributed_ions_reduce_error,
-        distributed_electrons_reduce_error);
-    std::printf("AMRMB conservation: dm_ions=%.3e dm_elec=%.3e\n", std::fabs(mi - m0i),
-                std::fabs(mass_e - m0e));
-    if (!(di.size() == static_cast<std::size_t>(n) * n)) {
-      std::printf("FAIL taille densite\n");
-      ++fails;
-    }
-    if (!(cp > 1e-12)) {
-      std::printf("FAIL potentiel trivial (Poisson somme inactif)\n");
-      ++fails;
-    }
-    // masse de CHAQUE bloc conservee (transport conservatif periodique, par bloc).
-    if (!(std::fabs(mi - m0i) < 1e-9)) {
-      std::printf("FAIL masse ions non conservee\n");
-      ++fails;
-    }
-    if (!(std::fabs(mass_e - m0e) < 1e-9)) {
-      std::printf("FAIL masse electrons non conservee\n");
-      ++fails;
-    }
-    // grossier replique : tout bit-identique cross-rang (spread exactement 0).
-    if (!(sp == 0.0)) {
-      std::printf("FAIL grandeurs non bit-identiques entre rangs\n");
-      ++fails;
-    }
-    // The replicated run must not apply MPI SUM to an already-global level 0. The distributed
-    // run must apply it exactly once. Checking all three additive reductions catches both the
-    // raw-state and transformed-value paths (abs / square).
-    constexpr double kReductionTolerance = 1e-11;
-    if (!(replicated_ions_reduce_error < kReductionTolerance &&
-          replicated_electrons_reduce_error < kReductionTolerance)) {
-      std::printf("FAIL composite_reduce replique multiplie ou perd le grossier\n");
-      ++fails;
-    }
-    if (!(distributed_ions_reduce_error < kReductionTolerance &&
-          distributed_electrons_reduce_error < kReductionTolerance)) {
-      std::printf("FAIL composite_reduce distribue ne reconstruit pas le grossier\n");
-      ++fails;
-    }
-    if (!(replicated_coarse_error < kReductionTolerance &&
-          distributed_coarse_error < kReductionTolerance &&
-          replicated_fine_error < kReductionTolerance &&
-          distributed_fine_error < kReductionTolerance)) {
-      std::printf("FAIL composite_reduce ne respecte pas la selection exacte des niveaux\n");
-      ++fails;
-    }
-    if (fails == 0)
-      std::printf(
-          "OK test_mpi_amr_twoblock_parity np=%d (multi-blocs AMR : Poisson somme "
-          "co-localise, masse par bloc, bit-identique cross-rang)\n",
-          np);
-  } else {
-    (void)sp;
+template <int Dim>
+RunResult run_mode(bool distribute_coarse) {
+  pops::AmrSystemConfig<Dim> config;
+  config.level_count = 1;
+  config.transition_ratios.clear();
+  config.transition_buffers.clear();
+  config.transition_lookaheads.clear();
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.coarse_max_grid[axis] = distribute_coarse ? 16 : 0;
   }
-  comm_finalize();
-  return fails ? 1 : 0;
+  config.distribute_coarse = distribute_coarse;
+  pops::AmrSystem<Dim> system(config);
+  system.install_block_state_route("first", "state/first");
+  pops::add_compiled_model<Dim>(system, "first", advection_model<Dim>());
+  system.set_conservative_state("first", gaussian(config.shape));
+  RunResult result;
+  result.state = system.block_level_state_global("first", 0);
+  result.mass = system.mass("first");
+
+  try {
+    system.install_block_state_route("second", "state/second");
+  } catch (const std::logic_error&) {
+    result.second_package_refused = true;
+  }
+  if (system.n_blocks() != 1 || system.block_level_state_global("first", 0) != result.state)
+    throw std::runtime_error("second-package refusal changed the accepted first package");
+  return result;
 }
 
+double checksum(const std::vector<double>& values) {
+  double result = 0.0;
+  for (const double value : values)
+    result += value * value;
+  return result;
+}
+
+int run_collective_parity(int argc, char** argv) {
+  pops::comm_init(&argc, &argv);
+  int failure = 0;
+  {
+    Kokkos::ScopeGuard guard(argc, argv);
+    try {
+      const RunResult replicated = run_mode<pops::kNativeDimension>(false);
+      const RunResult distributed = run_mode<pops::kNativeDimension>(true);
+      const double replicated_checksum = checksum(replicated.state);
+      const double distributed_checksum = checksum(distributed.state);
+      const auto spread = [](double value) {
+        return pops::all_reduce_max(value) - (-pops::all_reduce_max(-value));
+      };
+      EXPECT_TRUE(replicated.second_package_refused);
+      EXPECT_TRUE(distributed.second_package_refused);
+      EXPECT_EQ(replicated.state, distributed.state);
+      EXPECT_NEAR(replicated.mass, distributed.mass, 1.0e-13);
+      EXPECT_EQ(spread(replicated_checksum), 0.0);
+      EXPECT_EQ(spread(distributed_checksum), 0.0);
+      EXPECT_EQ(spread(replicated.mass), 0.0);
+      EXPECT_EQ(spread(distributed.mass), 0.0);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "rank %d exact package parity failed: %s\n", pops::my_rank(),
+                   error.what());
+      failure = 1;
+    }
+    failure = static_cast<int>(
+        pops::all_reduce_max(static_cast<long>(failure || ::testing::Test::HasFailure())));
+    if (pops::my_rank() == 0 && failure == 0)
+      std::printf("OK test_mpi_amr_twoblock_parity np=%d dim=%d fail-closed-package-parity\n",
+                  pops::n_ranks(), pops::kNativeDimension);
+  }
+  pops::comm_finalize();
+  return failure;
+}
+
+}  // namespace
+
 TEST(test_mpi_amr_twoblock_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_twoblock_parity,
-                                    "test_mpi_amr_twoblock_parity"),
-            0);
+  EXPECT_EQ(pops::test::RunTestBody(&run_collective_parity, "test_mpi_amr_twoblock_parity"), 0);
 }
