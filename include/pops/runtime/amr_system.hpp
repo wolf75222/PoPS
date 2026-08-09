@@ -23,6 +23,7 @@
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/output_piece.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>
+#include <pops/runtime/system/auxiliary_checkpoint.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 
 #include <array>
@@ -671,6 +672,24 @@ class AmrSystem {
   [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
+  /// Level-qualified group and plan access for generated AMR Program contexts.  Every consumer
+  /// binds its compact local view against the active hierarchy level; no shared auxiliary slab is
+  /// exposed at this seam.
+  [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
+  prepared_amr_provider_storage_groups(int level) const;
+  [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+  prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid, int level) const;
+
+  /// Durable accepted metadata for each AMR hierarchy level.  The native checkpoint backend owns
+  /// rank-local group payload staging; this image authenticates its exact group identities,
+  /// owner-qualified ComponentKeys, shapes and accepted provider generations before publication.
+  [[nodiscard]] POPS_EXPORT std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
+  capture_auxiliary_checkpoint_accepted_state() const;
+  /// Restore only after the caller has staged compatible rank-local group payloads privately.  A
+  /// communicator preflight and a full registry rollback image prevent a rejected level from
+  /// exposing a partial accepted generation.
+  POPS_EXPORT void restore_auxiliary_checkpoint_accepted_state(
+      const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state);
 
   /// @name Named multi-elliptic fields (ADC-428)
   /// Exact-ranked API for a SECOND elliptic solve on the AMR hierarchy. Installation is accepted

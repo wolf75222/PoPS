@@ -17,6 +17,7 @@
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/system/provider_storage_binding.hpp>
 
 #include <algorithm>
 #include <array>
@@ -420,6 +421,30 @@ class AmrProgramContext {
       unavailable_("exact-ranked multi-block AMR state provider");
     refresh_resources_();
     return runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
+  }
+
+  /// Bind one generated consumer's compact provider view for the active AMR hierarchy level.
+  /// The program block is authenticated before storage lookup; the qid resolves through that
+  /// level's sealed plan, so neither generated code nor this context can fall back to ``ctx.aux``.
+  template <int Count>
+  [[nodiscard]] ProviderStorageView<Dim, Count> provider_values_view(
+      std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
+    static_assert(Count >= 0, "a provider consumer count cannot be negative");
+    if constexpr (Count == 0) {
+      (void)consumer_qid;
+      (void)program_block;
+      (void)local_fab;
+      return {};
+    } else {
+      const field_type& state_field = state(program_block);
+      const auto* const groups =
+          facade_->prepared_amr_provider_storage_groups(active_level_);
+      const auto& plan = facade_->prepared_amr_auxiliary_consumer_plan(
+          std::string(consumer_qid), active_level_);
+      runtime::system::require_pointwise_provider_groups<Dim, Count>(
+          state_field, groups, &plan, "AmrProgramContext provider values");
+      return runtime::system::bind_provider_storage_view<Dim, Count>(&plan, groups, local_fab);
+    }
   }
 
   field_type rhs_scratch_like(const field_type& prototype) const {

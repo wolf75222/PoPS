@@ -3733,6 +3733,130 @@ AmrSystem<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid
 }
 
 template <int Dim>
+const runtime::system::AuxiliaryStorageGroups<Dim>*
+AmrSystem<Dim>::prepared_amr_provider_storage_groups(int level) const {
+  p_->ensure_engine();
+  if (level < 0 || !p_->prepared_hierarchy ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
+    throw std::out_of_range("AMR provider storage level lies outside the live hierarchy");
+  const auto& groups = p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)];
+  if (!groups)
+    throw std::logic_error("AMR prepared hierarchy has no provider storage groups at this level");
+  return groups.get();
+}
+
+template <int Dim>
+const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
+AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid,
+                                                      int level) const {
+  p_->ensure_engine();
+  if (level < 0 || !p_->prepared_hierarchy ||
+      static_cast<std::size_t>(level) >= p_->prepared_hierarchy->auxiliary_registries.size())
+    throw std::out_of_range("AMR provider consumer-plan level lies outside the live hierarchy");
+  return p_->prepared_hierarchy->auxiliary_registries[static_cast<std::size_t>(level)]
+      .consumer_plan(consumer_qid);
+}
+
+template <int Dim>
+std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>
+AmrSystem<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
+  p_->ensure_engine();
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR auxiliary checkpoint requires a materialized hierarchy lane");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>> result;
+  long local_failure = 0;
+  std::string collective_contract;
+  try {
+    const auto& groups = p_->prepared_hierarchy->provider_storage;
+    const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
+    if (groups.size() != registries.size())
+      throw std::logic_error("AMR auxiliary checkpoint hierarchy has mismatched groups and registries");
+    result.reserve(registries.size());
+    ExactContractBuilder exact;
+    exact.text("pops.amr-exact-auxiliary-checkpoint")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(registries.size()));
+    for (std::size_t level = 0; level < registries.size(); ++level) {
+      if (!groups[level])
+        throw std::logic_error("AMR auxiliary checkpoint has an empty level carrier");
+      auto accepted = runtime::system::capture_auxiliary_checkpoint_state(registries[level]);
+      runtime::system::require_auxiliary_checkpoint_storage(accepted, *groups[level]);
+      const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(accepted);
+      exact.scalar(static_cast<std::uint64_t>(level)).bytes(
+          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+      result.push_back(std::move(accepted));
+    }
+    collective_contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+  }
+  if (all_reduce_max(local_failure, lane) != 0)
+    throw std::runtime_error("AMR auxiliary checkpoint capture failed on at least one rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.amr-auxiliary-checkpoint"), collective_contract}}, lane))
+    throw std::runtime_error("AMR auxiliary checkpoint differs between communicator ranks");
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_auxiliary_checkpoint_accepted_state(
+    const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<Dim>>& state) {
+  p_->ensure_engine();
+  if (!p_->prepared_hierarchy || !p_->prepared_hierarchy->lane)
+    throw std::logic_error("AMR auxiliary checkpoint restore requires a materialized hierarchy lane");
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  long local_failure = 0;
+  std::string collective_contract;
+  try {
+    const auto& groups = p_->prepared_hierarchy->provider_storage;
+    const auto& registries = p_->prepared_hierarchy->auxiliary_registries;
+    if (state.size() != groups.size() || state.size() != registries.size())
+      throw std::invalid_argument("AMR auxiliary checkpoint level count differs from the hierarchy");
+    ExactContractBuilder exact;
+    exact.text("pops.amr-exact-auxiliary-checkpoint")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(state.size()));
+    for (std::size_t level = 0; level < state.size(); ++level) {
+      if (!groups[level])
+        throw std::logic_error("AMR auxiliary checkpoint restore has an empty level carrier");
+      runtime::system::require_auxiliary_checkpoint_storage(state[level], *groups[level]);
+      const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(state[level]);
+      exact.scalar(static_cast<std::uint64_t>(level)).bytes(
+          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    }
+    collective_contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+  }
+  if (all_reduce_max(local_failure, lane) != 0)
+    throw std::invalid_argument("AMR auxiliary checkpoint preflight failed on at least one rank");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("pops.amr-auxiliary-checkpoint"), collective_contract}}, lane))
+    throw std::runtime_error("AMR auxiliary checkpoint differs between communicator ranks");
+
+  const auto storage_snapshot = p_->snapshot_provider_storage();
+  const auto registry_snapshot = p_->snapshot_provider_registries();
+  const auto dirty_snapshot = p_->dirty_auxiliary_providers;
+  try {
+    for (std::size_t level = 0; level < state.size(); ++level)
+      runtime::system::restore_auxiliary_checkpoint_state(
+          state[level], p_->prepared_hierarchy->auxiliary_registries[level], lane);
+    p_->dirty_auxiliary_providers.clear();
+  } catch (...) {
+    if (storage_snapshot && registry_snapshot) {
+      for (std::size_t level = 0; level < storage_snapshot->size(); ++level)
+        *p_->prepared_hierarchy->provider_storage[level] = (*storage_snapshot)[level];
+      p_->prepared_hierarchy->auxiliary_registries = *registry_snapshot;
+    }
+    p_->dirty_auxiliary_providers = dirty_snapshot;
+    throw;
+  }
+}
+
+template <int Dim>
 std::vector<double> AmrSystem<Dim>::auxiliary_component(
     const runtime::system::AuxiliaryComponentKey& key, int level) const {
   p_->ensure_engine();
@@ -6484,6 +6608,14 @@ template std::vector<double> AmrSystem<kNativeDimension>::auxiliary_component(
 template std::string AmrSystem<kNativeDimension>::auxiliary_registry_contract() const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
+template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
+AmrSystem<kNativeDimension>::prepared_amr_provider_storage_groups(int) const;
+template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
+AmrSystem<kNativeDimension>::prepared_amr_auxiliary_consumer_plan(const std::string&, int) const;
+template std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>
+AmrSystem<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
+template void AmrSystem<kNativeDimension>::restore_auxiliary_checkpoint_accepted_state(
+    const std::vector<runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>>&);
 template void AmrSystem<kNativeDimension>::add_prepared_amr_poisson_rhs(
     int, MultiFab<kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::install_block_state_route(const std::string&,
