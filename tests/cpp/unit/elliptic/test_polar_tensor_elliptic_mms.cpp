@@ -101,7 +101,8 @@ TEST(test_polar_tensor_elliptic_mms, radial_line_solver_authenticates_the_final_
   options.absolute_tolerance = pops::Real(1e-12);
   options.maximum_iterations = 500;
   options.preconditioner = pops::PolarPreconditioner::radial_line;
-  auto solver = pops::PolarTensorProvider<kDim>::build(request(), options);
+  auto prepared = pops::PolarTensorProvider<kDim>::build(request(), options);
+  auto solver = std::move(prepared);
   fill_rhs(solver);
   const pops::SolveReport report = solver.solve();
   ASSERT_TRUE(report.solved()) << report.reason;
@@ -124,8 +125,9 @@ TEST(test_polar_tensor_elliptic_mms, explicit_tensor_coefficients_use_the_same_e
   tr.set_val(pops::Real(0));
   pops::PolarTensorOptions options;
   options.maximum_iterations = 500;
-  auto solver = pops::PolarTensorProvider<kDim>::build(std::move(build), options);
-  solver.set_coefficients(rr, tt, &rt, &tr);
+  auto prepared = pops::PolarTensorProvider<kDim>::build(std::move(build), options);
+  prepared.set_coefficients(rr, tt, &rt, &tr);
+  auto solver = std::move(prepared);
   fill_rhs(solver);
   const pops::SolveReport report = solver.solve();
   ASSERT_TRUE(report.solved()) << report.reason;

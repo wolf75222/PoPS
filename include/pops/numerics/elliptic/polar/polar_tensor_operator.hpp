@@ -392,8 +392,6 @@ class PolarTensorKrylovSolver {
     validate_options_();
     radial_radial_store_.set_val(Real(1));
     azimuthal_azimuthal_store_.set_val(Real(1));
-    radial_radial_ = &radial_radial_store_;
-    azimuthal_azimuthal_ = &azimuthal_azimuthal_store_;
     prepare_boundaries_and_halo_();
   }
 
@@ -539,6 +537,19 @@ class PolarTensorKrylovSolver {
     return std::isfinite(static_cast<double>(value)) && value != Real(0);
   }
 
+  field_type& radial_radial_field_() noexcept {
+    return radial_radial_ ? *radial_radial_ : radial_radial_store_;
+  }
+  const field_type& radial_radial_field_() const noexcept {
+    return radial_radial_ ? *radial_radial_ : radial_radial_store_;
+  }
+  field_type& azimuthal_azimuthal_field_() noexcept {
+    return azimuthal_azimuthal_ ? *azimuthal_azimuthal_ : azimuthal_azimuthal_store_;
+  }
+  const field_type& azimuthal_azimuthal_field_() const noexcept {
+    return azimuthal_azimuthal_ ? *azimuthal_azimuthal_ : azimuthal_azimuthal_store_;
+  }
+
   void validate_options_() const {
     if (!std::isfinite(static_cast<double>(options_.relative_tolerance)) ||
         !std::isfinite(static_cast<double>(options_.absolute_tolerance)) ||
@@ -609,21 +620,21 @@ class PolarTensorKrylovSolver {
 
   void apply_full_(field_type& input, field_type& output) {
     fill_(input, *full_physical_);
-    apply_polar_tensor(input, geometry_, output, *radial_radial_,
-                       *azimuthal_azimuthal_, radial_azimuthal_, azimuthal_radial_);
+    apply_polar_tensor(input, geometry_, output, radial_radial_field_(),
+                       azimuthal_azimuthal_field_(), radial_azimuthal_, azimuthal_radial_);
   }
 
   void apply_linear_(field_type& input, field_type& output) {
     fill_(input, *homogeneous_physical_);
-    apply_polar_tensor(input, geometry_, output, *radial_radial_,
-                       *azimuthal_azimuthal_, radial_azimuthal_, azimuthal_radial_);
+    apply_polar_tensor(input, geometry_, output, radial_radial_field_(),
+                       azimuthal_azimuthal_field_(), radial_azimuthal_, azimuthal_radial_);
   }
 
   void prepare_coefficients_() {
     if (coefficients_ready_)
       return;
-    fill_(*radial_radial_, *coefficient_physical_);
-    fill_(*azimuthal_azimuthal_, *coefficient_physical_);
+    fill_(radial_radial_field_(), *coefficient_physical_);
+    fill_(azimuthal_azimuthal_field_(), *coefficient_physical_);
     if (radial_azimuthal_)
       fill_(*radial_azimuthal_, *coefficient_physical_);
     if (azimuthal_radial_)
@@ -639,8 +650,8 @@ class PolarTensorKrylovSolver {
       for_each_cell(
           inverse_diagonal_.box(local),
           polar_tensor_detail::InverseDiagonalKernel<Dim>{
-              std::as_const(*radial_radial_).fab(local).view(),
-              std::as_const(*azimuthal_azimuthal_).fab(local).view(),
+              std::as_const(radial_radial_field_()).fab(local).view(),
+              std::as_const(azimuthal_azimuthal_field_()).fab(local).view(),
               inverse_diagonal_.fab(local).view(), geometry_.domain().lo[0],
               geometry_.domain().hi[0], geometry_.radial_lower(), geometry_.dr(), inverse_dr,
               inverse_dtheta, lower_scale, upper_scale});
@@ -654,19 +665,21 @@ class PolarTensorKrylovSolver {
   }
 
   void build_radial_lines_(Real lower_scale, Real upper_scale) {
-    for (const Box<Dim>& box : radial_radial_->layout().boxes())
+    field_type& radial_radial = radial_radial_field_();
+    field_type& azimuthal_azimuthal = azimuthal_azimuthal_field_();
+    for (const Box<Dim>& box : radial_radial.layout().boxes())
       if (box.lo[0] != geometry_.domain().lo[0] ||
           box.hi[0] != geometry_.domain().hi[0])
         throw std::invalid_argument(
             "polar radial-line preconditioner requires every patch to span the radial domain");
 
     const int radial_cells = static_cast<int>(geometry_.domain().length(0));
-    line_diagonal_.resize(radial_radial_->local_size());
-    line_lower_.resize(radial_radial_->local_size());
-    line_upper_.resize(radial_radial_->local_size());
-    for (std::size_t local = 0; local < radial_radial_->local_size(); ++local) {
-      const auto& rr_fab = radial_radial_->fab(local);
-      const auto& tt_fab = azimuthal_azimuthal_->fab(local);
+    line_diagonal_.resize(radial_radial.local_size());
+    line_lower_.resize(radial_radial.local_size());
+    line_upper_.resize(radial_radial.local_size());
+    for (std::size_t local = 0; local < radial_radial.local_size(); ++local) {
+      const auto& rr_fab = radial_radial.fab(local);
+      const auto& tt_fab = azimuthal_azimuthal.fab(local);
       auto rr = rr_fab.create_host_mirror();
       auto tt = tt_fab.create_host_mirror();
       rr_fab.copy_to_host(rr);
