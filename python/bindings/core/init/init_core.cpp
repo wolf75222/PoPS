@@ -4,7 +4,6 @@
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
 #endif
 
-#include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
@@ -753,26 +752,10 @@ void init_core(py::module_& m) {
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
 
-  // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
-  // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
-  // (AUX_NAMED_MAX / AUX_NAMED_BASE / AUX_CANONICAL in dsl.py) cannot SILENTLY drift from C++:
-  // test_capabilities.py asserts they match. kAuxMaxExtra is the only remaining compile-time aux
-  // limit and is now declarative + introspectable here.
-  m.attr("__aux_base_comps__") = static_cast<int>(pops::kAuxBaseComps);
-  m.attr("__aux_named_base__") = static_cast<int>(pops::kAuxNamedBase);
-  m.attr("__aux_max_extra__") = static_cast<int>(pops::kAuxMaxExtra);
-  m.attr("__aux_max_comps__") = static_cast<int>(pops::kAuxMaxComps);
   // Runtime-param capacity (ADC-610): the SINGLE C++ source of kMaxRuntimeParams
   // (pops/runtime/config/runtime_params.hpp). The codegen guard reads this so the Python literal
   // fallback (physics/aux.py) cannot SILENTLY drift from the fixed-size device array bound.
   m.attr("__max_runtime_params__") = static_cast<int>(pops::kMaxRuntimeParams);
-  {
-    py::dict canon;
-    for (const auto& [name, comp] : pops::kAuxCanonicalNames)
-      canon[py::str(std::string(name))] = static_cast<int>(comp);
-    m.attr("__aux_canonical__") = canon;
-  }
-
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
   // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
   // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
