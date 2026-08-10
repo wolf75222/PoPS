@@ -1,14 +1,15 @@
 """pops.runtime_environment -- explicit native runtime environment capabilities.
 
 This module is metadata-only at import time. It centralizes the current native runtime facts:
-an artifact-selected compile-time spatial dimension, AMR refinement ratio 2, double precision,
-and no custom communicator route.
+an artifact-selected compile-time spatial dimension, hierarchy-selected AMR transition ratios,
+double precision, and no custom communicator route.
 When the compiled extension is available, :func:`runtime_environment_report` delegates to the
 C++ report; otherwise it returns the same conservative static facts with unknown lifecycle fields
 and zero active Kokkos concurrency.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from pops.params.use_sites import ParamUse, resolve_param_use
@@ -16,7 +17,6 @@ from pops.params.use_sites import ParamUse, resolve_param_use
 # The declared native-core facts live in the dependency-free leaf pops._native_facts (so the
 # runtime-fenced layers can read them); this module re-exports them as the public spelling.
 from pops._native_facts import (  # noqa: F401  (re-export)
-    NATIVE_AMR_REFINEMENT_RATIO,
     NATIVE_COMMUNICATOR,
     NATIVE_MAX_RUNTIME_PARAMS,
     NATIVE_PRECISION,
@@ -54,7 +54,9 @@ class RuntimeCapabilityError(ValueError):
 def _static_report() -> dict:
     return {
         "dimension": native_dimension(),
-        "amr_refinement_ratio": NATIVE_AMR_REFINEMENT_RATIO,
+        "amr_refinement_ratio": None,
+        "amr_refinement_ratio_selection": "hierarchy_exact_rank",
+        "amr_refinement_ratio_rank": native_dimension(),
         "precision": NATIVE_PRECISION,
         "real_bytes": NATIVE_REAL_BYTES,
         "max_runtime_params": NATIVE_MAX_RUNTIME_PARAMS,
@@ -91,7 +93,7 @@ def runtime_environment_report() -> dict:
 
     The preferred source is ``_pops.runtime_environment_report()``. The fallback is static and
     conservative: it never claims custom communicators, an unauthenticated dimension,
-    non-ratio-2 AMR, non-double
+    a fabricated process-global AMR ratio, non-double
     precision support, or an active Kokkos execution-space concurrency.
     """
     from pops._native_selector import selected_native_module
@@ -145,17 +147,44 @@ def validate_dimension(value: Any, *, where: str = "runtime") -> int:
     return dim
 
 
-def validate_amr_refinement_ratio(value: Any, *, where: str = "AMR") -> int:
-    """Reject any requested AMR refinement ratio other than 2."""
+def validate_amr_refinement_ratio(value: Any, *, where: str = "AMR") -> tuple[int, ...]:
+    """Authenticate one isotropic or exact-rank anisotropic AMR transition ratio.
+
+    A scalar denotes an isotropic refinement of at least two on every native axis.  A sequence
+    is an exact native-rank ratio: each axis must remain positive and at least one axis must
+    refine.  Selection belongs to hierarchy construction; this validator deliberately does not
+    compare the result with a process-global native constant.
+    """
     value = resolve_param_use(
         value, ParamUse.AMR_HIERARCHY, where="%s(refinement_ratio=)" % where)
-    ratio = int(value)
-    if ratio != NATIVE_AMR_REFINEMENT_RATIO:
+    dimension = native_dimension()
+    if type(dimension) is not int or dimension not in NATIVE_SUPPORTED_DIMENSIONS:
         raise RuntimeCapabilityError(
-            "%s: AMR refinement ratio %d is unsupported; native AMR supports ratio %d only "
-            "(hierarchy, patch ranges, reflux and subcycling are ratio-2 kernels)."
-            % (where, ratio, NATIVE_AMR_REFINEMENT_RATIO),
-            field="amr_refinement_ratio", requested=ratio)
+            "%s: no compiled PoPS artifact authenticates the AMR ratio rank" % where,
+            field="amr_refinement_ratio", requested=value)
+    if type(value) is int:
+        if value < 2:
+            raise RuntimeCapabilityError(
+                "%s: isotropic AMR refinement_ratio must be an integer >= 2" % where,
+                field="amr_refinement_ratio", requested=value)
+        return (value,) * dimension
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise RuntimeCapabilityError(
+            "%s: AMR refinement_ratio must be an integer or a length-%d sequence" %
+            (where, dimension), field="amr_refinement_ratio", requested=value)
+    ratio = tuple(value)
+    if len(ratio) != dimension:
+        raise RuntimeCapabilityError(
+            "%s: AMR refinement_ratio sequence must have exactly %d axes (got %d)" %
+            (where, dimension, len(ratio)), field="amr_refinement_ratio", requested=value)
+    if any(type(axis) is not int or axis < 1 for axis in ratio):
+        raise RuntimeCapabilityError(
+            "%s: AMR refinement_ratio axes must be plain integers >= 1" % where,
+            field="amr_refinement_ratio", requested=value)
+    if not any(axis > 1 for axis in ratio):
+        raise RuntimeCapabilityError(
+            "%s: AMR refinement_ratio must refine at least one axis" % where,
+            field="amr_refinement_ratio", requested=value)
     return ratio
 
 
@@ -206,8 +235,7 @@ def validate_runtime_environment(*, dimension: Any = None, amr_refinement_ratio:
 
 
 __all__ = [
-    "NATIVE_SUPPORTED_DIMENSIONS", "native_dimension", "NATIVE_AMR_REFINEMENT_RATIO",
-    "NATIVE_PRECISION",
+    "NATIVE_SUPPORTED_DIMENSIONS", "native_dimension", "NATIVE_PRECISION",
     "NATIVE_REAL_BYTES", "NATIVE_COMMUNICATOR", "runtime_environment_report",
     "compiled_runtime_facts", "validate_dimension", "validate_amr_refinement_ratio",
     "validate_precision", "validate_communicator", "validate_runtime_environment",

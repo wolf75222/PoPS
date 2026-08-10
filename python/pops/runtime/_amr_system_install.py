@@ -462,16 +462,10 @@ class _AmrSystemInstall(_AmrSystem):
 
         if type(registry) is not ResolvedAMRTransfer:
             raise TypeError("pops.bind: amr_transfer must be an exact AMRTransfer")
-        face_vectors = set()
+        oriented_face_groups: dict[tuple[str, ...], int] = {}
         for entry in registry.entries:
             native = entry.native_materialization
             provider_options = native.provider_identity.to_data().get("options", {})
-            paired = provider_options.get("paired_subjects")
-            if paired is not None:
-                pair = tuple(paired)
-                if len(pair) != 2 or any(not isinstance(value, str) for value in pair):
-                    raise ValueError("pops.bind: paired face provider has an invalid subject manifest")
-                face_vectors.add(pair)
             key = entry.key.to_data()
             if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
                 options = native.options.to_data()
@@ -488,6 +482,34 @@ class _AmrSystemInstall(_AmrSystem):
             if len(dimensions) != 1:
                 raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
             dimension = next(iter(dimensions))
+            oriented = provider_options.get("oriented_subjects")
+            if oriented is not None:
+                if isinstance(oriented, (str, bytes)):
+                    raise TypeError(
+                        "pops.bind: oriented face provider subjects must be an ordered sequence"
+                    )
+                group = tuple(oriented)
+                if (
+                    len(group) != dimension
+                    or len(set(group)) != dimension
+                    or any(not isinstance(value, str) or not value for value in group)
+                    or key["space"]["name"] != "face"
+                    or key["operation"]["name"] != "prolongation"
+                    or options.get("native_route") != "divergence_preserving_face"
+                ):
+                    raise ValueError(
+                        "pops.bind: oriented face provider requires exactly one ordered "
+                        "divergence-preserving subject per native axis"
+                    )
+                previous_dimension = oriented_face_groups.setdefault(group, dimension)
+                if previous_dimension != dimension:
+                    raise ValueError(
+                        "pops.bind: oriented face provider group mixes native dimensions"
+                    )
+            elif options.get("native_route") == "divergence_preserving_face":
+                raise ValueError(
+                    "pops.bind: divergence-preserving face provider omitted oriented_subjects"
+                )
             ratios = {
                 tuple(row.accuracy.refinement_ratio) for row in entry.requirements
             }
@@ -516,8 +538,8 @@ class _AmrSystemInstall(_AmrSystem):
                 ghost_depth,
                 next(iter(ratios)),
             )
-        for pair in sorted(face_vectors):
-            self._s._register_bootstrap_face_vector(pair)
+        for group in sorted(oriented_face_groups):
+            self._s._register_bootstrap_oriented_face_subjects(group)
 
     def _install_field_plan(self, field: Any, field_plan: Any, *, install_plan: Any = None) -> None:
         """Install the complete resolved AMR field route before native block loaders run."""

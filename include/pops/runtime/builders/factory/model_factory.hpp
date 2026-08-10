@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 /// @file
@@ -76,22 +77,6 @@ POPS_COLD_FN void dispatch_cartesian_exb_transport(const ModelSpec&, Visitor&& v
   visitor(CartesianExBDriftND<Dim>{});
 }
 
-/// Dispatch one provider that requires the x-y plane.  The overload is selected by the immutable
-/// native specialization; no run-time dimension branch exists and the unsupported 1D provider type
-/// is never constructed.
-template <class Factory, int Dim, class Visitor>
-  requires(Dim >= 2)
-POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&& visitor) {
-  visitor(Factory::template make<Dim>(model));
-}
-
-template <class Factory, int Dim, class Visitor>
-  requires(Dim < 2)
-[[noreturn]] POPS_COLD_FN void dispatch_planar_source(const ModelSpec& model, Visitor&&) {
-  throw std::runtime_error("source '" + model.source.get() +
-                           "' invalid here (requires one momentum per native axis, or 'none')");
-}
-
 /// Builds the transport brick and calls v(transport). The tag is validated ONCE against the registry
 /// (the historical rejection message stays byte-identical, single-sourced by validate_transport) and
 /// then parsed into the typed TransportRouteId (route_ids.hpp): the switch selects the brick by the
@@ -126,7 +111,7 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 ///                                    regime; the stiff regime goes through the condensed Schur);
 ///   - "potential_magnetic" | "potential_lorentz": CompositeSource<PotentialForce, MagneticLorentz>
 ///                                    = electrostatic + Lorentz summed (the full magnetized force in a
-///                                    polar setup, with no centrifugal workaround needed).
+///                                    Cartesian model, with geometry-specific basis terms kept out).
 /// qom (q/m, sign included) is shared by the two charged forces (same species). The magnetized bricks
 /// declare three exact magnetic provider slots, so CompositeModel propagates the vector contract.
 /// The source tag is parsed ONCE into the typed SourceRouteId (route_ids.hpp) once it is a KNOWN
@@ -137,29 +122,35 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 /// source tag OR a fluid source on a scalar transport falls through to the historical "invalid here"
 /// throw, BYTE-IDENTICAL (dispatch_source has no separate validate_source; this throw is the shared
 /// rejection for both, so the parse is gated behind is_source to keep it that way).
-template <int NV, class Visitor>
-POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
+template <int Dim, int NV, class Visitor>
+POPS_COLD_FN void dispatch_source_for_dimension(const ModelSpec& m, Visitor&& v) {
+  static_assert(Dim >= 1 && Dim <= 3, "source dispatch supports Cartesian dimensions 1, 2, and 3");
   if (is_source(m.source)) {
     const SourceRouteId route = parse_source_route(m.source);
     if (route == SourceRouteId::kNone)
       return v(NoSource{});
-    if constexpr (NV == kNativeDimension + 1 || NV == kNativeDimension + 2) {
+    if constexpr (NV == Dim + 1 || NV == Dim + 2) {
       switch (route) {
         case SourceRouteId::kNone:
           break;  // handled above (any transport); kept for switch completeness
         case SourceRouteId::kPotential:
-          return v(PotentialForce{Real(m.qom)});
+          return v(PotentialForceND<Dim>{Real(m.qom)});
         case SourceRouteId::kGravity:
-          return v(GravityForce{});
+          return v(GravityForceND<Dim>{});
         case SourceRouteId::kMagneticLorentz:
-          return dispatch_planar_source<MagneticSourceFactory, kNativeDimension>(m, v);
+          return v(MagneticSourceFactory::template make<Dim>(m));
         case SourceRouteId::kPotentialMagneticLorentz:
-          return dispatch_planar_source<PotentialMagneticSourceFactory, kNativeDimension>(m, v);
+          return v(PotentialMagneticSourceFactory::template make<Dim>(m));
       }
     }
   }
   throw std::runtime_error("source '" + m.source.get() +
                            "' invalid here (requires one momentum per native axis, or 'none')");
+}
+
+template <int NV, class Visitor>
+POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
+  return dispatch_source_for_dimension<kNativeDimension, NV>(m, std::forward<Visitor>(v));
 }
 
 /// Builds the elliptic right-hand-side brick and calls v(elliptic). Like dispatch_transport: the tag

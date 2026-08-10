@@ -29,30 +29,52 @@ from .lowering_coverage import (
     LoweringRejection,
 )
 
-_NATIVE_ROLE_ALIASES = {
-    "density": "density",
-    "energy": "energy",
-    "pressure": "pressure",
-    "temperature": "temperature",
-    "scalar": "scalar",
-}
-
-
-def _is_axis_role(value: str) -> bool:
-    family, separator, axis = value.partition(":")
-    return family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal()
-
-
 def _lower_native_role(value: Any) -> str | None:
-    from pops.physics.roles import ComponentRole, native_role_token
+    from pops.physics.roles import ComponentRole, native_role_token, parse_role
 
     if isinstance(value, ComponentRole):
         return native_role_token(value)
     if isinstance(value, str):
-        if value in _NATIVE_ROLE_ALIASES or _is_axis_role(value):
-            return value
-        return _NATIVE_ROLE_ALIASES.get(value)
+        try:
+            parsed = parse_role(value, where="Module StateSpace role")
+        except (TypeError, ValueError):
+            return None
+        # Module IR may carry canonical physical tokens or the explicit generic
+        # ``custom`` sentinel. Arbitrary labels and legacy spellings do not turn
+        # into a physical role during lowering.
+        if parsed.token == value and (parsed.physical or value == "custom"):
+            return parsed.token
     return None
+
+
+def _typed_lowering_roles(state: Any) -> list[Any] | None:
+    """Reconstitute typed authoring descriptors from exact Module IR tokens.
+
+    A Module stores lowering metadata as exact structured tokens.  The private
+    emitter facade, like public authoring, accepts only ``ComponentRole`` values;
+    this adapter is therefore directional and does not add a string authoring API.
+    """
+    from pops.physics.roles import ComponentRole
+
+    class _LoweredComponentRole(ComponentRole):
+        __slots__ = ("_native_name",)
+
+        def __init__(self, native_name: str) -> None:
+            self._native_name = native_name
+
+        @property
+        def native_name(self) -> str:
+            return self._native_name
+
+    result = []
+    for component in state.components:
+        value = state.roles.get(component)
+        if isinstance(value, ComponentRole):
+            result.append(value)
+            continue
+        token = _lower_native_role(value)
+        result.append(None if token is None else _LoweredComponentRole(token))
+    return None if all(role is None for role in result) else result
 
 
 def _module_to_model(module: Any, state_space: Any = None) -> Any:
@@ -117,11 +139,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     if registry.owner_path != module.owner_path:
         raise ValueError("compile_problem: Module ParamRegistry owner drift")
     object.__setattr__(m, "_param_registry", registry)
-    roles = None
-    if state.roles:
-        roles = [_lower_native_role(state.roles.get(c)) for c in state.components]
-        if all(r is None for r in roles):
-            roles = None
+    roles = _typed_lowering_roles(state) if state.roles else None
     cvars = m.conservative_vars(*state.components, roles=roles)
     coverage_rows.append(LoweringCoverageRow(
         "state_space:%s" % state.name, "lowered",

@@ -229,7 +229,10 @@ class _Executor:
 
     def local_boxes(self, block):
         assert block == "fluid"
-        return [(0, 0, self._nx - 1, self._ny - 1)]
+        return [((0, 0), (self._nx, self._ny))]
+
+    def spatial_shape(self):
+        return self._nx, self._ny
 
     def _output_geometry_snapshot(self, origin, spacing, shape, cell_measure):
         assert tuple(shape) == (self._nx, self._ny)
@@ -454,6 +457,41 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
         runtime._runtime_plan.communication.transfers[0].provider_id
         == runtime._layout_plan.mappings[0].provider_id
     )
+
+
+@pytest.mark.parametrize(
+    ("shape", "bounds"),
+    (
+        ((7,), ((1,), (6,))),
+        ((7, 9), ((1, 2), (6, 8))),
+        ((7, 9, 11), ((1, 2, 3), (6, 8, 10))),
+    ),
+)
+def test_local_boxes_preserve_exact_ranked_half_open_bounds(shape, bounds):
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: shape,
+        local_boxes=lambda block: (bounds,) if block == "fluid" else (),
+    )
+
+    assert runtime.local_boxes("fluid") == (bounds,)
+
+
+def test_local_boxes_reject_a_fixed_rank_or_non_integral_provider_shape():
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: (7, 9, 11),
+        local_boxes=lambda _block: (((0, 0), (7, 9)),),
+    )
+    with pytest.raises(TypeError, match="exact rank 3"):
+        runtime.local_boxes("fluid")
+
+    runtime._executor = SimpleNamespace(
+        spatial_shape=lambda: (7,),
+        local_boxes=lambda _block: (((0.0,), (7,)),),
+    )
+    with pytest.raises(TypeError, match="plain integer"):
+        runtime.local_boxes("fluid")
 
 
 def test_private_engines_expose_no_scientific_output_policy_surface():

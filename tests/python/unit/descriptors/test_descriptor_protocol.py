@@ -42,7 +42,8 @@ PROTOCOL_MEMBERS = (
 MOMENTS_ROUTE_CHOOSERS = (
     (moments.ExactSpeeds(moments.ExactSpeeds.ROE_DISSIPATION), "wave_speed"),
     (moments.RealizabilityProjection(eps_m00=1e-10, robust=False), "realizability"),
-    (moments.MagneticMomentSource(q_over_m="my_q", b_field="my_b"), "moment_source"),
+    (moments.MagneticMomentSource(
+        q_over_m="my_q", axial_component="my_axial"), "moment_source"),
     (moments.HyQMOM15Closure(), "closure"),
 )
 

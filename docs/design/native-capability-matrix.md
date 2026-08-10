@@ -429,8 +429,8 @@ future validators:
   returned by a Kokkos finalize hook.
 - `program:hierarchy_scoped_solve`: a hierarchy-scoped `LinearProblem` requires an explicit
   matrix-free operator provider such as `CompositeTensorFAC()` and an executable Krylov solver. The
-  currently audited native tensor route is 2D; unsupported dimensions or hierarchy shapes fail
-  capability validation instead of selecting a named time preset.
+  full-tensor FAC authority is exact-rank in 1D, 2D and 3D; rank, hierarchy, coefficient and MPI
+  ownership mismatches fail capability validation before execution.
 
 ## Error Policy
 

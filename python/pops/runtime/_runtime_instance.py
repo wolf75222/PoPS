@@ -652,19 +652,30 @@ class RuntimeInstance:
             )
         return provider(block)
 
-    def local_boxes(self, block: str) -> tuple[tuple[int, int, int, int], ...]:
-        """Return this rank's exact native uniform boxes in global index coordinates."""
+    def local_boxes(
+        self, block: str
+    ) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
+        """Return rank-owned boxes as exact-rank half-open ``(lower, upper)`` bounds."""
         provider = getattr(self._executor, "local_boxes", None)
         if not callable(provider):
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local boxes"
             )
-        result: list[tuple[int, int, int, int]] = []
-        for raw_box in cast(Iterable[Iterable[Any]], provider(block)):
-            box = tuple(int(value) for value in raw_box)
-            if len(box) != 4:
-                raise TypeError("native local box rows must contain exactly four indices")
-            result.append(cast(tuple[int, int, int, int], box))
+        dimension = len(self.spatial_shape())
+        result: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+        for raw_box in cast(Iterable[Iterable[Iterable[Any]]], provider(block)):
+            bounds = tuple(tuple(axis for axis in bound) for bound in raw_box)
+            if len(bounds) != 2 or any(len(bound) != dimension for bound in bounds):
+                raise TypeError(
+                    "native local box rows must contain lower/upper bounds of exact rank %d"
+                    % dimension
+                )
+            if any(type(axis) is not int for bound in bounds for axis in bound):
+                raise TypeError("native local box bounds must contain plain integer indices")
+            lower, upper = bounds
+            if any(hi <= lo for lo, hi in zip(lower, upper, strict=True)):
+                raise ValueError("native local box upper bounds must be greater than lower bounds")
+            result.append((lower, upper))
         return tuple(result)
 
     def local_state(self, block: str, box_index: int) -> Any:

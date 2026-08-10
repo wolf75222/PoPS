@@ -58,8 +58,7 @@ def _install_state_transfer_routes(simulation, subject):
     routes = (
         ("prolongation", "conservative_linear", 2, [1]),
         ("restriction", "volume_average", 1, [0]),
-        ("coarse_fine_fill", "conservative_coarse_fine", 2, [2]),
-        ("temporal_interpolation", "linear_time_interpolation", 2, [0]),
+        ("coarse_fine_fill", "conservative_coarse_fine", 2, [1]),
     )
     for operation, kernel, order, ghost_depth in routes:
         simulation._s._register_bootstrap_transfer_route(

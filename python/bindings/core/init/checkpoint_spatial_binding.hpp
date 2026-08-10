@@ -77,8 +77,8 @@ inline py::list checkpoint_spatial_exact_list(const py::handle& value, const cha
 
 template <int Dim>
 std::vector<std::int64_t> prepare_checkpoint_spatial_contract(const py::dict& data) {
-  using checkpoint::EncodedSpatialContract;
-  using checkpoint::decode_spatial_contract;
+  using runtime::checkpoint::EncodedSpatialContract;
+  using runtime::checkpoint::decode_spatial_contract;
 
   require_checkpoint_spatial_keys(data);
   EncodedSpatialContract encoded;
@@ -87,7 +87,7 @@ std::vector<std::int64_t> prepare_checkpoint_spatial_contract(const py::dict& da
   encoded.dimension =
       checkpoint_spatial_exact_int(data["dimension"], "checkpoint spatial dimension");
   // Refuse an incompatible variant before decoding or allocating any vector payload.
-  if (encoded.schema_version != checkpoint::kSpatialContractSchemaVersion)
+  if (encoded.schema_version != runtime::checkpoint::kSpatialContractSchemaVersion)
     throw py::value_error("checkpoint spatial schema version is unsupported");
   if (encoded.dimension != Dim)
     throw py::value_error("checkpoint dimension does not match the loaded native specialization");

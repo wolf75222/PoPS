@@ -75,19 +75,46 @@ def test_disc_level_set_uses_explicit_or_frame_center_without_callback() -> None
         Disc().level_set(Cartesian2D())
 
 
-def test_half_plane_level_set_has_negative_active_side() -> None:
-    frame = _frame()
-    geometry = HalfPlane(point=(0.25, -0.5), normal=(2.0, -1.0)).level_set(frame)
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_half_plane_level_set_has_exact_rank_and_negative_active_side(
+    dimension: int,
+) -> None:
+    frame = CartesianDomain(
+        "ranked-half-plane-%d" % dimension,
+        (-1.0,) * dimension,
+        (1.0,) * dimension,
+    ).frame()
+    point = tuple(0.25 * (axis + 1) for axis in range(dimension))
+    normal = tuple((-1.0 if axis % 2 else 2.0) for axis in range(dimension))
+    geometry = HalfPlane(point=point, normal=normal).level_set(frame)
     root = geometry.expression.to_data()["root"]
 
-    assert root["op"] == "add"
-    assert [argument["op"] for argument in root["arguments"]] == ["mul", "mul"]
+    def coordinate_axes(node: object) -> set[int]:
+        if isinstance(node, dict):
+            axes = (
+                {int(node["axis"]["index"])}
+                if node.get("op") == "coordinate"
+                else set()
+            )
+            for value in node.values():
+                axes.update(coordinate_axes(value))
+            return axes
+        if isinstance(node, list):
+            axes: set[int] = set()
+            for value in node:
+                axes.update(coordinate_axes(value))
+            return axes
+        return set()
+
+    assert coordinate_axes(root) == set(range(dimension))
     assert geometry.to_data()["active_when"] == "phi<0"
 
-    with pytest.raises(ValueError, match="exactly two"):
+    with pytest.raises(ValueError, match="same non-zero dimension"):
         HalfPlane(point=(0.0,), normal=(1.0, 0.0))
     with pytest.raises(ValueError, match="non-zero"):
         HalfPlane(normal=(0.0, 0.0))
+    with pytest.raises(ValueError, match="frame rank 2"):
+        HalfPlane(point=(0.0,), normal=(1.0,)).level_set(_frame())
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
@@ -102,12 +129,11 @@ def test_no_wall_is_the_ranked_all_active_geometry(dimension: int) -> None:
     assert geometry.expression.same_as(constant(-1.0))
 
 
-@pytest.mark.parametrize("provider", (Disc(), HalfPlane()))
-def test_planar_geometry_providers_remain_explicit_capabilities(provider: object) -> None:
+def test_disc_remains_an_explicit_planar_capability() -> None:
     frame = CartesianDomain("ranked-geometry", (-1.0,), (1.0,)).frame()
 
     with pytest.raises(TypeError, match="two-dimensional Cartesian frame"):
-        provider.level_set(frame)
+        Disc().level_set(frame)
 
 
 def test_boolean_composition_is_generic_immutable_and_canonical() -> None:

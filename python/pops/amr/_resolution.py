@@ -15,8 +15,8 @@ from pops.identity.semantic import semantic_value
 from pops.model import Handle, OwnerPath, ParamHandle
 
 from .authoring import (
-    AMRHierarchy,
     AMRRegrid,
+    resolve_transition_ratios,
 )
 
 
@@ -446,7 +446,7 @@ def _combined_requirement(
 
 
 def _hierarchy(
-    authoring: AMRHierarchy,
+    authoring: Any,
     patch_layout: Any,
     load_balance: Any,
     regrid: AMRRegrid,
@@ -528,15 +528,25 @@ def _hierarchy(
     minimum_buffer = tuple(
         max(tagging.buffer_cells, value) for value in nesting.minimum_buffer
     )
+    hierarchy_data = _protocol(
+        authoring, "to_data", where="AMR hierarchy authority"
+    )()
+    if not isinstance(hierarchy_data, dict):
+        raise TypeError("AMR hierarchy authority to_data() must return a mapping")
+    transition_ratios = resolve_transition_ratios(
+        hierarchy_data.get("ratios"),
+        dimension=dimension,
+        where="AMR hierarchy transition ratios",
+    )
     transitions = tuple(
         LevelTransition(
             coarse_level=index,
             fine_level=index + 1,
-            ratio=(ratio,) * dimension,
+            ratio=ratio,
             buffer=minimum_buffer,
             lookahead=nesting.minimum_lookahead,
         )
-        for index, ratio in enumerate(authoring.ratios)
+        for index, ratio in enumerate(transition_ratios)
     )
     def provider(local_id: str, kind: str) -> Handle:
         return Handle(local_id, kind=kind, owner=context.owner)
@@ -603,7 +613,7 @@ def _hierarchy(
     capabilities = HierarchyProviderCapabilities(
         provider("shared_n_level", "amr_hierarchy_provider"),
         supported_dimensions=(1, 2, 3),
-        supports_anisotropic_ratio=False,
+        supports_anisotropic_ratio=True,
         max_materialized_level_count=2_147_483_647,
         supports_transactional_regrid=True,
         supports_lifecycle_events=True,

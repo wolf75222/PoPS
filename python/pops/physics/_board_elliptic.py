@@ -162,9 +162,19 @@ class _EllipticAuthoringMixin(_BoardModel):
                 ),
             ):
                 for component in outputs:
-                    if component in model._provider_components:
-                        continue
-                    self._dsl.aux(component)
+                    if component not in model._provider_components:
+                        self._dsl.aux(component)
+                # The structured FieldOutput sequence is the storage authority for a solved
+                # field.  A consumer may have referenced one of its components before the
+                # provider was declared; that authoring order must not silently change the
+                # FieldSpace type returned by the solve.  Preserve unrelated external inputs in
+                # their relative order and make this provider's exact output tuple contiguous.
+                output_names = set(outputs)
+                model._provider_components[:] = [
+                    component
+                    for component in model._provider_components
+                    if component not in output_names
+                ] + list(outputs)
                 self._dsl.elliptic_field(
                     name,
                     rhs,

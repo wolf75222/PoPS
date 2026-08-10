@@ -1,7 +1,6 @@
 """Direct scalar tensor-FAC scheduling on the AMR target."""
 
 from __future__ import annotations
-from pops.codegen.program_codegen import emit_cpp_program
 
 from dataclasses import replace
 import json
@@ -9,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.identity.scalar import scalar_cpp, scalar_data
+from pops.lib.models import author_electrostatic_lorentz
 from pops.linalg import LinearProblem
 from pops.numerics.terms import Flux
 from pops.params import ConstParam
@@ -21,7 +23,6 @@ from typed_program_support import state_refs
 
 def _coupled_model(name):
     from pops.math import sqrt
-    from pops.lib.models import author_electrostatic_lorentz
     from pops.physics._facade import Model
 
     model = Model(name)
@@ -44,9 +45,89 @@ def _coupled_model(name):
     model.elliptic_rhs(rho)
     model.aux("grad_x")
     model.aux("grad_y")
-    model.aux("B_z")
-    author_electrostatic_lorentz(model)
+    for component in ("magnetic_x", "magnetic_y", "magnetic_z"):
+        model.aux(component)
+    author_electrostatic_lorentz(
+        model,
+        magnetic_components=("magnetic_x", "magnetic_y", "magnetic_z"),
+        dimension=2,
+    )
     return model
+
+
+@pytest.mark.parametrize(
+    ("roles", "expected_dimension"),
+    (
+        (("tracer", "momentum:0", "density"), 1),
+        (("momentum:1", "tracer", "density", "momentum:0"), 2),
+        (("momentum:2", "density", "momentum:0", "tracer", "momentum:1"), 3),
+    ),
+)
+def test_electrostatic_lorentz_resolves_permuted_exact_rank_state(
+    roles, expected_dimension,
+):
+    magnetic_values = {
+        "magnetic_x": 2.0,
+        "magnetic_y": 3.0,
+        "magnetic_z": 5.0,
+    }
+
+    class _Model:
+        cons_names = tuple("component_%d" % index for index in range(len(roles)))
+        cons_roles = roles
+
+        def aux(self, component):
+            return magnetic_values[component]
+
+        def local_linear_operator(self, name, *, matrix):
+            return name, matrix
+
+    name, matrix = author_electrostatic_lorentz(
+        _Model(),
+        magnetic_components=tuple(magnetic_values),
+        dimension=expected_dimension,
+    )
+    assert name == "electrostatic_lorentz_J"
+    momentum = {
+        int(role.split(":", 1)[1]): index
+        for index, role in enumerate(roles)
+        if role.startswith("momentum:")
+    }
+    expected = (
+        (0.0, 5.0, -3.0),
+        (-5.0, 0.0, 2.0),
+        (3.0, -2.0, 0.0),
+    )
+    for row, values in enumerate(matrix):
+        for column, value in enumerate(values):
+            row_axis = next((axis for axis, index in momentum.items() if index == row), None)
+            column_axis = next(
+                (axis for axis, index in momentum.items() if index == column), None)
+            reference = (
+                0.0 if row_axis is None or column_axis is None
+                else expected[row_axis][column_axis]
+            )
+            assert value == reference
+    assert tuple(sorted(momentum)) == tuple(range(expected_dimension))
+
+
+def test_electrostatic_lorentz_rejects_implicit_or_ambiguous_provider_vectors():
+    class _Model:
+        cons_names = ("rho", "momentum")
+        cons_roles = ("density", "momentum:0")
+
+        @staticmethod
+        def aux(_component):
+            return 0.0
+
+    with pytest.raises(TypeError, match="ordered three-component"):
+        author_electrostatic_lorentz(_Model(), magnetic_components="magnetic_z")
+    with pytest.raises(ValueError, match="three unique"):
+        author_electrostatic_lorentz(
+            _Model(), magnetic_components=("magnetic_x", "magnetic_x", "magnetic_z"))
+    with pytest.raises(TypeError, match="explicit dimension or typed frame"):
+        author_electrostatic_lorentz(
+            _Model(), magnetic_components=("magnetic_x", "magnetic_y", "magnetic_z"))
 
 
 def _linear_handle(model):
@@ -73,6 +154,12 @@ def _build(
     _with_interface_pair=False,
 ):
     model = _coupled_model("hierarchy_tensor_model")
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    from pops.model.provider_pack import ProviderPack
+
+    assert source_module is model.module
+    assert type(getattr(emit_model, "_auxiliary_provider_pack", None)) is ProviderPack
+    model = emit_model
     program = Program("hierarchy_tensor_step")._bind_operators(model)
 
     # Keep the tensor owner at Program block index 1. This makes the emitted/native block binding
@@ -196,14 +283,14 @@ def _build(
 
         source = _emit_cpp_program_impl(
             program,
-            model=model,
+            model=emit_model,
             target="amr_system",
             has_shared_interface_implicit_jacvec=True,
         )
     else:
-        source = emit_cpp_program(program, model=model, target="amr_system")
+        source = emit_cpp_program(program, model=emit_model, target="amr_system")
     if _return_model:
-        return program, source, model
+        return program, source, emit_model
     return program, source
 
 

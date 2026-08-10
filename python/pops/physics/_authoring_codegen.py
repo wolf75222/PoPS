@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .aux import roles_for
+from .roles import parse_role
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -145,7 +146,10 @@ class _CodegenMixin(_HyperbolicModel):
             return
         missing = []
         roles = roles_for(self.cons_names, self.cons_roles)
-        if all(r == "Custom" for r in roles):
+        if all(
+            not parse_role(role, where="compile metadata role").physical
+            for role in roles
+        ):
             missing.append("physical roles (conservative_vars(..., roles=[...]) or canonical names)")
         if self.gamma is None:
             missing.append("gamma (set_gamma(...))")

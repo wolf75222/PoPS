@@ -258,7 +258,7 @@ def _fft_resolver(options: Mapping[str, Any], facts: Any, where: str) -> Any:
     return _resolution(
         {
             "factory_route": "fft",
-            "schema_identity": "pops.system.fft-discrete-rank2-options.empty@1",
+            "schema_identity": "pops.system.fft-discrete-exact-rank-options.empty@2",
             "options": {},
         },
         _builtin_topology(facts),
@@ -275,6 +275,15 @@ def _validate_fft(use: Any, where: str) -> None:
         raise ValueError("%s FFT provider does not implement a screened operator" % where)
     if facts.layout.get("embedded_boundary"):
         raise ValueError("%s FFT provider requires a full-material topology" % where)
+    cells = facts.layout.get("cells")
+    if not isinstance(cells, tuple) or len(cells) not in (1, 2, 3):
+        dimension = len(cells) if isinstance(cells, tuple) else "unknown"
+        raise ValueError(
+            "%s FFT concrete backend requires Cartesian Dim in {1,2,3}; got Dim=%s"
+            % (where, dimension)
+        )
+    if any(type(value) is not int or value < 1 for value in cells):
+        raise ValueError("%s FFT provider requires a positive cell count on every axis" % where)
     faces = facts.boundary.get("faces")
     if (
         not isinstance(faces, tuple)
@@ -286,16 +295,6 @@ def _validate_fft(use: Any, where: str) -> None:
         raise ValueError("%s FFT provider requires an immutable boundary contract" % where)
     if facts.nonlinear:
         raise ValueError("%s FFT provider cannot serve a nonlinear outer solve" % where)
-    cells = facts.layout.get("cells")
-    if not isinstance(cells, tuple) or len(cells) != 2:
-        dimension = len(cells) if isinstance(cells, tuple) else "unknown"
-        raise ValueError(
-            "%s FFT concrete backend requires exact Dim=2; got Dim=%s" % (where, dimension)
-        )
-    if (
-        any(type(value) is not int or value < 1 or value & (value - 1) for value in cells)
-    ):
-        raise ValueError("%s FFT provider requires a power-of-two cell count on every axis" % where)
 
 
 def _register_ready_providers() -> tuple[Any, Any, Any]:
@@ -359,17 +358,17 @@ def _register_ready_providers() -> tuple[Any, Any, Any]:
     fft = register(
         Provider(
             provider_id="pops.field-solver.fft",
-            version=2,
-            resolver_id="pops.field-solver.fft.resolve@2",
-            installer_id="pops.field-solver.fft.install@2",
+            version=3,
+            resolver_id="pops.field-solver.fft.resolve@3",
+            installer_id="pops.field-solver.fft.install@3",
             use_policy=UsePolicy(
                 "pops.field-solver.fft.use",
-                2,
+                3,
                 {
                     "targets": ("system",),
-                    "layout": "uniform-exact-rank-two-power-of-two",
+                    "layout": "uniform-exact-rank-cartesian",
                     "boundary": "fully-periodic",
-                    "operator": "discrete-five-point-poisson",
+                    "operator": "discrete-cartesian-poisson",
                 },
                 _validate_fft,
             ),

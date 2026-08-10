@@ -93,6 +93,85 @@ def _delegated_geometry(value: Any, *, where: str) -> NormalizedGeometry:
     return result
 
 
+def _embedded_boundary_plan_data(value: Any, *, where: str) -> dict[str, Any]:
+    """Authenticate one detached embedded-boundary plan without re-entering authoring code."""
+    import json as json_module
+    import math
+
+    from pops._frozen_data import thaw_data
+    from pops.mesh.geometry import LevelSet
+
+    data = json_module.loads(json_module.dumps(
+        thaw_data(value), sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ))
+    if type(data) is not dict or set(data) != {
+        "schema_version", "level_set", "boundary", "transport",
+    } or data.get("schema_version") != 1:
+        raise TypeError("captured %s embedded-boundary plan is malformed" % where)
+    level_set = LevelSet.from_data(data["level_set"])
+    if level_set.to_data() != data["level_set"]:
+        raise ValueError("captured %s embedded LevelSet is not canonical" % where)
+    if data["boundary"] != {"provider": "zero_flux"}:
+        raise TypeError("captured %s embedded boundary flux is unsupported" % where)
+    transport = data["transport"]
+    if type(transport) is not dict or set(transport) != {
+        "mode", "kappa_min", "face_open_eps", "cut_theta_min",
+    }:
+        raise TypeError("captured %s embedded transport plan is malformed" % where)
+    if transport["mode"] not in {"none", "staircase", "cutcell"}:
+        raise ValueError("captured %s embedded transport mode is unsupported" % where)
+    for name in ("kappa_min", "face_open_eps", "cut_theta_min"):
+        value = transport[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("captured %s embedded threshold %s must be real" % (where, name))
+        if not math.isfinite(value) or value < 0.0 or value > 1.0:
+            raise ValueError(
+                "captured %s embedded threshold %s must be finite and in [0, 1]"
+                % (where, name)
+            )
+    return data
+
+
+def _capture_embedded_boundary(
+    spatial: Any, embedded_boundary: Any, *, where: str,
+) -> dict[str, Any]:
+    """Resolve one typed EmbeddedBoundary twice and retain only its canonical signed plan."""
+    from pops.boundary.embedded import lower_embedded_boundary_flux
+    from pops.mesh.geometry import EmbeddedBoundary
+    from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
+
+    if not isinstance(embedded_boundary, EmbeddedBoundary):
+        raise TypeError(
+            "%s.embedded_boundary must be a pops.mesh.geometry.EmbeddedBoundary" % where
+        )
+    frame = getattr(spatial, "frame", None)
+
+    def project() -> dict[str, Any]:
+        level_set = embedded_boundary.level_set(frame)
+        thresholds = transport_mask_thresholds(embedded_boundary.transport)
+        return {
+            "schema_version": 1,
+            "level_set": level_set.to_data(),
+            "boundary": {
+                "provider": lower_embedded_boundary_flux(embedded_boundary.boundary),
+            },
+            "transport": {
+                "mode": lower_transport_mask(embedded_boundary.transport),
+                "kappa_min": thresholds.get("kappa_min", 0.0),
+                "face_open_eps": thresholds.get("face_open_eps", 0.0),
+                "cut_theta_min": thresholds.get("cut_theta_min", 0.0),
+            },
+        }
+
+    first = project()
+    second = project()
+    if first != second:
+        raise ValueError(
+            "%s embedded geometry and transport providers must lower deterministically" % where
+        )
+    return _embedded_boundary_plan_data(first, where=where)
+
+
 class Uniform(MeshDescriptor):
     """A single-level layout; AMR criteria need an explicit ignore marker."""
 
@@ -110,7 +189,9 @@ class Uniform(MeshDescriptor):
         self.refine = refine
         self.ignore_amr = ignore_amr
         self._embedded_boundary_plan = (
-            None if embedded_boundary is None else self._resolve_embedded_boundary()
+            None
+            if embedded_boundary is None
+            else _capture_embedded_boundary(self.mesh, embedded_boundary, where="Uniform")
         )
 
     def options(self) -> dict[str, Any]:
@@ -126,60 +207,7 @@ class Uniform(MeshDescriptor):
         """Return detached signed runtime data captured when this layout was authored."""
         if self._embedded_boundary_plan is None:
             raise ValueError("Uniform layout has no embedded boundary")
-        return _detached_json(self._embedded_boundary_plan)
-
-    def _resolve_embedded_boundary(self) -> dict[str, Any]:
-        """Resolve an extension geometry exactly once into deterministic signed data."""
-        from pops.mesh.geometry import Disc, EmbeddedBoundary
-        from pops.mesh.masks import lower_transport_mask, transport_mask_thresholds
-
-        embedded = self.embedded_boundary
-        if not isinstance(embedded, EmbeddedBoundary):
-            raise TypeError(
-                "Uniform.embedded_boundary must be a pops.mesh.geometry.EmbeddedBoundary"
-            )
-        frame = getattr(self.mesh, "frame", None)
-
-        def project() -> dict[str, Any]:
-            from pops.boundary.embedded import lower_embedded_boundary_flux
-
-            level_set = embedded.level_set(frame)
-            mode = lower_transport_mask(embedded.transport)
-            if mode == "cutcell" and type(embedded.domain) is not Disc:
-                raise NotImplementedError(
-                    "CutCell is not a generic LevelSet route: arbitrary analytic/CSG geometry "
-                    "requires true face apertures, cell-intersection volumes and a typed wall-flux "
-                    "provider. Use Staircase for generic embedded geometry until that complete "
-                    "native route exists."
-                )
-            thresholds = transport_mask_thresholds(embedded.transport)
-            if not isinstance(thresholds, dict) or any(
-                key not in {"kappa_min", "face_open_eps", "cut_theta_min"}
-                for key in thresholds
-            ):
-                raise TypeError(
-                    "embedded transport thresholds must use only kappa_min, "
-                    "face_open_eps and cut_theta_min"
-                )
-            return {
-                "schema_version": 1,
-                "level_set": level_set.to_data(),
-                "boundary": {"provider": lower_embedded_boundary_flux(embedded.boundary)},
-                "transport": {
-                    "mode": mode,
-                    "kappa_min": thresholds.get("kappa_min", 0.0),
-                    "face_open_eps": thresholds.get("face_open_eps", 0.0),
-                    "cut_theta_min": thresholds.get("cut_theta_min", 0.0),
-                },
-            }
-
-        first = project()
-        second = project()
-        if first != second:
-            raise ValueError(
-                "embedded geometry and transport providers must lower deterministically"
-            )
-        return _detached_json(first)
+        return _embedded_boundary_plan_data(self._embedded_boundary_plan, where="Uniform")
 
     def semantic_data(self) -> dict[str, Any]:
         return {
@@ -207,11 +235,20 @@ class Uniform(MeshDescriptor):
         return first
 
     def capabilities(self) -> CapabilitySet:
+        embedded = (
+            None
+            if self._embedded_boundary_plan is None
+            else self._normalized_embedded_boundary()
+        )
         return CapabilitySet({
             "layout": "uniform",
             "levels": 1,
             "supports_amr": False,
             "transition_ratios": [],
+            "embedded_boundary": embedded is not None,
+            "embedded_boundary_transport": (
+                None if embedded is None else embedded["transport"]["mode"]
+            ),
         })
 
     def resolve_for_case(self, resolver: Any) -> Uniform:
@@ -256,22 +293,7 @@ class Uniform(MeshDescriptor):
 
     def validate(self, context: Any = None) -> bool:
         if self._embedded_boundary_plan is not None:
-            # Reparse the detached data rather than recalling Geometry.level_set() or any
-            # TransportMask extension.  Bind performs the same strict schema authentication.
-            from pops.mesh.geometry import LevelSet
-
-            captured = self._normalized_embedded_boundary()
-            if set(captured) != {"schema_version", "level_set", "boundary", "transport"} \
-                    or captured.get("schema_version") != 1:
-                raise TypeError("captured Uniform embedded-boundary plan is malformed")
-            LevelSet.from_data(captured["level_set"])
-            if captured["boundary"] != {"provider": "zero_flux"}:
-                raise TypeError("captured Uniform embedded boundary flux is unsupported")
-            transport = captured["transport"]
-            if not isinstance(transport, dict) or set(transport) != {
-                "mode", "kappa_min", "face_open_eps", "cut_theta_min",
-            }:
-                raise TypeError("captured Uniform embedded transport plan is malformed")
+            self._normalized_embedded_boundary()
         if self.refine is not None and self.ignore_amr is None:
             raise ValueError(
                 "Uniform layout cannot consume AMR refinement criteria; remove the criterion, "
@@ -293,10 +315,10 @@ class Uniform(MeshDescriptor):
     def _amr_report(self) -> Any:
         from pops._capabilities_inspect import AmrReport, _native_amr_context
 
-        native_depth, native_ratios, _ = _native_amr_context()
+        native_depth, native_ratio_policy, _ = _native_amr_context()
         return AmrReport(
             layout="uniform", max_levels=1, ratio=1,
-            native_max_levels=native_depth, native_ratios=native_ratios,
+            native_max_levels=native_depth, native_ratio_policy=native_ratio_policy,
             available="yes",
             limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
             requirements={}, policies=[],
@@ -334,6 +356,24 @@ def _authority_data(value: Any, slot: str) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise TypeError("AMR.%s identity must be strict JSON data" % slot) from exc
     return data
+
+
+def _resolved_hierarchy_data(value: Any, *, dimension: int) -> dict[str, Any]:
+    """Project hierarchy authoring onto its one canonical exact-rank layout identity."""
+    from pops.amr.authoring import resolve_transition_ratios
+
+    data = _authority_data(value, "hierarchy")
+    levels = data.get("max_levels")
+    if type(levels) is not int or levels < 1:
+        raise ValueError("AMR hierarchy requires at least one level")
+    ratios = resolve_transition_ratios(
+        data.get("ratios"), dimension=dimension, where="AMR hierarchy ratios"
+    )
+    if len(ratios) != levels - 1:
+        raise ValueError(
+            "AMR hierarchy ratios must contain exactly max_levels - 1 transitions"
+        )
+    return {**data, "ratios": [list(row) for row in ratios]}
 
 
 def _provider_data(value: Any, slot: str) -> dict[str, Any]:
@@ -402,6 +442,7 @@ class AMR(MeshDescriptor):
         regrid: Any,
         transfer: Any,
         execution: Any,
+        embedded_boundary: Any = None,
         patch_layout: Any = None,
         load_balance: Any = None,
         tagger: Any = None,
@@ -417,6 +458,12 @@ class AMR(MeshDescriptor):
         self._regrid = regrid
         self._transfer = transfer
         self._execution = execution
+        self._embedded_boundary = embedded_boundary
+        self._embedded_boundary_plan = (
+            None
+            if embedded_boundary is None
+            else _capture_embedded_boundary(self.grid, embedded_boundary, where="AMR")
+        )
         self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
         if load_balance is None or tagger is None or clustering is None or reflux is None:
             from pops.lib.amr import (
@@ -460,6 +507,10 @@ class AMR(MeshDescriptor):
         return self._execution
 
     @property
+    def embedded_boundary(self) -> Any:
+        return self._embedded_boundary
+
+    @property
     def patch_layout(self) -> Any:
         return self._patch_layout
 
@@ -496,15 +547,12 @@ class AMR(MeshDescriptor):
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
                 raise TypeError("AMR.grid must implement %s()" % method)
-        hierarchy = data["hierarchy"]
-        levels = hierarchy.get("max_levels")
-        ratios = hierarchy.get("ratios")
-        if isinstance(levels, bool) or not isinstance(levels, int) or levels < 1:
-            raise ValueError("AMR hierarchy requires at least one level")
-        if not isinstance(ratios, list) or len(ratios) != levels - 1 or any(
-                isinstance(ratio, bool) or not isinstance(ratio, int) or ratio < 2
-                for ratio in ratios):
-            raise ValueError("AMR hierarchy identity must preserve every transition ratio")
+        dimension = self.grid.capabilities().get("dim")
+        if type(dimension) is not int or dimension not in (1, 2, 3):
+            raise ValueError("AMR.grid must authenticate dimension 1, 2, or 3")
+        _resolved_hierarchy_data(self.hierarchy, dimension=dimension)
+        if self._embedded_boundary_plan is not None:
+            _embedded_boundary_plan_data(self._embedded_boundary_plan, where="AMR")
 
     def requirements(self) -> RequirementSet:
         return RequirementSet({
@@ -517,22 +565,34 @@ class AMR(MeshDescriptor):
     def capabilities(self) -> CapabilitySet:
         self._validate_authorities()
         grid = self.grid.capabilities().to_dict()
-        hierarchy = _authority_data(self.hierarchy, "hierarchy")
+        hierarchy = _resolved_hierarchy_data(self.hierarchy, dimension=grid["dim"])
         execution = _authority_data(self.execution, "execution")
+        embedded = (
+            None
+            if self._embedded_boundary_plan is None
+            else _embedded_boundary_plan_data(self._embedded_boundary_plan, where="AMR")
+        )
         return CapabilitySet({
             "layout": "amr",
             "supports_amr": True,
             "dim": grid.get("dim"),
             "max_levels": hierarchy["max_levels"],
-            "transition_ratios": list(hierarchy["ratios"]),
+            "transition_ratios": [list(row) for row in hierarchy["ratios"]],
             "execution": execution["mode"],
+            "embedded_boundary": embedded is not None,
+            "embedded_boundary_transport": (
+                None if embedded is None else embedded["transport"]["mode"]
+            ),
         })
 
     def options(self) -> dict[str, Any]:
         self._validate_authorities()
-        return {
+        dimension = self.grid.capabilities().get("dim")
+        options = {
             "grid": self.grid.to_dict(),
-            "hierarchy": self.hierarchy.to_data(),
+            "hierarchy": _resolved_hierarchy_data(
+                self.hierarchy, dimension=dimension
+            ),
             "tagging": self.tagging.inspect(),
             "regrid": self.regrid.to_data(),
             "transfer": self.transfer.inspect(),
@@ -543,10 +603,16 @@ class AMR(MeshDescriptor):
             "clustering": self.clustering.inspect(),
             "reflux": self.reflux.inspect(),
         }
+        if self._embedded_boundary_plan is not None:
+            options["embedded_boundary"] = _embedded_boundary_plan_data(
+                self._embedded_boundary_plan, where="AMR"
+            )
+        return options
 
     def _summary(self) -> str:
         """Keep descriptor printing structural; detailed authority data belongs to ``inspect``."""
-        hierarchy = _authority_data(self.hierarchy, "hierarchy")
+        dimension = self.grid.capabilities().get("dim")
+        hierarchy = _resolved_hierarchy_data(self.hierarchy, dimension=dimension)
         execution = _authority_data(self.execution, "execution")
         grid_name = getattr(self.grid, "name", type(self.grid).__name__)
         return "grid=%s, max_levels=%s, transition_ratios=%s, execution=%s" % (
@@ -582,19 +648,29 @@ class AMR(MeshDescriptor):
                 return value
             return resolver(value)
 
-        return type(self)(
+        result = type(self)(
             grid=self.grid,
             hierarchy=self.hierarchy,
             tagging=self.tagging.resolve_references(resolved),
             regrid=self.regrid,
             transfer=self.transfer.resolve_references(resolved),
             execution=self.execution,
+            embedded_boundary=None,
             patch_layout=self.patch_layout,
             load_balance=self.load_balance,
             tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
             reflux=self.reflux.resolve_references(resolved),
         )
+        # Resolution keeps only the signed, detached plan.  It cannot re-enter a mutable Geometry
+        # or TransportMask provider after the authoring transaction has been authenticated.
+        result._embedded_boundary = None
+        result._embedded_boundary_plan = (
+            None
+            if self._embedded_boundary_plan is None
+            else _embedded_boundary_plan_data(self._embedded_boundary_plan, where="AMR")
+        )
+        return result
 
     def resolve_amr_authorities(self, context: Any) -> Any:
         """Resolve via the same open layout protocol available to extension descriptors."""
@@ -646,7 +722,9 @@ class AMR(MeshDescriptor):
             "schema_version": 1,
             "kind": "adaptive",
             "base_domain": data["decomposition"],
-            "hierarchy": _authority_data(self.hierarchy, "hierarchy"),
+            "hierarchy": _resolved_hierarchy_data(
+                self.hierarchy, dimension=self.normalized_geometry().dimension
+            ),
             "patch_layout": _patch_layout_data(self.patch_layout),
             "load_balance": _load_balance_data(self.load_balance),
         }
@@ -664,11 +742,13 @@ class AMR(MeshDescriptor):
     def _amr_report(self) -> Any:
         from pops._capabilities_inspect import AmrReport, _native_amr_context
 
-        native_depth, native_ratios, native_note = _native_amr_context()
+        native_depth, native_ratio_policy, native_note = _native_amr_context()
         status = self.available()
-        hierarchy = _authority_data(self.hierarchy, "hierarchy")
-        ratios = tuple(hierarchy["ratios"])
-        ratio = ratios[0] if len(set(ratios)) == 1 else None
+        hierarchy = _resolved_hierarchy_data(
+            self.hierarchy, dimension=self.normalized_geometry().dimension
+        )
+        ratios = tuple(tuple(row) for row in hierarchy["ratios"])
+        ratio = list(ratios[0]) if len(set(ratios)) == 1 else None
         limitations = [native_note]
         if not status.ok and status.reason:
             limitations.append(status.reason)
@@ -677,7 +757,7 @@ class AMR(MeshDescriptor):
             max_levels=hierarchy["max_levels"],
             ratio=ratio,
             native_max_levels=native_depth,
-            native_ratios=native_ratios,
+            native_ratio_policy=native_ratio_policy,
             available=status.status,
             limitations=limitations,
             requirements=self.requirements().to_dict(),

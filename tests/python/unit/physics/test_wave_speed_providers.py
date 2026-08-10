@@ -22,9 +22,11 @@ from pops.numerics.riemann import HLL, Rusanov  # noqa: E402
 from pops.numerics.riemann.waves import (  # noqa: E402
     WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure, Einfeldt, Davis,
     MaxWaveSpeed, provider_of)
+from pops.physics import Density, Momentum  # noqa: E402
 from pops.physics._facade import Model  # noqa: E402
 from pops.numerics.riemann.waves import check_hll_waves  # noqa: E402
 from pops.runtime.routes import check_wave_speed_provider  # noqa: E402
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS  # noqa: E402
 
 
 def _model_pair():
@@ -47,7 +49,7 @@ def _model_jacobian():
 def _model_pressure():
     m = Model("press")
     rho, mx, my = m.conservative_vars("rho", "m_x", "m_y",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+                                      roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)])
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", 1.0 * rho)

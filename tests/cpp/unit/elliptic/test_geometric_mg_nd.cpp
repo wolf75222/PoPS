@@ -63,14 +63,8 @@ Index<Dim> index(int value) {
 }
 
 template <int Dim>
-pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool periodic = false) {
-  const Box<Dim> domain{index<Dim>(0), index<Dim>(cells - 1)};
-  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, [&] {
-    RealVector<Dim> upper{};
-    for (int axis = 0; axis < Dim; ++axis)
-      upper[axis] = Real(1);
-    return upper;
-  }());
+pops::EllipticBuildRequest<Dim> request(const Geometry<Dim>& geometry, BoxArray<Dim> boxes,
+                                        bool periodic = false) {
   Extent<Dim> rank_extent = extent<Dim>(1);
   rank_extent[0] = pops::n_ranks();
   Index<Dim> local_rank{};
@@ -97,6 +91,18 @@ pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool per
       Extent<Dim>{},
       extent<Dim>(1),
       {distribution.box_count(), pairs}};
+}
+
+template <int Dim>
+pops::EllipticBuildRequest<Dim> request(int cells, BoxArray<Dim> boxes, bool periodic = false) {
+  const Box<Dim> domain{index<Dim>(0), index<Dim>(cells - 1)};
+  const Geometry<Dim> geometry = Geometry<Dim>::from_bounds(domain, RealVector<Dim>{}, [&] {
+    RealVector<Dim> upper{};
+    for (int axis = 0; axis < Dim; ++axis)
+      upper[axis] = Real(1);
+    return upper;
+  }());
+  return request<Dim>(geometry, std::move(boxes), periodic);
 }
 
 template <int Dim>
@@ -143,6 +149,21 @@ void expect_partial_composite_preparation() {
   const pops::SolveReport report = solver.solve();
   EXPECT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(report.iters, 0);
+}
+
+template <int Dim>
+void expect_exact_rank_composite_ratio(const std::array<int, Dim>& components) {
+  auto coarse = complete_request<Dim>(4);
+  Extent<Dim> ratio_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio_extent[axis] = components[static_cast<std::size_t>(axis)];
+  const Geometry<Dim> fine_geometry = coarse.geometry.refine(ratio_extent);
+  auto fine =
+      request<Dim>(fine_geometry, BoxArray<Dim>{std::vector<Box<Dim>>{fine_geometry.domain()}});
+  CompositeFacBuildRequest<Dim> hierarchy{{std::move(coarse), std::move(fine)},
+                                          {RefinementRatio<Dim>{components}}};
+  CompositeFacPoisson<Dim> solver(std::move(hierarchy));
+  EXPECT_EQ(solver.n_levels(), 2);
 }
 
 template <int Dim>
@@ -424,6 +445,12 @@ TEST(test_geometric_mg_nd, partial_composite_hierarchies_prepare_in_exact_rank) 
   expect_partial_composite_preparation<1>();
   expect_partial_composite_preparation<2>();
   expect_partial_composite_preparation<3>();
+}
+
+TEST(test_geometric_mg_nd, composite_fac_accepts_ranked_and_partially_refined_axes) {
+  expect_exact_rank_composite_ratio<1>({3});
+  expect_exact_rank_composite_ratio<2>({3, 1});
+  expect_exact_rank_composite_ratio<3>({1, 2, 3});
 }
 
 TEST(test_geometric_mg_nd,

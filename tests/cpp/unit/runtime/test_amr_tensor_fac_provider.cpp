@@ -42,7 +42,8 @@ pops::PhysicalBoundaryConditions<Dim> homogeneous_dirichlet(const pops::Geometry
 }
 
 template <int Dim>
-pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refined = false) {
+pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(
+    bool refined, const std::array<int, Dim>& ratio_components) {
   using namespace pops;
   using namespace pops::runtime::program;
 
@@ -64,10 +65,11 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refi
   result.components = 1;
   result.levels.push_back(std::move(level));
   if (refined) {
-    std::array<int, Dim> ratio_components{};
-    ratio_components.fill(2);
     const amr::RefinementRatio<Dim> ratio{ratio_components};
-    const Geometry<Dim> fine_geometry = geometry.refine(extents<Dim>(2));
+    Extent<Dim> ratio_extent{};
+    for (int axis = 0; axis < Dim; ++axis)
+      ratio_extent[axis] = ratio_components[static_cast<std::size_t>(axis)];
+    const Geometry<Dim> fine_geometry = geometry.refine(ratio_extent);
     const mesh::BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{fine_geometry.domain()});
     const mesh::Distribution<Dim> fine_distribution = mesh::Distribution<Dim>::partitioned(
         fine_layout, rank_space, std::vector<Index<Dim>>{Index<Dim>{}});
@@ -83,6 +85,13 @@ pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refi
   result.solution_field_slot = "pops.tensor-elliptic.solution";
   result.options = tensor_elliptic_detail::default_options();
   return result;
+}
+
+template <int Dim>
+pops::runtime::program::HierarchyTensorSolverBuildRequest<Dim> request(bool refined = false) {
+  std::array<int, Dim> ratio_components{};
+  ratio_components.fill(2);
+  return request<Dim>(refined, ratio_components);
 }
 
 template <int Dim>
@@ -242,6 +251,19 @@ TEST(HierarchyTensorExactRank, OneTwoAndThreeDimensionalRequestsPrepare) {
   expect_rank_accepted<1>();
   expect_rank_accepted<2>();
   expect_rank_accepted<3>();
+}
+
+TEST(HierarchyTensorExactRank, FacAcceptsRankedAndPartiallyRefinedAxes) {
+  using namespace pops::runtime::program;
+  EXPECT_TRUE(CompositeTensorHierarchyProvider<1>{}
+                  .supports(request<1>(true, std::array<int, 1>{3}))
+                  .accepted());
+  EXPECT_TRUE(CompositeTensorHierarchyProvider<2>{}
+                  .supports(request<2>(true, std::array<int, 2>{3, 1}))
+                  .accepted());
+  EXPECT_TRUE(CompositeTensorHierarchyProvider<3>{}
+                  .supports(request<3>(true, std::array<int, 3>{1, 2, 3}))
+                  .accepted());
 }
 
 template <int Dim>

@@ -44,7 +44,9 @@ def test_amr_system_inspect_composes_amr_snapshot():
     # policy authority is exact; manufacturing the common two-level default is not.
     assert d["amr"]["max_levels"] == "resource_policy"
     assert d["amr"]["ratio"] == 2
-    assert d["runtime_environment"]["amr_refinement_ratio"] == 2
+    assert d["runtime_environment"]["amr_refinement_ratio"] is None
+    assert d["runtime_environment"]["amr_refinement_ratio_selection"] == "hierarchy_exact_rank"
+    assert d["runtime_environment"]["amr_refinement_ratio_rank"] == 2
     assert d["options"]["defaults"]["amr"]["refinement_ratio"] == 2
     assert d["options"]["amr"]["disabled"] is True
     assert any(row["feature"] == "amr:refinement_ratio" and row["status"] == "partial"

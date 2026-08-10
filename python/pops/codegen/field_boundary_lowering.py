@@ -30,8 +30,8 @@ class FieldLayoutContract:
     mesh: Any
     embedded_boundary: Any
     levels: int
-    transition_ratios: tuple[int, ...]
-    level_refinements: tuple[int, ...]
+    transition_ratios: tuple[tuple[int, ...], ...]
+    level_refinements: tuple[tuple[int, ...], ...]
 
 
 def _exact_positive_int(value: Any, *, where: str, minimum: int = 1) -> int:
@@ -66,27 +66,6 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
         levels = _exact_positive_int(
             data.get("max_levels"), where="AMR field layout max_levels", minimum=1
         )
-        raw_ratios = data.get("transition_ratios")
-        if not isinstance(raw_ratios, (list, tuple)):
-            raise TypeError(
-                "AMR field layout transition_ratios must be an ordered integer sequence"
-            )
-        ratios = tuple(
-            _exact_positive_int(
-                value,
-                where="AMR field layout transition_ratios[%d]" % index,
-                minimum=2,
-            )
-            for index, value in enumerate(raw_ratios)
-        )
-        if len(ratios) != levels - 1:
-            raise ValueError(
-                "AMR field layout transition_ratios must contain exactly one ratio per "
-                "coarse/fine transition"
-            )
-        refinements = [1]
-        for ratio in ratios:
-            refinements.append(refinements[-1] * ratio)
         candidates = [
             value
             for value in (getattr(layout, "grid", None), getattr(layout, "base", None))
@@ -94,13 +73,70 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
         ]
         if len(candidates) != 1:
             raise TypeError("AMR field layout must expose exactly one grid/base mesh provider")
+        mesh = candidates[0]
+        dimension = data.get("dim")
+        if dimension is None:
+            mesh_capabilities = getattr(mesh, "capabilities", None)
+            if not callable(mesh_capabilities):
+                raise TypeError("AMR field mesh must authenticate its spatial dimension")
+            mesh_evidence = mesh_capabilities()
+            mesh_to_dict = getattr(mesh_evidence, "to_dict", None)
+            if not callable(mesh_to_dict):
+                raise TypeError("AMR field mesh capabilities must implement to_dict()")
+            dimension = mesh_to_dict().get("dim")
+        if type(dimension) is not int or dimension not in (1, 2, 3):
+            raise ValueError("AMR field layout dimension must be 1, 2, or 3")
+        raw_ratios = data.get("transition_ratios")
+        if not isinstance(raw_ratios, (list, tuple)):
+            raise TypeError(
+                "AMR field layout transition_ratios must be an ordered sequence of axis vectors"
+            )
+        if len(raw_ratios) != levels - 1:
+            raise ValueError(
+                "AMR field layout transition_ratios must contain exactly one ratio per "
+                "coarse/fine transition"
+            )
+        ratios = []
+        for transition, raw_ratio in enumerate(raw_ratios):
+            if not isinstance(raw_ratio, (list, tuple)):
+                raise TypeError(
+                    "AMR field layout transition_ratios[%d] must be an axis vector"
+                    % transition
+                )
+            ratio = tuple(raw_ratio)
+            if len(ratio) != dimension:
+                raise ValueError(
+                    "AMR field layout transition_ratios[%d] must contain %d axes"
+                    % (transition, dimension)
+                )
+            ratio = tuple(
+                _exact_positive_int(
+                    value,
+                    where="AMR field layout transition_ratios[%d][%d]"
+                    % (transition, axis),
+                )
+                for axis, value in enumerate(ratio)
+            )
+            if not any(value > 1 for value in ratio):
+                raise ValueError(
+                    "AMR field layout transition_ratios[%d] must refine at least one axis"
+                    % transition
+                )
+            ratios.append(ratio)
+        ratios = tuple(ratios)
+        refinements = [(1,) * dimension]
+        for ratio in ratios:
+            previous = refinements[-1]
+            refinements.append(tuple(
+                previous[axis] * ratio[axis] for axis in range(dimension)
+            ))
         embedded = getattr(layout, "embedded_boundary", None)
         if embedded is not None:
             raise TypeError(
                 "AMR field layout advertises an embedded boundary without a typed field "
                 "topology provider"
             )
-        return FieldLayoutContract(kind, candidates[0], None, levels, ratios, tuple(refinements))
+        return FieldLayoutContract(kind, mesh, None, levels, ratios, tuple(refinements))
     if kind == "uniform":
         levels = _exact_positive_int(data.get("levels"), where="uniform field layout levels")
         if levels != 1:
@@ -109,7 +145,12 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
         if mesh is None:
             raise TypeError("uniform field layout must expose its mesh provider")
         return FieldLayoutContract(
-            kind, mesh, getattr(layout, "embedded_boundary", None), levels, (), (1,)
+            kind,
+            mesh,
+            getattr(layout, "embedded_boundary", None),
+            levels,
+            (),
+            ((1,) * len(getattr(mesh, "cells", ())),),
         )
     raise ValueError(
         "field layout capabilities require layout='uniform' or layout='amr'; got %r" % kind
@@ -453,7 +494,7 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
                 {
                     "coarse_level": index,
                     "fine_level": index + 1,
-                    "transition_ratio": ratio,
+                    "transition_ratio": list(ratio),
                 }
                 for index, ratio in enumerate(contract.transition_ratios)
             ]
@@ -475,8 +516,8 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
             }
         ),
         "levels": contract.levels,
-        "transition_ratios": list(contract.transition_ratios),
-        "level_refinements": list(contract.level_refinements),
+        "transition_ratios": [list(row) for row in contract.transition_ratios],
+        "level_refinements": [list(row) for row in contract.level_refinements],
         "connectivity": connectivity,
         "component_derivation": "connected-components-of-resolved-cell-graph",
         "basis_derivation": "one-constant-mode-per-connected-material-component",

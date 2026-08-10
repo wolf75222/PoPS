@@ -40,10 +40,12 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
+from pops.physics import Density, Energy, Momentum
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.initial_states import bubble_amr as _bubble
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.amr_tagging import install_prepared_threshold_union
 from tests.python.support.requirements import (
     default_cxx,
@@ -64,7 +66,7 @@ def _euler_formulas(m):
     FACADE Model @p m (dont compile(...) rend un CompiledModel). Renvoie (rho, rho_u, rho_v, E)."""
     rho, rhou, rhov, E = m.conservative_vars(
         "rho", "rho_u", "rho_v", "E",
-        roles=["Density", "MomentumX", "MomentumY", "Energy"])
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS), Energy()])
     u = rhou / rho
     v = rhov / rho
     p = (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v))

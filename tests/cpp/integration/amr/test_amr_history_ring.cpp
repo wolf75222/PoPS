@@ -1,14 +1,20 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace {
@@ -71,6 +77,14 @@ AdvectionModel<Dim> advection_model() {
 }
 
 template <int Dim>
+void install_advection(pops::AmrSystem<Dim>& system) {
+  pops::add_compiled_model<Dim>(
+      system, "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, "test.amr-history/provider-free");
+}
+
+template <int Dim>
 std::size_t cell_count(const pops::Extent<Dim>& shape) {
   std::size_t result = 1;
   for (int axis = 0; axis < Dim; ++axis)
@@ -85,7 +99,7 @@ struct Fixture {
 
   Fixture() : system(config()) {
     system.install_block_state_route("tracer", "state/tracer");
-    pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
+    install_advection(system);
     system.set_conservative_state("tracer", std::vector<double>(cell_count(config().shape), 1.0));
     (void)system.engine();
     system.set_program_block_map({0});
@@ -107,6 +121,25 @@ struct Fixture {
                               "clock.macro", "dense.linear");
   }
 };
+
+template <int Dim>
+pops::AmrSystemConfig<Dim> three_level_config() {
+  pops::AmrSystemConfig<Dim> result;
+  result.level_count = 3;
+  result.regrid_every = 0;
+  result.transition_ratios.resize(2);
+  result.transition_buffers.resize(2);
+  result.transition_lookaheads.resize(2);
+  for (int axis = 0; axis < Dim; ++axis) {
+    result.shape[axis] = 8;
+    for (std::size_t transition = 0; transition < 2; ++transition) {
+      result.transition_ratios[transition][axis] = 2;
+      result.transition_buffers[transition][axis] = 1;
+      result.transition_lookaheads[transition][axis] = 1;
+    }
+  }
+  return result;
+}
 
 }  // namespace
 
@@ -202,4 +235,70 @@ TEST(test_amr_history_ring, RegisteredHistoryRejectsTopologyPublicationBeforeMut
   EXPECT_THROW(fixture.context->publish_regrid(std::move(prepared), std::move(child)),
                std::runtime_error);
   EXPECT_EQ(engine->hierarchy().num_levels(), 1U);
+}
+
+TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutConservativeCatchUpProvider) {
+  constexpr int Dim = pops::kNativeDimension;
+  const pops::AmrSystemConfig<Dim> config = three_level_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  system.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
+  system.install_block_state_route("tracer", "state/tracer");
+  install_advection(system);
+  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
+  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
+                                               "test.amr-history.three-level-tagging@1");
+
+  auto* runtime = system.engine();
+  ASSERT_NE(runtime, nullptr);
+  ASSERT_EQ(runtime->hierarchy().num_levels(), 3U);
+  for (std::size_t level = 1; level < runtime->hierarchy().num_levels(); ++level)
+    for (int axis = 0; axis < Dim; ++axis)
+      EXPECT_EQ(runtime->hierarchy().layout(level).ratio_from_parent()[axis], 2);
+  EXPECT_EQ(system.checkpoint_temporal_relations(),
+            (std::vector<std::vector<std::string>>{{"0", "1", "2", "1", "integral_only"},
+                                                   {"1", "2", "2", "1", "integral_only"}}));
+  EXPECT_TRUE(system.program_sync_manifest().empty());
+  EXPECT_TRUE(system.program_interface_flux_ledger_manifest().empty());
+
+  system.set_program_block_map({0});
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  context->configure_primary_clock("clock.level.0");
+  context->declare_clock_relation("clock.level.0", "clock.level.1", 2);
+  context->declare_clock_relation("clock.level.1", "clock.level.2", 2);
+
+  std::size_t maximum_patches = 0;
+  for (std::size_t level = 1; level < runtime->hierarchy().num_levels(); ++level)
+    maximum_patches =
+        std::max(maximum_patches, runtime->hierarchy().layout(level).patches().size());
+  ASSERT_GT(maximum_patches, 0U);
+  const std::size_t overlap_pairs = maximum_patches * (maximum_patches - 1U) / 2U;
+  const std::array<int, 2> temporal_substeps{2, 2};
+  const auto plan =
+      context->prepare_subcycling(std::span<const int>(temporal_substeps),
+                                  {temporal_substeps.size(), {maximum_patches, overlap_pairs}});
+  plan.require_live(*runtime);
+  ASSERT_EQ(plan.size(), 2U);
+  EXPECT_EQ(plan.transition(0).temporal_substeps(), 2);
+  EXPECT_EQ(plan.transition(1).temporal_substeps(), 2);
+  EXPECT_EQ(plan.transition(0).temporal_substeps() * plan.transition(1).temporal_substeps(), 4);
+
+  std::array<int, 3> level_advances{};
+  std::string refusal;
+  try {
+    context->advance_synchronized_hierarchy(0.125, [&](double) {
+      ++level_advances[static_cast<std::size_t>(context->level())];
+      context->state(0).set_val(pops::Real(9));
+    });
+  } catch (const std::runtime_error& error) {
+    refusal = error.what();
+  }
+
+  EXPECT_EQ(refusal,
+            "AmrProgramContext::advance_synchronized_hierarchy requires a prepared exact-ranked "
+            "conservative multi-level synchronization provider before any level state is advanced");
+  EXPECT_EQ(level_advances, (std::array<int, 3>{0, 0, 0}));
+  for (std::size_t level = 0; level < runtime->hierarchy().num_levels(); ++level) {
+    EXPECT_EQ(pops::reduce_min_local(runtime->hierarchy().state(level)), pops::Real(1));
+    EXPECT_EQ(pops::reduce_max_local(runtime->hierarchy().state(level)), pops::Real(1));
+  }
 }

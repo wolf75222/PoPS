@@ -151,7 +151,7 @@ enum class FieldSolverRouteId : int {
 };
 inline constexpr RouteInfo kFieldSolverRoutes[] = {
   {0, "geometric_mg", "pops::GeometricMG", "", ""},
-  {1, "fft", "pops::PoissonFFTSolver<2>", "exact rank two,periodic bc,constant coefficient,power-of-two grid,canonical ordered MPI slabs", "rank one / rank three, walls, variable epsilon and non-power-of-two grids are rejected"},
+  {1, "fft", "pops::PoissonFFTSolver<Dim>", "Cartesian native rank one / two / three,periodic bc,constant coefficient,canonical ordered MPI slabs", "walls, variable epsilon and non-canonical decompositions are rejected; non-radix-2 extents use the diagnosed direct-DFT path"},
   {2, "polar", "pops::PolarPoissonSolver<2>", "exact rank two,annular polar geometry,single MPI rank,single full-annulus patch", "spatial dimensions one / three and distributed annuli are rejected"},
   {3, "cartesian_cg", "pops::elliptic::nd::CartesianPoissonSolver<Dim>", "uniform Cartesian layout,constant-coefficient Poisson operator", "no AMR, screened operator, embedded boundary, or dynamic boundary"},
 };
@@ -177,7 +177,7 @@ enum class LayoutRouteId : int {
 };
 inline constexpr RouteInfo kLayoutRoutes[] = {
   {0, "uniform", "pops::System", "", ""},
-  {1, "amr", "pops::AmrSystem", "", "refinement ratio 2 (kAmrRefRatio); fft field solver not wired"},
+  {1, "amr", "pops::AmrSystem", "", "transition ratios are authenticated by the exact-rank hierarchy; FFT field solves are Uniform-only"},
 };
 inline constexpr const char* kLayoutRouteTokensCsv = "uniform|amr";
 
@@ -304,9 +304,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 2;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 4;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "4806be6ce7a26431de34be4449d9a28ce34f53af78e2087bc7047663ff0450b2";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078";
-inline constexpr const char* kRouteRegistrySignature = "v4:b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078";
+inline constexpr const char* kComponentCatalogSha256 = "520c51b60d3ae00bdffa0ed040f437fed772b80160e8d5fae7e4c86c829b8305";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3";
+inline constexpr const char* kRouteRegistrySignature = "v4:47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

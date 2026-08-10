@@ -764,16 +764,15 @@
           "token": "fft",
           "wire_id": 1,
           "cpp_id": "kFft",
-          "native_entry": "pops::PoissonFFTSolver<2>",
+          "native_entry": "pops::PoissonFFTSolver<Dim>",
           "requirements": [
-            "exact rank two",
+            "Cartesian native rank one / two / three",
             "periodic bc",
             "constant coefficient",
-            "power-of-two grid",
             "canonical ordered MPI slabs"
           ],
           "limitations": [
-            "rank one / rank three, walls, variable epsilon and non-power-of-two grids are rejected"
+            "walls, variable epsilon and non-canonical decompositions are rejected; non-radix-2 extents use the diagnosed direct-DFT path"
           ],
           "aliases": [],
           "metadata": {}
@@ -881,7 +880,7 @@
           "native_entry": "pops::AmrSystem",
           "requirements": [],
           "limitations": [
-            "refinement ratio 2 (kAmrRefRatio); fft field solver not wired"
+            "transition ratios are authenticated by the exact-rank hierarchy; FFT field solves are Uniform-only"
           ],
           "aliases": [],
           "metadata": {}

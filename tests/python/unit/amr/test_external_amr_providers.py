@@ -167,7 +167,7 @@ def _layout(authored, *, tagger, clustering, tagging=None, reflux=None):
     )
 
 
-def test_external_amr_providers_survive_resolution_with_exact_components(tmp_path):
+def test_external_amr_provider_installers_fail_closed_at_resolution(tmp_path):
     target = _example().build_final_case()
     tagger_component = _component(
         tmp_path, name="tagger", interface=interfaces.Tagger)
@@ -175,47 +175,53 @@ def test_external_amr_providers_survive_resolution_with_exact_components(tmp_pat
         tmp_path, name="clustering", interface=interfaces.Clustering)
     reflux_component = _component(
         tmp_path, name="reflux", interface=interfaces.Reflux)
-    layout = _layout(
-        target.layout,
-        tagger=TaggerProvider(tagger_component),
-        clustering=ClusteringProvider(clustering_component),
-        reflux=RefluxProvider(reflux_component),
+    cases = (
+        (
+            "clustering",
+            _layout(
+                target.layout,
+                tagger=target.layout.tagger,
+                clustering=ClusteringProvider(clustering_component),
+            ),
+            (clustering_component,),
+            "BergerRigoutsosProvider<Dim>",
+        ),
+        (
+            "tagger",
+            _layout(
+                target.layout,
+                tagger=TaggerProvider(tagger_component),
+                clustering=target.layout.clustering,
+            ),
+            (tagger_component,),
+            "PreparedTaggingExecutionPlan<Dim>",
+        ),
+        (
+            "reflux",
+            _layout(
+                target.layout,
+                tagger=target.layout.tagger,
+                clustering=target.layout.clustering,
+                reflux=RefluxProvider(reflux_component),
+            ),
+            (reflux_component,),
+            "transactional AmrRuntime<Dim> reflux ledger",
+        ),
     )
-
-    resolved = pops.resolve(
-        pops.validate(target.authoring.case),
-        layout=layout,
-        components=(tagger_component, clustering_component, reflux_component),
-    )
-
-    assert tuple(resolved.amr_providers) == ("clustering", "tagger", "reflux")
-    tagger = resolved.amr_providers["tagger"]
-    clustering = resolved.amr_providers["clustering"]
-    reflux = resolved.amr_providers["reflux"]
-    assert tagger["provider_type"] == "external_amr_tagger"
-    assert tagger["component_id"] == tagger_component.component_manifest.component_id
-    assert tagger["tagging_graph_identity"] == resolved.bootstrap_plan.tagging.qualified_id
-    assert tuple(tagger["tagging_capability"]["candidate_outputs"]) == tuple(
-        TAGGER_CAPABILITY["candidate_outputs"])
-    assert tagger["native_interface"] == interfaces.Tagger.to_data()
-    assert clustering["provider_type"] == "external_amr_clustering"
-    assert clustering["component_id"] == clustering_component.component_manifest.component_id
-    assert clustering["native_interface"] == interfaces.Clustering.to_data()
-    assert reflux["provider_type"] == "external_amr_reflux"
-    assert reflux["component_id"] == reflux_component.component_manifest.component_id
-    assert reflux["native_interface"] == interfaces.Reflux.to_data()
-    assert reflux["clock_identity"] == target.authoring.program.clock.qualified_id
-    from pops.identity.semantic import semantic_value
-
-    assert resolved.resolved_hierarchy.plan.clustering.options.to_data() == {
-        "provider": semantic_value(dict(clustering), where="test clustering provider"),
-    }
+    for role, layout, components, authority in cases:
+        with pytest.raises(
+                NotImplementedError,
+                match=r"external AMR %s component installation.*%s"
+                % (role, authority)):
+            pops.resolve(
+                pops.validate(target.authoring.case),
+                layout=layout,
+                components=components,
+            )
 
 
-def test_third_party_authority_uses_the_open_provider_lowering_protocol(tmp_path):
+def test_third_party_external_authority_uses_open_lowering_but_fails_closed(tmp_path):
     target = _example().build_final_case()
-    tagger_component = _component(
-        tmp_path, name="third_party_tagger", interface=interfaces.Tagger)
     clustering_component = _component(
         tmp_path, name="third_party_clustering", interface=interfaces.Clustering)
 
@@ -237,22 +243,19 @@ def test_third_party_authority_uses_the_open_provider_lowering_protocol(tmp_path
 
     layout = _layout(
         target.layout,
-        tagger=TaggerProvider(tagger_component),
+        tagger=target.layout.tagger,
         clustering=ThirdPartyClusteringAuthority(
             ClusteringProvider(clustering_component)),
     )
-    resolved = pops.resolve(
-        pops.validate(target.authoring.case),
-        layout=layout,
-        components=(tagger_component, clustering_component),
-    )
-
-    assert resolved.amr_providers["clustering"]["component_id"] \
-        == clustering_component.component_manifest.component_id
-    assert resolved.amr_providers["clustering"]["runtime_installation"] == {
-        "schema_version": 1,
-        "protocol": "external_component",
-    }
+    with pytest.raises(
+            NotImplementedError,
+            match=r"external AMR clustering component installation.*"
+                  r"BergerRigoutsosProvider<Dim>"):
+        pops.resolve(
+            pops.validate(target.authoring.case),
+            layout=layout,
+            components=(clustering_component,),
+        )
 
 
 def test_incomplete_third_party_authority_is_rejected_explicitly(tmp_path):
@@ -307,9 +310,10 @@ def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
         )
 
 
-def test_external_clustering_options_survive_prepared_native_lowering(tmp_path):
+def test_external_clustering_options_remain_inspectable_but_native_lowering_fails_closed(
+        tmp_path):
     from pops.amr.providers import (
-        AMRProviderLoweringContext,
+        amr_provider_binding_identity,
         prepare_amr_provider_native_config,
     )
 
@@ -320,27 +324,21 @@ def test_external_clustering_options_survive_prepared_native_lowering(tmp_path):
         manifest_parameters=({"name": "options", "kind": "runtime"},),
         instance_parameters={"options": {"target_boxes": 12, "strict": True}},
     )
-    graph = SimpleNamespace(qualified_id="test::tagging-graph")
-    binding = ClusteringProvider(component).lower_amr_provider(
-        AMRProviderLoweringContext(
-            layout_identity="test::layout",
-            components=(component,),
-            tagging_graph=graph,
-            clock_identity="test::clock",
-        )
-    )
-    from pops.identity.semantic import semantic_value
-
-    prepared = prepare_amr_provider_native_config(
-        semantic_value(binding.data, where="test external clustering binding"))
-
-    assert prepared.role == "clustering"
-    assert prepared.config == {}
-    assert prepared.provider_options == {
+    binding = ClusteringProvider(component).inspect()
+    assert binding["component"]["parameters"] == {
         "options": {"target_boxes": 12, "strict": True},
     }
+    binding["layout_identity"] = "test::layout"
+    binding["provider_identity"] = amr_provider_binding_identity(
+        "clustering", binding)
 
-    forged = dict(binding.data)
+    with pytest.raises(
+            NotImplementedError,
+            match=r"external AMR clustering component installation.*"
+                  r"BergerRigoutsosProvider<Dim>"):
+        prepare_amr_provider_native_config(binding)
+
+    forged = dict(binding)
     forged_component = dict(forged["component"])
     forged_component["parameters"] = {
         "options": {"target_boxes": 99, "strict": False},
@@ -395,8 +393,6 @@ def test_external_tagger_requires_exact_candidate_program_capability(tmp_path):
     advertised_but_unsupported = _component(
         tmp_path, name="persistent_capability", interface=interfaces.Tagger,
         tagger_capability={**TAGGER_CAPABILITY, "persistent_hysteresis": True})
-    persistent_clustering = _component(
-        tmp_path, name="persistent_clustering", interface=interfaces.Clustering)
     target = _example().build_final_case()
     from pops.amr import AMRTagging, EqualityPolicy, Hysteresis
 
@@ -408,7 +404,7 @@ def test_external_tagger_requires_exact_candidate_program_capability(tmp_path):
     layout = _layout(
         target.layout,
         tagger=TaggerProvider(advertised_but_unsupported),
-        clustering=ClusteringProvider(persistent_clustering),
+        clustering=target.layout.clustering,
         tagging=persistent_tagging,
     )
     with pytest.raises(
@@ -416,7 +412,7 @@ def test_external_tagger_requires_exact_candidate_program_capability(tmp_path):
             match="external AMR Tagger persistent_hysteresis is not implemented"):
         pops.resolve(
             pops.validate(target.authoring.case), layout=layout,
-            components=(advertised_but_unsupported, persistent_clustering))
+            components=(advertised_but_unsupported,))
 
 
 def test_external_tagger_refuses_graph_opcode_outside_manifest(tmp_path):
@@ -425,18 +421,16 @@ def test_external_tagger_refuses_graph_opcode_outside_manifest(tmp_path):
     tagger_component = _component(
         tmp_path, name="limited_tagger", interface=interfaces.Tagger,
         tagger_capability=capability)
-    clustering_component = _component(
-        tmp_path, name="clustering", interface=interfaces.Clustering)
     layout = _layout(
         target.layout,
         tagger=TaggerProvider(tagger_component),
-        clustering=ClusteringProvider(clustering_component),
+        clustering=target.layout.clustering,
     )
     with pytest.raises(NotImplementedError, match="lacks resolved opcode"):
         pops.resolve(
             pops.validate(target.authoring.case),
             layout=layout,
-            components=(tagger_component, clustering_component),
+            components=(tagger_component,),
         )
 
 
@@ -446,34 +440,28 @@ def test_external_tagger_refuses_resolved_stencil_beyond_its_capacity(tmp_path):
     tagger_component = _component(
         tmp_path, name="thin_stencil_tagger", interface=interfaces.Tagger,
         tagger_capability=capability)
-    clustering_component = _component(
-        tmp_path, name="thin_stencil_clustering", interface=interfaces.Clustering)
     layout = _layout(
         target.layout,
         tagger=TaggerProvider(tagger_component),
-        clustering=ClusteringProvider(clustering_component),
+        clustering=target.layout.clustering,
     )
     with pytest.raises(NotImplementedError, match="maximum_stencil_terms"):
         pops.resolve(
             pops.validate(target.authoring.case), layout=layout,
-            components=(tagger_component, clustering_component))
+            components=(tagger_component,))
 
 
-def test_external_amr_provider_install_is_prevalidated_and_transactional():
-    from pops._platform_contracts import (
-        ExecutionContext,
-        ExecutionResource,
-        proven_serial_manifest,
+def test_external_amr_provider_bind_fails_closed_without_native_mutation():
+    from pops.amr.providers import (
+        _normalize_tagger_capability,
+        amr_provider_binding_identity,
+        prepare_amr_provider_installation,
     )
     from pops.runtime._runtime_authorities import _install_amr_provider_authorities
 
     layout_identity = "test::layout"
     clock_identity = "test::case::clock"
     graph_identity = "test::case::tagging-graph"
-    from pops.amr.providers import (
-        _normalize_tagger_capability,
-        amr_provider_binding_identity,
-    )
     normalized_capability = _normalize_tagger_capability((TAGGER_CAPABILITY,))
 
     def binding(slot, interface, component_id, manifest):
@@ -506,102 +494,45 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
         row["provider_identity"] = amr_provider_binding_identity(slot, row)
         return row
 
-    tagger_handle, clustering_handle, reflux_handle = object(), object(), object()
-    tagger_id, clustering_id, reflux_id = "test::tagger", "test::clustering", "test::reflux"
-    tagger_manifest = "manifest::tagger"
-    clustering_manifest = "manifest::clustering"
-    reflux_manifest = "manifest::reflux"
-    installed = {
-        tagger_id: SimpleNamespace(
-            component_manifest=SimpleNamespace(token=tagger_manifest),
-            interface=interfaces.Tagger,
-            native_handle=tagger_handle,
-            runtime_contract=SimpleNamespace(capabilities=(TAGGER_CAPABILITY,)),
-        ),
-        clustering_id: SimpleNamespace(
-            component_manifest=SimpleNamespace(token=clustering_manifest),
-            interface=interfaces.Clustering,
-            native_handle=clustering_handle,
-            runtime_contract=SimpleNamespace(capabilities=()),
-        ),
-        reflux_id: SimpleNamespace(
-            component_manifest=SimpleNamespace(token=reflux_manifest),
-            interface=interfaces.Reflux,
-            native_handle=reflux_handle,
-            runtime_contract=SimpleNamespace(capabilities=()),
-        ),
+    providers = {
+        "clustering": binding(
+            "clustering", interfaces.Clustering,
+            "test::clustering", "manifest::clustering"),
+        "tagger": binding(
+            "tagger", interfaces.Tagger, "test::tagger", "manifest::tagger"),
+        "reflux": binding(
+            "reflux", interfaces.Reflux, "test::reflux", "manifest::reflux"),
     }
-    execution = ExecutionContext(
-        backend=proven_serial_manifest(
-            backend="production", target="amr_system",
-            abi="test|external-amr-providers|v1", runtime=True),
-        communicator=ExecutionResource("communicator", "serial"),
-        datatype=ExecutionResource("datatype", "float64"),
-        device=ExecutionResource("device", "host"),
-    )
+    executable_authorities = {
+        "clustering": "BergerRigoutsosProvider<Dim>",
+        "tagger": "PreparedTaggingExecutionPlan<Dim>",
+        "reflux": "transactional AmrRuntime<Dim> reflux ledger",
+    }
+    for role, frozen in providers.items():
+        with pytest.raises(
+                NotImplementedError,
+                match=r"external AMR %s component installation.*%s"
+                % (role, executable_authorities[role])):
+            prepare_amr_provider_installation(
+                role=role,
+                frozen_binding=frozen,
+                layout_identity=layout_identity,
+                resolved_tagging_identity=graph_identity,
+            )
+
+    native = SimpleNamespace(calls=[])
+    engine = SimpleNamespace(_s=native)
     plan = SimpleNamespace(
-        amr_providers={
-            "clustering": binding(
-                "clustering", interfaces.Clustering,
-                clustering_id, clustering_manifest),
-            "tagger": binding(
-                "tagger", interfaces.Tagger, tagger_id, tagger_manifest),
-            "reflux": binding(
-                "reflux", interfaces.Reflux, reflux_id, reflux_manifest),
-        },
-        components=installed,
-        execution_context=execution,
+        amr_providers=providers,
         artifact=SimpleNamespace(
-            layout_plan=SimpleNamespace(qualified_id=layout_identity),
-            plan=SimpleNamespace(blocks=()),
-        ),
+            layout_plan=SimpleNamespace(qualified_id=layout_identity)),
         bootstrap_plan=SimpleNamespace(
             tagging=SimpleNamespace(qualified_id=graph_identity)),
     )
-
-    class Native:
-        def __init__(self):
-            self.calls = []
-            self.discarded = False
-
-        def _install_amr_clustering_component(self, *args):
-            self.calls.append(("clustering", args))
-
-        def _install_amr_tagger_component(self, *args):
-            self.calls.append(("tagger", args))
-
-        def _install_amr_reflux_component(self, *args):
-            self.calls.append(("reflux", args))
-
-        def _discard_amr_provider_components(self):
-            self.calls.clear()
-            self.discarded = True
-
-    native = Native()
-    engine = SimpleNamespace(_s=native)
-    _install_amr_provider_authorities(engine, plan)
-    assert [name for name, _ in native.calls] == ["clustering", "tagger", "reflux"]
-    assert native.calls[0][1][0] is clustering_handle
-    assert native.calls[1][1][0] is tagger_handle
-    assert native.calls[2][1][0] is reflux_handle
-    assert tuple(engine._amr_provider_authorities) == ("clustering", "tagger", "reflux")
-
-    missing = SimpleNamespace(**vars(plan))
-    missing.components = {clustering_id: installed[clustering_id]}
-    untouched = Native()
-    with pytest.raises(ValueError, match="not installed"):
-        _install_amr_provider_authorities(SimpleNamespace(_s=untouched), missing)
-    assert untouched.calls == []
-    assert not untouched.discarded
-
-    missing_reflux = SimpleNamespace(**vars(plan))
-    missing_reflux.components = {
-        clustering_id: installed[clustering_id],
-        tagger_id: installed[tagger_id],
-    }
-    untouched_reflux = Native()
-    with pytest.raises(ValueError, match="AMR reflux provider.*not installed"):
-        _install_amr_provider_authorities(
-            SimpleNamespace(_s=untouched_reflux), missing_reflux)
-    assert untouched_reflux.calls == []
-    assert not untouched_reflux.discarded
+    with pytest.raises(
+            NotImplementedError,
+            match=r"external AMR clustering component installation.*"
+                  r"BergerRigoutsosProvider<Dim>"):
+        _install_amr_provider_authorities(engine, plan)
+    assert native.calls == []
+    assert not hasattr(engine, "_amr_provider_authorities")

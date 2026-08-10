@@ -92,7 +92,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
 
     # --- variable declaration (direct delegation to HyperbolicModel) ---
     def conservative_vars(self, *names: Any, roles: Any = None) -> Any:
-        """Declares the conservative variables. @p roles: same convention as HyperbolicModel."""
+        """Declare conservative variables with typed ``ComponentRole`` descriptors."""
         return self._m.conservative_vars(*names, roles=roles)
 
     def primitive(self, name: Any, expr: Any) -> Any:
@@ -105,6 +105,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """Declare primitives and their order, from expressions in kwargs or positional names.
 
         Keyword and positional forms are exclusive; keyword insertion order defines the layout.
+        Optional roles are typed ``ComponentRole`` descriptors, never role-name strings.
         """
         if named and vars:
             raise ValueError(

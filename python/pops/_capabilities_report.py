@@ -283,10 +283,13 @@ class NativeCapabilityReport:
         lines.append("  platform : %s" % self.platform)
         lines.append("  abi_key  : %s" % ((self.abi_key or "")[:12] or "none"))
         lines.append(
-            "  runtime  : dimension=%s amr_refinement_ratio=%s precision=%s communicator=%s"
+            "  runtime  : dimension=%s amr_refinement_ratio=%s selection=%s rank=%s "
+            "precision=%s communicator=%s"
             % (
                 self.runtime.get("dimension"),
                 self.runtime.get("amr_refinement_ratio"),
+                self.runtime.get("amr_refinement_ratio_selection"),
+                self.runtime.get("amr_refinement_ratio_rank"),
                 self.runtime.get("precision"),
                 self.runtime.get("communicator"),
             )
@@ -627,7 +630,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="available",
             limitation=(
-                "host float64 and ratio-2 AMR only; MPI requires both components to declare "
+                "host float64 with hierarchy-selected AMR ratios; MPI requires both components "
+                "to declare "
                 "MPI_COMM_WORLD and "
                 "a distributed coarse level; executable MPI qualification currently covers "
                 "exactly two ranks with distributed L0/L1 and regrid rematerialization; "
@@ -737,10 +741,11 @@ def _support_rows(flags: Any, source: Any) -> list:
             platform="host",
             flags=flags,
             flag="supports_amr",
-            limitation="hierarchy depth is resource-policy controlled; native ratio=2",
+            limitation=("hierarchy depth and transition ratios are selected by the "
+                        "authenticated AMR hierarchy"),
             requested="layout=AMR",
             available_route="backend='production' target='amr_system'",
-            alternative="use Uniform or an AMR hierarchy with 2:1 transitions",
+            alternative="use Uniform or an AMR hierarchy with explicit transition ratios",
             source=source,
         ),
         _row(
@@ -865,9 +870,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             gpu=gpu,
-            limitation="resource-policy-controlled depth and native ratio=2",
-            requested="AMR hierarchy with a non-2:1 transition",
-            available_route="AMR hierarchy with 2:1 transitions",
+            limitation=("resource-policy-controlled depth and hierarchy-selected "
+                        "transition ratios"),
+            requested="AMR hierarchy with an unauthenticated transition ratio",
+            available_route="AMR hierarchy with explicit transition ratios",
             alternative="use Uniform or the native AMR envelope",
             source=source,
         ),
@@ -1003,8 +1009,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             layout="uniform|amr",
             backend="production",
             limitation=(
-                "ghost_depth=3; ratio-2 AMR in the compile-selected native rank selects the "
-                "conservative order-5 "
+                "ghost_depth=3; hierarchy-selected AMR in the compile-selected native rank "
+                "selects the conservative order-5 "
                 "cell-average provider from resolved spatial capabilities"
             ),
             source=source,
@@ -1041,8 +1047,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             mpi=mpi,
             gpu=gpu,
             limitation=(
-                "exact Dim=2, periodic, constant coefficient, power-of-two uniform grid, "
-                "canonical ordered MPI slabs; rank one/three and non-power-of-two grids refuse"
+                "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient and canonical "
+                "ordered MPI slabs; radix-2 fast path with diagnosed direct-DFT fallback"
             ),
             source=source,
         ),
@@ -1094,8 +1100,8 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             gpu=gpu,
             status="partial",
             limitation=(
-                "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
-                "validate_amr_refinement_ratio() rejects other ratios"
+                "AMR transition ratios are exact hierarchy properties; the native runtime does "
+                "not advertise a process-global ratio invariant"
             ),
             source=source,
         ),
@@ -1138,9 +1144,11 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="partial",
             limitation=(
                 "physical transfer routes are exact dense %s "
-                "contracts; restriction, coarse-fine fill and temporal interpolation "
-                "currently accept cell-centered state only; derived fields recompute "
-                "through elliptic_solve and caches rebuild through patch_topology"
+                "contracts; cell-centered state provides restriction, coarse-fine fill and "
+                "qualified temporal interpolation; complete oriented Cartesian face vectors "
+                "provide divergence-preserving prolongation and primitive node fields provide "
+                "multilinear prolongation; derived fields recompute through elliptic_solve and "
+                "caches rebuild through patch_topology"
             ) % physical_transfer_centerings,
             source=source,
         ),

@@ -127,7 +127,7 @@ flowchart TD
 
 PoPS is organized into five orthogonal layers. A high layer expresses the problem, a low layer executes it; a high layer never depends on an execution detail. The structuring separation: the containers (what stores) are distinct from the execution policy (how one loops and communicates).
 
-**Physics (local, device-callable).** The `PhysicalModel` concept ([`include/pops/core/model/physical_model.hpp`](../include/pops/core/model/physical_model.hpp)) only exposes local and pointwise laws, all `POPS_HD`: `flux`, `source`, `max_wave_speed`, `elliptic_rhs`. No access to storage nor to parallelism; no allocation in hot loops, no `std::function`, no dynamic polymorphism. The core is model-agnostic: a model is a composition (`CompositeModel`, [`include/pops/physics/composition/composite.hpp`](../include/pops/physics/composition/composite.hpp)) of generic bricks ([`include/pops/physics/bricks/bricks.hpp`](../include/pops/physics/bricks/bricks.hpp)) on three axes (transport / source / elliptic), the scenario names living on the application side. The `aux` channel carries `(phi, grad_x, grad_y)` and is extensible (`B_z`, `T_e`). The geometry (cartesian / polar / disk) is a config axis of the mesh, not of the model.
+**Physics (local, device-callable).** The `PhysicalModel` concept ([`include/pops/core/model/physical_model.hpp`](../include/pops/core/model/physical_model.hpp)) only exposes local and pointwise laws, all `POPS_HD`: `flux`, `source`, `max_wave_speed`, `elliptic_rhs`. No access to storage nor to parallelism; no allocation in hot loops, no `std::function`, no dynamic polymorphism. The core is model-agnostic: a model is a composition (`CompositeModel`, [`include/pops/physics/composition/composite.hpp`](../include/pops/physics/composition/composite.hpp)) of generic bricks ([`include/pops/physics/bricks/bricks.hpp`](../include/pops/physics/bricks/bricks.hpp)) on three axes (transport / source / elliptic), the scenario names living on the application side. Each consumer receives a compact `ProviderValues<N>` plan resolved from owner-qualified `ComponentKey`s; the core reserves no physical auxiliary slots. The geometry (cartesian / polar / embedded level set) is a config axis of the mesh, not of the model.
 
 **Numerics / discretization.** The local numerical logic: Riemann flux ([`include/pops/numerics/fv/numerical_flux.hpp`](../include/pops/numerics/fv/numerical_flux.hpp): Rusanov / HLL / HLLC / Roe, `POPS_HD` policies), MUSCL + WENO5-Z reconstruction ([`include/pops/numerics/fv/reconstruction.hpp`](../include/pops/numerics/fv/reconstruction.hpp)), the elliptic operator ([`include/pops/numerics/elliptic/`](../include/pops/numerics/elliptic/)) and the logical BCs ([`include/pops/mesh/boundary/physical_bc.hpp`](../include/pops/mesh/boundary/physical_bc.hpp)). We distinguish the point-wise policies (flux, reconstruction, stencil: they take states, see no container) from the grid operators (`assemble_rhs`, [`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp)) which loop over a `Box` via a local view `Array4` but ignore the decomposition into boxes/ranks and the backend. The geometry variants are purely additive: [`spatial_operator_eb.hpp`](../include/pops/numerics/spatial/embedded_boundary/operator.hpp) (cut-cell) and [`spatial_operator_polar.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp), the cartesian remaining bit-identical.
 
@@ -496,13 +496,13 @@ sequenceDiagram
     Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
     Runtime->>EllipticSolver: exécute les noeuds solve du Program
     EllipticSolver->>EllipticSolver: assemble le second membre (somme des q_b n_b) puis resout Poisson pour phi
-    EllipticSolver-->>Runtime: renvoie aux (phi, grad phi, et B_z ou T_e si declares)
+    EllipticSolver-->>Runtime: publie les ComponentKey de sortie (potentiel et gradients exact-rank)
     Runtime->>Runtime: propose dt via la StepStrategy liée
 
     loop noeuds du graphe temporel explicite / implicite
         Runtime->>Executor: évalue le noeud avec ses handles qualifiés
         loop étages et sous-pas déclarés dans Program
-            Executor->>SpatialOperator: fill_ghosts(U) puis assemble_rhs(U, aux)
+            Executor->>SpatialOperator: fill_ghosts(U, providers) puis assemble_rhs(U, ProviderValues)
             SpatialOperator->>SpatialOperator: reconstruction limitee puis flux numerique
             SpatialOperator-->>Executor: assemble le residu R (moins divergence du flux, plus source)
             Executor->>Executor: combinaison du graphe (mise à jour provisoire)

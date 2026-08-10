@@ -593,6 +593,7 @@ struct PreparedAmrSystemBlock {
   VariableSet primitive_variables{};
   double gamma = 1.0;
   Extent<Dim> ghosts{};
+  int reconstruction_order = 1;
   int substeps = 1;
   int stride = 1;
   std::string time_route;
@@ -703,13 +704,14 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   result.primitive_variables = Model::primitive_vars();
   result.gamma = request.gamma;
   result.ghosts = required_ghosts;
+  result.reconstruction_order = Reconstruction::formal_order;
   result.substeps = request.substeps;
   result.stride = request.stride;
   result.time_route = request.routes.time;
 
   ExactContractBuilder package_contract;
   package_contract.text("pops.prepared-generated-amr-system-block")
-      .scalar(std::uint32_t{3})
+      .scalar(std::uint32_t{4})
       .scalar(std::int32_t{Dim})
       .text(name)
       .text(provider_identity)
@@ -718,6 +720,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
       .text(cut_cell_provider_identity)
       .scalar(std::int32_t{Model::n_vars})
       .scalar(std::int32_t{provider_count})
+      .scalar(std::int32_t{Reconstruction::formal_order})
       .scalar(request.gamma)
       .scalar(std::int32_t{request.substeps})
       .scalar(std::int32_t{request.stride})

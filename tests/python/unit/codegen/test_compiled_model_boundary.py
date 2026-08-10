@@ -24,7 +24,7 @@ class _SourceModel:
         self.returned_hash = returned_hash
         self.extra = extra
         self.module = Module("compiled_model_boundary")
-        self.module.state_space("U", ("u",), roles={"u": "Scalar"})
+        self.module.state_space("U", ("u",), roles={"u": "scalar"})
 
     def _model_hash(self):
         return "structural:%s" % self.name
@@ -66,7 +66,7 @@ def _compiled(*, target="system", model_hash="structural:source", identity=None)
         so_path="<compiled-model-boundary>",
         backend="production",
         cons_names=("u",),
-        cons_roles=("Scalar",),
+        cons_roles=("scalar",),
         prim_names=("u",),
         n_vars=1,
         gamma=None,
@@ -201,7 +201,7 @@ def test_subclass_noop_seal_cannot_bypass_canonical_boundary():
 
     source = _SourceModel()
     loader = NoOpSealLoader(
-        "<noop-seal>", "production", ("u",), ("Scalar",), ("u",),
+        "<noop-seal>", "production", ("u",), ("scalar",), ("u",),
         1, None, 0, {}, {"cpu": True}, "abi", source._model_hash(), "c++", "c++23",
         2,
         definition_identity=model_compile_identity(source),

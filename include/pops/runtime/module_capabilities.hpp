@@ -181,14 +181,16 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
     const ModuleCapabilities& caps, const RuntimeEnvironmentReport& env) {
   const bool mpi = caps.supports_mpi;
   const bool gpu = caps.supports_gpu;
-  const std::string amr_note = "hierarchy depth is resource-policy controlled; native ratio=2";
+  const std::string amr_note =
+      "hierarchy depth and transition ratios are selected by the authenticated AMR hierarchy";
   return {
       capability_route("supports_uniform", status_from_bool(caps.supports_uniform),
                        "single-level Uniform layout", "uniform", "module", "host", mpi, gpu,
                        "layout=Uniform", "layout=Uniform"),
       capability_route("supports_amr", status_from_bool(caps.supports_amr), amr_note, "amr",
                        "production", "host", mpi, gpu, "layout=AMR",
-                       "backend='production' target='amr_system'", "use Uniform or AMR(ratio=2)"),
+                       "backend='production' target='amr_system'",
+                       "use Uniform or an AMR hierarchy with explicit transition ratios"),
       capability_route("supports_mpi", status_from_bool(caps.supports_mpi),
                        "MPI transport is compiled only when POPS_USE_MPI=ON", kLayoutRouteTokensCsv,
                        "production", "mpi", mpi, gpu, "platform=MPI", "serial/OpenMP build",
@@ -220,8 +222,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "exact native-rank single-level Cartesian layout; polar is a rank-2 provider", "uniform",
           "module", "host", mpi, gpu),
       capability_route("layout:AMR", status_from_bool(caps.supports_amr),
-                       "resource-policy-controlled depth and native ratio=2", "amr", "production",
-                       "host", mpi, gpu, "AMR(ratio!=2)", "AMR(ratio=2)",
+                       "resource-policy-controlled depth and hierarchy-selected transition ratios",
+                       "amr", "production", "host", mpi, gpu,
+                       "AMR with an unauthenticated transition ratio",
+                       "AMR with explicit hierarchy transition ratios",
                        "use Uniform or the native AMR envelope"),
       capability_route("spatial:finite_volume", "available",
                        "exact native-rank finite-volume production route", kLayoutRouteTokensCsv,
@@ -243,8 +247,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route(
           "reconstruction:weno5", "available",
-          "ghost_depth=3; uniform and ratio-2 AMR routes use the compile-selected native rank; "
-          "AMR selects the "
+          "ghost_depth=3; uniform and hierarchy-selected AMR routes use the compile-selected "
+          "native rank; AMR selects the "
           "conservative order-5 coarse/fine provider for cell averages from resolved capabilities",
           kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("limiter:mc", "available",
@@ -260,8 +264,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "native multigrid/FAC route; supports variable epsilon", "amr", "production",
                        "host", mpi, gpu),
       capability_route("elliptic:fft", "available",
-                       "exact Dim=2, periodic, constant coefficient, power-of-two uniform grid, "
-                       "canonical ordered MPI slabs",
+                       "exact Cartesian Dim in {1,2,3}, periodic, constant coefficient, canonical "
+                       "ordered MPI slabs; radix-2 fast path with diagnosed direct-DFT fallback",
                        "uniform", "production", "host", mpi, gpu),
       capability_route("elliptic:mg_fac_defaults", "partial",
                        "geometric MG/FAC defaults and debug diagnostics are still header-local; "
@@ -276,8 +280,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "resolved artifact retains exactly one dimension in {1,2,3}",
                        kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("amr:refinement_ratio", "partial",
-                       "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
-                       "validate_amr_refinement_ratio() rejects other ratios",
+                       "AMR transition ratios are exact hierarchy properties; the native runtime "
+                       "does not advertise a process-global ratio invariant",
                        "amr", "production", "host", mpi, gpu),
       capability_route("parallel:mpi_world_communicator", status_from_bool(caps.supports_mpi),
                        mpi ? "exact MPI_COMM_WORLD execution is proved by the native module and "

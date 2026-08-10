@@ -136,8 +136,8 @@ struct InjectionTransfer {
       std::int64_t quotient = relative / ratio[axis];
       if (relative % ratio[axis] < 0)
         --quotient;
-      parent[axis] = static_cast<int>(
-          static_cast<std::int64_t>(mapping.coarse_origin[axis]) + quotient);
+      parent[axis] =
+          static_cast<int>(static_cast<std::int64_t>(mapping.coarse_origin[axis]) + quotient);
     }
     fine(fine_index, 0) = coarse(parent, 0);
   }
@@ -159,9 +159,8 @@ void execute_transfers(const std::vector<CellTransfer<Dim>>& transfers) {
 
 template <int Dim>
 void require_ratio(const ::pops::amr::RefinementRatio<Dim>& ratio) {
-  for (int axis = 0; axis < Dim; ++axis)
-    if (ratio[axis] < 2)
-      throw std::invalid_argument("composite FAC requires refinement ratios of at least two");
+  if (ratio.is_identity())
+    throw std::invalid_argument("composite FAC transition must refine at least one axis");
 }
 
 }  // namespace pops::elliptic::mg::fac_detail

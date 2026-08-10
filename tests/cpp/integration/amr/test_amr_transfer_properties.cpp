@@ -160,6 +160,110 @@ struct InjectionError {
 };
 
 template <int Dim>
+struct FillNodeSource {
+  pops::FieldView<pops::Real, Dim> values{};
+  pops::Index<Dim> origin{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& node) const {
+    pops::Real value = pops::Real(0.6);
+    for (int axis = 0; axis < Dim; ++axis)
+      value += pops::Real(0.17 * (axis + 1)) * pops::Real(node[axis] - origin[axis]);
+    values(node) = value;
+  }
+};
+
+template <int Dim>
+struct NodeError {
+  pops::FieldView<const pops::Real, Dim> values{};
+  pops::amr::RefinementRatio<Dim> ratio{};
+  transfer::IndexMapping<Dim> mapping{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& node) const {
+    pops::Real expected = pops::Real(0.6);
+    for (int axis = 0; axis < Dim; ++axis) {
+      const pops::Real coordinate =
+          pops::Real(node[axis] - mapping.fine_origin[axis]) / pops::Real(ratio[axis]);
+      expected += pops::Real(0.17 * (axis + 1)) * coordinate;
+    }
+    const pops::Real difference = values(node) - expected;
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
+struct FillFaceSource {
+  pops::FieldView<pops::Real, Dim> values{};
+  pops::Index<Dim> origin{};
+  int normal_axis = 0;
+
+  POPS_HD void operator()(const pops::Index<Dim>& face) const {
+    pops::Real value = pops::Real(0.25 * (normal_axis + 1));
+    for (int axis = 0; axis < Dim; ++axis) {
+      const pops::Real coordinate = pops::Real(face[axis] - origin[axis]);
+      value += pops::Real(0.09 * (normal_axis + 1) * (axis + 1)) * coordinate;
+      value += pops::Real(0.007 * (axis + 1)) * coordinate * coordinate;
+    }
+    values(face) = value;
+  }
+};
+
+template <int Dim>
+struct FaceDivergenceError {
+  std::array<pops::FieldView<const pops::Real, Dim>, Dim> coarse{};
+  std::array<pops::FieldView<const pops::Real, Dim>, Dim> fine{};
+  pops::amr::RefinementRatio<Dim> ratio{};
+  transfer::IndexMapping<Dim> mapping{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& fine_cell) const {
+    pops::Index<Dim> parent{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int relative = fine_cell[axis] - mapping.fine_origin[axis];
+      parent[axis] = mapping.coarse_origin[axis] +
+                     static_cast<int>(transfer::detail::floor_div_positive(relative, ratio[axis]));
+    }
+    pops::Real coarse_divergence = pops::Real(0);
+    pops::Real fine_divergence = pops::Real(0);
+    for (int axis = 0; axis < Dim; ++axis) {
+      pops::Index<Dim> coarse_upper = parent;
+      pops::Index<Dim> fine_upper = fine_cell;
+      ++coarse_upper[axis];
+      ++fine_upper[axis];
+      coarse_divergence += coarse[axis](coarse_upper) - coarse[axis](parent);
+      fine_divergence += pops::Real(ratio[axis]) * (fine[axis](fine_upper) - fine[axis](fine_cell));
+    }
+    const pops::Real difference = fine_divergence - coarse_divergence;
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
+struct FillTemporalSources {
+  pops::FieldView<pops::Real, Dim> older{};
+  pops::FieldView<pops::Real, Dim> newer{};
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    pops::Real coordinate = pops::Real(0);
+    for (int axis = 0; axis < Dim; ++axis)
+      coordinate += pops::Real(axis + 1) * pops::Real(cell[axis]);
+    older(cell) = pops::Real(1) + coordinate;
+    newer(cell) = pops::Real(7) - pops::Real(0.5) * coordinate;
+  }
+};
+
+template <int Dim>
+struct TemporalError {
+  pops::FieldView<const pops::Real, Dim> older{};
+  pops::FieldView<const pops::Real, Dim> newer{};
+  pops::FieldView<const pops::Real, Dim> candidate{};
+
+  POPS_HD pops::Real operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real expected = older(cell) + pops::Real(0.25) * (newer(cell) - older(cell));
+    const pops::Real difference = candidate(cell) - expected;
+    return difference < pops::Real(0) ? -difference : difference;
+  }
+};
+
+template <int Dim>
 void prove_live_runtime_transfers() {
   auto runtime = make_runtime<Dim>();
   auto& parent = runtime.hierarchy().state(0);
@@ -213,6 +317,93 @@ void prove_live_runtime_transfers() {
   time_amr::execute_prepared_transfer(fill_patch);
   EXPECT_LT(pops::for_each_cell_reduce_max(
                 ghost_region, ChildError<Dim>{std::as_const(child.fab(0)).view(), ratio, mapping}),
+            pops::Real(2e-13));
+
+  const auto fifth_order_fill = time_amr::prepare_fifth_order_fill_patch(
+      runtime, 0, std::as_const(parent.fab(0)).view(), child.fab(0).view(), child.box(0), mapping);
+  EXPECT_EQ(fifth_order_fill.kind(),
+            transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation);
+  time_amr::execute_prepared_transfer(fifth_order_fill);
+  EXPECT_LT(pops::for_each_cell_reduce_max(
+                child.box(0), ChildError<Dim>{std::as_const(child.fab(0)).view(), ratio, mapping}),
+            pops::Real(3e-13));
+
+  pops::Box<Dim> coarse_nodes = parent.box(0);
+  pops::Box<Dim> fine_nodes = child.box(0);
+  for (int axis = 0; axis < Dim; ++axis) {
+    ++coarse_nodes.hi[axis];
+    ++fine_nodes.hi[axis];
+  }
+  pops::Fab<Dim> parent_nodes(coarse_nodes, 1);
+  pops::Fab<Dim> child_nodes(fine_nodes, 1);
+  pops::for_each_cell(coarse_nodes,
+                      FillNodeSource<Dim>{parent_nodes.view(), mapping.coarse_origin});
+  const auto node_transfer = time_amr::prepare_node_multilinear(
+      runtime, 0, std::as_const(parent_nodes).view(), child_nodes.view(), fine_nodes, mapping);
+  EXPECT_EQ(node_transfer.kind(), transfer::TransferKind::NodeMultilinearProlongation);
+  time_amr::execute_prepared_transfer(node_transfer);
+  EXPECT_LT(pops::for_each_cell_reduce_max(
+                fine_nodes, NodeError<Dim>{std::as_const(child_nodes).view(), ratio, mapping}),
+            pops::Real(3e-13));
+
+  const pops::Box<Dim> parent_face_source = parent.fab(0).grown_box();
+  std::vector<pops::Fab<Dim>> parent_faces;
+  std::vector<pops::Fab<Dim>> child_faces;
+  parent_faces.reserve(Dim);
+  child_faces.reserve(Dim);
+  std::array<pops::FieldView<const pops::Real, Dim>, Dim> parent_face_views{};
+  std::array<pops::FieldView<pops::Real, Dim>, Dim> child_face_views{};
+  for (int normal_axis = 0; normal_axis < Dim; ++normal_axis) {
+    pops::Box<Dim> fine_faces = child.box(0);
+    ++fine_faces.hi[normal_axis];
+    parent_faces.emplace_back(parent_face_source, 1);
+    child_faces.emplace_back(fine_faces, 1);
+    pops::for_each_cell(
+        parent_face_source,
+        FillFaceSource<Dim>{parent_faces.back().view(), mapping.coarse_origin, normal_axis});
+  }
+  for (int axis = 0; axis < Dim; ++axis) {
+    parent_face_views[axis] = std::as_const(parent_faces[static_cast<std::size_t>(axis)]).view();
+    child_face_views[axis] = child_faces[static_cast<std::size_t>(axis)].view();
+  }
+  const auto face_transfer = time_amr::prepare_divergence_preserving_faces(
+      runtime, 0, parent_face_views, child_face_views, child.box(0), mapping);
+  EXPECT_EQ(face_transfer.kind(), transfer::TransferKind::DivergencePreservingFaceProlongation);
+  time_amr::execute_prepared_transfer(face_transfer);
+  std::array<pops::FieldView<const pops::Real, Dim>, Dim> fine_face_views{};
+  for (int axis = 0; axis < Dim; ++axis)
+    fine_face_views[axis] = std::as_const(child_faces[static_cast<std::size_t>(axis)]).view();
+  EXPECT_LT(pops::for_each_cell_reduce_max(
+                child.box(0),
+                FaceDivergenceError<Dim>{parent_face_views, fine_face_views, ratio, mapping}),
+            pops::Real(3e-12));
+
+  pops::Fab<Dim> older(parent.box(0), 1);
+  pops::Fab<Dim> newer(parent.box(0), 1);
+  pops::Fab<Dim> temporal_candidate(parent.box(0), 1);
+  pops::for_each_cell(parent.box(0), FillTemporalSources<Dim>{older.view(), newer.view()});
+  const std::string spatial_contract(runtime.spatial_contract());
+  const transfer::QualifiedTemporalState older_state{
+      "test/state", spatial_contract, runtime.topology_epoch(),
+      runtime.materialization_generation(),
+      pops::amr::ClockStamp{0, 5, pops::amr::Rational(0, 1), 1.0}};
+  const transfer::QualifiedTemporalState newer_state{
+      "test/state", spatial_contract, runtime.topology_epoch(),
+      runtime.materialization_generation(),
+      pops::amr::ClockStamp{0, 5, pops::amr::Rational(1, 1), 3.0}};
+  const transfer::QualifiedTemporalState target_state{
+      "test/state", spatial_contract, runtime.topology_epoch(),
+      runtime.materialization_generation(),
+      pops::amr::ClockStamp{0, 5, pops::amr::Rational(1, 4), 1.5}};
+  const auto temporal = time_amr::prepare_linear_time_interpolation(
+      runtime, 0, std::as_const(older).view(), std::as_const(newer).view(),
+      temporal_candidate.view(), parent.box(0), older_state, newer_state, target_state);
+  EXPECT_EQ(temporal.refinement_ratio(), ratio);
+  time_amr::execute_prepared_transfer(temporal);
+  EXPECT_LT(pops::for_each_cell_reduce_max(
+                parent.box(0),
+                TemporalError<Dim>{std::as_const(older).view(), std::as_const(newer).view(),
+                                   std::as_const(temporal_candidate).view()}),
             pops::Real(2e-13));
 
   EXPECT_THROW(

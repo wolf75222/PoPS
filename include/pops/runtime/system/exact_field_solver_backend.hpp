@@ -7,12 +7,14 @@
 #include <pops/mesh/boundary/halo_exchange.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_poisson.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -99,6 +101,117 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
  private:
   std::string identity_;
   elliptic::nd::CartesianPoissonSolver<Dim> solver_;
+};
+
+/// Exact direct Cartesian periodic Poisson backend.  This adapter deliberately exposes only the
+/// common System field surface; dynamic boundary and nonlinear contracts cannot be represented by
+/// the constant-coefficient FFT operator and therefore fail closed.
+template <int Dim>
+class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
+ public:
+  static constexpr int dimension = Dim;
+  using field_type = typename ExactFieldSolverBackend<Dim>::field_type;
+  using request_type = EllipticBuildRequest<Dim>;
+
+  PoissonFftFieldSolverBackend(request_type request,
+                               std::string identity = "pops.field-solver.fft@1")
+      : identity_(std::move(identity)),
+        solver_(make_elliptic_solver<PoissonFFTSolver<Dim>>(std::move(request),
+                                                            PoissonFFTFactory<Dim>{})) {
+    if (identity_.empty())
+      throw std::invalid_argument("FFT field solver backend identity must be non-empty");
+  }
+
+  /// Allocate the stable polymorphic object before entering the solver constructor, which
+  /// duplicates MPI communicators. A rank-local allocator failure is therefore published on the
+  /// world lane while no rank owns a backend communicator.
+  static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
+      request_type request, std::string_view identity) {
+    const ExecutionLane world = ExecutionLane::world();
+    void* storage = nullptr;
+    std::optional<std::string> prepared_identity;
+    std::exception_ptr allocation_error;
+    try {
+      if (identity.empty())
+        throw std::invalid_argument("FFT field solver backend identity must be non-empty");
+      prepared_identity.emplace(identity);
+      storage = ::operator new(sizeof(PoissonFftFieldSolverBackend));
+    } catch (...) {
+      allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(allocation_error ? 1L : 0L, world.communicator()) != 0) {
+      ::operator delete(storage);
+      if (world.size() == 1 && allocation_error)
+        std::rethrow_exception(allocation_error);
+      throw std::runtime_error("FFT field solver backend allocation failed collectively");
+    }
+
+    PoissonFftFieldSolverBackend* result = nullptr;
+    try {
+      result = ::new (storage)
+          PoissonFftFieldSolverBackend(std::move(request), std::move(*prepared_identity));
+    } catch (...) {
+      ::operator delete(storage);
+      throw;
+    }
+    return std::unique_ptr<ExactFieldSolverBackend<Dim>>(result);
+  }
+
+  field_type& rhs() noexcept override { return solver_.rhs(); }
+  field_type& candidate() noexcept override { return solver_.phi(); }
+  const field_type& candidate() const noexcept override { return solver_.phi(); }
+
+  void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim>) override {
+    throw std::logic_error(
+        "FFT field solver has a fixed periodic boundary contract and rejects dynamic kernels");
+  }
+  void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const override {
+    if (kernel)
+      throw std::logic_error(
+          "FFT field solver has a fixed periodic boundary contract and rejects dynamic kernels");
+  }
+  void replace_boundary_kernel(
+      std::optional<CompiledFieldBoundaryKernel<Dim>> kernel) noexcept override {
+    if (kernel)
+      std::terminate();
+  }
+  void set_boundary_context(const FieldBoundaryExecutionContext<Dim>&) override {
+    throw std::logic_error("FFT field solver does not consume a dynamic boundary context");
+  }
+  void install_newton(FieldNewtonOptions) override {
+    throw std::logic_error("FFT field solver is a direct linear backend and rejects Newton setup");
+  }
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) override {
+    solver_.install_nullspace(std::move(plan), std::move(distribution));
+  }
+  SolveReport solve(const field_type& warm_start) override {
+    const ExecutionLane world = ExecutionLane::world();
+    std::exception_ptr copy_error;
+    try {
+      elliptic::nd::detail::copy_component(warm_start, 0, solver_.phi(), 0);
+      Kokkos::fence();
+    } catch (...) {
+      copy_error = std::current_exception();
+    }
+    if (all_reduce_max(copy_error ? 1L : 0L, world.communicator()) != 0) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "poisson_fft_warm_start_copy_failed_collectively");
+      return report;
+    }
+    return solver_.solve();
+  }
+  int maximum_iterations() const noexcept override { return 1; }
+  std::string_view provider_identity() const noexcept override { return identity_; }
+  std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
+    return {};
+  }
+
+ private:
+  std::string identity_;
+  PoissonFFTSolver<Dim> solver_;
 };
 
 template <int Dim>

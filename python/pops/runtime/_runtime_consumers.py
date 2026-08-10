@@ -4615,7 +4615,11 @@ class RuntimeOutputSnapshot:
                 "the normalized geometry has rank %d" % dimension
             )
         scale = layout.levels[level].refinement
-        native_shape = tuple(extent * scale for extent in geometry.cells)
+        if len(scale) != dimension:
+            raise ValueError("output level refinement rank differs from normalized geometry")
+        native_shape = tuple(
+            extent * scale[axis] for axis, extent in enumerate(geometry.cells)
+        )
         if geometry.cell_measure not in _NATIVE_CELL_MEASURES:
             raise NotImplementedError(
                 "scientific output does not implement normalized cell measure %s"
@@ -4634,9 +4638,12 @@ class RuntimeOutputSnapshot:
             length / extent
             for length, extent in zip(geometry.lengths, native_shape, strict=True)
         )
-        next_ratio = 0
+        next_ratio = (0,) * dimension
         if layout.adaptive and level + 1 < len(layout.levels):
-            next_ratio = layout.levels[level + 1].refinement // layout.levels[level].refinement
+            next_refinement = layout.levels[level + 1].refinement
+            next_ratio = tuple(
+                next_refinement[axis] // scale[axis] for axis in range(dimension)
+            )
         if layout.adaptive:
             native = cast(
                 Mapping[str, Any],

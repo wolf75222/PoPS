@@ -1,9 +1,10 @@
 """pops.lib.models -- provided physical models (pure facade compositions).
 
-Currently the moment models (:class:`pops.lib.models.moments.HyQMOM15` /
-:class:`pops.lib.models.moments.Gaussian`) and the electrostatic-Lorentz linearization
-authoring (:func:`author_electrostatic_lorentz`, ADC-637) the condensed-implicit macro
-eliminates generically.
+Currently this contains the explicitly 2V/2D moment specializations
+(:class:`pops.lib.models.moments.HyQMOM15` / :class:`pops.lib.models.moments.Gaussian`) and
+the exact-rank Cartesian electrostatic-Lorentz authoring helper
+(:func:`author_electrostatic_lorentz`, ADC-637) consumed by the generic condensed-implicit
+operator path.
 
 DEFER (no generator to wrap): ``lib.models.fluids`` (Euler / IsothermalEuler) and
 ``lib.models.mhd`` (IdealMHD) -- there is no ``build_euler`` / ``build_mhd`` generator in

@@ -94,8 +94,9 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
     const std::string& riemann, const std::string& reconstruction, const std::string& time,
     double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0) {
   static_assert(Dim >= 1 && Dim <= 3);
-  static_assert(requires { Model::dimension; },
-                "a generated System model must publish its exact spatial dimension");
+  static_assert(
+      requires { Model::dimension; },
+      "a generated System model must publish its exact spatial dimension");
   static_assert(Model::dimension == Dim,
                 "generated model dimension differs from the target System specialization");
   static_assert(requires {
@@ -115,16 +116,19 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
                                    static_cast<Real>(positivity_floor)};
   compiled_system_detail::validate_routes(routes);
   using Request = CompiledSystemBlockPreparation<Dim, Model>;
-  static_assert(requires(Request request) {
-    {
-      prepare_exact_system_block(std::move(request))
-    } -> std::same_as<PreparedSystemBlock<Dim>>;
-  }, "generated model package lacks prepare_exact_system_block for its exact native dimension");
+  static_assert(
+      requires(Request request) {
+        {
+          prepare_exact_system_block(std::move(request))
+        } -> std::same_as<PreparedSystemBlock<Dim>>;
+      }, "generated model package lacks prepare_exact_system_block for its exact native dimension");
 
-  const auto* provider_storage = system.prepared_block_provider_storage_groups();
+  const runtime::system::AuxiliaryStorageGroups<Dim>* provider_storage = nullptr;
   const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>* provider_plan = nullptr;
-  if constexpr (provider_count_for<Model, Dim>() > 0)
+  if constexpr (provider_count_for<Model, Dim>() > 0) {
+    provider_storage = system.prepared_block_provider_storage_groups();
     provider_plan = &system.prepared_auxiliary_consumer_plan(name);
+  }
   PreparedSystemBlock<Dim> prepared = compiled_system_detail::invoke_package_preparer(
       Request{name, std::move(model), std::move(routes), system.prepared_block_geometry(),
               BoundaryTopology<Dim>::axis_periodic(system.prepared_block_periodicity()),
@@ -158,13 +162,12 @@ void add_compiled_model(System<Dim>& system, const std::string& name, Model mode
                         const std::string& riemann = "rusanov",
                         const std::string& reconstruction = "conservative",
                         const std::string& time = "explicit",
-                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
-                        int substeps = 1, bool evolve = true, int stride = 1,
-                        double positivity_floor = 0.0) {
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
+                        bool evolve = true, int stride = 1, double positivity_floor = 0.0) {
   install_prepared_block(
-      system, prepare_compiled_system_block<Dim>(
-                  system, name, std::move(model), limiter, riemann, reconstruction, time, gamma,
-                  substeps, evolve, stride, positivity_floor));
+      system, prepare_compiled_system_block<Dim>(system, name, std::move(model), limiter, riemann,
+                                                 reconstruction, time, gamma, substeps, evolve,
+                                                 stride, positivity_floor));
 }
 
 }  // namespace pops

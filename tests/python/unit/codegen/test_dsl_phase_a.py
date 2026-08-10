@@ -118,7 +118,7 @@ def pure_python_checks():
 
     state = m.module.state_spaces()["U"]
     assert state.components == ("rho", "rho_u", "rho_v", "E")
-    assert state.roles["rho"] == "Density" and state.roles["E"] == "Energy"
+    assert state.roles["rho"] == "density" and state.roles["E"] == "energy"
     print("OK  etat final : composantes et roles physiques types")
 
     # FiniteVolume : riemann (PAS flux) -> Spatial.flux ; variables -> recon
@@ -135,7 +135,7 @@ def pure_python_checks():
     sys = System(n=16, periodicity=(True, True))
     fake = CompiledModel(so_path="/inexistant.so", backend="production",
                          cons_names=["rho", "rho_u", "rho_v", "E"],
-                         cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
+                         cons_roles=["density", "momentum:0", "momentum:1", "energy"],
                          prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
                          n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
                          abi_key="", model_hash="h", cxx="c++", std="c++20",

@@ -14,6 +14,8 @@ import pytest
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
+from pops.frames import X_AXIS
+from pops.physics import Momentum
 from pops.runtime._system import AmrSystem  # private engine seam exercised by this guard
 
 
@@ -23,7 +25,7 @@ def _compiled_amr_metadata(*, so_path: str = "/nonexistent/pops-amr-guard.so") -
         so_path=so_path,
         backend="production",
         cons_names=["rho", "rho_u", "rho_v", "E"],
-        cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
+        cons_roles=["density", "momentum:0", "momentum:1", "energy"],
         prim_names=["rho", "u", "v", "p"],
         n_vars=4,
         gamma=1.4,
@@ -59,7 +61,7 @@ def test_compiled_amr_guard_rejects_untransported_stride(time):
     ("time", "selector"),
     [
         (engine.IMEX(implicit_vars=["rho_u"]), "implicit_vars"),
-        (engine.IMEX(implicit_roles=["momentum_x"]), "implicit_roles"),
+        (engine.IMEX(implicit_roles=[Momentum(X_AXIS)]), "implicit_roles"),
     ],
 )
 def test_compiled_amr_guard_rejects_untransported_partial_imex_mask(time, selector):

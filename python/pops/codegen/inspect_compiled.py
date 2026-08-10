@@ -46,7 +46,6 @@ class _MemoryRuntimeContext:
 
     dimension: int
     real_bytes: int
-    amr_refinement_ratio: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,11 +55,11 @@ class _MemoryLayoutContext:
     kind: str
     dimension: int
     max_levels: int
-    ratio: int | None
+    transition_ratios: tuple[tuple[int, ...], ...]
 
 
 def _native_memory_context() -> _MemoryRuntimeContext:
-    """Read the native precision and AMR facts; an absolute estimate has no source-only mode."""
+    """Read native precision/rank facts; an absolute estimate has no source-only mode."""
     mod = None
     for name in ("_pops", "pops._pops"):
         try:
@@ -89,7 +88,7 @@ def _native_memory_context() -> _MemoryRuntimeContext:
             field="runtime_environment_report") from exc
 
     values = {}
-    for key in ("dimension", "real_bytes", "amr_refinement_ratio"):
+    for key in ("dimension", "real_bytes"):
         value = report.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise MemoryEstimateCapabilityError(
@@ -690,30 +689,38 @@ def _layout_context(layout: Any, context: _MemoryRuntimeContext) -> _MemoryLayou
             raise MemoryEstimateCapabilityError(
                 "estimate_memory uniform layout must explicitly report max_levels=1 and supports_amr=False",
                 field="layout.max_levels", actual=max_levels)
-        return _MemoryLayoutContext(kind, dimension, max_levels, None)
+        return _MemoryLayoutContext(kind, dimension, max_levels, ())
 
     ratios = capabilities.get("transition_ratios")
     if not isinstance(ratios, (tuple, list)) or len(ratios) != max_levels - 1:
         raise MemoryEstimateCapabilityError(
             "estimate_memory AMR layout requires transition_ratios for every level transition",
             field="layout.transition_ratios", actual=ratios)
-    normalized_ratios = tuple(
-        _positive_int(value, field="layout.transition_ratios[%d]" % index)
-        for index, value in enumerate(ratios))
-    if max_levels == 1:
-        return _MemoryLayoutContext(kind, dimension, max_levels, None)
-    declared_ratio = capabilities.get("ratio")
-    ratio = (normalized_ratios[0] if declared_ratio is None
-             else _positive_int(declared_ratio, field="layout.ratio"))
-    if any(value != ratio for value in normalized_ratios):
-        raise MemoryEstimateCapabilityError(
-            "estimate_memory requires one normalized AMR ratio; transition_ratios=%r disagree with ratio=%d"
-            % (normalized_ratios, ratio), field="layout.transition_ratios", actual=normalized_ratios)
-    if ratio != context.amr_refinement_ratio:
-        raise MemoryEstimateCapabilityError(
-            "estimate_memory AMR ratio=%d disagrees with native ratio=%d" % (
-                ratio, context.amr_refinement_ratio), field="layout.ratio", actual=ratio)
-    return _MemoryLayoutContext(kind, dimension, max_levels, ratio)
+    normalized_ratios = []
+    for transition, row in enumerate(ratios):
+        if not isinstance(row, (tuple, list)) or len(row) != dimension:
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory requires an exact-rank ratio for every AMR transition",
+                field="layout.transition_ratios[%d]" % transition,
+                actual=row,
+            )
+        ratio = tuple(
+            _positive_int(
+                value,
+                field="layout.transition_ratios[%d][%d]" % (transition, axis),
+            )
+            for axis, value in enumerate(row)
+        )
+        if not any(value > 1 for value in ratio):
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory AMR transition must refine at least one axis",
+                field="layout.transition_ratios[%d]" % transition,
+                actual=ratio,
+            )
+        normalized_ratios.append(ratio)
+    return _MemoryLayoutContext(
+        kind, dimension, max_levels, tuple(normalized_ratios)
+    )
 
 
 def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
@@ -829,33 +836,38 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     """A CONSERVATIVE AMR patch budget from the public layout-capability protocol (no bind).
 
     Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra
-    patch budget (``amr_patch_bytes`` is ``None``). For an AMR layout with ``max_levels=L`` and
-    transition ratio ``r`` the
-    worst case fully refines every level: a level ``k`` covering the whole domain at refinement
-    ``r^k`` has ``r^(Dim*k)`` times the base cells. Summing the geometric series over the refined
-    levels (1..L-1) gives the extra fine-grid footprint on top of the base level. This is an UPPER
-    bound (real regrids refine a fraction of the domain); a tight figure needs a bind."""
+    patch budget (``amr_patch_bytes`` is ``None``). For AMR, every transition carries one exact
+    axis ratio. The worst case fully refines every level, so the level multiplier is the product of
+    its cumulative per-axis refinements. Summing those multipliers over levels ``1..L-1`` gives the
+    extra fine-grid footprint on top of the base level. This is an UPPER bound (real regrids refine
+    a fraction of the domain); a tight figure needs a bind."""
     layout_context = _layout_context(layout, context)
     if layout_context.kind == "uniform":
         return "uniform", None, []
     max_levels = layout_context.max_levels
     if max_levels <= 1:
         return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
-    ratio = layout_context.ratio
-    assert ratio is not None  # established by _layout_context for a refining AMR hierarchy
-    # Sum r^(Dim*k) for k = 1 .. max_levels-1 (full-domain refinement at every level).
-    refine_factor = sum(
-        ratio ** (layout_context.dimension * k) for k in range(1, max_levels))
+    ratios = layout_context.transition_ratios
+    cumulative = [1] * layout_context.dimension
+    level_factors = []
+    for ratio in ratios:
+        cumulative = [
+            cumulative[axis] * ratio[axis]
+            for axis in range(layout_context.dimension)
+        ]
+        level_factors.append(math.prod(cumulative))
+    refine_factor = sum(level_factors)
     # Each refined cell carries the same per-cell footprint as the base (state + one elliptic field).
     per_cell_levels = state_field + n_elliptic * cell_field
     amr_bytes = refine_factor * per_cell_levels
     notes = [
         "AMR estimate is CONSERVATIVE: assumes EVERY level (1..%d) fully refines the whole domain "
-        "at ratio %d (worst case); a real regrid tags a fraction of cells, so the true footprint is "
+        "at exact-ranked transition ratios %s (worst case); a real regrid tags a fraction of cells, "
+        "so the true footprint is "
         "smaller. A tight AMR figure needs a bind (the regrid pattern is data-dependent)."
-        % (max_levels - 1, ratio),
-        "AMR refine factor (sum of r^(%d*k), k=1..%d) = %d base-grid equivalents"
-        % (layout_context.dimension, max_levels - 1, refine_factor),
+        % (max_levels - 1, ratios),
+        "AMR refine factor (sum of exact cumulative axis products over levels 1..%d) = %d "
+        "base-grid equivalents" % (max_levels - 1, refine_factor),
     ]
     return "amr", amr_bytes, notes
 

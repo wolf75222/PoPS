@@ -123,6 +123,9 @@ RESTRICTION = TransferOperation("restriction")
 COARSE_FINE_FILL = TransferOperation("coarse_fine_fill")
 TEMPORAL_INTERPOLATION = TransferOperation("temporal_interpolation")
 
+ENUMERATED_REFINEMENT_RATIOS = "enumerated"
+HIERARCHY_EXACT_RANK = "hierarchy_exact_rank"
+
 
 @dataclass(frozen=True, slots=True)
 class TransferKey:
@@ -174,7 +177,8 @@ class TransferCapabilities:
     dimensions: tuple[int, ...] = (1, 2, 3)
     conservative: bool = False
     temporal: bool = False
-    refinement_ratios: tuple[int, ...] = (2,)
+    refinement_ratios: tuple[int, ...] = ()
+    refinement_ratio_policy: str = HIERARCHY_EXACT_RANK
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -192,11 +196,20 @@ class TransferCapabilities:
             raise ValueError("TransferCapabilities.dimensions must be unique values from {1,2,3}")
         if type(self.conservative) is not bool or type(self.temporal) is not bool:
             raise TypeError("TransferCapabilities flags must be exact bool values")
+        if self.refinement_ratio_policy not in {
+            ENUMERATED_REFINEMENT_RATIOS, HIERARCHY_EXACT_RANK,
+        }:
+            raise ValueError("unsupported TransferCapabilities.refinement_ratio_policy")
         ratios = tuple(self.refinement_ratios)
-        if not ratios or any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 2 for value in ratios
-        ):
-            raise ValueError("TransferCapabilities.refinement_ratios must be integers >= 2")
+        if self.refinement_ratio_policy == HIERARCHY_EXACT_RANK:
+            if ratios:
+                raise ValueError(
+                    "hierarchy_exact_rank capabilities cannot enumerate refinement ratios")
+        elif not ratios or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in ratios
+        ) or not any(value > 1 for value in ratios):
+            raise ValueError(
+                "enumerated refinement ratios require integers >= 1 and one value > 1")
         object.__setattr__(self, "ghost_depth", ghost)
         object.__setattr__(self, "dimensions", tuple(sorted(dimensions)))
         object.__setattr__(self, "refinement_ratios", tuple(sorted(set(ratios))))
@@ -217,9 +230,10 @@ class TransferCapabilities:
                     strict=True,
                 )
             )
-            and all(
-                ratio in self.refinement_ratios
-                for ratio in requirement.accuracy.refinement_ratio
+            and (
+                self.refinement_ratio_policy == HIERARCHY_EXACT_RANK
+                or all(ratio in self.refinement_ratios
+                       for ratio in requirement.accuracy.refinement_ratio)
             )
             and (not requirement.accuracy.conservative or self.conservative)
             and (
@@ -235,6 +249,7 @@ class TransferCapabilities:
             "dimensions": list(self.dimensions),
             "conservative": self.conservative,
             "temporal": self.temporal,
+            "refinement_ratio_policy": self.refinement_ratio_policy,
             "refinement_ratios": list(self.refinement_ratios),
         }
 
@@ -543,8 +558,8 @@ class AccuracyRequirement:
         ):
             raise ValueError("AccuracyRequirement.ghost_depth is incompatible with dimension")
         if len(ratio) not in (1, self.dimension) or any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 2 for value in ratio
-        ):
+            isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in ratio
+        ) or not any(value > 1 for value in ratio):
             raise ValueError("AccuracyRequirement.refinement_ratio is incompatible with dimension")
         if type(self.conservative) is not bool or type(self.temporal) is not bool:
             raise TypeError("AccuracyRequirement flags must be exact bool values")

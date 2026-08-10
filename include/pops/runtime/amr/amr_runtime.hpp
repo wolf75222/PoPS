@@ -405,7 +405,9 @@ class AmrRuntime {
         break;
       case ::pops::amr::transfer::TransferKind::LinearProlongation:
       case ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation:
+      case ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation:
       case ::pops::amr::transfer::TransferKind::ConstantInjection:
+      case ::pops::amr::transfer::TransferKind::NodeMultilinearProlongation:
         if (source_level + 1 != destination_level)
           throw std::invalid_argument(
               "AMR interpolation must transfer from one parent to its child");

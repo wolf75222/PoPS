@@ -449,13 +449,12 @@ def test_checkpoint_spatial_schema_refuses_padding_and_parallel_2d_keys():
         inspect_checkpoint_spatial_contract(payload)
 
 
-def test_checkpoint_install_expands_normalized_isotropic_ratios_to_exact_dim_vectors():
+def test_checkpoint_install_refuses_unresolved_scalar_ratio_metadata():
     native = _native_spatial_layout(3, (2, 3, 4))
-    contract = CheckpointSpatialContract.from_native_layout(
-        native, transition_ratios=(2, 3)
-    )
-
-    assert contract.refinement_ratios == ((2, 2, 2), (3, 3, 3))
+    with pytest.raises(TypeError, match="already be an exact-rank axis vector"):
+        CheckpointSpatialContract.from_native_layout(
+            native, transition_ratios=(2, 3)
+        )
 
 
 def test_checkpoint_install_requires_native_products_to_match_before_publishing_authority():

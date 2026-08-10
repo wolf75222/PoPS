@@ -152,22 +152,46 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
         raise TypeError("layout capability supports_amr must be bool")
     raw_ratios = capabilities.get("transition_ratios", ())
     if isinstance(raw_ratios, (str, bytes)):
-        raise TypeError("layout transition_ratios must be an ordered integer sequence")
+        raise TypeError("layout transition_ratios must be an ordered sequence of axis vectors")
     try:
-        ratios = tuple(raw_ratios)
+        raw_rows = tuple(raw_ratios)
     except TypeError as exc:
-        raise TypeError("layout transition_ratios must be an ordered integer sequence") from exc
+        raise TypeError(
+            "layout transition_ratios must be an ordered sequence of axis vectors"
+        ) from exc
     if not adaptive and count == 1:
-        ratios = ()
-    if len(ratios) != max(0, count - 1) or any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 2
-            for value in ratios):
+        raw_rows = ()
+    if len(raw_rows) != max(0, count - 1):
         raise ValueError(
-            "adaptive layout capabilities require one transition ratio >= 2 per level transition"
+            "adaptive layout capabilities require one exact-rank ratio per level transition"
         )
-    refinements = [1]
+    ratios = []
+    for transition, row in enumerate(raw_rows):
+        if isinstance(row, (str, bytes)):
+            raise TypeError(
+                "layout transition_ratios[%d] must be an axis vector" % transition
+            )
+        try:
+            ratio = tuple(row)
+        except TypeError as exc:
+            raise TypeError(
+                "layout transition_ratios[%d] must be an axis vector" % transition
+            ) from exc
+        if len(ratio) != geometry.dimension or any(
+            type(value) is not int or value < 1 for value in ratio
+        ) or not any(value > 1 for value in ratio):
+            raise ValueError(
+                "layout transition_ratios[%d] must contain %d positive integers and refine "
+                "at least one axis" % (transition, geometry.dimension)
+            )
+        ratios.append(ratio)
+    ratios = tuple(ratios)
+    refinements = [(1,) * geometry.dimension]
     for ratio in ratios:
-        refinements.append(refinements[-1] * ratio)
+        previous = refinements[-1]
+        refinements.append(tuple(
+            previous[axis] * ratio[axis] for axis in range(geometry.dimension)
+        ))
     levels = tuple(LayoutLevel(index, refinement)
                    for index, refinement in enumerate(refinements))
     descriptor_name = getattr(descriptor, "name", type(descriptor).__name__)

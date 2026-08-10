@@ -367,6 +367,7 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_EQ(prepared.name, "tracer");
   EXPECT_EQ(prepared.ncomp, 1);
   EXPECT_EQ(prepared.provider_components, 0);
+  EXPECT_EQ(prepared.reconstruction_order, 2);
   EXPECT_EQ(prepared.substeps, 2);
   EXPECT_EQ(prepared.stride, 3);
   EXPECT_EQ(prepared.time_route, "explicit");
@@ -377,6 +378,13 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
   EXPECT_FALSE(prepared.cut_cell_provider_identity.empty());
   for (int axis = 0; axis < Dim; ++axis)
     EXPECT_EQ(prepared.ghosts[axis], 2);
+
+  const auto weno = pops::prepare_compiled_amr_system_block<Dim>(
+      "weno-tracer", advection_model<Dim>(), "weno5", "rusanov", "conservative", "explicit", 1.4, 1,
+      1, 0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.tracer/physical_flux");
+  EXPECT_EQ(weno.reconstruction_order, 5);
+  for (int axis = 0; axis < Dim; ++axis)
+    EXPECT_EQ(weno.ghosts[axis], 3);
 }
 
 TEST(GeneratedAmrSystemBlock, PackageContractAuthenticatesPhysicalModelParameters) {

@@ -426,6 +426,8 @@ class AmrProgramContext {
   /// Bind one generated consumer's compact provider view for the active AMR hierarchy level.
   /// The program block is authenticated before storage lookup; the qid resolves through that
   /// level's sealed plan, so neither generated code nor this context can fall back to ``ctx.aux``.
+  /// This is a rank-local Fab hot path: collective resource refresh belongs to the enclosing
+  /// resource traversal, never to one invocation of the local provider callback.
   template <int Count>
   [[nodiscard]] ProviderStorageView<Dim, Count> provider_values_view(
       std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
@@ -436,7 +438,16 @@ class AmrProgramContext {
       (void)local_fab;
       return {};
     } else {
-      const field_type& state_field = state(program_block);
+      if (sys_block(program_block) != 0)
+        unavailable_("exact-ranked multi-block AMR state provider");
+      if (resource_epoch_ != runtime_->topology_epoch() ||
+          resource_generation_ != runtime_->materialization_generation())
+        throw std::logic_error(
+            "AMR Program provider binding requires a collectively refreshed resource traversal");
+      if (active_level_ < 0 || active_level_ >= nlev())
+        throw std::out_of_range("AMR Program provider level lies outside the live hierarchy");
+      const field_type& state_field =
+          runtime_->hierarchy().state(static_cast<std::size_t>(active_level_));
       const auto* const groups =
           facade_->prepared_amr_provider_storage_groups(active_level_);
       const auto& plan = facade_->prepared_amr_auxiliary_consumer_plan(

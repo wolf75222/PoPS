@@ -241,7 +241,7 @@ def test_geometric_mg_rich_surface():
 
 def test_geometric_mg_capabilities():
     caps = elliptic.GeometricMG().capabilities()
-    assert caps.supports("uniform") is True
+    assert caps.supports("uniform") is False
     assert caps.supports("amr") is True
     assert caps.supports("mpi") is True
     assert caps.supports("gpu") is True
@@ -293,12 +293,12 @@ def test_fft_is_a_real_solver_with_route_constraints():
     f = elliptic.FFT()
     assert f.name == "fft"
     # A real, runtime-wired solver -- not unimplemented.
-    assert f.native_id == "pops::PoissonFFTSolver<2>"
+    assert f.native_id == "pops::PoissonFFTSolver<Dim>"
     assert f.scheme == "fft"
     assert f.options() == {}
     assert f.to_data() == {"scheme": "fft"}
     status = f.available()
-    # partial = genuine route constraints (periodic / const-coeff / power-of-two), not "no symbol".
+    # partial = genuine route constraints (periodic / constant coefficient), not "no symbol".
     assert status.status == "partial"
     assert any("periodic" in m for m in status.missing)
     assert "pops.solvers.elliptic.CartesianCG()" in status.alternatives
@@ -331,8 +331,8 @@ def test_fft_rejects_amr_layout_with_precise_message():
     assert elliptic.FFT().available().status == "partial"
 
 
-@pytest.mark.parametrize("dimension", (1, 3))
-def test_fft_rejects_non_two_dimensional_uniform_layout(dimension):
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+def test_fft_accepts_every_native_cartesian_rank(dimension):
     from pops.domain import CartesianDomain
     from pops.layouts import Uniform
     from pops.mesh import CartesianGrid, PeriodicAxes
@@ -348,11 +348,8 @@ def test_fft_rejects_non_two_dimensional_uniform_layout(dimension):
         periodic=PeriodicAxes(frame.axes),
     ))
     status = elliptic.FFT().available({"layout": layout})
-    assert status.status == "no"
-    assert "exact two-dimensional" in status.reason
-    assert "Dim=%d" % dimension in status.reason
-    with pytest.raises(ValueError, match="exact two-dimensional"):
-        elliptic.FFT().validate({"layout": layout})
+    assert status.status == "partial"
+    assert elliptic.FFT().validate({"layout": layout})
 
 
 def test_fft_available_never_raises_on_odd_context():
@@ -384,16 +381,28 @@ def test_geometric_mg_accepts_amr_layout():
 
 def test_preconditioners_catalog():
     pre = solvers.preconditioners
-    assert pre.GeometricMG().native_id == "pops::GeometricMG"
-    assert pre.GeometricMG().category == "preconditioner"
+    assert {
+        name for name in dir(pre) if not name.startswith("_")
+    } == {
+        "HeaderOnlyComponent",
+        "Identity",
+        "IntOption",
+        "NativeComponent",
+        "NativeEmission",
+        "Prepared",
+        "Provider",
+        "ScratchResource",
+        "UsePolicy",
+        "register",
+    }
     identity = pre.Identity()
     assert identity.available().ok is True
     assert identity.native_id == "pops::ApplyFn"
-    for removed in ("Jacobi", "BlockJacobi"):
+    for removed in ("GeometricMG", "Jacobi", "BlockJacobi"):
         assert not hasattr(pre, removed)
     for extension in (
-        "Prepared", "register", "Provider", "IntOption", "ScratchResource",
-        "NativeComponent", "HeaderOnlyComponent"
+        "Prepared", "register", "Provider", "IntOption", "NativeEmission",
+        "ScratchResource", "UsePolicy", "NativeComponent", "HeaderOnlyComponent"
     ):
         assert callable(getattr(pre, extension))
 

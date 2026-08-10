@@ -7,6 +7,7 @@
 #include "../bindings_detail.hpp"
 
 #include <pops/mesh/index/box.hpp>
+#include <pops/mesh/layout/refinement.hpp>
 
 #include <algorithm>
 #include <array>
@@ -118,13 +119,29 @@ py::dict native_output_geometry_snapshot(int level, std::uint64_t topology_epoch
                                          const std::array<std::int64_t, Dim>& cell_shape,
                                          const std::string& cell_measure,
                                          const std::vector<OutputGeometryPatch<Dim>>& patches,
-                                         int next_refinement_ratio, bool adaptive) {
+                                         const std::array<int, Dim>& next_refinement_ratio,
+                                         bool adaptive) {
   static_assert(Dim >= 1 && Dim <= 3, "output geometry only supports dimensions 1, 2, and 3");
   if (level < 0)
     throw std::invalid_argument("native output geometry level must be nonnegative");
-  if (next_refinement_ratio < 0 || next_refinement_ratio == 1)
+  bool has_next_refinement = false;
+  bool inactive_refinement = true;
+  Extent<Dim> next_ratio{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const int value = next_refinement_ratio[static_cast<std::size_t>(axis)];
+    inactive_refinement = inactive_refinement && value == 0;
+    if (value > 0) {
+      has_next_refinement = has_next_refinement || value > 1;
+      next_ratio[axis] = value;
+    }
+  }
+  if (!inactive_refinement &&
+      (std::any_of(next_refinement_ratio.begin(), next_refinement_ratio.end(),
+                   [](int value) { return value < 1; }) ||
+       !has_next_refinement))
     throw std::invalid_argument(
-        "native output geometry next refinement ratio must be zero or greater than one");
+        "native output geometry next refinement ratio must be all-zero or exact-rank, "
+        "positive, and refine at least one axis");
 
   Index<Dim> domain_lower{};
   Index<Dim> domain_upper{};
@@ -175,16 +192,16 @@ py::dict native_output_geometry_snapshot(int level, std::uint64_t topology_epoch
 
   for (const Box<Dim>& box : boxes)
     for_each_output_index(box, [&](const Index<Dim>& index) {
-      valid[output_linear_offset(index, cell_shape)] = true;
+      valid[output_linear_offset<Dim>(index, cell_shape)] = true;
     });
 
-  if (adaptive && next_refinement_ratio > 1) {
+  if (adaptive && has_next_refinement) {
     for (const OutputGeometryPatch<Dim>& patch : patches) {
       if (patch.level != level + 1)
         continue;
-      const Box<Dim> parent = checked_box(patch.box.coarsen(next_refinement_ratio));
+      const Box<Dim> parent = checked_box(pops::coarsen(patch.box, next_ratio));
       for_each_output_index(parent, [&](const Index<Dim>& index) {
-        covered[output_linear_offset(index, cell_shape)] = true;
+        covered[output_linear_offset<Dim>(index, cell_shape)] = true;
       });
     }
   }
@@ -193,8 +210,8 @@ py::dict native_output_geometry_snapshot(int level, std::uint64_t topology_epoch
   // independently as the reserved ``pops_kappa`` sidecar; folding them into this geometry array
   // would make the mesh metric ambiguous and would double-apply kappa in downstream consumers.
   for_each_output_index(domain, [&](const Index<Dim>& index) {
-    volumes[output_linear_offset(index, cell_shape)] =
-        output_cell_volume(cell_measure, origin, spacing, index);
+    volumes[output_linear_offset<Dim>(index, cell_shape)] =
+        output_cell_volume<Dim>(cell_measure, origin, spacing, index);
   });
 
   py::list box_rows;

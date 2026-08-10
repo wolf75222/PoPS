@@ -118,6 +118,7 @@ def test_darwin_preserves_valid_signatures_and_refreshes_final_manifest_hash(
 ):
     helper = _helper()
     variant = _installed_variant(helper, tmp_path / "pops", payload=b"signed extension")
+    variant.path.write_bytes(b"wheel-rewritten signed extension")
     calls = []
 
     def run(command, **kwargs):

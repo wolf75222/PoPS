@@ -278,49 +278,12 @@ class AmrSystem(
         return self._s.named_field_values(name)
 
     def add_coupling(self, coupling: Any) -> Any:
-        """Add a private compiled inter-species coupled-source engine record
-        on the SHARED AMR hierarchy (MULTI-BLOCK), refined counterpart of System.add_coupling. The source
-        is transported as bytecode and interpreted on the C++ side (AmrSystem.add_coupled_source; no
-        per-cell Python callback). The coupling frequency (CoupledSource.frequency) is honored:
-        constant -> dt bound dt <= cfl/mu; Expr -> PER-CELL frequency mu(U) evaluated on the COARSE grid at
-        each step_cfl (the freq_prog_* vectors are forwarded). Must be called BEFORE the first
-        step (the source is frozen then injected at the lazy build of the runtime engine)."""
+        """Reject coupling until one complete multi-block AMR provider owns its execution."""
         _guard_assembling(self, "add_coupling")  # frozen once pops.bind completes (ADC-592)
-        # Late import (the multispecies module imports this package: avoid the cycle).
-        from pops.physics.multispecies import CompiledCoupledSource
-        from pops.physics.coupling_presets import lower_named_coupling, coupling_operator_args
-
-        if isinstance(coupling, CompiledCoupledSource):
-            args = coupling_operator_args(
-                coupling,
-                getattr(coupling, "conserved_roles", ()),
-                getattr(coupling, "created_roles", ()),
-            )
-            self._s.add_coupling_operator(*args)
-            return
-        # Named preset (ADC-595): lower to the generic coupled source (bit-identical to System), so the
-        # AMR path gains the named couplings as typed operators too. ThermalExchange needs a per-block
-        # gamma; AmrSystem does not expose block_gamma, so a preset that requires it raises clearly.
-        preset = lower_named_coupling(coupling, self._amr_block_gamma)
-        if preset is None:
-            raise TypeError(
-                "AmrSystem.add_coupling expects a private named-coupling engine descriptor or "
-                "CompiledCoupledSource"
-            )
-        preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
-        args = coupling_operator_args(
-            preset.source.compile(), preset.conserved, preset.created, frequency=preset.frequency
-        )
-        self._s.add_coupling_operator(*args)
-
-    def _amr_block_gamma(self, name: Any) -> Any:
-        """Per-block adiabatic index for the ThermalExchange preset (ADC-595). AmrSystem does not expose
-        a block_gamma accessor, so a ThermalExchange on AMR raises a clear error pointing at the generic
-        private CompiledCoupledSource path with an explicit gamma."""
         raise NotImplementedError(
-            "AmrSystem: the ThermalExchange preset needs a per-block gamma, which AMR does not expose; "
-            "author the thermal exchange as a private CompiledCoupledSource with an explicit gamma "
-            "param, or use it on a uniform System."
+            "AMR coupling installation requires the atomic "
+            "PreparedMultiBlockAmrHierarchy<Dim> coupling provider; the exact single-block "
+            "AMR core publishes no coupled-source executor"
         )
 
     @property

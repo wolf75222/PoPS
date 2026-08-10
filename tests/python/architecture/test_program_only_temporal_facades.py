@@ -499,16 +499,23 @@ def test_gpu_amr_step_harnesses_install_a_program_authority():
         ), path.relative_to(ROOT).as_posix()
 
 
-def test_gpu_amr_program_harness_retains_the_bz_device_probe():
+def test_gpu_amr_program_harness_retains_the_exact_magnetic_provider_device_probe():
     source = (ROOT / "tests/gpu/romeo/amrmpi_integrated.cpp").read_text(encoding="utf-8")
     for marker in (
-        "run_bz_program_probe(",
-        "set_magnetic_field(",
+        "run_magnetic_provider_program_probe(",
+        "AuxiliaryComponentKey",
+        "install_prepared_auxiliary_provider(",
+        "install_auxiliary_consumer_plan(",
+        "stage_auxiliary_input(",
+        '"B-x"',
+        '"B-y"',
+        '"B-z"',
         'block_level_state_global("magnetic", level)',
         "baseline.size() < 2",
-        "B_z not consumed on device",
+        "three-component provider projection incorrect on device",
     ):
         assert marker in source
+    assert "set_magnetic_field(" not in source
 
     for retired_harness in (
         "gpu_amr_bz_validate.cpp",

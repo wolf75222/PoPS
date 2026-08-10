@@ -56,7 +56,7 @@ class CompiledComponent:
             "schema_version": 3,
             "state_spaces": ("U",),
             "cons_names": ("u",),
-            "cons_roles": ("VelocityX",),
+            "cons_roles": ("velocity:0",),
             "n_vars": 1,
             "params": {},
             "provider_components": (),

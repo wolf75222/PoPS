@@ -206,18 +206,22 @@ class CompiledModel:
             for name in self.runtime_param_names
         ]
 
-    def check_runtime(self, n: Any = 16, state: Any = None, raise_on_error: Any = True,
+    def check_runtime(self, layout: Any = None, state: Any = None, raise_on_error: Any = True,
                       rtol: Any = 1e-8, atol: Any = 1e-10) -> Any:
-        """RUNTIME re-verification of a CompiledModel ALONE (audit balance, GENERICITY pt 9):
+        """RUNTIME re-verification of a CompiledModel on an authenticated native layout.
+
         without the original dsl.Model, the FORMULAS are no longer re-verifiable (symbolic
-        check_model), but the .so itself is -- we install it in an EPHEMERAL System (n x n
-        periodic, neutral Poisson, minmod+rusanov) and delegate to System.check_model (finite
+        check_model), but the .so itself is -- we install it in an ephemeral System configured by
+        :func:`system_config_from_layout` from the exact ``NativeSpatialLayout`` supplied by the
+        artifact caller.  No cell count, bounds, decomposition, or periodicity is synthesized by
+        this diagnostic.  Omitting ``layout`` refuses the check.  It delegates to
+        System.check_model (finite
         state, residual -div F + S finite, positivity by roles, round-trip of THE MODEL
         conversions).
 
-        @p state: dict {conservative variable name: ndarray (n, n)} to control the tested state.
-        None -> SMOKE state by ROLES (Density = 1 + gaussian bump, Momentum* = 0,
-        Energy = 2.5, other components = 0.5) -- enough to exercise flux/source/conversions;
+        @p state: dict {conservative variable name: ndarray layout.shape} to control the tested state.
+        None -> SMOKE state by the resolved StateSchema (density = 1 + gaussian bump,
+        momentum:* = 0, energy = 2.5, other components = 0.5) -- enough to exercise flux/source/conversions;
         provide state= for a precise physical regime. @return the dict from System.check_model.
         """
         import numpy as np  # lazy: only needed at check_runtime call time
@@ -226,27 +230,54 @@ class CompiledModel:
                 "CompiledModel.check_runtime: only target='system' is re-verifiable in an "
                 "ephemeral System; a target='amr_system' loader is checked installed in its "
                 "AmrSystem (AMR test invariants), not in isolation.")
+        from pops.mesh import NativeSpatialLayout
         from pops.runtime._engine_descriptors import Explicit, Spatial
+        from pops.runtime._runtime_mesh_lowering import system_config_from_layout
         from pops.runtime._system import System  # advanced seam (ADC-545: off the public surface)
         from pops.numerics.reconstruction.limiters import Minmod
         from pops.numerics.riemann import Rusanov
-        sim = System(n=int(n), L=1.0, periodicity=(True, True))
+        from pops.physics.roles import StateSchema
+        if layout is None:
+            raise ValueError(
+                "CompiledModel.check_runtime requires an authenticated NativeSpatialLayout; "
+                "it will not invent a diagnostic mesh"
+            )
+        if type(layout) is not NativeSpatialLayout:
+            raise TypeError(
+                "CompiledModel.check_runtime.layout must be an exact NativeSpatialLayout"
+            )
+        native_layout = NativeSpatialLayout.from_data(layout.to_data())
+        schema = StateSchema.resolve(
+            self.cons_roles,
+            dimension=self.native_dimension,
+            where="CompiledModel.check_runtime conservative state",
+        )
+        if native_layout.dimension != schema.dimension:
+            raise ValueError(
+                "CompiledModel.check_runtime layout dimension %d differs from model dimension %d"
+                % (native_layout.dimension, schema.dimension)
+            )
+        shape = native_layout.shape
+        sim = System(config=system_config_from_layout(native_layout))
         sim.set_poisson()
         sim.add_equation("check", model=self,
                          spatial=Spatial(limiter=Minmod(), flux=Rusanov()),
                          time=Explicit())
-        x = (np.arange(n) + 0.5) / float(n)
-        X, Y = np.meshgrid(x, x, indexing="xy")
-        bump = 1.0 + 0.3 * np.exp(-40.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+        coordinates = np.indices(shape, dtype=float)
+        radius_squared = sum(
+            ((coordinates[axis] + 0.5) / float(shape[axis]) - 0.5) ** 2
+            for axis in range(schema.dimension)
+        )
+        bump = 1.0 + 0.3 * np.exp(-40.0 * radius_squared)
         comps = []
-        for name, role in zip(self.cons_names, self.cons_roles, strict=True):
+        for name, role in zip(self.cons_names, schema.roles, strict=True):
             if state is not None and name in state:
-                comps.append(np.asarray(state[name], dtype=float).reshape(n, n))
-            elif role == "Density":
+                comps.append(np.asarray(state[name], dtype=float).reshape(shape))
+            elif role.family == "density":
                 comps.append(bump)
-            elif role in ("MomentumX", "MomentumY"):
-                comps.append(np.zeros((n, n)))
-            elif role == "Energy":
+            elif role.family == "momentum":
+                comps.append(np.zeros(shape))
+            elif role.family == "energy":
                 comps.append(2.5 + 0.0 * bump)
             else:
                 comps.append(0.5 + 0.0 * bump)

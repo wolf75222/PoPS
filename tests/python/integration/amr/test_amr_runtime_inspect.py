@@ -372,7 +372,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     payload = pops.inspect(artifact.layout)["amr_report"]
     assert payload["layout"] == "amr"
     assert payload["max_levels"] == 2
-    assert payload["ratio"] == 2
+    assert payload["ratio"] == [2, 2]
 
     # A separately authored layout is inspected directly, with no artifact-specific override API.
     override = pops.inspect(final_amr_layout(cartesian_grid(n=32)))["amr_report"]

@@ -4,6 +4,7 @@
 #include "system_impl.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/coupling/source/coupled_source_program.hpp>
 #include <pops/runtime/builders/compiled/native_loader.hpp>
 #include <pops/runtime/named_field_output.hpp>
 
@@ -17,6 +18,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -54,6 +56,45 @@ std::size_t storage_offset(const Index<Dim>& index, const Box<Dim>& storage) {
     stride *= static_cast<std::size_t>(extent[axis]);
   }
   return offset;
+}
+
+template <int Dim>
+mesh::BoxArrayValidationBudget exact_layout_budget(const mesh::BoxArray<Dim>& layout) {
+  const std::size_t boxes = layout.size();
+  if (boxes > 1 && boxes - 1 > std::numeric_limits<std::size_t>::max() / boxes)
+    throw std::length_error("FFT field layout validation budget exceeds size_t");
+  return {boxes, boxes < 2 ? 0 : boxes * (boxes - 1) / 2};
+}
+
+template <int Dim>
+PhysicalBoundaryConditions<Dim> fft_periodic_boundary(const Geometry<Dim>& geometry) {
+  std::array<bool, Dim> periodic{};
+  std::array<PhysicalBoundaryFace, 2 * Dim> faces{};
+  RealVector<Dim> spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    periodic[axis] = true;
+    spacing[axis] = geometry.spacing(axis);
+  }
+  return {BoundaryTopology<Dim>::axis_periodic(periodic), faces, spacing};
+}
+
+template <int Dim>
+EllipticBuildRequest<Dim> fft_build_request(const Geometry<Dim>& geometry,
+                                            const mesh::BoxArray<Dim>& layout,
+                                            const mesh::Distribution<Dim>& distribution,
+                                            Index<Dim> local_rank) {
+  Extent<Dim> rhs_ghosts{};
+  Extent<Dim> phi_ghosts{};
+  for (int axis = 0; axis < Dim; ++axis)
+    phi_ghosts[axis] = 1;
+  return {geometry,
+          layout,
+          distribution,
+          local_rank,
+          fft_periodic_boundary(geometry),
+          rhs_ghosts,
+          phi_ghosts,
+          exact_layout_budget(layout)};
 }
 
 /// Copy only valid cells. Ghost values are owned by prepared communication/boundary producers and
@@ -279,7 +320,7 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
             prepared.primitive_to_conservative));
   }
 
-  if (p_->auxiliary_registry_.sealed()) {
+  if (prepared.provider_components != 0 && p_->auxiliary_registry_.sealed()) {
     const auto& plan = p_->auxiliary_registry_.consumer_plan(prepared.name);
     if (plan.value_count() != static_cast<std::size_t>(prepared.provider_components))
       throw std::invalid_argument(
@@ -307,7 +348,6 @@ void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   candidate.batch_cons_to_prim = std::move(prepared.batch_conservative_to_primitive);
   candidate.source_frequency = std::move(prepared.source_frequency);
   candidate.stability_dt = std::move(prepared.stability_dt);
-  candidate.hotspot = std::move(prepared.closures.hotspot);
   candidate.project = std::move(prepared.closures.project);
   candidate.project_masked = std::move(prepared.closures.project_masked);
   candidate.rhs_flux_only = std::move(prepared.closures.rhs_flux_only);
@@ -451,15 +491,57 @@ void System<Dim>::register_elliptic_field(
         std::string(component->second->provider_identity()), p_->geom, p_->ba, p_->dm,
         p_->local_rank, topology, p_->periodicity, component->second);
   } else {
-    if (plan.has_reaction)
-      throw std::logic_error(
-          "configured exact Cartesian field solver does not implement a reaction operator");
-    operator_options.absolute_tolerance = static_cast<Real>(configured->second.absolute_tolerance);
-    operator_options.relative_tolerance = static_cast<Real>(configured->second.relative_tolerance);
-    operator_options.maximum_iterations = configured->second.maximum_iterations;
-    backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
-        p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options,
-        configured->second.exact_identity);
+    if (configured->second.family_route == "fft") {
+      if (plan.has_reaction)
+        throw std::logic_error(
+            "FFT field solver is a constant-coefficient Poisson operator and rejects reaction");
+      if (plan.boundary_kernel)
+        throw std::logic_error(
+            "FFT field solver has a fixed periodic boundary contract and rejects dynamic kernels");
+      if (plan.newton)
+        throw std::logic_error(
+            "FFT field solver is direct linear and rejects Newton configuration");
+      for (int axis = 0; axis < Dim; ++axis) {
+        if (!p_->periodicity[static_cast<std::size_t>(axis)])
+          throw std::logic_error(
+              "FFT field solver requires periodic System topology on every axis");
+        for (int side = 0; side < 2; ++side) {
+          const std::size_t face = static_cast<std::size_t>(2 * axis + side);
+          if (operator_options.boundaries[face] != elliptic::nd::CartesianBoundaryKind::periodic)
+            throw std::logic_error(
+                "FFT field solver requires periodic exact field boundaries on every face");
+        }
+      }
+      const ExecutionLane world = ExecutionLane::world();
+      std::optional<EllipticBuildRequest<Dim>> request;
+      std::exception_ptr request_error;
+      try {
+        request.emplace(fft_build_request(p_->geom, p_->ba, p_->dm, p_->local_rank));
+      } catch (...) {
+        request_error = std::current_exception();
+      }
+      if (all_reduce_max(request_error ? 1L : 0L, world.communicator()) != 0) {
+        if (world.size() == 1 && request_error)
+          std::rethrow_exception(request_error);
+        throw std::runtime_error("FFT field solver request allocation failed collectively");
+      }
+      backend = runtime::system::PoissonFftFieldSolverBackend<Dim>::prepare_collectively(
+          std::move(*request), configured->second.exact_identity);
+    } else if (configured->second.family_route == "cartesian_cg") {
+      if (plan.has_reaction)
+        throw std::logic_error(
+            "configured exact Cartesian field solver does not implement a reaction operator");
+      operator_options.absolute_tolerance =
+          static_cast<Real>(configured->second.absolute_tolerance);
+      operator_options.relative_tolerance =
+          static_cast<Real>(configured->second.relative_tolerance);
+      operator_options.maximum_iterations = configured->second.maximum_iterations;
+      backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
+          p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options,
+          configured->second.exact_identity);
+    } else {
+      throw std::logic_error("configured exact field solver route was not decoded exactly");
+    }
   }
 
   auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
@@ -643,42 +725,346 @@ void System<Dim>::finalize_native_packages() {
 }
 
 template <int Dim>
-void System<Dim>::add_coupled_source(const CoupledSourceProgram&, double, const std::string&) {
-  throw std::logic_error(
-      "System coupled-source bytecode is not an execution provider; install one prepared "
-      "dimension-qualified coupling operator");
+void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& description,
+                                               double frequency, const std::string& label,
+                                               CouplingOperatorView inspect) {
+  struct InputRef {
+    int block = -1;
+    int component = -1;
+  };
+  struct OutputRef {
+    int block = -1;
+    int component = -1;
+    CsProgram program{};
+  };
+
+  std::vector<InputRef> inputs;
+  std::vector<OutputRef> outputs;
+  std::vector<Real> constants;
+  CsProgram frequency_program{};
+  bool has_frequency_program = false;
+  std::exception_ptr local_error;
+  try {
+    require_assembling(p_->lifecycle_, "add_coupled_source");
+    if (label.empty() || !std::isfinite(frequency) || frequency < 0.0)
+      throw std::invalid_argument(
+          "System coupled source requires a non-empty label and finite non-negative frequency");
+    if (description.in_blocks.size() != description.in_roles.size() ||
+        description.out_blocks.size() != description.out_roles.size() ||
+        description.out_blocks.size() != description.prog_lens.size() ||
+        description.prog_ops.size() != description.prog_args.size() ||
+        description.freq_prog_ops.size() != description.freq_prog_args.size())
+      throw std::invalid_argument("System coupled-source arrays have inconsistent lengths");
+    if (description.out_blocks.empty())
+      throw std::invalid_argument("System coupled source requires at least one output term");
+    if (description.in_blocks.size() + description.consts.size() >
+            static_cast<std::size_t>(kCsMaxReg) ||
+        description.out_blocks.size() > static_cast<std::size_t>(kCsMaxTerms))
+      throw std::length_error("System coupled source exceeds its device register/term capacity");
+
+    const auto resolve = [&](const std::string& block_name, const std::string& token) -> InputRef {
+      const int block = p_->blocks_.index(block_name);
+      const VariableSet& variables = p_->sp[static_cast<std::size_t>(block)].cons_vars;
+      validate_variable_semantics<Dim>(variables, "System::add_coupled_source", block_name);
+      if (!variables.user_roles.empty() && variables.user_roles.size() != variables.roles.size())
+        throw std::invalid_argument("System block '" + block_name +
+                                    "' has incomplete custom-role metadata");
+      int component = -1;
+      for (int candidate = 0; candidate < variables.size; ++candidate) {
+        const VariableSemantic semantic = variables.roles[static_cast<std::size_t>(candidate)];
+        bool matches = false;
+        if (semantic == VariableSemantic::Custom) {
+          const std::string_view label =
+              variables.user_roles.empty()
+                  ? std::string_view{}
+                  : std::string_view(variables.user_roles[static_cast<std::size_t>(candidate)]);
+          matches = label.empty() ? token == "custom" : label == token;
+        } else {
+          matches = role_name(semantic) == token;
+        }
+        if (!matches)
+          continue;
+        if (component >= 0)
+          throw std::invalid_argument("System block '" + block_name + "' declares role token '" +
+                                      token + "' more than once");
+        component = candidate;
+      }
+      if (component < 0)
+        throw std::invalid_argument("System block '" + block_name +
+                                    "' does not declare role token '" + token +
+                                    "' (declared: " + roles_csv(variables) + ")");
+      return {block, component};
+    };
+
+    inputs.reserve(description.in_blocks.size());
+    for (std::size_t index = 0; index < description.in_blocks.size(); ++index)
+      inputs.push_back(resolve(description.in_blocks[index], description.in_roles[index]));
+
+    outputs.reserve(description.out_blocks.size());
+    std::size_t offset = 0;
+    const int register_count =
+        static_cast<int>(description.in_blocks.size() + description.consts.size());
+    for (std::size_t term = 0; term < description.out_blocks.size(); ++term) {
+      const InputRef target = resolve(description.out_blocks[term], description.out_roles[term]);
+      const int length = description.prog_lens[term];
+      if (length < 0 || length > kCsMaxProg || offset > description.prog_ops.size() ||
+          static_cast<std::size_t>(length) > description.prog_ops.size() - offset)
+        throw std::invalid_argument("System coupled-source term program has an invalid length");
+      CsProgram program{};
+      program.len = length;
+      for (int instruction = 0; instruction < length; ++instruction) {
+        const int opcode = description.prog_ops[offset + static_cast<std::size_t>(instruction)];
+        const int argument = description.prog_args[offset + static_cast<std::size_t>(instruction)];
+        if (opcode < 0 || opcode > static_cast<int>(CsOp::Sqrt) ||
+            (opcode == static_cast<int>(CsOp::PushReg) &&
+             (argument < 0 || argument >= register_count)))
+          throw std::invalid_argument("System coupled-source term contains an invalid instruction");
+        program.op[instruction] = opcode;
+        program.arg[instruction] = argument;
+      }
+      validate_cs_program_stack(program, "System::add_coupled_source term " + std::to_string(term));
+      outputs.push_back({target.block, target.component, program});
+      offset += static_cast<std::size_t>(length);
+    }
+    if (offset != description.prog_ops.size())
+      throw std::invalid_argument("System coupled-source term lengths do not consume the program");
+
+    has_frequency_program = !description.freq_prog_ops.empty();
+    if (has_frequency_program) {
+      if (description.freq_prog_ops.size() > static_cast<std::size_t>(kCsMaxProg))
+        throw std::length_error("System coupled-source frequency program is too long");
+      frequency_program.len = static_cast<int>(description.freq_prog_ops.size());
+      for (int instruction = 0; instruction < frequency_program.len; ++instruction) {
+        const int opcode = description.freq_prog_ops[static_cast<std::size_t>(instruction)];
+        const int argument = description.freq_prog_args[static_cast<std::size_t>(instruction)];
+        if (opcode < 0 || opcode > static_cast<int>(CsOp::Sqrt) ||
+            (opcode == static_cast<int>(CsOp::PushReg) &&
+             (argument < 0 || argument >= register_count)))
+          throw std::invalid_argument(
+              "System coupled-source frequency contains an invalid instruction");
+        frequency_program.op[instruction] = opcode;
+        frequency_program.arg[instruction] = argument;
+      }
+      validate_cs_program_stack(frequency_program, "System::add_coupled_source frequency");
+    }
+    constants.assign(description.consts.begin(), description.consts.end());
+    if (std::any_of(constants.begin(), constants.end(),
+                    [](Real value) { return !std::isfinite(value); }))
+      throw std::invalid_argument("System coupled-source constants must be finite native reals");
+    if (!inspect.label.empty()) {
+      if (inspect.label != label || inspect.frequency.constant_mu != frequency ||
+          inspect.frequency.per_cell != has_frequency_program)
+        throw std::invalid_argument(
+            "typed System coupling inspect metadata differs from its executable program");
+    } else {
+      inspect.label = label;
+      inspect.frequency.constant_mu = frequency;
+      inspect.frequency.per_cell = has_frequency_program;
+    }
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System coupled-source preparation failed collectively");
+  }
+
+  ExactContractBuilder contract;
+  contract.text("pops.system.coupled-source")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .text(label)
+      .scalar(frequency)
+      .sequence(description.in_blocks,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(description.in_roles,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(description.consts)
+      .sequence(description.out_blocks,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(description.out_roles,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(description.prog_ops)
+      .sequence(description.prog_args)
+      .sequence(description.prog_lens)
+      .sequence(description.freq_prog_ops)
+      .sequence(description.freq_prog_args)
+      .sequence(inspect.conservation.conserved_roles,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(inspect.conservation.created_roles,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .scalar(static_cast<std::uint8_t>(inspect.frequency.per_cell ? 1 : 0));
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-coupled-source"), contract.view()}}))
+    throw std::invalid_argument("System coupled-source descriptions differ between MPI ranks");
+
+  const int input_count = static_cast<int>(inputs.size());
+  const int constant_count = static_cast<int>(constants.size());
+  const int output_count = static_cast<int>(outputs.size());
+  auto operation = [inputs, outputs, constants, input_count, constant_count, output_count](
+                       Real dt, const std::vector<MultiFab<Dim>*>& states) {
+    const int reference_block = input_count != 0 ? inputs.front().block : outputs.front().block;
+    MultiFab<Dim>& reference = *states[static_cast<std::size_t>(reference_block)];
+    for (const InputRef& input : inputs)
+      if (states[static_cast<std::size_t>(input.block)]->local_global_indices() !=
+          reference.local_global_indices())
+        throw std::invalid_argument("System coupled-source input layouts are not co-located");
+    for (const OutputRef& output : outputs)
+      if (states[static_cast<std::size_t>(output.block)]->local_global_indices() !=
+          reference.local_global_indices())
+        throw std::invalid_argument("System coupled-source output layouts are not co-located");
+    for (std::size_t local = 0; local < reference.local_size(); ++local) {
+      CoupledSourceKernel<Dim> kernel{};
+      kernel.dt = dt;
+      kernel.n_in = input_count;
+      kernel.n_const = constant_count;
+      kernel.n_terms = output_count;
+      for (int input = 0; input < input_count; ++input) {
+        const InputRef& ref = inputs[static_cast<std::size_t>(input)];
+        const Fab<Dim>& fab = states[static_cast<std::size_t>(ref.block)]->fab(local);
+        kernel.in[input] = fab.view();
+        kernel.in_comp[input] = ref.component;
+      }
+      for (int constant = 0; constant < constant_count; ++constant)
+        kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
+      for (int output = 0; output < output_count; ++output) {
+        const OutputRef& ref = outputs[static_cast<std::size_t>(output)];
+        kernel.out[output] = states[static_cast<std::size_t>(ref.block)]->fab(local).view();
+        kernel.out_comp[output] = ref.component;
+        kernel.prog[output] = ref.program;
+      }
+      for_each_cell(reference.box(local), kernel);
+    }
+  };
+
+  std::function<Real()> maximum_frequency;
+  if (has_frequency_program) {
+    Impl* implementation = p_.get();
+    maximum_frequency = [implementation, inputs, constants, frequency_program, input_count,
+                         constant_count]() {
+      if (input_count == 0)
+        throw std::logic_error("state-dependent coupling frequency requires at least one input");
+      const MultiFab<Dim>& reference =
+          implementation->sp[static_cast<std::size_t>(inputs.front().block)].U;
+      Real local_maximum = Real(0);
+      for (std::size_t local = 0; local < reference.local_size(); ++local) {
+        CoupledFreqKernel<Dim> kernel{};
+        kernel.n_in = input_count;
+        kernel.n_const = constant_count;
+        kernel.prog = frequency_program;
+        for (int input = 0; input < input_count; ++input) {
+          const InputRef& ref = inputs[static_cast<std::size_t>(input)];
+          const Fab<Dim>& fab =
+              implementation->sp[static_cast<std::size_t>(ref.block)].U.fab(local);
+          kernel.in[input] = fab.view();
+          kernel.in_comp[input] = ref.component;
+        }
+        for (int constant = 0; constant < constant_count; ++constant)
+          kernel.consts[constant] = constants[static_cast<std::size_t>(constant)];
+        local_maximum = std::max(
+            local_maximum,
+            for_each_cell_reduce_max(reference.box(local), [=] POPS_HD(const Index<Dim>& index) {
+              Real value = std::numeric_limits<Real>::lowest();
+              kernel(index, value);
+              return value;
+            }));
+      }
+      return all_reduce_max(local_maximum);
+    };
+  }
+  install_prepared_coupling_operator(label, std::string(contract.view()), std::move(inspect),
+                                     std::move(operation), frequency, std::move(maximum_frequency));
 }
 
 template <int Dim>
-void System<Dim>::add_coupling_operator(const CouplingOperator&) {
-  throw std::logic_error(
-      "System CouplingOperator metadata is not executable; install its prepared exact-ranked "
-      "operator and inspect view together");
+void System<Dim>::add_coupled_source(const CoupledSourceProgram& description, double frequency,
+                                     const std::string& label) {
+  add_coupled_source_prepared_(description, frequency, label, {});
+}
+
+template <int Dim>
+void System<Dim>::add_coupling_operator(const CouplingOperator& op) {
+  validate_coupling_contract(op, "System::add_coupling_operator");
+  add_coupled_source_prepared_(op.program, op.frequency.constant_mu, op.label,
+                               CouplingOperatorView{op.label, op.conservation, op.frequency});
 }
 
 template <int Dim>
 void System<Dim>::install_prepared_coupling_operator(
-    const std::string& label, CouplingOperatorView view,
+    const std::string& label, const std::string& provider_contract, CouplingOperatorView view,
     std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
     double constant_frequency, std::function<Real()> maximum_frequency) {
-  require_assembling(p_->lifecycle_, "install_prepared_coupling_operator");
-  if (label.empty() || !operation || !std::isfinite(constant_frequency) || constant_frequency < 0.0)
-    throw std::invalid_argument(
-        "prepared System coupling requires an identity, executable provider, and finite frequency");
-  if (!view.label.empty() && view.label != label)
-    throw std::invalid_argument(
-        "prepared System coupling inspect identity differs from its executable provider");
-  view.label = label;
-  view.frequency.constant_mu = constant_frequency;
-  view.frequency.per_cell = static_cast<bool>(maximum_frequency);
+  std::exception_ptr local_error;
+  runtime::system::SystemCouplingRegistry<Dim> candidate;
+  std::string exact;
+  try {
+    require_assembling(p_->lifecycle_, "install_prepared_coupling_operator");
+    if (label.empty() || provider_contract.empty() || !operation ||
+        !std::isfinite(constant_frequency) || constant_frequency < 0.0)
+      throw std::invalid_argument(
+          "prepared System coupling requires exact provider identity, executable, and finite "
+          "frequency");
+    if (!view.label.empty() && view.label != label)
+      throw std::invalid_argument(
+          "prepared System coupling inspect identity differs from its executable provider");
+    if (p_->coupling_.operator_contracts.size() != p_->coupling_.operators.size() ||
+        p_->coupling_.operators.size() != p_->coupling_.coupled_operators.size())
+      throw std::logic_error("prepared System coupling registry is inconsistent");
+    view.label = label;
+    view.frequency.constant_mu = constant_frequency;
+    view.frequency.per_cell = static_cast<bool>(maximum_frequency);
 
-  auto candidate = p_->coupling_;
-  candidate.operators.push_back(std::move(operation));
-  candidate.coupled_operators.push_back(std::move(view));
-  if (constant_frequency > 0.0)
-    candidate.coupled_freqs.push_back({label, constant_frequency});
-  if (maximum_frequency)
-    candidate.coupled_frequencies.push_back({label, std::move(maximum_frequency)});
+    ExactContractBuilder contract;
+    contract.text("pops.system.prepared-coupling")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(label)
+        .bytes(provider_contract)
+        .scalar(constant_frequency)
+        .scalar(static_cast<std::uint8_t>(maximum_frequency ? 1 : 0))
+        .sequence(view.conservation.conserved_roles,
+                  [](ExactContractBuilder& item, const std::string& role) { item.text(role); })
+        .sequence(view.conservation.created_roles,
+                  [](ExactContractBuilder& item, const std::string& role) { item.text(role); })
+        .scalar(static_cast<std::uint64_t>(p_->sp.size()));
+    for (const typename Impl::Species& block : p_->sp) {
+      if (block.name.empty() || block.state_identity.empty())
+        throw std::invalid_argument(
+            "prepared System coupling block map lacks an exact state identity");
+      contract.text(block.name)
+          .text(block.state_identity)
+          .scalar(block.ncomp)
+          .scalar(static_cast<std::uint64_t>(block.cons_vars.roles.size()));
+      for (const VariableSemantic role : block.cons_vars.roles)
+        contract.scalar(static_cast<std::uint8_t>(role.kind)).scalar(role.axis);
+      contract.sequence(
+          block.cons_vars.user_roles,
+          [](ExactContractBuilder& item, const std::string& role) { item.text(role); });
+    }
+    exact = std::move(contract).release();
+
+    // Copy and allocate the complete candidate registry before consensus.  A rank-local allocation
+    // failure therefore cannot publish a shorter provider list on another rank.
+    candidate = p_->coupling_;
+    candidate.operators.push_back(std::move(operation));
+    candidate.operator_contracts.push_back(exact);
+    candidate.coupled_operators.push_back(std::move(view));
+    if (constant_frequency > 0.0)
+      candidate.coupled_freqs.push_back({label, constant_frequency});
+    if (maximum_frequency)
+      candidate.coupled_frequencies.push_back({label, std::move(maximum_frequency)});
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared System coupling installation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-prepared-coupling"), exact}}))
+    throw std::invalid_argument("prepared System coupling contract differs between MPI ranks");
   p_->coupling_ = std::move(candidate);
 }
 
@@ -737,7 +1123,7 @@ template void System<kNativeDimension>::add_coupled_source(const CoupledSourcePr
                                                            const std::string&);
 template void System<kNativeDimension>::add_coupling_operator(const CouplingOperator&);
 template void System<kNativeDimension>::install_prepared_coupling_operator(
-    const std::string&, CouplingOperatorView,
+    const std::string&, const std::string&, CouplingOperatorView,
     std::function<void(Real, const std::vector<MultiFab<kNativeDimension>*>&)>, double,
     std::function<Real()>);
 template const std::vector<CouplingOperatorView>& System<kNativeDimension>::coupled_operators()

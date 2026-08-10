@@ -22,7 +22,6 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
     PHYSICAL_DEFAULT_GAMMA,
-    numerical_defaults_report,
 )
 
 if TYPE_CHECKING:
@@ -153,6 +152,13 @@ class _AmrSystemEquation(_AmrSystem):
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
+            from pops.runtime._system_install import (
+                _candidate_coupling_contracts,
+                _model_coupling_contract,
+            )
+
+            contract = _model_coupling_contract(model, dimension=len(self._shape))
+            contract_candidate = _candidate_coupling_contracts(self, name, contract)
             # The installed Program remains the sole time authority.
             spatial_options: dict[str, bool | float] = {
                 "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
@@ -196,6 +202,7 @@ class _AmrSystemEquation(_AmrSystem):
                 ),
                 **spatial_options,
             )
+            self._coupling_block_contracts = contract_candidate
             return
 
         if not isinstance(model, CompiledModel):
@@ -294,6 +301,15 @@ class _AmrSystemEquation(_AmrSystem):
             getattr(spatial, "positivity_floor", 0.0),
             where="AmrSystem.add_equation.positivity_floor",
         )
+        from pops.runtime._system_install import (
+            _candidate_coupling_contracts,
+            _model_coupling_contract,
+        )
+
+        contract = _model_coupling_contract(
+            compiled, dimension=compiled.native_dimension, adiabatic_index=gamma
+        )
+        contract_candidate = _candidate_coupling_contracts(self, name, contract)
         if spatial.external_flux_id is not None:
             if "amr" not in spatial.external_flux_supported_layouts:
                 raise ValueError(
@@ -324,24 +340,10 @@ class _AmrSystemEquation(_AmrSystem):
                     "AmrSystem.add_equation: external Riemann ABI v2 does not transport "
                     "wave_speed_cache"
                 )
-            self._s._install_external_riemann_block(
-                name,
-                spatial.external_flux_library_path,
-                spatial.external_flux_id,
-                spatial.external_flux_library_sha256,
-                spatial.limiter,
-                spatial.recon,
-                time.kind,
-                gamma,
-                nsub,
-                nstride,
-                compiled.n_vars,
-                compiled.n_aux,
-                compiled.model_hash,
-                positivity_floor,
-                spatial_options.get(
-                    "weno_epsilon", float(numerical_defaults_report()["weno"]["epsilon"])
-                ),
+            raise NotImplementedError(
+                "external block NumericalFlux installation requires a complete generated "
+                "PreparedSystemBlock<Dim> provider package; the legacy external-Riemann AMR "
+                "seam had no native implementation"
             )
         else:
             self._s._install_native_block(
@@ -357,3 +359,4 @@ class _AmrSystemEquation(_AmrSystem):
                 positivity_floor,
                 **spatial_options,
             )
+        self._coupling_block_contracts = contract_candidate

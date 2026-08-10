@@ -607,6 +607,7 @@ def finalize_runtime_authorities(
         raise RuntimeError("post-block authority finalization lost pre-build boundary reports")
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_interface_flux_component", None)
+    install_provider = getattr(native, "_install_interface_flux_provider", None)
     previous_reports = getattr(engine, "_interface_authorities", None)
     if previous_reports is None:
         previous_reports = {}
@@ -653,9 +654,11 @@ def finalize_runtime_authorities(
                 "shared-interface declarations disappeared between authority finalizations")
         engine._interface_authorities = MappingProxyType({})
         return
-    if not callable(install):
+    if not callable(install_provider):
         raise NotImplementedError(
-            "the selected native provider cannot install shared NumericalFlux components")
+            "shared NumericalFlux installation requires the atomic "
+            "PreparedMultiBlockAmrHierarchy<Dim> interface provider; the exact single-block "
+            "AMR core publishes no per-interface executor")
 
     block_layouts: dict[str, str] = {}
     for assignment in install_plan.artifact.layout_plan.assignments:
@@ -792,11 +795,17 @@ def finalize_runtime_authorities(
         for level in levels:
             if level in previous_levels:
                 continue
-            jobs.append((
-                left_index, right_index, level, installed.native_handle,
-                interface, row["component"], parameters_json, target_json,
-                execution_data,
-            ))
+            jobs.append({
+                "left_block": left_index,
+                "right_block": right_index,
+                "level": level,
+                "component": installed.native_handle,
+                "interface": interface,
+                "binding": row["component"],
+                "parameters_json": parameters_json,
+                "target_json": target_json,
+                "execution_context": execution_data,
+            })
         installed_reports[identity] = MappingProxyType({
             "left_block": left,
             "right_block": right,
@@ -812,25 +821,35 @@ def finalize_runtime_authorities(
     transactional_prefix = callable(checkpoint_provider) and callable(
         rollback_installations
     )
-    if jobs and not transactional_prefix and not callable(discard):
+    atomic_provider = callable(install_provider)
+    if jobs and not atomic_provider and not transactional_prefix and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back shared interface installation")
     accepted_size = None
-    if jobs and transactional_prefix:
+    if jobs and not atomic_provider and transactional_prefix:
         accepted_size = cast(Callable[[], Any], checkpoint_provider)()
         if type(accepted_size) is not int or accepted_size < 0:
             raise RuntimeError(
                 "native shared-interface installation checkpoint is invalid"
             )
     try:
-        for job in jobs:
-            cast(Callable[..., Any], install)(*job)
+        if jobs and atomic_provider:
+            cast(Callable[[list[dict[str, Any]]], Any], install_provider)(jobs)
+        else:
+            for job in jobs:
+                cast(Callable[..., Any], install)(
+                    job["left_block"], job["right_block"], job["level"],
+                    job["component"], job["interface"], job["binding"],
+                    job["parameters_json"], job["target_json"],
+                    job["execution_context"],
+                )
     except BaseException:
         try:
-            if accepted_size is None:
-                cast(Callable[..., Any], discard)()
-            else:
-                cast(Callable[[int], Any], rollback_installations)(accepted_size)
+            if not atomic_provider:
+                if accepted_size is None:
+                    cast(Callable[..., Any], discard)()
+                else:
+                    cast(Callable[[int], Any], rollback_installations)(accepted_size)
         finally:
             engine._interface_authorities = MappingProxyType(dict(previous_reports))
         raise
@@ -838,20 +857,16 @@ def finalize_runtime_authorities(
 
 
 def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
-    """Install every AMR provider through its authority-carried runtime protocol."""
+    """Authenticate every intrinsic AMR provider before retaining its authority."""
 
     providers = install_plan.amr_providers
     if not isinstance(providers, Mapping) \
             or tuple(providers) != ("clustering", "tagger", "reflux"):
         raise ValueError(
             "adaptive runtime requires exact clustering, tagger and reflux providers")
-    native = getattr(engine, "_s", None)
     from pops.amr.providers import prepare_amr_provider_installation
-    from pops.runtime._component_execution_context import component_execution_data
 
     layout_identity = install_plan.artifact.layout_plan.qualified_id
-    execution_data = component_execution_data(install_plan.execution_context)
-    jobs = []
     reports = {}
     resolved_tagging = getattr(
         getattr(install_plan, "bootstrap_plan", None), "tagging", None)
@@ -861,29 +876,9 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
             role=role,
             frozen_binding=frozen,
             layout_identity=layout_identity,
-            components=install_plan.components,
-            native=native,
             resolved_tagging_identity=resolved_tagging_identity,
         )
-        if prepared.installer is not None:
-            jobs.append((
-                prepared.installer,
-                prepared.native_handle,
-                prepared.binding,
-                execution_data,
-            ))
         reports[prepared.role] = MappingProxyType(prepared.binding)
-
-    discard = getattr(native, "_discard_amr_provider_components", None)
-    if jobs and not callable(discard):
-        raise NotImplementedError(
-            "the selected native provider cannot roll back AMR provider installation")
-    try:
-        for installer, handle, binding, execution in jobs:
-            cast(Callable[..., Any], installer)(handle, binding, execution)
-    except BaseException:
-        cast(Callable[..., Any], discard)()
-        raise
     engine._amr_provider_authorities = MappingProxyType(reports)
 
 

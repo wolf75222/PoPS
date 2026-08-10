@@ -6,6 +6,7 @@ import importlib.machinery
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import ModuleType
 import zipfile
@@ -17,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[3]
 WRITER = ROOT / "scripts" / "write_native_variant_manifest.py"
 PROVER = ROOT / "scripts" / "prove_installed_wheel.py"
 PYTHON_CMAKE = ROOT / "python" / "CMakeLists.txt"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PYTEST_CONFTEST = ROOT / "tests" / "python" / "conftest.py"
 
 
 def _writer():
@@ -152,6 +155,123 @@ def test_cmake_authenticates_and_installs_the_exact_linked_leaf():
     assert '--dimension "${POPS_NATIVE_DIM}"' in source
     assert '--version "${PROJECT_VERSION}"' in source
     assert 'install(FILES "${POPS_PY_NATIVE_MANIFEST}" DESTINATION pops/_native)' in source
+
+
+def test_process_harness_accepts_only_an_authenticated_selected_nested_leaf(tmp_path):
+    source_python = tmp_path / "python"
+    native_root = source_python / "pops" / "_native"
+    selected = _extension(native_root, 3, b"authenticated Dim=3")
+    manifest = native_root / "variants.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "variants": [
+                    {
+                        "dimension": 3,
+                        "path": f"dim3/{selected.name}",
+                        "sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
+                        "version": "1.2.3",
+                        "abi_key": "abi-dim3",
+                        "has_mpi": False,
+                        "has_kokkos": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    root_residue = source_python / "pops" / (
+        "_pops" + importlib.machinery.EXTENSION_SUFFIXES[0]
+    )
+    root_residue.write_bytes(b"unauthenticated root residue")
+    script = """
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+conftest_path = Path(sys.argv[1])
+source_python = Path(sys.argv[2])
+selected = Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location("variant_process_conftest", conftest_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.SOURCE_PYTHON = source_python
+module._source_python_has_native_variant.cache_clear()
+
+assert module._source_python_has_native_variant(3)
+assert not module._source_python_has_native_variant(2)
+usable = module._process_pythonpath(str(source_python), native_dimension=3).split(os.pathsep)
+assert str(source_python) in usable
+
+selected.write_bytes(b"tampered selected leaf")
+module._source_python_has_native_variant.cache_clear()
+assert not module._source_python_has_native_variant(3)
+refused = module._process_pythonpath(str(source_python), native_dimension=3).split(os.pathsep)
+assert str(source_python) not in refused
+unselected = module._process_pythonpath(str(source_python), native_dimension=None).split(os.pathsep)
+assert str(source_python) not in unselected
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(PYTEST_CONFTEST), str(source_python), str(selected)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert root_residue.is_file()
+
+
+def test_ci_consumes_only_the_authenticated_dim2_native_variant():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    conftest = PYTEST_CONFTEST.read_text(encoding="utf-8")
+
+    for retired_root_contract in (
+        "find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so'",
+        "cp build-mpi/python/pops/_pops*.so",
+        "from pops import _pops",
+    ):
+        assert retired_root_contract not in workflow
+
+    for required_contract in (
+        "pops-module-dim2-",
+        "pops-module-openmp-dim2-",
+        "--exclude='_native/***'",
+        "scripts/verify_installed_native.py",
+        '--expect-dim "$POPS_NATIVE_DIM" --expect-serial',
+        "build-mpi/python/pops/_native/variants.json",
+        "build-mpi/python-package/pops/_native/variants.json",
+        "build-mpi/python-package/pops/_native/dim2/",
+        '--expect-dim "$POPS_NATIVE_DIM" --expect-mpi --expect-parallel-hdf5',
+        "_pops = select_native_dimension(2)",
+        "select_native_dimension(2); import runpy, sys",
+    ):
+        assert required_contract in workflow
+
+    native_jobs = (
+        ("gate-python-prewarm", "gate-python-build"),
+        ("gate-python-build", "gate-python"),
+        ("gate-python", "gate-python-compile-cache"),
+        ("gate-python-compile-cache", "gate-mpi-prewarm"),
+        ("gate-mpi-prewarm", "gate"),
+        ("mpi", "gate-openmp-prewarm"),
+        ("gate-openmp-prewarm", "kokkos-openmp"),
+        ("kokkos-openmp", None),
+    )
+    for job_name, next_job in native_jobs:
+        job = workflow.split(f"\n  {job_name}:\n", 1)[1]
+        if next_job is not None:
+            job = job.split(f"\n  {next_job}:\n", 1)[0]
+        assert 'POPS_NATIVE_DIM: "2"' in job, job_name
+
+    assert 'value = environment.get("POPS_NATIVE_DIM")' in conftest
+    assert 'select_native_dimension(native_dimension)' in conftest
+    assert 'select_native_dimension(int(sys.argv[1]))' in conftest
+    assert 'environment.get("POPS_NATIVE_DIM", "2")' not in conftest
 
 
 def test_wheel_proof_accepts_an_explicit_fat_set_and_rejects_a_hidden_subset(tmp_path):

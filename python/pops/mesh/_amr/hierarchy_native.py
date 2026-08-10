@@ -38,18 +38,22 @@ class PreparedHierarchyNativeLowering:
             raise ValueError(
                 "hierarchy native lowering must preserve one contract per level transition"
             )
-        for name, rows, minimum in (
-            ("transition_ratios", ratios, 2),
-            ("transition_buffers", buffers, 0),
-        ):
-            for index, row in enumerate(rows):
-                if len(row) != self.dimension or any(
-                    type(value) is not int or value < minimum for value in row
-                ):
-                    raise ValueError(
-                        "hierarchy native lowering %s[%d] must contain %d integers >= %d"
-                        % (name, index, self.dimension, minimum)
-                    )
+        for index, row in enumerate(ratios):
+            if len(row) != self.dimension or any(
+                type(value) is not int or value < 1 for value in row
+            ) or not any(value > 1 for value in row):
+                raise ValueError(
+                    "hierarchy native lowering transition_ratios[%d] must contain %d positive "
+                    "integers and refine at least one axis" % (index, self.dimension)
+                )
+        for index, row in enumerate(buffers):
+            if len(row) != self.dimension or any(
+                type(value) is not int or value < 0 for value in row
+            ):
+                raise ValueError(
+                    "hierarchy native lowering transition_buffers[%d] must contain %d "
+                    "non-negative integers" % (index, self.dimension)
+                )
         if any(type(value) is not int or value < 0 for value in lookaheads):
             raise ValueError(
                 "hierarchy native lowering transition_lookaheads must be non-negative integers"
@@ -201,7 +205,7 @@ def _lower_shared_n_level(
 
 
 register_prepared_hierarchy_native_provider(
-    PreparedHierarchyNativeProvider("shared_n_level", 2, _lower_shared_n_level)
+    PreparedHierarchyNativeProvider("shared_n_level", 3, _lower_shared_n_level)
 )
 
 

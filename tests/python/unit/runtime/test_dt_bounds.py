@@ -28,6 +28,7 @@ import tempfile
 import numpy as np
 
 import pops.runtime._engine_descriptors as engine
+from pops.physics import Density
 from pops.physics._facade import Model
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
@@ -153,7 +154,7 @@ if missing:
 def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):
     """Advection scalaire a vitesse constante (1, 0) : lambda_max = 1 connu analytiquement."""
     m = Model(name)
-    (rho,) = m.conservative_vars("rho", roles=["Density"])
+    (rho,) = m.conservative_vars("rho", roles=[Density()])
     m.flux(x=[1.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[1.0 + 0.0 * rho], y=[0.0 * rho])
     m.primitive_vars(rho)
@@ -218,7 +219,7 @@ try:
         f"borne active = source_frequency:s (recu {s.last_dt_bound()!r})")
     try:
         bad = Model("freq_sans_source")
-        (r2,) = bad.conservative_vars("rho", roles=["Density"])
+        (r2,) = bad.conservative_vars("rho", roles=[Density()])
         bad.flux(x=[1.0 * r2], y=[0.0 * r2])
         bad.eigenvalues(x=[1.0 + 0.0 * r2], y=[0.0 * r2])
         bad.primitive_vars(r2)

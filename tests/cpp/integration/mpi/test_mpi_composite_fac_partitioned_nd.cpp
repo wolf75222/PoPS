@@ -88,7 +88,9 @@ CompositeFacPreparationBudget budget() {
 }
 
 template <int Dim>
-CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget preparation = budget()) {
+CompositeFacBuildRequest<Dim> make_request_with_ratio(
+    const std::array<int, Dim>& ratio_components,
+    CompositeFacPreparationBudget preparation = budget()) {
   Index<Dim> coarse_upper{};
   coarse_upper[0] = 7;
   for (int axis = 1; axis < Dim; ++axis)
@@ -96,7 +98,9 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
   const Box<Dim> coarse_domain{Index<Dim>{}, coarse_upper};
   const Geometry<Dim> coarse_geometry = Geometry<Dim>::from_bounds(
       coarse_domain, coordinates<Dim>(Real(0)), coordinates<Dim>(Real(1)));
-  const Extent<Dim> ratio_extent = integer_extent<Dim>(2);
+  Extent<Dim> ratio_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio_extent[axis] = ratio_components[static_cast<std::size_t>(axis)];
   const Geometry<Dim> fine_geometry = coarse_geometry.refine(ratio_extent);
 
   Index<Dim> coarse_left_upper = coarse_upper;
@@ -108,17 +112,17 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
       Box<Dim>{coarse_right_lower, coarse_upper},
   });
 
-  Index<Dim> fine_first_lower{};
-  Index<Dim> fine_first_upper = fine_geometry.domain().hi;
-  fine_first_lower[0] = 4;
-  fine_first_upper[0] = 7;
-  Index<Dim> fine_second_lower{};
-  Index<Dim> fine_second_upper = fine_geometry.domain().hi;
-  fine_second_lower[0] = 8;
-  fine_second_upper[0] = 11;
+  Index<Dim> fine_first_parent_lower{};
+  Index<Dim> fine_first_parent_upper = coarse_upper;
+  fine_first_parent_lower[0] = 2;
+  fine_first_parent_upper[0] = 3;
+  Index<Dim> fine_second_parent_lower{};
+  Index<Dim> fine_second_parent_upper = coarse_upper;
+  fine_second_parent_lower[0] = 4;
+  fine_second_parent_upper[0] = 5;
   const BoxArray<Dim> fine_layout(std::vector<Box<Dim>>{
-      Box<Dim>{fine_first_lower, fine_first_upper},
-      Box<Dim>{fine_second_lower, fine_second_upper},
+      pops::refine(Box<Dim>{fine_first_parent_lower, fine_first_parent_upper}, ratio_extent),
+      pops::refine(Box<Dim>{fine_second_parent_lower, fine_second_parent_upper}, ratio_extent),
   });
 
   Extent<Dim> rank_extents = integer_extent<Dim>(1);
@@ -132,9 +136,6 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
       Distribution<Dim>::partitioned(fine_layout, rank_space, fine_owners);
   const Index<Dim> local_rank = rank_coordinate<Dim>(pops::my_rank());
   const BoxArrayValidationBudget layout_budget{2, 1};
-  std::array<int, Dim> ratio_components{};
-  ratio_components.fill(2);
-
   EllipticBuildRequest<Dim> coarse{coarse_geometry,
                                    coarse_layout,
                                    coarse_distribution,
@@ -153,6 +154,13 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
                                  layout_budget};
   return CompositeFacBuildRequest<Dim>{
       {std::move(coarse), std::move(fine)}, {RefinementRatio<Dim>{ratio_components}}, preparation};
+}
+
+template <int Dim>
+CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget preparation = budget()) {
+  std::array<int, Dim> ratio_components{};
+  ratio_components.fill(2);
+  return make_request_with_ratio<Dim>(ratio_components, preparation);
 }
 
 template <int Dim>
@@ -213,6 +221,12 @@ void expect_partitioned_fac() {
             pops::all_reduce_max(static_cast<long>(report.iters)));
 }
 
+template <int Dim>
+void expect_exact_rank_ratio_prepares(const std::array<int, Dim>& ratio_components) {
+  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), {}, Real(1));
+  EXPECT_EQ(solver.n_levels(), 2);
+}
+
 void expect_collective_budget_failure() {
   CompositeFacPreparationBudget preparation = budget();
   if (pops::my_rank() == 0)
@@ -241,6 +255,9 @@ int run_partitioned_fac_matrix(int argc, char** argv) {
       expect_partitioned_fac<1>();
       expect_partitioned_fac<2>();
       expect_partitioned_fac<3>();
+      expect_exact_rank_ratio_prepares<1>({3});
+      expect_exact_rank_ratio_prepares<2>({3, 1});
+      expect_exact_rank_ratio_prepares<3>({1, 2, 3});
       expect_collective_budget_failure();
     }
     result = ::testing::Test::HasFailure() ? 1 : 0;

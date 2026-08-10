@@ -9,8 +9,10 @@ using namespace pops;
 TEST(RuntimeEnvironment, ReportsDimensionPrecisionAndBackends) {
   const RuntimeEnvironmentReport report = runtime_environment_report();
 
-  EXPECT_TRUE(report.dimension == 2) << "dimension_2";
-  EXPECT_TRUE(report.amr_refinement_ratio == kAmrRefRatio) << "amr_ratio_2";
+  EXPECT_TRUE(report.dimension == kNativeDimension) << "native_dimension";
+  EXPECT_TRUE(report.amr_refinement_ratio_selection == "hierarchy_exact_rank")
+      << "amr_ratio_authority";
+  EXPECT_TRUE(report.amr_refinement_ratio_rank == kNativeDimension) << "amr_ratio_rank";
   EXPECT_TRUE(report.precision == "double") << "precision_double";
   EXPECT_TRUE(report.real_bytes == static_cast<int>(sizeof(Real))) << "real_bytes";
   EXPECT_TRUE(!report.supports_single_precision) << "no_single_precision";

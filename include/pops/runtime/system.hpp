@@ -336,17 +336,6 @@ class System {
                                                  std::function<void()> installer,
                                                  std::shared_ptr<void> package_lifetime);
 
-  /// Installs an authenticated external Riemann policy against its compiled Model on the real
-  /// System storage. The loaded library remains alive until every installed closure is destroyed.
-  void add_external_riemann_block(const std::string& name, const std::string& so_path,
-                                  const std::string& brick_id, const std::string& sha256,
-                                  const std::string& limiter, const std::string& recon,
-                                  const std::string& time, double gamma, int substeps, bool evolve,
-                                  int stride, int expected_nvars, int expected_naux,
-                                  const std::string& expected_model_identity,
-                                  double positivity_floor = 0.0,
-                                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
-
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
   /// on the Python side so that emit_cpp_native_loader (or a diagnostic) can consult it.
@@ -383,7 +372,7 @@ class System {
   POPS_EXPORT void discard_hyperbolic_boundaries();
   /// Install one already-authenticated exact-ranked shared-interface provider after every endpoint
   /// block has been materialized. Interface geometry remains private to that provider; the generic
-  /// System never rebuilds a two-dimensional axis route from scalar metadata.
+  /// System never rebuilds an axis route from scalar metadata.
   POPS_EXPORT void install_interface_provider(SystemInterfaceProvider<Dim> provider);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
@@ -580,12 +569,6 @@ class System {
   /// the entire domain (default path). Diagnostic / contract verification.
   std::vector<double> embedded_boundary_mask() const;
 
-  /// Guarantees that the SHARED aux channel has at least @p ncomp components. Called by
-  /// add_compiled_model (cf. dsl_block.hpp) with aux_comps<Model> when adding a block that reads extra
-  /// auxiliary fields. Reallocating preserves the ADDRESS of the System's aux (the already-installed
-  /// block closures point to &aux), and re-applies B_z if it was supplied.
-  /// POPS_EXPORT: called by add_compiled_model (header) -> must be exported for the loader .so.
-
   /// Sets the density of a species (component 0), n*n row-major array. The other
   /// components (momentum, energy) are set to the at-rest equilibrium.
   void set_density(const std::string& name, const std::vector<double>& rho);
@@ -671,9 +654,10 @@ class System {
   void add_coupling_operator(const CouplingOperator& op);
 
   /// Install one executable coupling that was prepared by an authenticated dimension-qualified
-  /// package. The operator receives the simultaneous candidate-state pack selected by Program.
+  /// package. `provider_contract` is its immutable identity/version/program digest; the operator
+  /// receives the simultaneous candidate-state pack selected by Program.
   POPS_EXPORT void install_prepared_coupling_operator(
-      const std::string& label, CouplingOperatorView view,
+      const std::string& label, const std::string& provider_contract, CouplingOperatorView view,
       std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
       double constant_frequency = 0.0, std::function<Real()> maximum_frequency = {});
 
@@ -778,11 +762,6 @@ class System {
   /// Advances one step at dt = cfl * h / max wave speed of the system. @return the dt used.
   double step_cfl(double cfl, double speed_floor = static_cast<double>(kCflSpeedFloor),
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0);
-  /// Diagnostic (ADC-182): {w, i, j} of the GLOBAL cell that dominates the transport
-  /// CFL bound of the block -- to locate a realizability erosion / a collapsing dt.
-  /// On demand, off the hot path (step/step_cfl unchanged).
-  std::array<double, 3> dt_hotspot(const std::string& name);
-
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
   /// Per-phase / per-brick wall-clock timing of the step. Disabled by default (no hot-path cost
   /// when off). enable_profiling() then step()/step_cfl() then profile_report() returns the table;
@@ -829,13 +808,11 @@ class System {
   std::vector<std::string> variable_names(const std::string& name,
                                           const std::string& kind = "conservative") const;
   /// PHYSICAL roles of the variables of a block (parallel to variable_names): "density",
-  /// "momentum_x", "energy", ... or "custom" if the block does not provide its roles. This is what
+  /// "momentum:0", "energy", ... or "custom" if the block does not provide its roles. This is what
   /// the inter-species couplings resolve (index_of(role)) instead of a literal index.
   std::vector<std::string> variable_roles(const std::string& name,
                                           const std::string& kind = "conservative") const;
-  /// Adiabatic index (gamma) of the block, read by the inter-species couplings (collision, thermal
-  /// exchange, T_e). Equals the historical default 1.4 unless the block declares it (add_block: ModelSpec
-  /// gamma; compiled / dynamic block: optional symbol pops_compiled_gamma of the .so ABI).
+  /// Adiabatic index declared by the block and read by model-aware coupling providers.
   double block_gamma(const std::string& name) const;
   /// @}
 
@@ -1126,9 +1103,8 @@ class System {
   /// @{
   /// Mark the composition as bound (frozen): every structural setter (add_block / set_poisson /
   /// install_program / set_analytic_level_set / ...) then rejects with a precise error.
-  /// The runtime-data setters (set_state / set_density / set_program_params /
-  /// set_magnetic_field / set_aux_field_component / set_clock / set_potential) stay allowed. A second
-  /// mark_bound() throws (a composition binds exactly once).
+  /// Runtime-data publication through exact state, field, parameter and ComponentKey provider
+  /// authorities stays allowed. A second mark_bound() throws (a composition binds exactly once).
   void mark_bound();
   /// The runtime lifecycle state: "assembling" (not yet bound -- the composition is mutable),
   /// "bound" (mark_bound() ran, no macro-step advanced yet), "running" (bound AND macro_step() > 0).
@@ -1269,11 +1245,11 @@ class System {
   /// Structured report of effective numerical, solver and physical options currently configured.
   EffectiveOptionsReport effective_options_report() const;
   double mass(const std::string& name) const;
-  std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
-  std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
+  std::vector<double> density(const std::string& name) const;  ///< native index order
+  std::vector<double> potential();  ///< phi, native index order
   /// RESTORES the potential phi (accepted-state restart): without it the multigrid would restart from
-  /// a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx row-major
-  /// (same layout as potential()).
+  /// a blank phi and the resume would not be bit-identical (warm start lost). The field uses the
+  /// same exact-ranked flattened layout as potential().
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);
@@ -1290,9 +1266,9 @@ class System {
   /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes
   /// the single artifact only on rank 0.
   /// @{
-  std::vector<double> density_global(const std::string& name) const;  ///< comp0, ny*nx global
-  std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*ny*nx global
-  std::vector<double> potential_global();                             ///< phi, ny*nx global
+  std::vector<double> density_global(const std::string& name) const;  ///< comp0, global cell product
+  std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*global cell product
+  std::vector<double> potential_global();                             ///< phi, global cell product
   std::vector<double> field_potential_global(const std::string& provider_slot);
   /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
   /// Local pieces preserve native ranked ownership and never gather.
@@ -1330,11 +1306,11 @@ class System {
   /// rank 0 and nothing elsewhere -- true hyperslab parallelism appears only on a MULTI-BOX
   /// geometry (cf. AMR). The API stays correct in the general case (iteration over all the local fabs,
   /// GLOBAL indices in the box). Layout of local_state IDENTICAL to state_global but
-  /// relative to the local box: (c*bny + (j - jlo))*bnx + (i - ilo), component-major.
+  /// relative to the local box: component-major with the final native axis contiguous.
   /// @{
   std::vector<Box<Dim>> local_boxes(const std::string& name) const;
   std::vector<double> local_state(const std::string& name,
-                                  int li) const;  ///< U of fab li, flat (ncomp*bny*bnx)
+                                  int li) const;  ///< U of fab li, flat (ncomp*box.numPts())
                                                   /// @}
                                                   /// @}
 
@@ -1381,6 +1357,8 @@ class System {
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(
       const std::array<std::uint64_t, 4>& authority) const noexcept;
+  void add_coupled_source_prepared_(const CoupledSourceProgram& program, double frequency,
+                                    const std::string& label, CouplingOperatorView inspect);
   struct Impl;
   std::unique_ptr<Impl> p_;
 };

@@ -1,16 +1,19 @@
 # M4 native runtime and scientific I/O conformance gate
 
-The evidence ledger is **SOURCE-CLOSED AND REQUIRED BY CI**. The ledger in
+The evidence ledger is **REQUIRED BY CI AND CURRENTLY OPEN**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
-ADC-679 through ADC-687. It contains exactly 55 executable checks and
-`deferred = []`. Milestone closure is accepted only for a commit whose required MPI job
-successfully executes the complete installed gate; source audit alone is not
-the acceptance evidence.
+ADC-679 through ADC-687. It currently contains 53 executable checks and two
+explicit ADC-681 gaps: runtime installation/execution of external boundary
+components and external AMR Tagger/Clustering/Reflux components. Milestone
+closure is accepted only after those rows are replaced by real installed
+proofs, `deferred = []`, and the required MPI job executes the complete gate;
+source audit alone is not acceptance evidence.
 
 The source audit already authenticates real proofs for:
 
-- external flux, boundary, tagger, transfer, solver, and writer components
-  that are compiled, loaded, and executed;
+- external flux, transfer, solver, and writer components that are compiled,
+  loaded, and executed; boundary and AMR tagging component execution remain
+  explicit gaps rather than being inferred from direct ABI unit tests;
 - canonical component manifests, generated registries, exact interface
   tables, and platform launch checks;
 - source, manifest, and installed-binary tamper refusals, provider absence,
@@ -126,19 +129,20 @@ without a wrapper, fake engine, replaced step target, or monkeypatch.
 
 ## Gate modes
 
-The source-only architecture CI checks that the ledger is closed:
+The source-only architecture CI audits executable evidence and explicit gaps:
 
 ```bash
-python scripts/run_m4_gate.py --check-only
+python scripts/run_m4_gate.py --audit-only
 ```
 
-`--check-only` verifies the exact nodeids, CTest selectors, manifest ownership,
-empty deferred-gap ledger, and source-level anti-skip rules without launching
-a compiler, test, MPI process, or native reader. `--audit-only` performs the
-same structural audit and reports `AUDITED CLOSED`.
+`--audit-only` verifies exact nodeids, CTest selectors, manifest ownership,
+gap evidence, and source-level anti-skip rules without launching a compiler,
+test, MPI process, or native reader; it reports `AUDITED OPEN` while any gap
+remains. `--check-only` additionally requires an empty deferred-gap ledger and
+therefore fails closed on the current manifest.
 
-The installed MPI lane asks the same closed manifest for its exact native build
-targets:
+Once the manifest is closed, the installed MPI lane asks it for the exact
+native build targets:
 
 ```bash
 python scripts/run_m4_gate.py --list-ctest-targets

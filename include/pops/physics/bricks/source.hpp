@@ -203,8 +203,10 @@ struct GravityForceND {
 
 /// Explicit Cartesian Lorentz force from the three-component magnetic provider vector.
 ///
-/// This capability needs the x-y plane. In 3D it rotates the x/y momenta and leaves z unchanged;
-/// in 2D the same algebra applies to Cartesian or to the local `(e_r, e_theta)` polar basis.
+/// Every native momentum component is the exact projection of `q/m (momentum x B)` through the
+/// three-dimensional Levi-Civita tensor.  A 1D state therefore has the mathematically exact axial
+/// projection, a 2D state has both in-plane projections, and a 3D state has the full cross product.
+/// Geometry-specific basis transforms are deliberately outside this Cartesian brick.
 template <int Dim, class MagneticSlots = ProviderSlots<0, 1, 2>>
 struct MagneticLorentzForceND {
   static_assert(Dim >= 1 && Dim <= 3,

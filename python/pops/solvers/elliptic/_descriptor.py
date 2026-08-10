@@ -11,9 +11,9 @@ parameter surface, not the bare string ``solver="geometric_mg"``:
   tolerance (:class:`pops.solvers.tolerances.Relative` / :class:`~pops.solvers.tolerances.Absolute`)
   and a V-cycle cap (``max_cycles``). It declares its AMR / MPI / GPU /
   variable_epsilon) so an unsupported route is refused before the runtime is touched.
-* :class:`FFT` -- the concrete exact-rank-two ``pops::PoissonFFTSolver<2>`` (periodic BC,
-  constant coefficient, power-of-two grid); ``available()`` reports ``partial`` for those route
-  constraints and refuses rank one or three instead of substituting another algorithm.
+* :class:`FFT` -- the exact-ranked ``pops::PoissonFFTSolver<Dim>`` for Cartesian ranks 1, 2 and 3
+  (periodic BC and constant coefficient). Radix-2 axes use the fast transform and other extents use
+  the same authenticated discrete operator through an explicit direct-DFT fallback.
 
 All are inert (Spec 5 sec.6): they record the choice and answer ``available`` / ``lower`` /
 ``inspect``; the C++ kernels perform the solve. The ``scheme`` attribute mirrors
@@ -483,17 +483,17 @@ class GeometricMG(Descriptor):
 
 
 class FFT(Descriptor):
-    """The exact-rank-two discrete FFT Poisson provider.
+    """The exact-ranked Cartesian discrete FFT Poisson provider.
 
-    The concrete C++ engine performs FFT-x, a slab transpose and FFT-y.  It therefore accepts only
-    a two-dimensional uniform periodic layout, even though periodic Poisson is mathematically ND.
-    The public provider inverts the same discrete five-point operator used to authenticate its
-    residual.  There is deliberately no continuous-symbol selector: that engine has no matching
-    apply/residual provider and cannot publish an authenticated :class:`SolveReport` for it.
+    The C++ engine is instantiated at the artifact's compile-time rank in ``{1, 2, 3}`` and
+    distributes the last transform direction over canonical MPI slabs. The public provider inverts
+    the same exact-rank discrete Cartesian operator used to authenticate its residual. There is
+    deliberately no continuous-symbol selector: that engine has no matching apply/residual
+    provider and cannot publish an authenticated :class:`SolveReport` for it.
     """
 
     category = "elliptic_solver"
-    native_id = "pops::PoissonFFTSolver<2>"
+    native_id = "pops::PoissonFFTSolver<Dim>"
 
     @property
     def name(self) -> str:
@@ -530,20 +530,19 @@ class FFT(Descriptor):
                 alternatives=["pops.solvers.elliptic.GeometricMG()"],
             )
         dimension = _context_layout_dimension(context)
-        if dimension is not None and dimension != 2:
+        if dimension is not None and dimension not in (1, 2, 3):
             return Availability.no(
-                "FFT requires an exact two-dimensional uniform periodic layout; got Dim=%d. "
+                "FFT requires a Cartesian layout with Dim in {1,2,3}; got Dim=%d. "
                 "Use CartesianCG()." % dimension,
-                missing=["exact Dim=2 FFT backend"],
+                missing=["native Cartesian rank in {1,2,3}"],
                 alternatives=["pops.solvers.elliptic.CartesianCG()"],
             )
         return Availability.partial(
-            "the exact Dim=2 FFT Poisson solver requires a periodic boundary, a "
-            "constant-coefficient operator (no wall / embedded boundary), a power-of-two grid "
-            "and canonical ordered MPI slabs",
+            "the exact-ranked FFT Poisson solver requires a periodic boundary, a "
+            "constant-coefficient operator (no wall / embedded boundary) and canonical ordered "
+            "MPI slabs; non-radix-2 extents use the diagnosed direct-DFT path",
             missing=[
-                "exact Dim=2 layout", "periodic BC", "constant coefficient",
-                "power-of-two grid", "canonical MPI slabs",
+                "periodic BC", "constant coefficient", "canonical MPI slabs",
             ],
             alternatives=["pops.solvers.elliptic.CartesianCG()"],
         )

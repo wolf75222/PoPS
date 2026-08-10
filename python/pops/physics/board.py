@@ -29,7 +29,7 @@ from .. import math as _bm
 from .._ir import _wrap
 from .board_handles import (FieldHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
-                            VectorHandle, _canon_role, _safe_name)
+                            VectorHandle, _safe_name)
 from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
                               normalize_sequence, require_name)
 from ._board_compile import _BoardCompileMixin
@@ -332,7 +332,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             "clock": "simulation" if placement is None else placement.clock,
             "units": units,
         }
-        role_list = None if roles is None else [_canon_role(role_map.get(c)) for c in components]
+        # Preserve the typed descriptors through authoring.  ``roles_for`` owns
+        # the single lowering to exact ``family[:axis]`` native tokens.
+        role_list = None if roles is None else [role_map.get(c) for c in components]
         hyp = self._dsl._m
         with atomic_attrs(
             (hyp, "cons_names"),
@@ -503,9 +505,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 stack.extend(_children(node))
 
         role_map = normalize_roles(roles, names, "primitive_state")
-        role_list = None if roles is None else [
-            _canon_role(role_map.get(name)) for name in names
-        ]
+        role_list = None if roles is None else [role_map.get(name) for name in names]
         hyp = self._dsl._m
         with atomic_attrs(
             (hyp, "prim_state"), (hyp, "prim_roles"), (hyp, "cons_from"),

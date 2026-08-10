@@ -267,17 +267,9 @@ def capabilities() -> Any:
     runtime_env = runtime_environment_report()
     poisson_system = [
         "%s (exact-ranked Cartesian Poisson; 1D/2D/3D)" % poisson_cg,
+        "%s (exact-ranked Cartesian Dim=1/2/3, periodic, constant eps, ordered MPI slabs)"
+        % poisson_fft,
     ]
-    if runtime_env["dimension"] == 2:
-        poisson_system.append(
-            "%s (exact Dim=2, periodic, n = 2^k, constant eps, ordered MPI slabs)"
-            % poisson_fft
-        )
-    else:
-        poisson_system.append(
-            "%s unavailable for Dim=%d (concrete backend is exact Dim=2)"
-            % (poisson_fft, runtime_env["dimension"])
-        )
     return {
         # Immutable rank selected by the loaded native artifact before runtime construction.
         "dimension": runtime_env["dimension"],
@@ -359,9 +351,8 @@ def capabilities() -> Any:
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
-            "refinement_ratio = 2 only (single native AMR invariant, centralized in "
-            "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
-            "hierarchy construction, not silently mis-coarsened)",
+            "transition ratios selected by the authenticated hierarchy (exact native-rank "
+            "values; no process-global AMR ratio is advertised)",
         },
         "schur": {
             "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "

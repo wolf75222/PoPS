@@ -3,32 +3,15 @@ from __future__ import annotations
 
 from typing import Any
 
-
-ROLE_TO_CANONICAL = {
-    "density": "density",
-    "energy": "energy",
-    "pressure": "pressure",
-    "temperature": "temperature",
-    "scalar": "scalar",
-}
-
-
-def _axis_role(role: Any) -> bool:
-    if not isinstance(role, str):
-        return False
-    family, separator, axis = role.partition(":")
-    return family in {"momentum", "velocity", "axial"} and separator == ":" and axis.isdecimal()
+from pops.physics.roles import parse_role
 
 
 def role_canonical(role: Any) -> Any:
     """Canonical lowercase role accepted by the native boundary."""
-    if role in ROLE_TO_CANONICAL:
-        return ROLE_TO_CANONICAL[role]
-    if _axis_role(role):
-        return role
-    raise ValueError(
-        "CoupledSource: unknown role %r (roles: %s)"
-        % (role, ", ".join(sorted(ROLE_TO_CANONICAL))))
+    try:
+        return parse_role(role, where="CoupledSource role").token
+    except (TypeError, ValueError) as exc:
+        raise ValueError("CoupledSource: unknown structured role %r" % (role,)) from exc
 
 
 # Mirror of pops::CsOp and coupled_source_program.hpp capacities.

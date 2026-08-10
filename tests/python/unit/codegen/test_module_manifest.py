@@ -25,7 +25,7 @@ from pops.params import ConstParam, RuntimeParam
 def _small_module():
     """A minimal single-state Module with a field, a param, an aux and one field_operator."""
     mod = model.Module("m")
-    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "density"})
     f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
     mod.parameters(RuntimeParam("alpha", default=1.0))
     mod.aux_fields(B_z="cell_scalar")
@@ -60,7 +60,7 @@ def test_manifest_schema_and_spaces():
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
-    assert manifest.state_spaces["U"]["roles"] == {"rho": "Density"}
+    assert manifest.state_spaces["U"]["roles"] == {"rho": "density"}
     assert manifest.field_spaces["fields"]["components"] == ("phi", "grad_x", "grad_y")
     assert manifest.params["alpha"]["default"] == {
         "state": "value",

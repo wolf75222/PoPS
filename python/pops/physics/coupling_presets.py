@@ -25,6 +25,7 @@ Import-graph rule (Spec 4): pure ``pops._ir`` / ``pops.physics.multispecies`` + 
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from fractions import Fraction
 from typing import Any
 
@@ -35,6 +36,29 @@ from pops.physics._scalars import (
     subtract_exact_integer,
 )
 from pops.physics.multispecies import CoupledSource
+from pops.physics.roles import CouplingBlockContract, StateSchema
+
+
+def _same_dimension(*schemas: StateSchema) -> int:
+    dimensions = {schema.dimension for schema in schemas}
+    if len(dimensions) != 1:
+        raise ValueError("named coupling requires participating StateSchemas at one exact dimension")
+    return next(iter(dimensions))
+
+
+def _require_density(schema: StateSchema, *, block: Any) -> None:
+    schema.require("density")
+
+
+def _require_fluid(schema: StateSchema, *, block: Any) -> tuple[int, ...]:
+    schema.require("density")
+    axes = schema.axes("momentum")
+    expected = tuple(range(schema.dimension))
+    if axes != expected:
+        raise ValueError(
+            "named fluid coupling block %r requires momentum:<axis> for every axis %r; got %r"
+            % (block, expected, axes))
+    return axes
 
 
 # --- declared conservation contract carried alongside a preset's CoupledSource -------------------
@@ -65,8 +89,9 @@ class ContractedCoupling:
         )
 
 
-def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any,
-                      name: str = "ionization") -> Any:
+def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any, *,
+                      electron_schema: StateSchema, ion_schema: StateSchema,
+                      neutral_schema: StateSchema, name: str = "ionization") -> Any:
     """Ionization ``n_g -> n_i + n_e`` at rate ``r = k * n_e * n_g`` (ADC-595 preset).
 
     Reproduces ``System::add_ionization`` (deleted): one neutral disappears, one ion and one electron
@@ -78,11 +103,15 @@ def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any,
 
     Returns a :class:`ContractedCoupling` (source + declared ``created=['density']`` contract).
     """
+    _same_dimension(electron_schema, ion_schema, neutral_schema)
+    _require_density(electron_schema, block=electron)
+    _require_density(ion_schema, block=ion)
+    _require_density(neutral_schema, block=neutral)
     src = CoupledSource(name)
     # Only the electron and neutral densities are READ (the rate is k * n_e * n_g); the ion density is a
     # write target only, so it is NOT registered as an input (matching the C++ helper's register set).
-    ne = src.block(electron).role("Density")
-    ng = src.block(neutral).role("Density")
+    ne = src.block(electron).role("density")
+    ng = src.block(neutral).role("density")
     k = src.param("k_ionization", rate)
     r = (k * ne) * ng  # r = k * n_e * n_g, grouped ((k*ne)*ng) as the C++ helper
     src.add(neutral, role="density", expr=-r)   # n_g -= dt*r
@@ -93,7 +122,8 @@ def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any,
     return ContractedCoupling(src, created=["density"])
 
 
-def collision_preset(a: Any, b: Any, rate: Any, name: str = "collision") -> Any:
+def collision_preset(a: Any, b: Any, rate: Any, *, a_schema: StateSchema,
+                     b_schema: StateSchema, name: str = "collision") -> Any:
     """Inter-species friction ``F = k * (u_a - u_b)`` on the momentum (ADC-595 preset).
 
     Reproduces ``System::add_collision`` (deleted): the force is applied with OPPOSITE sign on each
@@ -103,26 +133,28 @@ def collision_preset(a: Any, b: Any, rate: Any, name: str = "collision") -> Any:
     matching ``ub += dt*F``) and ``-expr`` on @p a (which LOSES, matching ``ua -= dt*F``), so the two
     legs share the SAME subtree with opposite sign -- conservative by construction.
 
-    Returns a :class:`ContractedCoupling` (source + declared ``conserved=['momentum:0','momentum:1']``).
+    Returns a :class:`ContractedCoupling` whose conserved roles cover every resolved momentum axis.
     """
+    dimension = _same_dimension(a_schema, b_schema)
+    axes_a = _require_fluid(a_schema, block=a)
+    axes_b = _require_fluid(b_schema, block=b)
+    if axes_a != axes_b or axes_a != tuple(range(dimension)):
+        raise ValueError("collision requires matching exact-rank momentum StateSchemas")
     src = CoupledSource(name)
-    mxa = src.block(a).role("momentum:0")
-    mya = src.block(a).role("momentum:1")
     da = src.block(a).role("density")
-    mxb = src.block(b).role("momentum:0")
-    myb = src.block(b).role("momentum:1")
     db = src.block(b).role("density")
     k = src.param("k_collision", rate)
-    fx = k * ((mxa / da) - (mxb / db))  # F_x = k (u_xa - u_xb); C++ grouping preserved
-    fy = k * ((mya / da) - (myb / db))  # F_y = k (u_ya - u_yb)
-    # b GAINS +F (ub += dt*F), a LOSES -F (ua -= dt*F): add_pair(block_a=b, block_b=a) emits +expr on b
-    # and -expr on a -- the exact signs of the C++ helper.
-    src.add_pair(b, a, role="momentum:0", expr=fx)
-    src.add_pair(b, a, role="momentum:1", expr=fy)
-    return ContractedCoupling(src, conserved=["momentum:0", "momentum:1"])
+    conserved = []
+    for axis in range(dimension):
+        role = "momentum:%d" % axis
+        force = k * ((src.block(a).role(role) / da) - (src.block(b).role(role) / db))
+        src.add_pair(b, a, role=role, expr=force)
+        conserved.append(role)
+    return ContractedCoupling(src, conserved=conserved)
 
 
-def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: Any,
+def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: Any, *,
+                            a_schema: StateSchema, b_schema: StateSchema,
                             name: str = "thermal_exchange") -> Any:
     """Inter-species thermal exchange ``q = k * (T_a - T_b)`` on the energy (ADC-595 preset).
 
@@ -136,14 +168,15 @@ def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: An
 
     Returns a :class:`ContractedCoupling` (source + declared ``conserved=['energy']``).
     """
+    dimension = _same_dimension(a_schema, b_schema)
+    _require_fluid(a_schema, block=a)
+    _require_fluid(b_schema, block=b)
+    a_schema.require("energy")
+    b_schema.require("energy")
     src = CoupledSource(name)
     ea = src.block(a).role("energy")
-    mxa = src.block(a).role("momentum:0")
-    mya = src.block(a).role("momentum:1")
     da = src.block(a).role("density")
     eb = src.block(b).role("energy")
-    mxb = src.block(b).role("momentum:0")
-    myb = src.block(b).role("momentum:1")
     db = src.block(b).role("density")
     k = src.param("k_thermal", rate)
     ga = exact_physics_scalar(gamma_a, where="thermal_exchange_preset.gamma_a")
@@ -153,9 +186,16 @@ def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: An
     gam_b = src.param(
         "gamma_b", subtract_exact_integer(gb, 1, where="thermal_exchange_preset.gamma_b"))
     half = src.param("half", Fraction(1, 2))
-    # p = (gamma-1) * (E - 0.5 * (mx*mx + my*my) / rho), grouped exactly as the C++ helper.
-    pa = gam_a * (ea - half * (((mxa * mxa) + (mya * mya)) / da))
-    pb = gam_b * (eb - half * (((mxb * mxb) + (myb * myb)) / db))
+    kinetic_a = kinetic_b = None
+    for axis in range(dimension):
+        role = "momentum:%d" % axis
+        ma = src.block(a).role(role)
+        mb = src.block(b).role(role)
+        kinetic_a = ma * ma if kinetic_a is None else kinetic_a + ma * ma
+        kinetic_b = mb * mb if kinetic_b is None else kinetic_b + mb * mb
+    # p = (gamma-1) * (E - 0.5 * sum_axis(m_axis^2) / rho).
+    pa = gam_a * (ea - half * (kinetic_a / da))
+    pb = gam_b * (eb - half * (kinetic_b / db))
     q = k * ((pa / da) - (pb / db))  # q = k (T_a - T_b), T = p / rho
     # b GAINS +q (ub += dt*q), a LOSES -q (ua -= dt*q): add_pair(block_a=b, block_b=a).
     src.add_pair(b, a, role="energy", expr=q)
@@ -186,21 +226,37 @@ def coupling_operator_args(compiled: Any, conserved: Any = (), created: Any = ()
             getattr(compiled, "freq_prog_args", []), list(conserved), list(created))
 
 
-def lower_named_coupling(coupling: Any, gamma_of: Any) -> Any:
+def lower_named_coupling(
+    coupling: Any, contract_of: Callable[[Any], CouplingBlockContract]
+) -> Any:
     """Lower a named coupling object to its :class:`ContractedCoupling` preset, or ``None`` (ADC-595).
 
     Dispatches the private native-engine ``Ionization`` / ``Collision`` / ``ThermalExchange``
     values (duck-typed by their fields to avoid a runtime import cycle) to the matching preset
-    builder. ``ThermalExchange`` reads each block's adiabatic index via the @p gamma_of callback
-    (``lambda name: sim.block_gamma(name)``), inlined as a per-block ``.param()``, exactly like the
-    deleted ``System::add_thermal_exchange`` read ``P->sp[ia].gamma``. Returns ``None`` for any object
-    that is not a named coupling (the caller then handles the generic CompiledCoupledSource path)."""
+    builder. ``ThermalExchange`` reads each block's ``adiabatic_index`` from the same authenticated
+    model/provider contract as its StateSchema; no runtime-specific physical accessor or AMR slot is
+    invented. Returns ``None`` for any object that is not a named coupling (the caller then handles
+    the generic CompiledCoupledSource path)."""
     kind = type(coupling).__name__
     if kind == "Ionization":
-        return ionization_preset(coupling.electron, coupling.ion, coupling.neutral, coupling.rate)
+        electron = contract_of(coupling.electron)
+        ion = contract_of(coupling.ion)
+        neutral = contract_of(coupling.neutral)
+        return ionization_preset(
+            coupling.electron, coupling.ion, coupling.neutral, coupling.rate,
+            electron_schema=electron.schema, ion_schema=ion.schema,
+            neutral_schema=neutral.schema)
     if kind == "Collision":
-        return collision_preset(coupling.a, coupling.b, coupling.rate)
+        a = contract_of(coupling.a)
+        b = contract_of(coupling.b)
+        return collision_preset(
+            coupling.a, coupling.b, coupling.rate,
+            a_schema=a.schema, b_schema=b.schema)
     if kind == "ThermalExchange":
+        a = contract_of(coupling.a)
+        b = contract_of(coupling.b)
         return thermal_exchange_preset(coupling.a, coupling.b, coupling.rate,
-                                       gamma_of(coupling.a), gamma_of(coupling.b))
+                                       a.parameter("adiabatic_index"),
+                                       b.parameter("adiabatic_index"),
+                                       a_schema=a.schema, b_schema=b.schema)
     return None

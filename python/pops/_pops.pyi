@@ -90,7 +90,9 @@ class StepAttemptRejected(RuntimeError):
 
 class _RuntimeEnvironmentReport(TypedDict):
     dimension: int
-    amr_refinement_ratio: int
+    amr_refinement_ratio: None
+    amr_refinement_ratio_selection: str
+    amr_refinement_ratio_rank: int
     precision: str
     real_bytes: int
     supports_single_precision: bool

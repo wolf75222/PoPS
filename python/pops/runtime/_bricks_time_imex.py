@@ -1,7 +1,7 @@
 """IMEX / source-implicit time policies + the implicit-mask helpers.
 
-Split out of :mod:`pops.runtime._bricks_time` for the 500-line cap (ADC-550): the mask
-normalization helpers ``_role_to_stable`` / ``_norm_implicit`` and the implicit-source time
+Split out of :mod:`pops.runtime._bricks_time` for the 500-line cap (ADC-550): the exact-role mask
+normalization helper ``_norm_implicit`` and the implicit-source time
 policies ``IMEX`` / ``SourceImplicit`` / ``SourceImplicitBE`` / ``IMEXRK``. ``_bricks_time``
 re-imports every name; private native-engine adapters consume them through
 ``pops.runtime._engine_descriptors``. Global solves and operator splitting are explicit ``Program``
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.physics.roles import ComponentRole, native_role_token
 from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -56,35 +57,15 @@ def _newton_controls(
     )
 
 
-def _role_to_stable(name: Any) -> Any:
-    """Normalize a role name to the STABLE key expected by the C++ (role_from_name): lowercase
-    snake_case ("momentum_x", "energy"). Tolerates the PascalCase variants of the C++ enum exposed in
-    the target API (e.g. "MomentumX" -> "momentum_x", "Energy" -> "energy") by inserting a '_' before each
-    internal uppercase letter before lowercasing. A name already in snake_case ("momentum_x") is unchanged."""
-    s = str(name).strip()
-    if not s:
-        return s
-    if s == s.lower():  # already snake_case / lowercase: unchanged
-        return s
-    out = [s[0].lower()]
-    for ch in s[1:]:
-        if ch.isupper():
-            out.append("_")
-            out.append(ch.lower())
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
 def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
-    """Normalize the implicit-mask lists (names / physical roles) into lists of strings.
+    """Normalize names and typed physical roles into the native exact-role vocabulary.
 
-    None -> [] (default: inactive mask, model default, bit-identical). A bare string is tolerated
-    (e.g. implicit_vars="rho_u" -> ["rho_u"]). The roles are reduced to the STABLE C++ key (snake_case)
-    via _role_to_stable -> "MomentumX" and "momentum_x" are equivalent. The mask lives on the TEMPORAL
-    POLICY / block side (and NOT the model): the SAME model is reused with distinct implicit treatments.
-    The RESOLUTION of names/roles -> indices and the validation (name/role absent from the block) lives
-    on the C++ side (System::add_block), the only source of truth for the block names/roles."""
+    ``implicit_vars`` remains a list of exact state-component names. ``implicit_roles`` accepts only
+    :class:`pops.physics.ComponentRole` values and lowers them to ``family`` or
+    ``family:<axis>`` tokens.  There are no X/Y/Z role aliases: the model's exact native dimension
+    validates every axis when the block is bound.  The mask lives on the temporal policy, so the same
+    model can be reused with distinct implicit treatments.
+    """
 
     def as_list(x: Any, what: Any) -> Any:
         if x is None:
@@ -100,7 +81,27 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
         return out
 
     names = as_list(implicit_vars, "implicit_vars")
-    roles = [_role_to_stable(r) for r in as_list(implicit_roles, "implicit_roles")]
+    if implicit_roles is None:
+        role_values: list[ComponentRole] = []
+    elif isinstance(implicit_roles, ComponentRole):
+        role_values = [implicit_roles]
+    elif isinstance(implicit_roles, (str, bytes)):
+        raise TypeError(
+            "%s: implicit_roles requires typed pops.physics roles, not strings" % label
+        )
+    else:
+        try:
+            role_values = list(implicit_roles)
+        except TypeError:
+            raise TypeError(
+                "%s: implicit_roles must be an ordered iterable of typed pops.physics roles"
+                % label
+            ) from None
+    if any(not isinstance(role, ComponentRole) for role in role_values):
+        raise TypeError(
+            "%s: implicit_roles requires typed pops.physics roles, not strings or labels" % label
+        )
+    roles = [native_role_token(role) for role in role_values]
     return names, roles
 
 
@@ -123,9 +124,9 @@ class IMEX:
       Default [] (+ implicit_roles []) = the model/Program default. A lowering that supports this
       route resolves names against the block descriptor; an absent name raises an error.
       E.g. the private engine record ``IMEX(implicit_vars=["rho_u", "rho_v"])``.
-    - ``implicit_roles``: same mask but by physical ROLE ("density", "momentum_x", "energy", ...)
-      instead of the name (cf. System.variable_roles). Union with implicit_vars. E.g.
-      ``IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"])``.
+    - ``implicit_roles``: same mask but by typed physical role instead of the component name
+      (cf. System.variable_roles). Union with implicit_vars. For example, in a two-dimensional
+      frame: ``IMEX(implicit_roles=[Momentum(x_axis), Momentum(y_axis), Energy()])``.
     - ``newton_max_iters``: hard iteration budget of the local Newton.
     - ``newton_rel_tol`` / ``newton_abs_tol``: per-cell stopping criterion
       ||F||_inf <= abs_tol + rel_tol*||F0||_inf. At least one tolerance must be positive.
@@ -316,7 +317,6 @@ class IMEXRK:
 
 
 __all__ = [
-    "_role_to_stable",
     "_norm_implicit",
     "IMEX",
     "SourceImplicit",

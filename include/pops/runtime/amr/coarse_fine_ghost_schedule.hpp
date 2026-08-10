@@ -133,7 +133,8 @@ template <int Dim>
 Box<Dim> required_parent_stencil(const Box<Dim>& fine_region,
                                  const ::pops::amr::RefinementRatio<Dim>& ratio,
                                  const Box<Dim>& coarse_domain, const Box<Dim>& fine_domain,
-                                 const Index<Dim>& periodic_source_from_destination) {
+                                 const Index<Dim>& periodic_source_from_destination,
+                                 int stencil_radius) {
   Box<Dim> result{};
   for (int axis = 0; axis < Dim; ++axis) {
     const auto parent = [&](int fine_coordinate) {
@@ -147,8 +148,8 @@ Box<Dim> required_parent_stencil(const Box<Dim>& fine_region,
     std::int64_t lower = parent(fine_region.lo[axis]);
     std::int64_t upper = parent(fine_region.hi[axis]);
     if (ratio[axis] > 1) {
-      --lower;
-      ++upper;
+      lower -= stencil_radius;
+      upper += stencil_radius;
     }
     if (lower < std::numeric_limits<int>::min() || upper > std::numeric_limits<int>::max())
       throw std::overflow_error("coarse/fine interpolation stencil exceeds native coordinates");
@@ -256,7 +257,8 @@ class CoarseFineGhostSchedule {
   CoarseFineGhostSchedule(const MultiFab<Dim, CoarseMemorySpace>& coarse,
                           const MultiFab<Dim, FineMemorySpace>& fine, const Box<Dim>& coarse_domain,
                           const Box<Dim>& fine_domain, ::pops::amr::RefinementRatio<Dim> ratio,
-                          BoundaryTopology<Dim> topology, CoarseFineGhostScheduleBudget budget)
+                          BoundaryTopology<Dim> topology, int parent_stencil_radius,
+                          CoarseFineGhostScheduleBudget budget)
       : coarse_layout_(coarse.layout()),
         coarse_distribution_(coarse.distribution()),
         fine_layout_(fine.layout()),
@@ -266,6 +268,7 @@ class CoarseFineGhostSchedule {
         fine_domain_(fine_domain),
         ratio_(ratio),
         topology_(topology),
+        parent_stencil_radius_(parent_stencil_radius),
         ghosts_(fine.ghosts()),
         ncomp_(fine.ncomp()) {
     validate_metadata_(coarse, fine, budget);
@@ -286,6 +289,7 @@ class CoarseFineGhostSchedule {
   const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
   const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
   int ncomp() const noexcept { return ncomp_; }
+  int parent_stencil_radius() const noexcept { return parent_stencil_radius_; }
   const std::vector<patch_plan_type>& patch_plans() const noexcept { return patch_plans_; }
   const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_jobs_; }
   const std::vector<job_type>& local_jobs() const noexcept { return local_jobs_; }
@@ -312,9 +316,11 @@ class CoarseFineGhostSchedule {
   void validate_metadata_(const MultiFab<Dim, CoarseMemorySpace>& coarse,
                           const MultiFab<Dim, FineMemorySpace>& fine,
                           const CoarseFineGhostScheduleBudget& budget) const {
-    if (coarse_domain_.empty() || fine_domain_.empty() || !ratio_.refines_any_axis())
+    if (coarse_domain_.empty() || fine_domain_.empty() || !ratio_.refines_any_axis() ||
+        parent_stencil_radius_ < 0 || parent_stencil_radius_ > 2)
       throw std::invalid_argument(
-          "coarse/fine ghost schedule requires non-empty adjacent refined domains");
+          "coarse/fine ghost schedule requires non-empty adjacent refined domains and a "
+          "supported parent stencil radius");
     if (fine_domain_ != ::pops::amr::hierarchy::refine_box(coarse_domain_, ratio_))
       throw std::invalid_argument(
           "coarse/fine ghost schedule child domain is not the refined parent domain");
@@ -364,7 +370,7 @@ class CoarseFineGhostSchedule {
         staging = coarse_fine_ghost_detail::bounding_union(
             staging, coarse_fine_ghost_detail::required_parent_stencil(
                          destination.destination, ratio_, coarse_domain_, fine_domain_,
-                         destination.periodic_source_from_destination));
+                         destination.periodic_source_from_destination, parent_stencil_radius_));
       if (!staging.empty())
         for (int axis = 0; axis < Dim; ++axis)
           if (topology_.is_physical(Face<Dim>{axis, BoundarySide::lower}) &&
@@ -496,6 +502,7 @@ class CoarseFineGhostSchedule {
   Box<Dim> fine_domain_{};
   ::pops::amr::RefinementRatio<Dim> ratio_{};
   BoundaryTopology<Dim> topology_{};
+  int parent_stencil_radius_ = 1;
   Extent<Dim> ghosts_{};
   int ncomp_ = 0;
   std::vector<patch_plan_type> patch_plans_{};

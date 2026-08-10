@@ -20,7 +20,7 @@ def _facts(
         layout={
             "kind": "uniform" if target == "system" else "amr",
             "levels": 1 if target == "system" else 2,
-            "transition_ratios": () if target == "system" else (2,),
+            "transition_ratios": () if target == "system" else ((2, 2),),
             "embedded_boundary": False,
             "adaptive": target != "system",
             "cells": (16, 16),

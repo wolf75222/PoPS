@@ -217,29 +217,58 @@ class Disc(Geometry):
 
 
 class HalfPlane(Geometry):
-    """A half-plane wall: a point on the plane + an outward normal."""
+    """A Cartesian half-space bounded by an exact-rank hyperplane.
 
-    def __init__(self, point: Any = (0.0, 0.0), normal: Any = (1.0, 0.0)) -> None:
-        self.point = _geometry_coordinates(point, where="HalfPlane(point=)")
-        self.normal = _geometry_coordinates(normal, where="HalfPlane(normal=)")
-        if len(self.point) != 2 or len(self.normal) != 2:
-            raise ValueError("HalfPlane point and normal must contain exactly two coordinates")
-        if self.normal == (0.0, 0.0):
+    ``point=None`` selects the origin and ``normal=None`` selects the first Cartesian axis after
+    the owning frame has supplied its rank. Explicit point and normal vectors must have the same
+    non-zero rank and must match that frame exactly.
+    """
+
+    def __init__(self, point: Any = None, normal: Any = None) -> None:
+        self.point = (
+            None if point is None else _geometry_coordinates(point, where="HalfPlane(point=)")
+        )
+        self.normal = (
+            None if normal is None else _geometry_coordinates(normal, where="HalfPlane(normal=)")
+        )
+        explicit_ranks = tuple(
+            len(values) for values in (self.point, self.normal) if values is not None
+        )
+        if any(rank == 0 for rank in explicit_ranks) or len(set(explicit_ranks)) > 1:
+            raise ValueError("HalfPlane point and normal must have the same non-zero dimension")
+        if self.normal is not None and not any(value != 0.0 for value in self.normal):
             raise ValueError("HalfPlane normal must be non-zero")
 
     def options(self) -> dict:
         return {"point": self.point, "normal": self.normal}
 
     def preview_extent(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        return ((self.point[0] - 1.0, self.point[1] - 1.0),
-                (self.point[0] + 1.0, self.point[1] + 1.0))
+        point = self.point if self.point is not None else (0.0, 0.0)
+        first = point[0]
+        second = point[1] if len(point) > 1 else 0.0
+        return ((first - 1.0, second - 1.0), (first + 1.0, second + 1.0))
 
     def level_set(self, frame: Any) -> LevelSet:
-        """Bind this half-plane to ``frame``; the side opposite the normal is active."""
-        x_value, y_value = _planar_coordinates(frame, where="HalfPlane.level_set(frame)")
-        px, py = self.point
-        nx, ny = self.normal
-        return LevelSet((x_value - px) * nx + (y_value - py) * ny)
+        """Bind this half-space to ``frame``; the side opposite the normal is active."""
+        coordinate_values = _cartesian_coordinates(frame)
+        dimension = len(coordinate_values)
+        point = self.point if self.point is not None else (0.0,) * dimension
+        normal = self.normal if self.normal is not None else (1.0,) + (0.0,) * (dimension - 1)
+        if len(point) != dimension or len(normal) != dimension:
+            raise ValueError(
+                "HalfPlane point and normal rank must match the Cartesian frame rank %d"
+                % dimension
+            )
+        terms = tuple(
+            (coordinate - origin) * direction
+            for coordinate, origin, direction in zip(
+                coordinate_values, point, normal, strict=True
+            )
+        )
+        expression = terms[0]
+        for term in terms[1:]:
+            expression = expression + term
+        return LevelSet(expression)
 
 
 class LevelSet(Geometry):

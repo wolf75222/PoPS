@@ -1,6 +1,7 @@
 """Final object-level AMR authoring values."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
@@ -16,6 +17,54 @@ def _positive_int(value: Any, *, where: str, minimum: int = 1) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValueError("%s must be an integer >= %d" % (where, minimum))
     return value
+
+
+def _authored_transition_ratio(value: Any, *, where: str) -> int | tuple[int, ...]:
+    """Freeze one unresolved spatial transition without guessing its mesh rank.
+
+    An exact integer is the sole isotropic convenience.  A sequence is already axis-ranked and is
+    therefore preserved verbatim until the owning Cartesian mesh supplies ``Dim``.
+    """
+    if type(value) is int:
+        return _positive_int(value, where=where, minimum=2)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError(
+            "%s must be an integer isotropic ratio or an ordered axis sequence" % where
+        )
+    row = tuple(value)
+    if not row or len(row) > 3:
+        raise ValueError("%s must contain one, two, or three spatial axes" % where)
+    for axis, item in enumerate(row):
+        _positive_int(item, where="%s[%d]" % (where, axis))
+    if not any(item > 1 for item in row):
+        raise ValueError("%s must refine at least one spatial axis" % where)
+    return row
+
+
+def resolve_transition_ratios(
+    ratios: Any, *, dimension: int, where: str = "AMR transition ratios"
+) -> tuple[tuple[int, ...], ...]:
+    """Resolve scalar authoring conveniences to one exact ``tuple[Dim]`` per transition."""
+    if type(dimension) is not int or dimension not in (1, 2, 3):
+        raise ValueError("%s require Cartesian dimension 1, 2, or 3" % where)
+    if isinstance(ratios, (str, bytes)) or not isinstance(ratios, Sequence):
+        raise TypeError("%s must be an ordered transition sequence" % where)
+    resolved = []
+    for transition, value in enumerate(ratios):
+        authored = _authored_transition_ratio(
+            value, where="%s[%d]" % (where, transition)
+        )
+        if type(authored) is int:
+            row = (authored,) * dimension
+        else:
+            row = authored
+            if len(row) != dimension:
+                raise ValueError(
+                    "%s[%d] has rank %d but the owning mesh has rank %d"
+                    % (where, transition, len(row), dimension)
+                )
+        resolved.append(row)
+    return tuple(resolved)
 
 
 def _strict_key_data(value: Any) -> Any:
@@ -81,7 +130,7 @@ class AMRHierarchy:
     """Explicit level topology; one ratio is declared per coarse/fine transition."""
 
     max_levels: int
-    ratios: tuple[int, ...]
+    ratios: tuple[int | tuple[int, ...], ...]
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -90,26 +139,42 @@ class AMRHierarchy:
         if len(ratios) != levels - 1:
             raise ValueError(
                 "AMRHierarchy.ratios must contain max_levels - 1 transitions")
-        for index, ratio in enumerate(ratios):
-            _positive_int(ratio, where="AMRHierarchy.ratios[%d]" % index, minimum=2)
-        object.__setattr__(self, "ratios", ratios)
-
-    @property
-    def uniform_ratio(self) -> int | None:
-        if not self.ratios:
-            return 1
-        return self.ratios[0] if len(set(self.ratios)) == 1 else None
+        object.__setattr__(
+            self,
+            "ratios",
+            tuple(
+                _authored_transition_ratio(
+                    ratio, where="AMRHierarchy.ratios[%d]" % index
+                )
+                for index, ratio in enumerate(ratios)
+            ),
+        )
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_type": "amr_hierarchy",
             "max_levels": self.max_levels,
-            "ratios": list(self.ratios),
+            "ratios": [
+                ratio if type(ratio) is int else list(ratio) for ratio in self.ratios
+            ],
         }
 
     inspect = to_data
 
+    def resolved_ratios(self, dimension: int) -> tuple[tuple[int, ...], ...]:
+        return resolve_transition_ratios(
+            self.ratios, dimension=dimension, where="AMRHierarchy.ratios"
+        )
+
+    def resolved_data(self, dimension: int) -> dict[str, Any]:
+        """Canonical hierarchy identity after its owning mesh has authenticated ``Dim``."""
+        return {
+            "schema_version": 2,
+            "authority_type": "amr_hierarchy",
+            "max_levels": self.max_levels,
+            "ratios": [list(row) for row in self.resolved_ratios(dimension)],
+        }
 
 @dataclass(frozen=True, slots=True)
 class AMRRegrid:

@@ -25,7 +25,7 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 def test_deterministic():
     def build():
         mod = model.Module("m")
-        u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+        u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "density"})
         f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
         mod.parameters(RuntimeParam("alpha", default=1.0))
         mod.aux_fields(B_z="cell_scalar")
@@ -248,11 +248,11 @@ def test_layout_storage_roles_and_typed_signature_change_invalidate():
     def build(*, layout="cell", storage="multifab", roles=None, operator_components=("rho",)):
         mod = model.Module("m")
         mod.state_space(
-            "U", ("rho",), roles=roles or {"rho": "Density"},
+            "U", ("rho",), roles=roles or {"rho": "density"},
             layout=layout, storage=storage,
         )
         op_space = model.StateSpace(
-            "U", operator_components, roles=roles or {"rho": "Density"},
+            "U", operator_components, roles=roles or {"rho": "density"},
             layout=layout, storage=storage,
         )
         mod.operator(

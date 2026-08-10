@@ -185,8 +185,12 @@ def test_native_hierarchy_lowering_dispatches_to_an_opaque_provider_route() -> N
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_shared_native_hierarchy_preserves_every_ranked_transition(dimension: int) -> None:
     clock = _clock("ranked-native-%d" % dimension)
-    first_ratio = tuple(2 + axis for axis in range(dimension))
-    second_ratio = tuple(3 + axis for axis in range(dimension))
+    first_ratio = (3,) if dimension == 1 else tuple(
+        1 if axis == 0 else 2 + axis for axis in range(dimension)
+    )
+    second_ratio = (4,) if dimension == 1 else tuple(
+        1 if axis == 1 else 3 + axis for axis in range(dimension)
+    )
     first_buffer = tuple(2 + axis for axis in range(dimension))
     second_buffer = tuple(3 + axis for axis in range(dimension))
     transitions = (

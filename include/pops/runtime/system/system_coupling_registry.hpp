@@ -70,6 +70,10 @@ struct SystemCouplingRegistry {
   /// Inter-species coupled sources applied by an explicit Program node after transport.  Each
   /// operator consumes the exact simultaneous candidate-state pack supplied by that Program.
   std::vector<PreparedCouplingOperator<Dim>> operators;
+  /// Exact ordered provider contracts corresponding one-to-one with `operators`.  The contract
+  /// authenticates executable identity/version, inspect metadata, block map and frequency route;
+  /// application compares the whole sequence across ranks rather than trusting only its length.
+  std::vector<std::string> operator_contracts;
   /// GLOBAL host dt bounds (add_dt_bound). Read by the stepper.
   std::vector<GlobalDtBound> dt_bounds;
   /// constant coupled-source frequency bounds. Read by the stepper.

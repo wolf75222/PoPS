@@ -30,14 +30,16 @@ def max_runtime_params() -> int:
     return _K_MAX_RUNTIME_PARAMS
 
 
-# --- Physical roles: variable name -> VariableRole -------------------------
-# CANONICAL mapping name -> physical role (cf. pops::VariableRole / role_name on the C++ side). Lets a
+# --- Physical roles: variable name -> exact structured token ---------------
+# CANONICAL mapping name -> physical role token. Lets a
 # generated brick DECLARE the MEANING of its components (density, momentum, energy...) instead of
 # empty roles, so that inter-species couplings (System::add_collision / add_thermal_exchange)
 # resolve via index_of(role) rather than via a literal index. The usual names of fluid models
-# (rho, rho_u, u, p, E, n...) are recognized; an unknown name stays 'Custom'. A model can impose
-# its roles explicitly (conservative_vars(..., roles=[...]) / set_primitive_state(..., roles=[...]))
-# for a non-standard layout. Key = EXACT variable name, value = member of pops::VariableRole.
+# (rho, rho_u, u, p, E, n...) are recognized; an unknown name becomes an exact user-role label. A
+# model can impose
+# its roles explicitly with typed ComponentRole descriptors
+# (conservative_vars(..., roles=[...]) / set_primitive_state(..., roles=[...]))
+# for a non-standard layout. Key = exact variable name, value = structured native token.
 CANONICAL_ROLES = {
     "rho": "density", "n": "density", "density": "density",
     "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
@@ -52,16 +54,49 @@ CANONICAL_ROLES = {
 
 
 def role_of(name: Any) -> Any:
-    """CANONICAL physical role of name @p name (member of pops::VariableRole), 'Custom' if unknown."""
-    return CANONICAL_ROLES.get(name, "custom")
+    """Canonical physical token or exact custom label inferred from ``name``.
+
+    Unknown components keep their identity (``q1`` and ``q2`` do not collapse
+    onto one anonymous ``custom`` token).  The typed :class:`Custom` descriptor
+    owns validation of labels that cross the native metadata boundary.
+    """
+    physical = CANONICAL_ROLES.get(name)
+    if physical is not None:
+        return physical
+    from .roles import Custom, native_role_token
+
+    return native_role_token(Custom(name))
 
 
 def roles_for(names: Any, override: Any = None) -> Any:
-    """List of roles (pops::VariableRole members) parallel to @p names. @p override (optional):
-    list of the same length explicitly fixing the roles (string 'Density'... or None to fall back
-    on the canonical mapping of the name). Used for non-standard layouts where names are not enough."""
+    """Lower typed role descriptors to exact native tokens parallel to ``names``.
+
+    ``None`` entries request canonical name inference.  This function is the sole
+    authoring-to-token boundary: role strings are rejected instead of being treated
+    as a compatibility vocabulary.
+    """
     if override is None:
         return [role_of(nm) for nm in names]
-    if len(override) != len(names):
-        raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
-    return [(r if r is not None else role_of(nm)) for nm, r in zip(names, override, strict=True)]
+    if isinstance(override, (str, bytes)):
+        raise TypeError("roles must be an ordered iterable, not a string")
+    try:
+        values = list(override)
+    except TypeError:
+        raise TypeError("roles must be an ordered iterable") from None
+    if len(values) != len(names):
+        raise ValueError("roles: %d roles for %d variables" % (len(values), len(names)))
+    from .roles import ComponentRole, native_role_token
+
+    lowered = []
+    for index, (name, role) in enumerate(zip(names, values, strict=True)):
+        if role is None:
+            lowered.append(role_of(name))
+            continue
+        if isinstance(role, str):
+            raise TypeError(
+                "role %d requires a typed ComponentRole, not a string" % index
+            )
+        if not isinstance(role, ComponentRole):
+            raise TypeError("role %d must implement ComponentRole" % index)
+        lowered.append(native_role_token(role))
+    return lowered

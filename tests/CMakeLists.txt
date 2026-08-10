@@ -806,6 +806,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_geometric_mg 2)
   set(POPS_MPI_RANKS_test_coupled_fieldsolve 2)
+  set(POPS_MPI_RANKS_test_amr_program_positivity_floor 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
@@ -936,6 +937,7 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
+    test_amr_program_positivity_floor
     test_krylov_workspace_reentrancy
     test_pure_field_algebra_extreme_dot
     test_geometric_mg
@@ -1010,6 +1012,9 @@ if(POPS_HAS_MPI)
   endforeach()
   set_tests_properties(test_coupled_fieldsolve_np2 PROPERTIES
     ENVIRONMENT "OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_amr_program_positivity_floor_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
 endif()
 

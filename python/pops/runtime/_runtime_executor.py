@@ -229,7 +229,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         from pops.runtime._runtime_mesh_lowering import (
-            install_uniform_embedded_boundary,
+            install_embedded_boundary,
             system_config_from_layout,
         )
         from pops.runtime._system import System
@@ -245,7 +245,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             transition_ratios=normalized_layout.transition_ratios,
         )
         cast(Any, engine)._execution_context = plan.execution_context
-        install_uniform_embedded_boundary(engine, normalized_layout)
+        install_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)
@@ -297,6 +297,9 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
             transition_ratios=normalized_layout.transition_ratios,
         )
         engine._execution_context = plan.execution_context
+        from pops.runtime._runtime_mesh_lowering import install_embedded_boundary
+
+        install_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)

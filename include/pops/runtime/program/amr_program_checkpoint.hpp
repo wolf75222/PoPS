@@ -31,6 +31,20 @@ namespace amr_reflux = ::pops::amr::reflux;
 
 using AmrProgramFacePayload = std::vector<Real>;
 
+/// Logical history identity retained independently from its per-level native storage keys.  The
+/// checkpoint carries the complete authored contract so a fresh exact-ranked hierarchy can
+/// materialize rings without executing physics merely to trigger Program prelude allocation.
+struct AmrProgramHistoryDescriptor {
+  std::string name;
+  int program_owner = -1;
+  std::string state_identity;
+  std::string space_identity;
+  std::string clock_identity;
+  std::string interpolation_identity;
+  int depth = 0;
+  int components = 0;
+};
+
 /// Rank-independent accepted image of one exact native AMR Program.
 ///
 /// Face entries are the published side of the canonical transactional ledger. Pending fragments,
@@ -45,6 +59,7 @@ struct AmrProgramAcceptedState {
   std::uint64_t materialization_generation = 0;
   std::vector<::pops::amr::ClockStamp> level_clocks;
   std::map<std::string, std::int64_t> logical_clock_ticks;
+  std::vector<AmrProgramHistoryDescriptor> histories;
   CellTemporalPartitionAcceptedState temporal_partition;
   std::vector<std::uint8_t> tagging_hysteresis_state;
   std::array<std::vector<amr_reflux::FaceFluxFragment<Dim, AmrProgramFacePayload>>, Dim>
@@ -53,7 +68,7 @@ struct AmrProgramAcceptedState {
 
 namespace checkpoint_detail {
 
-inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '1'};
+inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'N', 'D', '2'};
 
 class Writer {
  public:
@@ -328,6 +343,19 @@ void validate_state(const AmrProgramAcceptedState<Dim>& state) {
     throw std::invalid_argument(
         "exact AMR Program checkpoint temporal partition names another topology");
 
+  std::string previous_history;
+  for (const AmrProgramHistoryDescriptor& history : state.histories) {
+    if (history.name.empty() || history.program_owner < 0 || history.state_identity.empty() ||
+        history.space_identity.empty() || history.clock_identity.empty() ||
+        history.interpolation_identity.empty() || history.depth < 2 || history.components < 1)
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint has an incomplete history descriptor");
+    if (!previous_history.empty() && previous_history >= history.name)
+      throw std::invalid_argument(
+          "exact AMR Program checkpoint history descriptors must be uniquely ordered");
+    previous_history = history.name;
+  }
+
   for (int axis = 0; axis < Dim; ++axis) {
     const auto& fragments = state.accepted_face_flux[static_cast<std::size_t>(axis)];
     std::optional<amr_reflux::FaceFluxFragmentKey<Dim>> previous;
@@ -394,6 +422,17 @@ std::vector<std::uint8_t> serialize_amr_program_accepted_state(
     out.string(identity);
     out.i64(tick);
   }
+  out.size(state.histories.size());
+  for (const AmrProgramHistoryDescriptor& history : state.histories) {
+    out.string(history.name);
+    out.i32(history.program_owner);
+    out.string(history.state_identity);
+    out.string(history.space_identity);
+    out.string(history.clock_identity);
+    out.string(history.interpolation_identity);
+    out.i32(history.depth);
+    out.i32(history.components);
+  }
   checkpoint_detail::write_temporal_partition(out, state.temporal_partition);
   out.bytes(state.tagging_hysteresis_state);
   for (int axis = 0; axis < Dim; ++axis) {
@@ -427,6 +466,17 @@ AmrProgramAcceptedState<Dim> deserialize_amr_program_accepted_state(
     if (!state.logical_clock_ticks.emplace(std::move(identity), tick).second)
       throw std::runtime_error(
           "invalid exact AMR Program checkpoint: duplicate logical clock identity");
+  }
+  state.histories.resize(in.size());
+  for (AmrProgramHistoryDescriptor& history : state.histories) {
+    history.name = in.string();
+    history.program_owner = in.i32();
+    history.state_identity = in.string();
+    history.space_identity = in.string();
+    history.clock_identity = in.string();
+    history.interpolation_identity = in.string();
+    history.depth = in.i32();
+    history.components = in.i32();
   }
   state.temporal_partition = checkpoint_detail::read_temporal_partition(in);
   state.tagging_hysteresis_state = in.bytes();

@@ -45,7 +45,7 @@ struct SpatialContract {
   std::array<double, Dim> lower{};
   std::array<double, Dim> upper{};
   std::array<bool, Dim> periodicity{};
-  std::vector<amr::RefinementRatio<Dim>> refinement_ratios;
+  std::vector<::pops::amr::RefinementRatio<Dim>> refinement_ratios;
   std::string native_layout_identity;
   std::string spatial_identity;
 

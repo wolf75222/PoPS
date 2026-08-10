@@ -193,8 +193,8 @@ def test_field_install_consumes_the_public_amr_layout_contract():
     recipe = resolved.field_plans["fields"].native_options["topology_recipe"]
     assert recipe["connectivity"]["graph"] == "amr-composite-cell-graph"
     assert recipe["levels"] == 2
-    assert recipe["transition_ratios"] == (2,)
-    assert recipe["level_refinements"] == (1, 2)
+    assert recipe["transition_ratios"] == ((2, 2),)
+    assert recipe["level_refinements"] == ((1, 1), (2, 2))
     graph = resolved.bootstrap_plan.tagging.graph
     assert type(graph.refine) is AnyOf
     assert tuple(type(child) for child in graph.refine.children) == (Above, GradientAbove)
@@ -258,7 +258,7 @@ def test_amr_aggregate_accepts_an_external_hierarchy_protocol_by_identity():
     )
     assert extended.available().ok
     ratios = extended.capabilities().get("transition_ratios")
-    assert ratios == [2]
+    assert ratios == [[2, 2]]
     assert len(ratios) == extended.hierarchy.max_levels - 1
 
 
@@ -275,11 +275,10 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
         prolongation = built_in.prolongation
         restriction = built_in.restriction
         coarse_fine = built_in.coarse_fine
-        time_interpolation = built_in.time_interpolation
 
         def amr_transfer_policy_data(self):
             routes = {}
-            for name in ("prolongation", "restriction", "coarse_fine", "time_interpolation"):
+            for name in ("prolongation", "restriction", "coarse_fine"):
                 kernel = getattr(self, name)
                 candidates = getattr(kernel, "amr_transfer_kernel_candidates", None)
                 routes[name] = (

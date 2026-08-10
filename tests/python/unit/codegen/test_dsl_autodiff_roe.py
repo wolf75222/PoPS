@@ -30,9 +30,11 @@ import pops.runtime._engine_descriptors as engine
 from pops._ir.expr import Expr, Var
 from pops._ir.lowering import diff
 from pops._ir.ops import left, right, sqrt
+from pops.physics import Density, Momentum
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.physics_roles import X_AXIS, Y_AXIS
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -116,8 +118,10 @@ print("== (b) m.flux_jacobian : Jacobien de flux auto-derive == analytique connu
 def iso_model(name):
     """Isotherme 3-var (rho, mx, my), p = cs2 rho, flux et valeurs propres standard."""
     m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+    )
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     m.primitive("p", CS2 * rho)
@@ -177,8 +181,10 @@ L, R = left, right
 
 def iso_bare():
     m = Model("iso_rej")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+    )
     m.primitive("u", mx / rho)
     m.primitive("p", CS2 * rho)
     return m, rho, mx, my
@@ -236,8 +242,10 @@ def iso_roe_hand(name):
     Energy, transcrite en left()/right() des deux etats). Pas d'enable_roe : l'utilisateur fournit
     tout le hook."""
     m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+    )
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", CS2 * rho)
@@ -280,8 +288,10 @@ def iso_roe_hand(name):
 def iso_roe_roles(name):
     """Meme isotherme avec enable_roe() (capability generee depuis les ROLES) : la reference."""
     m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+    rho, mx, my = m.conservative_vars(
+        "rho", "mx", "my",
+        roles=[Density(), Momentum(X_AXIS), Momentum(Y_AXIS)],
+    )
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     m.primitive("p", CS2 * rho)

@@ -25,8 +25,7 @@ namespace pops {
 /// crosses this boundary.
 template <int Dim>
 struct SystemBlockClosures {
-  static_assert(Dim >= 1 && Dim <= 3,
-                "SystemBlockClosures only supports dimensions 1, 2, and 3");
+  static_assert(Dim >= 1 && Dim <= 3, "SystemBlockClosures only supports dimensions 1, 2, and 3");
 
   using field_type = MultiFab<Dim>;
   using boundary_type = PreparedHyperbolicBoundary<Dim>;
@@ -39,7 +38,7 @@ struct SystemBlockClosures {
   using PointJvp =
       std::function<void(const point_type&, field_type&, const field_type&, field_type&)>;
   using PreparedPointJvp = std::function<void(const point_type&, field_type&, const field_type&,
-                                               field_type&, const boundary_type&)>;
+                                              field_type&, const boundary_type&)>;
   using PointStatePreparation = std::function<void(const point_type&, field_type&)>;
   using PreparedPointStatePreparation =
       std::function<void(const point_type&, field_type&, const boundary_type&)>;
@@ -80,7 +79,6 @@ struct SystemBlockClosures {
   PointStatePreparation prepare_generated_state_at_point;
   PreparedPointStatePreparation prepare_generated_state_at_point_prepared;
 
-  std::function<void(const field_type&, Real&, Index<Dim>&)> hotspot;
   std::function<void(field_type&)> project;
   std::function<void(field_type&)> project_masked;
   EmbeddedResidualFamily staircase;
@@ -94,8 +92,7 @@ struct SystemBlockClosures {
 /// leaving a partially installed block after a later preparation failure.
 template <int Dim>
 struct PreparedSystemBlock {
-  static_assert(Dim >= 1 && Dim <= 3,
-                "PreparedSystemBlock only supports dimensions 1, 2, and 3");
+  static_assert(Dim >= 1 && Dim <= 3, "PreparedSystemBlock only supports dimensions 1, 2, and 3");
 
   using field_type = MultiFab<Dim>;
 
@@ -136,6 +133,11 @@ struct SystemInterfaceProvider {
   using field_type = MultiFab<Dim>;
   using point_type = runtime::multiblock::BoundaryEvaluationPoint;
 
+  /// Stable key and complete binary contract of the detached provider registry.  The key is a
+  /// digest-qualified identity; the contract authenticates route order, components, execution
+  /// authority and the native spatial rank before this provider is published.
+  std::string provider_identity;
+  std::string collective_contract;
   std::function<void(const point_type&, const std::vector<field_type*>&,
                      const std::vector<field_type*>&, const std::vector<int>&)>
       evaluate_rhs;

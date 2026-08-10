@@ -9,6 +9,7 @@ from .board import Model
 from .roles import (
     Axial,
     ComponentRole,
+    Custom,
     Density,
     Energy,
     Momentum,
@@ -19,6 +20,6 @@ from .roles import (
 )
 
 __all__ = [
-    "Model", "Axial", "ComponentRole", "Density", "Energy", "Momentum", "Pressure",
-    "Scalar", "Temperature", "Velocity",
+    "Model", "Axial", "ComponentRole", "Custom", "Density", "Energy", "Momentum",
+    "Pressure", "Scalar", "Temperature", "Velocity",
 ]

@@ -107,12 +107,18 @@ class ComponentProviderPacks:
 
         def canonical(value: Any) -> Any:
             if isinstance(value, ProviderPack):
-                return value.to_data()
+                return canonical(value.to_data())
             if isinstance(value, Mapping):
                 return {
                     key: canonical(item)
                     for key, item in value.items()
                 }
+            # Artifact sealing deliberately replaces mutable JSON arrays by tuples.  Treat that
+            # storage-only transition as the same logical metadata while retaining sequence order
+            # and recursively checking every value.  No other representation is coerced here:
+            # changed keys, rows, scalars, or ProviderPack contracts still conflict.
+            if isinstance(value, (list, tuple)):
+                return tuple(canonical(item) for item in value)
             return value
 
         for name, value in values.items():

@@ -31,8 +31,7 @@ typename SystemBlockStore<Dim>::EmbeddedResidualFamily& select_embedded_residual
 template <int Dim>
 void require_embedded_residual_route(const SystemBlockStore<Dim>& blocks,
                                      const typename SystemBlockStore<Dim>::BlockState& block,
-                                     int block_index, bool available,
-                                     const char* operation) {
+                                     int block_index, bool available, const char* operation) {
   if (block.boundary)
     throw std::runtime_error(std::string(operation) +
                              " requires an EB-qualified hyperbolic boundary provider");
@@ -108,34 +107,107 @@ int System<Dim>::n_blocks() const {
 template <int Dim>
 std::size_t System<Dim>::apply_coupling_operators(
     Real dt, const std::vector<MultiFab<Dim>*>& candidate_states) {
-  if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
-    throw std::invalid_argument(
-        "System::apply_coupling_operators requires a finite non-negative dt");
-  if (candidate_states.size() != p_->sp.size())
-    throw std::invalid_argument(
-        "System::apply_coupling_operators requires one candidate state per block");
+  std::exception_ptr local_error;
+  try {
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument(
+          "System::apply_coupling_operators requires a finite non-negative dt");
+    if (candidate_states.size() != p_->sp.size())
+      throw std::invalid_argument(
+          "System::apply_coupling_operators requires one candidate state per block");
+    if (p_->coupling_.operator_contracts.size() != p_->coupling_.operators.size() ||
+        p_->coupling_.operators.size() != p_->coupling_.coupled_operators.size())
+      throw std::logic_error("System coupling registry lost its exact provider contracts");
 
-  for (std::size_t block = 0; block < candidate_states.size(); ++block) {
-    const MultiFab<Dim>* candidate = candidate_states[block];
-    if (candidate == nullptr)
-      throw std::invalid_argument(
-          "System::apply_coupling_operators received a null candidate state");
-    const MultiFab<Dim>& live = p_->sp[block].U;
-    if (candidate->layout() != live.layout() || candidate->distribution() != live.distribution() ||
-        candidate->local_rank() != live.local_rank() || candidate->ncomp() != live.ncomp() ||
-        candidate->ghosts() != live.ghosts())
-      throw std::invalid_argument(
-          "System::apply_coupling_operators candidate layout differs from its block");
-    for (const typename Impl::Species& accepted : p_->sp)
-      if (candidate == &accepted.U)
+    for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+      const MultiFab<Dim>* candidate = candidate_states[block];
+      if (candidate == nullptr)
         throw std::invalid_argument(
-            "System::apply_coupling_operators cannot mutate accepted live states");
-    for (std::size_t previous = 0; previous < block; ++previous)
-      if (candidate_states[previous] == candidate)
+            "System::apply_coupling_operators received a null candidate state");
+      const MultiFab<Dim>& live = p_->sp[block].U;
+      if (candidate->layout() != live.layout() ||
+          candidate->distribution() != live.distribution() ||
+          candidate->local_rank() != live.local_rank() || candidate->ncomp() != live.ncomp() ||
+          candidate->ghosts() != live.ghosts())
         throw std::invalid_argument(
-            "System::apply_coupling_operators cannot alias two block candidates");
+            "System::apply_coupling_operators candidate layout differs from its block");
+      for (const typename Impl::Species& accepted : p_->sp)
+        if (candidate == &accepted.U)
+          throw std::invalid_argument(
+              "System::apply_coupling_operators cannot mutate accepted live states");
+      for (std::size_t previous = 0; previous < block; ++previous)
+        if (candidate_states[previous] == candidate)
+          throw std::invalid_argument(
+              "System::apply_coupling_operators cannot alias two block candidates");
+    }
+  } catch (...) {
+    local_error = std::current_exception();
   }
-  return p_->coupling_.apply(dt, candidate_states);
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System coupling application preflight failed collectively");
+  }
+
+  ExactContractBuilder invocation;
+  invocation.text("pops.system.coupling-application")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .scalar(dt)
+      .scalar(static_cast<std::uint64_t>(candidate_states.size()))
+      .sequence(
+          p_->coupling_.operator_contracts,
+          [](ExactContractBuilder& item, const std::string& provider) { item.bytes(provider); });
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-coupling-application"), invocation.view()}}))
+    throw std::invalid_argument(
+        "System coupling application identity or time step differs between MPI ranks");
+
+  // Allocate and deep-copy every rollback image before the first operator can mutate a candidate.
+  // MultiFab/Fab copies stay in the active Kokkos memory space; no host mirror participates.
+  std::vector<MultiFab<Dim>> rollback;
+  try {
+    rollback.reserve(candidate_states.size());
+    for (const MultiFab<Dim>* candidate : candidate_states)
+      rollback.emplace_back(*candidate);
+    Kokkos::fence();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System coupling rollback allocation failed collectively");
+  }
+
+  local_error = nullptr;
+  try {
+    p_->coupling_.apply(dt, candidate_states);
+    Kokkos::fence();
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  const bool failed = all_reduce_max(local_error ? 1L : 0L) != 0;
+  if (!failed)
+    return p_->coupling_.operators.size();
+
+  std::exception_ptr restore_error;
+  try {
+    for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+      MultiFab<Dim>& candidate = *candidate_states[block];
+      const MultiFab<Dim>& snapshot = rollback[block];
+      for (std::size_t local = 0; local < candidate.local_size(); ++local)
+        Kokkos::deep_copy(candidate.fab(local).storage(), snapshot.fab(local).storage());
+    }
+    Kokkos::fence();
+  } catch (...) {
+    restore_error = std::current_exception();
+  }
+  if (all_reduce_max(restore_error ? 1L : 0L) != 0)
+    throw std::runtime_error("System coupling rollback failed collectively");
+  if (n_ranks() == 1 && local_error)
+    std::rethrow_exception(local_error);
+  throw std::runtime_error("System coupling application failed and rolled back collectively");
 }
 
 template <int Dim>
@@ -151,13 +223,10 @@ void System<Dim>::block_rhs_into(int block, MultiFab<Dim>& state, MultiFab<Dim>&
     throw std::out_of_range("System::block_rhs_into block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    auto& family =
-        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
     require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
-                                         static_cast<bool>(family.full),
-                                         "System::block_rhs_into");
+                                         static_cast<bool>(family.full), "System::block_rhs_into");
     family.full(state, residual, *p_->embedded_boundary_);
     return;
   }
@@ -205,19 +274,15 @@ void System<Dim>::block_rhs_group(const runtime::multiblock::BoundaryEvaluationP
     flux_only[index] = requested_flux_only[request];
   }
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
     for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
       const int block = requested_blocks[request];
       typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-      auto& family =
-          select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
       auto& closure = requested_flux_only[request] != 0 ? family.flux_only : family.full;
-      require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
-                                           static_cast<bool>(closure),
+      require_embedded_residual_route<Dim>(p_->blocks_, selected, block, static_cast<bool>(closure),
                                            "System::block_rhs_group");
-      closure(*requested_states[request], *requested_residuals[request],
-              *p_->embedded_boundary_);
+      closure(*requested_states[request], *requested_residuals[request], *p_->embedded_boundary_);
     }
     return;
   }
@@ -231,14 +296,11 @@ void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEval
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System core RHS block index is out of range");
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
     typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
-    auto& family =
-        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
     auto& closure = flux_only ? family.flux_only : family.full;
-    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
-                                         static_cast<bool>(closure),
+    require_embedded_residual_route<Dim>(p_->blocks_, selected, block, static_cast<bool>(closure),
                                          "System::block_rhs_core_into_at");
     closure(state, residual, *p_->embedded_boundary_);
     return;
@@ -248,8 +310,7 @@ void System<Dim>::block_rhs_core_into_at(const runtime::multiblock::BoundaryEval
 
 template <int Dim>
 void System<Dim>::block_prepare_generated_state_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
-    MultiFab<Dim>& state) {
+    const runtime::multiblock::BoundaryEvaluationPoint& point, int block, MultiFab<Dim>& state) {
   if (block < 0 || block >= p_->blocks_.size())
     throw std::out_of_range("System generated-state block index is out of range");
   p_->blocks_.prepare_generated_state(point, static_cast<std::size_t>(block), state);
@@ -262,10 +323,8 @@ void System<Dim>::block_neg_div_flux_into(int block, MultiFab<Dim>& state,
     throw std::out_of_range("System flux-only block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    auto& family =
-        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
     require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
                                          static_cast<bool>(family.flux_only),
                                          "System::block_neg_div_flux_into");
@@ -291,10 +350,8 @@ void System<Dim>::block_source_into(int block, MultiFab<Dim>& state, MultiFab<Di
     throw std::out_of_range("System source-only block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    auto& family =
-        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
     require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
                                          static_cast<bool>(family.source_only),
                                          "System::block_source_into");
@@ -377,13 +434,10 @@ void System<Dim>::block_project(int block, MultiFab<Dim>& state) {
     throw std::out_of_range("System projection block index is out of range");
   typename Impl::Species& selected = p_->sp[static_cast<std::size_t>(block)];
   if (p_->embedded_boundary_ &&
-      p_->embedded_boundary_->mode() !=
-          runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
-    auto& family =
-        select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
-    require_embedded_residual_route<Dim>(p_->blocks_, selected, block,
-                                         static_cast<bool>(family.project),
-                                         "System::block_project");
+      p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
+    auto& family = select_embedded_residual_family<Dim>(selected, p_->embedded_boundary_->mode());
+    require_embedded_residual_route<Dim>(
+        p_->blocks_, selected, block, static_cast<bool>(family.project), "System::block_project");
     family.project(state, *p_->embedded_boundary_);
     return;
   }
@@ -504,8 +558,7 @@ template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, bool);
 template void System<kNativeDimension>::block_prepare_generated_state_at(
-    const runtime::multiblock::BoundaryEvaluationPoint&, int,
-    MultiFab<kNativeDimension>&);
+    const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into(int, MultiFab<kNativeDimension>&,
                                                                 MultiFab<kNativeDimension>&);
 template void System<kNativeDimension>::block_neg_div_flux_into_at(

@@ -247,13 +247,13 @@ class AmrReport:
     the descriptors, it computes nothing.
     """
 
-    def __init__(self, *, layout, max_levels, ratio, native_max_levels, native_ratios,
+    def __init__(self, *, layout, max_levels, ratio, native_max_levels, native_ratio_policy,
                  available, limitations, requirements, policies):
         self.layout = layout
         self.max_levels = max_levels
         self.ratio = ratio
         self.native_max_levels = native_max_levels
-        self.native_ratios = tuple(native_ratios)
+        self.native_ratio_policy = native_ratio_policy
         self.available = available
         self.limitations = list(limitations)
         self.requirements = dict(requirements or {})
@@ -266,7 +266,7 @@ class AmrReport:
             "max_levels": self.max_levels,
             "ratio": self.ratio,
             "native_max_levels": self.native_max_levels,
-            "native_ratios": list(self.native_ratios),
+            "native_ratio_policy": self.native_ratio_policy,
             "available": self.available,
             "limitations": list(self.limitations),
             "requirements": dict(self.requirements),
@@ -280,9 +280,9 @@ class AmrReport:
 
     def __str__(self):
         lines = ["AMR hierarchy report (%s):" % self.layout]
-        lines.append("  levels: max_levels=%s ratio=%s (native depth: %s; ratios=%s)" % (
+        lines.append("  levels: max_levels=%s ratio=%s (native depth: %s; ratio policy=%s)" % (
             self.max_levels, self.ratio, self.native_max_levels,
-            ", ".join(map(str, self.native_ratios))))
+            self.native_ratio_policy))
         lines.append("  available: %s" % self.available)
         if self.requirements:
             req = ", ".join("%s=%s" % (k, v) for k, v in sorted(self.requirements.items()))
@@ -322,25 +322,24 @@ def _amr_policy_rows(layout):
 
 def _native_amr_context():
     """Return the immutable native facts shared by layout-owned AMR reports."""
-    from pops.mesh._amr import NATIVE_RATIOS
+    from pops.mesh._amr import NATIVE_RATIO_POLICY
 
     native_depth = "resource_policy"
     native_note = (
-        "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s; "
-        "transitions are 2D isotropic and share one isotropic buffer/lookahead; policy routes are "
+        "resolved hierarchy depth is resource-policy controlled; native transfer ratios are "
+        "selected by the hierarchy with exact native rank; policy routes are "
         "shared_n_level / berger_rigoutsos / box_array / prepared load-balance provider "
         "(space-filling curve default; knapsack and round-robin built in)"
-        % ", ".join(map(str, NATIVE_RATIOS))
     )
-    return native_depth, tuple(NATIVE_RATIOS), native_note
+    return native_depth, NATIVE_RATIO_POLICY, native_note
 
 
 def _native_amr_envelope():
     """Build the runtime's descriptor-free native AMR capability envelope."""
-    native_depth, native_ratios, native_note = _native_amr_context()
+    native_depth, native_ratio_policy, native_note = _native_amr_context()
     return AmrReport(
-        layout="native-envelope", max_levels=native_depth, ratio=native_ratios[0],
-        native_max_levels=native_depth, native_ratios=native_ratios,
+        layout="native-envelope", max_levels=native_depth, ratio=None,
+        native_max_levels=native_depth, native_ratio_policy=native_ratio_policy,
         available="yes", limitations=[native_note], requirements={}, policies=[])
 
 

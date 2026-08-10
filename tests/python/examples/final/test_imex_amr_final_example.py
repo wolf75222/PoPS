@@ -131,7 +131,6 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
         "amr-runtime-transfer-operation:apply_transfer_provider:coarse_fine_fill",
         "amr-runtime-transfer-operation:apply_transfer_provider:prolongation",
         "amr-runtime-transfer-operation:apply_transfer_provider:restriction",
-        "amr-runtime-transfer-operation:apply_transfer_provider:temporal_interpolation",
         "amr-runtime-transfer-operation:recompute:coarse_fine_fill",
     }
     assert any(

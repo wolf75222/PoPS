@@ -12,7 +12,25 @@ issues = [
   "ADC-687",
 ]
 
-deferred = []
+[[deferred]]
+issue = "ADC-681"
+requirement = "external_boundary"
+polarity = "positive"
+reason = "RuntimeInstance still has no installed boundary-component executor; the direct ABI unit test does not prove install, execution, or rollback."
+evidence_paths = [
+  "python/pops/runtime/_runtime_authorities.py",
+  "include/pops/mesh/boundary/prepared_boundary_component.hpp",
+]
+
+[[deferred]]
+issue = "ADC-681"
+requirement = "external_tagger"
+polarity = "positive"
+reason = "External AMR Tagger, Clustering, and Reflux component installers remain fail-closed and are not executed through AmrSystem."
+evidence_paths = [
+  "python/pops/amr/providers.py",
+  "python/pops/runtime/_runtime_authorities.py",
+]
 
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
@@ -108,22 +126,6 @@ target = "native_interfaces"
 nodeid = "tests/python/unit/codegen/test_component_adapters.py::test_registration_rejects_malformed_interface_and_target_before_mutation"
 
 [[check]]
-issue = "ADC-681"
-requirement = "external_boundary"
-polarity = "positive"
-kind = "ctest"
-target = "external_boundary@test_amr_native_loader"
-test_regex = "^test_amr_native_loader\\.BoundaryPlanSessionsOwnFreshLaneQualifiedComponentStates$"
-
-[[check]]
-issue = "ADC-681"
-requirement = "external_tagger"
-polarity = "positive"
-kind = "ctest"
-target = "external_tagger@test_amr_native_loader"
-test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
-
-[[check]]
 issue = "ADC-682"
 requirement = "flux_contract"
 polarity = "positive"
@@ -145,7 +147,7 @@ requirement = "platform_execution"
 polarity = "positive"
 kind = "ctest"
 target = "platform_execution@test_platform_manifest"
-test_regex = "^PlatformManifest\\.GenericTwoDimensionalDoubleRouteLaunches$"
+test_regex = "^PlatformManifest\\.GenericNativeRankDoubleRouteLaunches$"
 
 [[check]]
 issue = "ADC-683"

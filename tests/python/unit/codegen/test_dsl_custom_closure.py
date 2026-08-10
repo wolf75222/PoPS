@@ -20,6 +20,7 @@ import sys
 
 import numpy as np
 
+from pops.frames import Cartesian2D
 from pops.moments import CartesianVelocityMoments, Closure, closure, moment_indices
 
 fails = 0
@@ -94,7 +95,8 @@ def my_closure(S):  # noqa: N803  (S mirrors the engine variable name)
 
 chk(isinstance(my_closure, Closure),
     "la fermeture utilisateur satisfait le protocole Closure (structurel)")
-model = CartesianVelocityMoments(2, closure=my_closure).build(name="custom_fn")
+model = CartesianVelocityMoments(2, closure=my_closure).build(
+    name="custom_fn", frame=Cartesian2D())
 fx = np.asarray(model.flux_value(U6, {}, model.frame.axes[0])).ravel()
 fy = np.asarray(model.flux_value(U6, {}, model.frame.axes[1])).ravel()
 e1 = max(np.abs(fx - FX_REF).max(), np.abs(fy - FY_REF).max())
@@ -114,7 +116,8 @@ class PolyClosure:
 obj_closure = PolyClosure()
 chk(isinstance(obj_closure, Closure),
     "la fermeture-objet satisfait le protocole Closure")
-model_obj = CartesianVelocityMoments(2, closure=obj_closure).build(name="custom_obj")
+model_obj = CartesianVelocityMoments(2, closure=obj_closure).build(
+    name="custom_obj", frame=Cartesian2D())
 fxo = np.asarray(model_obj.flux_value(U6, {}, model_obj.frame.axes[0])).ravel()
 chk(np.abs(fxo - FX_REF).max() < 1e-13,
     "flux facade (fermeture-objet) == miroir manuel (meme AST que la fonction)")

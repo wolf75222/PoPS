@@ -236,11 +236,11 @@ class NativeAMRBootstrapConsumer:
                 raise ValueError("native prolongation did not materialize the requested state level")
             action_route = self._route(action)
             space = self._initial[action.subject_id][2]
-            expected_route = {
-                "cell": "conservative_linear",
-                "face": "face_divergence_preserving",
-                "node": "node_bilinear",
-            }[space]
+            if space != "cell":
+                raise NotImplementedError(
+                    "native AMR bootstrap has no prepared %s prolongation provider" % space
+                )
+            expected_route = "conservative_linear"
             if action_route != expected_route:
                 raise ValueError("native prolongation receipt does not authenticate its provider")
             materialized = self._engine._s._bootstrap_prolong_array(

@@ -1,126 +1,203 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/parallel/comm.hpp>
 
 #include <array>
 #include <cmath>
-#include <cstddef>
 #include <cstdio>
-#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace {
 
-constexpr int kDim = 2;
 constexpr int kCells = 64;
 constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
-std::size_t storage_ordinal(const pops::Box<kDim>& storage, const pops::Index<kDim>& index) {
-  return static_cast<std::size_t>(index[0] - storage.lo[0]) +
-         static_cast<std::size_t>(index[1] - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
-}
-
-pops::EllipticBuildRequest<kDim> distributed_request() {
+template <int Dim>
+pops::EllipticBuildRequest<Dim> distributed_request() {
   const int ranks = pops::n_ranks();
   if (ranks < 1 || kCells % ranks != 0)
-    throw std::invalid_argument("MPI FFT test extent must be divisible by communicator size");
-  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0}, pops::Index<kDim>{kCells - 1, kCells - 1}};
-  const pops::Geometry<kDim> geometry = pops::Geometry<kDim>::from_bounds(
-      domain, pops::RealVector<kDim>{0, 0}, pops::RealVector<kDim>{1, 1});
-  const int local_y = kCells / ranks;
-  std::vector<pops::Box<kDim>> slabs;
+    throw std::invalid_argument("MPI FFT extent must divide communicator size");
+  pops::Index<Dim> lo{};
+  pops::Index<Dim> hi{};
+  pops::RealVector<Dim> lower{};
+  pops::RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    hi[axis] = kCells - 1;
+    upper[axis] = pops::Real(1);
+  }
+  const pops::Box<Dim> domain{lo, hi};
+  const pops::Geometry<Dim> geometry = pops::Geometry<Dim>::from_bounds(domain, lower, upper);
+  const int local_last = kCells / ranks;
+  std::vector<pops::Box<Dim>> slabs;
   slabs.reserve(static_cast<std::size_t>(ranks));
-  for (int rank = 0; rank < ranks; ++rank)
-    slabs.emplace_back(pops::Index<kDim>{0, rank * local_y},
-                       pops::Index<kDim>{kCells - 1, (rank + 1) * local_y - 1});
-  pops::mesh::BoxArray<kDim> layout(std::move(slabs));
-  const pops::mesh::RankSpace<kDim> rank_space{pops::Index<kDim>{0, 0},
-                                               pops::Extent<kDim>{ranks, 1}};
-  std::vector<pops::Index<kDim>> owners;
+  for (int rank = 0; rank < ranks; ++rank) {
+    auto slab_lo = lo;
+    auto slab_hi = hi;
+    slab_lo[Dim - 1] = rank * local_last;
+    slab_hi[Dim - 1] = (rank + 1) * local_last - 1;
+    slabs.emplace_back(slab_lo, slab_hi);
+  }
+  pops::mesh::BoxArray<Dim> layout(std::move(slabs));
+  pops::Extent<Dim> rank_extent{};
+  for (int axis = 0; axis < Dim; ++axis)
+    rank_extent[axis] = axis == Dim - 1 ? ranks : 1;
+  const pops::mesh::RankSpace<Dim> rank_space{pops::Index<Dim>{}, rank_extent};
+  std::vector<pops::Index<Dim>> owners;
   owners.reserve(static_cast<std::size_t>(ranks));
   for (int rank = 0; rank < ranks; ++rank)
     owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
-  const pops::mesh::Distribution<kDim> distribution =
-      pops::mesh::Distribution<kDim>::partitioned(layout, rank_space, std::move(owners));
-  const std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
-  const pops::RealVector<kDim> spacing{geometry.spacing(0), geometry.spacing(1)};
+  const pops::mesh::Distribution<Dim> distribution =
+      pops::mesh::Distribution<Dim>::partitioned(layout, rank_space, std::move(owners));
+  std::array<pops::PhysicalBoundaryFace, 2 * Dim> faces{};
+  std::array<bool, Dim> periodic{};
+  pops::RealVector<Dim> spacing{};
+  pops::Extent<Dim> rhs_ghosts{};
+  pops::Extent<Dim> phi_ghosts{};
+  periodic.fill(true);
+  for (int axis = 0; axis < Dim; ++axis) {
+    spacing[axis] = geometry.spacing(axis);
+    phi_ghosts[axis] = 1;
+  }
   const std::size_t pairs = layout.size() * (layout.size() - 1) / 2;
   return {geometry,
           std::move(layout),
           distribution,
           rank_space.coordinate(static_cast<std::size_t>(pops::my_rank())),
-          pops::PhysicalBoundaryConditions<kDim>{
-              pops::BoundaryTopology<kDim>::axis_periodic({true, true}), faces, spacing},
-          pops::Extent<kDim>{0, 0},
-          pops::Extent<kDim>{1, 1},
+          pops::PhysicalBoundaryConditions<Dim>{
+              pops::BoundaryTopology<Dim>::axis_periodic(periodic), faces, spacing},
+          rhs_ghosts,
+          phi_ghosts,
           {static_cast<std::size_t>(ranks), pairs}};
 }
 
-void fill_mean_zero_mode(pops::MultiFab<kDim>& field, const pops::Geometry<kDim>& geometry) {
-  for (std::size_t local = 0; local < field.local_size(); ++local) {
-    auto& fab = field.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    const pops::Box<kDim>& valid = fab.box();
-    const pops::Box<kDim>& storage = fab.grown_box();
-    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
-      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-        host(storage_ordinal(storage, pops::Index<kDim>{i, j})) =
-            std::sin(pops::Real(2) * kPi * geometry.cell_coordinate(0, i)) *
-            std::sin(pops::Real(2) * kPi * geometry.cell_coordinate(1, j));
-      }
-    }
-    fab.copy_from_host(host);
-  }
+template <int Dim>
+bool verify_solver_dimension() {
+  auto request = distributed_request<Dim>();
+  pops::Real measure = pops::Real(1);
+  for (int axis = 0; axis < Dim; ++axis)
+    measure *= request.geometry.spacing(axis);
+  pops::PoissonFFTSolver<Dim> solver = pops::make_elliptic_solver<pops::PoissonFFTSolver<Dim>>(
+      std::move(request), pops::PoissonFFTFactory<Dim>{});
+  solver.install_nullspace(
+      pops::constant_mean_zero_nullspace<Dim>("periodic-mpi-fft", "mpi-nd-test", measure),
+      pops::PreparedVectorDistribution<Dim>::distributed());
+  auto rhs = solver.rhs().fab(0).view();
+  const auto geometry = solver.geom();
+  pops::for_each_cell(solver.rhs().box(0), [=](const pops::CellIndex<Dim>& cell) {
+    rhs(cell, 0) = Kokkos::sin(pops::Real(2) * kPi * geometry.cell_coordinate(0, cell[0]));
+  });
+  const pops::SolveReport report = solver.solve();
+  return report.solved() && report.residual_norm < pops::Real(1e-9);
+}
 
-  const pops::Real mean = pops::reduce_sum(field) / static_cast<pops::Real>(kCells * kCells);
-  for (std::size_t local = 0; local < field.local_size(); ++local) {
-    auto& fab = field.fab(local);
-    auto host = fab.create_host_mirror();
-    fab.copy_to_host(host);
-    const pops::Box<kDim>& valid = fab.box();
-    const pops::Box<kDim>& storage = fab.grown_box();
-    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-        host(storage_ordinal(storage, pops::Index<kDim>{i, j})) -= mean;
-    fab.copy_from_host(host);
+bool verify_last_axis_fallback_contract() {
+  const int extent = 3 * pops::n_ranks();
+  pops::PoissonFFT<1> fft({extent}, {1.0}, "pops.mpi.last-axis-fallback");
+  pops::PoissonFFT<1>::device_view rhs("mpi_last_fallback_rhs", fft.local_cell_count());
+  pops::PoissonFFT<1>::device_view phi("mpi_last_fallback_phi", fft.local_cell_count());
+  Kokkos::deep_copy(rhs, pops::PoissonFFT<1>::complex_type(0.0, 0.0));
+  fft.solve(rhs, phi);
+  return pops::poisson_fft_direct_dft_fallback_count() > 0;
+}
+
+bool verify_divergent_valid_request_is_rejected_collectively() {
+  if (pops::n_ranks() == 1)
+    return true;
+  const int extent = pops::n_ranks() * (pops::my_rank() == 0 ? 4 : 8);
+  bool rejected = false;
+  try {
+    pops::PoissonFFT<1> fft({extent}, {1.0}, "pops.mpi.divergent-valid-request");
+    (void)fft;
+  } catch (const std::invalid_argument&) {
+    rejected = true;
   }
+  return pops::all_reduce_min(rejected ? 1L : 0L) == 1L;
+}
+
+bool verify_rank_local_invalid_request_is_rejected_collectively() {
+  const int extent = pops::my_rank() == 0 ? 0 : pops::n_ranks() * 4;
+  bool rejected = false;
+  try {
+    pops::PoissonFFT<1> fft({extent}, {1.0}, "pops.mpi.rank-local-invalid-request");
+    (void)fft;
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  return pops::all_reduce_min(rejected ? 1L : 0L) == 1L;
+}
+
+bool verify_rank_local_diagnostic_failure_is_collective(pops::PoissonFFTDiagnosticStage stage,
+                                                        int extent, const char* identity) {
+  bool rejected = false;
+  {
+    try {
+      pops::PoissonFFT<1> fft({extent}, {1.0}, identity,
+                              pops::PoissonFFTDiagnosticContext{stage, 0});
+      pops::PoissonFFT<1>::device_view rhs("mpi_fft_diagnostic_rhs", fft.local_cell_count());
+      pops::PoissonFFT<1>::device_view phi("mpi_fft_diagnostic_phi", fft.local_cell_count());
+      Kokkos::deep_copy(rhs, pops::PoissonFFT<1>::complex_type(0.0, 0.0));
+      fft.solve(rhs, phi);
+    } catch (const std::exception&) {
+      rejected = true;
+    }
+  }  // Every rank that owned a duplicated diagnostic lane releases it before the next plan.
+  if (pops::all_reduce_min(rejected ? 1L : 0L) != 1L)
+    return false;
+
+  pops::PoissonFFT<1> recovery({extent}, {1.0}, std::string(identity) + "/recovery");
+  pops::PoissonFFT<1>::device_view rhs("mpi_fft_recovery_rhs", recovery.local_cell_count());
+  pops::PoissonFFT<1>::device_view phi("mpi_fft_recovery_phi", recovery.local_cell_count());
+  Kokkos::deep_copy(rhs, pops::PoissonFFT<1>::complex_type(0.0, 0.0));
+  recovery.solve(rhs, phi);
+  return true;
+}
+
+bool verify_failure_boundaries_and_lane_unwind() {
+  const int ranks = pops::n_ranks();
+  bool valid = verify_rank_local_diagnostic_failure_is_collective(
+      pops::PoissonFFTDiagnosticStage::workspace_allocation, 4 * ranks,
+      "pops.mpi.fft-workspace-allocation-failure");
+  valid = verify_rank_local_diagnostic_failure_is_collective(
+              pops::PoissonFFTDiagnosticStage::peer_dft_launch, 3 * ranks,
+              "pops.mpi.fft-peer-launch-failure") &&
+          valid;
+  valid = verify_rank_local_diagnostic_failure_is_collective(
+              pops::PoissonFFTDiagnosticStage::peer_accumulation, 3 * ranks,
+              "pops.mpi.fft-peer-accumulation-failure") &&
+          valid;
+  if (ranks > 1 && pops::is_pow2(ranks))
+    valid = verify_rank_local_diagnostic_failure_is_collective(
+                pops::PoissonFFTDiagnosticStage::distributed_radix, 4 * ranks,
+                "pops.mpi.fft-distributed-radix-failure") &&
+            valid;
+  return valid;
 }
 
 int run_mpi_fft_distributed(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
-  long local_failures = 0;
-  {
-    auto request = distributed_request();
-    const pops::Real measure = request.geometry.spacing(0) * request.geometry.spacing(1);
-    pops::PoissonFFTSolver<kDim> solver = pops::make_elliptic_solver<pops::PoissonFFTSolver<kDim>>(
-        std::move(request), pops::PoissonFFTFactory<kDim>{});
-    solver.install_nullspace(
-        pops::constant_mean_zero_nullspace<kDim>("periodic-mpi-fft", "mpi-test", measure),
-        pops::PreparedVectorDistribution<kDim>::distributed());
-    fill_mean_zero_mode(solver.rhs(), solver.geom());
-    const pops::SolveReport report = solver.solve();
-    if (!report.solved() || report.residual_norm > pops::Real(1e-9))
-      ++local_failures;
-    if (pops::my_rank() == 0)
-      std::printf("PoissonFFTSolver<2> np=%d residual(-lap(phi)-rhs)=%.3e status=%s\n",
-                  pops::n_ranks(), static_cast<double>(report.residual_norm), report.status_name());
-  }
-
-  const long failures = pops::all_reduce_sum(local_failures);
+  pops::reset_poisson_fft_direct_dft_fallback_count();
+  long failures = 0;
+  failures += verify_solver_dimension<1>() ? 0 : 1;
+  failures += verify_solver_dimension<2>() ? 0 : 1;
+  failures += verify_solver_dimension<3>() ? 0 : 1;
+  failures += pops::poisson_fft_direct_dft_fallback_count() == 0 ? 0 : 1;
+  failures += verify_last_axis_fallback_contract() ? 0 : 1;
+  failures += verify_divergent_valid_request_is_rejected_collectively() ? 0 : 1;
+  failures += verify_rank_local_invalid_request_is_rejected_collectively() ? 0 : 1;
+  failures += verify_failure_boundaries_and_lane_unwind() ? 0 : 1;
+  failures = pops::all_reduce_sum(failures);
   if (failures == 0 && pops::my_rank() == 0)
-    std::printf("OK test_mpi_fft_distributed\n");
+    std::printf("OK test_mpi_fft_distributed 1D/2D/3D np=%d\n", pops::n_ranks());
   pops::comm_finalize();
   return failures == 0 ? 0 : 1;
 }
 
 }  // namespace
 
-TEST(test_mpi_fft_distributed, exact_rank_two_slabs_are_invariant_across_mpi_sizes) {
+TEST(test_mpi_fft_distributed, cartesian_solver_is_exact_in_every_native_dimension) {
   EXPECT_EQ(pops::test::RunTestBody(&run_mpi_fft_distributed, "test_mpi_fft_distributed"), 0);
 }

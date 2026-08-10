@@ -850,10 +850,8 @@ class CompositeFacPoisson {
         continue;
       const auto& parent = request.levels[level - 1];
       const auto& ratio = request.ratios[level - 1];
-      for (int axis = 0; axis < Dim; ++axis)
-        if (ratio[axis] < 2)
-          throw std::invalid_argument(
-              "partitioned FAC refinement ratio must be at least two on every axis");
+      if (ratio.is_identity())
+        throw std::invalid_argument("partitioned FAC transition must refine at least one axis");
       const Extent<Dim> ratio_value = fac_detail::ratio_extent(ratio);
       if (current.geometry != parent.geometry.refine(ratio_value) ||
           current.boundary.topology() != parent.boundary.topology())

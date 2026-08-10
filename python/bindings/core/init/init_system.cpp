@@ -4,16 +4,18 @@
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
+#include <pops/core/identity/sha256.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
+#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
+#include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 
 #include <array>
+#include <cmath>
+#include <exception>
 #include <initializer_list>
 #include <limits>
-
-using System = pops::System<pops::kNativeDimension>;
-using SystemConfig = pops::SystemConfig<pops::kNativeDimension>;
-using SystemLayoutTransferSpec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
-using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
+#include <memory>
+#include <optional>
 
 // ADC-365: the System runtime-composition facade bindings.
 //
@@ -25,6 +27,11 @@ using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kN
 // every System method name here is unique). The class name and the .def names are unchanged, so the
 // legacy-name architecture gate still finds them in this exact file.
 namespace {
+
+using System = pops::System<pops::kNativeDimension>;
+using SystemConfig = pops::SystemConfig<pops::kNativeDimension>;
+using SystemLayoutTransferSpec = pops::SystemLayoutTransferSpec<pops::kNativeDimension>;
+using PreparedSystemLayoutTransfer = pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
 
 void require_exact_keys(const py::dict& value, std::initializer_list<const char*> expected,
                         const char* where) {
@@ -114,6 +121,267 @@ PreparedProviderOptions prepared_provider_options_from_python(const std::string&
   }
   (void)options.exact_contract();
   return options;
+}
+
+template <int Dim>
+struct PreparedSystemInterfaceJob {
+  pops::runtime::multiblock::AxisAlignedInterface<Dim> route;
+  pops::runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec;
+  std::shared_ptr<pops::component::LoadedComponent> component;
+};
+
+template <int Dim>
+std::string prepare_system_interface_jobs(const py::list& rows,
+                                          std::vector<PreparedSystemInterfaceJob<Dim>>& jobs) {
+  if (!PyList_CheckExact(rows.ptr()) || rows.empty())
+    throw py::type_error("System shared-interface provider requires one exact non-empty job list");
+  jobs.reserve(static_cast<std::size_t>(rows.size()));
+  pops::ExactContractBuilder contract;
+  contract.text("pops.system.interface-provider")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .scalar(static_cast<std::uint64_t>(rows.size()));
+  std::string previous_identity;
+  for (const py::handle value : rows) {
+    if (!PyDict_CheckExact(value.ptr()))
+      throw py::type_error("System shared-interface provider jobs must be exact dictionaries");
+    const py::dict row = py::reinterpret_borrow<py::dict>(value);
+    require_exact_keys(row,
+                       {"left_block", "right_block", "level", "component", "interface", "binding",
+                        "parameters_json", "target_json", "execution_context"},
+                       "System shared-interface provider job");
+    const std::size_t left_block = py::cast<std::size_t>(row["left_block"]);
+    const std::size_t right_block = py::cast<std::size_t>(row["right_block"]);
+    const int level = py::cast<int>(row["level"]);
+    if (level != 0)
+      throw py::value_error("System shared-interface provider accepts only its uniform level zero");
+    const py::dict interface = py::cast<py::dict>(row["interface"]);
+    const py::dict binding = py::cast<py::dict>(row["binding"]);
+    const py::dict execution = py::cast<py::dict>(row["execution_context"]);
+    auto route = pops::python::detail::interface_route_from_python<Dim>(interface, left_block,
+                                                                        right_block, level);
+    auto spec = pops::python::detail::interface_flux_spec_from_python<Dim>(
+        interface, binding, py::cast<std::string>(row["parameters_json"]),
+        py::cast<std::string>(row["target_json"]), execution);
+    auto component = py::cast<std::shared_ptr<pops::component::LoadedComponent>>(row["component"]);
+    if (!component || route.identity.empty() || spec.interface_identity != route.identity)
+      throw py::value_error("System shared-interface provider job has no exact component key");
+    if (!previous_identity.empty() && route.identity <= previous_identity)
+      throw py::value_error(
+          "System shared-interface provider jobs must have unique sorted identities");
+    previous_identity = route.identity;
+
+    const PopsExecutionContextV1 context = spec.execution->view();
+    contract.text(route.identity)
+        .scalar(static_cast<std::uint64_t>(route.left_block))
+        .scalar(static_cast<std::uint64_t>(route.right_block))
+        .scalar(static_cast<std::int32_t>(route.level))
+        .scalar(static_cast<std::int32_t>(route.left_axis))
+        .scalar(static_cast<std::int32_t>(route.right_axis))
+        .scalar(static_cast<std::uint8_t>(route.left_side))
+        .scalar(static_cast<std::uint8_t>(route.right_side))
+        .sequence(route.tangential_transform.right_tangent_for_left)
+        .sequence(route.tangential_transform.sign)
+        .sequence(route.tangential_transform.offset)
+        .sequence(route.right_component_for_left)
+        .text(route.left_trace_projection_identity)
+        .text(route.right_trace_projection_identity)
+        .text(route.left_trace_provider_identity)
+        .text(route.right_trace_provider_identity)
+        .scalar(static_cast<std::uint8_t>(route.left_trace_operation))
+        .scalar(static_cast<std::uint8_t>(route.right_trace_operation))
+        .scalar(static_cast<std::int32_t>(route.left_trace_required_depth))
+        .scalar(static_cast<std::int32_t>(route.right_trace_required_depth))
+        .text(route.affine_mapping_identity)
+        .scalar(route.right_normal_translation)
+        .text(spec.component_id)
+        .text(spec.manifest_identity)
+        .scalar(spec.interface_version)
+        .text(spec.canonical_layout_identity)
+        .text(spec.parameters_json)
+        .text(spec.target_json)
+        .text(context.execution_identity)
+        .scalar(context.context_version)
+        .scalar(static_cast<std::int32_t>(context.memory_space))
+        .text(context.backend_identity)
+        .text(context.device_identity)
+        .scalar(static_cast<std::int32_t>(context.scalar_type))
+        .scalar(static_cast<std::int32_t>(context.storage_precision))
+        .scalar(static_cast<std::int32_t>(context.compute_precision))
+        .scalar(static_cast<std::int32_t>(context.accumulation_precision))
+        .scalar(static_cast<std::int32_t>(context.reduction_precision))
+        .text(context.stream_identity)
+        .text(context.communicator_identity)
+        .text(context.communicator_datatype_identity);
+    jobs.push_back({std::move(route), std::move(spec), std::move(component)});
+  }
+  return std::move(contract).release();
+}
+
+template <int Dim>
+void evaluate_system_interface_provider(
+    pops::System<Dim>& system,
+    const std::shared_ptr<pops::runtime::multiblock::InterfaceFluxScheduler<Dim>>& scheduler,
+    const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::vector<pops::MultiFab<Dim>*>& states,
+    const std::vector<pops::MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only) {
+  std::exception_ptr request_error;
+  std::string request_contract;
+  try {
+    const auto blocks = static_cast<std::size_t>(system.n_blocks());
+    if (!scheduler || point.clock.empty() || point.tick < 0 || point.level != 0 ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < ::pops::amr::Rational(0, 1) ||
+        ::pops::amr::Rational(1, 1) < point.stage_fraction || states.size() != blocks ||
+        residuals.size() != blocks || (!flux_only.empty() && flux_only.size() != blocks))
+      throw std::invalid_argument(
+          "System shared-interface evaluation has an incomplete exact-ranked request");
+    pops::ExactContractBuilder contract;
+    contract.text("pops.system.interface-evaluation")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(point.clock)
+        .scalar(point.tick)
+        .scalar(point.level)
+        .scalar(point.substep)
+        .scalar(point.stage)
+        .scalar(point.stage_fraction.numerator)
+        .scalar(point.stage_fraction.denominator)
+        .scalar(point.dt)
+        .scalar(point.physical_time)
+        .scalar(static_cast<std::uint64_t>(blocks));
+    for (std::size_t block = 0; block < blocks; ++block) {
+      const bool has_state = states[block] != nullptr;
+      const bool has_residual = residuals[block] != nullptr;
+      const int mode = flux_only.empty() ? 0 : flux_only[block];
+      if (has_state != has_residual || (mode != 0 && mode != 1))
+        throw std::invalid_argument(
+            "System shared-interface evaluation has inconsistent block storage or mode");
+      contract.presence(has_state).scalar(static_cast<std::uint8_t>(mode));
+    }
+    request_contract = std::move(contract).release();
+  } catch (...) {
+    request_error = std::current_exception();
+  }
+  if (pops::all_reduce_max(request_error ? 1L : 0L) != 0) {
+    if (request_error)
+      std::rethrow_exception(request_error);
+    throw std::runtime_error(
+        "System shared-interface evaluation request failed on another MPI rank");
+  }
+  if (!pops::all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-interface-evaluation"), std::string_view(request_contract)}}))
+    throw std::invalid_argument(
+        "System shared-interface evaluation request differs between MPI ranks");
+
+  std::exception_ptr core_error;
+  try {
+    for (std::size_t block = 0; block < states.size(); ++block)
+      if (states[block] != nullptr)
+        system.block_rhs_core_into_at(point, static_cast<int>(block), *states[block],
+                                      *residuals[block],
+                                      !flux_only.empty() && flux_only[block] != 0);
+  } catch (...) {
+    core_error = std::current_exception();
+  }
+  if (pops::all_reduce_max(core_error ? 1L : 0L) != 0) {
+    if (pops::n_ranks() == 1 && core_error)
+      std::rethrow_exception(core_error);
+    throw std::runtime_error("System shared-interface core residual failed collectively");
+  }
+  scheduler->apply(point, states, residuals);
+}
+
+template <int Dim>
+void install_system_interface_provider(pops::System<Dim>& system, const py::list& rows) {
+  using Scheduler = pops::runtime::multiblock::InterfaceFluxScheduler<Dim>;
+  using PreparedComponent = pops::runtime::multiblock::PreparedInterfaceFluxComponent<Dim>;
+  std::vector<PreparedSystemInterfaceJob<Dim>> jobs;
+  std::string provider_contract;
+  std::exception_ptr parse_error;
+  try {
+    provider_contract = prepare_system_interface_jobs<Dim>(rows, jobs);
+  } catch (...) {
+    parse_error = std::current_exception();
+  }
+  if (pops::all_reduce_max(parse_error ? 1L : 0L) != 0) {
+    if (parse_error)
+      std::rethrow_exception(parse_error);
+    throw std::runtime_error(
+        "System shared-interface provider preparation failed on another MPI rank");
+  }
+  if (!pops::all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("system-interface-provider"), std::string_view(provider_contract)}}))
+    throw std::invalid_argument(
+        "System shared-interface provider contract differs between MPI ranks");
+
+  std::shared_ptr<Scheduler> scheduler;
+  std::optional<pops::Geometry<Dim>> geometry;
+  std::vector<pops::MultiFab<Dim>*> left_states;
+  std::vector<pops::MultiFab<Dim>*> right_states;
+  std::exception_ptr storage_error;
+  try {
+    scheduler = std::make_shared<Scheduler>();
+    geometry.emplace(system.prepared_block_geometry());
+    left_states.reserve(jobs.size());
+    right_states.reserve(jobs.size());
+    for (const auto& job : jobs) {
+      if (job.route.left_block >= static_cast<std::size_t>(system.n_blocks()) ||
+          job.route.right_block >= static_cast<std::size_t>(system.n_blocks()))
+        throw std::out_of_range(
+            "System shared-interface endpoint lies outside the exact block registry");
+      left_states.push_back(&system.block_state(static_cast<int>(job.route.left_block)));
+      right_states.push_back(&system.block_state(static_cast<int>(job.route.right_block)));
+    }
+  } catch (...) {
+    storage_error = std::current_exception();
+  }
+  if (pops::all_reduce_max(storage_error ? 1L : 0L) != 0) {
+    if (storage_error)
+      std::rethrow_exception(storage_error);
+    throw std::runtime_error(
+        "System shared-interface storage preparation failed on another MPI rank");
+  }
+
+  for (std::size_t index = 0; index < jobs.size(); ++index) {
+    auto& job = jobs[index];
+    const PopsExecutionContextV1 execution = job.spec.execution->view();
+    scheduler->install(
+        std::move(job.route), *left_states[index], *geometry, *right_states[index], *geometry,
+        execution, [spec = std::move(job.spec), component = std::move(job.component)]() mutable {
+          auto prepared =
+              std::make_shared<PreparedComponent>(std::move(spec), std::move(component));
+          return pops::runtime::multiblock::InterfaceFluxEvaluator(
+              [prepared](const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                         const pops::runtime::multiblock::InterfaceFluxBatch& batch) {
+                prepared->evaluate(point, batch);
+              });
+        });
+  }
+  scheduler->require_runtime_rematerialization_ready(1);
+
+  std::vector<std::uint8_t> identity_bytes(provider_contract.begin(), provider_contract.end());
+  pops::SystemInterfaceProvider<Dim> provider;
+  provider.provider_identity =
+      "pops.system.interface-provider.nd.v1:sha256:" + pops::identity::sha256_hex(identity_bytes);
+  provider.collective_contract = std::move(provider_contract);
+  auto evaluate = [&system, scheduler](
+                      const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                      const std::vector<pops::MultiFab<Dim>*>& states,
+                      const std::vector<pops::MultiFab<Dim>*>& residuals,
+                      const std::vector<int>& flux_only) {
+    evaluate_system_interface_provider(system, scheduler, point, states, residuals, flux_only);
+  };
+  provider.evaluate_rhs = evaluate;
+  provider.evaluate_core = std::move(evaluate);
+  provider.evaluation_count = [scheduler](const std::string& identity, int level) {
+    return scheduler->evaluation_count(identity, level);
+  };
+  provider.has_interfaces = [scheduler](int block) {
+    return block >= 0 && scheduler->participates(static_cast<std::size_t>(block), 0);
+  };
+  provider.discard = [scheduler] { scheduler->clear(); };
+  system.install_interface_provider(std::move(provider));
 }
 
 // Assembly seams: per-block composition + compiled/native/program install (the "what to assemble" API).
@@ -221,22 +489,12 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_discard_boundary_plans", &System::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
-          "_install_interface_flux_component",
-          [](System& system, std::size_t left_block, std::size_t right_block, int level,
-             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& interface,
-             const py::dict& binding, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution) {
-            auto route = pops::python::detail::interface_route_from_python<pops::kNativeDimension>(
-                interface, left_block, right_block, level);
-            auto spec =
-                pops::python::detail::interface_flux_spec_from_python<pops::kNativeDimension>(
-                    interface, binding, parameters_json, target_json, execution);
-            system.install_interface_flux_component(std::move(route), std::move(spec),
-                                                    std::move(component));
+          "_install_interface_flux_provider",
+          [](System& system, const py::list& jobs) {
+            install_system_interface_provider<pops::kNativeDimension>(system, jobs);
           },
-          py::arg("left_block"), py::arg("right_block"), py::arg("level"), py::arg("component"),
-          py::arg("interface"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"))
+          py::arg("jobs"),
+          "Prepare and atomically install one complete exact-ranked shared-interface provider.")
       .def("_interface_evaluation_count", &System::interface_evaluation_count, py::arg("identity"),
            py::arg("level") = 0)
       .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
@@ -256,13 +514,6 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("params") = std::vector<double>{}, py::arg("positivity_floor") = 0.0)
       .def("_finalize_native_packages", &System::finalize_native_packages)
-      .def("_install_external_riemann_block", &System::add_external_riemann_block, py::arg("name"),
-           py::arg("so_path"), py::arg("brick_id"), py::arg("sha256"), py::arg("limiter"),
-           py::arg("recon"), py::arg("time"), py::arg("gamma"), py::arg("substeps"),
-           py::arg("evolve"), py::arg("stride"), py::arg("expected_nvars"),
-           py::arg("expected_naux"), py::arg("expected_model_identity"),
-           py::arg("positivity_floor") = 0.0,
-           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
@@ -673,9 +924,10 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      .def("embedded_boundary_mask", [](const System& s) {
-        return to_ranked_field(s.embedded_boundary_mask(), s.spatial_shape());
-      })
+      .def("embedded_boundary_mask",
+           [](const System& s) {
+             return to_ranked_field(s.embedded_boundary_mask(), s.spatial_shape());
+           })
       // Auxiliary values are addressed by their complete owner-qualified key.  Python supplies
       // only data; native generated packages install the immutable producer graph and kernels.
       .def(
@@ -794,11 +1046,6 @@ void bind_system_stepping(py::class_<System>& cls) {
             return rows;
           },
           "Structured solver/runtime diagnostic events; empty unless diagnostics were enabled.")
-      .def("dt_hotspot", &System::dt_hotspot,
-           "Diagnostic (ADC-182): (w, i, j) of the GLOBAL cell that dominates the transport CFL "
-           "bound "
-           "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
-           py::arg("name"))
       // Explicit host inspection/state-transfer primitives.  Production time programs execute in
       // the prepared native runtime; these bulk copies exist for initialization, checkpoints,
       // diagnostics and numerical verification, never as a per-cell Python stepping route.
@@ -992,17 +1239,24 @@ void bind_system_data(py::class_<System>& cls) {
                 throw std::invalid_argument(
                     "System output geometry shape differs from the native domain");
             return pops::python::detail::native_output_geometry_snapshot<pops::kNativeDimension>(
-                0, 0, origin, spacing, cell_shape, cell_measure, {}, 0, false);
+                0, 0, origin, spacing, cell_shape, cell_measure, {},
+                std::array<int, pops::kNativeDimension>{}, false);
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
           "Private Writer geometry view: native, immutable, and cacheable by the runtime.")
       // LOCAL per-fab accessors (NOT collective): native ownership inspection. ScientificOutput
       // consumes the typed output_*_local_pieces API above; local_boxes returns the list of boxes
-      // (ilo, jlo, ihi, jhi) in GLOBAL indices; local_state returns the state of fab li reshaped
-      // (n_vars, bny, bnx) for a hyperslab dset[:, jlo:jhi+1, ilo:ihi+1]. A rank without a box returns an
-      // empty list. Since the System is single-box, real parallelism only appears on a multi-box
-      // geometry (cf. AMR); the API stays correct in the general case.
-      .def("local_boxes", &System::local_boxes, py::arg("name"))
+      // as (lower[Dim], upper_exclusive[Dim]) in GLOBAL native-axis indices. local_state returns fab
+      // li as (n_vars, extent[Dim-1], ..., extent[0]), matching the reversed spatial-axis NumPy
+      // convention and the same half-open box. A rank without a box returns an empty list. Since the
+      // System is single-box, real parallelism only appears on a multi-box geometry (cf. AMR); the
+      // API stays correct in the general case.
+      .def(
+          "local_boxes",
+          [](const System& system, const std::string& name) {
+            return ranked_boxes_to_python<pops::kNativeDimension>(system.local_boxes(name));
+          },
+          py::arg("name"))
       .def(
           "local_state",
           [](const System& s, const std::string& name, int li) {
@@ -1023,6 +1277,9 @@ void bind_system_data(py::class_<System>& cls) {
 // class exists before the other groups extend it). The per-concern order matches the historical single
 // chain; no overload set spans two concerns.
 void init_system(py::module_& m) {
+  using NativePreparedSystemLayoutTransfer =
+      pops::PreparedSystemLayoutTransfer<pops::kNativeDimension>;
+  using NativeSystem = pops::System<pops::kNativeDimension>;
   py::class_<SystemLayoutTransferReceipt>(m, "_SystemLayoutTransferReceipt")
       .def_readonly("applied", &SystemLayoutTransferReceipt::applied)
       .def_readonly("mapping_identity", &SystemLayoutTransferReceipt::mapping_identity)
@@ -1042,20 +1299,22 @@ void init_system(py::module_& m) {
       .def_readonly("source_element_count", &SystemLayoutTransferReceipt::source_element_count)
       .def_readonly("destination_element_count",
                     &SystemLayoutTransferReceipt::destination_element_count);
-  py::class_<PreparedSystemLayoutTransfer, std::shared_ptr<PreparedSystemLayoutTransfer>>(
-      m, "_PreparedSystemLayoutTransfer")
-      .def("begin_transaction", &PreparedSystemLayoutTransfer::begin_transaction,
+  py::class_<NativePreparedSystemLayoutTransfer,
+             std::shared_ptr<NativePreparedSystemLayoutTransfer>>(m,
+                                                                  "_PreparedSystemLayoutTransfer")
+      .def("begin_transaction", &NativePreparedSystemLayoutTransfer::begin_transaction,
            py::arg("generation"))
-      .def("capture", &PreparedSystemLayoutTransfer::capture, py::arg("generation"),
+      .def("capture", &NativePreparedSystemLayoutTransfer::capture, py::arg("generation"),
            py::arg("attempt"))
-      .def("apply", &PreparedSystemLayoutTransfer::apply, py::arg("generation"), py::arg("attempt"))
-      .def("reject_attempt", &PreparedSystemLayoutTransfer::reject_attempt, py::arg("generation"),
+      .def("apply", &NativePreparedSystemLayoutTransfer::apply, py::arg("generation"),
            py::arg("attempt"))
-      .def("finalize_transaction", &PreparedSystemLayoutTransfer::finalize_transaction,
+      .def("reject_attempt", &NativePreparedSystemLayoutTransfer::reject_attempt,
+           py::arg("generation"), py::arg("attempt"))
+      .def("finalize_transaction", &NativePreparedSystemLayoutTransfer::finalize_transaction,
            py::arg("generation"))
-      .def("rollback_transaction", &PreparedSystemLayoutTransfer::rollback_transaction,
+      .def("rollback_transaction", &NativePreparedSystemLayoutTransfer::rollback_transaction,
            py::arg("generation"));
-  py::class_<System> cls(m, "System");
+  py::class_<NativeSystem> cls(m, "System");
   bind_system_assembly(cls);
   bind_system_program(cls);
   bind_system_checkpoint(cls);

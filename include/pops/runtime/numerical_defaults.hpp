@@ -50,7 +50,8 @@ inline constexpr int kMGDefaultPreSmooth = 2;
 inline constexpr int kMGDefaultPostSmooth = 2;
 inline constexpr int kMGDefaultBottomSweeps = 50;
 // ADC-644: the total-cell coarsening ceiling. Coarsening STOPS once a level's total unknown count
-// (nx*ny) is at or below this; distinct from kMGDefaultMinCoarse (a per-axis floor). Default sentinel
+// (the exact-ranked cell product) is at or below this; distinct from kMGDefaultMinCoarse (a per-axis
+// floor). Default sentinel
 // 0 = disabled (only min_coarse governs) -> the historical V-cycle hierarchy, bit-identical.
 inline constexpr int kMGDefaultCoarseThreshold = 0;
 

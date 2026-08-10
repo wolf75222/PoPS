@@ -23,9 +23,9 @@ from . import tagging_graph as _tagging_graph, tagging_resolution as _tagging_re
 from .tagging_graph import *  # noqa: F403
 from .tagging_resolution import *  # noqa: F403
 
-# ResolvedHierarchy transports an arbitrary positive level count. Only the refinement ratio is a
-# native kernel capability; no authoring-level constant may masquerade as a backend maximum.
-NATIVE_RATIOS = (2,)
+# ResolvedHierarchy transports the exact per-axis ratio selected by the hierarchy.  This token is
+# report metadata only; it must never be interpreted as a finite set of native ratios.
+NATIVE_RATIO_POLICY = "hierarchy_exact_rank"
 
 
 def _require_handle(reference: Any, where: str) -> Any:
@@ -402,7 +402,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
 __all__ = [
     "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchClustering",
     "ProperNesting", "BufferCells", "IgnoreAMRCriteria",
-    "NATIVE_RATIOS",
+    "NATIVE_RATIO_POLICY",
 ] + _tagging_graph.__all__ + _tagging_resolution.__all__ \
     + _hierarchy.__all__ + _hierarchy_regrid.__all__ + _hierarchy_resolution.__all__ \
     + _transfer.__all__ + _bootstrap.__all__

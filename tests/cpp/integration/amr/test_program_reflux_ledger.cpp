@@ -34,6 +34,12 @@ namespace reflux = pops::amr::reflux;
 namespace time_amr = pops::numerics::time::amr;
 namespace program = pops::runtime::program;
 
+void require_kokkos_runtime() {
+#if defined(POPS_HAS_KOKKOS)
+  static Kokkos::ScopeGuard guard;
+#endif
+}
+
 constexpr pops::mesh::BoxArrayValidationBudget kLayoutBudget{8, 28};
 constexpr hierarchy::HierarchyValidationBudget kHierarchyBudget{2, 8};
 constexpr reflux::FaceFluxLedgerBudget kLedgerBudget{128, 128, 4};
@@ -261,12 +267,14 @@ void prove_checkpoint_rejections() {
 
 TEST(test_program_reflux_ledger,
      CanonicalMetricLedgerAndAcceptedCheckpointAreExactInOneTwoAndThreeDimensions) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard;
-#endif
+  require_kokkos_runtime();
   prove_ranked_reflux_and_checkpoint<1>();
   prove_ranked_reflux_and_checkpoint<2>();
   prove_ranked_reflux_and_checkpoint<3>();
+}
+
+TEST(test_program_reflux_ledger, InvalidCheckpointAndDuplicateFacesRejectBeforeMutation) {
+  require_kokkos_runtime();
   prove_checkpoint_rejections();
 }
 

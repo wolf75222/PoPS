@@ -45,10 +45,8 @@ from pops.runtime._bricks_scheme import (  # noqa: F401
 from pops.runtime._bricks_time import (  # noqa: F401
     IMEX,
     IMEXRK,
-    Role,
     SourceImplicit,
     SourceImplicitBE,
     _norm_implicit,
-    _role_to_stable,
 )
 from pops.runtime._bricks_typed import Dirichlet, Neumann, Periodic  # noqa: F401

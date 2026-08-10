@@ -75,7 +75,6 @@ class SystemBlockStore {
     VariableSet prim_vars;
     CellConvert prim_to_cons;
     CellRecovery cons_to_prim;
-    std::function<void(const field_type&, Real&, Index<Dim>&)> hotspot;
     std::function<Real(const field_type&)> source_frequency;
     std::function<Real(const field_type&)> stability_dt;
     std::function<void(field_type&)> project;
@@ -136,7 +135,8 @@ class SystemBlockStore {
   void install_interface_provider(InterfaceProvider provider) {
     if (interface_provider_)
       throw std::runtime_error("System shared-interface provider is already installed");
-    if (!provider.evaluate_rhs || !provider.evaluate_core || !provider.evaluation_count ||
+    if (provider.provider_identity.empty() || provider.collective_contract.empty() ||
+        !provider.evaluate_rhs || !provider.evaluate_core || !provider.evaluation_count ||
         !provider.has_interfaces || !provider.discard)
       throw std::invalid_argument(
           "System shared-interface provider must implement the complete ranked contract");

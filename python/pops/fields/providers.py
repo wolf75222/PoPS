@@ -21,8 +21,8 @@ _EXTERNAL_PROVIDER_INTERFACE = "pops.prepared-field-solver-provider@1"
 _EXTERNAL_RESOLVER_ID = "pops.fields.external-field-solver.resolve@3"
 _EXTERNAL_INSTALLER_ID = "pops.fields.external-field-solver.install@3"
 _EXTERNAL_USE_POLICY_ID = "pops.fields.external-field-solver.use"
-_EXTERNAL_USE_POLICY_VERSION = 4
-_EXTERNAL_ADAPTER_ID = "pops.fields.external-field-solver.system-amr-host@2"
+_EXTERNAL_USE_POLICY_VERSION = 5
+_EXTERNAL_ADAPTER_ID = "pops.fields.external-field-solver.system-amr-host@3"
 _EXTERNAL_LEVEL_LOCAL_POLICY = {
     "policy_id": "pops.field-hierarchy.level-local",
     "interface_version": 1,
@@ -46,7 +46,7 @@ def _external_adapter_capabilities() -> dict[str, Any]:
         "targets": ["system", "amr_system"],
         "layout_kinds": ["uniform", "amr"],
         "max_levels": None,
-        "refinement_ratios": [2],
+        "refinement_ratio_policy": "hierarchy_exact_rank",
         "hierarchy_policies": [
             _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
             _EXTERNAL_COMPOSITE_POLICY["policy_id"],
@@ -235,7 +235,7 @@ class ExternalFieldSolver(Descriptor):
             "execution_adapter": "host_serial_or_declared_mpi_hierarchy_batch_v2",
             "supports_amr": True,
             "max_levels": None,
-            "refinement_ratios": (2,),
+            "refinement_ratio_policy": "hierarchy_exact_rank",
             "hierarchy_policies": (
                 _EXTERNAL_LEVEL_LOCAL_POLICY["policy_id"],
                 _EXTERNAL_COMPOSITE_POLICY["policy_id"],
@@ -390,13 +390,22 @@ def _validate_external_facts(facts: Any, where: str) -> None:
             )
         )
     transition_ratios = tuple(facts.layout.get("transition_ratios", ()))
+    cells = tuple(facts.layout.get("cells", ()))
+    dimension = len(cells)
     if facts.target == "amr_system" and (
         len(transition_ratios) != levels - 1
-        or any(type(ratio) is not int or ratio != 2 for ratio in transition_ratios)
+        or dimension not in (1, 2, 3)
+        or any(
+            not isinstance(ratio, (tuple, list))
+            or len(ratio) != dimension
+            or any(type(value) is not int or value < 1 for value in ratio)
+            or not any(value > 1 for value in ratio)
+            for ratio in transition_ratios
+        )
     ):
         raise ValueError(
-            "%s provider %s adapter %s requires one ratio-2 transition between each AMR level, "
-            "got %r"
+            "%s provider %s adapter %s requires one exact-rank positive ratio refining at least "
+            "one axis between each AMR level, got %r"
             % (where, _EXTERNAL_PROVIDER_ID, _EXTERNAL_ADAPTER_ID, transition_ratios)
         )
     if (

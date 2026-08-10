@@ -56,26 +56,10 @@ def model_hash(model: Any, params: Any = None) -> str:
             return ()
         return tuple(canonical_axis_mapping(mapping, where=where))
 
-    def _role_of(name: Any) -> str:
-        _CANONICAL_ROLES = {
-            "rho": "density", "n": "density", "density": "density",
-            "rho_u": "momentum:0", "rhou": "momentum:0", "mom_x": "momentum:0", "mx": "momentum:0",
-            "rho_v": "momentum:1", "rhov": "momentum:1", "mom_y": "momentum:1", "my": "momentum:1",
-            "rho_w": "momentum:2", "rhow": "momentum:2", "mom_z": "momentum:2", "mz": "momentum:2",
-            "E": "energy", "rho_E": "energy", "ener": "energy", "energy": "energy",
-            "u": "velocity:0", "v": "velocity:1", "w": "velocity:2",
-            "vx": "velocity:0", "vy": "velocity:1", "vz": "velocity:2",
-            "p": "pressure", "pressure": "pressure",
-            "T": "temperature", "temperature": "temperature",
-        }
-        return _CANONICAL_ROLES.get(name, "custom")
-
     def _roles_for(names: Any, override: Any = None) -> list:
-        if override is None:
-            return [_role_of(nm) for nm in names]
-        if len(override) != len(names):
-            raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
-        return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
+        from pops.physics.aux import roles_for
+
+        return list(roles_for(names, override))
 
     m = model
     parts = []
@@ -712,7 +696,6 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '                                        bool wave_speed_cache) {\n'
                    '  using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;\n'
                    '  auto* s = reinterpret_cast<NativeAmrSystem*>(sys);\n'
-                   '  pops_register_auxiliary_routes_amr(s);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
                    + ell_field_prepare_lines +

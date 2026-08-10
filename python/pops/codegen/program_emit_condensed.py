@@ -7,10 +7,10 @@ velocity reconstruction. These three emitters lower those stages to INLINE ``for
 that compute ``M^{-1}`` once per cell with the closed-form ``pops::detail::block_inverse<N>`` intrinsic
 (block_inverse.hpp) -- generic in J, with NO physics vocabulary and NO call into ``coupling/schur/**``.
 
-They are the codegen counterpart of the hand-written Schur brick's per-cell kernels: for the
-Lorentz linearization ``J = [[0, B_z], [-B_z, 0]]`` the emitted coefficient entries are bit-identical to
-``SchurOperatorCoeffKernelC`` (block_inverse<2> == LorentzEliminator, proven in test_block_inverse), so
-the retirement parity gate rests on the intrinsic, not on a pattern-match of "is this a rotation?".
+They are the codegen counterpart of the hand-written Schur brick's per-cell kernels. For every
+authored local operator block ``J_K`` the emitted coefficient entries are produced by the exact same
+``block_inverse<N>`` intrinsic, so the retirement parity gate rests on the generic intrinsic rather
+than a pattern match for one named physical field or one planar rotation.
 
 The J entries are lowered by the SAME ``Expr.to_cpp()`` + ``_cell_locals`` machinery the model-kernel
 emitters use (program_emit_model_kernels / program_emit_kernels). block_inverse is computed ONCE per

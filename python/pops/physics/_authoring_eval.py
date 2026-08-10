@@ -16,6 +16,7 @@ from pops._cartesian_axes import axis_name, flattened_axis_values
 from pops._ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
 
 from .aux import roles_for
+from .roles import StateSchema
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -295,18 +296,22 @@ class _EvalMixin(_HyperbolicModel):
         self.check()  # declared dependencies (raises if a variable does not exist)
         rng = np.random.default_rng(seed)
         nv = self.n_vars
-        roles = roles_for(self.cons_names, self.cons_roles)
+        schema = StateSchema.resolve(
+            roles_for(self.cons_names, self.cons_roles),
+            dimension=len(self._flux),
+            where="check_model conservative state",
+        )
         if samples is None:
             U = rng.uniform(-1.0, 1.0, size=(nv, int(n_samples)))
             kinetic = np.zeros(int(n_samples))
-            for i, r in enumerate(roles):
-                if r == "Density":
+            for i, role in enumerate(schema.roles):
+                if role.family == "density":
                     U[i] = rng.uniform(0.1, 2.0, size=int(n_samples))
-            for i, r in enumerate(roles):
-                if r in ("MomentumX", "MomentumY"):
+            for i, role in enumerate(schema.roles):
+                if role.family == "momentum":
                     kinetic += U[i] ** 2
-            for i, r in enumerate(roles):
-                if r == "Energy":
+            for i, role in enumerate(schema.roles):
+                if role.family == "energy":
                     U[i] = 1.0 + kinetic  # above the kinetic: pressure > 0 for an ideal gas
         else:
             U = np.asarray(samples, dtype=float)
@@ -384,9 +389,9 @@ class _EvalMixin(_HyperbolicModel):
                 failures.append("round-trip to_conservative(to_primitive(U)) != U (max deviation %g: "
                                 "inconsistent conversions)" % err)
         # positivity: Density roles (conservative) and primitive 'p' (pressure) if declared
-        for i, r in enumerate(roles):
-            if r == "Density" and not bool(np.all(U[i] > 0)):
-                failures.append("component '%s' (Density role) not strictly positive on the "
+        for i, role in enumerate(schema.roles):
+            if role.family == "density" and not bool(np.all(U[i] > 0)):
+                failures.append("component '%s' (density role) not strictly positive on the "
                                 "samples" % self.cons_names[i])
         if "p" in self.prim_defs:
             p = np.asarray(env["p"], dtype=float)

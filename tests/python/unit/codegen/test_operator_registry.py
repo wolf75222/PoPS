@@ -53,8 +53,8 @@ def test_spaces():
     assert isinstance(state, model.StateSpace)
     assert state.name == "U"
     assert state.components == ("rho", "mx", "my")
-    assert state.roles["rho"] == "Density"
-    assert state.roles["mx"] == "MomentumX"
+    assert state.roles["rho"] == "density"
+    assert state.roles["mx"] == "momentum:0"
     fields = m.field_space()
     assert isinstance(fields, model.FieldSpace)
     assert fields.components == ("phi", "grad_x", "grad_y", "B_z")

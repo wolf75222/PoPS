@@ -51,7 +51,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
     component = CompiledModel(
         so_path="<stub-amr>", backend="production",
         cons_names=["rho", "mx", "my"],
-        cons_roles=["Density", "MomentumX", "MomentumY"],
+        cons_roles=["density", "momentum:0", "momentum:1"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux,
         params=params, caps={"cpu": True, "amr": True, "mpi": mpi},
         abi_key=pops._pops.abi_key(),

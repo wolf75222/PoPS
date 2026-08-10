@@ -199,7 +199,9 @@ pops::CapabilityTarget parse_capability_target(const std::string& target, const 
 py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   py::dict d;
   d["dimension"] = r.dimension;
-  d["amr_refinement_ratio"] = r.amr_refinement_ratio;
+  d["amr_refinement_ratio"] = py::none();
+  d["amr_refinement_ratio_selection"] = r.amr_refinement_ratio_selection;
+  d["amr_refinement_ratio_rank"] = r.amr_refinement_ratio_rank;
   d["precision"] = r.precision;
   d["real_bytes"] = r.real_bytes;
   d["supports_single_precision"] = r.supports_single_precision;
@@ -315,7 +317,9 @@ py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
   d["supports_named_fields"] = c.supports_named_fields;
   d["supports_partial_imex_mask"] = c.supports_partial_imex_mask;
   d["dimension"] = env.dimension;
-  d["amr_refinement_ratio"] = env.amr_refinement_ratio;
+  d["amr_refinement_ratio"] = py::none();
+  d["amr_refinement_ratio_selection"] = env.amr_refinement_ratio_selection;
+  d["amr_refinement_ratio_rank"] = env.amr_refinement_ratio_rank;
   d["precision"] = env.precision;
   d["real_bytes"] = env.real_bytes;
   d["communicator"] = env.communicator;
@@ -801,7 +805,7 @@ void init_core(py::module_& m) {
       .def_property(
           "periodicity",
           [](const NativeSystemConfig& config) {
-            return ranked_periodicity_to_python(config.periodicity);
+            return ranked_periodicity_to_python<kNativeDimension>(config.periodicity);
           },
           [](NativeSystemConfig& config, const py::handle& value) {
             config.periodicity =

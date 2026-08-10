@@ -8,7 +8,9 @@
 #include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/bricks/source.hpp>
 #include <pops/physics/composition/composite.hpp>
+#include <pops/runtime/builders/factory/model_factory.hpp>
 
+#include <array>
 #include <type_traits>
 
 using namespace pops;
@@ -78,6 +80,55 @@ void check_cartesian_exb_slots_are_permutable() {
   EXPECT_EQ(law.template velocity<1>(providers), Real(-3));
   EXPECT_EQ(law.template flux<0>(state, providers)[0], Real(-6));
   EXPECT_EQ(law.template flux<1>(state, providers)[0], Real(-9));
+}
+
+template <int Dim>
+void check_magnetic_factory_dispatch() {
+  ModelSpec spec;
+  spec.source = "magnetic";
+  spec.qom = 0.5;
+
+  bool visited = false;
+  detail::dispatch_source_for_dimension<Dim, Dim + 2>(spec, [&](auto source) {
+    using Source = std::remove_cvref_t<decltype(source)>;
+    if constexpr (std::is_same_v<Source, MagneticLorentzForceND<Dim>>) {
+      visited = true;
+      ProviderValues<3> providers{};
+      providers[0] = Real(2);
+      providers[1] = Real(3);
+      providers[2] = Real(5);
+      StateVec<Dim + 2> state{};
+      state[0] = Real(1);
+      for (int axis = 0; axis < Dim; ++axis)
+        state[axis + 1] = Real(axis + 2);
+
+      const auto result = source.apply(state, providers);
+      std::array<Real, 3> momentum{};
+      for (int axis = 0; axis < Dim; ++axis)
+        momentum[static_cast<std::size_t>(axis)] = state[axis + 1];
+      const std::array<Real, 3> expected{
+          Real(0.5) * (momentum[1] * providers[2] - momentum[2] * providers[1]),
+          Real(0.5) * (momentum[2] * providers[0] - momentum[0] * providers[2]),
+          Real(0.5) * (momentum[0] * providers[1] - momentum[1] * providers[0])};
+      for (int axis = 0; axis < Dim; ++axis)
+        EXPECT_EQ(result[axis + 1], expected[static_cast<std::size_t>(axis)]);
+      EXPECT_EQ(result[Dim + 1], Real(0));
+    }
+  });
+  EXPECT_TRUE(visited);
+
+  spec.source = "potential_magnetic";
+  bool composite_visited = false;
+  detail::dispatch_source_for_dimension<Dim, Dim + 2>(spec, [&](auto source) {
+    using Source = std::remove_cvref_t<decltype(source)>;
+    if constexpr (std::is_same_v<Source, CompositeSource<PotentialForceND<Dim>,
+                                                         MagneticLorentzForceND<Dim>>>) {
+      composite_visited = true;
+      static_assert(Source::dimension == Dim);
+      static_assert(Source::n_providers == 3);
+    }
+  });
+  EXPECT_TRUE(composite_visited);
 }
 
 }  // namespace
@@ -157,6 +208,12 @@ TEST(ProviderValues, LorentzUsesItsExplicitMagneticProvider) {
   EXPECT_EQ(source[2], Real(-0.5));
   EXPECT_EQ(source[3], Real(8.5));
   EXPECT_EQ(source[4], Real(0));
+}
+
+TEST(ProviderValues, MagneticFactoryDispatchAndRuntimeAreExactRanked) {
+  check_magnetic_factory_dispatch<1>();
+  check_magnetic_factory_dispatch<2>();
+  check_magnetic_factory_dispatch<3>();
 }
 
 TEST(ProviderValues, CompositePropagatesItsExactProviderCount) {

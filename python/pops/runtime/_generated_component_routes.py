@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 4
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '4806be6ce7a26431de34be4449d9a28ce34f53af78e2087bc7047663ff0450b2'
+COMPONENT_CATALOG_SHA256 = '520c51b60d3ae00bdffa0ed040f437fed772b80160e8d5fae7e4c86c829b8305'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3'
 
-ROUTE_REGISTRY_SIGNATURE = 'v4:b5cacb99614b063712c296d4b779283ec9acbe6d69f4092e453c4bd5406c0078'
+ROUTE_REGISTRY_SIGNATURE = 'v4:47dfb51e5f2aba1e78fb7b760f2775b820d210934c8e101826ac372dbc6032b3'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -76,14 +76,13 @@ ROUTE_TABLES = {'riemann': (('rusanov',
            ('typed implicit Program solve required; no block-local native advance',))),
  'field_solver': (('geometric_mg', 'pops::GeometricMG', (), ()),
                   ('fft',
-                   'pops::PoissonFFTSolver<2>',
-                   ('exact rank two',
+                   'pops::PoissonFFTSolver<Dim>',
+                   ('Cartesian native rank one / two / three',
                     'periodic bc',
                     'constant coefficient',
-                    'power-of-two grid',
                     'canonical ordered MPI slabs'),
-                   ('rank one / rank three, walls, variable epsilon and non-power-of-two grids are '
-                    'rejected',)),
+                   ('walls, variable epsilon and non-canonical decompositions are rejected; '
+                    'non-radix-2 extents use the diagnosed direct-DFT path',)),
                   ('polar',
                    'pops::PolarPoissonSolver<2>',
                    ('exact rank two',
@@ -103,7 +102,8 @@ ROUTE_TABLES = {'riemann': (('rusanov',
             ('amr',
              'pops::AmrSystem',
              (),
-             ('refinement ratio 2 (kAmrRefRatio); fft field solver not wired',))),
+             ('transition ratios are authenticated by the exact-rank hierarchy; FFT field solves '
+              'are Uniform-only',))),
  'transport': (('exb',
                 'pops::CartesianExBDrift',
                 (),

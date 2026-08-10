@@ -29,25 +29,33 @@ def test_generic_csg_uses_the_real_staircase_route() -> None:
     assert embedded["level_set"]["active_when"] == "phi<0"
 
 
-def test_generic_csg_cannot_claim_the_disc_only_cutcell_route() -> None:
-    with pytest.raises(NotImplementedError, match="true face apertures"):
-        Uniform(
-            cartesian_grid(),
-            embedded_boundary=EmbeddedBoundary(_annulus(), CutCell(), ZeroFlux()),
-        )
+def test_generic_csg_uses_the_exact_ranked_cutcell_route() -> None:
+    layout = Uniform(
+        cartesian_grid(),
+        embedded_boundary=EmbeddedBoundary(_annulus(), CutCell(), ZeroFlux()),
+    )
+
+    embedded = layout.options()["embedded_boundary"]
+    assert embedded["transport"] == {
+        "mode": "cutcell",
+        "kappa_min": 0.0,
+        "face_open_eps": 0.0,
+        "cut_theta_min": 0.0,
+    }
+    assert embedded["level_set"]["active_when"] == "phi<0"
 
 
-def test_extension_cannot_alias_the_disc_only_cutcell_route_for_csg() -> None:
+def test_extension_can_select_the_generic_cutcell_contract_for_csg() -> None:
     class AliasedCutCell(TransportMask):
         mode_token = "cutcell"
 
-    with pytest.raises(NotImplementedError, match="true face apertures"):
-        Uniform(
-            cartesian_grid(),
-            embedded_boundary=EmbeddedBoundary(
-                _annulus(), AliasedCutCell(), ZeroFlux()
-            ),
-        )
+    layout = Uniform(
+        cartesian_grid(),
+        embedded_boundary=EmbeddedBoundary(
+            _annulus(), AliasedCutCell(), ZeroFlux()
+        ),
+    )
+    assert layout.options()["embedded_boundary"]["transport"]["mode"] == "cutcell"
 
 
 def test_embedded_boundary_requires_an_explicit_supported_flux_provider() -> None:

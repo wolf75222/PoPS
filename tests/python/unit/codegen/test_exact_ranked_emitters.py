@@ -1,50 +1,63 @@
 """Exact-ranked C++ emission from the authenticated x[/y[/z]] physics map."""
 from __future__ import annotations
 
-import shutil
 import subprocess
 
 import pytest
 
 from pops._ir import Var
+from pops.codegen.module_lowering import lower_and_validate
+from pops.codegen.toolchain import native_compile_environment, pops_loader_build_flags
+from pops.frames import X_AXIS, Y_AXIS, Z_AXIS
 from pops.math import sqrt
 from pops.params import RuntimeParam
+from pops.physics import Density, Energy, Momentum
 from pops.physics._facade import Model
-from pops.physics._model import HyperbolicModel
 from tests.python.support.requirements import repo_include
 
 
 AXES = ("x", "y", "z")
+ROLE_AXES = (X_AXIS, Y_AXIS, Z_AXIS)
 
 
-def _scalar_model(dimension: int, *, explicit_waves: bool = True) -> HyperbolicModel:
-    model = HyperbolicModel("ranked_scalar_%d" % dimension)
+def _emit_cpp_brick(model: Model, **kwargs: object) -> tuple[str, object]:
+    """Emit only after canonical Module/provider-pack lowering."""
+    emit_model, source_module = lower_and_validate(model, facade=model)
+    return emit_model._m.emit_cpp_brick(**kwargs), source_module
+
+
+def _scalar_model(dimension: int, *, explicit_waves: bool = True,
+                  eigenvalues: bool = True) -> Model:
+    model = Model("ranked_scalar_%d" % dimension)
     (q,) = model.conservative_vars("q")
     axes = AXES[:dimension]
-    model.set_flux(**{
+    model.flux(**{
         axis: [(ordinal + 1) * q] for ordinal, axis in enumerate(axes)
     })
     if explicit_waves:
-        model.set_wave_speeds(**{
+        model.wave_speeds(**{
             axis: (-(ordinal + 1) + 0 * q, ordinal + 1 + 0 * q)
             for ordinal, axis in enumerate(axes)
         })
-    else:
-        model.set_eigenvalues(**{
+    elif eigenvalues:
+        model.eigenvalues(**{
             axis: [ordinal + 1 + 0 * q] for ordinal, axis in enumerate(axes)
         })
-    model.set_primitive_state(q)
-    model.set_conservative_from([q])
+    model.primitive_vars(q)
+    model.conservative_from([q])
     return model
 
 
-def _euler_model(dimension: int) -> HyperbolicModel:
+def _euler_model(dimension: int) -> Model:
     gamma = 1.4
-    model = HyperbolicModel("ranked_euler_%d" % dimension)
+    model = Model("ranked_euler_%d" % dimension)
     names = ("rho", "rho_u", "rho_v", "rho_w", "E")
-    roles = ("Density", "MomentumX", "MomentumY", "MomentumZ", "Energy")
     selected_names = (names[0], *names[1:dimension + 1], names[-1])
-    selected_roles = (roles[0], *roles[1:dimension + 1], roles[-1])
+    selected_roles = (
+        Density(),
+        *(Momentum(ROLE_AXES[axis]) for axis in range(dimension)),
+        Energy(),
+    )
     conservative = model.conservative_vars(*selected_names, roles=selected_roles)
     rho, momenta, energy = conservative[0], conservative[1:-1], conservative[-1]
     velocities = [
@@ -74,10 +87,10 @@ def _euler_model(dimension: int) -> HyperbolicModel:
             normal_velocity,
             normal_velocity + sound,
         ]
-    model.set_flux(**fluxes)
-    model.set_eigenvalues(**eigenvalues)
-    model.set_primitive_state(rho, *velocities, pressure)
-    model.set_conservative_from([
+    model.flux(**fluxes)
+    model.eigenvalues(**eigenvalues)
+    model.primitive_vars(rho, *velocities, pressure)
+    model.conservative_from([
         rho,
         *(rho * velocity for velocity in velocities),
         pressure / (gamma - 1.0) + 0.5 * rho * kinetic,
@@ -88,27 +101,32 @@ def _euler_model(dimension: int) -> HyperbolicModel:
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 def test_physical_methods_are_axis_static_and_ranked_from_flux(dimension: int) -> None:
     model = _scalar_model(dimension)
-    source = model.emit_cpp_brick(name="RankedScalar")
+    source, _ = _emit_cpp_brick(model, name="RankedScalar")
 
     assert "static constexpr int dimension = %d;" % dimension in source
     assert "static constexpr pops::PreparedProviderIdentity provider_identity()" in source
     assert "serialize_exact_parameters(pops::ExactContractBuilder& contract)" in source
-    assert '.text("%s")' % model._model_hash() in source
+    assert '.text("%s")' % model._m._model_hash() in source
     assert "template <int Axis>\n  POPS_HD State flux(" in source
     assert "template <int Axis>\n  POPS_HD pops::Real max_wave_speed(" in source
     assert "template <int Axis>\n  POPS_HD void wave_speeds(" in source
-    assert "int dir" not in source
+    assert "return flux<Axis>(U, a);" in source
+    assert "return max_wave_speed<Axis>(U, a);" in source
+    assert source.count("if constexpr (Axis + 1 < dimension)") == 2
+    assert "invalid[component] = std::numeric_limits<pops::Real>::quiet_NaN();" in source
+    assert "return std::numeric_limits<pops::Real>::quiet_NaN();" in source
+    assert "if (axis == 0)" not in source
+    assert "switch (axis)" not in source
     assert "if constexpr (Axis == %d)" % (dimension - 1) in source
     assert "if constexpr (Axis == %d)" % dimension not in source
     assert source.count("F[0] =") == dimension
 
 
 def test_fd_jacobian_calls_the_same_axis_static_flux() -> None:
-    model = _scalar_model(3, explicit_waves=False)
-    model._eig = {}
-    model.set_wave_speeds_from_jacobian(eig="fd")
+    model = _scalar_model(3, explicit_waves=False, eigenvalues=False)
+    model.wave_speeds_from_jacobian(eig="fd")
 
-    source = model.emit_cpp_brick(name="RankedFd")
+    source, _ = _emit_cpp_brick(model, name="RankedFd")
     assert "flux<Axis>(Up_, a)" in source
     assert "flux<Axis>(Um_, a)" in source
     assert "flux(Up_, a, dir)" not in source
@@ -120,14 +138,13 @@ def test_runtime_parameter_values_are_part_of_the_emitted_exact_contract() -> No
     speed = authored.value(authored.param(RuntimeParam("speed", default=2.0)))
     authored.flux(x=[speed * state], y=[state])
     authored.eigenvalues(x=[speed + 0 * state], y=[1 + 0 * state])
-    model = authored._m
-    model.set_primitive_state(state)
-    model.set_conservative_from([state])
+    authored.primitive_vars(state)
+    authored.conservative_from([state])
 
-    source = model.emit_cpp_brick(name="ExactRuntimeParameter")
+    source, _ = _emit_cpp_brick(authored, name="ExactRuntimeParameter")
     assert "params.count < 0 || params.count > pops::kMaxRuntimeParams" in source
     assert "contract.scalar(params.values[index]);" in source
-    assert '.text("%s")' % model._model_hash() in source
+    assert '.text("%s")' % authored._m._model_hash() in source
 
 
 @pytest.mark.parametrize("dimension", (1, 2, 3))
@@ -136,7 +153,7 @@ def test_role_hllc_and_roe_iterate_ranked_momenta(dimension: int) -> None:
     model.enable_hllc()
     model.enable_roe()
 
-    source = model.emit_cpp_brick(name="RankedEuler")
+    source, _ = _emit_cpp_brick(model, name="RankedEuler")
     assert "template <int Axis>\n  POPS_HD pops::Real contact_speed(" in source
     assert "template <int Axis>\n  POPS_HD State hllc_star_state(" in source
     assert "template <int Axis>\n  POPS_HD State roe_dissipation(" in source
@@ -158,7 +175,7 @@ def test_provided_roe_rows_cover_the_exact_rank(dimension: int) -> None:
         for ordinal, axis in enumerate(AXES[:dimension])
     })
 
-    source = model.emit_cpp_brick(name="ProvidedRoe")
+    source, _ = _emit_cpp_brick(model, name="ProvidedRoe")
     assert "template <int Axis>\n  POPS_HD State roe_dissipation(" in source
     assert "if constexpr (Axis == %d)" % (dimension - 1) in source
     assert "int dir" not in source
@@ -170,9 +187,9 @@ def test_roe_jacobian_is_derived_on_every_ranked_axis(dimension: int) -> None:
     model.roe_from_jacobian()
 
     assert tuple(
-        key for key in model._roe_jacobian if key != "entropy_fix"
+        key for key in model._m._roe_jacobian if key != "entropy_fix"
     ) == AXES[:dimension]
-    source = model.emit_cpp_brick(name="JacobianRoe")
+    source, _ = _emit_cpp_brick(model, name="JacobianRoe")
     assert "template <int Axis>\n  POPS_HD State roe_dissipation(" in source
     assert "if constexpr (Axis == %d)" % (dimension - 1) in source
 
@@ -187,28 +204,34 @@ def test_provided_roe_refuses_a_partial_ranked_map() -> None:
 
 
 def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
-    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    try:
+        compiler, authenticated_compile_flags, link_flags = pops_loader_build_flags()
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
     include = repo_include()
-    if compiler is None:
-        pytest.skip("a C++20 compiler is required for exact-ranked emitter syntax")
 
     for dimension in (1, 2, 3):
         model = _euler_model(dimension)
         model.enable_hllc()
         model.enable_roe()
-        source = model.emit_cpp_brick(
+        source, _ = _emit_cpp_brick(
+            model,
             name="Euler%d" % dimension, namespace="rank%d" % dimension
         )
         calls = [
-            "  { rank%d::Euler%d model; rank%d::Euler%d::State state{};"
-            % (dimension, dimension, dimension, dimension),
-            "    pops::Aux providers{}; pops::Real lower{}, upper{};",
+            "  { using Model = rank%d::Euler%d; Model model; Model::State state{};"
+            % (dimension, dimension),
+            "    using Providers = pops::ProviderValues<pops::provider_count<Model>()>;",
+            "    Providers providers{}; pops::Real lower{}, upper{};",
+            "    static_assert(pops::HyperbolicModel<Model>);",
             "    pops::ExactContractBuilder brick_contract;",
             "    model.serialize_exact_parameters(brick_contract);",
         ]
         for axis in range(dimension):
             calls.append("    (void)model.template flux<%d>(state, providers);" % axis)
             calls.append("    (void)model.template max_wave_speed<%d>(state, providers);" % axis)
+            calls.append("    (void)model.flux(state, providers, %d);" % axis)
+            calls.append("    (void)model.max_wave_speed(state, providers, %d);" % axis)
             calls.append("    model.template wave_speeds<%d>(state, providers, lower, upper);" % axis)
             calls.append(
                 "    (void)model.template contact_speed<%d>(state, state, 1, 1, -1, 1);"
@@ -221,6 +244,12 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
                 "    (void)model.template roe_dissipation<%d>(state, providers, state, providers);"
                 % axis
             )
+        calls += [
+            "    const auto invalid_flux = model.flux(state, providers, Model::dimension);",
+            "    for (int component = 0; component < Model::State::size(); ++component)",
+            "      if (!std::isnan(invalid_flux[component])) return 1;",
+            "    if (!std::isnan(model.max_wave_speed(state, providers, Model::dimension))) return 1;",
+        ]
         calls.append("  }")
         calls += [
             "  { using ExactModel = pops::CompositeModel<rank%d::Euler%d, "
@@ -237,6 +266,8 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
             "  }",
         ]
         translation_unit = "\n".join((
+            "#include <cmath>",
+            "#include <pops/core/model/physical_model.hpp>",
             "#include <pops/physics/bricks/bricks.hpp>",
             source,
             "int main() {",
@@ -247,6 +278,10 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
         source_path = tmp_path / ("ranked_emitters_%dd.cpp" % dimension)
         executable = tmp_path / ("ranked_emitters_%dd" % dimension)
         source_path.write_text(translation_unit, encoding="utf-8")
+        compile_flags = [
+            flag for flag in authenticated_compile_flags
+            if not flag.startswith("-DPOPS_NATIVE_DIM=")
+        ]
         subprocess.run(
             [
                 compiler,
@@ -255,9 +290,13 @@ def test_ranked_hllc_and_roe_templates_are_cpp_well_formed(tmp_path) -> None:
                 "-DPOPS_NATIVE_DIM=%d" % dimension,
                 "-I",
                 include,
+                *compile_flags,
                 source_path,
+                *link_flags,
                 "-o",
                 executable,
             ],
             check=True,
+            env=native_compile_environment(),
         )
+        subprocess.run([executable], check=True, env=native_compile_environment())

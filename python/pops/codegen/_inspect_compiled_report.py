@@ -154,6 +154,9 @@ class CompiledReport(Report):
             lines.append("    dimension             : %s" % self.runtime.get("dimension"))
             lines.append("    amr_refinement_ratio  : %s"
                          % self.runtime.get("amr_refinement_ratio"))
+            lines.append("    amr_ratio_selection   : %s (rank=%s)"
+                         % (self.runtime.get("amr_refinement_ratio_selection"),
+                            self.runtime.get("amr_refinement_ratio_rank")))
             lines.append("    precision             : %s (%s bytes)"
                          % (self.runtime.get("precision"), self.runtime.get("real_bytes")))
             lines.append("    communicator          : %s"

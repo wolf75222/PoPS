@@ -1044,10 +1044,9 @@ class FullTensorCompositeFac {
         throw std::invalid_argument(
             "dimension-generic tensor FAC refined levels require unique partitioned ownership");
       const Extent<Dim> ratio = detail::ratio_extent(ratios_[level - 1]);
-      for (int axis = 0; axis < Dim; ++axis)
-        if (ratios_[level - 1][axis] < 2)
-          throw std::invalid_argument(
-              "dimension-generic tensor FAC refinement ratios must be at least two");
+      if (ratios_[level - 1].is_identity())
+        throw std::invalid_argument(
+            "dimension-generic tensor FAC transition must refine at least one axis");
       if (*binding.geometry != bindings_[level - 1].geometry->refine(ratio) ||
           binding.boundary->topology() != bindings_[level - 1].boundary->topology())
         throw std::invalid_argument(

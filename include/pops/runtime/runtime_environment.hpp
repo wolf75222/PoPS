@@ -6,7 +6,6 @@
 /// This report is deliberately descriptive. It does not initialize Kokkos, MPI, or an allocator;
 /// it only exposes the global assumptions that affect binding and runtime behaviour.
 
-#include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/foundation/native_dimension.hpp>
@@ -22,11 +21,13 @@
 
 namespace pops {
 
-inline constexpr int kNativeAmrRefinementRatio = kAmrRefRatio;
-
 struct RuntimeEnvironmentReport {
   int dimension = kNativeDimension;
-  int amr_refinement_ratio = kNativeAmrRefinementRatio;
+  // Transition ratios belong to an authenticated AMR hierarchy, never to the
+  // process-wide native module.  Keep the authority and exact spatial rank
+  // visible rather than fabricating a scalar global ratio.
+  std::string amr_refinement_ratio_selection = "hierarchy_exact_rank";
+  int amr_refinement_ratio_rank = kNativeDimension;
 
   std::string precision = "double";
   int real_bytes = static_cast<int>(sizeof(Real));

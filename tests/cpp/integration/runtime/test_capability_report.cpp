@@ -13,8 +13,11 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   EXPECT_TRUE(report.abi_version == kAbiVersion) << "abi_version";
   EXPECT_TRUE(report.target == "module") << "target_module";
   EXPECT_TRUE(!report.abi_key.empty()) << "abi_key_present";
-  EXPECT_TRUE(report.runtime.dimension == 2) << "runtime_dimension";
-  EXPECT_TRUE(report.runtime.amr_refinement_ratio == 2) << "runtime_amr_ratio";
+  EXPECT_TRUE(report.runtime.dimension == kNativeDimension) << "runtime_dimension";
+  EXPECT_TRUE(report.runtime.amr_refinement_ratio_selection == "hierarchy_exact_rank")
+      << "runtime_amr_ratio_authority";
+  EXPECT_TRUE(report.runtime.amr_refinement_ratio_rank == kNativeDimension)
+      << "runtime_amr_ratio_rank";
   EXPECT_TRUE(!report.routes.empty()) << "routes_present";
 
   bool saw_amr_ratio = false;
@@ -33,7 +36,8 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
     if (row.route_id == "amr:refinement_ratio") {
       saw_amr_ratio = true;
       EXPECT_TRUE(row.status == "partial") << "amr_ratio_partial";
-      EXPECT_TRUE(row.reason.find("ratio=2") != std::string::npos) << "amr_ratio_reason";
+      EXPECT_TRUE(row.reason.find("process-global ratio invariant") != std::string::npos)
+          << "amr_ratio_reason";
     } else if (row.route_id == "precision:single_or_mixed") {
       saw_precision = true;
       EXPECT_TRUE(row.status == "unavailable") << "precision_unavailable";

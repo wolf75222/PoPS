@@ -1,6 +1,6 @@
-"""pops.moments -- generic 2D moment-model generator and facade API.
+"""pops.moments -- explicit two-velocity-dimensional moment generator and facade API.
 
-The GENERATOR surface (the systematic binomial algebra for 2D Vlasov/QMOM moment
+The generator surface (the systematic binomial algebra for 2V Vlasov/QMOM moment
 hierarchies) is re-exported from the sub-modules: index helpers, the Gaussian closure,
 the source terms, and the model-builder entry point.
 
@@ -8,7 +8,8 @@ The public construction API is a set of thin facades over that generator: a flue
 :class:`MomentModel` (built by :func:`CartesianVelocityMoments`) that records options and
 calls :func:`build_moment_model` only on ``.build()``, plus the inert structural
 descriptors (:class:`MomentHierarchy` / :class:`MomentBasis` / ... ) and the closures
-surface (:mod:`pops.moments.closures`).
+surface (:mod:`pops.moments.closures`). This package is an advertised 2V/2D physical
+specialization, not a fallback used by the generic 1D/2D/3D runtime.
 """
 # --- generator surface (the engine) ----------------------------------------
 from .model_builder import (
@@ -18,7 +19,7 @@ from .model_builder import (
     moment_names,
     moment_transport_blocks,
 )
-from .sources import (lorentz_sources, maxwellian_moments, bgk_source,
+from .sources import (MOMENT_VELOCITY_DIMENSION, lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
 from .closures import (gaussian_closure, closure, Closure, LocalClosure,
                        apply_local_closure, HyQMOM15Closure)
@@ -39,6 +40,7 @@ __all__ = [
     "moment_indices",
     "moment_names",
     "moment_transport_blocks",
+    "MOMENT_VELOCITY_DIMENSION",
     "gaussian_closure",
     "lorentz_sources",
     "maxwellian_moments",

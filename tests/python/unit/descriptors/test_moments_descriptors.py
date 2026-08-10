@@ -24,6 +24,7 @@ import pytest
 from pops import moments  # noqa: E402
 from pops.descriptors import Availability, Descriptor, DescriptorProtocol  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.frames import Cartesian2D  # noqa: E402
 from pops.physics import Model  # noqa: E402
 
 
@@ -62,12 +63,21 @@ def test_realizability_projection_descriptor_contract():
 
 
 def test_magnetic_moment_source_descriptor_contract():
-    src = moments.MagneticMomentSource(q_over_m="my_q", b_field="my_b")
+    src = moments.MagneticMomentSource(
+        q_over_m="my_q", axial_component="my_axial")
     assert isinstance(src, (Descriptor, DescriptorProtocol))
     assert src.name == "MagneticMomentSource"
     assert src.category == "moment_source"
-    assert src.options() == {"q_over_m": "my_q", "b_field": "my_b"}
-    assert src.capabilities().to_dict()["provides"] == "magnetic_lorentz"
+    assert src.options() == {
+        "q_over_m": "my_q",
+        "axial_component": "my_axial",
+        "velocity_dimension": 2,
+    }
+    assert src.capabilities().to_dict() == {
+        "provides": "magnetic_lorentz",
+        "velocity_dimension": 2,
+        "axial_components": 1,
+    }
     assert src.validate() is True
     # The builder side stays: as_sources() returns a (m, M) -> list callable.
     assert callable(src.as_sources(2.0))
@@ -111,7 +121,8 @@ def test_hyqmom15_relaxation_descriptor_contract():
 def test_route_choosers_available_is_explainable():
     # Every moments descriptor answers available() with an Availability, never a bare bool.
     for descriptor in (moments.ExactSpeeds(), moments.RealizabilityProjection(),
-                       moments.MagneticMomentSource(), moments.HyQMOM15Closure(),
+                       moments.MagneticMomentSource(axial_component="magnetic_axial"),
+                       moments.HyQMOM15Closure(),
                        moments.HyQMOM15Relaxation()):
         status = descriptor.available()
         assert isinstance(status, Availability)
@@ -161,10 +172,12 @@ def test_moment_transport_blocks_follow_the_canonical_directional_chains():
 def test_gaussian_exact_speeds_use_the_generic_moment_partition():
     from pops.lib.models.moments import Gaussian
 
-    model = Gaussian.transport(order=2, name="gaussian_partition_contract", roe=True)
+    model = Gaussian.transport(
+        order=2, name="gaussian_partition_contract", roe=True, frame=Cartesian2D())
     provider = model._dsl._m._ws_jacobian
     assert provider["blocks"] == moments.moment_transport_blocks(2)
     assert provider["im_tol"] == 0
+    model._dsl._model_hash()  # canonical provider-pack resolution before private source inspection
     source = model._dsl._m.emit_cpp_brick()
     assert "pops::detail::roe_abs_apply_certified_real" in source
     assert "pops::real_spectrum(roe_block_" in source
@@ -189,10 +202,12 @@ def test_moment_coefficients_preserve_typed_storage_and_numeric_values():
     background = RuntimeParam("neutralizing_background")
     specification = (moments.CartesianVelocityMoments(order=2)
                      .add_poisson_coupling(eps=eps, background=background)
-                     .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
+                     .add_vlasov_electric_source(("grad_x", "grad_y"), q_over_m)
                      .add_magnetic_source(-0.25))
-    first = specification.build("typed_moment_coefficients_a").module.params()
-    second_model = specification.build("typed_moment_coefficients_b")
+    first = specification.build(
+        "typed_moment_coefficients_a", frame=Cartesian2D()).module.params()
+    second_model = specification.build(
+        "typed_moment_coefficients_b", frame=Cartesian2D())
     second = second_model.module.params()
 
     assert eps.is_owned is False and q_over_m.is_owned is False and background.is_owned is False
@@ -220,7 +235,10 @@ def test_moment_coefficients_preserve_typed_storage_and_numeric_values():
 def test_moment_coefficients_refuse_implicit_string_and_bool_coercions():
     with pytest.raises(TypeError, match="q_over_m"):
         moments.CartesianVelocityMoments(2).add_vlasov_electric_source(
-            "grad_x", "grad_y", "q_over_m")
+            ("grad_x", "grad_y"), "q_over_m")
+    with pytest.raises(ValueError, match="exactly 2 components"):
+        moments.CartesianVelocityMoments(2).add_vlasov_electric_source(
+            ("electric_only",), RuntimeParam("electric_q_over_m"))
     with pytest.raises(TypeError, match="eps"):
         moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=True)
     with pytest.raises(TypeError, match="Poisson background"):
@@ -240,7 +258,7 @@ def test_moment_coefficients_cannot_clone_another_registry_owner():
         eps=claimed_after_recording)
     Model("late_coefficient_owner").param(claimed_after_recording)
     with pytest.raises(ValueError, match=r"already owned.*shared owner or tie"):
-        specification.build("late_owned_moment_model")
+        specification.build("late_owned_moment_model", frame=Cartesian2D())
 
 
 # ---------------------------------------------------------------------------------------------
@@ -299,7 +317,7 @@ def test_hyqmom15_model_is_inspectable_and_runtime_free():
     # typed transport + source operators and the 15 conservative names, with no runtime leakage
     # (mirrors the ADC-566 lib boundary: models lower runtime-free to pops.model.Module).
     from pops.lib.models.moments import HyQMOM15
-    model = HyQMOM15.vlasov_poisson_magnetic(order=4)
+    model = HyQMOM15.vlasov_poisson_magnetic(order=4, frame=Cartesian2D())
     module = getattr(model, "module", model)
     assert hasattr(module, "operator_registry")
     op_names = module.operator_registry().names()

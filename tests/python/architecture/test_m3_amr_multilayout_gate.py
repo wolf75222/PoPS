@@ -30,27 +30,32 @@ def test_m3_manifest_references_only_real_mandatory_proofs():
     assert len(data["check"]) == 43
 
 
-def test_m3_gate_pins_three_level_subcycled_reflux_proof():
+def test_m3_gate_pins_exact_ranked_history_publication_and_rollback_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
-    assert {
-        "issue": "ADC-678",
-        "requirement": "accepted_state",
-        "polarity": "positive",
-        "kind": "ctest",
-        "target": "test_amr_history_ring",
-        "test_regex": (
-            "^test_amr_history_ring\\.ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
-        ),
-    } in data["check"]
+    expected = {
+        "RetainsAndInterpolatesExactRankedState": "positive",
+        "FacadeTransactionRestoresAcceptedHistoryImage": "positive",
+        "RegisteredHistoryRejectsTopologyPublicationBeforeMutation": "refusal",
+    }
+    for case, polarity in expected.items():
+        assert {
+            "issue": "ADC-678",
+            "requirement": "accepted_state",
+            "polarity": polarity,
+            "kind": "ctest",
+            "target": "test_amr_history_ring",
+            "test_regex": "^test_amr_history_ring\\.%s$" % case,
+        } in data["check"]
 
-    source = ROOT / "tests/cpp/integration/amr/test_amr_history_ring.cpp"
-    assert (
-        "TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp)"
-    ) in source.read_text(encoding="utf-8")
+    source = (ROOT / "tests/cpp/integration/amr/test_amr_history_ring.cpp").read_text(
+        encoding="utf-8"
+    )
+    for case in expected:
+        assert "TEST(test_amr_history_ring, %s)" % case in source
 
 
-def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
+def test_m3_gate_pins_exact_ranked_partitioned_transfer_proof():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
     assert {
@@ -65,11 +70,14 @@ def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
     source = (ROOT / "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp").read_text(
         encoding="utf-8"
     )
-    assert "runtime::amr::composite_reduce_fields" in source
-    assert "std::fabs(integral - 1.25)" in source
+    assert "prove_partitioned_transfers<pops::kNativeDimension>" in source
+    assert "TransferKind::LinearProlongation" in source
+    assert "TransferKind::ConservativeRestriction" in source
+    assert "TransferKind::CoarseFineGhostInterpolation" in source
+    assert '"exact-ranked-partitioned-transfers\\n"' in source
 
 
-def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
+def test_m3_gate_pins_exact_ranked_temporal_accepted_image_proof():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
     assert {
@@ -77,15 +85,16 @@ def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
         "requirement": "accepted_state",
         "polarity": "positive",
         "kind": "ctest",
-        "target": "test_program_reflux_ledger",
+        "target": "test_temporal_partition_restart",
         "test_regex": (
-            "^test_program_reflux_ledger\\.accepted_checkpoint_state_round_trips_canonically$"
+            "^test_temporal_partition_restart\\."
+            "AcceptedImageIsCanonicalInOneTwoAndThreeDimensions$"
         ),
     } in data["check"]
 
-    source = ROOT / "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
+    source = ROOT / "tests/cpp/integration/amr/test_temporal_partition_restart.cpp"
     assert (
-        "TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonically)"
+        "TEST(test_temporal_partition_restart, AcceptedImageIsCanonicalInOneTwoAndThreeDimensions)"
     ) in source.read_text(encoding="utf-8")
 
 
@@ -155,11 +164,12 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",
-        "polarity": "refusal",
+        "polarity": "positive",
         "kind": "ctest",
-        "target": "test_amr_native_loader",
+        "target": "test_amr_seed_no_refine",
         "test_regex": (
-            "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+            "^test_amr_seed_no_refine\\."
+            "OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional$"
         ),
     } in checks
 
@@ -167,11 +177,6 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
     ).read_text(encoding="utf-8")
     assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
-    runtime_source = (
-        ROOT / "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
-    ).read_text(encoding="utf-8")
-    assert "check_persistent_tagging_hysteresis_and_rollback()" in runtime_source
-    assert "check_persistent_tagging_equality_at_inclusive_boundary()" in runtime_source
     restart_source = (
         ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
     ).read_text(encoding="utf-8")
@@ -180,10 +185,14 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
     assert "_assert_same_accepted_image(restarted, rollback_image)" in restart_source
     assert "_runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]" in restart_source
     native_source = (
-        ROOT / "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"
+        ROOT / "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"
     ).read_text(encoding="utf-8")
-    assert "unsupported_hysteresis.min_cycles = 1" in native_source
-    assert "EXPECT_EQ(tag_call_count(), calls_before_hysteresis)" in native_source
+    assert "OneHierarchySweepAgesHysteresisOnceAndCheckpointRestoreIsTransactional" \
+        in native_source
+    assert "all parent levels in one hierarchy sweep must share one hysteresis cycle" \
+        in native_source
+    assert "restored.restore_checkpoint_accepted_state(accepted)" in native_source
+    assert "EXPECT_THROW(restored.restore_checkpoint_accepted_state(invalid)" in native_source
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
@@ -226,7 +235,7 @@ def test_m3_gate_rejects_a_missing_or_non_exact_ctest_case_before_build(tmp_path
     data = data.replace(
         (
             'test_regex = "^test_amr_history_ring\\\\.'
-            'ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"'
+            'RetainsAndInterpolatesExactRankedState$"'
         ),
         'test_regex = "^test_amr_history_ring\\\\.DefinitelyMissingProof$"',
         1,
@@ -332,11 +341,12 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     assert "_restart_accepted_contract_identity" in restart_mpi_source
     assert 'receipt["history_consensus_identity_before"]' in restart_mpi_source
     assert "both AB2 histories are conservatively rematerialized" in restart_mpi_source
-    program_context = (
-        ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+    program_runtime = (
+        ROOT / "include/pops/runtime/program/program_runtime_state.hpp"
     ).read_text(encoding="utf-8")
-    assert "AMR RegridOnRestart requires a clean accepted Program boundary" in program_context
-    assert "supports shared-interface flux groups only in serial" not in program_context
+    assert "RegridOnRestart requires an authenticated artifact-backed Program" in program_runtime
+    assert "artifact lacks its restart preflight/regrid/resync hooks" in program_runtime
+    assert "supports shared-interface flux groups only in serial" not in program_runtime
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",

@@ -50,6 +50,13 @@ ConfiguredFieldOptions decode_configured_field_options(std::string_view family_r
   if (family_route == "geometric_mg")
     throw std::invalid_argument(
         "GeometricMG is reserved for the AMR MG/FAC route; uniform System requires cartesian_cg");
+  if (family_route == "fft") {
+    if (options.schema_identity != "pops.system.fft-discrete-exact-rank-options.empty@2" ||
+        !options.values.empty())
+      throw std::invalid_argument(
+          "System FFT field solver requires its exact empty discrete Cartesian option schema");
+    return {};
+  }
   if (family_route != "cartesian_cg")
     throw std::invalid_argument("System exact-ranked field solver family is unknown: " +
                                 std::string(family_route));

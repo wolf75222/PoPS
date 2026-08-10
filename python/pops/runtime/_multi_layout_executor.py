@@ -1169,7 +1169,7 @@ class _MultiLayoutUniformExecutor:
 def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     from pops.codegen._layout_resolution import ResolvedRuntimeLayouts
     from pops.runtime._runtime_mesh_lowering import (
-        install_uniform_embedded_boundary,
+        install_embedded_boundary,
         system_config_from_layout,
     )
     from pops.runtime._system import System
@@ -1252,7 +1252,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             transition_ratios=normalized_layout.transition_ratios,
         )
         cast(Any, engine)._execution_context = plan.execution_context
-        install_uniform_embedded_boundary(engine, normalized_layout)
+        install_embedded_boundary(engine, normalized_layout)
         selected = {
             name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
         }

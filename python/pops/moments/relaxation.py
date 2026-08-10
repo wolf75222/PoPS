@@ -482,7 +482,7 @@ class HyQMOM15Relaxation(Descriptor):
         denominator_minus = 3.0 * target[(1, 1)] / 16.0 - 3.0 / 16.0
         a03, a04 = target[(0, 3)], target[(0, 4)]
         a11, a12, a13 = target[(1, 1)], target[(1, 2)], target[(1, 3)]
-        a21, a22 = target[(2, 1)], target[(2, 2)]
+        a21 = target[(2, 1)]
         a30, a31, a40 = target[(3, 0)], target[(3, 1)], target[(4, 0)]
         s22_1 = (
             3.0 * a11 / 8.0 - a04 / 32.0 - a13 / 8.0 - a31 / 8.0 - a40 / 32.0

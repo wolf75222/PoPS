@@ -41,6 +41,8 @@ struct AmrGhostFillPreparation {
   Box<Dim> coarse_domain{};
   Box<Dim> fine_domain{};
   ::pops::amr::RefinementRatio<Dim> ratio{};
+  ::pops::amr::transfer::TransferKind interpolation_kind =
+      ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation;
   BoundaryTopology<Dim> topology{};
   std::uint64_t topology_generation = 0;
   std::uint64_t materialization_generation = 0;
@@ -94,9 +96,10 @@ std::string exact_contract(const CoarseFineGhostSchedule<Dim>& schedule,
                            std::string_view lane_identity) {
   ExactContractBuilder contract;
   contract.text("pops.prepared-amr-ghost-fill")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(std::int32_t{Dim})
       .scalar(std::int32_t{preparation.fine_level})
+      .scalar(preparation.interpolation_kind)
       .text(preparation.field_identity)
       .text(lane_identity)
       .scalar(preparation.topology_generation)
@@ -183,7 +186,7 @@ class PreparedAmrGhostFill {
   PreparedAmrGhostFill() = default;
 
   [[nodiscard]] static PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.amr.sparse-ghost-fill", 1};
+    return {"pops.amr.sparse-ghost-fill", 2};
   }
 
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
@@ -341,9 +344,19 @@ class PreparedAmrGhostFill {
       fine = &fine_field;
       lane = &requested_lane;
       preparation = std::move(requested);
+      const auto provider =
+          ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
+              preparation.interpolation_kind);
+      const auto capabilities = provider.capabilities();
+      if (preparation.interpolation_kind !=
+              ::pops::amr::transfer::TransferKind::CoarseFineGhostInterpolation &&
+          preparation.interpolation_kind !=
+              ::pops::amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation)
+        throw std::invalid_argument(
+            "prepared AMR ghost fill requires an authenticated coarse/fine interpolation kind");
       coarse_fine.emplace(coarse_field, fine_field, preparation.coarse_domain,
                           preparation.fine_domain, preparation.ratio, preparation.topology,
-                          preparation.budget.coarse_fine);
+                          capabilities.source_stencil_radius, preparation.budget.coarse_fine);
       same_level.emplace(
           prepare_halo_schedule(fine_field, preparation.fine_domain, preparation.topology,
                                 HaloLayoutCoverage::sparse_level, preparation.budget.same_level));
@@ -367,8 +380,9 @@ class PreparedAmrGhostFill {
         scratch.push_back(std::move(patch));
       }
 
-      const auto provider = ::pops::amr::transfer::TransferProvider<
-          Dim, ::pops::amr::transfer::Centering::Cell>::coarse_fine_ghost_interpolation();
+      const auto provider =
+          ::pops::amr::transfer::TransferProvider<Dim, ::pops::amr::transfer::Centering::Cell>(
+              preparation.interpolation_kind);
       for (const auto& plan : coarse_fine->patch_plans()) {
         const std::size_t scratch_index = scratch_by_fine_patch[plan.fine_patch];
         if (scratch_index == no_scratch)

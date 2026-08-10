@@ -14,7 +14,6 @@
 #include <pops/runtime/amr_patch.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
-#include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/amr/exact_field_solver_provider.hpp>
 #include <pops/runtime/amr/field_solver_options.hpp>
@@ -54,7 +53,8 @@
 /// ProgramGraph places their typed operations. Multiple COMPILED blocks (add_compiled_model) and a
 /// MIX of compiled + native blocks share the same hierarchy (capstone v, multi-block production DSL).
 ///
-/// @note Resolved explicit Programs support N ratio-2 levels. An implicit/IMEX AMR composition
+/// @note Resolved explicit Programs support N levels with hierarchy-authenticated exact-rank
+/// transition ratios. An implicit/IMEX AMR composition
 /// without a typed Program primitive fails closed; there is no private Newton or time-step fallback.
 
 namespace pops {
@@ -76,12 +76,6 @@ namespace runtime::program {
 template <int Dim, class MemorySpace>
 class AmrProgramContext;
 }  // namespace runtime::program
-
-namespace runtime::amr {
-struct PreparedTaggerSpec;
-struct PreparedClusteringSpec;
-struct PreparedRefluxSpec;
-}  // namespace runtime::amr
 
 namespace runtime::field {
 struct PreparedFieldSolverSpec;
@@ -140,7 +134,7 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
   int level_count = 2;    ///< maximum active hierarchy depth (>= 1)
   /// Exact level-to-level hierarchy graph. Each table contains one ranked row per transition;
-  /// ratios are >= 2 and buffers/lookaheads are >= 0 component-wise.
+  /// ratio axes are positive and each row refines at least one axis; buffers/lookaheads are >= 0.
   std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
@@ -204,10 +198,10 @@ struct AmrBuildParams {
   /// Initial coarse seed: density only (historical) OR the FULL conservative state (priority).
   struct InitialData {
     bool has_density = false;
-    std::vector<double> density;  ///< initial coarse density (component 0), ny*nx
+    std::vector<double> density;  ///< initial coarse density (component 0), one native cell product
     // FULL initial conservative state (all components), takes priority over `density` when has_state.
     bool has_state = false;
-    std::vector<double> state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
+    std::vector<double> state;  ///< ncomp*cell_count, component-major in native index order
   } initial;
 };
 
@@ -390,27 +384,6 @@ class AmrSystem {
                                                const std::string& provider_slot);
   /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
   POPS_EXPORT void discard_hyperbolic_boundaries();
-  POPS_EXPORT void install_amr_tagger_component(
-      runtime::amr::PreparedTaggerSpec spec, std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_amr_clustering_component(
-      runtime::amr::PreparedClusteringSpec spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void install_amr_reflux_component(
-      runtime::amr::PreparedRefluxSpec spec, std::shared_ptr<component::LoadedComponent> component);
-  POPS_EXPORT void discard_amr_provider_components();
-  /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
-  /// only after the lazy AmrRuntime has been built and before bind freezes composition.
-  POPS_EXPORT void install_interface_flux_component(
-      runtime::multiblock::AxisAlignedInterface<Dim> route,
-      runtime::multiblock::PreparedInterfaceFluxSpec<Dim> spec,
-      std::shared_ptr<component::LoadedComponent> component);
-  /// Roll back a failed all-interface post-block installation transaction.
-  POPS_EXPORT void discard_interface_flux_components();
-  /// Internal bind transaction checkpoint for incremental per-level interface installation.
-  POPS_EXPORT std::size_t interface_flux_installation_checkpoint() const;
-  POPS_EXPORT void rollback_interface_flux_installations(std::size_t accepted_size);
-  POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
-                                                     int level = 0) const;
 
   /// Internal installation seam for a compiled AMR production package. The .so inlines the header
   /// template add_compiled_model(AmrSystem&, ...), prepares one complete
@@ -452,17 +425,6 @@ class AmrSystem {
                         const std::vector<double>& params = {}, double positivity_floor = 0.0,
                         double weno_epsilon = static_cast<double>(kWenoEpsilon),
                         bool wave_speed_cache = false);
-
-  /// AMR twin of System::add_external_riemann_block. The external flux is instantiated directly
-  /// in the deferred AmrRuntime builder and therefore retains native reflux/halo execution.
-  void add_external_riemann_block(const std::string& name, const std::string& so_path,
-                                  const std::string& brick_id, const std::string& sha256,
-                                  const std::string& limiter, const std::string& recon,
-                                  const std::string& time, double gamma, int substeps, int stride,
-                                  int expected_nvars, int expected_naux,
-                                  const std::string& expected_model_identity,
-                                  double positivity_floor = 0.0,
-                                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
   /// Install the exact prepared AMRTagging program resolved from the layout authority.
   /// This is the only tagging installation seam: the runtime never synthesizes a scalar
@@ -597,13 +559,13 @@ class AmrSystem {
                            const std::string& nullspace_provider_identity,
                            const PreparedProviderOptions& options);
 
-  /// Sets the initial density on the coarse level (component 0), ny*nx row-major.
+  /// Sets the initial density on the coarse level (component 0), flattened in native index order.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).
   void set_density(const std::string& name, const std::vector<double>& rho);
 
   /// Sets the FULL INITIAL CONSERVATIVE STATE (all components) on the coarse level, then
   /// prolongs it to the fine levels at build (constant injection, like the density). @p U is flat
-  /// component-major (c*ny*nx + j*nx + i) of size ncomp*ny*nx; ncomp == n_vars of the model (checked at
+  /// component-major with one exact-ranked cell product per component; ncomp == n_vars of the model (checked at
   /// build, where only Model::n_vars is known). Takes priority over set_density: allows starting the AMR
   /// from a full drift state (rho, rho*u, rho*v) instead of m=0. The conversion
   /// primitive -> conservative (rho_u = rho*u) is done on the Python side (the caller already supplies the
@@ -611,7 +573,7 @@ class AmrSystem {
   /// state is threaded to the deferred concrete builder, seeds the coarse, then is injected to the
   /// fine levels. In multi-block @p name indexes the target block.
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
-  ///         is not a multiple of ny*nx.
+  ///         is not a multiple of the exact-ranked coarse cell count.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
   void begin_bootstrap_plan();
   bool bootstrap_next_level();  ///< execute the next exact ranked transition if tagged
@@ -623,31 +585,7 @@ class AmrSystem {
       const std::string& representation, const std::string& storage, const std::string& operation,
       const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
       const Extent<Dim>& refinement_ratio);
-  void register_bootstrap_array(const std::string& subject, const std::string& centering, int ncomp,
-                                Extent<Dim> shape, const std::vector<double>& values);
-  void register_bootstrap_face_vector(const std::vector<std::string>& subjects);
-  void bind_bootstrap_block_subject(const std::string& subject, const std::string& block);
-  void register_analytic_constant(const std::string& subject, const std::string& block,
-                                  const std::string& space, const std::string& centering,
-                                  const std::vector<double>& components);
-  void register_analytic_gaussian(const std::string& subject, const std::string& block,
-                                  const RealVector<Dim>& center, double background,
-                                  double amplitude, double inverse_width);
-  void register_analytic_expression(const std::string& subject, const std::string& block,
-                                    const std::string& space, const std::string& centering,
-                                    const std::vector<std::vector<std::string>>& opcodes,
-                                    const std::vector<std::vector<double>>& literals);
-  std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
-  int apply_bootstrap_component_floor(const std::string& subject, int level, int component,
-                                      double floor);
-  std::int64_t recompute_bootstrap_field(const std::string& subject, const std::string& field_name);
-  std::int64_t bootstrap_prolong_array(const std::string& subject, int level);
-  void synchronize_bootstrap_state(const std::string& subject, int fine_level);
-  std::vector<double> bootstrap_array_level(const std::string& subject, int level) const;
-  void invalidate_bootstrap_cache(const std::string& subject, int level);
-  std::vector<AmrPatch<Dim>> rebuild_bootstrap_topology_cache(const std::string& subject,
-                                                              int level);
-  std::uint64_t bootstrap_cache_epoch(const std::string& subject) const;
+  void register_bootstrap_oriented_face_subjects(const std::vector<std::string>& oriented_subjects);
 
   /// Register immutable owner-qualified auxiliary producers and native consumer views.  The graph
   /// is sealed before hierarchy materialization; physical aliases and raw component indices are
@@ -669,7 +607,8 @@ class AmrSystem {
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
   /// Level-qualified group and plan access for generated AMR Program contexts.  Every consumer
   /// binds its compact local view against the active hierarchy level; no shared auxiliary slab is
-  /// exposed at this seam.
+  /// exposed at this seam.  These are rank-local hot-path lookups: callers must first perform one
+  /// collective ``refresh_prepared_amr_levels()`` for the enclosing Program resource traversal.
   [[nodiscard]] POPS_EXPORT const runtime::system::AuxiliaryStorageGroups<Dim>*
   prepared_amr_provider_storage_groups(int level) const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
@@ -696,18 +635,16 @@ class AmrSystem {
   /// must be owned by a sealed ``field_output`` provider; no raw carrier component crosses this API.
   /// @throws if the system is already built, the output contract is malformed, or no exact-ranked
   /// hierarchy field-solver provider is installed. Provider-unavailable failure happens before mutation.
-  POPS_EXPORT void register_elliptic_field(const std::string& block_name,
-                                           const std::string& provider_key,
-                                           const std::vector<runtime::system::AuxiliaryComponentKey>&
-                                               output_keys,
-                                           int gradient_sign);
+  POPS_EXPORT void register_elliptic_field(
+      const std::string& block_name, const std::string& provider_key,
+      const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign);
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
   /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws before mutation if
   /// the system is already built, the block is unknown, or no exact-ranked hierarchy provider exists.
   POPS_EXPORT void set_block_elliptic_field(
       const std::string& block_name, const std::string& field,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
-  /// Solved potential of named @p field on the COARSE level, ny*nx row-major (read-back). Solves the
+  /// Solved potential of named @p field on the coarse level, flattened in native index order. Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
   /// field is unregistered.
@@ -744,49 +681,6 @@ class AmrSystem {
   /// provider, kernel, descriptor fields.  The sealed checkpoint compares these rows byte-for-byte.
   std::vector<std::vector<std::string>> checkpoint_transfer_routes() const;
   /// @}
-
-  /// Registers an inter-species COUPLED SOURCE (compiled pops.dsl.CoupledSource, flat bytecode ABI
-  /// P5), refined counterpart of System::add_coupled_source but on the SHARED AMR hierarchy.
-  /// Registration stores the typed operator only: the installed Program owns its temporal placement,
-  /// applies it to candidate states level by level, and then performs the authored synchronization.
-  /// The coupling is baked into a device-clean stack machine (CoupledSourceKernel): NO per-cell Python
-  /// callback in the hot path. MULTI-BLOCK only (>= 2 add_block: the coupling reads/writes
-  /// SEVERAL named blocks). Must be called BEFORE the first step (the runtime engine is built
-  /// at lazy build; the source is injected into it).
-  ///
-  /// CONSERVATION: an add_pair construction (a term +expr on a block, -expr exactly on the other,
-  /// SAME cell) makes the sum of the two blocks conserved PER CELL (and globally) to machine
-  /// precision. The engine does NOT IMPOSE it (an ionization creating an e/i pair is legal): it is a
-  /// property of the constructed coupling (verify_conservation on the DSL side checks it symbolically).
-  ///
-  /// @throws std::runtime_error if called in mono-block, if the system is already built, or if the
-  ///         shape of the bytecode / a role / a block is invalid (same guards as System).
-  /// @param prog      bytecode description of the coupling grouped in a POD (ADC-214; cf.
-  ///                  CoupledSourceProgram; parity with System::add_coupled_source): in_blocks /
-  ///                  in_roles / consts / out_blocks / out_roles + prog_ops / prog_args / prog_lens
-  ///                  (stack machine) + freq_prog_ops / freq_prog_args (PER-CELL frequency mu(U)
-  ///                  optional; EMPTY = constant frequency only, bit-identical; non-empty:
-  ///                  evaluated on the COARSE LEVEL of the input blocks at each step_cfl, MAX +
-  ///                  all_reduce_max, bound dt <= cfl / max(mu) on the coarse, not the patches).
-  /// @param frequency CONSTANT declared frequency mu [1/s] of the coupling (wave 3): bound
-  ///                  dt <= cfl/mu on the macro-step of step_cfl; <= 0 (default) = no bound.
-  /// @param label     name of the coupling (reason "coupled_source:<label>" of last_dt_bound).
-  void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
-                          const std::string& label = "coupled_source");
-
-  /// Registers a TYPED coupling operator (ADC-595, parity with System::add_coupling_operator): the
-  /// same coupled-source program PLUS its declared conservation contract and frequency bound. The
-  /// declared contract is VALIDATED at registration (host, fail-loud) against the actual output terms,
-  /// then the program is lowered through the SAME add_coupled_source path (bit-identical numerics), and
-  /// the declared contract is recorded for coupled_operators(). An empty (unchecked) contract is
-  /// equivalent to add_coupled_source.
-  void add_coupling_operator(const CouplingOperator& op);
-
-  /// Read-only view of the registered coupling operators (ADC-595, parity with System): label plus the
-  /// declared conservation / frequency contracts, in registration order, so a Program or a runtime
-  /// report enumerates the AMR couplings as typed operators. A raw add_coupled_source registers an
-  /// "unchecked" entry (empty contract). Empty until the first coupling is added.
-  const std::vector<CouplingOperatorView>& coupled_operators() const;
 
   void step(double dt);  ///< one AMR macro-step (periodic regrid included)
   void advance(double dt, int nsteps);
@@ -951,7 +845,8 @@ class AmrSystem {
   /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr
   /// receives a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen
   /// boundary.
-  POPS_EXPORT runtime::amr::AmrRuntime<Dim>* engine() const;
+  POPS_EXPORT runtime::amr::AmrRuntime<Dim, typename Kokkos::DefaultExecutionSpace::memory_space>*
+  engine() const;
   /// Compatibility inspection seam. Once built, every resolved AMR system uses AmrRuntime, so this
   /// returns true; before build engine() remains null. POPS_EXPORT for dlopen-boundary parity.
   POPS_EXPORT bool uses_runtime_engine() const;
@@ -1030,7 +925,8 @@ class AmrSystem {
   int n_patches();  ///< number of current fine patches (of the shared hierarchy)
   /// Index-space signatures of the current fine patches: one AmrPatch<Dim> (level, ilo, jlo, ihi, jhi) per
   /// fine box, for ALL fine levels (level >= 1). INCLUSIVE corners in the index space of the
-  /// level (each base-axis count shifted by ``level``, ratio 2). SAME source as n_patches()
+  /// level (each base-axis count refined by the authenticated hierarchy transitions). SAME source
+  /// as n_patches()
   /// (the GLOBAL fine
   /// BoxArray, all boxes/all ranks -> rank-independent, MPI-safe, zero communication). It is a
   /// QUERY (between steps): read-only of the already-stored boxes, NO hot-path cost. The
@@ -1151,14 +1047,15 @@ class AmrSystem {
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(
       const std::string& name);   ///< mass of the named block on the coarse (conserved PER BLOCK)
-  std::vector<double> density();  ///< coarse density of the 1st block, ny*nx row-major
-  std::vector<double> density(const std::string& name);  ///< named-block density, ny*nx row-major
-  /// Electrostatic potential phi of the COARSE LEVEL (base), ny*nx row-major. Level 0 covers
-  /// the whole domain: enough to sample a median circle (azimuthal FFT), SAME
-  /// observable as System::potential() on a single-level mesh. Solves the coarse Poisson if
+  std::vector<double> density();  ///< coarse density of the first block, native index order
+  std::vector<double> density(
+      const std::string& name);  ///< named-block density, native index order
+  /// Electrostatic potential phi of the coarse level, flattened in native index order. Level 0
+  /// covers the whole domain and is the same observable as System::potential() on a single-level
+  /// mesh. Solves the coarse Poisson if
   /// needed (cf. System::potential / ensure_elliptic), so current value even before any step.
   /// MULTI-BLOCK: phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located); shared by all
-  /// the blocks (single aux). The block name therefore does not intervene.
+  /// the blocks through one qualified field output. The block name therefore does not intervene.
   std::vector<double> potential();
 
  private:

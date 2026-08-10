@@ -22,7 +22,7 @@ def test_signature_sugar_preserves_exact_typed_spaces() -> None:
 def test_module_builders_return_exact_operator_handles() -> None:
     module = model.Module("euler-poisson-lorentz")
     state = module.state_space(
-        "U", ("rho", "mx", "my"), roles={"rho": "Density"})
+        "U", ("rho", "mx", "my"), roles={"rho": "density"})
     fields = module.field_space("fields", ("phi", "grad_x", "grad_y"))
     parameters = module.parameters(
         RuntimeParam("alpha", default=1.0),

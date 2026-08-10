@@ -25,10 +25,14 @@
 #include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
+#include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/named_field_output.hpp>
 #include <pops/runtime/named_field_publication.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system/system_boundary_registry.hpp>
@@ -43,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -65,6 +70,81 @@ inline void require_amr_assembling(const runtime::system::SystemLifecycle& lifec
                              ": composition is frozen after bind");
 }
 
+struct NativeAmrPackageMetadata {
+  std::string route_manifest;
+  std::string parameter_names;
+  int parameter_count = 0;
+};
+
+int native_amr_parameter_name_count(const char* raw) {
+  if (raw == nullptr || *raw == '\0')
+    return 0;
+  int count = 1;
+  for (const char* cursor = raw; *cursor != '\0'; ++cursor)
+    if (*cursor == ',')
+      ++count;
+  return count;
+}
+
+NativeAmrPackageMetadata inspect_native_amr_package(pops::dynlib::handle handle,
+                                                    const std::vector<double>& parameters) {
+  constexpr const char* context = "AmrSystem::_install_native_block";
+  const auto manifest = reinterpret_cast<const char* (*)()>(
+      pops::dynlib::sym(handle, "pops_compiled_route_manifest"));
+  const auto count =
+      reinterpret_cast<int (*)()>(pops::dynlib::sym(handle, "pops_compiled_nparams"));
+  const auto names =
+      reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_compiled_param_names"));
+  if (manifest == nullptr || count == nullptr || names == nullptr)
+    throw std::runtime_error(std::string(context) +
+                             ": strict package metadata is missing; rebuild the artifact");
+
+  const char* route_manifest = manifest();
+  const char* parameter_names = names();
+  if (route_manifest == nullptr || parameter_names == nullptr)
+    throw std::runtime_error(std::string(context) + ": package metadata returned null");
+  pops::verify_route_manifest(route_manifest, context);
+
+  const int parameter_count = count();
+  if (parameter_count < 0 || parameter_count > kMaxRuntimeParams ||
+      native_amr_parameter_name_count(parameter_names) != parameter_count ||
+      parameters.size() != static_cast<std::size_t>(parameter_count))
+    throw std::runtime_error(std::string(context) +
+                             ": bound parameter vector disagrees with the exact package metadata");
+  return {route_manifest, parameter_names, parameter_count};
+}
+
+std::string exact_amr_history_key(std::string_view name, int level) {
+  if (name.empty() || level < 0)
+    throw std::invalid_argument("AMR history key requires a name and non-negative level");
+  return "pops.amr.level-history.v1/" + std::to_string(level) + "/" + std::to_string(name.size()) +
+         ":" + std::string(name);
+}
+
+std::optional<std::pair<int, std::string>> decode_exact_amr_history_key(std::string_view key) {
+  constexpr std::string_view prefix = "pops.amr.level-history.v1/";
+  if (!key.starts_with(prefix))
+    return std::nullopt;
+  key.remove_prefix(prefix.size());
+  const std::size_t level_end = key.find('/');
+  const std::size_t length_end = key.find(':', level_end == std::string_view::npos ? 0 : level_end);
+  if (level_end == std::string_view::npos || length_end == std::string_view::npos)
+    throw std::invalid_argument("AMR history storage key is malformed");
+  std::size_t consumed = 0;
+  const int level = std::stoi(std::string(key.substr(0, level_end)), &consumed);
+  if (consumed != level_end || level < 0)
+    throw std::invalid_argument("AMR history storage key has an invalid level");
+  const std::string length_text(key.substr(level_end + 1, length_end - level_end - 1));
+  consumed = 0;
+  const unsigned long long encoded_length = std::stoull(length_text, &consumed);
+  if (consumed != length_text.size())
+    throw std::invalid_argument("AMR history storage key has an invalid name length");
+  const std::string name(key.substr(length_end + 1));
+  if (encoded_length != name.size() || name.empty())
+    throw std::invalid_argument("AMR history storage key has a truncated name");
+  return std::pair<int, std::string>{level, std::move(name)};
+}
+
 template <int Dim>
 void validate_amr_config(const AmrSystemConfig<Dim>& config) {
   config.validate_spatial_domain();
@@ -82,12 +162,14 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
       config.transition_lookaheads.size() != transitions)
     throw std::invalid_argument(
         "AmrSystem transition tables must contain exactly level_count - 1 ranked rows");
-  for (std::size_t transition = 0; transition < transitions; ++transition)
+  for (std::size_t transition = 0; transition < transitions; ++transition) {
+    bool refines_any_axis = false;
     for (int axis = 0; axis < Dim; ++axis) {
-      if (config.transition_ratios[transition][axis] < 2 ||
+      if (config.transition_ratios[transition][axis] < 1 ||
           config.transition_ratios[transition][axis] > std::numeric_limits<int>::max())
         throw std::invalid_argument(
-            "AmrSystem transition refinement ratios must be at least two on every axis");
+            "AmrSystem transition refinement ratios must be positive on every axis");
+      refines_any_axis = refines_any_axis || config.transition_ratios[transition][axis] > 1;
       if (config.transition_buffers[transition][axis] < 0 ||
           config.transition_lookaheads[transition][axis] < 0)
         throw std::invalid_argument(
@@ -99,6 +181,10 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
         throw std::overflow_error(
             "AmrSystem transition buffer plus lookahead exceeds the ranked neighborhood budget");
     }
+    if (!refines_any_axis)
+      throw std::invalid_argument(
+          "AmrSystem transition refinement ratio must refine at least one axis");
+  }
   for (int axis = 0; axis < Dim; ++axis)
     if (config.coarse_max_grid[axis] < 0)
       throw std::invalid_argument("AmrSystem coarse_max_grid must be non-negative");
@@ -1537,9 +1623,10 @@ void validate_prepared_amr_block(const PreparedAmrSystemBlock<Dim>& block) {
         "identities");
   if (block.cut_cell_provider_identity.empty())
     throw std::invalid_argument("prepared AMR block requires a cut-cell provider identity");
-  if (block.ncomp < 1 || block.provider_components < 0)
+  if (block.ncomp < 1 || block.provider_components < 0 || block.reconstruction_order < 1)
     throw std::invalid_argument(
-        "prepared AMR block requires positive state and a non-negative provider-value count");
+        "prepared AMR block requires positive state/order and a non-negative provider-value "
+        "count");
   if (!std::isfinite(block.gamma) || !(block.gamma > 0.0) || block.substeps < 1 ||
       block.stride < 1 || block.time_route.empty())
     throw std::invalid_argument("prepared AMR block gamma, cadence, or time route is invalid");
@@ -1629,6 +1716,7 @@ struct AmrSystem<Dim>::Impl {
     int substeps = 1;
     int stride = 1;
     int required_ghost_depth = 1;
+    int reconstruction_order = 1;
     Extent<Dim> ghosts{};
     std::string time = "euler";
     bool has_density = false;
@@ -1900,6 +1988,9 @@ struct AmrSystem<Dim>::Impl {
   using provider_registry_snapshot_type = std::vector<auxiliary_registry_type>;
   struct AcceptedSnapshot;
 
+  // Declared before every package-owned closure carrier so it is destroyed last.  The generated
+  // DSO remains loaded until all prepared block, auxiliary and elliptic closures are gone.
+  std::vector<std::shared_ptr<pops::dynlib::handle>> native_package_lifetimes;
   AmrSystemConfig<Dim> cfg;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
   std::vector<BlockSpec> blocks;
@@ -1917,6 +2008,8 @@ struct AmrSystem<Dim>::Impl {
   mutable std::unique_ptr<engine_type> engine;
   std::map<std::string, BootstrapTransferRoute> bootstrap_transfer_routes;
   std::map<std::pair<std::string, std::string>, std::string> bootstrap_subject_routes;
+  std::map<std::string, std::array<std::string, Dim>> bootstrap_oriented_face_groups;
+  std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
   std::optional<prepared_block_type> prepared_block;
   std::vector<std::string> embedded_boundary_opcodes;
   std::vector<double> embedded_boundary_literals;
@@ -1934,9 +2027,10 @@ struct AmrSystem<Dim>::Impl {
   std::vector<std::string> dirty_auxiliary_providers;
   bool auxiliary_registry_consensus_verified = false;
   std::vector<GlobalDtBound> dt_bounds;
-  std::vector<CouplingOperatorView> coupling_views;
   double accepted_time = 0.0;
   int macro_step = 0;
+  mutable int checkpoint_regrid_count_value = 0;
+  mutable std::vector<int> last_replay_regrid_steps;
   std::string last_dt_reason;
   mutable std::vector<std::uint8_t> program_accepted_bytes;
   mutable std::uint64_t program_accepted_revision = 0;
@@ -1953,8 +2047,11 @@ struct AmrSystem<Dim>::Impl {
     std::shared_ptr<const provider_snapshot_type> provider_storage;
     std::shared_ptr<const provider_registry_snapshot_type> provider_registries;
     runtime::program::ProgramRuntimeState<Dim> program;
+    std::vector<::pops::amr::ParentChildClockRelation> temporal_relations;
     double accepted_time = 0.0;
     int macro_step = 0;
+    int checkpoint_regrid_count_value = 0;
+    std::vector<int> last_replay_regrid_steps;
     std::vector<std::uint8_t> program_accepted_bytes;
     std::uint64_t program_accepted_revision = 0;
     bool program_accepted_bytes_runtime_owned = false;
@@ -1969,8 +2066,11 @@ struct AmrSystem<Dim>::Impl {
           provider_storage(owner.snapshot_provider_storage()),
           provider_registries(owner.snapshot_provider_registries()),
           program(owner.program),
+          temporal_relations(owner.temporal_relations),
           accepted_time(owner.accepted_time),
           macro_step(owner.macro_step),
+          checkpoint_regrid_count_value(owner.checkpoint_regrid_count_value),
+          last_replay_regrid_steps(owner.last_replay_regrid_steps),
           program_accepted_bytes(owner.program_accepted_bytes),
           program_accepted_revision(owner.program_accepted_revision),
           program_accepted_bytes_runtime_owned(owner.program_accepted_bytes_runtime_owned),
@@ -2003,8 +2103,11 @@ struct AmrSystem<Dim>::Impl {
         owner.pending_provider_registry_restore = provider_registries;
       }
       owner.program = program;
+      owner.temporal_relations = temporal_relations;
       owner.accepted_time = accepted_time;
       owner.macro_step = macro_step;
+      owner.checkpoint_regrid_count_value = checkpoint_regrid_count_value;
+      owner.last_replay_regrid_steps = last_replay_regrid_steps;
       owner.program_accepted_bytes = program_accepted_bytes;
       owner.program_accepted_revision = program_accepted_revision;
       owner.program_accepted_bytes_runtime_owned = program_accepted_bytes_runtime_owned;
@@ -2031,6 +2134,7 @@ struct AmrSystem<Dim>::Impl {
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction;
   bool external_step_committed = false;
+  std::unique_ptr<AcceptedSnapshot> restart_transaction;
 
   explicit Impl(const AmrSystemConfig<Dim>& config)
       : cfg(config),
@@ -3231,6 +3335,7 @@ struct AmrSystem<Dim>::Impl {
                   .coarse_domain = coarse_domain,
                   .fine_domain = level_domain,
                   .ratio = ratio,
+                  .interpolation_kind = coarse_fine_transfer_kind(static_cast<int>(level - 1)),
                   .topology = exact_topology,
                   .topology_generation = candidate->topology_epoch,
                   .materialization_generation = candidate->materialization_generation,
@@ -3481,6 +3586,96 @@ struct AmrSystem<Dim>::Impl {
     return domains;
   }
 
+  std::vector<runtime::program::AmrProgramHistoryDescriptor> history_descriptors() const {
+    if (!engine)
+      throw std::logic_error("AMR history checkpoint requires a materialized hierarchy");
+    const auto& manager = program.hist_;
+    struct Accumulated {
+      runtime::program::AmrProgramHistoryDescriptor descriptor;
+      std::set<int> levels;
+    };
+    std::map<std::string, Accumulated> logical;
+    for (const auto& [key, ring] : manager.histories) {
+      const auto decoded = decode_exact_amr_history_key(key);
+      if (!decoded)
+        throw std::invalid_argument(
+            "AMR Program history manager contains a non-level-qualified ring");
+      const auto& [level, name] = *decoded;
+      if (level < 0 || static_cast<std::size_t>(level) >= engine->hierarchy().num_levels() ||
+          ring.empty() || ring.front().ncomp() < 1)
+        throw std::invalid_argument("AMR Program history ring has an invalid live-level image");
+      const auto depth = manager.depth.find(key);
+      const auto owner = manager.owner.find(key);
+      const auto state = manager.state_identity.find(key);
+      const auto space = manager.space_identity.find(key);
+      const auto clock = manager.clock_identity.find(key);
+      const auto interpolation = manager.interpolation_identity.find(key);
+      if (depth == manager.depth.end() || owner == manager.owner.end() ||
+          state == manager.state_identity.end() || space == manager.space_identity.end() ||
+          clock == manager.clock_identity.end() ||
+          interpolation == manager.interpolation_identity.end() || depth->second < 2 ||
+          ring.size() != static_cast<std::size_t>(depth->second))
+        throw std::invalid_argument("AMR Program history metadata is incomplete");
+      int program_owner = -1;
+      for (std::size_t index = 0; index < program.block_map_.size(); ++index)
+        if (program.block_map_[index] == owner->second) {
+          program_owner = static_cast<int>(index);
+          break;
+        }
+      if (program_owner < 0)
+        throw std::invalid_argument("AMR Program history has no exact program block owner");
+      runtime::program::AmrProgramHistoryDescriptor descriptor{
+          name,          program_owner,         state->second, space->second,
+          clock->second, interpolation->second, depth->second, ring.front().ncomp()};
+      auto [found, inserted] = logical.try_emplace(name, Accumulated{descriptor, {level}});
+      if (!inserted) {
+        const auto& retained = found->second.descriptor;
+        if (retained.program_owner != descriptor.program_owner ||
+            retained.state_identity != descriptor.state_identity ||
+            retained.space_identity != descriptor.space_identity ||
+            retained.clock_identity != descriptor.clock_identity ||
+            retained.interpolation_identity != descriptor.interpolation_identity ||
+            retained.depth != descriptor.depth || retained.components != descriptor.components ||
+            !found->second.levels.insert(level).second)
+          throw std::invalid_argument(
+              "AMR Program history contract differs between hierarchy levels");
+      }
+    }
+    std::vector<runtime::program::AmrProgramHistoryDescriptor> result;
+    result.reserve(logical.size());
+    for (auto& [name, accumulated] : logical) {
+      (void)name;
+      if (accumulated.levels.size() != engine->hierarchy().num_levels())
+        throw std::invalid_argument(
+            "AMR Program history does not cover every active hierarchy level");
+      result.push_back(std::move(accumulated.descriptor));
+    }
+    return result;
+  }
+
+  runtime::program::AmrProgramHistoryDescriptor history_descriptor(std::string_view name) const {
+    const auto descriptors = history_descriptors();
+    const auto found = std::find_if(descriptors.begin(), descriptors.end(),
+                                    [&](const auto& row) { return row.name == name; });
+    if (found == descriptors.end())
+      throw std::out_of_range("AmrSystem has no exact history ring '" + std::string(name) + "'");
+    return *found;
+  }
+
+  std::vector<std::string> history_level_keys(std::string_view name) const {
+    if (!engine)
+      throw std::logic_error("AMR history access requires a materialized hierarchy");
+    std::vector<std::string> keys;
+    keys.reserve(engine->hierarchy().num_levels());
+    for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level) {
+      std::string key = exact_amr_history_key(name, static_cast<int>(level));
+      if (!program.hist_.histories.contains(key))
+        throw std::out_of_range("AMR history ring is missing one active hierarchy level");
+      keys.push_back(std::move(key));
+    }
+    return keys;
+  }
+
   runtime::program::AmrProgramAcceptedState<Dim> minimal_program_accepted_state() const {
     if (!engine)
       throw std::logic_error("AMR Program checkpoint requires a materialized hierarchy");
@@ -3492,6 +3687,7 @@ struct AmrSystem<Dim>::Impl {
     for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level)
       state.level_clocks.push_back(
           {static_cast<int>(level), macro_step, ::pops::amr::Rational(0, 1), accepted_time});
+    state.histories = history_descriptors();
     return state;
   }
 
@@ -3507,6 +3703,7 @@ struct AmrSystem<Dim>::Impl {
     for (std::size_t level = 0; level < engine->hierarchy().num_levels(); ++level)
       state.level_clocks.push_back(
           {static_cast<int>(level), macro_step, ::pops::amr::Rational(0, 1), accepted_time});
+    state.histories = history_descriptors();
   }
 
   void publish_tagging_checkpoint() const {
@@ -3560,6 +3757,55 @@ struct AmrSystem<Dim>::Impl {
     if (route->second.kernel == "conservative_injection")
       return amr::transfer::TransferKind::ConstantInjection;
     throw std::invalid_argument("AMR regrid selected an unsupported prolongation kernel");
+  }
+
+  amr::transfer::TransferKind coarse_fine_transfer_kind(int parent_level) const {
+    amr::transfer::TransferKind selected =
+        amr::transfer::TransferKind::CoarseFineGhostInterpolation;
+    const std::size_t transition = static_cast<std::size_t>(parent_level);
+    if (transition >= cfg.transition_ratios.size())
+      throw std::out_of_range("AMR coarse/fine transfer transition is outside its hierarchy");
+    for (const BlockSpec& block : blocks) {
+      const std::string& subject = boundary_registry.state_route(block.name);
+      const auto subject_route =
+          bootstrap_subject_routes.find(std::make_pair(subject, std::string("coarse_fine_fill")));
+      if (subject_route == bootstrap_subject_routes.end()) {
+        if (block.reconstruction_order <= 2)
+          continue;
+        if (block.reconstruction_order == 5 && block.required_ghost_depth >= 3) {
+          selected = amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation;
+          continue;
+        }
+        throw std::invalid_argument(
+            "AMR block has no coarse/fine provider matching its authenticated reconstruction "
+            "order");
+      }
+      if (block.reconstruction_order > 5)
+        throw std::invalid_argument(
+            "AMR coarse/fine transfer has no provider for the block reconstruction order");
+      const auto route = bootstrap_transfer_routes.find(subject_route->second);
+      if (route == bootstrap_transfer_routes.end())
+        throw std::logic_error("AMR coarse/fine transfer route lost its exact provider authority");
+      if (route->second.refinement_ratio != cfg.transition_ratios[transition])
+        throw std::invalid_argument(
+            "AMR coarse/fine transfer route does not authenticate this ranked refinement ratio");
+      if (route->second.kernel == "conservative_coarse_fine") {
+        if (block.reconstruction_order > 2)
+          throw std::invalid_argument(
+              "AMR limited-linear coarse/fine route cannot satisfy the block reconstruction "
+              "order");
+        continue;
+      }
+      if (route->second.kernel == "conservative_polynomial5_coarse_fine") {
+        if (block.reconstruction_order > 5)
+          throw std::invalid_argument(
+              "AMR fifth-order coarse/fine route cannot satisfy the block reconstruction order");
+        selected = amr::transfer::TransferKind::FifthOrderCoarseFineGhostInterpolation;
+        continue;
+      }
+      throw std::invalid_argument("AMR coarse/fine selected an unsupported native kernel");
+    }
+    return selected;
   }
 
   std::uint64_t tagging_generation() const {
@@ -3801,8 +4047,13 @@ struct AmrSystem<Dim>::Impl {
           engine->hierarchy().state(static_cast<std::size_t>(parent_level)), parent_layout,
           *prepared.fine_layout(), retained_child, prepared_hierarchy->lane->communicator(),
           regrid_transfer_kind(parent_level)));
+    if (checkpoint_regrid_count_value == std::numeric_limits<int>::max())
+      throw std::overflow_error("AMR checkpoint regrid count overflow");
+    const std::uint64_t prior_topology_epoch = engine->topology_epoch();
     engine->publish_regrid(static_cast<std::size_t>(parent_level), std::move(prepared),
                            std::move(child_state));
+    if (engine->topology_epoch() != prior_topology_epoch)
+      ++checkpoint_regrid_count_value;
     if (hierarchy_cycle_state != nullptr)
       *hierarchy_cycle_state = std::move(staged_state);
     else
@@ -4037,8 +4288,13 @@ AmrSystem<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid
 template <int Dim>
 const runtime::system::AuxiliaryStorageGroups<Dim>*
 AmrSystem<Dim>::prepared_amr_provider_storage_groups(int level) const {
-  p_->ensure_engine();
-  if (level < 0 || !p_->prepared_hierarchy ||
+  // This accessor is used from rank-local Fab kernels after the Program context has collectively
+  // refreshed the hierarchy.  It must not materialize or refresh here: ranks may own different
+  // numbers of local Fabs and therefore call this seam a different number of times.
+  if (!p_->engine || !p_->prepared_hierarchy)
+    throw std::logic_error(
+        "AMR provider storage lookup requires a collectively prepared hierarchy");
+  if (level < 0 ||
       static_cast<std::size_t>(level) >= p_->prepared_hierarchy->provider_storage.size())
     throw std::out_of_range("AMR provider storage level lies outside the live hierarchy");
   const auto& groups = p_->prepared_hierarchy->provider_storage[static_cast<std::size_t>(level)];
@@ -4051,8 +4307,12 @@ template <int Dim>
 const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
 AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid,
                                                      int level) const {
-  p_->ensure_engine();
-  if (level < 0 || !p_->prepared_hierarchy ||
+  // Like the storage lookup above, consumer-plan binding is a rank-local hot-path operation.  The
+  // enclosing Program resource traversal owns collective refresh and topology qualification.
+  if (!p_->engine || !p_->prepared_hierarchy)
+    throw std::logic_error(
+        "AMR provider consumer-plan lookup requires a collectively prepared hierarchy");
+  if (level < 0 ||
       static_cast<std::size_t>(level) >= p_->prepared_hierarchy->auxiliary_registries.size())
     throw std::out_of_range("AMR provider consumer-plan level lies outside the live hierarchy");
   return p_->prepared_hierarchy->auxiliary_registries[static_cast<std::size_t>(level)]
@@ -4536,6 +4796,209 @@ void AmrSystem<Dim>::set_compiled_block(int ncomp, double gamma, int substeps,
 }
 
 template <int Dim>
+void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string& so_path,
+                                      const std::string& limiter, const std::string& riemann,
+                                      const std::string& recon, const std::string& time,
+                                      double gamma, int substeps, const std::vector<double>& params,
+                                      double positivity_floor, double weno_epsilon,
+                                      bool wave_speed_cache) {
+  using register_auxiliary_type = void (*)(AmrSystem<Dim>*);
+  using install_type = void (*)(void*, const char*, const char*, const char*, const char*,
+                                const char*, double, int, const double*, int, double, double, bool);
+
+  struct FieldPlanSnapshot {
+    std::optional<runtime::field::NamedFieldOutput<Dim>> output;
+    std::vector<runtime::system::AuxiliaryComponentKey> output_keys;
+    std::vector<std::vector<typename Impl::PreparedFieldRhs>> rhs_by_block;
+    bool use_prepared_level_rhs = false;
+  };
+
+  std::shared_ptr<pops::dynlib::handle> package_lifetime;
+  register_auxiliary_type register_auxiliary = nullptr;
+  install_type install = nullptr;
+  std::optional<typename Impl::auxiliary_registry_type> auxiliary_snapshot;
+  std::optional<typename Impl::boundary_registry_type> boundary_snapshot;
+  std::map<std::string, FieldPlanSnapshot> field_plan_snapshots;
+  bool auxiliary_consensus_snapshot = false;
+  std::string preparation_contract;
+  std::exception_ptr preparation_error;
+
+  try {
+    require_amr_assembling(p_->lifecycle, "add_native_block");
+    if (p_->engine || p_->prepared_hierarchy || p_->prepared_block || !p_->blocks.empty())
+      throw std::logic_error("AmrSystem accepts exactly one complete generated native package");
+    if (name.empty() || so_path.empty())
+      throw std::invalid_argument(
+          "AmrSystem native package requires non-empty block and artifact identities");
+    if (!std::isfinite(gamma) || !(gamma > 0.0) || substeps < 1)
+      throw std::invalid_argument(
+          "AmrSystem native package requires finite positive gamma and substeps");
+    if (!std::isfinite(positivity_floor) || positivity_floor < 0.0)
+      throw std::invalid_argument(
+          "AmrSystem native package positivity floor must be finite and non-negative");
+    if (!std::isfinite(weno_epsilon) || !(weno_epsilon > 0.0))
+      throw std::invalid_argument(
+          "AmrSystem native package WENO epsilon must be finite and positive");
+    if (limiter != "weno5" && weno_epsilon != static_cast<double>(kWenoEpsilon))
+      throw std::invalid_argument("AmrSystem native package WENO epsilon requires limiter='weno5'");
+    if (wave_speed_cache)
+      throw std::invalid_argument(
+          "AmrSystem native package has no prepared exact-ranked wave-speed cache provider");
+    (void)parse_limiter_route(limiter, "AmrSystem native package");
+    (void)parse_riemann_route(riemann, "AmrSystem native package");
+    (void)parse_recon_route(recon, "AmrSystem native package");
+    (void)parse_time_route(time, "AmrSystem native package");
+
+#if !defined(_WIN32)
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void*>(&detail::abi_key_string), &info) && info.dli_fname)
+      dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+#endif
+    const pops::dynlib::handle handle = pops::dynlib::open(so_path);
+    if (!pops::dynlib::valid(handle))
+      throw std::runtime_error("AmrSystem::add_native_block: cannot load '" + so_path +
+                               "': " + pops::dynlib::last_error());
+    package_lifetime = std::shared_ptr<pops::dynlib::handle>(new pops::dynlib::handle(handle),
+                                                             [](pops::dynlib::handle* owned) {
+                                                               pops::dynlib::close(*owned);
+                                                               delete owned;
+                                                             });
+
+    const auto key =
+        reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_native_abi_key"));
+    if (key == nullptr || key() == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_native_abi_key is missing; rebuild the artifact");
+    const std::string artifact_key = key();
+    const std::string module_key = detail::abi_key_string();
+    if (artifact_key != module_key)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: compiled package ABI differs from the native module");
+
+    const NativeAmrPackageMetadata metadata = inspect_native_amr_package(handle, params);
+    register_auxiliary = reinterpret_cast<register_auxiliary_type>(
+        pops::dynlib::sym(handle, "pops_register_auxiliary_routes_amr"));
+    install = reinterpret_cast<install_type>(pops::dynlib::sym(handle, "pops_install_native_amr"));
+    if (install == nullptr)
+      throw std::runtime_error(
+          "AmrSystem::add_native_block: pops_install_native_amr is missing; compile the package "
+          "with target='amr_system'");
+
+    auxiliary_snapshot.emplace(p_->auxiliary_registry);
+    boundary_snapshot.emplace(p_->boundary_registry);
+    auxiliary_consensus_snapshot = p_->auxiliary_registry_consensus_verified;
+    for (const auto& [slot, plan] : p_->field_plans)
+      field_plan_snapshots.emplace(
+          slot, FieldPlanSnapshot{plan.output, plan.output_keys, plan.rhs_by_block,
+                                  plan.use_prepared_level_rhs});
+    p_->native_package_lifetimes.reserve(p_->native_package_lifetimes.size() + 1);
+
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.native-package-preflight")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(name)
+        .text(limiter)
+        .text(riemann)
+        .text(recon)
+        .text(time)
+        .scalar(gamma)
+        .scalar(std::int32_t{substeps})
+        .sequence(params)
+        .scalar(positivity_floor)
+        .scalar(weno_epsilon)
+        .scalar(wave_speed_cache)
+        .text(artifact_key)
+        .text(metadata.route_manifest)
+        .text(metadata.parameter_names)
+        .scalar(std::int32_t{metadata.parameter_count})
+        .presence(register_auxiliary != nullptr);
+    preparation_contract = std::move(exact).release();
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AmrSystem native package preflight failed on at least one MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-native-package"), std::string_view(preparation_contract)}}))
+    throw std::invalid_argument("AmrSystem native package contracts differ between MPI ranks");
+
+  auto rollback = [&] {
+    p_->auxiliary_registry = *auxiliary_snapshot;
+    p_->auxiliary_registry_consensus_verified = auxiliary_consensus_snapshot;
+    p_->boundary_registry = *boundary_snapshot;
+    p_->blocks.clear();
+    p_->prepared_block.reset();
+    for (const auto& [slot, snapshot] : field_plan_snapshots) {
+      auto found = p_->field_plans.find(slot);
+      if (found == p_->field_plans.end())
+        throw std::logic_error("AMR native package changed the exact field-plan registry");
+      found->second.output = snapshot.output;
+      found->second.output_keys = snapshot.output_keys;
+      found->second.rhs_by_block = snapshot.rhs_by_block;
+      found->second.use_prepared_level_rhs = snapshot.use_prepared_level_rhs;
+    }
+  };
+
+  std::exception_ptr registration_error;
+  try {
+    if (register_auxiliary != nullptr)
+      register_auxiliary(this);
+  } catch (...) {
+    registration_error = std::current_exception();
+  }
+  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      rollback();
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
+      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+      throw std::runtime_error(
+          "AmrSystem native auxiliary registration rollback failed collectively");
+    }
+    if (n_ranks() == 1 && registration_error)
+      std::rethrow_exception(registration_error);
+    throw std::runtime_error(
+        "AmrSystem native auxiliary registration failed on at least one MPI rank");
+  }
+
+  std::exception_ptr installation_error;
+  try {
+    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
+            time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
+            static_cast<int>(params.size()), positivity_floor, weno_epsilon, wave_speed_cache);
+    if (!p_->prepared_block || p_->blocks.size() != 1 || p_->blocks.front().name != name)
+      throw std::logic_error(
+          "AmrSystem native package did not publish one complete prepared block");
+  } catch (...) {
+    installation_error = std::current_exception();
+  }
+  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      rollback();
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
+      p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+      throw std::runtime_error("AmrSystem native package rollback failed collectively");
+    }
+    if (n_ranks() == 1 && installation_error)
+      std::rethrow_exception(installation_error);
+    throw std::runtime_error("AmrSystem native package installation failed collectively");
+  }
+  p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
   std::exception_ptr preparation_error;
   long preparation_failure = 0;
@@ -4583,6 +5046,7 @@ void AmrSystem<Dim>::install_prepared_amr_block(PreparedBlock prepared) {
     block.stride = prepared.stride;
     block.ghosts = prepared.ghosts;
     block.time = prepared.time_route;
+    block.reconstruction_order = prepared.reconstruction_order;
     block.required_ghost_depth = 0;
     for (int axis = 0; axis < Dim; ++axis)
       block.required_ghost_depth =
@@ -4797,6 +5261,57 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
   p_->tagging_plan.reset();
   p_->tagging_state.clear();
   p_->automatic_bootstrap_complete = false;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_temporal_relations(const std::vector<std::int64_t>& numerators,
+                                            const std::vector<std::int64_t>& denominators,
+                                            const std::vector<std::string>& remainder_policies) {
+  std::vector<::pops::amr::ParentChildClockRelation> candidate;
+  std::string contract;
+  std::exception_ptr preparation_error;
+  try {
+    require_amr_assembling(p_->lifecycle, "set_temporal_relations");
+    const std::size_t transitions = static_cast<std::size_t>(p_->cfg.level_count - 1);
+    if (p_->engine || !p_->temporal_relations.empty() || numerators.size() != transitions ||
+        denominators.size() != transitions || remainder_policies.size() != transitions)
+      throw std::invalid_argument(
+          "AMR temporal authority requires exactly one unique pre-materialization relation per "
+          "level transition");
+    candidate.reserve(transitions);
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.temporal-relations")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(transitions));
+    for (std::size_t index = 0; index < transitions; ++index) {
+      const auto policy = remainder_policies[index] == "integral_only"
+                              ? ::pops::amr::RemainderPolicy::IntegralOnly
+                          : remainder_policies[index] == "explicit_final_substep"
+                              ? ::pops::amr::RemainderPolicy::ExplicitFinalSubstep
+                              : throw std::invalid_argument(
+                                    "AMR temporal relation has an unknown remainder policy");
+      const ::pops::amr::Rational ratio(numerators[index], denominators[index]);
+      candidate.emplace_back(static_cast<int>(index), static_cast<int>(index + 1), ratio, policy);
+      exact.scalar(static_cast<std::int32_t>(index))
+          .scalar(static_cast<std::int32_t>(index + 1))
+          .scalar(ratio.numerator)
+          .scalar(ratio.denominator)
+          .text(remainder_policies[index]);
+    }
+    contract = std::move(exact).release();
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AMR temporal relation preparation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-temporal-relations"), std::string_view(contract)}}))
+    throw std::invalid_argument("AMR temporal relations differ between MPI ranks");
+  p_->temporal_relations = std::move(candidate);
 }
 
 template <int Dim>
@@ -5929,9 +6444,8 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     if (!ratio_matches_transition)
       throw std::invalid_argument(
           "AMR bootstrap transfer route names no configured ranked hierarchy transition");
-    if (operation == "prolongation") {
-      if (space != "cell" || centering != "cell" || representation != "conservative" ||
-          storage != "dense")
+    if (operation == "prolongation" && space == "cell") {
+      if (centering != "cell" || representation != "conservative" || storage != "dense")
         throw std::invalid_argument(
             "AMR state prolongation requires the exact cell-centered conservative dense route");
       if (kernel == "conservative_linear") {
@@ -5951,7 +6465,73 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
       } else {
         throw std::invalid_argument("AMR prolongation kernel has no exact native provider");
       }
+    } else if (operation == "prolongation" && space == "face") {
+      bool exact_ghost = true;
+      for (int axis = 0; axis < Dim; ++axis)
+        exact_ghost = exact_ghost && ghost_depth[axis] == 1;
+      if (subjects.size() != 1 || centering.size() <= 5 || centering.rfind("face_", 0) != 0 ||
+          representation != "conservative" || storage != "dense" ||
+          kernel != "divergence_preserving_face" || order != 2 || !exact_ghost)
+        throw std::invalid_argument(
+            "AMR face prolongation requires one oriented conservative dense subject, the "
+            "divergence-preserving order-two provider, and one exact-ranked ghost");
+    } else if (operation == "prolongation" && space == "node") {
+      bool zero_ghost = true;
+      for (int axis = 0; axis < Dim; ++axis)
+        zero_ghost = zero_ghost && ghost_depth[axis] == 0;
+      if (subjects.size() != 1 || centering != "node" || representation != "primitive" ||
+          storage != "dense" || kernel != "node_multilinear" || order != 2 || !zero_ghost)
+        throw std::invalid_argument(
+            "AMR node prolongation requires one node-centered primitive dense subject, the "
+            "multilinear order-two provider, and zero ghosts");
+    } else if (operation == "prolongation") {
+      throw std::invalid_argument("AMR prolongation space has no exact native provider");
     }
+    if (operation == "restriction") {
+      bool zero_ghost = true;
+      for (int axis = 0; axis < Dim; ++axis)
+        zero_ghost = zero_ghost && ghost_depth[axis] == 0;
+      if (space != "cell" || centering != "cell" || representation != "conservative" ||
+          storage != "dense" || kernel != "volume_average" || order != 1 || !zero_ghost)
+        throw std::invalid_argument(
+            "AMR restriction requires the exact conservative cell-volume average provider");
+    }
+    if (operation == "coarse_fine_fill") {
+      if (space != "cell" || centering != "cell" || representation != "conservative" ||
+          storage != "dense")
+        throw std::invalid_argument(
+            "AMR state coarse/fine fill requires the exact cell-centered conservative dense "
+            "route");
+      if (kernel == "conservative_coarse_fine") {
+        bool lacks_stencil = false;
+        for (int axis = 0; axis < Dim; ++axis)
+          lacks_stencil = lacks_stencil || ghost_depth[axis] < 1;
+        if (order != 2 || lacks_stencil)
+          throw std::invalid_argument(
+              "AMR limited-linear coarse/fine fill requires order two and one ranked ghost");
+      } else if (kernel == "conservative_polynomial5_coarse_fine") {
+        bool lacks_stencil = false;
+        for (int axis = 0; axis < Dim; ++axis)
+          lacks_stencil = lacks_stencil || ghost_depth[axis] < 3;
+        if (order != 5 || lacks_stencil)
+          throw std::invalid_argument(
+              "AMR polynomial coarse/fine fill requires order five and three ranked ghosts");
+      } else {
+        throw std::invalid_argument("AMR coarse/fine kernel has no exact native provider");
+      }
+    }
+    if (operation == "temporal_interpolation") {
+      bool zero_ghost = true;
+      for (int axis = 0; axis < Dim; ++axis)
+        zero_ghost = zero_ghost && ghost_depth[axis] == 0;
+      if (space != "cell" || centering != "cell" || representation != "conservative" ||
+          storage != "dense" || kernel != "linear_time_interpolation" || order != 2 || !zero_ghost)
+        throw std::invalid_argument(
+            "AMR temporal interpolation requires the exact conservative linear-time provider");
+    }
+    if (operation != "prolongation" && operation != "restriction" &&
+        operation != "coarse_fine_fill" && operation != "temporal_interpolation")
+      throw std::invalid_argument("AMR bootstrap transfer operation has no exact native provider");
 
     typename Impl::BootstrapTransferRoute candidate{identity, subjects,    provider_identity,
                                                     space,    centering,   representation,
@@ -5999,6 +6579,97 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     throw std::invalid_argument("AMR bootstrap transfer route differs between MPI ranks");
   p_->bootstrap_transfer_routes = std::move(staged_routes);
   p_->bootstrap_subject_routes = std::move(staged_subjects);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::register_bootstrap_oriented_face_subjects(
+    const std::vector<std::string>& oriented_subjects) {
+  std::map<std::string, std::array<std::string, Dim>> staged_groups;
+  std::string exact;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    require_amr_assembling(p_->lifecycle, "register_bootstrap_oriented_face_subjects");
+    if (p_->engine || oriented_subjects.size() != static_cast<std::size_t>(Dim))
+      throw std::invalid_argument(
+          "AMR oriented face provider requires exactly one subject per native axis");
+    std::set<std::string> unique_subjects;
+    std::set<std::string> unique_centerings;
+    std::array<std::string, Dim> ranked_subjects{};
+    std::string provider_identity;
+    Extent<Dim> refinement_ratio{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::string& subject = oriented_subjects[static_cast<std::size_t>(axis)];
+      if (subject.empty() || !unique_subjects.insert(subject).second)
+        throw std::invalid_argument(
+            "AMR oriented face subjects must be non-empty and unique by native axis");
+      const auto subject_route =
+          p_->bootstrap_subject_routes.find(std::make_pair(subject, std::string("prolongation")));
+      if (subject_route == p_->bootstrap_subject_routes.end())
+        throw std::invalid_argument(
+            "AMR oriented face subject has no registered prolongation provider route");
+      const auto route = p_->bootstrap_transfer_routes.find(subject_route->second);
+      if (route == p_->bootstrap_transfer_routes.end())
+        throw std::logic_error("AMR oriented face subject lost its provider route");
+      const typename Impl::BootstrapTransferRoute& descriptor = route->second;
+      if (descriptor.space != "face" || descriptor.centering.size() <= 5 ||
+          descriptor.centering.rfind("face_", 0) != 0 ||
+          descriptor.representation != "conservative" || descriptor.storage != "dense" ||
+          descriptor.operation != "prolongation" ||
+          descriptor.kernel != "divergence_preserving_face" || descriptor.order != 2 ||
+          descriptor.subjects != std::vector<std::string>{subject})
+        throw std::invalid_argument(
+            "AMR oriented face group references a non-exact divergence-preserving route");
+      if (!unique_centerings.insert(descriptor.centering).second)
+        throw std::invalid_argument(
+            "AMR oriented face group must contain one distinct centering per native axis");
+      if (axis == 0) {
+        provider_identity = descriptor.provider_identity;
+        refinement_ratio = descriptor.refinement_ratio;
+      } else if (descriptor.provider_identity != provider_identity ||
+                 descriptor.refinement_ratio != refinement_ratio) {
+        throw std::invalid_argument(
+            "AMR oriented face subjects must share one provider and ranked transition ratio");
+      }
+      ranked_subjects[static_cast<std::size_t>(axis)] = subject;
+    }
+
+    ExactContractBuilder contract;
+    contract.text("pops.amr-system.bootstrap-oriented-face-subjects")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .text(provider_identity)
+        .sequence(oriented_subjects, [](ExactContractBuilder& item, const std::string& subject) {
+          item.text(subject);
+        });
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(refinement_ratio[axis]);
+    exact = std::move(contract).release();
+
+    staged_groups = p_->bootstrap_oriented_face_groups;
+    if (!staged_groups.emplace(provider_identity, std::move(ranked_subjects)).second)
+      throw std::invalid_argument("AMR oriented face provider identity is not unique");
+    for (const auto& [existing_provider, existing_subjects] : staged_groups) {
+      if (existing_provider == provider_identity)
+        continue;
+      for (const std::string& existing : existing_subjects)
+        if (unique_subjects.contains(existing))
+          throw std::invalid_argument(
+              "AMR oriented face subject cannot belong to multiple provider groups");
+    }
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR oriented face provider failed validation on another MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("bootstrap-oriented-face-subjects"), std::string_view(exact)}}))
+    throw std::invalid_argument("AMR oriented face subjects differ between MPI ranks");
+  p_->bootstrap_oriented_face_groups = std::move(staged_groups);
 }
 
 template <int Dim>
@@ -6338,6 +7009,153 @@ std::map<std::string, double> AmrSystem<Dim>::step_change_l2() const {
 }
 
 template <int Dim>
+void AmrSystem<Dim>::begin_restart_transaction() {
+  p_->ensure_engine();
+  const long invalid = p_->restart_transaction || p_->external_step_transaction ? 1L : 0L;
+  if (all_reduce_max(invalid) != 0)
+    throw std::logic_error(
+        "AmrSystem restart transaction cannot overlap another restart or step transaction");
+
+  std::unique_ptr<typename Impl::AcceptedSnapshot> candidate;
+  std::exception_ptr snapshot_error;
+  try {
+    candidate = std::make_unique<typename Impl::AcceptedSnapshot>(*p_);
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && snapshot_error)
+      std::rethrow_exception(snapshot_error);
+    throw std::runtime_error("AMR restart snapshot failed on at least one MPI rank");
+  }
+  p_->restart_transaction = std::move(candidate);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::commit_restart_transaction() {
+  const long inactive = p_->restart_transaction ? 0L : 1L;
+  if (all_reduce_max(inactive) != 0)
+    throw std::logic_error("AmrSystem has no collective restart transaction to commit");
+  p_->restart_transaction.reset();
+}
+
+template <int Dim>
+void AmrSystem<Dim>::rollback_restart_transaction() {
+  const long inactive = p_->restart_transaction ? 0L : 1L;
+  if (all_reduce_max(inactive) != 0)
+    throw std::logic_error("AmrSystem has no collective restart transaction to roll back");
+
+  std::unique_ptr<typename Impl::AcceptedSnapshot> snapshot = std::move(p_->restart_transaction);
+  std::exception_ptr restore_error;
+  try {
+    snapshot->restore(*p_);
+    p_->program.resync_after_restart_rollback("AmrSystem::rollback_restart_transaction:");
+  } catch (...) {
+    restore_error = std::current_exception();
+  }
+  if (all_reduce_max(restore_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && restore_error)
+      std::rethrow_exception(restore_error);
+    throw std::runtime_error("AMR restart rollback failed on at least one MPI rank");
+  }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::preflight_regrid_on_restart() {
+  p_->ensure_engine();
+  const long invalid = !p_->restart_transaction || p_->external_step_transaction ? 1L : 0L;
+  if (all_reduce_max(invalid) != 0)
+    throw std::logic_error(
+        "AmrSystem restart regrid preflight requires one active restart transaction");
+  std::exception_ptr preflight_error;
+  try {
+    p_->program.preflight_regrid_on_restart("AmrSystem::preflight_regrid_on_restart:");
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+  if (all_reduce_max(preflight_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preflight_error)
+      std::rethrow_exception(preflight_error);
+    throw std::runtime_error("AMR restart regrid preflight failed on at least one MPI rank");
+  }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::regrid_on_restart() {
+  p_->ensure_engine();
+  const long invalid = !p_->restart_transaction || p_->external_step_transaction ? 1L : 0L;
+  if (all_reduce_max(invalid) != 0)
+    throw std::logic_error("AmrSystem restart regrid requires one active restart transaction");
+  const std::uint64_t prior_topology_epoch = p_->engine->topology_epoch();
+  std::exception_ptr regrid_error;
+  try {
+    p_->program.regrid_on_restart("AmrSystem::regrid_on_restart:");
+    p_->refresh_prepared_hierarchy();
+    if (p_->engine->topology_epoch() == prior_topology_epoch)
+      throw std::runtime_error("AmrSystem restart regrid authority did not publish a new topology");
+  } catch (...) {
+    regrid_error = std::current_exception();
+  }
+  if (all_reduce_max(regrid_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && regrid_error)
+      std::rethrow_exception(regrid_error);
+    throw std::runtime_error("AMR restart regrid failed on at least one MPI rank");
+  }
+}
+
+template <int Dim>
+int AmrSystem<Dim>::checkpoint_regrid_count() const {
+  return p_->checkpoint_regrid_count_value;
+}
+
+template <int Dim>
+std::uint64_t AmrSystem<Dim>::checkpoint_topology_epoch() const {
+  return p_->engine ? p_->engine->topology_epoch() : 0;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch) {
+  p_->ensure_engine();
+  if (!p_->restart_transaction)
+    throw std::logic_error("AmrSystem checkpoint counters require one active restart transaction");
+  if (regrid_count < 0)
+    throw std::invalid_argument("AmrSystem checkpoint regrid count must be non-negative");
+
+  ExactContractBuilder request;
+  request.text("pops.amr-system.restore-checkpoint-counters")
+      .scalar(std::uint32_t{1})
+      .scalar(std::int32_t{Dim})
+      .scalar(std::int32_t{regrid_count})
+      .scalar(topology_epoch);
+  const std::string request_contract = std::move(request).release();
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-checkpoint-counters"), std::string_view(request_contract)}}))
+    throw std::invalid_argument("AMR checkpoint counters differ between MPI ranks");
+
+  using publication_type = typename Impl::engine_type::PreparedRestorePublication;
+  std::optional<publication_type> publication;
+  std::exception_ptr preparation_error;
+  try {
+    auto snapshot = p_->engine->snapshot();
+    snapshot.topology_epoch = topology_epoch;
+    snapshot.exact_spatial_contract = runtime::amr::detail::exact_runtime_spatial_contract(
+        p_->engine->spatial_identity(), snapshot.hierarchy, snapshot.topology_epoch,
+        snapshot.materialization_generation);
+    publication.emplace(p_->engine->prepare_restore_publication(snapshot));
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AMR checkpoint counter publication failed to prepare collectively");
+  }
+  p_->engine->publish_prepared_restore(std::move(*publication));
+  p_->checkpoint_regrid_count_value = regrid_count;
+  p_->refresh_prepared_hierarchy();
+}
+
+template <int Dim>
 void AmrSystem<Dim>::install_program_step(std::function<void(double)> step) {
   p_->program.install_unverified_step(std::move(step));
 }
@@ -6353,6 +7171,249 @@ void AmrSystem<Dim>::install_program_restart_hooks(std::function<void()> preflig
                                                    std::function<void()> resync) {
   p_->program.install_restart_hooks(std::move(preflight), std::move(regrid), std::move(resync),
                                     "AmrSystem");
+}
+
+template <int Dim>
+POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
+  require_amr_assembling(p_->lifecycle, "install_program");
+  if (p_->engine)
+    throw std::logic_error(
+        "AmrSystem::install_program must run before the AMR runtime is materialized");
+
+  using install_type = void (*)(AmrSystem<Dim>*);
+  using dt_bound_type = Real (*)(AmrSystem<Dim>*, Real);
+  using boundary_install_type = void (*)(AmrSystem<Dim>*);
+  pops::dynlib::handle handle{};
+  install_type install = nullptr;
+  dt_bound_type dt_bound = nullptr;
+  boundary_install_type install_boundaries = nullptr;
+  bool program_has_dt_bound = false;
+  std::string installed_hash;
+  std::vector<runtime::program::ProgramOperatorAuthority> operator_authorities;
+  std::vector<runtime::program::ProgramHistoryReplayAuthority> history_replay_authorities;
+  std::vector<int> program_block_map;
+  std::map<int, std::vector<double>> program_param_defaults;
+  std::exception_ptr preparation_error;
+
+  try {
+#if !defined(_WIN32)
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void*>(&detail::abi_key_string), &info) && info.dli_fname)
+      dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+#endif
+    handle = pops::dynlib::open(so_path);
+    if (!pops::dynlib::valid(handle))
+      throw std::runtime_error("AmrSystem::install_program: cannot load '" + so_path +
+                               "': " + pops::dynlib::last_error());
+
+    auto key =
+        reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_program_abi_key"));
+    if (!key)
+      throw std::runtime_error(
+          "AmrSystem::install_program: pops_program_abi_key is missing; regenerate the artifact");
+    const std::string module_key = detail::abi_key_string();
+    if (std::string(key()) != module_key)
+      throw std::runtime_error(
+          "AmrSystem::install_program: compiled Program ABI differs from the native module");
+
+    auto route_manifest = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(handle, "pops_program_route_manifest"));
+    if (!route_manifest)
+      throw std::runtime_error(
+          "AmrSystem::install_program: pops_program_route_manifest is missing; regenerate the "
+          "artifact");
+    const char* route_data = route_manifest();
+    if (route_data == nullptr || route_data[0] == '\0')
+      throw std::runtime_error(
+          "AmrSystem::install_program: pops_program_route_manifest returned empty data");
+    pops::verify_route_manifest(std::string(route_data), "install_program");
+
+    operator_authorities = runtime::program::read_program_operator_authorities(handle);
+    history_replay_authorities = runtime::program::read_program_history_replay_authorities(handle);
+    install = reinterpret_cast<install_type>(pops::dynlib::sym(handle, "pops_install_program_amr"));
+    if (!install)
+      throw std::runtime_error(
+          "AmrSystem::install_program: pops_install_program_amr is missing; compile the Program "
+          "with target='amr_system'");
+
+    const auto metadata = runtime::program::read_module_metadata(handle);
+    const std::vector<std::string> runtime_blocks = block_names();
+    std::string configured_solver;
+    if (!p_->default_field_slot.empty()) {
+      const auto field = p_->field_plans.find(p_->default_field_slot);
+      if (field == p_->field_plans.end())
+        throw std::logic_error("AmrSystem default field route is not materialized");
+      configured_solver = field->second.solver_route;
+    }
+    for (const auto& operation : metadata.operators) {
+      for (const std::string& required : runtime::program::required_blocks(operation.requirements))
+        if (std::find(runtime_blocks.begin(), runtime_blocks.end(), required) ==
+            runtime_blocks.end())
+          throw std::runtime_error("operator '" + operation.name + "' requires block instance '" +
+                                   required + "'");
+      const std::string required_solver = runtime::program::required_solver(operation.requirements);
+      if (!required_solver.empty() && required_solver != configured_solver)
+        throw std::runtime_error("field operator '" + operation.name + "' requires solver '" +
+                                 required_solver + "'");
+    }
+
+    auto has_dt =
+        reinterpret_cast<bool (*)()>(pops::dynlib::sym(handle, "pops_program_has_dt_bound"));
+    dt_bound =
+        reinterpret_cast<dt_bound_type>(pops::dynlib::sym(handle, "pops_program_dt_bound_amr"));
+    program_has_dt_bound = has_dt && has_dt();
+    if (program_has_dt_bound && !dt_bound)
+      throw std::runtime_error(
+          "AmrSystem::install_program: Program declares a dt bound but "
+          "pops_program_dt_bound_amr is missing");
+    auto hash = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(handle, "pops_program_hash"));
+    installed_hash = hash ? std::string(hash()) : std::string();
+    install_boundaries = reinterpret_cast<boundary_install_type>(
+        pops::dynlib::sym(handle, "pops_install_field_boundaries_amr"));
+
+    using count_type = int (*)();
+    using integer_type = int (*)(int);
+    auto block_count =
+        reinterpret_cast<count_type>(pops::dynlib::sym(handle, "pops_program_block_count"));
+    auto block_name = reinterpret_cast<const char* (*)(int)>(
+        pops::dynlib::sym(handle, "pops_program_block_name"));
+    if (!block_count || !block_name)
+      throw std::runtime_error(
+          "AmrSystem::install_program: the exact Program block identity table is missing");
+    const int count = block_count();
+    if (count < 0)
+      throw std::runtime_error("AmrSystem::install_program: Program block count is negative");
+    program_block_map.assign(static_cast<std::size_t>(count), -1);
+    for (int program = 0; program < count; ++program) {
+      const char* raw_name = block_name(program);
+      if (raw_name == nullptr || raw_name[0] == '\0')
+        throw std::runtime_error("AmrSystem::install_program: Program block identity is empty");
+      const auto found = std::find(runtime_blocks.begin(), runtime_blocks.end(), raw_name);
+      if (found == runtime_blocks.end())
+        throw std::runtime_error("Program requires block instance '" + std::string(raw_name) +
+                                 "', but simulation did not instantiate it");
+      program_block_map[static_cast<std::size_t>(program)] =
+          static_cast<int>(std::distance(runtime_blocks.begin(), found));
+    }
+
+    auto parameter_count =
+        reinterpret_cast<count_type>(pops::dynlib::sym(handle, "pops_program_param_count"));
+    auto parameter_block =
+        reinterpret_cast<integer_type>(pops::dynlib::sym(handle, "pops_program_param_block"));
+    auto parameter_index =
+        reinterpret_cast<integer_type>(pops::dynlib::sym(handle, "pops_program_param_index"));
+    auto parameter_default =
+        reinterpret_cast<double (*)(int)>(pops::dynlib::sym(handle, "pops_program_param_default"));
+    if (parameter_count || parameter_block || parameter_index || parameter_default) {
+      if (!parameter_count || !parameter_block || !parameter_index || !parameter_default)
+        throw std::runtime_error(
+            "AmrSystem::install_program: Program parameter table is incomplete");
+      const int parameters = parameter_count();
+      if (parameters < 0)
+        throw std::runtime_error("AmrSystem::install_program: Program parameter count is negative");
+      for (int ordinal = 0; ordinal < parameters; ++ordinal) {
+        const int block = parameter_block(ordinal);
+        const int index = parameter_index(ordinal);
+        if (block < 0 || block >= count || index < 0)
+          throw std::runtime_error(
+              "AmrSystem::install_program: Program parameter route is out of range");
+        std::vector<double>& values = program_param_defaults[block];
+        if (static_cast<int>(values.size()) <= index)
+          values.resize(static_cast<std::size_t>(index) + 1, 0.0);
+        values[static_cast<std::size_t>(index)] = parameter_default(ordinal);
+      }
+    }
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    pops::dynlib::close(handle);
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error("AmrSystem::install_program preparation failed collectively");
+  }
+
+  using artifact_snapshot_type = decltype(p_->program.capture_artifact_step_install());
+  std::optional<artifact_snapshot_type> previous_install;
+  std::optional<typename Impl::AcceptedSnapshot> previous_runtime;
+  std::map<std::string, std::optional<CompiledFieldBoundaryKernel<Dim>>> previous_boundaries;
+  std::exception_ptr snapshot_error;
+  try {
+    previous_install.emplace(p_->program.capture_artifact_step_install());
+    previous_runtime.emplace(*p_);
+    for (const auto& [slot, plan] : p_->field_plans)
+      previous_boundaries.emplace(slot, plan.boundary_kernel);
+  } catch (...) {
+    snapshot_error = std::current_exception();
+  }
+  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
+    pops::dynlib::close(handle);
+    if (n_ranks() == 1 && snapshot_error)
+      std::rethrow_exception(snapshot_error);
+    throw std::runtime_error("AmrSystem::install_program rollback snapshot failed collectively");
+  }
+
+  std::exception_ptr installation_error;
+  try {
+    p_->program.reset_artifact_candidate_state();
+    p_->program.block_map_ = program_block_map;
+    p_->program.block_params_.clear();
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program.operator_authorities_ = operator_authorities;
+
+    p_->ensure_engine();
+    install(this);
+    p_->program.require_exact_artifact_step_install(*previous_install,
+                                                    "AmrSystem::install_program:");
+    if (!p_->program.hierarchy_refresh_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact lacks its hierarchy refresh hook");
+    if (!p_->program.restart_regrid_preflight_ || !p_->program.restart_regrid_ ||
+        !p_->program.restart_resync_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact lacks its restart preflight/regrid/resync hooks");
+
+    p_->program.block_map_ = std::move(program_block_map);
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program.operator_authorities_ = std::move(operator_authorities);
+    p_->program.history_replay_authorities_ = std::move(history_replay_authorities);
+    p_->program.installed_hash_ = installed_hash;
+    if (program_has_dt_bound) {
+      AmrSystem<Dim>* self = this;
+      p_->program.dt_bound_ = [self, dt_bound](Real cfl) { return dt_bound(self, cfl); };
+    }
+    p_->program.artifact_backed_ = true;
+    if (install_boundaries)
+      install_boundaries(this);
+  } catch (...) {
+    installation_error = std::current_exception();
+  }
+
+  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
+    p_->program.rollback_artifact_step_install(std::move(*previous_install));
+    for (auto& [slot, plan] : p_->field_plans) {
+      plan.discard_materialization();
+      const auto boundary = previous_boundaries.find(slot);
+      if (boundary != previous_boundaries.end())
+        plan.boundary_kernel = std::move(boundary->second);
+    }
+    p_->prepared_hierarchy.reset();
+    p_->engine.reset();
+    p_->pending_provider_restore.reset();
+    p_->pending_provider_registry_restore.reset();
+    p_->resolved_tagging.reset();
+    p_->tagging_plan.reset();
+    p_->bootstrap_transaction.reset();
+    previous_runtime->restore(*p_);
+    pops::dynlib::close(handle);
+    if (n_ranks() == 1 && installation_error)
+      std::rethrow_exception(installation_error);
+    throw std::runtime_error("AmrSystem::install_program installation failed collectively");
+  }
+  // The installed closures point into the authenticated DSO, which therefore remains loaded.
 }
 
 template <int Dim>
@@ -6486,6 +7547,46 @@ std::map<std::string, double> AmrSystem<Dim>::program_diagnostics() const {
   std::map<std::string, double> result;
   for (const auto& [name, value] : p_->program.diagnostics())
     result.emplace(name, static_cast<double>(value));
+  return result;
+}
+
+template <int Dim>
+std::map<std::string, double> AmrSystem<Dim>::accepted_balance_terms(
+    const std::string& route) const {
+  if (!p_->external_step_transaction || p_->external_step_committed)
+    throw std::runtime_error(
+        "AmrSystem::_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  std::map<std::string, double> result;
+  for (const auto& [term, value] : p_->program.accepted_balance_terms(route, "AmrSystem"))
+    result.emplace(term, static_cast<double>(value));
+  return result;
+}
+
+template <int Dim>
+std::map<std::string, double> AmrSystem<Dim>::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction || p_->external_step_committed)
+    throw std::runtime_error(
+        "AmrSystem::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  p_->ensure_engine();
+  const typename Impl::BlockSpec& selected = p_->block(block);
+  if (component < 0 || component >= selected.ncomp)
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms component is out of range");
+  const std::size_t level_count = p_->engine->hierarchy().num_levels();
+  if (levels.empty() || std::any_of(levels.begin(), levels.end(), [&](int level) {
+        return level < 0 || static_cast<std::size_t>(level) >= level_count;
+      }))
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms level is out of active hierarchy range");
+  const int runtime_block = static_cast<int>(&selected - p_->blocks.data());
+  std::map<std::string, double> result;
+  for (const auto& [term, value] : p_->program.selected_accepted_balance_terms(
+           route, runtime_block, component, levels, automatic_terms, "AmrSystem"))
+    result.emplace(term, static_cast<double>(value));
   return result;
 }
 
@@ -6910,6 +8011,299 @@ double AmrSystem<Dim>::composite_reduce_field(const std::string& provider_slot,
 }
 
 template <int Dim>
+void AmrSystem<Dim>::set_hierarchy(const std::vector<AmrPatch<Dim>>& boxes) {
+  p_->ensure_engine();
+  if (n_ranks() != 1)
+    throw std::runtime_error(
+        "AmrSystem::set_hierarchy under MPI requires rebuild_hierarchy with explicit owner ranks");
+  rebuild_hierarchy(boxes, std::vector<int>(boxes.size(), 0));
+}
+
+template <int Dim>
+void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
+                                       const std::vector<int>& owner_ranks) {
+  p_->ensure_engine();
+  std::vector<std::vector<Box<Dim>>> level_boxes;
+  std::vector<std::vector<int>> level_owners;
+  std::string request_contract;
+  std::exception_ptr validation_error;
+  try {
+    if (boxes.size() != owner_ranks.size())
+      throw std::invalid_argument(
+          "AmrSystem::rebuild_hierarchy boxes and owner ranks must align exactly");
+    int active_levels = 1;
+    for (std::size_t index = 0; index < boxes.size(); ++index) {
+      const AmrPatch<Dim>& patch = boxes[index];
+      if (patch.level < 1 || patch.level >= p_->cfg.level_count || patch.box.empty())
+        throw std::invalid_argument(
+            "AmrSystem::rebuild_hierarchy requires non-empty configured fine-level patches");
+      if (owner_ranks[index] < 0 || owner_ranks[index] >= n_ranks())
+        throw std::out_of_range(
+            "AmrSystem::rebuild_hierarchy owner rank lies outside the execution lane");
+      active_levels = std::max(active_levels, patch.level + 1);
+    }
+    level_boxes.resize(static_cast<std::size_t>(active_levels));
+    level_owners.resize(static_cast<std::size_t>(active_levels));
+    ExactContractBuilder request;
+    request.text("pops.amr-system.rebuild-hierarchy")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(boxes.size()));
+    for (std::size_t index = 0; index < boxes.size(); ++index) {
+      const AmrPatch<Dim>& patch = boxes[index];
+      const std::size_t level = static_cast<std::size_t>(patch.level);
+      level_boxes[level].push_back(patch.box);
+      level_owners[level].push_back(owner_ranks[index]);
+      request.scalar(std::int32_t{patch.level});
+      for (int axis = 0; axis < Dim; ++axis)
+        request.scalar(std::int32_t{patch.box.lo[axis]});
+      for (int axis = 0; axis < Dim; ++axis)
+        request.scalar(std::int32_t{patch.box.hi[axis]});
+      request.scalar(std::int32_t{owner_ranks[index]});
+    }
+    for (int level = 1; level < active_levels; ++level)
+      if (level_boxes[static_cast<std::size_t>(level)].empty())
+        throw std::invalid_argument(
+            "AmrSystem::rebuild_hierarchy requires contiguous active fine levels");
+    request_contract = std::move(request).release();
+  } catch (...) {
+    validation_error = std::current_exception();
+  }
+  if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && validation_error)
+      std::rethrow_exception(validation_error);
+    throw std::runtime_error("AMR hierarchy rebuild validation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-rebuild-hierarchy"), std::string_view(request_contract)}}))
+    throw std::invalid_argument("AMR hierarchy rebuild request differs between MPI ranks");
+
+  p_->execute_transaction([&] {
+    using engine_type = typename Impl::engine_type;
+    using hierarchy_type = typename engine_type::hierarchy_type;
+    using level_type = typename engine_type::level_type;
+    using field_type = typename engine_type::field_type;
+
+    const auto& live_hierarchy = p_->engine->hierarchy();
+    hierarchy_type candidate_hierarchy = live_hierarchy.truncated(0);
+    const mesh::RankSpace<Dim>& rank_space = live_hierarchy.layout(0).distribution().rank_space();
+    const Index<Dim> local_rank = live_hierarchy.state(0).local_rank();
+    Box<Dim> level_domain = live_hierarchy.layout(0).domain();
+    for (std::size_t level = 1; level < level_boxes.size(); ++level) {
+      const auto ratio = refinement_ratio(p_->cfg.transition_ratios[level - 1]);
+      level_domain = amr::hierarchy::refine_box(level_domain, ratio);
+      mesh::BoxArray<Dim> patches(level_boxes[level]);
+      std::vector<Index<Dim>> owners;
+      owners.reserve(level_owners[level].size());
+      for (int rank : level_owners[level])
+        owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
+      mesh::Distribution<Dim> distribution =
+          mesh::Distribution<Dim>::partitioned(patches, rank_space, std::move(owners));
+      const mesh::BoxArrayValidationBudget layout_budget{patches.size(),
+                                                         checked_pair_count(patches.size())};
+      amr::hierarchy::LevelLayout<Dim> layout(static_cast<int>(level), level_domain, patches,
+                                              distribution, ratio, layout_budget);
+      field_type state(patches, distribution, local_rank, live_hierarchy.state(0).ncomp(),
+                       live_hierarchy.state(0).ghosts());
+      state.set_val(Real(0));
+      candidate_hierarchy =
+          candidate_hierarchy.with_level(level_type(std::move(layout), std::move(state)));
+    }
+
+    auto candidate_engine = std::make_unique<engine_type>(
+        std::move(candidate_hierarchy), p_->load_balance, p_->engine->spatial_identity());
+    auto qualified = candidate_engine->snapshot();
+    qualified.topology_epoch = runtime::amr::detail::next_generation(
+        p_->engine->topology_epoch(), "AMR hierarchy topology epoch");
+    qualified.materialization_generation = runtime::amr::detail::next_generation(
+        p_->engine->materialization_generation(), "AMR hierarchy materialization generation");
+    qualified.exact_spatial_contract = runtime::amr::detail::exact_runtime_spatial_contract(
+        candidate_engine->spatial_identity(), qualified.hierarchy, qualified.topology_epoch,
+        qualified.materialization_generation);
+    candidate_engine->restore(qualified);
+    std::unique_ptr<typename Impl::PreparedHierarchy> candidate_graph =
+        p_->prepare_hierarchy_graph(*candidate_engine, nullptr);
+
+    p_->engine.swap(candidate_engine);
+    p_->prepared_hierarchy.swap(candidate_graph);
+    p_->pending_provider_restore.reset();
+    p_->pending_provider_registry_restore.reset();
+    for (auto& [slot, plan] : p_->field_plans) {
+      (void)slot;
+      plan.discard_materialization();
+    }
+    p_->active_field_slot.clear();
+    p_->tagging_plan.reset();
+    p_->automatic_bootstrap_complete = true;
+    p_->program.refresh_hierarchy_state("AmrSystem::rebuild_hierarchy");
+  });
+}
+
+template <int Dim>
+std::vector<int> AmrSystem<Dim>::rematerialize_hierarchy_ownership(
+    const std::vector<AmrPatch<Dim>>& boxes) {
+  p_->ensure_engine();
+  std::vector<std::vector<Box<Dim>>> level_boxes;
+  std::vector<std::vector<std::size_t>> source_indices;
+  std::string request_contract;
+  std::exception_ptr validation_error;
+  try {
+    int active_levels = 1;
+    for (const AmrPatch<Dim>& patch : boxes) {
+      if (patch.level < 1 || patch.level >= p_->cfg.level_count || patch.box.empty())
+        throw std::invalid_argument(
+            "AMR ownership rematerialization requires non-empty configured fine-level patches");
+      active_levels = std::max(active_levels, patch.level + 1);
+    }
+    level_boxes.resize(static_cast<std::size_t>(active_levels));
+    source_indices.resize(static_cast<std::size_t>(active_levels));
+    ExactContractBuilder request;
+    request.text("pops.amr-system.rematerialize-ownership")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(boxes.size()));
+    for (std::size_t index = 0; index < boxes.size(); ++index) {
+      const AmrPatch<Dim>& patch = boxes[index];
+      const std::size_t level = static_cast<std::size_t>(patch.level);
+      level_boxes[level].push_back(patch.box);
+      source_indices[level].push_back(index);
+      request.scalar(std::int32_t{patch.level});
+      for (int axis = 0; axis < Dim; ++axis)
+        request.scalar(std::int32_t{patch.box.lo[axis]});
+      for (int axis = 0; axis < Dim; ++axis)
+        request.scalar(std::int32_t{patch.box.hi[axis]});
+    }
+    for (int level = 1; level < active_levels; ++level)
+      if (level_boxes[static_cast<std::size_t>(level)].empty())
+        throw std::invalid_argument(
+            "AMR ownership rematerialization requires contiguous active fine levels");
+    request_contract = std::move(request).release();
+  } catch (...) {
+    validation_error = std::current_exception();
+  }
+  if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && validation_error)
+      std::rethrow_exception(validation_error);
+    throw std::runtime_error("AMR ownership rematerialization validation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-rematerialize-ownership"), std::string_view(request_contract)}}))
+    throw std::invalid_argument("AMR ownership rematerialization request differs between ranks");
+  if (boxes.empty())
+    return {};
+
+  const ExecutionLane lane = ExecutionLane::world();
+  const mesh::RankSpace<Dim> rank_space = process_rank_space<Dim>(lane);
+  std::vector<int> result(boxes.size(), -1);
+  for (std::size_t level = 1; level < level_boxes.size(); ++level) {
+    const mesh::BoxArray<Dim> patches(level_boxes[level]);
+    const parallel::LoadBalancePreparationBudget budget{patches.size(), rank_space.size(),
+                                                        checked_layout_cells(patches)};
+    const auto prepared = p_->load_balance->prepare(patches, rank_space, budget, {}, lane);
+    const auto& distribution = prepared.plan().distribution();
+    for (std::size_t patch = 0; patch < patches.size(); ++patch)
+      result[source_indices[level][patch]] =
+          static_cast<int>(rank_space.linear_rank(distribution.owner(patch)));
+  }
+  return result;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::rematerialize_program_accepted_state(
+    const std::vector<std::vector<std::uint8_t>>& source_states,
+    const std::vector<std::vector<int>>& source_level_owners,
+    const std::vector<std::vector<int>>& target_level_owners) {
+  p_->ensure_engine();
+  std::optional<runtime::program::AmrProgramAcceptedState<Dim>> accepted;
+  std::string request_contract;
+  std::exception_ptr validation_error;
+  try {
+    if (source_states.empty() ||
+        source_states.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      throw std::invalid_argument(
+          "AMR Program rematerialization requires one source image per recorded rank");
+    const std::size_t levels = p_->engine->hierarchy().num_levels();
+    if (source_level_owners.size() != levels || target_level_owners.size() != levels)
+      throw std::invalid_argument(
+          "AMR Program rematerialization ownership must cover every active level");
+    const int source_rank_count = static_cast<int>(source_states.size());
+    for (std::size_t level = 0; level < levels; ++level) {
+      if (source_level_owners[level].size() != target_level_owners[level].size())
+        throw std::invalid_argument(
+            "AMR Program source and target ownership name different patch counts");
+      const auto& live = p_->engine->hierarchy().layout(level).distribution();
+      const std::size_t live_owners = live.replicated() ? 0 : live.owners().size();
+      if (target_level_owners[level].size() != live_owners)
+        throw std::invalid_argument(
+            "AMR Program target ownership differs from the live exact hierarchy");
+      for (int owner : source_level_owners[level])
+        if (owner < 0 || owner >= source_rank_count)
+          throw std::out_of_range("AMR Program source owner rank is out of range");
+      for (std::size_t patch = 0; patch < target_level_owners[level].size(); ++patch) {
+        const int owner = target_level_owners[level][patch];
+        if (owner < 0 || owner >= n_ranks() ||
+            owner != static_cast<int>(live.rank_space().linear_rank(live.owner(patch))))
+          throw std::invalid_argument(
+              "AMR Program target ownership differs from the published hierarchy");
+      }
+    }
+
+    accepted.emplace(
+        runtime::program::deserialize_amr_program_accepted_state<Dim>(source_states.front()));
+    for (std::size_t rank = 1; rank < source_states.size(); ++rank) {
+      const auto candidate =
+          runtime::program::deserialize_amr_program_accepted_state<Dim>(source_states[rank]);
+      if (runtime::program::serialize_amr_program_accepted_state(candidate) !=
+          runtime::program::serialize_amr_program_accepted_state(*accepted))
+        throw std::invalid_argument(
+            "AMR Program rank-independent accepted images differ across source ranks");
+    }
+    if (accepted->level_clocks.size() != levels)
+      throw std::invalid_argument(
+          "AMR Program accepted clocks differ from the rematerialized hierarchy depth");
+    accepted->spatial_contract = p_->engine->spatial_contract();
+    accepted->topology_epoch = p_->engine->topology_epoch();
+    accepted->materialization_generation = p_->engine->materialization_generation();
+    if (accepted->temporal_partition.kind == runtime::program::TemporalPartitionKind::CellLocal)
+      accepted->temporal_partition.topology_epoch = accepted->topology_epoch;
+    const std::vector<std::uint8_t> bytes =
+        runtime::program::serialize_amr_program_accepted_state(*accepted);
+    ExactContractBuilder request;
+    request.text("pops.amr-system.rematerialize-program-state")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .scalar(static_cast<std::uint64_t>(source_states.size()))
+        .scalar(static_cast<std::uint64_t>(levels))
+        .bytes(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    for (const auto& owners : source_level_owners) {
+      request.scalar(static_cast<std::uint64_t>(owners.size()));
+      for (int owner : owners)
+        request.scalar(std::int32_t{owner});
+    }
+    for (const auto& owners : target_level_owners) {
+      request.scalar(static_cast<std::uint64_t>(owners.size()));
+      for (int owner : owners)
+        request.scalar(std::int32_t{owner});
+    }
+    request_contract = std::move(request).release();
+  } catch (...) {
+    validation_error = std::current_exception();
+  }
+  if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && validation_error)
+      std::rethrow_exception(validation_error);
+    throw std::runtime_error("AMR Program rematerialization validation failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-rematerialize-program-state"),
+            std::string_view(request_contract)}}))
+    throw std::invalid_argument("AMR Program rematerialization request differs between ranks");
+  runtime::program::require_collective_amr_program_checkpoint_consensus(
+      *accepted, *p_->prepared_hierarchy->lane);
+  return runtime::program::serialize_amr_program_accepted_state(*accepted);
+}
+
+template <int Dim>
 std::vector<int> AmrSystem<Dim>::level_owner_ranks(int level) {
   p_->ensure_engine();
   if (level < 0 || static_cast<std::size_t>(level) >= p_->engine->hierarchy().num_levels())
@@ -6923,6 +8317,265 @@ std::vector<int> AmrSystem<Dim>::level_owner_ranks(int level) {
   for (const Index<Dim>& owner : distribution.owners())
     result.push_back(static_cast<int>(distribution.rank_space().linear_rank(owner)));
   return result;
+}
+
+template <int Dim>
+std::vector<std::string> AmrSystem<Dim>::history_names() const {
+  if (!p_->engine)
+    return {};
+  std::vector<std::string> result;
+  for (const auto& descriptor : p_->history_descriptors())
+    result.push_back(descriptor.name);
+  return result;
+}
+
+template <int Dim>
+int AmrSystem<Dim>::history_depth(const std::string& name) const {
+  p_->ensure_engine();
+  return p_->history_descriptor(name).depth;
+}
+
+template <int Dim>
+int AmrSystem<Dim>::history_ncomp(const std::string& name) const {
+  p_->ensure_engine();
+  return p_->history_descriptor(name).components;
+}
+
+template <int Dim>
+bool AmrSystem<Dim>::history_initialized(const std::string& name) const {
+  p_->ensure_engine();
+  const auto keys = p_->history_level_keys(name);
+  return std::all_of(keys.begin(), keys.end(), [&](const std::string& key) {
+    const auto found = p_->program.hist_.initialized.find(key);
+    return found != p_->program.hist_.initialized.end() && found->second;
+  });
+}
+
+template <int Dim>
+int AmrSystem<Dim>::history_fill_count(const std::string& name) const {
+  p_->ensure_engine();
+  const auto keys = p_->history_level_keys(name);
+  int result = p_->history_descriptor(name).depth;
+  for (const std::string& key : keys) {
+    const auto found = p_->program.hist_.fill_count.find(key);
+    if (found == p_->program.hist_.fill_count.end())
+      throw std::logic_error("AMR history ring lacks its accepted fill count");
+    result = std::min(result, found->second);
+  }
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_history_initialized(const std::string& name, bool initialized) {
+  p_->ensure_engine();
+  const int fill = initialized ? p_->history_descriptor(name).depth : 0;
+  for (const std::string& key : p_->history_level_keys(name)) {
+    p_->program.hist_.initialized.at(key) = initialized;
+    p_->program.hist_.fill_count.at(key) = fill;
+    p_->program.hist_.store_pending.at(key) = false;
+  }
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_history_fill_count(const std::string& name, int fill_count) {
+  p_->ensure_engine();
+  const int depth = p_->history_descriptor(name).depth;
+  if (fill_count < 0 || fill_count > depth)
+    throw std::invalid_argument("AMR history fill count lies outside its exact ring depth");
+  for (const std::string& key : p_->history_level_keys(name)) {
+    p_->program.hist_.fill_count.at(key) = fill_count;
+    p_->program.hist_.initialized.at(key) = fill_count > 0;
+    p_->program.hist_.store_pending.at(key) = false;
+  }
+}
+
+template <int Dim>
+std::vector<double> AmrSystem<Dim>::history_global(const std::string& name, int slot) const {
+  p_->ensure_engine();
+  const auto descriptor = p_->history_descriptor(name);
+  if (slot < 0 || slot >= descriptor.depth)
+    throw std::out_of_range("AMR history slot lies outside its exact ring depth");
+  const auto keys = p_->history_level_keys(name);
+  std::vector<double> result;
+  for (std::size_t level = 0; level < keys.size(); ++level) {
+    const auto& ring = p_->program.hist_.histories.at(keys[level]);
+    const Box<Dim>& domain = p_->engine->hierarchy().layout(level).domain();
+    std::vector<double> values =
+        gather_field(ring[static_cast<std::size_t>(slot)], domain, descriptor.components);
+    result.insert(result.end(), values.begin(), values.end());
+  }
+  return result;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_history(const std::string& name, int slot,
+                                     const std::vector<double>& values) {
+  p_->ensure_engine();
+  const auto descriptor = p_->history_descriptor(name);
+  if (slot < 0 || slot >= descriptor.depth)
+    throw std::out_of_range("AMR history slot lies outside its exact ring depth");
+  const auto keys = p_->history_level_keys(name);
+  std::vector<std::size_t> level_sizes;
+  level_sizes.reserve(keys.size());
+  std::size_t expected = 0;
+  for (std::size_t level = 0; level < keys.size(); ++level) {
+    const std::size_t cells = checked_cells(p_->engine->hierarchy().layout(level).domain());
+    if (cells >
+        std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(descriptor.components))
+      throw std::overflow_error("AMR history restore level size overflow");
+    const std::size_t count = cells * static_cast<std::size_t>(descriptor.components);
+    if (count > std::numeric_limits<std::size_t>::max() - expected)
+      throw std::overflow_error("AMR history restore total size overflow");
+    level_sizes.push_back(count);
+    expected += count;
+  }
+  if (values.size() != expected)
+    throw std::invalid_argument("AMR history restore payload has the wrong exact-ranked size");
+  std::size_t offset = 0;
+  for (std::size_t level = 0; level < keys.size(); ++level) {
+    auto& field = p_->program.hist_.histories.at(keys[level])[static_cast<std::size_t>(slot)];
+    const std::vector<double> level_values(
+        values.begin() + static_cast<std::ptrdiff_t>(offset),
+        values.begin() + static_cast<std::ptrdiff_t>(offset + level_sizes[level]));
+    write_field(field, p_->engine->hierarchy().layout(level).domain(), level_values,
+                descriptor.components);
+    offset += level_sizes[level];
+  }
+}
+
+template <int Dim>
+double AmrSystem<Dim>::history_slot_dt(const std::string& name, int slot) const {
+  p_->ensure_engine();
+  const int depth = p_->history_descriptor(name).depth;
+  if (slot < 0 || slot >= depth)
+    throw std::out_of_range("AMR history dt slot lies outside its exact ring depth");
+  std::optional<Real> retained;
+  for (const std::string& key : p_->history_level_keys(name)) {
+    const auto& values = p_->program.hist_.slot_dt.at(key);
+    if (values.size() != static_cast<std::size_t>(depth))
+      throw std::logic_error("AMR history dt ledger differs from its exact ring depth");
+    const Real candidate = values[static_cast<std::size_t>(slot)];
+    if (retained && *retained != candidate)
+      throw std::logic_error("AMR history dt differs between active hierarchy levels");
+    retained = candidate;
+  }
+  return static_cast<double>(*retained);
+}
+
+template <int Dim>
+void AmrSystem<Dim>::restore_history_slot_dt(const std::string& name, int slot, double dt) {
+  p_->ensure_engine();
+  const int depth = p_->history_descriptor(name).depth;
+  if (slot < 0 || slot >= depth || !std::isfinite(dt) || dt < 0.0)
+    throw std::invalid_argument("AMR history dt restore requires a valid slot and finite dt >= 0");
+  const Real native_dt = static_cast<Real>(dt);
+  if (!std::isfinite(static_cast<double>(native_dt)))
+    throw std::overflow_error("AMR history dt exceeds native Real");
+  for (const std::string& key : p_->history_level_keys(name))
+    p_->program.hist_.slot_dt.at(key)[static_cast<std::size_t>(slot)] = native_dt;
+}
+
+template <int Dim>
+int AmrSystem<Dim>::rebuild_history_slots(const std::string& name,
+                                          const std::vector<int>& stored_slots) {
+  p_->ensure_engine();
+  const auto descriptor = p_->history_descriptor(name);
+  if (!p_->program.step_)
+    throw std::logic_error("AMR history replay requires an installed compiled Program");
+  if (!p_->program.authorizes_history_replay(name, descriptor.depth))
+    throw std::logic_error("AMR history selective replay lacks its exact artifact-owned authority");
+  if (p_->program.substeps_ != 1 || p_->program.stride_ != 1)
+    throw std::logic_error(
+        "AMR history selective replay requires Program cadence (substeps=1, stride=1)");
+
+  std::vector<int> anchors = stored_slots;
+  std::sort(anchors.begin(), anchors.end());
+  anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
+  if (anchors.empty() || anchors.front() != 0 || anchors.back() != descriptor.depth - 1)
+    throw std::invalid_argument(
+        "AMR history selective replay requires exact newest and oldest anchors");
+  for (const int anchor : anchors)
+    if (anchor < 0 || anchor >= descriptor.depth)
+      throw std::out_of_range("AMR history selective replay anchor is outside the ring");
+  if (static_cast<int>(anchors.size()) == descriptor.depth) {
+    p_->last_replay_regrid_steps.clear();
+    return 0;
+  }
+  if (p_->cfg.regrid_every > 0)
+    for (int slot = descriptor.depth - 2; slot >= 0; --slot) {
+      const int cursor = p_->macro_step - 1 - slot;
+      if (cursor > 0 && cursor % p_->cfg.regrid_every == 0)
+        throw std::logic_error(
+            "AMR history selective replay window contains a scheduled regrid; use dense safety "
+            "storage");
+    }
+
+  const auto keys = p_->history_level_keys(name);
+  std::vector<Real> dts = p_->program.hist_.slot_dt.at(keys.front());
+  for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor)
+    for (int slot = anchors[anchor + 1] - 1; slot > anchors[anchor]; --slot)
+      if (slot + 1 >= static_cast<int>(dts.size()) ||
+          !std::isfinite(static_cast<double>(dts[static_cast<std::size_t>(slot + 1)])) ||
+          !(dts[static_cast<std::size_t>(slot + 1)] > Real(0)))
+        throw std::invalid_argument(
+            "AMR history selective replay requires every omitted outgoing dt");
+
+  typename Impl::AcceptedSnapshot accepted(*p_);
+  std::vector<std::vector<MultiFab<Dim>>> reconstructed(static_cast<std::size_t>(descriptor.depth));
+  std::vector<int> fired;
+  try {
+    for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor) {
+      const int newer = anchors[anchor];
+      const int older = anchors[anchor + 1];
+      accepted.restore(*p_);
+      for (std::size_t level = 0; level < keys.size(); ++level)
+        copy_full_field_in_place(
+            p_->program.hist_.histories.at(keys[level])[static_cast<std::size_t>(older)],
+            p_->engine->hierarchy().state(level));
+      for (int slot = older - 1; slot > newer; --slot) {
+        const int cursor = p_->macro_step - 1 - slot;
+        p_->macro_step = cursor;
+        p_->program.last_dt_ = dts[static_cast<std::size_t>(slot + 1)];
+        const std::uint64_t epoch = p_->engine->topology_epoch();
+        p_->program.run_balance_replay("AmrSystem::rebuild_history_slots", [&] {
+          p_->program.step_(static_cast<double>(dts[static_cast<std::size_t>(slot + 1)]));
+        });
+        if (p_->engine->topology_epoch() != epoch)
+          fired.push_back(cursor);
+        auto& image = reconstructed[static_cast<std::size_t>(slot)];
+        image.reserve(keys.size());
+        for (std::size_t level = 0; level < keys.size(); ++level)
+          image.push_back(p_->engine->hierarchy().state(level));
+      }
+    }
+  } catch (...) {
+    accepted.restore(*p_);
+    throw;
+  }
+  accepted.restore(*p_);
+  if (!fired.empty())
+    throw std::logic_error(
+        "AMR history selective replay changed topology; use dense safety storage");
+
+  int recomputed = 0;
+  for (int slot = 0; slot < descriptor.depth; ++slot) {
+    if (std::binary_search(anchors.begin(), anchors.end(), slot))
+      continue;
+    const auto& image = reconstructed[static_cast<std::size_t>(slot)];
+    if (image.size() != keys.size())
+      throw std::logic_error("AMR history anchors do not bracket every omitted slot");
+    for (std::size_t level = 0; level < keys.size(); ++level)
+      copy_full_field_in_place(image[level], p_->program.hist_.histories.at(
+                                                 keys[level])[static_cast<std::size_t>(slot)]);
+    ++recomputed;
+  }
+  p_->last_replay_regrid_steps.clear();
+  return recomputed;
+}
+
+template <int Dim>
+std::vector<int> AmrSystem<Dim>::last_replay_regrid_steps() const {
+  return p_->last_replay_regrid_steps;
 }
 
 template <int Dim>
@@ -6953,12 +8606,21 @@ std::vector<double> AmrSystem<Dim>::density(const std::string& name) {
 
 template <int Dim>
 std::vector<std::uint8_t> AmrSystem<Dim>::program_accepted_state() const {
-  return p_->program_accepted_bytes;
+  if (p_->program_accepted_bytes.empty() && !p_->program.artifact_backed_ && !p_->tagging_spec)
+    return {};
+  p_->ensure_engine();
+  runtime::program::AmrProgramAcceptedState<Dim> state =
+      p_->program_accepted_bytes.empty()
+          ? p_->minimal_program_accepted_state()
+          : runtime::program::deserialize_amr_program_accepted_state<Dim>(
+                p_->program_accepted_bytes);
+  p_->requalify_runtime_owned_program_state(state);
+  return runtime::program::serialize_amr_program_accepted_state(state);
 }
 
 template <int Dim>
 void AmrSystem<Dim>::copy_program_accepted_state_into(std::vector<std::uint8_t>& state) const {
-  state = p_->program_accepted_bytes;
+  state = program_accepted_state();
 }
 
 template <int Dim>
@@ -7012,6 +8674,99 @@ void AmrSystem<Dim>::restore_checkpoint_accepted_state(const std::vector<std::ui
 }
 
 template <int Dim>
+void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std::uint8_t>& state,
+                                                           const std::vector<std::string>& names,
+                                                           const std::vector<int>& depths,
+                                                           const std::vector<int>& ncomps) {
+  p_->ensure_engine();
+  if (!p_->restart_transaction)
+    throw std::logic_error("AMR Program restart histories require one active restart transaction");
+  if (names.size() != depths.size() || names.size() != ncomps.size())
+    throw std::invalid_argument(
+        "AMR Program restart history names, depths and component counts must align");
+
+  runtime::program::HistoryManager<Dim> candidate;
+  std::string contract;
+  std::exception_ptr preparation_error;
+  try {
+    const auto accepted = runtime::program::deserialize_amr_program_accepted_state<Dim>(state);
+    runtime::program::require_live_amr_program_checkpoint(accepted, *p_->engine);
+    if (accepted.histories.size() != names.size())
+      throw std::invalid_argument(
+          "AMR Program restart history registry differs from its accepted checkpoint");
+    const auto& hierarchy = p_->engine->hierarchy();
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.restart-history-materialization")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim})
+        .bytes(p_->engine->spatial_contract())
+        .scalar(static_cast<std::uint64_t>(accepted.histories.size()));
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      const auto& descriptor = accepted.histories[index];
+      if (descriptor.name != names[index] || descriptor.depth != depths[index] ||
+          descriptor.components != ncomps[index])
+        throw std::invalid_argument(
+            "AMR Program restart history arguments differ from the accepted descriptor");
+      if (index != 0 && names[index - 1] >= names[index])
+        throw std::invalid_argument("AMR Program restart history names must be uniquely ordered");
+      if (descriptor.program_owner < 0 ||
+          static_cast<std::size_t>(descriptor.program_owner) >= p_->program.block_map_.size())
+        throw std::invalid_argument("AMR Program restart history has an invalid program owner");
+      const int runtime_owner =
+          p_->program.block_map_[static_cast<std::size_t>(descriptor.program_owner)];
+      if (runtime_owner != 0 || p_->blocks.size() != 1)
+        throw std::logic_error(
+            "AMR Program restart history requires the prepared multi-block hierarchy provider");
+      exact.text(descriptor.name)
+          .scalar(std::int32_t{descriptor.program_owner})
+          .text(descriptor.state_identity)
+          .text(descriptor.space_identity)
+          .text(descriptor.clock_identity)
+          .text(descriptor.interpolation_identity)
+          .scalar(std::int32_t{descriptor.depth})
+          .scalar(std::int32_t{descriptor.components});
+      for (std::size_t level = 0; level < hierarchy.num_levels(); ++level) {
+        const std::string key = exact_amr_history_key(descriptor.name, static_cast<int>(level));
+        const MultiFab<Dim>& prototype = hierarchy.state(level);
+        std::vector<MultiFab<Dim>> ring;
+        ring.reserve(static_cast<std::size_t>(descriptor.depth));
+        for (int slot = 0; slot < descriptor.depth; ++slot) {
+          MultiFab<Dim> field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
+                              descriptor.components, prototype.ghosts());
+          field.set_val(Real(0));
+          ring.push_back(std::move(field));
+        }
+        candidate.histories.emplace(key, std::move(ring));
+        candidate.depth.emplace(key, descriptor.depth);
+        candidate.initialized.emplace(key, false);
+        candidate.fill_count.emplace(key, 0);
+        candidate.store_pending.emplace(key, false);
+        candidate.owner.emplace(key, runtime_owner);
+        candidate.state_identity.emplace(key, descriptor.state_identity);
+        candidate.space_identity.emplace(key, descriptor.space_identity);
+        candidate.clock_identity.emplace(key, descriptor.clock_identity);
+        candidate.interpolation_identity.emplace(key, descriptor.interpolation_identity);
+        candidate.slot_dt.emplace(
+            key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+      }
+    }
+    contract = std::move(exact).release();
+  } catch (...) {
+    preparation_error = std::current_exception();
+  }
+  if (all_reduce_max(preparation_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preparation_error)
+      std::rethrow_exception(preparation_error);
+    throw std::runtime_error(
+        "AMR Program restart history materialization failed on at least one MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("amr-restart-histories"), std::string_view(contract)}}))
+    throw std::invalid_argument("AMR Program restart history contracts differ between MPI ranks");
+  p_->program.hist_ = std::move(candidate);
+}
+
+template <int Dim>
 std::uint64_t AmrSystem<Dim>::program_accepted_state_revision() const {
   return p_->program_accepted_revision;
 }
@@ -7048,6 +8803,21 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::program_sync_manifest() co
 }
 
 template <int Dim>
+std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_temporal_relations() const {
+  std::vector<std::vector<std::string>> rows;
+  rows.reserve(p_->temporal_relations.size());
+  for (const auto& relation : p_->temporal_relations) {
+    const auto ratio = relation.temporal_ratio();
+    rows.push_back({std::to_string(relation.parent_level()), std::to_string(relation.child_level()),
+                    std::to_string(ratio.numerator), std::to_string(ratio.denominator),
+                    relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly
+                        ? "integral_only"
+                        : "explicit_final_substep"});
+  }
+  return rows;
+}
+
+template <int Dim>
 std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_transfer_routes() const {
   std::vector<std::vector<std::string>> rows;
   rows.reserve(p_->bootstrap_subject_routes.size());
@@ -7074,11 +8844,6 @@ std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_transfer_routes
   return rows;
 }
 
-template <int Dim>
-const std::vector<CouplingOperatorView>& AmrSystem<Dim>::coupled_operators() const {
-  return p_->coupling_views;
-}
-
 template AmrSystem<kNativeDimension>::AmrSystem(const AmrSystemConfig<kNativeDimension>&);
 template AmrSystem<kNativeDimension>::~AmrSystem();
 template AmrSystem<kNativeDimension>::AmrSystem(AmrSystem&&) noexcept;
@@ -7091,6 +8856,11 @@ template void AmrSystem<kNativeDimension>::set_compiled_block(
     int, double, int, AmrCompiledBlockBuilder<kNativeDimension>, const std::string&, bool,
     const std::string&, int, const std::vector<std::string>&, const std::vector<std::string>&,
     double, double, bool);
+template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, const std::string&,
+                                                            const std::string&, const std::string&,
+                                                            const std::string&, const std::string&,
+                                                            double, int, const std::vector<double>&,
+                                                            double, double, bool);
 template void AmrSystem<kNativeDimension>::install_prepared_amr_block(
     PreparedAmrSystemBlock<kNativeDimension>);
 template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
@@ -7101,6 +8871,9 @@ template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&,
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&, int, const std::string&,
     const std::string&, const std::string&, const std::string&);
+template void AmrSystem<kNativeDimension>::set_temporal_relations(const std::vector<std::int64_t>&,
+                                                                  const std::vector<std::int64_t>&,
+                                                                  const std::vector<std::string>&);
 template runtime::amr::PreparedTaggerCandidates<kNativeDimension>
 AmrSystem<kNativeDimension>::execute_prepared_tagging(int);
 template bool AmrSystem<kNativeDimension>::regrid_from_prepared_tagging(int);
@@ -7112,6 +8885,8 @@ template void AmrSystem<kNativeDimension>::register_bootstrap_transfer_route(
     const std::string&, const std::vector<std::string>&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, int, const Extent<kNativeDimension>&, const Extent<kNativeDimension>&);
+template void AmrSystem<kNativeDimension>::register_bootstrap_oriented_face_subjects(
+    const std::vector<std::string>&);
 template void AmrSystem<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>&,
                                                                   const std::vector<double>&,
                                                                   const std::string&, double,
@@ -7272,6 +9047,15 @@ template void AmrSystem<kNativeDimension>::rollback_step_transaction();
 template bool AmrSystem<kNativeDimension>::has_active_step_transaction() const noexcept;
 template void AmrSystem<kNativeDimension>::restore_active_step_transaction_for_program();
 template std::map<std::string, double> AmrSystem<kNativeDimension>::step_change_l2() const;
+template void AmrSystem<kNativeDimension>::begin_restart_transaction();
+template void AmrSystem<kNativeDimension>::commit_restart_transaction();
+template void AmrSystem<kNativeDimension>::rollback_restart_transaction();
+template void AmrSystem<kNativeDimension>::preflight_regrid_on_restart();
+template void AmrSystem<kNativeDimension>::regrid_on_restart();
+template int AmrSystem<kNativeDimension>::checkpoint_regrid_count() const;
+template std::uint64_t AmrSystem<kNativeDimension>::checkpoint_topology_epoch() const;
+template void AmrSystem<kNativeDimension>::restore_checkpoint_counters(int, std::uint64_t);
+template void AmrSystem<kNativeDimension>::install_program(const std::string&);
 template void AmrSystem<kNativeDimension>::install_program_step(std::function<void(double)>);
 template void AmrSystem<kNativeDimension>::install_program_hierarchy_refresh(std::function<void()>);
 template void AmrSystem<kNativeDimension>::install_program_restart_hooks(std::function<void()>,
@@ -7305,6 +9089,11 @@ template bool AmrSystem<kNativeDimension>::program_balance_consumer_is_due(const
                                                                            int) const;
 template double AmrSystem<kNativeDimension>::program_diagnostic(const std::string&) const;
 template std::map<std::string, double> AmrSystem<kNativeDimension>::program_diagnostics() const;
+template std::map<std::string, double> AmrSystem<kNativeDimension>::accepted_balance_terms(
+    const std::string&) const;
+template std::map<std::string, double> AmrSystem<kNativeDimension>::selected_accepted_balance_terms(
+    const std::string&, const std::string&, int, const std::vector<int>&,
+    const std::vector<std::string>&) const;
 template void AmrSystem<kNativeDimension>::begin_step_projection_report();
 template void AmrSystem<kNativeDimension>::note_step_projection(const std::string&);
 template std::vector<std::string> AmrSystem<kNativeDimension>::consume_step_projections();
@@ -7361,7 +9150,33 @@ template double AmrSystem<kNativeDimension>::composite_reduce(const std::string&
 template double AmrSystem<kNativeDimension>::composite_reduce_field(const std::string&,
                                                                     const std::string&, int,
                                                                     const std::vector<int>&);
+template void AmrSystem<kNativeDimension>::set_hierarchy(
+    const std::vector<AmrPatch<kNativeDimension>>&);
+template void AmrSystem<kNativeDimension>::rebuild_hierarchy(
+    const std::vector<AmrPatch<kNativeDimension>>&, const std::vector<int>&);
+template std::vector<int> AmrSystem<kNativeDimension>::rematerialize_hierarchy_ownership(
+    const std::vector<AmrPatch<kNativeDimension>>&);
+template std::vector<std::uint8_t>
+AmrSystem<kNativeDimension>::rematerialize_program_accepted_state(
+    const std::vector<std::vector<std::uint8_t>>&, const std::vector<std::vector<int>>&,
+    const std::vector<std::vector<int>>&);
 template std::vector<int> AmrSystem<kNativeDimension>::level_owner_ranks(int);
+template std::vector<std::string> AmrSystem<kNativeDimension>::history_names() const;
+template int AmrSystem<kNativeDimension>::history_depth(const std::string&) const;
+template int AmrSystem<kNativeDimension>::history_ncomp(const std::string&) const;
+template bool AmrSystem<kNativeDimension>::history_initialized(const std::string&) const;
+template int AmrSystem<kNativeDimension>::history_fill_count(const std::string&) const;
+template void AmrSystem<kNativeDimension>::set_history_initialized(const std::string&, bool);
+template void AmrSystem<kNativeDimension>::restore_history_fill_count(const std::string&, int);
+template std::vector<double> AmrSystem<kNativeDimension>::history_global(const std::string&,
+                                                                         int) const;
+template void AmrSystem<kNativeDimension>::restore_history(const std::string&, int,
+                                                           const std::vector<double>&);
+template double AmrSystem<kNativeDimension>::history_slot_dt(const std::string&, int) const;
+template void AmrSystem<kNativeDimension>::restore_history_slot_dt(const std::string&, int, double);
+template int AmrSystem<kNativeDimension>::rebuild_history_slots(const std::string&,
+                                                                const std::vector<int>&);
+template std::vector<int> AmrSystem<kNativeDimension>::last_replay_regrid_steps() const;
 template double AmrSystem<kNativeDimension>::mass();
 template double AmrSystem<kNativeDimension>::mass(const std::string&);
 template std::vector<double> AmrSystem<kNativeDimension>::density();
@@ -7374,6 +9189,9 @@ template void AmrSystem<kNativeDimension>::restore_program_accepted_state(
     const std::vector<std::uint8_t>&);
 template void AmrSystem<kNativeDimension>::restore_checkpoint_accepted_state(
     const std::vector<std::uint8_t>&);
+template void AmrSystem<kNativeDimension>::materialize_program_restart_histories(
+    const std::vector<std::uint8_t>&, const std::vector<std::string>&, const std::vector<int>&,
+    const std::vector<int>&);
 template std::uint64_t AmrSystem<kNativeDimension>::program_accepted_state_revision() const;
 template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::program_accepted_state_manifest() const;
@@ -7388,8 +9206,7 @@ AmrSystem<kNativeDimension>::program_interface_flux_ledger_manifest() const;
 template std::vector<std::vector<std::string>> AmrSystem<kNativeDimension>::program_sync_manifest()
     const;
 template std::vector<std::vector<std::string>>
+AmrSystem<kNativeDimension>::checkpoint_temporal_relations() const;
+template std::vector<std::vector<std::string>>
 AmrSystem<kNativeDimension>::checkpoint_transfer_routes() const;
-template const std::vector<CouplingOperatorView>& AmrSystem<kNativeDimension>::coupled_operators()
-    const;
-
 }  // namespace pops

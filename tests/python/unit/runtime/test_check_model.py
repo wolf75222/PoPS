@@ -7,6 +7,7 @@ import pytest
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.math import sqrt
+from pops.mesh import NativeSpatialLayout
 from pops.physics import Model
 from pops.physics.roles import Density, Momentum
 
@@ -59,6 +60,28 @@ def _isothermal_model(*, broken_roundtrip: bool = False, nan_flux: bool = False)
     return model, emitter
 
 
+def _runtime_layout(cells: int = 8) -> NativeSpatialLayout:
+    from pops._geometry_contracts import cartesian_geometry_contract
+
+    coordinates, measure = cartesian_geometry_contract(2)
+    return NativeSpatialLayout(
+        layout_id="layout://tests/check-runtime",
+        coordinate_system=coordinates,
+        cell_measure=measure,
+        axis_names=("x", "y"),
+        shape=(cells, cells),
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+        periodicity=(True, True),
+        centering="cell",
+        decomposition={
+            "schema_version": 1,
+            "kind": "single_box",
+            "boxes": [{"lower": [0, 0], "upper_exclusive": [cells, cells]}],
+        },
+    )
+
+
 def test_authenticated_formula_oracle_detects_roundtrip_and_nonfinite_flux() -> None:
     _, healthy = _isothermal_model()
     report = healthy.check_model()
@@ -86,13 +109,17 @@ def test_compiled_model_rechecks_the_installed_native_block(
     _, emitter = _isothermal_model()
     compiled = emitter.compile(backend="production", target="system")
 
-    report = compiled.check_runtime(n=8)
+    with pytest.raises(ValueError, match="authenticated NativeSpatialLayout"):
+        compiled.check_runtime()
+
+    layout = _runtime_layout()
+    report = compiled.check_runtime(layout)
     assert report["ok"] is True
     assert report["failures"] == []
 
     zeros = np.zeros((8, 8), dtype=np.float64)
     report = compiled.check_runtime(
-        n=8,
+        layout,
         state={"rho": zeros, "mx": zeros, "my": zeros},
         raise_on_error=False,
     )

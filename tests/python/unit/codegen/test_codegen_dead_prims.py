@@ -16,8 +16,10 @@ via pops.moments (Gaussian closure, NO dependency on adc_cases):
  (d) _is_zero: a closure returning Const(0.0) does not emit the higher-order
      reconstruction primitives (same behavior as the float zero 0.0).
 
-Points (b) and (c) compile a STANDALONE brick (header-only pops headers, without Kokkos) on the
-model of test_dsl_brick: auto-skip if the compiler or the headers are absent.
+Points (b) and (c) compile a STANDALONE brick against the authenticated Kokkos development
+contract used by the loaded native module.  The command pins ``POPS_NATIVE_DIM=2`` explicitly;
+there is no header-only/serial fallback.  It auto-skips only if the compiler or PoPS headers are
+absent.
 """
 
 from tests.python.support.requirements import require_native_or_skip
@@ -31,6 +33,9 @@ import numpy as np
 
 import pops.moments as M
 from pops._ir.expr import Const
+from pops._native_selector import select_native_dimension
+from pops.codegen.toolchain import native_compile_environment, pops_loader_build_flags
+from pops.frames import Cartesian2D
 
 from tests.python.support.requirements import repo_include
 
@@ -90,12 +95,14 @@ def moment_model(name, closure):
     """Final public moment construction used by both the numeric and codegen checks."""
     return M.CartesianVelocityMoments(
         ORDER, closure=closure, robust=False
-    ).build(name=name)
+    ).build(name=name, frame=Cartesian2D())
 
 
 def codegen_lower(model):
     """Internal lowering boundary, intentionally isolated to this C++ emission test."""
     dsl = getattr(model, "_dsl", None)
+    if dsl is not None:
+        dsl._model_hash()  # authenticate and attach the canonical provider pack
     lowered = getattr(dsl, "_m", None)
     if lowered is None or not callable(getattr(lowered, "emit_cpp_brick", None)):
         raise TypeError("codegen test requires the model's internal brick-lowering protocol")
@@ -103,6 +110,8 @@ def codegen_lower(model):
 
 
 HARNESS = r"""
+#include <Kokkos_Core.hpp>
+#include <Kokkos_MathematicalFunctions.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/variables.hpp>
@@ -110,20 +119,22 @@ __DEFAULT__
 __HOIST__
 #include <cstdio>
 int main(){
-  gdef::MomDef D; ghoi::MomHoi H; pops::Aux aux{};
+  gdef::MomDef D; ghoi::MomHoi H;
+  std::array<pops::Real, 0> providers{};
   const double S[][__NV__] = {
 __STATES__
   };
   const int ns = sizeof(S)/sizeof(S[0]);
   for(int k=0;k<ns;++k){
     pops::StateVec<__NV__> u{}; for(int i=0;i<__NV__;++i) u[i]=S[k][i];
-    for(int dir=0;dir<2;++dir){
-      auto fd=D.flux(u,aux,dir); auto fh=H.flux(u,aux,dir);
-      for(int i=0;i<__NV__;++i) printf("D %d %d %d %.17g\n", k, dir, i, (double)fd[i]);
-      for(int i=0;i<__NV__;++i) printf("H %d %d %d %.17g\n", k, dir, i, (double)fh[i]);
-    }
+    auto fdx=D.template flux<0>(u,providers); auto fhx=H.template flux<0>(u,providers);
+    auto fdy=D.template flux<1>(u,providers); auto fhy=H.template flux<1>(u,providers);
+    for(int i=0;i<__NV__;++i) printf("D %d 0 %d %.17g\n", k, i, (double)fdx[i]);
+    for(int i=0;i<__NV__;++i) printf("H %d 0 %d %.17g\n", k, i, (double)fhx[i]);
+    for(int i=0;i<__NV__;++i) printf("D %d 1 %d %.17g\n", k, i, (double)fdy[i]);
+    for(int i=0;i<__NV__;++i) printf("H %d 1 %d %.17g\n", k, i, (double)fhy[i]);
     auto p=D.to_primitive(u);            // exercises to_primitive (filtered)
-    (void)p; (void)D.max_wave_speed(u,aux,0);
+    (void)p; (void)D.template max_wave_speed<0>(u,providers);
   }
   return 0;
 }
@@ -161,7 +172,7 @@ def check_d_is_zero():
     chk(list(mc.prim_defs) == list(mf.prim_defs), "Const(0.0) == float 0.0 (same primitives)")
 
 
-def check_bc_numerique(m, cxx):
+def check_bc_numerique(m):
     print("== (b)/(c) brick compiles: flux == Python reference (rtol 1e-13), OPT-IN hoist ==")
     src_def = m.emit_cpp_brick(name="MomDef", namespace="gdef")
     src_hoi = m.emit_cpp_brick(name="MomHoi", namespace="ghoi", hoist_reciprocals=True)
@@ -176,12 +187,34 @@ def check_bc_numerique(m, cxx):
         .replace("__STATES__", sl)
         .replace("__NV__", str(NV))
     )
+    select_native_dimension(2)
+    compiler, compile_flags, link_flags = pops_loader_build_flags()
+    compile_flags = [
+        flag for flag in compile_flags
+        if not flag.startswith("-DPOPS_NATIVE_DIM=")
+    ]
+    compile_flags.append("-DPOPS_NATIVE_DIM=2")
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, "h.cpp")
         exe = os.path.join(tmp, "h")
         with open(cpp, "w") as f:
             f.write(prog)
-        subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
+        subprocess.run(
+            [
+                compiler,
+                "-std=c++20",
+                "-O2",
+                "-I",
+                INCLUDE,
+                *compile_flags,
+                cpp,
+                *link_flags,
+                "-o",
+                exe,
+            ],
+            check=True,
+            env=native_compile_environment(),
+        )
         out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 
     fd = {}
@@ -215,7 +248,7 @@ def main():
     check_d_is_zero()
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if cxx and os.path.isdir(INCLUDE):
-        check_bc_numerique(codegen_lower(moment_model("mom", M.gaussian_closure(ORDER))), cxx)
+        check_bc_numerique(codegen_lower(moment_model("mom", M.gaussian_closure(ORDER))))
     else:
         if fails:
             raise AssertionError(

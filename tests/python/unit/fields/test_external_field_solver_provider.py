@@ -143,15 +143,15 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     provider_authority = external.to_data()["provider"]
     assert provider_authority["use_policy"] == {
         "policy_id": "pops.fields.external-field-solver.use",
-        "version": 4,
+        "version": 5,
         "capabilities": {
             "provider_id": "pops.fields.external-field-solver",
             "provider_version": 2,
-            "adapter_identity": ("pops.fields.external-field-solver.system-amr-host@2"),
+            "adapter_identity": ("pops.fields.external-field-solver.system-amr-host@3"),
             "targets": ["system", "amr_system"],
             "layout_kinds": ["uniform", "amr"],
             "max_levels": None,
-            "refinement_ratios": [2],
+            "refinement_ratio_policy": "hierarchy_exact_rank",
             "hierarchy_policies": [
                 "pops.field-hierarchy.level-local",
                 "pops.field-hierarchy.composite",
@@ -185,7 +185,7 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     assert capabilities["adapter"] == provider_authority["use_policy"]["capabilities"]
     assert capabilities["supports_amr"] is True
     assert capabilities["max_levels"] is None
-    assert capabilities["refinement_ratios"] == (2,)
+    assert capabilities["refinement_ratio_policy"] == "hierarchy_exact_rank"
     plan.require_component_inputs((topology, solver))
 
     # Artifact state is recursively immutable, but the Python/native boundary must receive an
@@ -284,19 +284,22 @@ def test_external_field_solver_v2_refuses_level_local_amr(tmp_path):
     assert error.value.gate == "field.solver.provider_incompatible"
 
 
-def test_external_field_solver_v2_refuses_non_binary_amr_ratio(tmp_path):
-    provider, _topology, _solver = _provider(tmp_path)
+def test_external_field_solver_v2_preserves_runtime_selected_amr_ratio(tmp_path):
+    provider, topology, solver = _provider(tmp_path)
 
-    with pytest.raises(LoweringRejection, match="requires one ratio-2 transition") as error:
-        capture_field_plans(
-            _case(provider, hierarchy_policy=CompositeHierarchySolve()),
-            lambda value: value,
-            target="amr_system",
-            layout=final_amr_layout(
-                cartesian_grid(n=8, periodic=False), max_levels=2, ratio=4
-            ),
-        )
-    assert error.value.gate == "field.solver.provider_incompatible"
+    plan = capture_field_plans(
+        _case(provider, hierarchy_policy=CompositeHierarchySolve()),
+        lambda value: value,
+        target="amr_system",
+        layout=final_amr_layout(
+            cartesian_grid(n=8, periodic=False), max_levels=2, ratio=4
+        ),
+    )["potential"]
+
+    assert plan.native_options["solver_provider"]["facts"]["layout"][
+        "transition_ratios"
+    ] == ((4, 4),)
+    plan.require_component_inputs((topology, solver))
 
 
 def test_external_field_solver_reports_mpi_only_when_both_host_variants_declare_it(tmp_path):

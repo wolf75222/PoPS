@@ -1,5 +1,5 @@
 /// @file
-/// @brief Exact-ranked wrapper for the concrete two-dimensional PoPS FFT engine.
+/// @brief Exact-ranked wrapper for the device-resident Cartesian FFT engine.
 
 #pragma once
 
@@ -15,12 +15,14 @@
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,31 +32,28 @@
 namespace pops {
 
 enum class PoissonFFTSymbol : unsigned char {
-  discrete_five_point,
+  discrete_cartesian,
   continuous_spectral,
 };
 
-/// Compile-time capability declaration for the concrete FFT implementation shipped by PoPS.
-/// The underlying engine performs FFT-x, a y/x slab transpose, then FFT-y; it is therefore an
-/// intrinsically two-dimensional implementation even though periodic Poisson is mathematically ND.
+/// Compile-time capability declaration for the one Cartesian ND FFT implementation.
 template <int Dim>
 struct PoissonFFTCapabilities {
   static_assert(Dim >= 1 && Dim <= 3,
                 "PoissonFFTCapabilities only supports dimensions 1, 2, and 3");
 
   static constexpr int dimension = Dim;
-  static constexpr bool available = Dim == 2;
+  static constexpr bool available = true;
   static constexpr bool periodic = available;
   static constexpr bool distributed_slabs = available;
   static constexpr bool discrete_symbol = available;
   // The low-level engine can invert this symbol, but does not expose the matching apply operation.
   // Publishing it as an EllipticSolver would therefore require a fabricated residual norm.
   static constexpr bool continuous_spectral_symbol = false;
-  static constexpr std::string_view unavailable_reason =
-      available ? std::string_view{} : std::string_view{"PoPS concrete FFT engine has rank two"};
+  static constexpr std::string_view unavailable_reason{};
 
   static constexpr bool supports(PoissonFFTSymbol symbol) noexcept {
-    return symbol == PoissonFFTSymbol::discrete_five_point && discrete_symbol;
+    return symbol == PoissonFFTSymbol::discrete_cartesian && discrete_symbol;
   }
 
   static constexpr std::string_view rejection_reason(PoissonFFTSymbol symbol) noexcept {
@@ -66,9 +65,9 @@ struct PoissonFFTCapabilities {
   }
 };
 
-static_assert(!PoissonFFTCapabilities<1>::available);
+static_assert(PoissonFFTCapabilities<1>::available);
 static_assert(PoissonFFTCapabilities<2>::available);
-static_assert(!PoissonFFTCapabilities<3>::available);
+static_assert(PoissonFFTCapabilities<3>::available);
 
 namespace fft_solver_detail {
 
@@ -78,7 +77,7 @@ inline std::string options_contract() {
   ExactContractBuilder contract;
   contract.text("pops.elliptic.poisson-fft.options")
       .scalar(std::uint32_t{3})
-      .text("discrete-five-point")
+      .text("discrete-cartesian")
       .scalar(kDirectResidualSafetyFactor);
   return std::move(contract).release();
 }
@@ -130,60 +129,65 @@ void validate_periodic_boundary(const Geometry<Dim>& geometry,
   }
 }
 
-inline std::size_t host_offset(const Box<2>& grown, int i, int j) {
-  const std::size_t width = static_cast<std::size_t>(grown.length(0));
-  return static_cast<std::size_t>(j - grown.lo[1]) * width +
-         static_cast<std::size_t>(i - grown.lo[0]);
+template <int Dim>
+POPS_HD std::size_t local_slab_ordinal(const Box<Dim>& valid, const CellIndex<Dim>& cell) {
+  std::size_t ordinal = 0;
+  std::size_t stride = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    ordinal += static_cast<std::size_t>(cell[axis] - valid.lo[axis]) * stride;
+    stride *= static_cast<std::size_t>(valid.length(axis));
+  }
+  return ordinal;
 }
 
-inline std::vector<double> pack_local_scalar(const MultiFab<2>& field, Real factor) {
-  if (field.local_size() != 1)
-    throw std::logic_error("Poisson FFT requires exactly one local slab per rank");
-  const auto& fab = field.fab(0);
-  auto host = fab.create_host_mirror();
-  fab.copy_to_host(host);
-  const Box<2>& valid = fab.box();
-  const Box<2>& grown = fab.grown_box();
-  std::vector<double> packed(static_cast<std::size_t>(valid.numPts()));
-  std::size_t cursor = 0;
-  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-      packed[cursor++] = static_cast<double>(factor * host(host_offset(grown, i, j)));
-  return packed;
+template <int Dim>
+std::array<int, Dim> fft_cells(const Geometry<Dim>& geometry) {
+  std::array<int, Dim> cells{};
+  for (int axis = 0; axis < Dim; ++axis)
+    cells[axis] = static_cast<int>(geometry.domain().length(axis));
+  return cells;
 }
 
-inline void unpack_local_scalar(const std::vector<double>& packed, MultiFab<2>& field) {
-  if (field.local_size() != 1)
-    throw std::logic_error("Poisson FFT requires exactly one local slab per rank");
-  auto& fab = field.fab(0);
-  const Box<2>& valid = fab.box();
-  if (packed.size() != static_cast<std::size_t>(valid.numPts()))
-    throw std::invalid_argument("Poisson FFT returned a slab with the wrong element count");
-  auto host = fab.create_host_mirror();
-  fab.copy_to_host(host);
-  const Box<2>& grown = fab.grown_box();
-  std::size_t cursor = 0;
-  for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-    for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-      host(host_offset(grown, i, j)) = packed[cursor++];
-  fab.copy_from_host(host);
+template <int Dim>
+std::array<double, Dim> fft_lengths(const Geometry<Dim>& geometry) {
+  std::array<double, Dim> lengths{};
+  for (int axis = 0; axis < Dim; ++axis)
+    lengths[axis] = static_cast<double>(geometry.upper()[axis] - geometry.lower()[axis]);
+  return lengths;
 }
 
 }  // namespace fft_solver_detail
 
-/// One exact slab-distributed wrapper around the concrete PoPS two-dimensional FFT engine.
-/// A serial run is the one-rank instance of the same layout; there is no separate serial,
-/// distributed, or remapped compatibility class.
+/// One exact Cartesian slab-distributed wrapper around the PoPS device FFT engine.
+/// A serial run is the one-rank instance of the same execution trace.
 template <int Dim>
-  requires(PoissonFFTCapabilities<Dim>::available)
 class PoissonFFTSolver {
  public:
   static constexpr int dimension = Dim;
   using field_type = MultiFab<Dim>;
   using request_type = EllipticBuildRequest<Dim>;
 
+ private:
+  struct PreparedTag {};
+
+  struct PreparedStorage {
+    Geometry<Dim> geometry;
+    PhysicalBoundaryConditions<Dim> boundary;
+    field_type rhs;
+    field_type phi;
+    field_type trial;
+    field_type residual_field;
+    typename PoissonFFT<Dim>::device_view fft_rhs;
+    typename PoissonFFT<Dim>::device_view fft_phi;
+    std::unique_ptr<HaloSchedule<Dim>> halo_schedule;
+    std::unique_ptr<std::optional<ExecutionLane>> halo_lane_storage;
+    EllipticOperatorContract operator_contract;
+  };
+
+ public:
   explicit PoissonFFTSolver(request_type request)
-      : PoissonFFTSolver(prepare_collectively_(std::move(request)), PreparedTag{}) {}
+      : PoissonFFTSolver(prepare_storage_collectively_(prepare_collectively_(std::move(request))),
+                         PreparedTag{}) {}
 
   PoissonFFTSolver(const PoissonFFTSolver&) = delete;
   PoissonFFTSolver& operator=(const PoissonFFTSolver&) = delete;
@@ -193,7 +197,7 @@ class PoissonFFTSolver {
 
   static constexpr PoissonFFTCapabilities<Dim> capabilities() noexcept { return {}; }
   static constexpr EllipticOperatorIdentity operator_identity() noexcept {
-    return {"pops.elliptic.poisson-fft.discrete-rank2", 1};
+    return {"pops.elliptic.poisson-fft.discrete-cartesian", 3};
   }
   static EllipticOperatorContract expected_operator_contract(const request_type& request) {
     return make_expected_elliptic_operator_contract(operator_identity(), request,
@@ -201,7 +205,8 @@ class PoissonFFTSolver {
   }
   static bool supports(const request_type& request) noexcept {
     try {
-      validate_local_(request);
+      const ExecutionLane world = ExecutionLane::world();
+      validate_local_(request, world);
       return true;
     } catch (...) {
       return false;
@@ -215,7 +220,7 @@ class PoissonFFTSolver {
   const Geometry<Dim>& geom() const noexcept { return geometry_; }
   const PhysicalBoundaryConditions<Dim>& boundary() const noexcept { return boundary_; }
   static constexpr PoissonFFTSymbol symbol() noexcept {
-    return PoissonFFTSymbol::discrete_five_point;
+    return PoissonFFTSymbol::discrete_cartesian;
   }
   Real residual() const noexcept { return last_report_.residual_norm; }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
@@ -253,12 +258,60 @@ class PoissonFFTSolver {
       return last_report_;
     }
 
-    // The concrete brick inverts +laplacian.  The public elliptic contract owns
-    // A=-laplacian, so the exact adapter is a sign on the scalar payload, not a second operator.
-    const std::vector<double> local_rhs = fft_solver_detail::pack_local_scalar(rhs_, Real(-1));
-    std::vector<double> local_solution;
-    fft_.solve(local_rhs, local_solution);
-    fft_solver_detail::unpack_local_scalar(local_solution, trial_);
+    // Before touching fab(0), make every rank agree that its exact local slab and the staged
+    // device views still match the prepared FFT contract.  A rank with no local fab must never
+    // strand its peers in the transform exchange.
+    std::exception_ptr layout_error;
+    Box<Dim> valid{};
+    try {
+      if (!fft_ || rhs_.local_size() != 1 || phi_.local_size() != 1 || trial_.local_size() != 1 ||
+          residual_field_.local_size() != 1)
+        throw std::invalid_argument("Poisson FFT solve requires exactly one prepared local slab");
+      valid = rhs_.fab(0).box();
+      if (phi_.fab(0).box() != valid || trial_.fab(0).box() != valid ||
+          residual_field_.fab(0).box() != valid ||
+          fft_rhs_.extent(0) != static_cast<std::size_t>(valid.numPts()) ||
+          fft_phi_.extent(0) != static_cast<std::size_t>(valid.numPts()))
+        throw std::invalid_argument(
+            "Poisson FFT solve local field/view layout differs from its slab");
+    } catch (...) {
+      layout_error = std::current_exception();
+    }
+    if (all_reduce_max(layout_error ? 1L : 0L) != 0) {
+      report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
+                         "poisson_fft_local_slab_layout_mismatch");
+      last_report_ = report;
+      return last_report_;
+    }
+
+    // The brick inverts +laplacian while the public elliptic contract owns A=-laplacian.
+    // This sign conversion and both field transfers stay on the selected Kokkos device.
+    const auto rhs_view = rhs_.fab(0).view();
+    const auto trial_view = trial_.fab(0).view();
+    const auto fft_rhs = fft_rhs_;
+    const auto fft_phi = fft_phi_;
+    if (!execute_solve_stage_collectively_(
+            [&] {
+              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
+                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
+                fft_rhs[ordinal] =
+                    typename PoissonFFT<Dim>::complex_type(-rhs_view(cell, 0), Real(0));
+              });
+            },
+            report, "poisson_fft_rhs_pack_failed_collectively"))
+      return last_report_;
+    if (!execute_solve_stage_collectively_([&] { fft_->solve(fft_rhs_, fft_phi_); }, report,
+                                           "poisson_fft_transform_failed_collectively"))
+      return last_report_;
+    if (!execute_solve_stage_collectively_(
+            [&] {
+              for_each_cell(valid, [=](const CellIndex<Dim>& cell) {
+                const std::size_t ordinal = fft_solver_detail::local_slab_ordinal(valid, cell);
+                trial_view(cell, 0) = fft_phi[ordinal].real();
+              });
+            },
+            report, "poisson_fft_solution_unpack_failed_collectively"))
+      return last_report_;
 
     try {
       nullspace_workspace_->apply_gauge(trial_);
@@ -270,11 +323,19 @@ class PoissonFFTSolver {
     fill_periodic_(trial_);
 
     report.evaluations = 1;
+    Real local_reference_residual = 0;
+    Real local_residual = 0;
+    if (!execute_solve_stage_collectively_(
+            [&] {
+              local_reference_residual = norm_inf(rhs_);
+              compute_discrete_residual_();
+              local_residual = norm_inf(residual_field_);
+            },
+            report, "poisson_fft_residual_evaluation_failed_collectively"))
+      return last_report_;
     report.reference_residual_norm =
-        static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(rhs_))));
-    compute_discrete_residual_();
-    report.residual_norm =
-        static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(residual_field_))));
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_reference_residual)));
+    report.residual_norm = static_cast<Real>(all_reduce_max(static_cast<double>(local_residual)));
     report.rel_residual = report.reference_residual_norm > Real(0)
                               ? report.residual_norm / report.reference_residual_norm
                               : report.residual_norm;
@@ -306,43 +367,122 @@ class PoissonFFTSolver {
   }
 
  private:
-  struct PreparedTag {};
-
-  PoissonFFTSolver(request_type request, PreparedTag)
-      : geometry_(request.geometry),
-        boundary_(request.boundary),
-        rhs_(request.boxes, request.distribution, request.local_rank, 1, request.rhs_ghosts),
-        phi_(request.boxes, request.distribution, request.local_rank, 1, request.phi_ghosts),
-        trial_(request.boxes, request.distribution, request.local_rank, 1, request.phi_ghosts),
-        residual_field_(request.boxes, request.distribution, request.local_rank, 1, Extent<Dim>{}),
-        fft_(static_cast<int>(geometry_.domain().length(0)),
-             static_cast<int>(geometry_.domain().length(1)),
-             geometry_.upper()[0] - geometry_.lower()[0],
-             geometry_.upper()[1] - geometry_.lower()[1], false),
-        halo_schedule_(std::make_unique<HaloSchedule<Dim>>(prepare_halo_schedule(
-            trial_, geometry_.domain(), boundary_.topology(),
-            fft_solver_detail::exact_halo_budget(trial_.layout(), geometry_.domain())))) {
-    const bool remote = all_reduce_max(halo_schedule_->has_remote_jobs() ? 1L : 0L) != 0;
-    if (remote) {
-      halo_lane_ = std::make_unique<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
-          "pops.poisson-fft.exact-rank2/periodic-halo"));
-      HaloExchangeContext context{};
-      context.context_generation = 1;
-      context.schedule_generation = 1;
-      halo_exchange_ = std::make_unique<HaloExchange<Dim>>(*halo_schedule_, *halo_lane_, context);
+  template <class Operation>
+  bool execute_solve_stage_collectively_(Operation&& operation, SolveReport& report,
+                                         const char* failure_reason) {
+    const ExecutionLane world = ExecutionLane::world();
+    std::exception_ptr local_error;
+    try {
+      std::forward<Operation>(operation)();
+      Kokkos::fence();
+    } catch (...) {
+      local_error = std::current_exception();
     }
-    prepared_operator_contract_ = expected_operator_contract(request);
+    if (all_reduce_max(local_error ? 1L : 0L, world.communicator()) == 0)
+      return true;
+    report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, failure_reason);
+    last_report_ = report;
+    return false;
   }
 
-  static void validate_local_(const request_type& request) {
-    const int ranks = n_ranks();
+  PoissonFFTSolver(PreparedStorage prepared, PreparedTag)
+      : geometry_(std::move(prepared.geometry)),
+        boundary_(std::move(prepared.boundary)),
+        rhs_(std::move(prepared.rhs)),
+        phi_(std::move(prepared.phi)),
+        trial_(std::move(prepared.trial)),
+        residual_field_(std::move(prepared.residual_field)),
+        fft_rhs_(std::move(prepared.fft_rhs)),
+        fft_phi_(std::move(prepared.fft_phi)),
+        halo_schedule_(std::move(prepared.halo_schedule)),
+        halo_lane_(std::move(prepared.halo_lane_storage)),
+        prepared_operator_contract_(std::move(prepared.operator_contract)) {
+    // Every wrapper allocation and schedule has already crossed one world consensus.  Only then
+    // may the transform and halo paths duplicate their collectively owned communicators.
+    fft_.emplace(fft_solver_detail::fft_cells(geometry_), fft_solver_detail::fft_lengths(geometry_),
+                 "pops.poisson-fft/cartesian");
+    const bool remote = all_reduce_max(halo_schedule_->has_remote_jobs() ? 1L : 0L) != 0;
+    if (remote) {
+      // The stable holder was allocated and agreed before either FFT communicator was duplicated.
+      // Emplacing a noexcept-movable lane performs no allocation after MPI_Comm_dup, so a
+      // rank-local allocator failure cannot leave only a subset of ranks owning/freeing the lane.
+      halo_lane_->emplace(
+          ExecutionLane::duplicate_world_collectively("pops.poisson-fft.cartesian/periodic-halo"));
+      std::exception_ptr exchange_error;
+      try {
+        HaloExchangeContext context{};
+        context.context_generation = 1;
+        context.schedule_generation = 1;
+        halo_exchange_ =
+            std::make_unique<HaloExchange<Dim>>(*halo_schedule_, **halo_lane_, context);
+      } catch (...) {
+        exchange_error = std::current_exception();
+      }
+      if (all_reduce_max(exchange_error ? 1L : 0L) != 0) {
+        throw std::runtime_error("Poisson FFT halo-exchange preparation failed collectively");
+      }
+    }
+  }
+
+  static PreparedStorage prepare_storage_collectively_(const request_type& request) {
+    const ExecutionLane world = ExecutionLane::world();
+    std::optional<PreparedStorage> prepared;
+    std::exception_ptr allocation_error;
+    try {
+      field_type rhs(request.boxes, request.distribution, request.local_rank, 1,
+                     request.rhs_ghosts);
+      field_type phi(request.boxes, request.distribution, request.local_rank, 1,
+                     request.phi_ghosts);
+      field_type trial(request.boxes, request.distribution, request.local_rank, 1,
+                       request.phi_ghosts);
+      field_type residual_field(request.boxes, request.distribution, request.local_rank, 1,
+                                Extent<Dim>{});
+      typename PoissonFFT<Dim>::device_view fft_rhs("poisson_fft_rhs",
+                                                    local_fft_cell_count_(request));
+      typename PoissonFFT<Dim>::device_view fft_phi("poisson_fft_phi",
+                                                    local_fft_cell_count_(request));
+      auto halo_schedule = std::make_unique<HaloSchedule<Dim>>(prepare_halo_schedule(
+          trial, request.geometry.domain(), request.boundary.topology(),
+          fft_solver_detail::exact_halo_budget(trial.layout(), request.geometry.domain())));
+      auto halo_lane_storage = std::make_unique<std::optional<ExecutionLane>>();
+      prepared.emplace(PreparedStorage{request.geometry, request.boundary, std::move(rhs),
+                                       std::move(phi), std::move(trial), std::move(residual_field),
+                                       std::move(fft_rhs), std::move(fft_phi),
+                                       std::move(halo_schedule), std::move(halo_lane_storage),
+                                       expected_operator_contract(request)});
+    } catch (...) {
+      allocation_error = std::current_exception();
+    }
+    if (all_reduce_max(allocation_error ? 1L : 0L, world.communicator()) != 0) {
+      if (world.size() == 1 && allocation_error)
+        std::rethrow_exception(allocation_error);
+      throw std::runtime_error("Poisson FFT wrapper allocation failed collectively");
+    }
+    return std::move(*prepared);
+  }
+
+  static std::size_t local_fft_cell_count_(const request_type& request) {
+    const ExecutionLane world = ExecutionLane::world();
+    std::size_t local_cells = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t extent = request.geometry.domain().length(axis);
+      const std::size_t local_extent =
+          static_cast<std::size_t>(axis == Dim - 1 ? extent / world.size() : extent);
+      local_cells = fft_solver_detail::checked_multiply(
+          local_cells, local_extent, "Poisson FFT local slab element count overflow");
+    }
+    return local_cells;
+  }
+
+  static void validate_local_(const request_type& request, const ExecutionLane& world) {
+    const int ranks = world.size();
     if (ranks < 1 || request.geometry.domain().empty() || request.boxes.empty() ||
         !request.boxes.tiles_exactly(request.geometry.domain(), request.layout_budget) ||
         !request.distribution.matches_layout(request.boxes) ||
         !request.distribution.rank_space().contains(request.local_rank) ||
         request.distribution.rank_space().size() != static_cast<std::size_t>(ranks) ||
         request.distribution.rank_space().linear_rank(request.local_rank) !=
-            static_cast<std::size_t>(my_rank()))
+            static_cast<std::size_t>(world.rank()))
       throw std::invalid_argument("Poisson FFT received an invalid exact-ranked layout request");
     if (request.boxes.size() != static_cast<std::size_t>(ranks))
       throw std::invalid_argument("Poisson FFT requires exactly one slab per communicator rank");
@@ -355,28 +495,29 @@ class PoissonFFTSolver {
         throw std::invalid_argument(
             "Poisson FFT requires a ghost-free RHS and exactly one solution ghost");
 
-    const std::int64_t nx64 = request.geometry.domain().length(0);
-    const std::int64_t ny64 = request.geometry.domain().length(1);
-    if (nx64 <= 0 || ny64 <= 0 || nx64 > std::numeric_limits<int>::max() ||
-        ny64 > std::numeric_limits<int>::max())
-      throw std::invalid_argument("Poisson FFT extents exceed the concrete engine index range");
-    const int nx = static_cast<int>(nx64);
-    const int ny = static_cast<int>(ny64);
-    if (nx % ranks != 0 || ny % ranks != 0)
-      throw std::invalid_argument(
-          "Poisson FFT x and y extents must both be divisible by communicator size");
-    const int local_y = ny / ranks;
-    const std::size_t local_elements = fft_solver_detail::checked_multiply(
-        static_cast<std::size_t>(nx), static_cast<std::size_t>(local_y),
-        "Poisson FFT local slab element count overflow");
-    if (local_elements > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-      throw std::invalid_argument("Poisson FFT local slab exceeds MPI count range");
+    std::size_t local_elements = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const std::int64_t extent = request.geometry.domain().length(axis);
+      if (extent <= 0 || extent > std::numeric_limits<int>::max())
+        throw std::invalid_argument("Poisson FFT extent exceeds Cartesian index range");
+      if (axis == Dim - 1 && extent % ranks != 0)
+        throw std::invalid_argument("Poisson FFT final slab axis must divide communicator size");
+      const std::size_t local_extent =
+          static_cast<std::size_t>(axis == Dim - 1 ? extent / ranks : extent);
+      local_elements = fft_solver_detail::checked_multiply(
+          local_elements, local_extent, "Poisson FFT local slab element count overflow");
+    }
+    if (local_elements > static_cast<std::size_t>(std::numeric_limits<int>::max()) /
+                             sizeof(typename PoissonFFT<Dim>::complex_type))
+      throw std::invalid_argument("Poisson FFT local slab exceeds MPI byte count range");
 
     const Box<Dim>& domain = request.geometry.domain();
     for (int rank = 0; rank < ranks; ++rank) {
       Box<Dim> expected = domain;
-      expected.lo[1] = domain.lo[1] + rank * local_y;
-      expected.hi[1] = expected.lo[1] + local_y - 1;
+      const int axis = Dim - 1;
+      const int local_last = domain.length(axis) / ranks;
+      expected.lo[axis] = domain.lo[axis] + rank * local_last;
+      expected.hi[axis] = expected.lo[axis] + local_last - 1;
       if (request.boxes[static_cast<std::size_t>(rank)] != expected)
         throw std::invalid_argument("Poisson FFT layout is not the canonical ordered slab layout");
       if (!request.distribution.replicated() &&
@@ -387,23 +528,29 @@ class PoissonFFTSolver {
   }
 
   static request_type prepare_collectively_(request_type request) {
+    const ExecutionLane world = ExecutionLane::world();
     std::exception_ptr error;
+    std::string exact_request;
     try {
-      validate_local_(request);
+      validate_local_(request, world);
+      exact_request.assign(expected_operator_contract(request).exact_fingerprint());
     } catch (...) {
       error = std::current_exception();
     }
-    if (all_reduce_max(error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && error)
+    if (all_reduce_max(error ? 1L : 0L, world.communicator()) != 0) {
+      if (world.size() == 1 && error)
         std::rethrow_exception(error);
       throw std::runtime_error("Poisson FFT preparation failed collectively");
     }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"pops.poisson-fft-solver.exact-request@3", exact_request}}))
+      throw std::invalid_argument("Poisson FFT solver request differs across communicator ranks");
     return request;
   }
 
   void fill_periodic_(field_type& field) {
     if (halo_exchange_)
-      halo_exchange_->execute(field, *halo_lane_);
+      halo_exchange_->execute(field, **halo_lane_);
     else
       fill_boundary(field, *halo_schedule_);
   }
@@ -418,10 +565,14 @@ class PoissonFFTSolver {
   field_type phi_;
   field_type trial_;
   field_type residual_field_;
-  PoissonFFT fft_;
+  typename PoissonFFT<Dim>::device_view fft_rhs_{};
+  typename PoissonFFT<Dim>::device_view fft_phi_{};
   std::unique_ptr<HaloSchedule<Dim>> halo_schedule_;
-  std::unique_ptr<ExecutionLane> halo_lane_{};
+  // The indirection keeps the borrowed ExecutionLane address stable when this solver is moved.
+  // The optional itself is allocated during the pre-communicator storage transaction.
+  std::unique_ptr<std::optional<ExecutionLane>> halo_lane_{};
   std::unique_ptr<HaloExchange<Dim>> halo_exchange_{};
+  std::optional<PoissonFFT<Dim>> fft_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
   EllipticOperatorContract prepared_operator_contract_{};
   SolveReport last_report_{};
@@ -429,20 +580,19 @@ class PoissonFFTSolver {
 
 /// Exact provider declaration for discrete or continuous-symbol FFT construction.
 template <int Dim>
-  requires(PoissonFFTCapabilities<Dim>::available)
 class PoissonFFTFactory {
  public:
   using solver_type = PoissonFFTSolver<Dim>;
   using request_type = EllipticBuildRequest<Dim>;
 
-  explicit PoissonFFTFactory(PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_five_point) {
+  explicit PoissonFFTFactory(PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_cartesian) {
     if (!PoissonFFTCapabilities<Dim>::supports(symbol))
       throw std::invalid_argument(
           std::string(PoissonFFTCapabilities<Dim>::rejection_reason(symbol)));
   }
 
   std::string_view collective_contract() const noexcept {
-    return "pops.poisson-fft-factory.discrete-rank2@1";
+    return "pops.poisson-fft-factory.discrete-cartesian@3";
   }
   EllipticOperatorContract expected_operator_contract(const request_type& request) const {
     return solver_type::expected_operator_contract(request);
@@ -456,7 +606,11 @@ class PoissonFFTFactory {
   }
 };
 
+static_assert(EllipticSolver<PoissonFFTSolver<1>>);
 static_assert(EllipticSolver<PoissonFFTSolver<2>>);
+static_assert(EllipticSolver<PoissonFFTSolver<3>>);
+static_assert(EllipticFactory<PoissonFFTFactory<1>, PoissonFFTSolver<1>>);
 static_assert(EllipticFactory<PoissonFFTFactory<2>, PoissonFFTSolver<2>>);
+static_assert(EllipticFactory<PoissonFFTFactory<3>, PoissonFFTSolver<3>>);
 
 }  // namespace pops
