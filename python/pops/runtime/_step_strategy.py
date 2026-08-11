@@ -861,26 +861,6 @@ def run_prepared_step_attempt(
     return report
 
 
-def run_step_attempt(
-    engine: Any,
-    native: Any,
-    strategy: StepStrategy,
-    *,
-    t_end: float,
-    controls: Mapping[str, Any] | None = None,
-) -> StepTransactionReport:
-    """Execute one low-level accepted step for the remaining non-RuntimeInstance callers."""
-    sequence = prepare_step_attempts(
-        engine, native, strategy, t_end=float(t_end), controls=controls)
-    while True:
-        try:
-            return run_prepared_step_attempt(sequence)
-        except StepAttemptRejected as error:
-            if sequence.retry(error):
-                continue
-            raise
-
-
 def run_control_payload(
     strategy: StepStrategy, controls: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -899,5 +879,4 @@ __all__ = [
     "materialize_step_controller", "prepare_program_run", "prepare_step_attempts",
     "prepare_step_controller", "register_step_controller_factory",
     "resolve_run_strategy", "run_control_payload", "run_prepared_step_attempt",
-    "run_step_attempt",
 ]
