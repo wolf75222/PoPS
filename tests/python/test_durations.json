@@ -254,6 +254,7 @@
   "tests/python/unit/physics/test_generic_riemann_routes.py": 0.5,
   "tests/python/unit/physics/test_exact_physics_scalars.py": 1.0,
   "tests/python/unit/physics/test_fv_hll_minmod.py": 0.5,
+  "tests/python/unit/physics/test_generic_inversion_admissibility.py": 1.0,
   "tests/python/unit/physics/test_hll_isothermal.py": 67.7,
   "tests/python/unit/physics/test_named_field_runtime_params.py": 0.5,
   "tests/python/unit/physics/test_physics_board.py": 0.5,
@@ -263,6 +264,7 @@
   "tests/python/unit/physics/test_ranked_flux_authoring.py": 0.5,
   "tests/python/unit/physics/test_ranked_gradient_ir.py": 0.5,
   "tests/python/unit/physics/test_rate_equation_contract.py": 1.0,
+  "tests/python/unit/physics/test_role_identity_authority.py": 1.0,
   "tests/python/unit/physics/test_riemann_capabilities.py": 0.5,
   "tests/python/unit/physics/test_riemann_formula_hooks.py": 0.5,
   "tests/python/unit/physics/test_riemann_provider_identity.py": 0.5,
@@ -419,7 +421,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 244,
+    "estimated_count": 246,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -586,11 +588,13 @@
       "tests/python/unit/output/test_runtime_amr_embedded_boundary.py",
       "tests/python/unit/physics/test_board_authoring_atomicity.py",
       "tests/python/unit/physics/test_exact_physics_scalars.py",
+      "tests/python/unit/physics/test_generic_inversion_admissibility.py",
       "tests/python/unit/physics/test_physics_freeze_protocol.py",
       "tests/python/unit/physics/test_ranked_field_outputs.py",
       "tests/python/unit/physics/test_ranked_flux_authoring.py",
       "tests/python/unit/physics/test_ranked_gradient_ir.py",
       "tests/python/unit/physics/test_rate_equation_contract.py",
+      "tests/python/unit/physics/test_role_identity_authority.py",
       "tests/python/unit/physics/test_riemann_provider_identity.py",
       "tests/python/unit/problem/test_deep_freeze_storage.py",
       "tests/python/unit/problem/test_handle_data_model.py",
@@ -666,6 +670,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 415
+    "total_files": 417
   }
 }

@@ -35,17 +35,11 @@ EXPECTED_REQUIREMENTS = {
     "qualified_flux_provider_pack",
     "capability_driven_riemann",
     "mpi_collective_execution",
-    "typed_flux_recovery_consumption",
-    "prepared_riemann_recovery_policy",
     "public_prepared_riemann_recovery",
     "runtime_recovery_consumer_publication",
     "uniform_recovery_warm_start",
     "analytic_initial_recovery_publication",
     "fallible_primitive_to_conservative_publication",
-    "amr_regrid_recovery_publication",
-    "amr_restriction_recovery_publication",
-    "amr_bootstrap_recovery_publication",
-    "amr_history_recovery_publication",
     "physical_boundary_trace_recovery_publication",
     "terminal_source_recovery_publication",
     "type_erased_recovery_method_identity",
@@ -60,15 +54,23 @@ EXPECTED_REQUIREMENTS = {
     "characteristic_boundary_geometry_matrix",
     "measured_load_balance_decision",
     "amr_rebalance_migration_and_restart_coherence",
+    "standalone_exact_ranked_cell_temporal_provider",
     "bounded_cell_local_program_runtime",
+    "remaining_multirank_multibox_amr_local_time_execution",
     "prepared_hyperbolic_boundary_only_transport_authority",
     "polar_runtime_capability_honesty",
     "prepared_batch_recovery_only_runtime_authority",
     *EXPECTED_HARDWARE_REQUIREMENTS,
 }
+EXPECTED_UNAVAILABLE_REQUIREMENTS = set()
 EXPECTED_DEFERRED = (
+    "amr_bootstrap_recovery_publication",
+    "amr_history_recovery_publication",
+    "amr_regrid_recovery_publication",
+    "amr_restriction_recovery_publication",
+    "prepared_riemann_recovery_policy",
     "remaining_runtime_nd_metric_eb_characteristic_execution",
-    "remaining_multirank_multibox_amr_local_time_execution",
+    "typed_flux_recovery_consumption",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
 FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
@@ -121,7 +123,7 @@ def _declared_gtests(suite: dict) -> tuple[dict[str, bool], list[str]]:
                 errors.append("duplicate declared GTest %s" % name)
                 continue
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            body = text[match.start():end]
+            body = text[match.start() : end]
             tests[name] = (
                 suite_name.startswith("DISABLED_")
                 or test_name.startswith("DISABLED_")
@@ -183,9 +185,7 @@ def _validate_hardware_evidence(data: dict, errors: list[str]) -> tuple[str, ...
     if len(set(requirements)) != len(requirements):
         errors.append("hardware_evidence requirements must be unique")
     return tuple(
-        requirement
-        for requirement in requirements
-        if requirement in EXPECTED_HARDWARE_REQUIREMENTS
+        requirement for requirement in requirements if requirement in EXPECTED_HARDWARE_REQUIREMENTS
     )
 
 
@@ -261,12 +261,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         polarity = row.get("polarity")
         target = row.get("target")
         selector = row.get("test_regex")
-        if requirement not in EXPECTED_REQUIREMENTS:
+        if requirement not in EXPECTED_REQUIREMENTS | EXPECTED_UNAVAILABLE_REQUIREMENTS:
             errors.append("%s has unknown requirement %r" % (where, requirement))
         if polarity not in {"positive", "refusal"}:
             errors.append("%s polarity must be positive or refusal" % where)
         else:
             coverage[str(requirement)].add(str(polarity))
+        if requirement in EXPECTED_UNAVAILABLE_REQUIREMENTS and polarity != "refusal":
+            errors.append("%s unavailable requirement may carry refusal evidence only" % where)
         if requirement in EXPECTED_HARDWARE_REQUIREMENTS and polarity == "positive":
             errors.append(
                 "%s hardware positive evidence must come only from hardware_evidence" % where
@@ -283,8 +285,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             errors.extend("%s: %s" % (where, error) for error in source_errors)
             if test_name not in declared:
                 errors.append(
-                    "%s references unknown top-level pytest %r in %r"
-                    % (where, test_name, relative)
+                    "%s references unknown top-level pytest %r in %r" % (where, test_name, relative)
                 )
                 continue
             if _pytest_is_skipped(declared[str(test_name)]):
@@ -347,13 +348,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if duplicates:
         errors.append("duplicate executable checks: %s" % duplicates)
     if mpi_checks["mpi_collective_execution"] != 2:
-        errors.append(
-            "the closed mpi_collective_execution family requires exactly two MPI CTests"
-        )
+        errors.append("the closed mpi_collective_execution family requires exactly two MPI CTests")
     for requirement in sorted(EXPECTED_REQUIREMENTS):
         missing = {"positive", "refusal"} - coverage[requirement]
         if missing:
             errors.append("%s lacks %s coverage" % (requirement, "/".join(sorted(missing))))
+    for requirement in sorted(EXPECTED_UNAVAILABLE_REQUIREMENTS):
+        if coverage[requirement] != {"refusal"}:
+            errors.append("%s must carry exactly refusal evidence while deferred" % requirement)
     return data, errors
 
 
@@ -430,9 +432,7 @@ def _run_pytest(relative: str, test_name: str) -> None:
             raise subprocess.CalledProcessError(completed.returncode, command)
 
 
-def _run_hardware_evidence(
-    evidence: dict, report: Path, expected_revision: str
-) -> tuple[str, ...]:
+def _run_hardware_evidence(evidence: dict, report: Path, expected_revision: str) -> tuple[str, ...]:
     if FULL_GIT_REVISION.fullmatch(expected_revision) is None:
         raise RuntimeError("ADC-757 closure requires one full lowercase 40-hex Git revision")
     if not report.is_file():
@@ -515,8 +515,7 @@ def main(argv: list[str] | None = None) -> int:
             print("ADC-757 closure refused: %s" % error, file=sys.stderr)
             return 4
         print(
-            "ADC-757 authenticated hardware report proves: %s"
-            % ", ".join(proved),
+            "ADC-757 authenticated hardware report proves: %s" % ", ".join(proved),
             flush=True,
         )
     if args.check_only:

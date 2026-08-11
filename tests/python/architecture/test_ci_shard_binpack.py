@@ -73,6 +73,31 @@ def test_duration_catalog_exactly_matches_manifest_selection_universe():
     assert estimated <= universe
 
 
+def test_full_manifest_pack_stays_within_python_shard_test_budget():
+    """Measured tests leave setup/runner margin inside the 50-minute job watchdog."""
+    selector = _load("ci_select_tests")
+    universe = sorted(
+        {
+            path
+            for suite in selector.manifest_python_suites(selector.load_manifest())
+            for path in suite["files"]
+        }
+    )
+    durations = binpack.load_durations()
+    excluded = set(binpack.EXCLUDED_FROM_SHARDS)
+    shards = binpack.assign_shards(
+        [path for path in universe if path not in excluded],
+        shard_total=7,
+        durations=durations,
+    )
+    binpack.verify_partition(universe, shards)
+    loads = [sum(durations[path] for path in shard) for shard in shards]
+    assert max(loads) <= 35.0 * 60.0, (
+        "measured Python test load leaves less than 15 minutes for setup/runner variance: "
+        f"max={max(loads):.1f}s"
+    )
+
+
 def test_excluded_files_exist():
     """Each dedicated-job (compile-cache) file the binpacker excludes really exists."""
     for rel in binpack.EXCLUDED_FROM_SHARDS:

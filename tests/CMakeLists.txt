@@ -513,6 +513,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_coupled_source
   test_coupling_operator_contract
   test_implicit_source_nd
+  test_generic_inversion_admissibility
   test_diffusion
   test_amr_spatial_parity
   test_embedded_boundary_generic
@@ -776,6 +777,9 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_prepared_embedded_boundary_nd 2)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program 2)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_multibox 2)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_collective_rollback 2)
   set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
@@ -823,6 +827,9 @@ if(POPS_HAS_MPI)
     test_mpi_tensor_fac_provider_nd
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
+    test_mpi_cell_temporal_program
+    test_mpi_cell_temporal_program_multibox
+    test_mpi_cell_temporal_program_collective_rollback
     test_mpi_cell_temporal_program_refusal
     test_mpi_system_solve_fields
     test_mpi_system_fft
@@ -873,6 +880,10 @@ if(POPS_HAS_MPI)
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_system_analytic_level_set")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_multibox" OR
+           _test STREQUAL "test_mpi_cell_temporal_program_collective_rollback")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test STREQUAL "test_mpi_multiblock_interface_scheduler")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
@@ -886,6 +897,10 @@ if(POPS_HAS_MPI)
     endif()
     if(_test STREQUAL "test_mpi_system_layout_transfer")
       pops_native_loader_definitions(_compile_definitions)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program_multibox")
+      list(APPEND _compile_definitions POPS_CELL_TEMPORAL_MULTIBOX_EVERY_AXIS_PROOF=1)
+    elseif(_test STREQUAL "test_mpi_cell_temporal_program_collective_rollback")
+      list(APPEND _compile_definitions POPS_CELL_TEMPORAL_COLLECTIVE_ROLLBACK_PROOF=1)
     endif()
     if(DEFINED POPS_MPI_RANK_PARITY_${_test})
       if(DEFINED POPS_MPI_RANKS_${_test})
