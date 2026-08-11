@@ -109,13 +109,24 @@ def _append_pointwise_solve_report(
 
     code = "%s_code_%d" % (stem, solve.id)
     report = "%s_report_%d" % (stem, solve.id)
+    lane = "%s_lane" % report
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
     if active_mask is None:
-        reduction = "pops::reduce_max(%s, 0)" % status
+        reduction = "pops::all_reduce_max(pops::reduce_max_local(%s, 0), %s)" % (
+            status,
+            lane,
+        )
     else:
         if block is None:
             raise ValueError("pointwise masked solve reduction requires a runtime block index")
-        reduction = "ctx.pointwise_status_max(%d, %s, %s)" % (
-            block, status, active_mask)
+        reduction = "ctx.pointwise_status_max(%d, %s, %s, %s)" % (
+            block,
+            status,
+            active_mask,
+            lane,
+        )
     lines.append("const int %s = static_cast<int>(%s);" % (code, reduction))
     lines.append("pops::SolveReport %s;" % report)
     lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
@@ -130,8 +141,9 @@ def _append_pointwise_solve_report(
         % (report, failure_action("invalid_evaluation")))
     outcome = "%s_outcome_%d" % (stem, solve.id)
     lines.append(
-        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
-        % (outcome, report))
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
+    )
     _append_solve_report_guard(program, solve, outcome, lines, label=label)
 
 
@@ -145,8 +157,15 @@ def _append_local_nonlinear_report(
         if action_kind == "reject_attempt"
         else "pops::SolveAction::kFailRun"
     )
+    lane = "%s_lane" % report
     priority = "%s_priority" % report
-    lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 10));" % (priority, status))
+    lines.append(
+        "const pops::ExecutionLane& %s = ctx.prepared_execution_lane();" % lane
+    )
+    lines.append(
+        "const int %s = static_cast<int>(pops::all_reduce_max("
+        "pops::reduce_max_local(%s, 10), %s));" % (priority, status, lane)
+    )
     reduced = {
         "status": "%s_status" % report,
     }
@@ -166,7 +185,11 @@ def _append_local_nonlinear_report(
     for suffix, component, kind in fields:
         token = "%s_%s" % (report, suffix)
         reduced[suffix] = token
-        expression = "pops::reduce_max(%s, %d)" % (status, component)
+        expression = "pops::all_reduce_max(pops::reduce_max_local(%s, %d), %s)" % (
+            status,
+            component,
+            lane,
+        )
         if kind == "int":
             lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
         else:
@@ -175,11 +198,12 @@ def _append_local_nonlinear_report(
     reported_failure = "%s_reported_failure" % report
     failed_count = "%s_failed_count" % report
     lines += [
-        "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "const pops::Real %s = pops::all_reduce_sum("
+        "pops::reduce_sum_local(%s, 9), %s);" % (failed_count, status, lane),
         "pops::LocalNonlinearFailureLocation<pops::kNativeDimension> %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
-        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
-        % (location, status, priority),
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8, %s);"
+        % (location, status, priority, lane),
         "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
         % (failed_count, location, location, priority),
         "  throw std::runtime_error("
@@ -210,8 +234,8 @@ def _append_local_nonlinear_report(
     if outcome == report:
         outcome = "%s_outcome" % report
     lines.append(
-        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
-        % (outcome, report)
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane("
+        "std::move(%s), %s);" % (outcome, report, lane)
     )
     return outcome
 
@@ -535,8 +559,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         )
         reduced = "transform_failed_%d" % v.id
         lines.append(
-            "const pops::Real %s = ctx.pointwise_status_max(%d, %s, %s);"
-            % (reduced, bidx, status, active_mask))
+            "const pops::Real %s = ctx.pointwise_status_max("
+            "%d, %s, %s, ctx.prepared_execution_lane());"
+            % (reduced, bidx, status, active_mask)
+        )
         lines.append("if (%s != pops::Real(0)) {" % reduced)
         lines.append(
             "  throw pops::runtime::program::StepAttemptRejected("

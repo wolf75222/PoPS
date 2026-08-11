@@ -193,8 +193,6 @@ class AmrProgramContext {
       : facade_(require_facade_(facade)), runtime_(require_runtime_(*facade_)) {
     facade_->refresh_prepared_amr_levels();
     hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
-    scalar_boundary_lane_.emplace(ExecutionLane::duplicate_world_collectively(
-        "pops.program.amr.scalar-boundary.nd" + std::to_string(Dim)));
     synchronize_resource_generation_();
   }
 
@@ -204,8 +202,6 @@ class AmrProgramContext {
       throw std::invalid_argument("AMR Program facade and runtime do not share one hierarchy");
     facade_->refresh_prepared_amr_levels();
     hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
-    scalar_boundary_lane_.emplace(ExecutionLane::duplicate_world_collectively(
-        "pops.program.amr.scalar-boundary.nd" + std::to_string(Dim)));
     synchronize_resource_generation_();
   }
 
@@ -216,6 +212,12 @@ class AmrProgramContext {
 
   runtime_type& runtime() const noexcept { return *runtime_; }
   hierarchy_type& hierarchy() const noexcept { return runtime_->hierarchy(); }
+  /// Borrow the runtime-prepared AMR hierarchy lane; generated execution never materializes a
+  /// second communicator or falls back to the process world.
+  [[nodiscard]] const ExecutionLane& prepared_execution_lane() const {
+    require_facade_execution_();
+    return facade_->prepared_amr_multiblock_hierarchy_().lane();
+  }
   const ::pops::amr::hierarchy::LevelLayout<Dim>& layout(std::size_t selected) const {
     return runtime_->hierarchy().layout(selected);
   }
@@ -266,10 +268,9 @@ class AmrProgramContext {
   ::pops::amr::regridding::PreparedRegrid<Dim> prepare_regrid(
       std::size_t parent_level, ::pops::amr::RefinementRatio<Dim> ratio,
       ::pops::amr::tagging::ClusterResult<Dim> clustered,
-      ::pops::amr::regridding::RegridPreparationBudget preparation_budget,
-      const ExecutionLane& lane = ExecutionLane::world()) const {
+      ::pops::amr::regridding::RegridPreparationBudget preparation_budget) const {
     return runtime_->prepare_regrid(parent_level, ratio, std::move(clustered), preparation_budget,
-                                    lane);
+                                    prepared_execution_lane());
   }
 
   void publish_regrid(::pops::amr::regridding::PreparedRegrid<Dim> prepared,
@@ -284,16 +285,17 @@ class AmrProgramContext {
 
   PreparedRebalanceDecision<Dim> prepare_rebalance(
       std::size_t selected, ResourceEstimates estimates,
-      parallel::LoadBalancePreparationBudget preparation_budget, const RebalancePolicy& policy,
-      const ExecutionLane& lane = ExecutionLane::world()) const {
-    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, policy, lane);
+      parallel::LoadBalancePreparationBudget preparation_budget,
+      const RebalancePolicy& policy) const {
+    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, policy,
+                                       prepared_execution_lane());
   }
 
   PreparedRebalanceDecision<Dim> prepare_rebalance(
       std::size_t selected, ResourceEstimates estimates,
-      parallel::LoadBalancePreparationBudget preparation_budget,
-      const ExecutionLane& lane = ExecutionLane::world()) const {
-    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, lane);
+      parallel::LoadBalancePreparationBudget preparation_budget) const {
+    return runtime_->prepare_rebalance(selected, estimates, preparation_budget,
+                                       prepared_execution_lane());
   }
 
   void apply_rebalance(std::size_t selected, PreparedRebalanceDecision<Dim> decision,
@@ -997,11 +999,7 @@ class AmrProgramContext {
     return prepare_mesh_boundary_session(prototype, lane);
   }
 
-  void fill_boundary(field_type& field) const {
-    if (!scalar_boundary_lane_)
-      throw std::logic_error("AMR Program boundary fill requires an execution facade");
-    fill_boundary(field, *scalar_boundary_lane_);
-  }
+  void fill_boundary(field_type& field) const { fill_boundary(field, prepared_execution_lane()); }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
     scalar_boundary_session_type session(geometry(), facade_->prepared_amr_boundary_topology(),
@@ -1392,14 +1390,17 @@ class AmrProgramContext {
     return nullptr;
   }
   Real pointwise_status_max(int program_block, const field_type& status,
-                            const field_type* active_cells) const {
+                            const field_type* active_cells, const ExecutionLane& lane) const {
+    if (&lane != &prepared_execution_lane())
+      throw std::invalid_argument("AMR Program pointwise status requires its prepared lane");
     const field_type* expected = pointwise_active_mask(program_block, status);
     if (active_cells != expected)
       throw std::invalid_argument(
           "AMR Program pointwise status received a foreign active-cell mask");
     if (status.ncomp() < 1)
       throw std::invalid_argument("AMR Program pointwise status requires one component");
-    const Real result = pops::reduce_max(status, 0);
+    const Real result = static_cast<Real>(
+        all_reduce_max(static_cast<double>(pops::reduce_max_local(status, 0)), lane));
     return result == -std::numeric_limits<Real>::infinity() ? Real(0) : result;
   }
 
@@ -3187,7 +3188,6 @@ class AmrProgramContext {
   mutable ::pops::amr::Rational stage_time_{0, 1};
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
-  mutable std::optional<ExecutionLane> scalar_boundary_lane_;
   mutable std::uint64_t boundary_generation_ = 0;
   mutable std::uint64_t resource_epoch_ = std::numeric_limits<std::uint64_t>::max();
   mutable std::uint64_t resource_generation_ = std::numeric_limits<std::uint64_t>::max();
