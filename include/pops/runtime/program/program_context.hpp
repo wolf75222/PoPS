@@ -249,6 +249,12 @@ class ProgramContext {
 
   int n_blocks() const { return system_->n_blocks(); }
 
+  /// Borrow the runtime-owned lane authenticated during Uniform boundary preparation. Generated
+  /// implicit reports use this same lane for every reduction, diagnostic selection, and outcome.
+  [[nodiscard]] const ExecutionLane& prepared_execution_lane() const {
+    return system_->prepared_boundary_execution_lane();
+  }
+
   int sys_block(int program_block) const {
     const std::vector<int>& map = system_->program_block_map();
     if (map.empty())
