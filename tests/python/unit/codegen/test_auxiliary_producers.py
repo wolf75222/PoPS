@@ -90,7 +90,7 @@ def test_amr_auxiliary_hook_is_typed_and_distinct_from_the_system_hook() -> None
 
     source = _emit_auxiliary_route_registration(carrier, target="amr_system")
 
-    assert "pops_register_auxiliary_routes_amr" in source
+    assert "pops_register_provider_routes_amr" in source
     assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
     assert "pops::System<pops::kNativeDimension>* sys" not in source
 

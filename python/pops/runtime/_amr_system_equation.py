@@ -22,6 +22,7 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
     PHYSICAL_DEFAULT_GAMMA,
+    numerical_defaults_report,
 )
 
 if TYPE_CHECKING:
@@ -297,6 +298,9 @@ class _AmrSystemEquation(_AmrSystem):
             spatial_options["weno_epsilon"] = native_real(
                 spatial.weno_epsilon, where="AmrSystem.add_equation.weno_epsilon"
             )
+        weno_epsilon = spatial_options.get(
+            "weno_epsilon", float(numerical_defaults_report()["weno"]["epsilon"])
+        )
         positivity_floor = native_real(
             getattr(spatial, "positivity_floor", 0.0),
             where="AmrSystem.add_equation.positivity_floor",
@@ -318,8 +322,24 @@ class _AmrSystemEquation(_AmrSystem):
                 )
             if runtime_names:
                 raise ValueError(
-                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport model "
+                    "AmrSystem.add_equation: external Riemann ABI does not transport model "
                     "RuntimeParams"
+                )
+            expected_provider_count = len(tuple(compiled.provider_components))
+            external_shape = (
+                spatial.external_flux_dimension,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+            )
+            compiled_shape = (
+                compiled.native_dimension,
+                compiled.n_vars,
+                expected_provider_count,
+            )
+            if external_shape != compiled_shape:
+                raise ValueError(
+                    "AmrSystem.add_equation: external Riemann brick %r carries model shape %r, "
+                    "not %r" % (spatial.external_flux_id, external_shape, compiled_shape)
                 )
             if spatial.external_flux_model_identity != compiled.model_hash:
                 raise ValueError(
@@ -337,13 +357,26 @@ class _AmrSystemEquation(_AmrSystem):
                 )
             if spatial_options["wave_speed_cache"]:
                 raise ValueError(
-                    "AmrSystem.add_equation: external Riemann ABI v2 does not transport "
+                    "AmrSystem.add_equation: external Riemann ABI does not transport "
                     "wave_speed_cache"
                 )
-            raise NotImplementedError(
-                "external block NumericalFlux installation requires a complete generated "
-                "PreparedSystemBlock<Dim> provider package; the legacy external-Riemann AMR "
-                "seam had no native implementation"
+            self._s._register_external_riemann_package(
+                name,
+                spatial.external_flux_library_path,
+                spatial.external_flux_id,
+                spatial.external_flux_library_sha256,
+                spatial.external_flux_n_vars,
+                spatial.external_flux_provider_count,
+                spatial.external_flux_model_identity,
+                name,
+                spatial.limiter,
+                spatial.recon,
+                time.kind,
+                gamma,
+                nsub,
+                nstride,
+                positivity_floor,
+                weno_epsilon,
             )
         else:
             self._s._install_native_block(

@@ -280,6 +280,15 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon),
            py::arg("wave_speed_cache") = false)
+      .def("_register_external_riemann_package", &AmrSystem::register_external_riemann_package,
+           py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("expected_sha256"),
+           py::arg("expected_nvars"), py::arg("expected_provider_count"),
+           py::arg("expected_model_identity"), py::arg("provider_consumer_qid"),
+           py::arg("limiter") = "minmod", py::arg("recon") = "conservative",
+           py::arg("time") = "explicit",
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma), py::arg("substeps") = 1,
+           py::arg("stride") = 1, py::arg("positivity_floor") = 0.0,
+           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       .def(
           "_set_bootstrap_tagging",
           [](AmrSystem& system, const std::vector<std::string>& leaf_subject_kinds,

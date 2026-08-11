@@ -69,8 +69,8 @@ def test_amr_native_package_registers_routes_through_its_typed_hook() -> None:
     model = _model()
     source = model.__pops_native_loader_source__(name="GenericAuxAmr", target="amr_system")
 
-    assert "pops_register_auxiliary_routes_amr" in source
-    assert "pops_register_auxiliary_routes_amr(s);" in source
+    assert "pops_register_provider_routes_amr" in source
+    assert "install_auxiliary_consumer_plan" in source
     assert "pops::AmrSystem<pops::kNativeDimension>* sys" in source
     assert "seal_auxiliary_providers" not in source
 

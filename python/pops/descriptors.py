@@ -547,11 +547,14 @@ def load_cpp_library(path: Any) -> int:
             )
         if provider_count > 0:
             try:
-                _ = handle.pops_register_provider_routes
+                _ = (
+                    handle.pops_register_provider_routes,
+                    handle.pops_register_provider_routes_amr,
+                )
             except AttributeError as err:
                 raise ValueError(
                     "external Riemann brick library %r consumes providers but does not export "
-                    "pops_register_provider_routes" % (path,)
+                    "pops_register_provider_routes and pops_register_provider_routes_amr" % (path,)
                 ) from err
         if not model_identity_raw:
             raise ValueError(

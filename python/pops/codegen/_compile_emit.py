@@ -468,7 +468,7 @@ def _emit_auxiliary_route_registration(model: Any, *, target: str = "system") ->
     hook = (
         "pops_register_provider_routes"
         if target == "system"
-        else "pops_register_auxiliary_routes_amr"
+        else "pops_register_provider_routes_amr"
     )
     lines = [
         "POPS_LOADER_API void %s(%s* sys) {" % (hook, native_type),
