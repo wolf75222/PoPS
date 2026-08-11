@@ -513,8 +513,8 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
         restored.begin_run(run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
 
 
-def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope():
-    """The real low-level System seam reports the accepted direct step without private reads."""
+def test_system_direct_step_requires_the_installed_python_program_strategy():
+    """A native-only program cannot select a second Python temporal service."""
     import pops.runtime._engine_descriptors as engine
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
@@ -542,21 +542,12 @@ def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope
     system.set_state("scalar", initial)
     install_forward_euler_program(system)
 
-    system.step(dt)
+    with pytest.raises(TypeError, match=r"Program\.step_strategy"):
+        system.step(dt)
 
-    assert system.macro_step() == 1
-    assert system.time() == pytest.approx(dt, rel=0.0, abs=1e-15)
-    assert not np.array_equal(np.asarray(system.get_state("scalar")), initial)
-    temporal = system.program_report().temporal
-    assert temporal["strategy"] == run_control_payload(FixedDt(dt))
-    assert temporal["clock"] == {"time": float(dt).hex(), "macro_step": 1}
-    assert temporal["schedule_cursors"] == {
-        "macro_step": {"macro_step": 1, "phase": "accepted"},
-    }
-    assert temporal["controller_state"] == {"last_accepted_dt": float(dt).hex()}
-    assert temporal["transaction_stats"] == {"accepted": 1, "rejected": 0, "failed": 0}
-    assert temporal["status"] == "accepted"
-    assert temporal["synchronized"] is True
+    assert system.macro_step() == 0
+    assert system.time() == 0.0
+    assert np.array_equal(np.asarray(system.get_state("scalar")), initial)
 
 
 def test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary():

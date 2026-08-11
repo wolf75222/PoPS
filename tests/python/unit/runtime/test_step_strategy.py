@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import ClassVar
@@ -19,6 +20,7 @@ from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
     _phase,
+    prepare_program_run,
     prepare_step_controller,
     register_step_controller_factory,
     resolve_run_strategy,
@@ -137,6 +139,31 @@ def test_resolve_requires_the_installed_authored_strategy():
     assert resolve_run_strategy(_Engine(authored)) is authored
 
 
+def test_prepared_program_run_retains_exact_strategy_and_detached_controls():
+    strategy = ExternalTimeGrid("forcing_times")
+    engine = _Engine(strategy)
+    caller_grid = [0.0, 0.125, 0.5]
+
+    prepared = prepare_program_run(engine, {"forcing_times": caller_grid})
+    caller_grid[1] = 0.25
+
+    assert prepared.strategy is strategy
+    assert prepared.controls["forcing_times"] == (0.0, 0.125, 0.5)
+    assert prepared.restart_payload == {
+        "strategy": run_control_payload(strategy, {"forcing_times": [0.0, 0.125, 0.5]}),
+        "program_schedule": None,
+    }
+    native = _Native()
+    engine._step_transaction_plan = object()
+    with pytest.raises(RuntimeError, match="transaction plan changed"):
+        prepared.run_step(native, t_end=0.5)
+    assert native.calls == []
+    assert engine._step_controller is None
+
+    engine._step_transaction_plan = prepared.transaction_plan
+    prepared.run_step(native, t_end=0.5)
+
+
 def test_all_four_controllers_execute_real_native_attempts():
     fixed_native = _Native()
     fixed_report = run_step_attempt(
@@ -248,12 +275,22 @@ def test_controls_are_validated_before_controller_or_manifest_publication():
     ]
 
 
-def test_controller_identity_normalizes_external_grid_list_and_tuple():
+def test_controller_identity_normalizes_controls_but_rejects_a_failed_run_clone():
     strategy = ExternalTimeGrid("grid")
     engine = SimpleNamespace(_step_controller=None)
     first = prepare_step_controller(engine, strategy, {"grid": [0.0, 1.0]})
     second = prepare_step_controller(engine, strategy, {"grid": (0.0, 1.0)})
     assert second is first
+    # RuntimeInstance restores this shape after an entry-run failure.  Its strategy compares equal
+    # but cannot become the authority for a later prepared run.
+    restored = deepcopy(first)
+    assert restored.strategy == strategy
+    assert restored.strategy is not strategy
+    engine._step_controller = restored
+    rerun = prepare_step_controller(engine, strategy, {"grid": (0.0, 1.0)})
+    assert rerun is not first
+    assert rerun is not restored
+    assert rerun.strategy is strategy
 
 
 def test_error_controller_restores_the_exact_next_proposal_after_restart():
@@ -523,7 +560,7 @@ def test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strateg
 def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
     facade = object.__new__(facade_type)
     facade._s = _Native()
-    facade._step_strategy = None
+    facade._step_strategy = FixedDt(0.1) if facade_type is System else None
     facade._step_transaction_plan = None
     facade._step_controller = None
     facade._last_step_transaction_report = None
@@ -665,9 +702,13 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
         def __init__(self, plan):
             super().__init__(plan)
             self.calls = []
+            self.reject = 1
 
         def step(self, dt):
             self.calls.append(float(dt))
+            if self.reject:
+                self.reject -= 1
+                raise StepAttemptRejected("step attempt rejected during guard: retry snapshot")
             return super().step(dt)
 
     class RuntimeOwner:
@@ -700,14 +741,14 @@ def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps
 
     assert report.accepted_steps == 2
     assert owner.facade_step_calls == 0
-    assert raw.calls == [pytest.approx(0.2), pytest.approx(0.3)]
+    assert raw.calls == [pytest.approx(0.2), pytest.approx(0.1), pytest.approx(0.15)]
     controller = owner._step_controller
     assert controller.strategy is strategy
-    assert controller.next_dt == pytest.approx(0.45)
+    assert controller.next_dt == pytest.approx(0.225)
     state = owner._temporal_restart_state
     assert state.transaction_stats == {
         "accepted": 2,
-        "rejected": 0,
+        "rejected": 1,
         "failed": 0,
     }
     checkpoint = json.loads(

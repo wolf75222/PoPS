@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import bisect
+import json
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from pops._bootstrap import StepAttemptRejected
@@ -328,7 +331,7 @@ class StepController(ABC, Generic[_StepStrategyT]):
         self.attempts = 0
 
     def matches(self, strategy: StepStrategy, controls: Mapping[str, Any] | None) -> bool:
-        return self.strategy == strategy and self.controls == _control_identity(controls)
+        return self.strategy is strategy and self.controls == _control_identity(controls)
 
     def restore_temporal_state(self, temporal: Any) -> None:
         """Restore provider-owned proposal state; stateless controllers need no action."""
@@ -557,7 +560,7 @@ class ErrorControlledDtController(StepController[ErrorControlledDt]):
             if current is None:
                 current = self
             if type(current) is not ErrorControlledDtController \
-                    or current.strategy != self.strategy:
+                    or current.strategy is not self.strategy:
                 raise RuntimeError(
                     "ErrorControlledDt accepted through a different controller authority")
             current.next_dt = min(
@@ -697,12 +700,110 @@ def resolve_run_strategy(engine: Any) -> StepStrategy:
     return selected
 
 
+def _freeze_controls(value: Any) -> Any:
+    """Detach one canonical control value without retaining caller-owned containers."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({name: _freeze_controls(item) for name, item in value.items()})
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_controls(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedProgramRun:
+    """One installed Program's immutable temporal execution authority.
+
+    The descriptor and transaction plan retain their exact installed object identities.  Runtime
+    controls are round-tripped through the strategy's canonical representation before attempts
+    start, so a caller cannot change a prepared run by mutating a list passed to ``run``.
+    """
+
+    engine: Any
+    strategy: StepStrategy
+    transaction_plan: Any
+    controls: Mapping[str, Any]
+    _control_payload_json: str
+    _schedule_json: str
+
+    @property
+    def control_payload(self) -> dict[str, Any]:
+        """Return a fresh manifest copy for a consumer; never expose retained run state."""
+        return json.loads(self._control_payload_json)
+
+    @property
+    def restart_payload(self) -> dict[str, Any]:
+        """Return the exact strategy and installed schedule to bind before a first attempt."""
+        return {
+            "strategy": self.control_payload,
+            "program_schedule": json.loads(self._schedule_json),
+        }
+
+    def begin(self, temporal: Any, *, time: Any, macro_step: Any) -> None:
+        """Validate and bind restart state before any accepted mutation can occur."""
+        if temporal is not None:
+            temporal.begin_run(self.restart_payload, time=time, macro_step=macro_step)
+
+    def require_live_transaction_plan(self) -> None:
+        if getattr(self.engine, "_step_transaction_plan", None) is not self.transaction_plan:
+            raise RuntimeError("prepared run transaction plan changed before attempt preparation")
+
+    def prepare_attempts(self, native: Any, *, t_end: float) -> _PreparedStepAttempts:
+        """Create the detached retry cursor using only the frozen prepared controls."""
+        self.require_live_transaction_plan()
+        return prepare_step_attempts(
+            self.engine, native, self.strategy, t_end=float(t_end), controls=self.controls)
+
+    def run_prepared_attempt(self, sequence: _PreparedStepAttempts) -> StepTransactionReport:
+        """Refuse a plan swap between retry-cursor preparation and native execution."""
+        self.require_live_transaction_plan()
+        return run_prepared_step_attempt(sequence)
+
+    def run_step(self, native: Any, *, t_end: float) -> StepTransactionReport:
+        """Run one accepted standalone step; RuntimeInstance supplies its own transaction shell."""
+        sequence = self.prepare_attempts(native, t_end=float(t_end))
+        while True:
+            try:
+                return self.run_prepared_attempt(sequence)
+            except StepAttemptRejected as error:
+                if sequence.retry(error):
+                    continue
+                raise
+
+
+def prepare_program_run(
+    engine: Any, controls: Mapping[str, Any] | None = None,
+) -> PreparedProgramRun:
+    """Freeze one Program-authenticated temporal run before its first native attempt."""
+    strategy = resolve_run_strategy(engine)
+    control_payload = run_control_payload(strategy, controls)
+    restored_controls = strategy.restore_runtime_controls(control_payload["controls"])
+    strategy.validate_runtime_controls(restored_controls)
+    transaction_plan = getattr(engine, "_step_transaction_plan", None)
+    if transaction_plan is not None and getattr(transaction_plan, "strategy", None) is not strategy:
+        raise RuntimeError("installed step transaction plan differs from the authored strategy")
+    temporal = getattr(engine, "_temporal_restart_state", None)
+    schedule = None if temporal is None else getattr(temporal, "program_schedule", None)
+    return PreparedProgramRun(
+        engine=engine,
+        strategy=strategy,
+        transaction_plan=transaction_plan,
+        controls=MappingProxyType({
+            name: _freeze_controls(value) for name, value in restored_controls.items()
+        }),
+        _control_payload_json=json.dumps(
+            control_payload, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        _schedule_json=json.dumps(
+            schedule, sort_keys=True, separators=(",", ":"), allow_nan=False),
+    )
+
+
 def _controller(
     engine: Any, strategy: StepStrategy, controls: Mapping[str, Any] | None,
 ) -> StepController[Any]:
     strategy.validate_runtime_controls(controls)
     current = getattr(engine, "_step_controller", None)
-    if current is None or not current.matches(strategy, controls):
+    if current is None or getattr(current, "strategy", None) is not strategy \
+            or not current.matches(strategy, controls):
         current = materialize_step_controller(strategy, controls)
         current.restore_temporal_state(getattr(engine, "_temporal_restart_state", None))
         engine._step_controller = current
@@ -768,13 +869,7 @@ def run_step_attempt(
     t_end: float,
     controls: Mapping[str, Any] | None = None,
 ) -> StepTransactionReport:
-    """Execute one accepted step without an enclosing RuntimeInstance transaction.
-
-    RuntimeInstance uses :func:`prepare_step_attempts` and
-    :func:`run_prepared_step_attempt` directly so every retry receives a distinct native
-    transaction.  This compatibility helper retains the small standalone controller protocol used
-    by low-level tests and extension adapters.
-    """
+    """Execute one low-level accepted step for the remaining non-RuntimeInstance callers."""
     sequence = prepare_step_attempts(
         engine, native, strategy, t_end=float(t_end), controls=controls)
     while True:
@@ -800,8 +895,9 @@ def run_control_payload(
 
 __all__ = [
     "AdaptiveCFLController", "ErrorControlledDtController", "ExternalTimeGridController",
-    "FixedDtController", "StepAttemptRejected", "StepController", "materialize_step_controller",
-    "prepare_step_attempts", "prepare_step_controller", "register_step_controller_factory",
+    "FixedDtController", "PreparedProgramRun", "StepAttemptRejected", "StepController",
+    "materialize_step_controller", "prepare_program_run", "prepare_step_attempts",
+    "prepare_step_controller", "register_step_controller_factory",
     "resolve_run_strategy", "run_control_payload", "run_prepared_step_attempt",
     "run_step_attempt",
 ]

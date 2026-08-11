@@ -139,44 +139,32 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         return self._s
 
     def step(self, dt: Any) -> None:
-        """Advance one explicit fixed step and keep the restart envelope synchronized.
-
-        This low-level seam predates ``Program.step_strategy`` but it still represents an exact
-        :class:`~pops.time.FixedDt` attempt. Route it through the same accepted-attempt protocol as
-        :meth:`run` so a checkpoint taken after direct steps records the live clock and strategy.
-        """
-        from pops.runtime._step_strategy import run_control_payload, run_step_attempt
+        """Advance once through the installed Program's prepared temporal authority."""
+        from pops.runtime._step_strategy import prepare_program_run
         from pops.runtime._native_step_target import native_step_target
-        from pops.time import FixedDt
 
-        strategy = FixedDt(dt)
-        self._temporal_restart_state.begin_run(
-            run_control_payload(strategy), time=self.time(), macro_step=self.macro_step())
-        run_step_attempt(
-            self, native_step_target(self), strategy,
-            t_end=float(self.time()) + strategy.dt)
+        prepared_run = prepare_program_run(self)
+        prepared_run.begin(
+            self._temporal_restart_state, time=self.time(), macro_step=self.macro_step())
+        prepared_run.run_step(
+            native_step_target(self), t_end=float(self.time()) + float(dt))
 
     def run(self, t_end: Any, *, max_steps: int, output_dir: Any = None,
             controls: Any = None) -> Any:
         """Advance with the Program-authenticated typed strategy and exact runtime controls."""
-        from pops.runtime._step_strategy import (
-            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        from pops.runtime._step_strategy import prepare_program_run
         from pops.runtime._native_step_target import native_step_target
-        strategy = resolve_run_strategy(self)
-        control_payload = run_control_payload(strategy, controls)
-        prepare_step_controller(self, strategy, controls)
-        self._temporal_restart_state.begin_run(
-            control_payload, time=self.time(), macro_step=self.macro_step())
+        prepared_run = prepare_program_run(self, controls)
+        prepared_run.begin(
+            self._temporal_restart_state, time=self.time(), macro_step=self.macro_step())
         from pops.runtime._run_manifest import begin_run
         begin_run(
-            self, t_end=t_end, step_transaction=control_payload,
+            self, t_end=t_end, step_transaction=prepared_run.control_payload,
             max_steps=max_steps, output_dir=output_dir)
         step_target = native_step_target(self)
         steps = 0
         while self.time() < t_end and steps < max_steps:
-            run_step_attempt(
-                self, step_target, strategy,
-                t_end=float(t_end), controls=controls)
+            prepared_run.run_step(step_target, t_end=float(t_end))
             steps += 1
         return steps
 

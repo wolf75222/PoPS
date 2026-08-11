@@ -45,6 +45,7 @@ IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepp
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 PYTHON_SYSTEM_INSTALL = ROOT / "python/pops/runtime/_system_install.py"
+PYTHON_SYSTEM_RUNTIME = ROOT / "python/pops/runtime/_system.py"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
@@ -110,6 +111,17 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in source
     assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
+
+
+def test_python_system_temporal_facades_prepare_only_the_installed_program_run():
+    source = PYTHON_SYSTEM_RUNTIME.read_text(encoding="utf-8")
+    step = _python_function_source(source, "step")
+    run = _python_function_source(source, "run")
+    for body in (step, run):
+        assert "prepare_program_run" in body
+        assert "run_control_payload" not in body
+        assert "run_step_attempt" not in body
+    assert "FixedDt" not in step
 
 
 def test_static_system_assembler_is_retired_from_the_final_runtime_surface():
