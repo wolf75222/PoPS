@@ -77,15 +77,15 @@ class PoissonFFT {
   using device_view = Kokkos::View<complex_type*, MemorySpace>;
   using pinned_view = Kokkos::View<complex_type*, Kokkos::SharedHostPinnedSpace>;
 
-  PoissonFFT(int_array cells, real_array lengths,
-             std::string_view lane_identity = "pops.poisson-fft",
-             PoissonFFTDiagnosticContext diagnostic = {})
-      : cells_(cells), lengths_(lengths), diagnostic_(diagnostic) {
-    // This must be the first authority touched by the plan: it initializes MPI before any
-    // rank-dependent validation, allocation shape, or exact request is derived.
-    const ExecutionLane world = ExecutionLane::world();
-    ranks_ = world.size();
-    rank_ = world.rank();
+  PoissonFFT(int_array cells, real_array lengths, const ExecutionLane& lane,
+             std::string_view lane_identity, PoissonFFTDiagnosticContext diagnostic = {})
+      : cells_(cells),
+        lengths_(lengths),
+        lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        diagnostic_(diagnostic) {
+    ranks_ = lane.size();
+    rank_ = lane.rank();
     std::exception_ptr preparation_error;
     std::string request_contract;
     try {
@@ -93,7 +93,7 @@ class PoissonFFT {
       if (lane_identity.empty())
         throw std::invalid_argument("PoissonFFT requires a stable execution-lane identity");
       if (ranks_ < 1 || rank_ < 0 || rank_ >= ranks_)
-        throw std::invalid_argument("PoissonFFT requires a valid world communicator rank space");
+        throw std::invalid_argument("PoissonFFT requires a valid execution-lane rank space");
       if ((diagnostic_.stage == PoissonFFTDiagnosticStage::none && diagnostic_.fail_rank != -1) ||
           (diagnostic_.stage != PoissonFFTDiagnosticStage::none &&
            (diagnostic_.fail_rank < 0 || diagnostic_.fail_rank >= ranks_)))
@@ -121,6 +121,7 @@ class PoissonFFT {
           .scalar(static_cast<std::int32_t>(ranks_))
           .sequence(cells_)
           .sequence(lengths_)
+          .text(lane.identity())
           .text(lane_identity)
           .scalar(static_cast<std::uint8_t>(diagnostic_.stage))
           .scalar(static_cast<std::int32_t>(diagnostic_.fail_rank));
@@ -128,7 +129,7 @@ class PoissonFFT {
     } catch (...) {
       preparation_error = std::current_exception();
     }
-    const long preparation_failures = all_reduce_sum(preparation_error ? 1L : 0L);
+    const long preparation_failures = all_reduce_sum(preparation_error ? 1L : 0L, lane);
     if (preparation_failures != 0) {
       if (ranks_ == 1 && preparation_error)
         std::rethrow_exception(preparation_error);
@@ -136,7 +137,7 @@ class PoissonFFT {
                                std::to_string(preparation_failures) + " rank(s)");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"pops.poisson-fft.exact-request@3", request_contract}}))
+            {{"pops.poisson-fft.exact-request@3", request_contract}}, lane))
       throw std::invalid_argument("PoissonFFT request differs across communicator ranks");
 
     std::exception_ptr allocation_error;
@@ -153,12 +154,11 @@ class PoissonFFT {
     } catch (...) {
       allocation_error = std::current_exception();
     }
-    if (all_reduce_max(allocation_error ? 1L : 0L) != 0) {
+    if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
       if (ranks_ == 1 && allocation_error)
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("PoissonFFT workspace allocation failed collectively");
     }
-    lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity));
   }
 
   PoissonFFT(const PoissonFFT&) = delete;
@@ -181,10 +181,10 @@ class PoissonFFT {
   /// Solve lap_h phi = rhs.  Both views are local final-axis slabs and remain device-resident.
   void solve(const device_view& rhs, const device_view& phi) {
     // A rank-local view mismatch must never let a strict subset of ranks enter the exchange.
-    // Turn it into one world-collective failure before the first MPI operation on `lane_`.
+    // Turn it into one lane-collective failure before the first MPI operation on `lane_`.
     const long view_mismatch =
         rhs.extent(0) != local_count_ || phi.extent(0) != local_count_ ? 1L : 0L;
-    if (all_reduce_max(view_mismatch, world_communicator_()) != 0)
+    if (all_reduce_max(view_mismatch, *lane_) != 0)
       throw std::invalid_argument("PoissonFFT device views do not match the local slab");
     execute_local_stage_collectively_(
         [&] {
@@ -207,14 +207,6 @@ class PoissonFFT {
   }
 
  private:
-  static CommunicatorView world_communicator_() {
-#ifdef POPS_HAS_MPI
-    return CommunicatorView{MPI_COMM_WORLD};
-#else
-    return CommunicatorView{};
-#endif
-  }
-
   static std::size_t checked_product_(std::size_t left, std::size_t right) {
     if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
       throw std::length_error("PoissonFFT allocation overflow");
@@ -611,7 +603,8 @@ class PoissonFFT {
   int local_last_ = 0;
   std::size_t transverse_ = 0;
   std::size_t local_count_ = 0;
-  std::optional<ExecutionLane> lane_;
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   device_view values_{};
   device_view scratch_{};
   device_view peer_send_{};

@@ -484,6 +484,7 @@ void System<Dim>::register_elliptic_field(
     const std::string& block, const std::string& field,
     const std::vector<runtime::system::AuxiliaryComponentKey>& output_keys, int gradient_sign) {
   require_assembling(p_->lifecycle_, "register_elliptic_field");
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   if (field.empty())
     throw std::invalid_argument("System named elliptic field identity must be non-empty");
   (void)p_->find(block);
@@ -583,7 +584,7 @@ void System<Dim>::register_elliptic_field(
           "external field components currently require a fully periodic exact topology");
     backend = std::make_unique<runtime::system::ComponentFieldSolverBackend<Dim>>(
         std::string(component->second->provider_identity()), p_->geom, p_->ba, p_->dm,
-        p_->local_rank, topology, p_->periodicity, component->second);
+        p_->local_rank, topology, p_->periodicity, component->second, lane);
   } else {
     if (configured->second.family_route == "fft") {
       if (plan.has_reaction)
@@ -606,7 +607,6 @@ void System<Dim>::register_elliptic_field(
                 "FFT field solver requires periodic exact field boundaries on every face");
         }
       }
-      const ExecutionLane world = ExecutionLane::world();
       std::optional<EllipticBuildRequest<Dim>> request;
       std::exception_ptr request_error;
       try {
@@ -614,13 +614,13 @@ void System<Dim>::register_elliptic_field(
       } catch (...) {
         request_error = std::current_exception();
       }
-      if (all_reduce_max(request_error ? 1L : 0L, world.communicator()) != 0) {
-        if (world.size() == 1 && request_error)
+      if (all_reduce_max(request_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && request_error)
           std::rethrow_exception(request_error);
         throw std::runtime_error("FFT field solver request allocation failed collectively");
       }
       backend = runtime::system::PoissonFftFieldSolverBackend<Dim>::prepare_collectively(
-          std::move(*request), configured->second.exact_identity);
+          std::move(*request), configured->second.exact_identity, lane);
     } else if (configured->second.family_route == "cartesian_cg") {
       if (plan.has_reaction)
         throw std::logic_error(
@@ -631,7 +631,7 @@ void System<Dim>::register_elliptic_field(
           static_cast<Real>(configured->second.relative_tolerance);
       operator_options.maximum_iterations = configured->second.maximum_iterations;
       backend = std::make_unique<runtime::system::CartesianCgFieldSolverBackend<Dim>>(
-          p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options,
+          p_->geom, p_->ba, p_->dm, p_->local_rank, topology, operator_options, lane,
           configured->second.exact_identity);
     } else {
       throw std::logic_error("configured exact field solver route was not decoded exactly");
@@ -640,7 +640,7 @@ void System<Dim>::register_elliptic_field(
 
   auto prepared = std::make_shared<typename System<Dim>::Impl::exact_field_type>(
       provider_slot, block, output, p_->geom, p_->ba, p_->dm, p_->local_rank, std::move(backend),
-      p_->sp.size(), output_keys);
+      p_->sp.size(), lane, output_keys);
   if (plan.boundary_kernel)
     prepared->install_boundary_kernel(*plan.boundary_kernel);
   if (plan.newton)
@@ -656,7 +656,7 @@ void System<Dim>::register_elliptic_field(
   prepared->install_nullspace(
       p_->prepare_uniform_field_nullspace(plan.plan_identity, topology_identity,
                                           nullspace_selection, operator_options,
-                                          prepared->accepted_potential(), plan.has_reaction),
+                                          prepared->accepted_potential(), plan.has_reaction, lane),
       PreparedVectorDistribution<Dim>::distributed());
   p_->named_fields_.emplace(provider_slot, std::move(prepared));
 }
@@ -821,6 +821,7 @@ void System<Dim>::stage_prepared_native_package(std::string identity,
 template <int Dim>
 void System<Dim>::finalize_native_packages() {
   require_assembling(p_->lifecycle_, "finalize_native_packages");
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   if (p_->pending_native_packages_.empty())
     throw std::logic_error(
         "System native package finalization requires at least one staged package");
@@ -835,7 +836,7 @@ void System<Dim>::finalize_native_packages() {
   exact_packages.reserve(packages.size());
   for (const auto& package : packages)
     exact_packages.emplace_back("system-native-package", package.identity);
-  if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages))
+  if (!all_ranks_agree_exact_ordered_byte_pairs(exact_packages, lane))
     throw std::runtime_error("System staged native packages differ across MPI ranks");
 
   std::optional<typename Impl::NativePackageFinalizeSnapshot> snapshot;
@@ -845,8 +846,8 @@ void System<Dim>::finalize_native_packages() {
   } catch (...) {
     snapshot_error = std::current_exception();
   }
-  if (all_reduce_max(snapshot_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && snapshot_error)
+  if (all_reduce_max(snapshot_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && snapshot_error)
       std::rethrow_exception(snapshot_error);
     throw std::runtime_error("System native package rollback snapshot failed collectively");
   }
@@ -863,8 +864,8 @@ void System<Dim>::finalize_native_packages() {
       } catch (...) {
         local_error = std::current_exception();
       }
-      if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-        if (n_ranks() == 1 && local_error)
+      if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && local_error)
           std::rethrow_exception(local_error);
         throw std::runtime_error("System native package installer failed collectively: " +
                                  package.identity);
@@ -875,11 +876,11 @@ void System<Dim>::finalize_native_packages() {
   }
 
   const long failed = failure ? 1L : 0L;
-  if (all_reduce_max(failed) != 0) {
+  if (all_reduce_max(failed, lane) != 0) {
     // Every rank restores the same pre-finalization image.  ``packages`` then drops its DSO owners,
     // so no failed package code can remain reachable from the restored System.
     snapshot->restore(*p_);
-    if (n_ranks() == 1 && failure)
+    if (lane.size() == 1 && failure)
       std::rethrow_exception(failure);
     throw std::runtime_error("System native package finalization rolled back collectively");
   }
@@ -893,6 +894,7 @@ template <int Dim>
 void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& description,
                                                double frequency, const std::string& label,
                                                CouplingOperatorView inspect) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   struct InputRef {
     int block = -1;
     int component = -1;
@@ -1029,8 +1031,8 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("System coupled-source preparation failed collectively");
   }
@@ -1107,7 +1109,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
   if (has_frequency_program) {
     Impl* implementation = p_.get();
     maximum_frequency = [implementation, inputs, constants, frequency_program, input_count,
-                         constant_count]() {
+                         constant_count, lane = &lane]() {
       if (input_count == 0)
         throw std::logic_error("state-dependent coupling frequency requires at least one input");
       const MultiFab<Dim>& reference =
@@ -1135,7 +1137,7 @@ void System<Dim>::add_coupled_source_prepared_(const CoupledSourceProgram& descr
               return value;
             }));
       }
-      return all_reduce_max(local_maximum);
+      return all_reduce_max(local_maximum, *lane);
     };
   }
   install_prepared_coupling_operator(label, std::string(contract.view()), std::move(inspect),
@@ -1160,6 +1162,7 @@ void System<Dim>::install_prepared_coupling_operator(
     const std::string& label, const std::string& provider_contract, CouplingOperatorView view,
     std::function<void(Real, const std::vector<MultiFab<Dim>*>&)> operation,
     double constant_frequency, std::function<Real()> maximum_frequency) {
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
   std::exception_ptr local_error;
   runtime::system::SystemCouplingRegistry<Dim> candidate;
   std::string exact;
@@ -1222,13 +1225,13 @@ void System<Dim>::install_prepared_coupling_operator(
   } catch (...) {
     local_error = std::current_exception();
   }
-  if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-    if (n_ranks() == 1 && local_error)
+  if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    if (lane.size() == 1 && local_error)
       std::rethrow_exception(local_error);
     throw std::runtime_error("prepared System coupling installation failed collectively");
   }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("system-prepared-coupling"), exact}}))
+          {{std::string_view("system-prepared-coupling"), exact}}, lane))
     throw std::invalid_argument("prepared System coupling contract differs between MPI ranks");
   p_->coupling_ = std::move(candidate);
 }

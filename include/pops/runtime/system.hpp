@@ -1305,7 +1305,7 @@ class System {
   EffectiveOptionsReport effective_options_report() const;
   double mass(const std::string& name) const;
   std::vector<double> density(const std::string& name) const;  ///< native index order
-  std::vector<double> potential();  ///< phi, native index order
+  std::vector<double> potential();                             ///< phi, native index order
   /// RESTORES the potential phi (accepted-state restart): without it the multigrid would restart from
   /// a blank phi and the resume would not be bit-identical (warm start lost). The field uses the
   /// same exact-ranked flattened layout as potential().
@@ -1325,9 +1325,11 @@ class System {
   /// RuntimeInstance uses them for accepted-state checkpoint capture, then seals and publishes
   /// the single artifact only on rank 0.
   /// @{
-  std::vector<double> density_global(const std::string& name) const;  ///< comp0, global cell product
-  std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*global cell product
-  std::vector<double> potential_global();                             ///< phi, global cell product
+  std::vector<double> density_global(
+      const std::string& name) const;  ///< comp0, global cell product
+  std::vector<double> state_global(
+      const std::string& name) const;      ///< U, ncomp*global cell product
+  std::vector<double> potential_global();  ///< phi, global cell product
   std::vector<double> field_potential_global(const std::string& provider_slot);
   /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
   /// Local pieces preserve native ranked ownership and never gather.
@@ -1383,6 +1385,9 @@ class System {
   POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
                                                    const std::string& route, int every_n) const;
   POPS_EXPORT runtime::program::ProgramRuntimeState<Dim>& program_runtime_state_();
+  POPS_EXPORT void validate_program_state_publication_candidate_(int block,
+                                                                 const MultiFab<Dim>& candidate,
+                                                                 const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.

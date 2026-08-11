@@ -965,11 +965,13 @@ class DelegatingPrepared final : public PreparedTensorSolver {
     delegate_->stage_initial_guess(level, guess);
   }
   pops::SolveReport solve(
-      const pops::runtime::program::HierarchyTensorSolveControls& controls) override {
+      const pops::runtime::program::HierarchyTensorSolveControls& controls,
+      const pops::ExecutionLane& lane) override {
     const std::uint64_t solve_index =
         solve_calls.fetch_add(1, std::memory_order_relaxed);
     auto outcome =
-        pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(*delegate_, controls);
+        pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+            *delegate_, controls, lane);
     const auto action =
         outcome.report().solved_value_available()
             ? pops::SolveConsumption::kAccept
@@ -1054,11 +1056,12 @@ class Provider final : public TensorProvider {
         .bytes(pops::runtime::program::hierarchy_tensor_detail::request_contract(request));
     return std::move(contract).release();
   }
-  std::unique_ptr<PreparedTensorSolver> prepare(const TensorRequest& request) const override {
+  std::unique_ptr<PreparedTensorSolver> prepare(
+      const TensorRequest& request, const pops::ExecutionLane& lane) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("header-only hierarchy provider rejected the request");
     const BuiltinTensorProvider delegate;
-    auto prepared_delegate = delegate.prepare(delegate_request(request));
+    auto prepared_delegate = delegate.prepare(delegate_request(request), lane);
     std::vector<bool> level_populated;
     level_populated.reserve(request.levels.size());
     for (const auto& level : request.levels)

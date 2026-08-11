@@ -6,6 +6,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -64,7 +65,8 @@ class FieldNewtonKrylovWorkspace final {
 
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(field_type& iterate, ResidualProvider&& evaluate_residual,
-                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge) {
+                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
+                    const ExecutionLane& lane) {
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
     auto&& gauge_provider = apply_gauge;
@@ -75,7 +77,7 @@ class FieldNewtonKrylovWorkspace final {
 
     SolveReport report;
     report.evaluations = 1;
-    const Real initial_norm = norm_(residual_);
+    const Real initial_norm = norm_(residual_, lane);
     report.reference_residual_norm = initial_norm;
     report.residual_norm = initial_norm;
     const Real relative_denominator = initial_norm > Real(0) ? initial_norm : Real(1);
@@ -97,7 +99,7 @@ class FieldNewtonKrylovWorkspace final {
       correction_.set_val(Real(0));
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
-          solve_linear_(iterate, residual_, linear_stop, jvp_provider, iteration);
+          solve_linear_(iterate, residual_, linear_stop, jvp_provider, iteration, lane);
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
@@ -107,7 +109,7 @@ class FieldNewtonKrylovWorkspace final {
       }
 
       gauge_provider(correction_);
-      const Real full_step_norm = norm_(correction_);
+      const Real full_step_norm = norm_(correction_, lane);
       if (!finite_(full_step_norm)) {
         report.iters = iteration;
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt,
@@ -125,7 +127,7 @@ class FieldNewtonKrylovWorkspace final {
         residual_provider(trial_, trial_residual_, iteration + 1);
         Kokkos::fence();
         ++report.evaluations;
-        const Real trial_norm = norm_(trial_residual_);
+        const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
             trial_norm <= (Real(1) - options_.armijo * step) * report.residual_norm) {
           copy_(trial_, iterate);
@@ -166,9 +168,10 @@ class FieldNewtonKrylovWorkspace final {
 
   template <class JvpProvider>
   LinearResult solve_linear_(const field_type& iterate, const field_type& rhs, Real stop,
-                             JvpProvider& apply_jvp, int nonlinear_iteration) {
+                             JvpProvider& apply_jvp, int nonlinear_iteration,
+                             const ExecutionLane& lane) {
     copy_(rhs, linear_residual_);
-    Real beta = norm_(linear_residual_);
+    Real beta = norm_(linear_residual_, lane);
     LinearResult result;
     if (!finite_(beta))
       return result;
@@ -195,10 +198,11 @@ class FieldNewtonKrylovWorkspace final {
         Kokkos::fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
-          h_(row, column) = dot(work_, basis_[static_cast<std::size_t>(row)]);
+          h_(row, column) = static_cast<Real>(
+              all_reduce_sum(dot_local(work_, basis_[static_cast<std::size_t>(row)]), lane));
           saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
         }
-        h_(column + 1, column) = norm_(work_);
+        h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
           copy_(work_, basis_[static_cast<std::size_t>(column + 1)]);
           scale(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column));
@@ -247,7 +251,7 @@ class FieldNewtonKrylovWorkspace final {
       Kokkos::fence();
       ++result.evaluations;
       lincomb(linear_residual_, Real(1), rhs, Real(-1), image_);
-      beta = norm_(linear_residual_);
+      beta = norm_(linear_residual_, lane);
       if (!finite_(beta))
         return result;
       if (beta <= stop) {
@@ -299,8 +303,8 @@ class FieldNewtonKrylovWorkspace final {
                                   " differs from its prepared exact-ranked layout");
   }
 
-  static Real norm_(const field_type& field) {
-    const Real squared = dot(field, field);
+  static Real norm_(const field_type& field, const ExecutionLane& lane) {
+    const Real squared = static_cast<Real>(all_reduce_sum(dot_local(field, field), lane));
     if (!finite_(squared))
       return squared;
     if (squared < Real(0))

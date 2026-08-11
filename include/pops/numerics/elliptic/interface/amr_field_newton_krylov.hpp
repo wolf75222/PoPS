@@ -87,7 +87,8 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(std::span<field_type* const> destination, ResidualProvider&& evaluate_residual,
-                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge) {
+                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
+                    const ExecutionLane& lane) {
     authenticate_(destination, "destination");
     copy_from_external_(destination, iterate_);
     auto&& residual_provider = evaluate_residual;
@@ -99,7 +100,7 @@ class AmrFieldNewtonKrylovWorkspace final {
 
     SolveReport report;
     report.evaluations = 1;
-    const Real initial_norm = norm_(residual_);
+    const Real initial_norm = norm_(residual_, lane);
     report.reference_residual_norm = initial_norm;
     report.residual_norm = initial_norm;
     const Real relative_denominator = initial_norm > Real(0) ? initial_norm : Real(1);
@@ -122,7 +123,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       set_zero_(correction_);
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
       const LinearResult linear =
-          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration);
+          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane);
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
@@ -132,7 +133,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       }
 
       gauge_provider(correction_);
-      const Real full_step_norm = norm_(correction_);
+      const Real full_step_norm = norm_(correction_, lane);
       if (!finite_(full_step_norm)) {
         report.iters = iteration;
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt,
@@ -150,7 +151,7 @@ class AmrFieldNewtonKrylovWorkspace final {
         residual_provider(trial_, trial_residual_, iteration + 1);
         Kokkos::fence();
         ++report.evaluations;
-        const Real trial_norm = norm_(trial_residual_);
+        const Real trial_norm = norm_(trial_residual_, lane);
         if (finite_(trial_norm) &&
             trial_norm <= (Real(1) - options_.armijo * step) * report.residual_norm) {
           copy_(trial_, iterate_);
@@ -192,9 +193,10 @@ class AmrFieldNewtonKrylovWorkspace final {
 
   template <class JvpProvider>
   LinearResult solve_linear_(const hierarchy_type& iterate, const hierarchy_type& rhs, Real stop,
-                             JvpProvider& apply_jvp, int nonlinear_iteration) {
+                             JvpProvider& apply_jvp, int nonlinear_iteration,
+                             const ExecutionLane& lane) {
     copy_(rhs, linear_residual_);
-    Real beta = norm_(linear_residual_);
+    Real beta = norm_(linear_residual_, lane);
     LinearResult result;
     if (!finite_(beta))
       return result;
@@ -221,10 +223,10 @@ class AmrFieldNewtonKrylovWorkspace final {
         Kokkos::fence();
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
-          h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)]);
+          h_(row, column) = dot_(work_, basis_[static_cast<std::size_t>(row)], lane);
           saxpy_(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]);
         }
-        h_(column + 1, column) = norm_(work_);
+        h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
           copy_(work_, basis_[static_cast<std::size_t>(column + 1)]);
           scale_(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column));
@@ -271,7 +273,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       Kokkos::fence();
       ++result.evaluations;
       lincomb_(linear_residual_, Real(1), rhs, Real(-1), image_);
-      beta = norm_(linear_residual_);
+      beta = norm_(linear_residual_, lane);
       if (!finite_(beta))
         return result;
       if (beta <= stop) {
@@ -381,19 +383,28 @@ class AmrFieldNewtonKrylovWorkspace final {
       lincomb(destination[level], left_factor, left[level], right_factor, right[level]);
   }
 
-  Real dot_(const hierarchy_type& left, const hierarchy_type& right) const {
+  Real dot_(const hierarchy_type& left, const hierarchy_type& right,
+            const ExecutionLane& lane) const {
     if (left.size() != active_cells_.size() || right.size() != active_cells_.size())
       throw std::invalid_argument("AMR field Newton dot hierarchy size differs");
-    Real result = Real(0);
+    Real local_result = Real(0);
     for (std::size_t level = 0; level < left.size(); ++level) {
-      const RelativeCellMeasure<Dim, MemorySpace> measure{active_cells_[level], nullptr};
-      result += cell_measures_[level] * dot(left[level], right[level], 0, measure);
+      for (std::size_t local = 0; local < left[level].local_size(); ++local)
+        local_result += cell_measures_[level] *
+                        for_each_cell_reduce_sum(left[level].box(local),
+                                                 mf_arith_detail::MeasuredDotKernel<Dim>{
+                                                     left[level].fab(local).view(),
+                                                     right[level].fab(local).view(),
+                                                     active_cells_[level]->fab(local).view(),
+                                                     {},
+                                                     0,
+                                                     false});
     }
-    return result;
+    return static_cast<Real>(all_reduce_sum(local_result, lane));
   }
 
-  Real norm_(const hierarchy_type& fields) const {
-    const Real squared = dot_(fields, fields);
+  Real norm_(const hierarchy_type& fields, const ExecutionLane& lane) const {
+    const Real squared = dot_(fields, fields, lane);
     if (!finite_(squared))
       return squared;
     if (squared < Real(0))

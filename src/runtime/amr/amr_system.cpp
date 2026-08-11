@@ -2353,7 +2353,7 @@ struct AmrSystem<Dim>::Impl {
         field_solver_providers(std::make_shared<exact_field_registry_type>()),
         field_nullspace_providers(make_default_field_nullspace_provider_registry<Dim>()),
         hierarchy_tensor_solver_providers(
-            runtime::program::make_default_hierarchy_tensor_solver_provider_registry<Dim>()) {
+            std::make_shared<runtime::program::HierarchyTensorSolverProviderRegistry<Dim>>()) {
     field_solver_providers->add(runtime::amr::make_builtin_exact_amr_field_solver_provider<Dim>());
     const FieldNullspaceProviderSelection selection = operator_topology_zero_mean_nullspace();
     default_nullspace_provider_identity = selection.provider_identity;
@@ -2861,6 +2861,10 @@ struct AmrSystem<Dim>::Impl {
       throw std::runtime_error(
           "AMR Cartesian field solvers have no authenticated embedded-boundary operator");
     ensure_engine();
+    if (!multiblock_hierarchy)
+      throw std::logic_error(
+          "AMR exact field materialization requires its prepared multi-block hierarchy");
+    const ExecutionLane& lane = multiblock_hierarchy->lane();
     auto found = field_plans.find(slot);
     if (found == field_plans.end())
       throw std::out_of_range("AmrSystem has no exact field provider slot '" + slot + "'");
@@ -2882,10 +2886,11 @@ struct AmrSystem<Dim>::Impl {
     std::string provider_contract;
     std::string support_contract;
 
-    const auto finish_local_phase = [](std::exception_ptr local_error, std::string_view phase) {
-      if (all_reduce_max(local_error ? 1L : 0L) == 0)
+    const auto finish_local_phase = [&lane](std::exception_ptr local_error,
+                                            std::string_view phase) {
+      if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
         return;
-      if (n_ranks() == 1 && local_error)
+      if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR exact field " + std::string(phase) + " failed collectively");
     };
@@ -2942,7 +2947,7 @@ struct AmrSystem<Dim>::Impl {
       if (!provider)
         throw std::invalid_argument("unknown exact AMR field solver provider '" +
                                     plan.solver_route + "'");
-      const PreparedProviderSupport support = provider->supports(request);
+      const PreparedProviderSupport support = provider->supports(request, lane);
       support_contract = exact_prepared_provider_support(support);
       if (!support.well_formed())
         throw std::runtime_error("exact AMR field solver returned malformed support metadata");
@@ -2956,7 +2961,7 @@ struct AmrSystem<Dim>::Impl {
           .scalar(provider->interface_version())
           .text(provider->collective_contract());
       provider_contract = std::move(provider_declaration).release();
-      expected_contract = provider->expected_prepared_contract(request);
+      expected_contract = provider->expected_prepared_contract(request, lane);
       if (expected_contract.empty())
         throw std::runtime_error(
             "exact AMR field solver accepted the request without a prepared contract");
@@ -2969,12 +2974,13 @@ struct AmrSystem<Dim>::Impl {
              {"amr-exact-field-spatial", request.spatial_contract},
              {"amr-exact-field-provider", provider_contract},
              {"amr-exact-field-support", support_contract},
-             {"amr-exact-field-expected", expected_contract}}))
+             {"amr-exact-field-expected", expected_contract}},
+            lane))
       throw std::runtime_error("AMR exact field provider declaration differs between MPI ranks");
 
     local_error = {};
     try {
-      prepared_solver = provider->build(request);
+      prepared_solver = provider->build(request, lane);
       if (!prepared_solver || prepared_solver->provider_identity() != provider->identity() ||
           prepared_solver->exact_prepared_contract() != expected_contract ||
           prepared_solver->level_count() != static_cast<int>(engine->hierarchy().num_levels()))
@@ -2994,7 +3000,7 @@ struct AmrSystem<Dim>::Impl {
         plan.nullspace_provider_identity.empty() ? default_nullspace_options
                                                  : plan.nullspace_options};
     PreparedFieldNullspace<Dim> prepared_nullspace = prepare_field_nullspace_collectively<Dim>(
-        *field_nullspace_providers, selection, std::move(*nullspace_request));
+        *field_nullspace_providers, selection, std::move(*nullspace_request), lane);
     nullspace_request.reset();
     nullspace_contract = prepared_nullspace.exact_prepared_contract;
 
@@ -3206,6 +3212,9 @@ struct AmrSystem<Dim>::Impl {
       const std::vector<const field_type*>& stage_overrides,
       const runtime::multiblock::BoundaryEvaluationPoint* evaluation_point = nullptr) {
     materialize_field(slot);
+    if (!multiblock_hierarchy)
+      throw std::logic_error("AMR exact field solve requires its prepared multi-block hierarchy");
+    const ExecutionLane& lane = multiblock_hierarchy->lane();
     FieldPlan& plan = field_plans.at(slot);
     if (!active_field_slot.empty())
       throw std::logic_error(
@@ -3254,7 +3263,7 @@ struct AmrSystem<Dim>::Impl {
       if (!has_rhs)
         throw std::runtime_error("AMR exact field has no prepared RHS provider");
       Kokkos::fence();
-      SolveReport report = plan.prepared_solver->solve();
+      SolveReport report = plan.prepared_solver->solve(lane);
       if (!report.solved_value_available()) {
         active_field_slot.clear();
         return report;
@@ -4670,6 +4679,10 @@ struct AmrSystem<Dim>::Impl {
         std::rethrow_exception(map_error);
       throw std::runtime_error("AmrSystem Program block-map materialization failed collectively");
     }
+
+    hierarchy_tensor_solver_providers->add(
+        std::make_shared<runtime::program::CompositeTensorHierarchyProvider<Dim>>(),
+        multiblock_candidate->lane());
 
     // Every allocation, provider installation, seal and exact-map preparation has completed on
     // local candidates.  These ownership moves are the sole publication boundary and cannot throw.
@@ -7202,7 +7215,10 @@ void AmrSystem<Dim>::register_hierarchy_tensor_solver_provider(
   require_amr_assembling(p_->lifecycle, "register_hierarchy_tensor_solver_provider");
   if (!p_->hierarchy_tensor_solver_providers)
     throw std::logic_error("AmrSystem hierarchy tensor-solver registry is absent");
-  p_->hierarchy_tensor_solver_providers->add(std::move(provider));
+  if (!p_->multiblock_hierarchy)
+    throw std::logic_error(
+        "AmrSystem hierarchy tensor-solver registration requires its prepared hierarchy");
+  p_->hierarchy_tensor_solver_providers->add(std::move(provider), p_->multiblock_hierarchy->lane());
 }
 
 template <int Dim>
@@ -7210,7 +7226,10 @@ void AmrSystem<Dim>::register_program_hierarchy_tensor_solver_provider(
     std::shared_ptr<const runtime::program::HierarchyTensorSolverProvider<Dim>> provider) {
   if (!p_->hierarchy_tensor_solver_providers)
     throw std::logic_error("AmrSystem hierarchy tensor-solver registry is absent");
-  p_->hierarchy_tensor_solver_providers->add_collectively(std::move(provider));
+  if (!p_->multiblock_hierarchy)
+    throw std::logic_error(
+        "AMR Program hierarchy tensor-solver registration requires its prepared hierarchy");
+  p_->hierarchy_tensor_solver_providers->add(std::move(provider), p_->multiblock_hierarchy->lane());
 }
 
 template <int Dim>

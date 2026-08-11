@@ -4,7 +4,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <stdexcept>
 #include <string>
@@ -46,23 +46,24 @@ struct FieldBoundaryFailure {
   /// receive the same code/face/cell/value.  This intentionally lives at the host launcher seam:
   /// device functors first reduce into their local witness, then every rank calls this method in the
   /// same order even when it saw no local failure.
-  bool synchronize_across_ranks() {
+  bool synchronize_across_ranks(const ExecutionLane& lane) {
     const bool local_failed = failed();
-    const long failure_count = all_reduce_sum(local_failed ? 1L : 0L);
+    const long failure_count = all_reduce_sum(local_failed ? 1L : 0L, lane);
     if (failure_count == 0) {
       reset();
       return false;
     }
 
-    const int rank = my_rank();
-    const int owner =
-        static_cast<int>(all_reduce_min(static_cast<double>(local_failed ? rank : n_ranks())));
+    const int rank = lane.rank();
+    const int owner = static_cast<int>(
+        all_reduce_min(static_cast<double>(local_failed ? rank : lane.size()), lane));
     const bool publish = local_failed && rank == owner;
-    code = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(code) : 0L));
-    face = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(face) : 0L));
+    code = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(code) : 0L, lane));
+    face = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(face) : 0L, lane));
     for (int axis = 0; axis < Dim; ++axis)
-      cell[axis] = static_cast<int>(all_reduce_sum(publish ? static_cast<long>(cell[axis]) : 0L));
-    value = static_cast<Real>(all_reduce_sum(publish ? static_cast<double>(value) : 0.0));
+      cell[axis] =
+          static_cast<int>(all_reduce_sum(publish ? static_cast<long>(cell[axis]) : 0L, lane));
+    value = static_cast<Real>(all_reduce_sum(publish ? static_cast<double>(value) : 0.0, lane));
     return true;
   }
 };

@@ -254,7 +254,7 @@ class OperatorFactsBlindProvider final : public FieldNullspaceProvider<Dim> {
     return std::move(contract).release();
   }
   [[nodiscard]] PreparedFieldNullspace<Dim> prepare(
-      const FieldNullspaceProviderRequest<Dim>& request) const override {
+      const FieldNullspaceProviderRequest<Dim>& request, const ExecutionLane&) const override {
     return {std::string(identity()), interface_version(), expected_prepared_contract(request), {}};
   }
 };
@@ -262,6 +262,8 @@ class OperatorFactsBlindProvider final : public FieldNullspaceProvider<Dim> {
 template <int Dim, class Require>
 void exercise_exact_ranked_preflight(Require&& require) {
   const int rank = my_rank();
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.field-nullspace-preflight:" + std::to_string(Dim));
   const auto field = make_distributed_field<Dim>();
   const std::array<PreparedVectorDistribution<Dim>, 1> distributed_level{
       PreparedVectorDistribution<Dim>::Distributed};
@@ -283,7 +285,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
           FieldBoundaryNullspaceBehavior::PreservesConstantMode}},
         false);
     require(uniformly_rejected(
-        [&] { (void)prepare_field_nullspace_collectively<Dim>(registry, selection, request); },
+        [&] {
+          (void)prepare_field_nullspace_collectively<Dim>(registry, selection, request, lane);
+        },
         "operator facts differ across MPI ranks"));
 
     request.plan_identity = "mpi-preflight:operator-facts-behavior-drift";
@@ -293,7 +297,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
                                   : FieldBoundaryNullspaceBehavior::ConstrainsConstantMode}},
         false);
     require(uniformly_rejected(
-        [&] { (void)prepare_field_nullspace_collectively<Dim>(registry, selection, request); },
+        [&] {
+          (void)prepare_field_nullspace_collectively<Dim>(registry, selection, request, lane);
+        },
         "operator facts differ across MPI ranks"));
   }
 
@@ -316,7 +322,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
     PreparedFieldNullspace<Dim> prepared;
     require(uniformly_accepted([&] {
       prepared = prepare_field_nullspace_collectively<Dim>(
-          *registry, operator_topology_zero_mean_nullspace(), request);
+          *registry, operator_topology_zero_mean_nullspace(), request, lane);
     }));
     require(prepared.plan.bases.size() == 1U && prepared.plan.gauges.size() == 1U);
   }
@@ -335,13 +341,13 @@ void exercise_exact_ranked_preflight(Require&& require) {
         PreparedVectorDistribution<Dim>::Replicated};
     const std::span<const PreparedVectorDistribution<Dim>> distribution_span(distributions);
     require(uniformly_accepted([&] {
-      validate_field_nullspace_basis<Dim>(const_levels, plan, distribution_span);
+      validate_field_nullspace_basis<Dim>(const_levels, plan, distribution_span, lane);
       const std::vector<double> witness =
-          require_field_nullspace_compatible<Dim>(const_levels, plan, distribution_span);
+          require_field_nullspace_compatible<Dim>(const_levels, plan, distribution_span, lane);
       const double cell_count = static_cast<double>(std::size_t{1} << (Dim + 1));
       if (witness.size() != 2U || witness[0] != 0.0 || witness[1] != cell_count)
         throw std::runtime_error("replicated exact-rank witness was double-counted");
-      apply_field_gauge<Dim>(mutable_levels, plan, distribution_span);
+      apply_field_gauge<Dim>(mutable_levels, plan, distribution_span, lane);
     }));
   }
 
@@ -360,10 +366,10 @@ void exercise_exact_ranked_preflight(Require&& require) {
           "replicated-components", "replicated-components-layout",
           std::vector<std::shared_ptr<const MultiFab<Dim>>>{labels},
           {{1, "left", "mpi:label:1"}, {2, "right", "mpi:label:2"}}, {}, {Real(1)}, 0,
-          distribution_span);
+          distribution_span, lane);
       const std::vector<const MultiFab<Dim>*> levels{rhs.get()};
       const std::vector<double> witness =
-          require_field_nullspace_compatible<Dim>(levels, plan, distribution_span);
+          require_field_nullspace_compatible<Dim>(levels, plan, distribution_span, lane);
       const double component_cells = static_cast<double>(std::size_t{1} << Dim);
       if (witness.size() != 4U || witness[0] != 0.0 || witness[1] != component_cells ||
           witness[2] != 0.0 || witness[3] != component_cells)
@@ -377,14 +383,15 @@ void exercise_exact_ranked_preflight(Require&& require) {
         constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
     const std::vector<const MultiFab<Dim>*> layouts{rank == 0 ? nullptr : field.get()};
     require(uniformly_rejected(
-        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span); }));
+        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span, lane); }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>(
         rank == 0 ? "nullspace-rank-0" : "nullspace-rank-1", "mpi-preflight");
     const std::vector<const MultiFab<Dim>*> levels{field.get()};
-    require(uniformly_rejected(
-        [&] { (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span); }));
+    require(uniformly_rejected([&] {
+      (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span, lane);
+    }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
@@ -392,7 +399,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
       plan.bases[0].coverage = {field};
     const std::vector<const MultiFab<Dim>*> layouts{field.get()};
     require(uniformly_rejected(
-        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span); }));
+        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span, lane); }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
@@ -400,7 +407,8 @@ void exercise_exact_ranked_preflight(Require&& require) {
     const std::vector<const MultiFab<Dim>*> levels{field.get()};
     const int first_level = rank == 0 ? 1 : 0;
     require(uniformly_rejected([&] {
-      (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span, first_level);
+      (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span, lane,
+                                                    first_level);
     }));
   }
   {
@@ -411,7 +419,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
     }
     const std::vector<const MultiFab<Dim>*> layouts{field.get()};
     require(uniformly_rejected(
-        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span); }));
+        [&] { validate_field_nullspace_basis<Dim>(layouts, plan, distributed_span, lane); }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
@@ -423,21 +431,23 @@ void exercise_exact_ranked_preflight(Require&& require) {
         levels.size(), PreparedVectorDistribution<Dim>::Distributed);
     require(uniformly_rejected([&] {
       (void)require_field_nullspace_compatible<Dim>(
-          levels, plan, std::span<const PreparedVectorDistribution<Dim>>(distributions));
+          levels, plan, std::span<const PreparedVectorDistribution<Dim>>(distributions), lane);
     }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
     plan.gauges[0].value = rank == 0 ? Real(0) : Real(1);
     const std::vector<MultiFab<Dim>*> levels{field.get()};
-    require(uniformly_rejected([&] { apply_field_gauge<Dim>(levels, plan, distributed_span); }));
+    require(
+        uniformly_rejected([&] { apply_field_gauge<Dim>(levels, plan, distributed_span, lane); }));
   }
   {
     FieldNullspacePlan<Dim> plan = constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
     if (rank == 0)
       plan.gauges.clear();
     const std::vector<MultiFab<Dim>*> levels{field.get()};
-    require(uniformly_rejected([&] { apply_field_gauge<Dim>(levels, plan, distributed_span); }));
+    require(
+        uniformly_rejected([&] { apply_field_gauge<Dim>(levels, plan, distributed_span, lane); }));
   }
   {
     const FieldNullspacePlan<Dim> plan =
@@ -448,7 +458,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
                   : PreparedVectorDistribution<Dim>::Replicated};
     require(uniformly_rejected([&] {
       (void)require_field_nullspace_compatible<Dim>(
-          levels, plan, std::span<const PreparedVectorDistribution<Dim>>(distributions));
+          levels, plan, std::span<const PreparedVectorDistribution<Dim>>(distributions), lane);
     }));
   }
   {
@@ -456,8 +466,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
     const FieldNullspacePlan<Dim> plan =
         constant_mean_zero_nullspace<Dim>("nullspace", "mpi-preflight");
     const std::vector<const MultiFab<Dim>*> levels{drifted.get()};
-    require(uniformly_rejected(
-        [&] { (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span); }));
+    require(uniformly_rejected([&] {
+      (void)require_field_nullspace_compatible<Dim>(levels, plan, distributed_span, lane);
+    }));
   }
 
   // Component vocabulary drift is caught before mask allocation or label-count reduction.
@@ -469,7 +480,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
       (void)labelled_mean_zero_nullspace<Dim>(
           "prepared-nullspace", "prepared-layout",
           std::vector<std::shared_ptr<const MultiFab<Dim>>>{field}, components, {}, {Real(1)}, 0,
-          distributed_span);
+          distributed_span, lane);
     }));
   }
 
@@ -484,7 +495,8 @@ void exercise_exact_ranked_preflight(Require&& require) {
     require(uniformly_rejected(
         [&] {
           (void)require_field_nullspace_compatible<Dim>(
-              levels, plan, std::span<const PreparedVectorDistribution<Dim>>(replicated_level));
+              levels, plan, std::span<const PreparedVectorDistribution<Dim>>(replicated_level),
+              lane);
         },
         kExactReplicaValidationFailure));
   }
@@ -498,8 +510,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
         PreparedVectorDistribution<Dim>::Replicated};
     require(uniformly_rejected(
         [&] {
-          apply_field_gauge<Dim>(
-              levels, plan, std::span<const PreparedVectorDistribution<Dim>>(replicated_level));
+          apply_field_gauge<Dim>(levels, plan,
+                                 std::span<const PreparedVectorDistribution<Dim>>(replicated_level),
+                                 lane);
         },
         kExactReplicaValidationFailure));
   }
@@ -516,7 +529,8 @@ void exercise_exact_ranked_preflight(Require&& require) {
     require(uniformly_rejected(
         [&] {
           validate_field_nullspace_basis<Dim>(
-              levels, plan, std::span<const PreparedVectorDistribution<Dim>>(replicated_level));
+              levels, plan, std::span<const PreparedVectorDistribution<Dim>>(replicated_level),
+              lane);
         },
         kExactReplicaValidationFailure));
   }
@@ -530,7 +544,7 @@ void exercise_exact_ranked_preflight(Require&& require) {
     const std::vector<const MultiFab<Dim>*> levels{field.get()};
     require(uniformly_accepted([&] {
       const std::vector<double> witness =
-          require_field_nullspace_compatible<Dim>(levels, plan, distributed_span);
+          require_field_nullspace_compatible<Dim>(levels, plan, distributed_span, lane);
       if (witness.size() != 2U || std::abs(witness[0]) > 1e-13)
         throw std::runtime_error("distributed exact-rank witness is not mean-zero");
     }));
@@ -543,14 +557,14 @@ void exercise_exact_ranked_preflight(Require&& require) {
     const std::vector<const MultiFab<Dim>*> rhs_levels{rank_zero_field.get()};
     require(uniformly_accepted([&] {
       const std::vector<double> witness =
-          require_field_nullspace_compatible<Dim>(rhs_levels, plan, distributed_span);
+          require_field_nullspace_compatible<Dim>(rhs_levels, plan, distributed_span, lane);
       if (witness.size() != 2U || std::abs(witness[0]) > 1e-13)
         throw std::runtime_error("empty-rank exact-rank witness is not mean-zero");
     }));
     rank_zero_field->set_val(Real(3));
     const std::vector<MultiFab<Dim>*> phi_levels{rank_zero_field.get()};
-    require(
-        uniformly_accepted([&] { apply_field_gauge<Dim>(phi_levels, plan, distributed_span); }));
+    require(uniformly_accepted(
+        [&] { apply_field_gauge<Dim>(phi_levels, plan, distributed_span, lane); }));
     require(maximum_error(*rank_zero_field, Real(0)) < 1e-13);
   }
   {
@@ -566,9 +580,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
     require(uniformly_accepted([&] {
       const std::vector<MultiFab<Dim>*> mutable_levels{replica.get(), distributed.get()};
       const std::span<const PreparedVectorDistribution<Dim>> distribution_span(distributions);
-      apply_field_gauge<Dim>(mutable_levels, plan, distribution_span);
+      apply_field_gauge<Dim>(mutable_levels, plan, distribution_span, lane);
       const std::vector<double> witness =
-          require_field_nullspace_compatible<Dim>(levels, plan, distribution_span);
+          require_field_nullspace_compatible<Dim>(levels, plan, distribution_span, lane);
       // The replicated level contributes its physical cells once, while the distributed level
       // contributes the same global cell count partitioned across ranks.  After the shared gauge
       // shift both levels have magnitude one half, so their combined absolute moment equals one
@@ -576,10 +590,9 @@ void exercise_exact_ranked_preflight(Require&& require) {
       const double hierarchy_cells = static_cast<double>(std::size_t{1} << (Dim + 1));
       if (witness.size() != 2U || std::abs(witness[0]) > 1e-13 || witness[1] != hierarchy_cells)
         throw std::runtime_error(
-            "mixed exact-rank witness is not mean-zero: size=" +
-            std::to_string(witness.size()) + " moment=" +
-            (witness.empty() ? std::string("missing") : std::to_string(witness[0])) + " mass=" +
-            (witness.size() < 2U ? std::string("missing") : std::to_string(witness[1])) +
+            "mixed exact-rank witness is not mean-zero: size=" + std::to_string(witness.size()) +
+            " moment=" + (witness.empty() ? std::string("missing") : std::to_string(witness[0])) +
+            " mass=" + (witness.size() < 2U ? std::string("missing") : std::to_string(witness[1])) +
             " expected-mass=" + std::to_string(hierarchy_cells));
     }));
     require(maximum_error(*replica, Real(0.5)) < 1e-13);

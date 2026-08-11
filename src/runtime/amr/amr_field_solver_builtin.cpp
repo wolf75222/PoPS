@@ -68,11 +68,15 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
   using request_type = ExactAmrFieldSolverBuildRequest<Dim>;
 
   BuiltinExactAmrFieldSolver(const request_type& request, std::string contract,
-                             BuiltinOptions options)
-      : contract_(std::move(contract)), mode_(request.mode), options_(options) {
+                             BuiltinOptions options, const ExecutionLane& lane)
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        contract_(std::move(contract)),
+        mode_(request.mode),
+        options_(options) {
     if (mode_ == ExactFieldHierarchyMode::composite) {
       composite_ = std::make_unique<elliptic::mg::CompositeFacPoisson<Dim, MemorySpace>>(
-          request.hierarchy, options_.fac, request.reaction);
+          request.hierarchy, lane, options_.fac, request.reaction);
       return;
     }
     local_.reserve(request.hierarchy.levels.size());
@@ -80,7 +84,7 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       auto controls = options_.mg;
       controls.reaction = request.reaction;
       local_.push_back(
-          std::make_unique<elliptic::mg::GeometricMG<Dim, MemorySpace>>(level, controls));
+          std::make_unique<elliptic::mg::GeometricMG<Dim, MemorySpace>>(level, lane, controls));
     }
   }
 
@@ -163,7 +167,9 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
       result = std::max(result, solver->maximum_iterations());
     return result;
   }
-  SolveReport solve() override {
+  SolveReport solve(const ExecutionLane& lane) override {
+    if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument("exact AMR field solve requires its prepared execution lane");
     if (nullspace_contract_.empty())
       throw std::logic_error("exact AMR field solve has no prepared nullspace authority");
     if (composite_)
@@ -207,6 +213,8 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     return result;
   }
 
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::string contract_;
   std::string nullspace_contract_;
   ExactFieldHierarchyMode mode_ = ExactFieldHierarchyMode::level_local;
@@ -226,7 +234,8 @@ class BuiltinExactAmrFieldSolverProvider final
   std::string_view collective_contract() const noexcept override {
     return "pops.amr.field-solver.geometric-mg.exact-ranked@3";
   }
-  PreparedProviderSupport supports(const request_type& request) const noexcept override {
+  PreparedProviderSupport supports(const request_type& request,
+                                   const ExecutionLane& lane) const noexcept override {
     try {
       const BuiltinOptions decoded = decode_options<Dim>(request.provider_options);
       (void)decoded;
@@ -240,7 +249,7 @@ class BuiltinExactAmrFieldSolverProvider final
           if (!level.boxes.tiles_exactly(level.geometry.domain(), level.layout_budget))
             return PreparedProviderSupport::reject(
                 3, "level-local geometric MG requires a complete uniform level");
-      } else if (n_ranks() > 1) {
+      } else if (lane.size() > 1) {
         for (const auto& level : request.hierarchy.levels)
           if (!level.distribution.replicated())
             return PreparedProviderSupport::reject(
@@ -253,16 +262,18 @@ class BuiltinExactAmrFieldSolverProvider final
       return PreparedProviderSupport::reject(6, "geometric MG provider validation failed");
     }
   }
-  std::string expected_prepared_contract(const request_type& request) const override {
-    return make_exact_amr_field_solver_contract(identity(), request);
+  std::string expected_prepared_contract(const request_type& request,
+                                         const ExecutionLane& lane) const override {
+    return make_exact_amr_field_solver_contract(identity(), request, lane);
   }
-  std::unique_ptr<solver_type> build(const request_type& request) const override {
-    const PreparedProviderSupport decision = supports(request);
+  std::unique_ptr<solver_type> build(const request_type& request,
+                                     const ExecutionLane& lane) const override {
+    const PreparedProviderSupport decision = supports(request, lane);
     if (!decision.accepted())
       throw std::invalid_argument(std::string(decision.reason));
     return std::make_unique<BuiltinExactAmrFieldSolver<Dim, MemorySpace>>(
-        request, expected_prepared_contract(request),
-        decode_options<Dim>(request.provider_options));
+        request, expected_prepared_contract(request, lane),
+        decode_options<Dim>(request.provider_options), lane);
   }
 };
 

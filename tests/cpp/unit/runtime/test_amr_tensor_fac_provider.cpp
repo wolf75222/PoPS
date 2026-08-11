@@ -205,9 +205,10 @@ pops::Real solve_manufactured_error(int coarse_cells) {
   const std::array<Geometry<2>, 2> geometries{build_request.levels[0].geometry,
                                               build_request.levels[1].geometry};
   const Box<2> comparison = build_request.levels[1].layout[0].grow(-std::max(2, coarse_cells / 4));
-  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>();
+  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-mms");
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>(lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
-      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(build_request));
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(build_request), lane);
 
   for (int level = 0; level < prepared->level_count(); ++level) {
     prepared->assembly_target("pops.tensor-elliptic.coefficient.0.0", level).set_val(Real(2));
@@ -224,7 +225,7 @@ pops::Real solve_manufactured_error(int coarse_cells) {
   Kokkos::fence();
 
   SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
-      *prepared, HierarchyTensorSolveControls{Real(8e-7), Real(1e-12), 60});
+      *prepared, HierarchyTensorSolveControls{Real(8e-7), Real(1e-12), 60}, lane);
   const SolveReport report = outcome.consume(SolveConsumption::kAccept);
   if (!report.solved())
     throw std::runtime_error("dimension-generic tensor MMS did not converge: " + report.reason);
@@ -271,9 +272,11 @@ void expect_transactional_publication() {
   using namespace pops;
   using namespace pops::runtime::program;
   PreparedHierarchyTensorKernel<Dim> kernel{ExactIdentityTensorKernel<Dim>{}};
-  const auto registry = make_hierarchy_tensor_solver_provider_registry<Dim>(std::move(kernel));
+  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-transaction");
+  const auto registry =
+      make_hierarchy_tensor_solver_provider_registry<Dim>(std::move(kernel), lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
-      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true));
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true), lane);
   EXPECT_EQ(prepared->assembly_target("pops.tensor-elliptic.flux", 0).ncomp(), Dim);
   EXPECT_EQ(prepared->assembly_target(tensor_elliptic_detail::coefficient_slot(Dim - 1, Dim - 1), 0)
                 .ncomp(),
@@ -281,7 +284,7 @@ void expect_transactional_publication() {
   prepared->assembly_target("pops.tensor-elliptic.rhs", 0).set_val(Real(2));
   prepared->solution(0).set_val(Real(0));
   SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
-      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4});
+      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4}, lane);
   EXPECT_EQ(norm_inf(prepared->solution(0)), Real(0));
   EXPECT_TRUE(outcome.consume(SolveConsumption::kAccept).solved());
   EXPECT_EQ(norm_inf(prepared->solution(0)), Real(2));
@@ -297,9 +300,10 @@ template <int Dim>
 void expect_direct_fac_zero_residual() {
   using namespace pops;
   using namespace pops::runtime::program;
-  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>();
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("pops.test.nd-tensor-zero-residual");
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>(lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
-      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true));
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<Dim>(true), lane);
   for (int level = 0; level < prepared->level_count(); ++level) {
     for (int row = 0; row < Dim; ++row)
       for (int column = 0; column < Dim; ++column)
@@ -309,7 +313,7 @@ void expect_direct_fac_zero_residual() {
     prepared->stage_initial_guess(level, nullptr);
   }
   EXPECT_TRUE(solve_prepared_hierarchy_tensor_collectively(
-                  *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4})
+                  *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4}, lane)
                   .consume(SolveConsumption::kAccept)
                   .solved());
 }
@@ -321,8 +325,9 @@ TEST(HierarchyTensorExactRank, DirectFacUsesTheSameOperatorInOneTwoAndThreeDimen
 }
 
 TEST(HierarchyTensorExactRank, ExactRankProvidesTheBuiltinFullTensorFacKernel) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("pops.test.nd-tensor-provider");
   using namespace pops::runtime::program;
-  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>();
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<2>(lane);
   const auto provider = registry->resolve(tensor_elliptic_detail::kCompositeTensorProvider);
   const pops::PreparedProviderSupport support = provider->supports(request<2>(true));
   EXPECT_TRUE(support.accepted());
@@ -333,9 +338,10 @@ TEST(HierarchyTensorExactRank, ExactRankPublishesOnlyAfterSolveOutcomeAccept) {
   using namespace pops::runtime::program;
 
   PreparedHierarchyTensorKernel<2> kernel{ExactIdentityTensorKernel<2>{}};
-  const auto registry = make_hierarchy_tensor_solver_provider_registry<2>(std::move(kernel));
+  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-publication");
+  const auto registry = make_hierarchy_tensor_solver_provider_registry<2>(std::move(kernel), lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
-      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<2>(true));
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, request<2>(true), lane);
 
   EXPECT_EQ(prepared->level_count(), 2);
   EXPECT_EQ(prepared->assembly_target("pops.tensor-elliptic.flux", 0).ncomp(), 2);
@@ -346,7 +352,7 @@ TEST(HierarchyTensorExactRank, ExactRankPublishesOnlyAfterSolveOutcomeAccept) {
   prepared->assembly_target("pops.tensor-elliptic.rhs", 0).set_val(Real(2));
   prepared->solution(0).set_val(Real(0));
   SolveOutcome outcome = solve_prepared_hierarchy_tensor_collectively(
-      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4});
+      *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4}, lane);
 
   EXPECT_EQ(norm_inf(prepared->solution(0)), Real(0));
   const SolveReport accepted = outcome.consume(SolveConsumption::kAccept);

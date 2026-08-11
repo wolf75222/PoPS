@@ -194,17 +194,14 @@ class ProgramContext {
     double prior_physical_time_offset_ = 0.0;
   };
 
-  explicit ProgramContext(runtime_type* system)
-      : system_(require_system_(system)),
-        scalar_boundary_lane_(
-            std::make_shared<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
-                "pops.program.scalar-boundary.nd" + std::to_string(Dim)))) {}
+  explicit ProgramContext(runtime_type* system) : system_(require_system_(system)) {}
 
   void install(std::function<void(double)> step) const {
     system_->install_program_step(std::move(step));
   }
 
   void begin_step(double dt) const {
+    (void)prepared_execution_lane();
     if (!std::isfinite(dt) || dt <= 0.0)
       throw std::invalid_argument("ProgramContext step requires a finite positive dt");
     current_dt_ = dt;
@@ -278,8 +275,9 @@ class ProgramContext {
   /// embed global group/component addresses.  ``Count == 0`` returns an empty device-copyable view
   /// without reading a consumer plan or provider storage, even if another block owns providers.
   template <int Count>
-  [[nodiscard]] provider_values_view_type<Count> provider_values_view(
-      std::string_view consumer_qid, int program_block, std::size_t local_fab) const {
+  [[nodiscard]] provider_values_view_type<Count> provider_values_view(std::string_view consumer_qid,
+                                                                      int program_block,
+                                                                      std::size_t local_fab) const {
     static_assert(Count >= 0, "a provider consumer count cannot be negative");
     if constexpr (Count == 0) {
       (void)consumer_qid;
@@ -497,7 +495,8 @@ class ProgramContext {
       const field_type& value = snapshots[candidate] ? *snapshots[candidate] : *source;
       for (int block = 0; block < system_->n_blocks(); ++block)
         if (target == &system_->block_state(block)) {
-          system_->validate_program_state_publication_candidate(block, value);
+          system_->validate_program_state_publication_candidate_(block, value,
+                                                                 prepared_execution_lane());
           break;
         }
       ++candidate;
@@ -525,18 +524,27 @@ class ProgramContext {
   }
 
   Real sum_component(const field_type& field, int component) const {
-    return pops::reduce_sum(field, component);
+    return static_cast<Real>(
+        all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
   }
   Real max_component(const field_type& field, int component) const {
-    return pops::reduce_max(field, component);
+    return static_cast<Real>(
+        all_reduce_max(pops::reduce_max_local(field, component), prepared_execution_lane()));
   }
   Real min_component(const field_type& field, int component) const {
-    return pops::reduce_min(field, component);
+    return static_cast<Real>(
+        all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
   }
-  Real norm2(int, const field_type& field) const { return std::sqrt(pops::dot(field, field, 0)); }
-  Real norm_inf(int, const field_type& field) const { return pops::reduce_norm_inf(field, 0); }
+  Real norm2(int, const field_type& field) const {
+    return std::sqrt(static_cast<Real>(
+        all_reduce_sum(pops::dot_local(field, field, 0), prepared_execution_lane())));
+  }
+  Real norm_inf(int, const field_type& field) const {
+    return static_cast<Real>(all_reduce_max(pops::norm_inf(field, 0), prepared_execution_lane()));
+  }
   Real dot(int, const field_type& left, const field_type& right) const {
-    return pops::dot(left, right, 0);
+    return static_cast<Real>(
+        all_reduce_sum(pops::dot_local(left, right, 0), prepared_execution_lane()));
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -555,6 +563,7 @@ class ProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "Program scalar boundary preparation");
     return scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
                                                  lane, next_scalar_boundary_generation_());
   }
@@ -562,6 +571,7 @@ class ProgramContext {
   std::shared_ptr<block_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "Program block boundary preparation");
     int runtime_block = -1;
     std::exception_ptr local_error;
     try {
@@ -592,8 +602,7 @@ class ProgramContext {
         .scalar(point.dt)
         .scalar(point.physical_time);
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("program-prepared-block-boundary-session"), contract.view()}},
-            lane.communicator()))
+            {{std::string_view("program-prepared-block-boundary-session"), contract.view()}}, lane))
       throw std::runtime_error("Program prepared block boundary session differs across MPI ranks");
     auto transport =
         scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(), prototype,
@@ -651,24 +660,26 @@ class ProgramContext {
 
   void fill_boundary(field_type& field) const {
     auto session = scalar_boundary_session_type::prepare(geometry(), scalar_boundary_topology_(),
-                                                         field, *scalar_boundary_lane_,
+                                                         field, prepared_execution_lane(),
                                                          next_scalar_boundary_generation_());
     session->fill(field);
   }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "Program boundary fill");
     auto session = scalar_boundary_session_type::prepare(
         geometry(), scalar_boundary_topology_(), field, lane, next_scalar_boundary_generation_());
     session->fill(field);
   }
 
   void laplacian(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
     laplacian(output, input, *boundary);
   }
 
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program Laplacian boundary");
     require_scalar_stencil_(output, input, 1, "Program Laplacian");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -700,12 +711,13 @@ class ProgramContext {
   }
 
   void gradient(field_type& output, field_type& input) const {
-    auto boundary = prepare_mesh_boundary_session(input, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(input, prepared_execution_lane());
     gradient(output, input, *boundary);
   }
 
   void gradient(field_type& output, field_type& input,
                 const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program gradient boundary");
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
@@ -732,12 +744,13 @@ class ProgramContext {
   }
 
   void divergence(field_type& output, field_type& flux) const {
-    auto boundary = prepare_mesh_boundary_session(flux, *scalar_boundary_lane_);
+    auto boundary = prepare_mesh_boundary_session(flux, prepared_execution_lane());
     divergence(output, flux, *boundary);
   }
 
   void divergence(field_type& output, field_type& flux,
                   const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program divergence boundary");
     if (output.ncomp() != 1 || flux.ncomp() != Dim || output.layout() != flux.layout() ||
         output.distribution() != flux.distribution() || output.local_rank() != flux.local_rank() ||
         output.local_size() != flux.local_size())
@@ -804,6 +817,7 @@ class ProgramContext {
 
   void tensor_laplacian(field_type& output, field_type& input, const field_type& tensor,
                         const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "Program tensor Laplacian boundary");
     require_scalar_stencil_(output, input, 1, "Program tensor Laplacian");
     require_tensor_stencil_(input, tensor, "Program tensor Laplacian");
     boundary.fill(input);
@@ -1058,6 +1072,7 @@ class ProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
+    require_prepared_lane_(workspace.execution_lane(), "Program prepared linear solve");
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 
@@ -1233,6 +1248,13 @@ class ProgramContext {
       throw std::invalid_argument("ProgramContext rate identity must be non-negative");
   }
 
+  void require_prepared_lane_(const ExecutionLane& lane, const char* operation) const {
+    const ExecutionLane& prepared = prepared_execution_lane();
+    if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the context's authenticated execution lane");
+  }
+
   static void require_same_field_contract_(const field_type& left, const field_type& right,
                                            const char* operation) {
     if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
@@ -1263,8 +1285,7 @@ class ProgramContext {
         .scalar(std::int32_t{runtime_block})
         .text(lane.identity());
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("program-prepared-boundary-route"), contract.view()}},
-            lane.communicator()))
+            {{std::string_view("program-prepared-boundary-route"), contract.view()}}, lane))
       throw std::runtime_error(std::string(operation) + " differs across MPI ranks");
     return runtime_block;
   }
@@ -1448,7 +1469,6 @@ class ProgramContext {
   }
 
   runtime_type* system_ = nullptr;
-  std::shared_ptr<ExecutionLane> scalar_boundary_lane_;
   mutable std::uint64_t scalar_boundary_generation_ = 0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;

@@ -180,14 +180,14 @@ class PoissonFFTSolver {
     typename PoissonFFT<Dim>::device_view fft_rhs;
     typename PoissonFFT<Dim>::device_view fft_phi;
     std::unique_ptr<HaloSchedule<Dim>> halo_schedule;
-    std::unique_ptr<std::optional<ExecutionLane>> halo_lane_storage;
     EllipticOperatorContract operator_contract;
   };
 
  public:
-  explicit PoissonFFTSolver(request_type request)
-      : PoissonFFTSolver(prepare_storage_collectively_(prepare_collectively_(std::move(request))),
-                         PreparedTag{}) {}
+  PoissonFFTSolver(request_type request, const ExecutionLane& lane)
+      : PoissonFFTSolver(
+            prepare_storage_collectively_(prepare_collectively_(std::move(request), lane), lane),
+            lane, PreparedTag{}) {}
 
   PoissonFFTSolver(const PoissonFFTSolver&) = delete;
   PoissonFFTSolver& operator=(const PoissonFFTSolver&) = delete;
@@ -203,10 +203,9 @@ class PoissonFFTSolver {
     return make_expected_elliptic_operator_contract(operator_identity(), request,
                                                     fft_solver_detail::options_contract());
   }
-  static bool supports(const request_type& request) noexcept {
+  static bool supports(const request_type& request, const ExecutionLane& lane) noexcept {
     try {
-      const ExecutionLane world = ExecutionLane::world();
-      validate_local_(request, world);
+      validate_local_(request, lane);
       return true;
     } catch (...) {
       return false;
@@ -227,6 +226,7 @@ class PoissonFFTSolver {
   const EllipticOperatorContract& prepared_operator_contract() const noexcept {
     return prepared_operator_contract_;
   }
+  bool borrows_execution_lane(const ExecutionLane& lane) const noexcept { return lane_ == &lane; }
 
   void install_nullspace(FieldNullspacePlan<Dim> plan,
                          PreparedVectorDistribution<Dim> distribution) {
@@ -238,7 +238,7 @@ class PoissonFFTSolver {
     std::vector<const field_type*> layouts{&rhs_};
     std::vector<PreparedVectorDistribution<Dim>> distributions{std::move(distribution)};
     nullspace_workspace_ = std::make_unique<FieldNullspaceWorkspace<Dim>>(
-        std::move(plan), std::move(layouts), std::move(distributions));
+        std::move(plan), std::move(layouts), std::move(distributions), *lane_);
   }
 
   SolveReport solve() {
@@ -277,7 +277,7 @@ class PoissonFFTSolver {
     } catch (...) {
       layout_error = std::current_exception();
     }
-    if (all_reduce_max(layout_error ? 1L : 0L) != 0) {
+    if (all_reduce_max(layout_error ? 1L : 0L, *lane_) != 0) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "poisson_fft_local_slab_layout_mismatch");
       last_report_ = report;
@@ -334,8 +334,9 @@ class PoissonFFTSolver {
             report, "poisson_fft_residual_evaluation_failed_collectively"))
       return last_report_;
     report.reference_residual_norm =
-        static_cast<Real>(all_reduce_max(static_cast<double>(local_reference_residual)));
-    report.residual_norm = static_cast<Real>(all_reduce_max(static_cast<double>(local_residual)));
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_reference_residual), *lane_));
+    report.residual_norm =
+        static_cast<Real>(all_reduce_max(static_cast<double>(local_residual), *lane_));
     report.rel_residual = report.reference_residual_norm > Real(0)
                               ? report.residual_norm / report.reference_residual_norm
                               : report.residual_norm;
@@ -370,7 +371,6 @@ class PoissonFFTSolver {
   template <class Operation>
   bool execute_solve_stage_collectively_(Operation&& operation, SolveReport& report,
                                          const char* failure_reason) {
-    const ExecutionLane world = ExecutionLane::world();
     std::exception_ptr local_error;
     try {
       std::forward<Operation>(operation)();
@@ -378,14 +378,14 @@ class PoissonFFTSolver {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, world.communicator()) == 0)
+    if (all_reduce_max(local_error ? 1L : 0L, *lane_) == 0)
       return true;
     report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun, failure_reason);
     last_report_ = report;
     return false;
   }
 
-  PoissonFFTSolver(PreparedStorage prepared, PreparedTag)
+  PoissonFFTSolver(PreparedStorage prepared, const ExecutionLane& lane, PreparedTag)
       : geometry_(std::move(prepared.geometry)),
         boundary_(std::move(prepared.boundary)),
         rhs_(std::move(prepared.rhs)),
@@ -395,37 +395,30 @@ class PoissonFFTSolver {
         fft_rhs_(std::move(prepared.fft_rhs)),
         fft_phi_(std::move(prepared.fft_phi)),
         halo_schedule_(std::move(prepared.halo_schedule)),
-        halo_lane_(std::move(prepared.halo_lane_storage)),
+        lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
         prepared_operator_contract_(std::move(prepared.operator_contract)) {
-    // Every wrapper allocation and schedule has already crossed one world consensus.  Only then
-    // may the transform and halo paths duplicate their collectively owned communicators.
     fft_.emplace(fft_solver_detail::fft_cells(geometry_), fft_solver_detail::fft_lengths(geometry_),
-                 "pops.poisson-fft/cartesian");
-    const bool remote = all_reduce_max(halo_schedule_->has_remote_jobs() ? 1L : 0L) != 0;
+                 lane, "pops.poisson-fft/cartesian");
+    const bool remote = all_reduce_max(halo_schedule_->has_remote_jobs() ? 1L : 0L, lane) != 0;
     if (remote) {
-      // The stable holder was allocated and agreed before either FFT communicator was duplicated.
-      // Emplacing a noexcept-movable lane performs no allocation after MPI_Comm_dup, so a
-      // rank-local allocator failure cannot leave only a subset of ranks owning/freeing the lane.
-      halo_lane_->emplace(
-          ExecutionLane::duplicate_world_collectively("pops.poisson-fft.cartesian/periodic-halo"));
       std::exception_ptr exchange_error;
       try {
         HaloExchangeContext context{};
         context.context_generation = 1;
         context.schedule_generation = 1;
-        halo_exchange_ =
-            std::make_unique<HaloExchange<Dim>>(*halo_schedule_, **halo_lane_, context);
+        halo_exchange_ = std::make_unique<HaloExchange<Dim>>(*halo_schedule_, lane, context);
       } catch (...) {
         exchange_error = std::current_exception();
       }
-      if (all_reduce_max(exchange_error ? 1L : 0L) != 0) {
+      if (all_reduce_max(exchange_error ? 1L : 0L, lane) != 0) {
         throw std::runtime_error("Poisson FFT halo-exchange preparation failed collectively");
       }
     }
   }
 
-  static PreparedStorage prepare_storage_collectively_(const request_type& request) {
-    const ExecutionLane world = ExecutionLane::world();
+  static PreparedStorage prepare_storage_collectively_(const request_type& request,
+                                                       const ExecutionLane& lane) {
     std::optional<PreparedStorage> prepared;
     std::exception_ptr allocation_error;
     try {
@@ -438,51 +431,48 @@ class PoissonFFTSolver {
       field_type residual_field(request.boxes, request.distribution, request.local_rank, 1,
                                 Extent<Dim>{});
       typename PoissonFFT<Dim>::device_view fft_rhs("poisson_fft_rhs",
-                                                    local_fft_cell_count_(request));
+                                                    local_fft_cell_count_(request, lane));
       typename PoissonFFT<Dim>::device_view fft_phi("poisson_fft_phi",
-                                                    local_fft_cell_count_(request));
+                                                    local_fft_cell_count_(request, lane));
       auto halo_schedule = std::make_unique<HaloSchedule<Dim>>(prepare_halo_schedule(
           trial, request.geometry.domain(), request.boundary.topology(),
           fft_solver_detail::exact_halo_budget(trial.layout(), request.geometry.domain())));
-      auto halo_lane_storage = std::make_unique<std::optional<ExecutionLane>>();
-      prepared.emplace(PreparedStorage{request.geometry, request.boundary, std::move(rhs),
-                                       std::move(phi), std::move(trial), std::move(residual_field),
-                                       std::move(fft_rhs), std::move(fft_phi),
-                                       std::move(halo_schedule), std::move(halo_lane_storage),
-                                       expected_operator_contract(request)});
+      prepared.emplace(PreparedStorage{
+          request.geometry, request.boundary, std::move(rhs), std::move(phi), std::move(trial),
+          std::move(residual_field), std::move(fft_rhs), std::move(fft_phi),
+          std::move(halo_schedule), expected_operator_contract(request)});
     } catch (...) {
       allocation_error = std::current_exception();
     }
-    if (all_reduce_max(allocation_error ? 1L : 0L, world.communicator()) != 0) {
-      if (world.size() == 1 && allocation_error)
+    if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && allocation_error)
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("Poisson FFT wrapper allocation failed collectively");
     }
     return std::move(*prepared);
   }
 
-  static std::size_t local_fft_cell_count_(const request_type& request) {
-    const ExecutionLane world = ExecutionLane::world();
+  static std::size_t local_fft_cell_count_(const request_type& request, const ExecutionLane& lane) {
     std::size_t local_cells = 1;
     for (int axis = 0; axis < Dim; ++axis) {
       const std::int64_t extent = request.geometry.domain().length(axis);
       const std::size_t local_extent =
-          static_cast<std::size_t>(axis == Dim - 1 ? extent / world.size() : extent);
+          static_cast<std::size_t>(axis == Dim - 1 ? extent / lane.size() : extent);
       local_cells = fft_solver_detail::checked_multiply(
           local_cells, local_extent, "Poisson FFT local slab element count overflow");
     }
     return local_cells;
   }
 
-  static void validate_local_(const request_type& request, const ExecutionLane& world) {
-    const int ranks = world.size();
+  static void validate_local_(const request_type& request, const ExecutionLane& lane) {
+    const int ranks = lane.size();
     if (ranks < 1 || request.geometry.domain().empty() || request.boxes.empty() ||
         !request.boxes.tiles_exactly(request.geometry.domain(), request.layout_budget) ||
         !request.distribution.matches_layout(request.boxes) ||
         !request.distribution.rank_space().contains(request.local_rank) ||
         request.distribution.rank_space().size() != static_cast<std::size_t>(ranks) ||
         request.distribution.rank_space().linear_rank(request.local_rank) !=
-            static_cast<std::size_t>(world.rank()))
+            static_cast<std::size_t>(lane.rank()))
       throw std::invalid_argument("Poisson FFT received an invalid exact-ranked layout request");
     if (request.boxes.size() != static_cast<std::size_t>(ranks))
       throw std::invalid_argument("Poisson FFT requires exactly one slab per communicator rank");
@@ -527,30 +517,29 @@ class PoissonFFTSolver {
     }
   }
 
-  static request_type prepare_collectively_(request_type request) {
-    const ExecutionLane world = ExecutionLane::world();
+  static request_type prepare_collectively_(request_type request, const ExecutionLane& lane) {
     std::exception_ptr error;
     std::string exact_request;
     try {
-      validate_local_(request, world);
+      validate_local_(request, lane);
       exact_request.assign(expected_operator_contract(request).exact_fingerprint());
     } catch (...) {
       error = std::current_exception();
     }
-    if (all_reduce_max(error ? 1L : 0L, world.communicator()) != 0) {
-      if (world.size() == 1 && error)
+    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && error)
         std::rethrow_exception(error);
       throw std::runtime_error("Poisson FFT preparation failed collectively");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"pops.poisson-fft-solver.exact-request@3", exact_request}}))
+            {{"pops.poisson-fft-solver.exact-request@3", exact_request}}, lane))
       throw std::invalid_argument("Poisson FFT solver request differs across communicator ranks");
     return request;
   }
 
   void fill_periodic_(field_type& field) {
     if (halo_exchange_)
-      halo_exchange_->execute(field, **halo_lane_);
+      halo_exchange_->execute(field, *lane_);
     else
       fill_boundary(field, *halo_schedule_);
   }
@@ -568,9 +557,8 @@ class PoissonFFTSolver {
   typename PoissonFFT<Dim>::device_view fft_rhs_{};
   typename PoissonFFT<Dim>::device_view fft_phi_{};
   std::unique_ptr<HaloSchedule<Dim>> halo_schedule_;
-  // The indirection keeps the borrowed ExecutionLane address stable when this solver is moved.
-  // The optional itself is allocated during the pre-communicator storage transaction.
-  std::unique_ptr<std::optional<ExecutionLane>> halo_lane_{};
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::unique_ptr<HaloExchange<Dim>> halo_exchange_{};
   std::optional<PoissonFFT<Dim>> fft_{};
   std::unique_ptr<FieldNullspaceWorkspace<Dim>> nullspace_workspace_{};
@@ -585,7 +573,9 @@ class PoissonFFTFactory {
   using solver_type = PoissonFFTSolver<Dim>;
   using request_type = EllipticBuildRequest<Dim>;
 
-  explicit PoissonFFTFactory(PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_cartesian) {
+  explicit PoissonFFTFactory(const ExecutionLane& lane,
+                             PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_cartesian)
+      : lane_(&lane) {
     if (!PoissonFFTCapabilities<Dim>::supports(symbol))
       throw std::invalid_argument(
           std::string(PoissonFFTCapabilities<Dim>::rejection_reason(symbol)));
@@ -598,12 +588,17 @@ class PoissonFFTFactory {
     return solver_type::expected_operator_contract(request);
   }
   bool supports(const request_type& request) const noexcept {
-    return solver_type::supports(request);
+    return solver_type::supports(request, *lane_);
   }
   EllipticFactoryBuildResult<solver_type> build(request_type request) const noexcept {
     return capture_local_elliptic_factory_build<solver_type>(
-        [request = std::move(request)]() mutable { return solver_type(std::move(request)); });
+        [request = std::move(request), lane = lane_]() mutable {
+          return solver_type(std::move(request), *lane);
+        });
   }
+
+ private:
+  const ExecutionLane* lane_ = nullptr;
 };
 
 static_assert(EllipticSolver<PoissonFFTSolver<1>>);

@@ -44,7 +44,7 @@ class ExactFieldSolverBackend {
   virtual void install_newton(FieldNewtonOptions options) = 0;
   virtual void install_nullspace(FieldNullspacePlan<Dim> plan,
                                  PreparedVectorDistribution<Dim> distribution) = 0;
-  virtual SolveReport solve(const field_type& warm_start) = 0;
+  virtual SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) = 0;
   virtual int maximum_iterations() const noexcept = 0;
   virtual std::string_view provider_identity() const noexcept = 0;
   virtual std::vector<runtime::field::FieldTopologyReportRow> topology_report() const = 0;
@@ -60,10 +60,11 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
                                 const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
                                 BoundaryTopology<Dim> topology,
                                 elliptic::nd::CartesianPoissonOptions<Dim> options,
+                                const ExecutionLane& lane,
                                 std::string identity = "pops.field-solver.cartesian-cg@1")
       : identity_(std::move(identity)),
-        solver_(geometry, layout, distribution, local_rank, std::move(topology),
-                std::move(options)) {
+        solver_(geometry, layout, distribution, local_rank, std::move(topology), std::move(options),
+                lane) {
     if (identity_.empty())
       throw std::invalid_argument("Cartesian field solver backend identity must be non-empty");
   }
@@ -91,7 +92,9 @@ class CartesianCgFieldSolverBackend final : public ExactFieldSolverBackend<Dim> 
                          PreparedVectorDistribution<Dim> distribution) override {
     solver_.install_nullspace(std::move(plan), std::move(distribution));
   }
-  SolveReport solve(const field_type& warm_start) override { return solver_.solve(warm_start); }
+  SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) override {
+    return solver_.solve(warm_start, lane);
+  }
   int maximum_iterations() const noexcept override { return solver_.maximum_iterations(); }
   std::string_view provider_identity() const noexcept override { return identity_; }
   std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
@@ -113,21 +116,19 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   using field_type = typename ExactFieldSolverBackend<Dim>::field_type;
   using request_type = EllipticBuildRequest<Dim>;
 
-  PoissonFftFieldSolverBackend(request_type request,
+  PoissonFftFieldSolverBackend(request_type request, const ExecutionLane& lane,
                                std::string identity = "pops.field-solver.fft@1")
       : identity_(std::move(identity)),
         solver_(make_elliptic_solver<PoissonFFTSolver<Dim>>(std::move(request),
-                                                            PoissonFFTFactory<Dim>{})) {
+                                                            PoissonFFTFactory<Dim>{lane}, lane)) {
     if (identity_.empty())
       throw std::invalid_argument("FFT field solver backend identity must be non-empty");
   }
 
-  /// Allocate the stable polymorphic object before entering the solver constructor, which
-  /// duplicates MPI communicators. A rank-local allocator failure is therefore published on the
-  /// world lane while no rank owns a backend communicator.
+  /// Allocate the stable polymorphic object before entering the solver constructor. A rank-local
+  /// allocator failure is published on the already prepared execution lane before construction.
   static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
-      request_type request, std::string_view identity) {
-    const ExecutionLane world = ExecutionLane::world();
+      request_type request, std::string_view identity, const ExecutionLane& lane) {
     void* storage = nullptr;
     std::optional<std::string> prepared_identity;
     std::exception_ptr allocation_error;
@@ -139,9 +140,9 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     } catch (...) {
       allocation_error = std::current_exception();
     }
-    if (all_reduce_max(allocation_error ? 1L : 0L, world.communicator()) != 0) {
+    if (all_reduce_max(allocation_error ? 1L : 0L, lane) != 0) {
       ::operator delete(storage);
-      if (world.size() == 1 && allocation_error)
+      if (lane.size() == 1 && allocation_error)
         std::rethrow_exception(allocation_error);
       throw std::runtime_error("FFT field solver backend allocation failed collectively");
     }
@@ -149,7 +150,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     PoissonFftFieldSolverBackend* result = nullptr;
     try {
       result = ::new (storage)
-          PoissonFftFieldSolverBackend(std::move(request), std::move(*prepared_identity));
+          PoissonFftFieldSolverBackend(std::move(request), lane, std::move(*prepared_identity));
     } catch (...) {
       ::operator delete(storage);
       throw;
@@ -186,8 +187,10 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
                          PreparedVectorDistribution<Dim> distribution) override {
     solver_.install_nullspace(std::move(plan), std::move(distribution));
   }
-  SolveReport solve(const field_type& warm_start) override {
-    const ExecutionLane world = ExecutionLane::world();
+  SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) override {
+    if (!solver_.borrows_execution_lane(lane))
+      throw std::logic_error(
+          "FFT field solver execution lane differs from its prepared lane authority");
     std::exception_ptr copy_error;
     try {
       elliptic::nd::detail::copy_component(warm_start, 0, solver_.phi(), 0);
@@ -195,7 +198,7 @@ class PoissonFftFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     } catch (...) {
       copy_error = std::current_exception();
     }
-    if (all_reduce_max(copy_error ? 1L : 0L, world.communicator()) != 0) {
+    if (all_reduce_max(copy_error ? 1L : 0L, lane) != 0) {
       SolveReport report;
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
                          "poisson_fft_warm_start_copy_failed_collectively");
@@ -225,7 +228,7 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
                               const mesh::BoxArray<Dim>& layout,
                               const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
                               BoundaryTopology<Dim> topology, std::array<bool, Dim> periodicity,
-                              std::shared_ptr<component_type> component)
+                              std::shared_ptr<component_type> component, const ExecutionLane& lane)
       : identity_(std::move(identity)),
         geometry_(geometry),
         topology_(std::move(topology)),
@@ -235,7 +238,9 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
         halo_schedule_(prepare_halo_schedule(
             candidate_, geometry.domain(), topology_,
             elliptic::nd::detail::exact_halo_budget(layout, geometry.domain(), 1))),
-        component_(std::move(component)) {
+        component_(std::move(component)),
+        lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()) {
     std::exception_ptr validation_error;
     try {
       if (identity_.empty() || !component_)
@@ -251,19 +256,18 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     } catch (...) {
       validation_error = std::current_exception();
     }
-    if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && validation_error)
+    if (all_reduce_max(validation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && validation_error)
         std::rethrow_exception(validation_error);
       throw std::runtime_error("component field backend preparation failed collectively");
     }
-    const bool distributed_halo = all_reduce_max(halo_schedule_.has_remote_jobs() ? 1L : 0L) != 0;
+    const bool distributed_halo =
+        all_reduce_max(halo_schedule_.has_remote_jobs() ? 1L : 0L, lane) != 0;
     if (distributed_halo) {
-      lane_ = std::make_unique<ExecutionLane>(
-          ExecutionLane::duplicate_world_collectively(identity_ + "/solution-halo"));
       HaloExchangeContext context{};
       context.context_generation = 1;
       context.schedule_generation = 1;
-      exchange_ = std::make_unique<HaloExchange<Dim>>(halo_schedule_, *lane_, context);
+      exchange_ = std::make_unique<HaloExchange<Dim>>(halo_schedule_, lane, context);
     }
   }
 
@@ -306,23 +310,26 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
     const std::array<PreparedVectorDistribution<Dim>, 1> distributions{distribution};
     validate_field_nullspace_basis<Dim>({&rhs_}, plan,
                                         std::span<const PreparedVectorDistribution<Dim>>(
-                                            distributions.data(), distributions.size()));
+                                            distributions.data(), distributions.size()),
+                                        *lane_);
     nullspace_plan_ = std::move(plan);
     nullspace_distribution_ = std::move(distribution);
     nullspace_installed_ = true;
   }
 
-  SolveReport solve(const field_type& warm_start) override {
+  SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) override {
+    if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument("component field solve requires its prepared execution lane");
     if (!nullspace_installed_)
       throw std::logic_error("component field solve has no prepared nullspace authority");
-    require_field_nullspace_compatible(rhs_, nullspace_plan_, nullspace_distribution_);
+    require_field_nullspace_compatible(rhs_, nullspace_plan_, nullspace_distribution_, lane);
     elliptic::nd::detail::copy_component(warm_start, 0, candidate_, 0);
-    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_, lane);
     Kokkos::fence();
     SolveReport report = component_->solve(rhs_, candidate_, geometry_, periodicity_);
     if (!report.solved_value_available())
       return report;
-    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_);
+    apply_field_gauge(candidate_, nullspace_plan_, nullspace_distribution_, lane);
     if (exchange_)
       exchange_->execute(candidate_, *lane_);
     else
@@ -352,7 +359,8 @@ class ComponentFieldSolverBackend final : public ExactFieldSolverBackend<Dim> {
   field_type candidate_;
   HaloSchedule<Dim> halo_schedule_;
   std::shared_ptr<component_type> component_;
-  std::unique_ptr<ExecutionLane> lane_;
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::unique_ptr<HaloExchange<Dim>> exchange_;
   FieldNullspacePlan<Dim> nullspace_plan_;
   PreparedVectorDistribution<Dim> nullspace_distribution_ =

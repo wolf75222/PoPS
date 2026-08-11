@@ -206,19 +206,21 @@ TEST(GeometricMgCollectiveContract, MpiRouteInitializesRequestedCommunicator) {
 }
 
 TEST(GeometricMgTest, prepared_options_fail_closed_before_the_hierarchy_is_published) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.options");
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.maximum_cycles = 0;
-  EXPECT_THROW((void)Solver(request(8), options), std::exception);
+  EXPECT_THROW((void)Solver(request(8), lane, options), std::exception);
   options = {};
   options.relative_tolerance = std::numeric_limits<pops::Real>::quiet_NaN();
-  EXPECT_THROW((void)Solver(request(8), options), std::exception);
+  EXPECT_THROW((void)Solver(request(8), lane, options), std::exception);
   options = {};
   options.absolute_tolerance = pops::Real(-1);
-  EXPECT_THROW((void)Solver(request(8), options), std::exception);
+  EXPECT_THROW((void)Solver(request(8), lane, options), std::exception);
 }
 
 TEST(GeometricMgCollectiveContract,
      manufactured_dirichlet_mode_converges_and_publishes_exact_replicas) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.manufactured");
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.relative_tolerance = pops::Real(1e-10);
   options.absolute_tolerance = pops::Real(1e-12);
@@ -226,7 +228,7 @@ TEST(GeometricMgCollectiveContract,
   options.bottom_sweeps = 60;
   auto build = request(16);
   const auto expected_contract = Solver::expected_operator_contract(build, options);
-  Solver solver(std::move(build), options);
+  Solver solver(std::move(build), lane, options);
   install_nullspace(solver, false);
   EXPECT_EQ(solver.prepared_operator_contract().exact_fingerprint(),
             expected_contract.exact_fingerprint());
@@ -242,7 +244,8 @@ TEST(GeometricMgCollectiveContract,
 }
 
 TEST(GeometricMgTest, zero_problem_exits_without_mutating_the_exact_zero_state) {
-  Solver solver(request(8));
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.zero");
+  Solver solver(request(8), lane);
   install_nullspace(solver, false);
   solver.rhs().set_val(pops::Real(0));
   solver.phi().set_val(pops::Real(0));
@@ -254,11 +257,12 @@ TEST(GeometricMgTest, zero_problem_exits_without_mutating_the_exact_zero_state) 
 }
 
 TEST(GeometricMgTest, inhomogeneous_dirichlet_faces_recover_one_constant_solution) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.boundary");
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.relative_tolerance = pops::Real(1e-9);
   options.absolute_tolerance = pops::Real(1e-11);
   options.maximum_cycles = 100;
-  Solver solver(request(16, false, pops::Real(1)), options);
+  Solver solver(request(16, false, pops::Real(1)), lane, options);
   install_nullspace(solver, false);
   solver.rhs().set_val(pops::Real(0));
   solver.phi().set_val(pops::Real(0));
@@ -268,7 +272,8 @@ TEST(GeometricMgTest, inhomogeneous_dirichlet_faces_recover_one_constant_solutio
 }
 
 TEST(GeometricMgTest, periodic_nullspace_rejects_incompatible_rhs_without_mutation) {
-  Solver solver(request(8, true));
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.periodic");
+  Solver solver(request(8, true), lane);
   install_nullspace(solver, true);
   solver.rhs().set_val(pops::Real(1));
   solver.phi().set_val(pops::Real(3));
@@ -279,9 +284,10 @@ TEST(GeometricMgTest, periodic_nullspace_rejects_incompatible_rhs_without_mutati
 }
 
 TEST(GeometricMgTest, nonfinite_rhs_is_a_structured_fail_run) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.geometric-mg.nonfinite");
   for (const pops::Real invalid : {std::numeric_limits<pops::Real>::quiet_NaN(),
                                    std::numeric_limits<pops::Real>::infinity()}) {
-    Solver solver(request(8));
+    Solver solver(request(8), lane);
     install_nullspace(solver, false);
     solver.rhs().set_val(invalid);
     solver.phi().set_val(pops::Real(0));

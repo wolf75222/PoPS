@@ -175,6 +175,7 @@ struct HierarchyTensorSolveInvocation {
   std::span<const HierarchyTensorLevelFields<Dim, MemorySpace>> levels;
   HierarchyTensorSolveControls solve_controls;
   tensor_elliptic_detail::TensorFacControls fac_controls;
+  const ExecutionLane* execution_lane = nullptr;
 };
 
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
@@ -195,7 +196,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
 
   AmrTensorElliptic(request_type request, kernel_type kernel,
                     tensor_elliptic_detail::TensorFacControls controls,
-                    std::string prepared_contract)
+                    std::string prepared_contract, const ExecutionLane& lane)
       : request_(std::move(request)),
         kernel_(std::move(kernel)),
         controls_(std::move(controls)),
@@ -237,7 +238,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
         bindings.push_back(binding);
       }
       tensor_fac_ = std::make_unique<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>>(
-          std::span<const tensor_fac::LevelBinding<Dim, MemorySpace>>(bindings), request_.ratios);
+          std::span<const tensor_fac::LevelBinding<Dim, MemorySpace>>(bindings), request_.ratios,
+          lane);
     }
   }
 
@@ -252,8 +254,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   }
   int level_count() const noexcept override { return static_cast<int>(levels_.size()); }
 
-  bool owns_execution_lane() const noexcept {
-    return tensor_fac_ && tensor_fac_->owns_execution_lane();
+  bool borrows_execution_lane() const noexcept {
+    return tensor_fac_ && tensor_fac_->borrows_execution_lane();
   }
   bool has_remote_same_level_halo() const noexcept {
     return tensor_fac_ && tensor_fac_->has_remote_same_level_halo();
@@ -292,10 +294,12 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   }
 
  protected:
-  SolveReport solve(const HierarchyTensorSolveControls& controls) override {
+  SolveReport solve(const HierarchyTensorSolveControls& controls,
+                    const ExecutionLane& lane) override {
     if (kernel_)
       return kernel_(HierarchyTensorSolveInvocation<Dim, MemorySpace>{
-          &request_, std::span<const level_fields_type>(invocation_levels_), controls, controls_});
+          &request_, std::span<const level_fields_type>(invocation_levels_), controls, controls_,
+          &lane});
     if (!tensor_fac_)
       throw std::logic_error("flat tensor preparation delegates execution to prepared Krylov");
     CompositeFacOptions defaults;
@@ -309,7 +313,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
     resolved.coarse_absolute_tolerance =
         controls_.coarse_absolute_tolerance.value_or(defaults.coarse_abs_tol);
     resolved.coarse_cycles = controls_.coarse_cycles.value_or(defaults.coarse_cycles);
-    return tensor_fac_->solve(resolved);
+    return tensor_fac_->solve(resolved, lane);
   }
 
  private:
@@ -443,12 +447,13 @@ class CompositeTensorHierarchyProvider final
         .optional_collective_contract(kernel_);
     return std::move(contract).release();
   }
-  std::unique_ptr<solver_type> prepare(const request_type& request) const override {
+  std::unique_ptr<solver_type> prepare(const request_type& request,
+                                       const ExecutionLane& lane) const override {
     if (!supports(request).accepted())
       throw std::invalid_argument("tensor hierarchy provider rejected the build request");
     return std::make_unique<AmrTensorElliptic<Dim, MemorySpace>>(
         request, kernel_, tensor_elliptic_detail::decode_controls(request.options),
-        expected_prepared_contract(request));
+        expected_prepared_contract(request), lane);
   }
 
  private:
@@ -458,19 +463,20 @@ class CompositeTensorHierarchyProvider final
 
 template <int Dim, class MemorySpace>
 std::shared_ptr<HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>>
-make_default_hierarchy_tensor_solver_provider_registry() {
+make_default_hierarchy_tensor_solver_provider_registry(const ExecutionLane& lane) {
   auto registry = std::make_shared<HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>>();
-  registry->add(std::make_shared<CompositeTensorHierarchyProvider<Dim, MemorySpace>>());
+  registry->add(std::make_shared<CompositeTensorHierarchyProvider<Dim, MemorySpace>>(), lane);
   return registry;
 }
 
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 std::shared_ptr<HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>>
 make_hierarchy_tensor_solver_provider_registry(
-    PreparedHierarchyTensorKernel<Dim, MemorySpace> kernel) {
+    PreparedHierarchyTensorKernel<Dim, MemorySpace> kernel, const ExecutionLane& lane) {
   auto registry = std::make_shared<HierarchyTensorSolverProviderRegistry<Dim, MemorySpace>>();
   registry->add(
-      std::make_shared<CompositeTensorHierarchyProvider<Dim, MemorySpace>>(std::move(kernel)));
+      std::make_shared<CompositeTensorHierarchyProvider<Dim, MemorySpace>>(std::move(kernel)),
+      lane);
   return registry;
 }
 

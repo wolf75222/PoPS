@@ -117,7 +117,8 @@ inline std::string operator_topology_nullspace_contract(
 
 template <int Dim>
 inline FieldNullspacePlan<Dim> connected_operator_topology_plan(
-    const FieldNullspaceProviderRequest<Dim>& request, Real gauge_value) {
+    const FieldNullspaceProviderRequest<Dim>& request, Real gauge_value,
+    const ExecutionLane& lane) {
   const auto& topology = request.topology;
   FieldNullspacePlan<Dim> result;
   result.identity = request.plan_identity + ":nullspace";
@@ -135,7 +136,7 @@ inline FieldNullspacePlan<Dim> connected_operator_topology_plan(
   result.bases.push_back(std::move(basis));
   validate_field_nullspace_basis<Dim>(
       topology.layouts, result,
-      std::span<const PreparedVectorDistribution<Dim>>(topology.level_distributions),
+      std::span<const PreparedVectorDistribution<Dim>>(topology.level_distributions), lane,
       topology.first_level);
   return result;
 }
@@ -198,13 +199,13 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
     return operator_topology_nullspace_contract(request);
   }
   [[nodiscard]] PreparedFieldNullspace<Dim> prepare(
-      const FieldNullspaceProviderRequest<Dim>& request) const override {
+      const FieldNullspaceProviderRequest<Dim>& request, const ExecutionLane& lane) const override {
     const std::string contract = expected_prepared_contract(request);
     const Real gauge_value = operator_topology_gauge_value(request.options);
     FieldNullspacePlan<Dim> plan;
     if (field_operator_preserves_constant_mode(request.operator_facts)) {
       if (!request.topology.connected_component_contract.empty()) {
-        plan = connected_operator_topology_plan(request, gauge_value);
+        plan = connected_operator_topology_plan(request, gauge_value, lane);
       } else {
         plan = labelled_mean_zero_nullspace<Dim>(
             request.plan_identity + ":nullspace", request.topology.identity,
@@ -212,7 +213,7 @@ class OperatorTopologyFieldNullspaceProvider final : public FieldNullspaceProvid
             request.topology.coverage, request.topology.cell_measure,
             request.topology.field_component,
             std::span<const PreparedVectorDistribution<Dim>>(request.topology.level_distributions),
-            request.topology.first_level);
+            lane, request.topology.first_level);
         for (FieldGaugeConstraint& gauge : plan.gauges)
           gauge.value = gauge_value;
       }

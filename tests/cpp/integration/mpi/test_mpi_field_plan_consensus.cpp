@@ -307,7 +307,8 @@ class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierar
   }
   void stage_initial_guess(int, const MultiFab<2>*) override {}
 
-  SolveReport solve(const runtime::program::HierarchyTensorSolveControls&) override {
+  SolveReport solve(const runtime::program::HierarchyTensorSolveControls&,
+                    const ExecutionLane&) override {
     return make_consensus_report(fault_);
   }
 
@@ -1283,10 +1284,10 @@ int run_field_plan_consensus(int argc, char** argv) {
   // uniform error on every rank; an identical report remains publishable.
   {
     ConsensusHierarchyPrepared solver(SolveReportFault::None);
-    solver.seal_preparation();
+    solver.seal_preparation(lane);
     try {
       SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          solver, {Real(1.0e-8), Real(0), 4});
+          solver, {Real(1.0e-8), Real(0), 4}, lane);
       const SolveReport report = outcome.consume(SolveConsumption::kAccept);
       require(report.solved());
       require(report.reason == "collective-solved");
@@ -1301,12 +1302,12 @@ int run_field_plan_consensus(int argc, char** argv) {
         SolveReportFault::FailedIOnRankOne, SolveReportFault::FailedJOnRankOne,
         SolveReportFault::FailedComponentOnRankOne}) {
     ConsensusHierarchyPrepared solver(fault);
-    solver.seal_preparation();
+    solver.seal_preparation(lane);
     bool rejected = false;
     bool exact_error = false;
     try {
       (void)runtime::program::solve_prepared_hierarchy_tensor_collectively(
-          solver, {Real(1.0e-8), Real(0), 4});
+          solver, {Real(1.0e-8), Real(0), 4}, lane);
     } catch (const std::runtime_error& error) {
       rejected = true;
       exact_error = std::string_view(error.what()) ==
@@ -1457,7 +1458,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusHierarchyPrepared solver(SolveReportFault::None);
     SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
-        solver, {Real(1.0e-8), Real(0), 4});
+        solver, {Real(1.0e-8), Real(0), 4}, lane);
     bool rejected = false;
     try {
       (void)outcome.consume(rank == 0 ? SolveConsumption::kAccept : SolveConsumption::kFailRun);

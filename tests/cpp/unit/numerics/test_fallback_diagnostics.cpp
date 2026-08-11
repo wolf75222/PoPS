@@ -40,7 +40,8 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
       << "positivity fallback policy is reported";
 
   {
-    PoissonFFT<2> solver({6, 6}, {1.0, 1.0});
+    const ExecutionLane lane = ExecutionLane::world("tests.fallback-diagnostics.poisson-fft");
+    PoissonFFT<2> solver({6, 6}, {1.0, 1.0}, lane, "tests.fallback-diagnostics.poisson-fft");
     PoissonFFT<2>::device_view rhs("fallback_fft_rhs", solver.local_cell_count());
     PoissonFFT<2>::device_view phi("fallback_fft_phi", solver.local_cell_count());
     Kokkos::deep_copy(rhs, PoissonFFT<2>::complex_type(0.0, 0.0));

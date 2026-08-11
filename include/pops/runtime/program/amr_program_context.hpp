@@ -269,12 +269,14 @@ class AmrProgramContext {
       std::size_t parent_level, ::pops::amr::RefinementRatio<Dim> ratio,
       ::pops::amr::tagging::ClusterResult<Dim> clustered,
       ::pops::amr::regridding::RegridPreparationBudget preparation_budget) const {
+    const ExecutionLane& lane = prepared_execution_lane();
     return runtime_->prepare_regrid(parent_level, ratio, std::move(clustered), preparation_budget,
-                                    prepared_execution_lane());
+                                    lane);
   }
 
   void publish_regrid(::pops::amr::regridding::PreparedRegrid<Dim> prepared,
                       std::optional<field_type> child_state) const {
+    require_facade_execution_();
     require_history_free_for_topology_change_("regrid");
     const int parent_level = prepared.source_level().level;
     if (parent_level < 0)
@@ -287,19 +289,20 @@ class AmrProgramContext {
       std::size_t selected, ResourceEstimates estimates,
       parallel::LoadBalancePreparationBudget preparation_budget,
       const RebalancePolicy& policy) const {
-    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, policy,
-                                       prepared_execution_lane());
+    const ExecutionLane& lane = prepared_execution_lane();
+    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, policy, lane);
   }
 
   PreparedRebalanceDecision<Dim> prepare_rebalance(
       std::size_t selected, ResourceEstimates estimates,
       parallel::LoadBalancePreparationBudget preparation_budget) const {
-    return runtime_->prepare_rebalance(selected, estimates, preparation_budget,
-                                       prepared_execution_lane());
+    const ExecutionLane& lane = prepared_execution_lane();
+    return runtime_->prepare_rebalance(selected, estimates, preparation_budget, lane);
   }
 
   void apply_rebalance(std::size_t selected, PreparedRebalanceDecision<Dim> decision,
                        field_type remapped_state) const {
+    require_facade_execution_();
     require_history_free_for_topology_change_("rebalance");
     runtime_->apply_rebalance(selected, std::move(decision), std::move(remapped_state));
   }
@@ -333,10 +336,11 @@ class AmrProgramContext {
   }
 
   void begin_step(double dt) const {
+    require_facade_execution_();
     if (!std::isfinite(dt) || !(dt > 0.0))
       throw std::invalid_argument("AMR Program step requires a finite positive dt");
     current_dt_ = dt;
-    current_interval_start_time_ = facade_ == nullptr ? 0.0 : facade_->time();
+    current_interval_start_time_ = facade_->time();
     current_interval_begin_phase_ = {0, 1};
     current_interval_end_phase_ = {1, 1};
     stage_time_ = ::pops::amr::Rational(0, 1);
@@ -738,7 +742,6 @@ class AmrProgramContext {
 
   void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
     const auto& commit_lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
-    const auto commit_communicator = commit_lane.communicator();
     std::vector<field_type*> targets;
     std::vector<field_type> snapshots;
     std::vector<FluxExpression> snapshot_flux_expressions;
@@ -759,15 +762,14 @@ class AmrProgramContext {
     } catch (...) {
       snapshot_error = std::current_exception();
     }
-    if (all_reduce_max(snapshot_error ? 1L : 0L, commit_communicator) != 0) {
+    if (all_reduce_max(snapshot_error ? 1L : 0L, commit_lane) != 0) {
       if (commit_lane.size() == 1 && snapshot_error)
         std::rethrow_exception(snapshot_error);
       throw std::runtime_error("AMR Program commit snapshot failed collectively");
     }
 
     const long commit_count = static_cast<long>(targets.size());
-    if (all_reduce_min(commit_count, commit_communicator) !=
-        all_reduce_max(commit_count, commit_communicator))
+    if (all_reduce_min(commit_count, commit_lane) != all_reduce_max(commit_count, commit_lane))
       throw std::runtime_error("AMR Program commit count differs between MPI ranks");
 
     std::vector<std::optional<int>> runtime_blocks;
@@ -779,7 +781,7 @@ class AmrProgramContext {
     } catch (...) {
       classification_error = std::current_exception();
     }
-    if (all_reduce_max(classification_error ? 1L : 0L, commit_communicator) != 0) {
+    if (all_reduce_max(classification_error ? 1L : 0L, commit_lane) != 0) {
       if (commit_lane.size() == 1 && classification_error)
         std::rethrow_exception(classification_error);
       throw std::runtime_error("AMR Program commit target classification failed collectively");
@@ -811,7 +813,7 @@ class AmrProgramContext {
       } catch (...) {
         active_commit_error = std::current_exception();
       }
-      if (all_reduce_max(active_commit_error ? 1L : 0L, commit_communicator) != 0) {
+      if (all_reduce_max(active_commit_error ? 1L : 0L, commit_lane) != 0) {
         if (commit_lane.size() == 1 && active_commit_error)
           std::rethrow_exception(active_commit_error);
         throw std::runtime_error("active AMR Program commit failed collectively");
@@ -825,8 +827,7 @@ class AmrProgramContext {
     for (std::size_t candidate = 0; candidate < targets.size(); ++candidate) {
       const std::optional<int> runtime_block = runtime_blocks[candidate];
       const long state_target = runtime_block ? 1L : 0L;
-      if (all_reduce_min(state_target, commit_communicator) !=
-          all_reduce_max(state_target, commit_communicator))
+      if (all_reduce_min(state_target, commit_lane) != all_reduce_max(state_target, commit_lane))
         throw std::runtime_error(
             "AMR Program commit target state classification differs between MPI ranks");
       if (runtime_block)
@@ -863,7 +864,7 @@ class AmrProgramContext {
       } catch (...) {
         publication_error = std::current_exception();
       }
-      if (all_reduce_max(publication_error ? 1L : 0L, commit_communicator) != 0) {
+      if (all_reduce_max(publication_error ? 1L : 0L, commit_lane) != 0) {
         if (commit_lane.size() == 1 && publication_error)
           std::rethrow_exception(publication_error);
         throw std::runtime_error("AMR Program accepted-state publication pack failed collectively");
@@ -927,7 +928,7 @@ class AmrProgramContext {
       local_error = std::current_exception();
     }
     const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
-    if (all_reduce_max(local_error ? 1L : 0L, lane.communicator()) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR Program coupling candidate pack failed collectively");
@@ -937,18 +938,27 @@ class AmrProgramContext {
   }
 
   Real sum_component(const field_type& field, int component) const {
-    return pops::reduce_sum(field, component);
+    return static_cast<Real>(
+        all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
   }
   Real max_component(const field_type& field, int component) const {
-    return pops::reduce_max(field, component);
+    return static_cast<Real>(
+        all_reduce_max(pops::reduce_max_local(field, component), prepared_execution_lane()));
   }
   Real min_component(const field_type& field, int component) const {
-    return pops::reduce_min(field, component);
+    return static_cast<Real>(
+        all_reduce_min(pops::reduce_min_local(field, component), prepared_execution_lane()));
   }
-  Real norm2(int, const field_type& field) const { return std::sqrt(pops::dot(field, field, 0)); }
-  Real norm_inf(int, const field_type& field) const { return pops::reduce_norm_inf(field, 0); }
+  Real norm2(int, const field_type& field) const {
+    return std::sqrt(static_cast<Real>(
+        all_reduce_sum(pops::dot_local(field, field, 0), prepared_execution_lane())));
+  }
+  Real norm_inf(int, const field_type& field) const {
+    return static_cast<Real>(all_reduce_max(pops::norm_inf(field, 0), prepared_execution_lane()));
+  }
   Real dot(int, const field_type& left, const field_type& right) const {
-    return pops::dot(left, right, 0);
+    return static_cast<Real>(
+        all_reduce_sum(pops::dot_local(left, right, 0), prepared_execution_lane()));
   }
 
   Geometry<Dim> geometry() const {
@@ -986,6 +996,7 @@ class AmrProgramContext {
 
   std::shared_ptr<scalar_boundary_session_type> prepare_mesh_boundary_session(
       field_type& prototype, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "AMR scalar boundary preparation");
     return std::make_shared<scalar_boundary_session_type>(
         geometry(), facade_->prepared_amr_boundary_topology(), prototype, lane,
         next_boundary_generation_());
@@ -994,6 +1005,7 @@ class AmrProgramContext {
   std::shared_ptr<scalar_boundary_session_type> prepare_block_boundary_session(
       int program_block, field_type& prototype,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "AMR block boundary preparation");
     (void)sys_block(program_block);
     require_boundary_point_(point, "AMR block scalar boundary");
     return prepare_mesh_boundary_session(prototype, lane);
@@ -1002,6 +1014,7 @@ class AmrProgramContext {
   void fill_boundary(field_type& field) const { fill_boundary(field, prepared_execution_lane()); }
 
   void fill_boundary(field_type& field, const ExecutionLane& lane) const {
+    require_prepared_lane_(lane, "AMR boundary fill");
     scalar_boundary_session_type session(geometry(), facade_->prepared_amr_boundary_topology(),
                                          field, lane, next_boundary_generation_());
     session.fill(field);
@@ -1033,6 +1046,7 @@ class AmrProgramContext {
 
   void laplacian(field_type& output, field_type& input,
                  const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "AMR Laplacian boundary");
     boundary.fill(input);
     laplacian_without_fill_(output, input, boundary.geometry());
   }
@@ -1065,6 +1079,7 @@ class AmrProgramContext {
 
   void gradient(field_type& output, field_type& input,
                 const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "AMR gradient boundary");
     boundary.fill(input);
     gradient_without_fill_(output, input, boundary.geometry());
   }
@@ -1075,11 +1090,17 @@ class AmrProgramContext {
   }
 
   void divergence(field_type& output, field_type& flux) const {
+    auto boundary = prepare_mesh_boundary_session(flux, prepared_execution_lane());
+    divergence(output, flux, *boundary);
+  }
+  void divergence(field_type& output, field_type& flux,
+                  const scalar_boundary_session_type& boundary) const {
+    require_prepared_lane_(boundary.lane(), "AMR divergence boundary");
     if (output.ncomp() != 1 || flux.ncomp() != Dim)
       throw std::invalid_argument("AMR Program divergence requires one exact native vector field");
     require_same_layout_(output, flux, "AMR Program divergence");
-    fill_boundary(flux);
-    const Geometry<Dim> geom = geometry();
+    boundary.fill(flux);
+    const Geometry<Dim> geom = boundary.geometry();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> vector = std::as_const(flux).fab(local).view();
@@ -1096,9 +1117,6 @@ class AmrProgramContext {
       });
     }
     count_kernel_();
-  }
-  void divergence(field_type& output, field_type& flux, const scalar_boundary_session_type&) const {
-    divergence(output, flux);
   }
   void divergence(field_type& output, field_type& flux,
                   const scalar_boundary_session_type& boundary,
@@ -1423,6 +1441,7 @@ class AmrProgramContext {
     if (!hierarchy_tensor_solver_registry_)
       throw std::logic_error("AMR hierarchy tensor-solver registry is unavailable");
 
+    const ExecutionLane& lane = prepared_execution_lane();
     std::optional<HierarchyTensorSelection> staged;
     std::exception_ptr local_error;
     long local_failure = 0;
@@ -1461,13 +1480,13 @@ class AmrProgramContext {
       local_failure = 1;
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_failure) != 0) {
+    if (all_reduce_max(local_failure, lane) != 0) {
       if (local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR hierarchy tensor selection failed on another MPI rank");
     }
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"amr-hierarchy-tensor-selection", staged->exact_contract}}))
+            {{"amr-hierarchy-tensor-selection", staged->exact_contract}}, lane))
       throw std::invalid_argument("AMR hierarchy tensor selection differs between MPI ranks");
 
     if (hierarchy_tensor_selection_ &&
@@ -1491,11 +1510,12 @@ class AmrProgramContext {
     if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider) {
       SolveReport report;
       report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-      return SolveOutcome::collective_world(std::move(report));
+      return SolveOutcome::collective_lane(std::move(report), prepared_execution_lane());
     }
     return solve_prepared_hierarchy_tensor_collectively(
         solver,
-        HierarchyTensorSolveControls{relative_tolerance, absolute_tolerance, maximum_iterations});
+        HierarchyTensorSolveControls{relative_tolerance, absolute_tolerance, maximum_iterations},
+        prepared_execution_lane());
   }
 
   field_type& hierarchy_solution() const {
@@ -1589,6 +1609,7 @@ class AmrProgramContext {
                                      KrylovWorkspace<Dim>& workspace, field_type& solution,
                                      const field_type& rhs,
                                      const KrylovControls<Dim>& controls) const {
+    require_prepared_lane_(workspace.execution_lane(), "AMR prepared linear solve");
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
   }
 
@@ -1781,6 +1802,12 @@ class AmrProgramContext {
     if (facade_ == nullptr)
       throw std::logic_error("AMR Program execution requires its exact-ranked facade");
   }
+  void require_prepared_lane_(const ExecutionLane& lane, std::string_view operation) const {
+    const ExecutionLane& prepared = prepared_execution_lane();
+    if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires the context's authenticated execution lane");
+  }
   static void require_rate_identity_(int rate_id) {
     if (rate_id < 0)
       throw std::invalid_argument("AMR Program rate identity must be non-negative");
@@ -1906,7 +1933,7 @@ class AmrProgramContext {
       local_error = std::current_exception();
     }
     const auto& lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
-    if (all_reduce_max(local_error ? 1L : 0L, lane.communicator()) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error(std::string(failure));
@@ -2159,8 +2186,8 @@ class AmrProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const auto communicator = hierarchy.lane().communicator();
-    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    const ExecutionLane& lane = hierarchy.lane();
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       if (hierarchy.lane().size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR Program flux-expression budget validation failed collectively");
@@ -2168,7 +2195,7 @@ class AmrProgramContext {
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("amr-program-flux-expression-budget"),
               std::string_view(program_budget_contract)}},
-            communicator))
+            lane))
       throw std::invalid_argument(
           "AMR Program flux-expression budget differs between prepared-lane ranks");
 
@@ -2240,7 +2267,7 @@ class AmrProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       if (hierarchy.lane().size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR Program subcycling preparation failed collectively");
@@ -2427,14 +2454,14 @@ class AmrProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const auto communicator = facade_->prepared_amr_multiblock_hierarchy_().lane().communicator();
-    if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    const ExecutionLane& lane = prepared_execution_lane();
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       if (local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("AMR Program interface flux failed on another MPI rank");
     }
     for (Real& value : payload)
-      value = all_reduce_sum(value, communicator);
+      value = all_reduce_sum(value, lane);
     return payload;
   }
 
@@ -2567,8 +2594,8 @@ class AmrProgramContext {
     } catch (...) {
       preparation_error = std::current_exception();
     }
-    const auto communicator = facade_->prepared_amr_multiblock_hierarchy_().lane().communicator();
-    if (all_reduce_max(preparation_error ? 1L : 0L, communicator) != 0) {
+    const ExecutionLane& lane = prepared_execution_lane();
+    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
       if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && preparation_error)
         std::rethrow_exception(preparation_error);
       throw std::runtime_error("AMR Program face-flux preparation failed collectively");
@@ -2581,7 +2608,7 @@ class AmrProgramContext {
     } catch (...) {
       preparation_error = std::current_exception();
     }
-    if (all_reduce_max(preparation_error ? 1L : 0L, communicator) != 0) {
+    if (all_reduce_max(preparation_error ? 1L : 0L, lane) != 0) {
       if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && preparation_error)
         std::rethrow_exception(preparation_error);
       throw std::runtime_error("AMR Program face-flux basis reservation failed collectively");
@@ -2606,7 +2633,7 @@ class AmrProgramContext {
       } catch (...) {
         payload_error = std::current_exception();
       }
-      if (all_reduce_max(payload_error ? 1L : 0L, communicator) != 0) {
+      if (all_reduce_max(payload_error ? 1L : 0L, lane) != 0) {
         if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && payload_error)
           std::rethrow_exception(payload_error);
         throw std::runtime_error("AMR Program face-flux basis failed collectively");
@@ -2634,7 +2661,7 @@ class AmrProgramContext {
     } catch (...) {
       expression_error = std::current_exception();
     }
-    if (all_reduce_max(expression_error ? 1L : 0L, communicator) != 0) {
+    if (all_reduce_max(expression_error ? 1L : 0L, lane) != 0) {
       if (facade_->prepared_amr_multiblock_hierarchy_().lane().size() == 1 && expression_error)
         std::rethrow_exception(expression_error);
       throw std::runtime_error("AMR Program flux-expression attachment failed collectively");
@@ -2837,14 +2864,15 @@ class AmrProgramContext {
       local_failure = 1;
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_failure) != 0) {
+    const ExecutionLane& lane = prepared_execution_lane();
+    if (all_reduce_max(local_failure, lane) != 0) {
       if (local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error(
           "AMR hierarchy tensor request construction failed on another MPI rank");
     }
     return prepare_hierarchy_tensor_solver_collectively(
-        *hierarchy_tensor_solver_registry_, selection.provider_identity, std::move(request));
+        *hierarchy_tensor_solver_registry_, selection.provider_identity, std::move(request), lane);
   }
 
   hierarchy_tensor_solver_type& configured_hierarchy_tensor_solver_() const {

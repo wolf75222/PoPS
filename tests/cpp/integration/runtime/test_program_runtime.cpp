@@ -55,6 +55,11 @@ static void ensure_kokkos() {
 }
 #endif
 
+static void install_execution_lane(System<kNativeDimension>& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
+
 // Elliptic brick that contributes nothing (no charge): the Poisson RHS stays zero, phi = 0, and the
 // Euler flux has no provider requirements here, so the residual is pure gas dynamics.
 struct NoEll {
@@ -938,6 +943,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
 
   // Reference: one Forward-Euler step via the existing primitives, combined on the host.
   System<kNativeDimension> ref(cfg);
+  install_execution_lane(ref, "pops.test.program-runtime.forward-euler-reference");
   add_gas(ref, gamma);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -948,6 +954,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
 
   // Program: the SAME step expressed as a ProgramContext closure and driven by sim.step(dt).
   System<kNativeDimension> sim(cfg);
+  install_execution_lane(sim, "pops.test.program-runtime.forward-euler");
   add_gas(sim, gamma);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -1022,6 +1029,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
   fill_ic(initial, n, gamma);
 
   const auto install_forward_euler = [](System<kNativeDimension>& system) {
+    install_execution_lane(system, "pops.test.program-runtime.embedded-forward-euler");
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
@@ -1123,6 +1131,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   fill_ic(initial, n, gamma);
 
   const auto install_source_step = [](System<kNativeDimension>& system) {
+    install_execution_lane(system, "pops.test.program-runtime.embedded-source-step");
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
@@ -1182,6 +1191,7 @@ TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) 
   auto cfg = unit_domain_config<kNativeDimension>(n);
 
   System<kNativeDimension> system(cfg);
+  install_execution_lane(system, "pops.test.program-runtime.source-recovery");
   add_draining_gas(system, "gas", gamma);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
@@ -1219,6 +1229,7 @@ TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommi
   auto cfg = unit_domain_config<kNativeDimension>(n);
 
   System<kNativeDimension> system(cfg);
+  install_execution_lane(system, "pops.test.program-runtime.source-recovery-multiblock");
   add_draining_gas(system, "first", gamma);
   add_draining_gas(system, "second", gamma);
   std::vector<double> initial(4 * cells);
@@ -1274,6 +1285,7 @@ TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells
   fill_ic(initial, n, gamma);
 
   System<kNativeDimension> system(cfg);
+  install_execution_lane(system, "pops.test.program-runtime.inactive-source");
   add_sourced_gas(system, gamma);
   system.set_state("gas", initial);
   install_centered_ball(system, 0.31, "staircase");
@@ -1386,6 +1398,8 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   auto cfg = unit_domain_config<kNativeDimension>(n);
 
   System<kNativeDimension> staircase(cfg);
+  staircase.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.staircase-reductions")));
   add_gas(staircase, gamma, "none");
   install_centered_ball(staircase, 0.31, "staircase");
   const std::vector<double> staircase_mask = staircase.embedded_boundary_mask();
@@ -1430,6 +1444,8 @@ TEST(ProgramRuntime, PhysicalReductionsUsePreparedEmbeddedBoundaryMeasure) {
   EXPECT_EQ(staircase.reduce_component("gas", "abs_max", 0), 2.0);
 
   System<kNativeDimension> cutcell(cfg);
+  cutcell.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.cutcell-reductions")));
   add_gas(cutcell, gamma, "none");
   install_centered_ball(cutcell, 0.31, "cutcell");
   const std::vector<double> cutcell_mask = cutcell.embedded_boundary_mask();
@@ -1501,6 +1517,7 @@ TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
   fill_ic(initial, n, gamma);
 
   System<kNativeDimension> program(cfg);
+  install_execution_lane(program, "pops.test.program-runtime.ssprk3");
   add_gas(program, gamma, "none");
   install_centered_ball(program, 0.32, "staircase");
   const auto mask = program.embedded_boundary_mask();
@@ -1590,6 +1607,7 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
   fill_ic(initial, n, gamma);
 
   const auto install_projection_step = [](System<kNativeDimension>& system) {
+    install_execution_lane(system, "pops.test.program-runtime.projection-step");
     system.set_program_block_map({0});
     runtime::program::ProgramContext context(&system);
     context.configure_primary_clock("macro");
@@ -1642,6 +1660,8 @@ TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate)
   auto cfg = unit_domain_config<kNativeDimension>(n);
 
   System<kNativeDimension> sim(cfg);
+  sim.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.project-recheck-accept")));
   add_projecting_gas(sim, gamma);
   sim.set_poisson("charge_density", "cartesian_cg");
   std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
@@ -1700,6 +1720,8 @@ TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPub
   auto cfg = unit_domain_config<kNativeDimension>(n);
 
   System<kNativeDimension> sim(cfg);
+  sim.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.project-recheck-reject")));
   add_projecting_gas(sim, gamma);
   sim.set_poisson("charge_density", "cartesian_cg");
   std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
@@ -1769,6 +1791,8 @@ TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTran
   for (int axis = 0; axis < kNativeDimension; ++axis)
     config.periodicity[static_cast<std::size_t>(axis)] = false;
   System<kNativeDimension> system(config);
+  system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.prepared-boundary")));
   add_boundary_gas(system, gamma);
   std::vector<double> initial;
   fill_boundary_euler_ic<kNativeDimension>(initial, n, gamma);
@@ -1779,7 +1803,7 @@ TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTran
   context.configure_primary_clock("test.prepared-boundary");
   context.begin_step(1.0e-3);
   const auto point = context.boundary_evaluation_point(17);
-  auto lane = ExecutionLane::duplicate_world_collectively("test.program-runtime.prepared-boundary");
+  const ExecutionLane& lane = system.prepared_boundary_execution_lane();
   MultiFab<kNativeDimension>& state = context.state(0);
   const auto session = context.prepare_block_boundary_session(0, state, point, lane);
   ASSERT_TRUE(context.has_boundary_linearization(0));
@@ -1856,6 +1880,8 @@ TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTran
   residual.set_val(Real(-3));
 
   System<kNativeDimension> foreign_system(config);
+  foreign_system.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-runtime.foreign-prepared-boundary")));
   add_boundary_gas(foreign_system, gamma);
   foreign_system.set_state("gas", initial);
   foreign_system.set_program_block_map({0});
@@ -1863,8 +1889,8 @@ TEST(ProgramRuntime, PreparedBoundaryResidualAndJvpUseGeneratedBlockClosuresTran
   foreign_context.configure_primary_clock("test.prepared-boundary");
   foreign_context.begin_step(1.0e-3);
   MultiFab<kNativeDimension>& foreign_state = foreign_context.state(0);
-  const auto foreign_session =
-      foreign_context.prepare_block_boundary_session(0, foreign_state, point, lane);
+  const auto foreign_session = foreign_context.prepare_block_boundary_session(
+      0, foreign_state, point, foreign_system.prepared_boundary_execution_lane());
   if (lane.size() == 1) {
     EXPECT_THROW(context.boundary_residual_into_at(point, 0, state, residual, *foreign_session),
                  std::invalid_argument);

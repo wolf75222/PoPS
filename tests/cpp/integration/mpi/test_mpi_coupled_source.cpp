@@ -76,6 +76,8 @@ static std::vector<double> uniform_state(std::size_t cells, double density) {
 }
 
 static void install_ionization_program(NativeSystem& system) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world("pops.test.mpi-coupled-source")));
   system.set_program_block_map({0, 1, 2});
   runtime::program::ProgramContext<kDim> context(&system);
   context.configure_primary_clock("test.clock.macro");

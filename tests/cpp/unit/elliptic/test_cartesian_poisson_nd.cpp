@@ -127,6 +127,7 @@ void install_mode_nullspace(CartesianPoissonSolver<Dim>& solver, const Geometry<
 
 template <int Dim>
 void expect_manufactured_mode(CartesianBoundaryKind boundary) {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.manufactured");
   constexpr int cells = 8;
   const Box<Dim> domain{Index<Dim>{}, [&] {
                           Index<Dim> upper{};
@@ -148,7 +149,7 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
   options.relative_tolerance = Real{1e-12};
   options.maximum_iterations = 32;
   CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, Index<Dim>{}, topology,
-                                     options);
+                                     options, lane);
   install_mode_nullspace(solver, geometry, boundary);
   MultiFab<Dim> warm_start(layout, distribution, Index<Dim>{}, 1, uniform_extent<Dim>(1));
   warm_start.set_val(Real{0});
@@ -162,7 +163,7 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
                           inverse_spacing * inverse_spacing;
   fill_rhs(solver.rhs(), geometry, boundary, eigenvalue);
 
-  const SolveReport report = solver.solve(warm_start);
+  const SolveReport report = solver.solve(warm_start, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   EXPECT_LE(report.iters, 2);
   EXPECT_LT(maximum_error(solver.candidate(), geometry, boundary), Real{5e-11});
@@ -230,6 +231,7 @@ struct QuadraticJvpKernel {
 
 template <int Dim>
 void expect_exact_ranked_newton() {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.newton");
   Index<Dim> upper{};
   for (int axis = 0; axis < Dim; ++axis)
     upper[axis] = 3;
@@ -260,7 +262,7 @@ void expect_exact_ranked_newton() {
                                                                   direction.fab(local).view(),
                                                                   output.fab(local).view()});
       },
-      [](MultiFab<Dim>&) {});
+      [](MultiFab<Dim>&) {}, lane);
 
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   EXPECT_LT(report.residual_norm, Real(1e-10));
@@ -283,6 +285,7 @@ TEST(test_cartesian_poisson_nd, damped_newton_gmres_executes_one_algorithm_in_al
 }
 
 TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_acceptance) {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.named-field");
   constexpr int cells = 8;
   const Box<2> domain{Index<2>{0, 0}, Index<2>{cells - 1, cells - 1}};
   const Geometry<2> geometry =
@@ -295,7 +298,8 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   options.relative_tolerance = Real{1e-12};
   runtime::field::NamedFieldOutput<2> output(3, 1);
   runtime::system::ExactNamedField<2> provider("electric", "plasma", output, geometry, layout,
-                                               distribution, Index<2>{}, topology, options, 1);
+                                               distribution, Index<2>{}, topology, options, 1,
+                                               lane);
   PreparedFieldNullspace<2> prepared_nullspace;
   prepared_nullspace.provider_identity = "tests.constant-nullspace";
   prepared_nullspace.provider_version = 1;
@@ -318,14 +322,14 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
       },
       Real(1));
   const std::vector<const MultiFab<2>*> states{&state};
-  SolveReport report = provider.solve_candidate(states);
+  SolveReport report = provider.solve_candidate(states, nullptr, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_outputs(), 0), Real{0});
   provider.validate_candidate();
   provider.reject_candidate();
   EXPECT_DOUBLE_EQ(reduce_max(provider.accepted_potential(), 0), Real{0});
 
-  report = provider.solve_candidate(states);
+  report = provider.solve_candidate(states, nullptr, lane);
   ASSERT_TRUE(report.solved_value_available()) << report.reason;
   provider.validate_candidate();
   provider.accept_candidate();
@@ -336,6 +340,7 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
 }
 
 TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_mutation) {
+  const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.remote-halo");
   const Box<1> domain{Index<1>{0}, Index<1>{7}};
   const Geometry<1> geometry = Geometry<1>::from_bounds(domain, RealVector<1>{0}, RealVector<1>{1});
   const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{4});
@@ -347,7 +352,7 @@ TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_m
   MultiFab<1> warm_start(layout, distribution, Index<1>{0}, 1, Extent<1>{1});
   warm_start.set_val(Real{5});
   EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, Index<1>{0},
-                                               topology, options),
+                                               topology, options, lane),
                std::logic_error);
   for (std::size_t local = 0; local < warm_start.local_size(); ++local) {
     const auto& fab = static_cast<const MultiFab<1>&>(warm_start).fab(local);

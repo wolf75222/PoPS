@@ -140,6 +140,7 @@ Real maximum_absolute_value(const MultiFab<Dim>& field) {
 
 template <int Dim>
 struct TwoIslandFixture {
+  ExecutionLane lane = ExecutionLane::world("tests.field-nullspace.fixture:" + std::to_string(Dim));
   Box<Dim> domain = island_domain<Dim>();
   mesh::BoxArray<Dim> layout = mesh::BoxArray<Dim>(std::vector<Box<Dim>>{domain});
   mesh::Distribution<Dim> distribution =
@@ -160,7 +161,8 @@ struct TwoIslandFixture {
         std::vector<std::shared_ptr<const MultiFab<Dim>>>{labels},
         {{1, "island-a", "fixture:cell-label:1"}, {2, "island-b", "fixture:cell-label:2"}}, {},
         {Real(0.5)}, field_component,
-        std::span<const PreparedVectorDistribution<Dim>>(prepared_distributions), first_level);
+        std::span<const PreparedVectorDistribution<Dim>>(prepared_distributions), lane,
+        first_level);
   }
 
   MultiFab<Dim> field(int ncomp = 1, Extent<Dim> ghosts = Extent<Dim>{}) const {
@@ -228,21 +230,23 @@ void verify_nullspace_execution() {
   const std::vector<const MultiFab<Dim>*> rhs_levels{&rhs};
   const std::vector<double> witness = require_field_nullspace_compatible<Dim>(
       rhs_levels, plan, std::span<const PreparedVectorDistribution<Dim>>(prepared_distributions),
-      0);
+      fixture.lane, 0);
   ASSERT_EQ(witness.size(), 4U);
   EXPECT_NEAR(witness[0], 0.0, 1e-13);
   EXPECT_NEAR(witness[2], 0.0, 1e-13);
 
   const std::vector<MultiFab<Dim>*> phi_levels{&phi};
   apply_field_gauge<Dim>(phi_levels, plan,
-                         std::span<const PreparedVectorDistribution<Dim>>(prepared_distributions));
+                         std::span<const PreparedVectorDistribution<Dim>>(prepared_distributions),
+                         fixture.lane);
   EXPECT_NEAR(maximum_absolute_value(phi), Real(0), Real(1e-13));
 
   fill(phi, TestFieldPattern::island_constants);
   FieldNullspaceWorkspace<Dim> workspace(
       plan, {fixture.labels.get()},
       std::vector<PreparedVectorDistribution<Dim>>(prepared_distributions.begin(),
-                                                   prepared_distributions.end()));
+                                                   prepared_distributions.end()),
+      fixture.lane);
   const AllocationEventStats before = allocation_event_stats();
   workspace.apply_gauge(phi);
   const std::span<const double> persistent_witness = workspace.require_compatible(rhs);
@@ -276,7 +280,8 @@ void verify_overlapping_independent_bases() {
   const auto distributions = fixture.distributions();
   FieldNullspaceWorkspace<Dim> workspace(
       plan, {&prepared_layout},
-      std::vector<PreparedVectorDistribution<Dim>>(distributions.begin(), distributions.end()));
+      std::vector<PreparedVectorDistribution<Dim>>(distributions.begin(), distributions.end()),
+      fixture.lane);
 
   const AllocationEventStats before = allocation_event_stats();
   workspace.apply_gauge(value);
@@ -306,28 +311,30 @@ void verify_level_local_contract() {
   const std::vector<const MultiFab<Dim>*> const_levels{&field};
   const std::vector<MultiFab<Dim>*> mutable_levels{&field};
   const std::span<const PreparedVectorDistribution<Dim>> distribution_span(distributions);
-  EXPECT_NO_THROW(validate_field_nullspace_basis<Dim>(const_levels, plan, distribution_span, 1));
   EXPECT_NO_THROW(
-      (void)require_field_nullspace_compatible<Dim>(const_levels, plan, distribution_span, 1));
-  EXPECT_NO_THROW(apply_field_gauge<Dim>(mutable_levels, plan, distribution_span, 1));
+      validate_field_nullspace_basis<Dim>(const_levels, plan, distribution_span, fixture.lane, 1));
+  EXPECT_NO_THROW((void)require_field_nullspace_compatible<Dim>(
+      const_levels, plan, distribution_span, fixture.lane, 1));
+  EXPECT_NO_THROW(apply_field_gauge<Dim>(mutable_levels, plan, distribution_span, fixture.lane, 1));
 
   FieldNullspacePlan<Dim> zero_measure = plan;
   zero_measure.bases[0].cell_measure[1] = Real(0);
-  EXPECT_THROW(
-      validate_field_nullspace_basis<Dim>(const_levels, zero_measure, distribution_span, 1),
-      std::runtime_error);
+  EXPECT_THROW(validate_field_nullspace_basis<Dim>(const_levels, zero_measure, distribution_span,
+                                                   fixture.lane, 1),
+               std::runtime_error);
 
   FieldNullspacePlan<Dim> missing_mask = plan;
   missing_mask.bases[0].masks[1].reset();
-  EXPECT_THROW(
-      validate_field_nullspace_basis<Dim>(const_levels, missing_mask, distribution_span, 1),
-      std::runtime_error);
+  EXPECT_THROW(validate_field_nullspace_basis<Dim>(const_levels, missing_mask, distribution_span,
+                                                   fixture.lane, 1),
+               std::runtime_error);
 
   const std::array<PreparedVectorDistribution<Dim>, 0> missing_distribution{};
-  EXPECT_THROW(validate_field_nullspace_basis<Dim>(
-                   const_levels, plan,
-                   std::span<const PreparedVectorDistribution<Dim>>(missing_distribution), 1),
-               std::runtime_error);
+  EXPECT_THROW(
+      validate_field_nullspace_basis<Dim>(
+          const_levels, plan,
+          std::span<const PreparedVectorDistribution<Dim>>(missing_distribution), fixture.lane, 1),
+      std::runtime_error);
 }
 
 }  // namespace
@@ -406,7 +413,8 @@ TEST(test_field_nullspace, rejects_a_gauge_that_references_an_unknown_basis) {
   const auto distributions = fixture.distributions();
   const std::vector<const MultiFab<2>*> layouts{fixture.labels.get()};
   EXPECT_THROW(validate_field_nullspace_basis<2>(
-                   layouts, plan, std::span<const PreparedVectorDistribution<2>>(distributions)),
+                   layouts, plan, std::span<const PreparedVectorDistribution<2>>(distributions),
+                   fixture.lane),
                std::runtime_error);
 }
 

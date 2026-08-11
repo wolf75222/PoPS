@@ -492,7 +492,7 @@ struct System<Dim>::Impl {
       std::string plan_identity, std::string topology_identity,
       const FieldNullspaceProviderSelection& selection,
       const elliptic::nd::CartesianPoissonOptions<Dim>& options, const field_type& layout,
-      bool has_reaction) const {
+      bool has_reaction, const ExecutionLane& lane) const {
     if (!field_nullspace_providers_)
       throw std::logic_error("System field-nullspace registry is absent");
 
@@ -543,7 +543,7 @@ struct System<Dim>::Impl {
     request.topology.cell_measure = {cell_measure};
     request.topology.level_distributions = {distribution};
     return prepare_field_nullspace_collectively<Dim>(*field_nullspace_providers_, selection,
-                                                     std::move(request));
+                                                     std::move(request), lane);
   }
 
   Species& find(const std::string& name) { return blocks_.find(name); }

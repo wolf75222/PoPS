@@ -441,7 +441,8 @@ inline void validate_controls(const Controls& controls) {
 ///
 /// Coefficients are row-major ``A[row * Dim + column]``.  The conservative flux stencil includes
 /// every cross derivative, so its support expands with the exact compile-time dimension.
-/// Same-level halos and every partitioned coarse/fine transfer own one duplicated ExecutionLane;
+/// Same-level halos and every partitioned coarse/fine transfer borrow one authenticated
+/// ExecutionLane;
 /// replicated level zero is retained as an explicit capability and refined contributions are
 /// broadcast from their unique owners into that replicated parent.  No solve-time storage
 /// allocation is permitted.
@@ -451,8 +452,12 @@ class FullTensorCompositeFac {
   using field_type = MultiFab<Dim, MemorySpace>;
 
   FullTensorCompositeFac(std::span<const LevelBinding<Dim, MemorySpace>> bindings,
-                         std::span<const ::pops::amr::RefinementRatio<Dim>> ratios)
-      : bindings_(bindings.begin(), bindings.end()), ratios_(ratios.begin(), ratios.end()) {
+                         std::span<const ::pops::amr::RefinementRatio<Dim>> ratios,
+                         const ExecutionLane& lane)
+      : bindings_(bindings.begin(), bindings.end()),
+        ratios_(ratios.begin(), ratios.end()),
+        lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()) {
     static_assert(
         Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, MemorySpace>::accessible,
         "FullTensorCompositeFac requires DefaultExecutionSpace access to its memory space");
@@ -471,15 +476,15 @@ class FullTensorCompositeFac {
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && local_error)
+    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("dimension-generic tensor FAC preparation failed collectively");
     }
 
     exact_contract_ = build_exact_contract_();
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{"pops-nd-tensor-fac", std::string_view(exact_contract_)}}))
+            {{"pops-nd-tensor-fac", std::string_view(exact_contract_)}}, lane))
       throw std::invalid_argument(
           "dimension-generic tensor FAC hierarchy differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection)
@@ -487,22 +492,21 @@ class FullTensorCompositeFac {
               {{"pops-nd-tensor-parent-gather",
                 std::string_view(connections_[connection]->gather_contract)},
                {"pops-nd-tensor-fine-restriction",
-                std::string_view(connections_[connection]->restriction_contract)}}))
+                std::string_view(connections_[connection]->restriction_contract)}},
+              lane))
         throw std::invalid_argument(
             "dimension-generic tensor FAC coarse/fine schedule differs between MPI ranks");
 
-    lane_.emplace(
-        ExecutionLane::duplicate_world_collectively("pops.runtime.amr.nd-tensor-composite-fac"));
     for (auto& connection : connections_)
-      connection->attach_lane(*lane_);
+      connection->attach_lane(lane);
     for (std::size_t level = 0; level < levels_.size(); ++level) {
-      const bool remote = all_reduce_max(levels_[level]->halo_schedule.has_remote_jobs() ? 1L : 0L,
-                                         lane_->communicator()) != 0;
+      const bool remote =
+          all_reduce_max(levels_[level]->halo_schedule.has_remote_jobs() ? 1L : 0L, lane) != 0;
       if (remote) {
         HaloExchangeContext context{};
         context.context_generation = level + 1;
         context.schedule_generation = level + 1;
-        levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, *lane_, context);
+        levels_[level]->halo_exchange.emplace(levels_[level]->halo_schedule, lane, context);
       }
     }
   }
@@ -514,9 +518,7 @@ class FullTensorCompositeFac {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_contract_; }
 
-  bool owns_execution_lane() const noexcept {
-    return lane_ && (n_ranks() == 1 || lane_->owns_communicator());
-  }
+  bool borrows_execution_lane() const noexcept { return lane_ != nullptr; }
 
   bool has_remote_same_level_halo() const noexcept {
     return std::any_of(levels_.begin(), levels_.end(),
@@ -540,7 +542,10 @@ class FullTensorCompositeFac {
                        [](const auto& connection) { return connection->replicated_parent; });
   }
 
-  SolveReport solve(const Controls& controls) {
+  SolveReport solve(const Controls& controls, const ExecutionLane& lane) {
+    if (all_reduce_max(&lane == lane_ ? 0L : 1L, *lane_) != 0)
+      throw std::invalid_argument(
+          "dimension-generic tensor FAC requires its prepared execution lane");
     detail::validate_controls(controls);
     for (std::size_t level = 0; level < levels_.size(); ++level)
       detail::copy_valid<Dim>(*levels_[level]->binding.solution,
@@ -937,7 +942,7 @@ class FullTensorCompositeFac {
         } catch (...) {
           packing_failure = 1;
         }
-        if (all_reduce_max(packing_failure, lane->communicator()) != 0)
+        if (all_reduce_max(packing_failure, *lane) != 0)
           throw std::runtime_error(
               "dimension-generic tensor replicated restriction packing failed collectively");
 #ifdef POPS_HAS_MPI
@@ -945,7 +950,7 @@ class FullTensorCompositeFac {
           const int code = MPI_Bcast(patch.broadcast_buffer.data(),
                                      static_cast<int>(patch.broadcast_buffer.size()), MPI_DOUBLE,
                                      root, lane->native_handle());
-          if (all_reduce_max(code == MPI_SUCCESS ? 0L : 1L, lane->communicator()) != 0)
+          if (all_reduce_max(code == MPI_SUCCESS ? 0L : 1L, *lane) != 0)
             throw std::runtime_error(
                 "dimension-generic tensor replicated restriction broadcast failed collectively");
         }
@@ -968,7 +973,7 @@ class FullTensorCompositeFac {
         } catch (...) {
           publication_failure = 1;
         }
-        if (all_reduce_max(publication_failure, lane->communicator()) != 0)
+        if (all_reduce_max(publication_failure, *lane) != 0)
           throw std::runtime_error(
               "dimension-generic tensor replicated restriction publication failed collectively");
       }
@@ -981,10 +986,10 @@ class FullTensorCompositeFac {
           "dimension-generic tensor FAC requires a populated refined hierarchy");
     const auto& rank_space = bindings_.front().solution->rank_space();
     const Index<Dim> local_rank = bindings_.front().solution->local_rank();
-    if (rank_space.size() != static_cast<std::size_t>(n_ranks()) ||
-        rank_space.linear_rank(local_rank) != static_cast<std::size_t>(my_rank()))
+    if (rank_space.size() != static_cast<std::size_t>(lane_->size()) ||
+        rank_space.linear_rank(local_rank) != static_cast<std::size_t>(lane_->rank()))
       throw std::invalid_argument(
-          "dimension-generic tensor FAC process space differs from MPI world");
+          "dimension-generic tensor FAC process space differs from its execution lane");
     for (std::size_t level = 0; level < bindings_.size(); ++level) {
       const auto& binding = bindings_[level];
       if (binding.geometry == nullptr || binding.boundary == nullptr || binding.rhs == nullptr ||
@@ -1071,8 +1076,9 @@ class FullTensorCompositeFac {
   std::string build_exact_contract_() const {
     ExactContractBuilder contract;
     contract.text("pops.runtime.amr.nd-tensor-composite-fac")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .scalar(std::int32_t{Dim})
+        .text(lane_->identity())
         .scalar(static_cast<std::uint64_t>(bindings_.size()));
     for (const auto& binding : bindings_) {
       for (int axis = 0; axis < Dim; ++axis)
@@ -1198,7 +1204,7 @@ class FullTensorCompositeFac {
         local_invalid = std::max(local_invalid, patch_invalid);
       }
     Kokkos::fence();
-    return all_reduce_max(local_invalid, lane_->communicator()) == 0;
+    return all_reduce_max(local_invalid, *lane_) == 0;
   }
 
   detail::TensorStencil<Dim> stencil_(const Level& level, std::size_t local,
@@ -1307,22 +1313,22 @@ class FullTensorCompositeFac {
   }
 
   Real global_norm_inf_(const field_type& field) const {
-    return static_cast<Real>(
-        all_reduce_max(static_cast<double>(norm_inf(field)), lane_->communicator()));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field)), *lane_));
   }
 
   Real composite_residual_norm_() const {
     Real local = Real(0);
     for (const auto& level : levels_)
       local = std::max(local, norm_inf(level->residual));
-    return static_cast<Real>(all_reduce_max(static_cast<double>(local), lane_->communicator()));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(local), *lane_));
   }
 
   std::vector<LevelBinding<Dim, MemorySpace>> bindings_;
   std::vector<::pops::amr::RefinementRatio<Dim>> ratios_;
-  // The owning lane must outlive HaloExchange and RegionTransport borrows. Member destruction is
-  // reverse declaration order, so it deliberately precedes every prepared communication object.
-  std::optional<ExecutionLane> lane_{};
+  // The immutable borrow pins the external lane until every prepared communication object has
+  // been destroyed. Member destruction is reverse declaration order, so the borrow follows them.
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   std::vector<std::unique_ptr<Level>> levels_;
   std::vector<std::unique_ptr<Connection>> connections_;
   std::string exact_contract_{};

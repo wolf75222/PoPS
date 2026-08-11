@@ -61,18 +61,20 @@ using NativeField = MultiFab<kTestDimension>;
 using NativeConstView = FieldView<const Real, kTestDimension>;
 using NativeBox = Box<kTestDimension>;
 
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<1>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<1, 0>>);
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<2>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<2, 0>>);
-static_assert(std::is_same_v<
-              decltype(std::declval<const runtime::program::ProgramContext<3>&>()
-                           .template provider_values_view<0>("", 0, 0)),
-              ProviderStorageView<3, 0>>);
+void install_execution_lane(NativeSystem& system, std::string identity) {
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world(std::move(identity))));
+}
+
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<1>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<1, 0>>);
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<2>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<2, 0>>);
+static_assert(std::is_same_v<decltype(std::declval<const runtime::program::ProgramContext<3>&>()
+                                          .template provider_values_view<0>("", 0, 0)),
+                             ProviderStorageView<3, 0>>);
 
 NativeSystemConfig native_config(std::int64_t cells, Real length = Real(1)) {
   NativeSystemConfig config;
@@ -386,6 +388,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   const std::vector<double> U0 = ic(n);
 
   NativeSystem ref(cfg);
+  install_execution_lane(ref, "pops.test.program-context.forward-euler-reference");
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -396,6 +399,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   }
 
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.forward-euler");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -440,6 +444,7 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.simultaneous-field");
   add_gas_block(sim, "a");
   add_gas_block(sim, "b");
   sim.set_program_block_map({0, 1});
@@ -641,6 +646,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 
   // Reference SSPRK2 on the host via solve_fields + eval_rhs (a fresh solve per stage state).
   NativeSystem ref(cfg);
+  install_execution_lane(ref, "pops.test.program-context.ssprk-reference");
   add_gas(ref);
   ref.set_state("gas", U0);
   (void)pops::consume_solve_outcome(ref.solve_fields());
@@ -661,6 +667,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   // NativeProgramContext SSPRK2: stage into scratch states via scratch_state_like / axpy / lincomb, with a
   // per-stage solve_fields_from_state before each RHS.
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.ssprk");
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -710,6 +717,8 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   const std::vector<double> U0 = ic(n);
 
   NativeSystem sim(cfg);
+  sim.install_prepared_boundary_execution_lane(std::make_shared<ExecutionLane>(
+      ExecutionLane::world("pops.test.program-context.seam-surface")));
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
@@ -820,6 +829,7 @@ TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRe
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);
   NativeSystem sim(cfg);
+  install_execution_lane(sim, "pops.test.program-context.logical-subcycle");
   add_gas(sim);
   sim.set_program_block_map({0});
 

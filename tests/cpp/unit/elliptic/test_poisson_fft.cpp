@@ -70,12 +70,12 @@ pops::EllipticBuildRequest<kRegressionDim> fft_request(int cells) {
           {static_cast<std::size_t>(ranks), pairs}};
 }
 
-pops::PoissonFFTSolver<kRegressionDim> make_fft_solver(int cells) {
+pops::PoissonFFTSolver<kRegressionDim> make_fft_solver(int cells, const pops::ExecutionLane& lane) {
   auto request = fft_request(cells);
   const pops::Real measure = request.geometry.spacing(0) * request.geometry.spacing(1);
   pops::PoissonFFTSolver<kRegressionDim> solver =
       pops::make_elliptic_solver<pops::PoissonFFTSolver<kRegressionDim>>(
-          std::move(request), pops::PoissonFFTFactory<kRegressionDim>{});
+          std::move(request), pops::PoissonFFTFactory<kRegressionDim>{lane}, lane);
   solver.install_nullspace(
       pops::constant_mean_zero_nullspace<kRegressionDim>("periodic-fft", "unit-test", measure),
       pops::PreparedVectorDistribution<kRegressionDim>::distributed());
@@ -102,11 +102,11 @@ void fill_mode(Field& field, const pops::Geometry<kRegressionDim>& geometry, pop
   }
 }
 
-void subtract_global_mean(Field& field) {
+void subtract_global_mean(Field& field, const pops::ExecutionLane& lane) {
   pops::Real cells = 0;
   for (const pops::Box<kRegressionDim>& box : field.layout().boxes())
     cells += static_cast<pops::Real>(box.numPts());
-  const pops::Real mean = pops::reduce_sum(field) / cells;
+  const pops::Real mean = pops::all_reduce_sum(pops::reduce_sum_local(field), lane) / cells;
   for (std::size_t local = 0; local < field.local_size(); ++local) {
     auto& fab = field.fab(local);
     auto host = fab.create_host_mirror();
@@ -120,7 +120,8 @@ void subtract_global_mean(Field& field) {
   }
 }
 
-pops::Real maximum_difference(const Field& left, const Field& right) {
+pops::Real maximum_difference(const Field& left, const Field& right,
+                              const pops::ExecutionLane& lane) {
   pops::Real local_max = 0;
   for (std::size_t local = 0; local < left.local_size(); ++local) {
     const auto& left_fab = left.fab(local);
@@ -141,7 +142,7 @@ pops::Real maximum_difference(const Field& left, const Field& right) {
       }
     }
   }
-  return static_cast<pops::Real>(pops::all_reduce_max(static_cast<double>(local_max)));
+  return static_cast<pops::Real>(pops::all_reduce_max(static_cast<double>(local_max), lane));
 }
 
 template <int Dim>
@@ -151,7 +152,9 @@ void expect_device_cartesian_fft() {
   std::array<double, Dim> lengths{};
   cells.fill(kExtent);
   lengths.fill(1.0);
-  pops::PoissonFFT<Dim> fft(cells, lengths, "pops.unit.nd-device-fft");
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.poisson-fft.device:" + std::to_string(Dim));
+  pops::PoissonFFT<Dim> fft(cells, lengths, lane, "pops.unit.nd-device-fft");
   typename pops::PoissonFFT<Dim>::device_view rhs("fft_nd_rhs", fft.local_cell_count());
   typename pops::PoissonFFT<Dim>::device_view phi("fft_nd_phi", fft.local_cell_count());
   auto host_rhs = Kokkos::create_mirror_view(rhs);
@@ -172,6 +175,8 @@ void expect_device_cartesian_fft() {
 
 template <int Dim>
 void expect_cartesian_solver() {
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("tests.poisson-fft.solver:" + std::to_string(Dim));
   constexpr int kExtent = 8;
   pops::Index<Dim> lo{};
   pops::Index<Dim> hi{};
@@ -209,7 +214,7 @@ void expect_cartesian_solver() {
       phi_ghosts,
       {1, 0}};
   pops::PoissonFFTSolver<Dim> solver = pops::make_elliptic_solver<pops::PoissonFFTSolver<Dim>>(
-      std::move(request), pops::PoissonFFTFactory<Dim>{});
+      std::move(request), pops::PoissonFFTFactory<Dim>{lane}, lane);
   pops::Real measure = pops::Real(1);
   for (int axis = 0; axis < Dim; ++axis)
     measure *= geometry.spacing(axis);
@@ -229,6 +234,7 @@ void expect_cartesian_solver() {
 }  // namespace
 
 TEST(test_poisson_fft, capability_is_cartesian_nd_and_spectral_fails_closed) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.capabilities");
   static_assert(pops::PoissonFFTCapabilities<1>::available);
   static_assert(pops::PoissonFFTCapabilities<2>::available);
   static_assert(pops::PoissonFFTCapabilities<3>::available);
@@ -240,7 +246,7 @@ TEST(test_poisson_fft, capability_is_cartesian_nd_and_spectral_fails_closed) {
   EXPECT_EQ(pops::PoissonFFTCapabilities<2>::rejection_reason(
                 pops::PoissonFFTSymbol::continuous_spectral),
             "continuous spectral FFT has no exact apply/residual provider");
-  EXPECT_THROW((void)pops::PoissonFFTFactory<2>{pops::PoissonFFTSymbol::continuous_spectral},
+  EXPECT_THROW((void)pops::PoissonFFTFactory<2>{lane, pops::PoissonFFTSymbol::continuous_spectral},
                std::invalid_argument);
 }
 
@@ -260,8 +266,9 @@ TEST(test_poisson_fft, solver_executes_in_one_two_and_three_dimensions) {
 }
 
 TEST(test_poisson_fft, radix_last_axis_has_no_direct_dft_fallback_but_nonpow2_is_diagnosed) {
-  auto execute = [](int extent) {
-    pops::PoissonFFT<1> fft({extent}, {1.0}, "pops.unit.last-axis-radix");
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.radix");
+  auto execute = [&lane](int extent) {
+    pops::PoissonFFT<1> fft({extent}, {1.0}, lane, "pops.unit.last-axis-radix");
     pops::PoissonFFT<1>::device_view rhs("fft_last_rhs", fft.local_cell_count());
     pops::PoissonFFT<1>::device_view phi("fft_last_phi", fft.local_cell_count());
     Kokkos::deep_copy(rhs, pops::PoissonFFT<1>::complex_type(0.0, 0.0));
@@ -275,25 +282,29 @@ TEST(test_poisson_fft, radix_last_axis_has_no_direct_dft_fallback_but_nonpow2_is
 }
 
 TEST(test_poisson_fft, rejects_invalid_cartesian_workspace_before_lane_materialization) {
-  EXPECT_THROW((pops::PoissonFFT<1>({0}, {1.0}, "pops.unit.invalid-fft")), std::invalid_argument);
-  EXPECT_THROW((pops::PoissonFFT<2>({8, 8}, {1.0, 0.0}, "pops.unit.invalid-fft")),
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.invalid");
+  EXPECT_THROW((pops::PoissonFFT<1>({0}, {1.0}, lane, "pops.unit.invalid-fft")),
+               std::invalid_argument);
+  EXPECT_THROW((pops::PoissonFFT<2>({8, 8}, {1.0, 0.0}, lane, "pops.unit.invalid-fft")),
                std::invalid_argument);
 }
 
 TEST(test_poisson_fft, device_dft_rejects_nonzero_mean_then_solves_exactly) {
-  pops::PoissonFFT<2> slow_probe({kFallbackCells, kFallbackCells}, {1.0, 1.0});
-  pops::PoissonFFT<2> fast_probe({32, 32}, {1.0, 1.0});
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.device-dft");
+  pops::PoissonFFT<2> slow_probe({kFallbackCells, kFallbackCells}, {1.0, 1.0}, lane,
+                                 "tests.poisson-fft.slow-probe");
+  pops::PoissonFFT<2> fast_probe({32, 32}, {1.0, 1.0}, lane, "tests.poisson-fft.fast-probe");
   EXPECT_TRUE(slow_probe.uses_direct_dft_fallback());
   EXPECT_FALSE(fast_probe.uses_direct_dft_fallback());
 
-  pops::PoissonFFTSolver<kRegressionDim> solver = make_fft_solver(kFallbackCells);
+  pops::PoissonFFTSolver<kRegressionDim> solver = make_fft_solver(kFallbackCells, lane);
   solver.phi().set_val(pops::Real(7));
   fill_mode(solver.rhs(), solver.geom(), pops::Real(1));
   const pops::SolveReport incompatible = solver.solve();
   EXPECT_EQ(incompatible.status, pops::SolveStatus::kIncompatibleRhs);
   EXPECT_EQ(pops::reduce_norm_inf(solver.phi()), pops::Real(7));
 
-  subtract_global_mean(solver.rhs());
+  subtract_global_mean(solver.rhs(), lane);
   const pops::SolveReport solved = solver.solve();
   ASSERT_TRUE(solved.solved()) << solved.reason;
   EXPECT_TRUE(std::isfinite(static_cast<double>(pops::reduce_norm_inf(solver.phi()))));
@@ -301,19 +312,20 @@ TEST(test_poisson_fft, device_dft_rejects_nonzero_mean_then_solves_exactly) {
 }
 
 TEST(test_poisson_fft, discrete_provider_matches_exact_rank_geometric_mg) {
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-fft.mg-parity");
   auto mg_request = fft_request(kFallbackCells);
   auto fft_request_value = mg_request;
   const pops::Real measure = mg_request.geometry.spacing(0) * mg_request.geometry.spacing(1);
 
   pops::PoissonFFTSolver<kRegressionDim> fft =
       pops::make_elliptic_solver<pops::PoissonFFTSolver<kRegressionDim>>(
-          std::move(fft_request_value), pops::PoissonFFTFactory<kRegressionDim>{});
+          std::move(fft_request_value), pops::PoissonFFTFactory<kRegressionDim>{lane}, lane);
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.relative_tolerance = pops::Real(1e-11);
   options.absolute_tolerance = pops::Real(1e-13);
   options.maximum_cycles = 200;
   options.bottom_sweeps = 80;
-  pops::elliptic::mg::GeometricMG<kRegressionDim> mg(std::move(mg_request), options);
+  pops::elliptic::mg::GeometricMG<kRegressionDim> mg(std::move(mg_request), lane, options);
   fft.install_nullspace(
       pops::constant_mean_zero_nullspace<kRegressionDim>("periodic-fft", "unit-test", measure),
       pops::PreparedVectorDistribution<kRegressionDim>::distributed());
@@ -323,8 +335,8 @@ TEST(test_poisson_fft, discrete_provider_matches_exact_rank_geometric_mg) {
 
   fill_mode(fft.rhs(), fft.geom(), pops::Real(0));
   fill_mode(mg.rhs(), mg.geom(), pops::Real(0));
-  subtract_global_mean(fft.rhs());
-  subtract_global_mean(mg.rhs());
+  subtract_global_mean(fft.rhs(), lane);
+  subtract_global_mean(mg.rhs(), lane);
   fft.phi().set_val(pops::Real(0));
   mg.phi().set_val(pops::Real(0));
   const pops::SolveReport fft_report = fft.solve();
@@ -332,7 +344,7 @@ TEST(test_poisson_fft, discrete_provider_matches_exact_rank_geometric_mg) {
   ASSERT_TRUE(fft_report.solved()) << fft_report.reason;
   ASSERT_TRUE(mg_report.solved()) << mg_report.reason;
   EXPECT_LT(fft_report.residual_norm, pops::Real(1e-9));
-  const pops::Real reference = pops::reduce_norm_inf(mg.phi());
+  const pops::Real reference = pops::all_reduce_max(pops::reduce_norm_inf_local(mg.phi()), lane);
   ASSERT_GT(reference, pops::Real(0));
-  EXPECT_LT(maximum_difference(fft.phi(), mg.phi()) / reference, pops::Real(1e-6));
+  EXPECT_LT(maximum_difference(fft.phi(), mg.phi(), lane) / reference, pops::Real(1e-6));
 }

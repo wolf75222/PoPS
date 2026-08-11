@@ -62,7 +62,8 @@ TEST(test_poisson_smoother_cache,
   options.bottom_sweeps = 50;
   auto build = request(32);
   const auto expected_contract = Solver::expected_operator_contract(build, options);
-  Solver solver(std::move(build), options);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.poisson-smoother-cache");
+  Solver solver(std::move(build), lane, options);
   solver.install_nullspace(pops::FieldNullspacePlan<kDim>{},
                            pops::PreparedVectorDistribution<kDim>::replicated());
   ASSERT_GE(solver.num_levels(), 2);

@@ -111,11 +111,13 @@ std::string fac_hierarchy_contract(const CompositeFacBuildRequest<Dim>& request)
 
 template <int Dim>
 std::string fac_build_contract(const CompositeFacBuildRequest<Dim>& request,
-                               const CompositeFacOptions& options, Real reaction) {
+                               const CompositeFacOptions& options, Real reaction,
+                               const ExecutionLane& lane) {
   ExactContractBuilder contract;
   contract.text("pops.elliptic.composite-fac-build")
       .scalar(std::uint32_t{2})
       .scalar(std::int32_t{Dim})
+      .text(lane.identity())
       .bytes(fac_hierarchy_contract(request))
       .bytes(fac_options_contract<Dim>(options, reaction));
   return std::move(contract).release();
@@ -150,28 +152,31 @@ class CompositeFacPoisson {
   using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
   using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
-  CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
-                      Real reaction = Real(0))
-      : options_(options), reaction_(reaction) {
+  CompositeFacPoisson(request_type request, const ExecutionLane& lane,
+                      CompositeFacOptions options = {}, Real reaction = Real(0))
+      : lane_(&lane),
+        lane_borrow_(lane.borrow_immutably()),
+        options_(options),
+        reaction_(reaction) {
     std::exception_ptr validation_error;
     try {
       detail::validate_fac_options(options_);
       if (!std::isfinite(static_cast<double>(reaction_)) || reaction_ < Real(0))
         throw std::invalid_argument("composite FAC reaction must be finite and non-negative");
-      validate_request_(request);
+      validate_request_(request, lane);
     } catch (...) {
       validation_error = std::current_exception();
     }
-    if (all_reduce_max(validation_error ? 1L : 0L) != 0) {
-      if (n_ranks() == 1 && validation_error)
+    if (all_reduce_max(validation_error ? 1L : 0L, lane) != 0) {
+      if (lane.size() == 1 && validation_error)
         std::rethrow_exception(validation_error);
       throw std::runtime_error("composite FAC preparation failed collectively");
     }
 
     build_levels_(request);
     build_connections_(request.ratios);
-    build_coarse_solver_(request.levels.front());
-    exact_prepared_contract_ = detail::fac_build_contract(request, options_, reaction_);
+    build_coarse_solver_(request.levels.front(), lane);
+    exact_prepared_contract_ = detail::fac_build_contract(request, options_, reaction_, lane);
   }
 
   CompositeFacPoisson(const CompositeFacPoisson&) = delete;
@@ -184,12 +189,13 @@ class CompositeFacPoisson {
     return {"pops.elliptic.composite-fac.nd", 2};
   }
   static std::string expected_prepared_contract(const request_type& request,
+                                                const ExecutionLane& lane,
                                                 CompositeFacOptions options = {},
                                                 Real reaction = Real(0)) {
     detail::validate_fac_options(options);
     if (!std::isfinite(static_cast<double>(reaction)) || reaction < Real(0))
       throw std::invalid_argument("composite FAC reaction must be finite and non-negative");
-    return detail::fac_build_contract(request, options, reaction);
+    return detail::fac_build_contract(request, options, reaction, lane);
   }
 
   std::string_view exact_prepared_contract() const noexcept { return exact_prepared_contract_; }
@@ -210,6 +216,7 @@ class CompositeFacPoisson {
     return levels_.at(static_cast<std::size_t>(level))->phi;
   }
   const SolveReport& last_solve_report() const noexcept { return last_report_; }
+  bool borrows_execution_lane(const ExecutionLane& lane) const noexcept { return lane_ == &lane; }
 
   void install_newton(FieldNewtonOptions options) {
     if (newton_workspace_)
@@ -272,7 +279,7 @@ class CompositeFacPoisson {
       candidates.push_back(&level->phi);
     }
     auto workspace =
-        std::make_unique<FieldNullspaceWorkspace<Dim>>(plan, rhs_layouts, distributions);
+        std::make_unique<FieldNullspaceWorkspace<Dim>>(plan, rhs_layouts, distributions, *lane_);
     FieldNullspacePlan<Dim> coarse_plan = coarse_correction_plan_(plan);
     coarse_solver_->install_nullspace(std::move(coarse_plan), distributions.front());
 
@@ -477,7 +484,7 @@ class CompositeFacPoisson {
     return result;
   }
 
-  static void validate_request_(const request_type& request) {
+  static void validate_request_(const request_type& request, const ExecutionLane& lane) {
     if (request.levels.empty() || request.ratios.size() + 1 != request.levels.size())
       throw std::invalid_argument(
           "composite FAC requires one ratio between each adjacent pair of levels");
@@ -487,15 +494,15 @@ class CompositeFacPoisson {
       if (current.geometry.domain().empty() || current.boxes.empty() ||
           !current.distribution.matches_layout(current.boxes) ||
           !current.distribution.rank_space().contains(current.local_rank) ||
-          current.distribution.rank_space().size() != static_cast<std::size_t>(n_ranks()) ||
+          current.distribution.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
           current.distribution.rank_space().linear_rank(current.local_rank) !=
-              static_cast<std::size_t>(my_rank()) ||
+              static_cast<std::size_t>(lane.rank()) ||
           !current.boxes.is_disjoint_within(current.geometry.domain(), current.layout_budget))
         throw std::invalid_argument("composite FAC level has an invalid exact-ranked layout");
       if (level == 0 &&
           !current.boxes.tiles_exactly(current.geometry.domain(), current.layout_budget))
         throw std::invalid_argument("composite FAC coarse level must tile its complete domain");
-      if (n_ranks() > 1 && !current.distribution.replicated())
+      if (lane.size() > 1 && !current.distribution.replicated())
         throw std::invalid_argument("composite FAC currently requires replicated levels under MPI");
       for (int axis = 0; axis < Dim; ++axis)
         if (current.rhs_ghosts[axis] != 0 || current.phi_ghosts[axis] < 1)
@@ -652,7 +659,8 @@ class CompositeFacPoisson {
     }
   }
 
-  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request) {
+  void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request,
+                            const ExecutionLane& lane) {
     GeometricMultigridOptions controls;
     controls.relative_tolerance = options_.coarse_rel_tol;
     controls.absolute_tolerance = options_.coarse_abs_tol;
@@ -661,8 +669,8 @@ class CompositeFacPoisson {
     EllipticBuildRequest<Dim> correction_request = coarse_request;
     correction_request.boundary =
         detail::boundary_for_geometry(coarse_request.boundary, coarse_request.geometry, true);
-    coarse_solver_ =
-        std::make_unique<GeometricMG<Dim, MemorySpace>>(std::move(correction_request), controls);
+    coarse_solver_ = std::make_unique<GeometricMG<Dim, MemorySpace>>(std::move(correction_request),
+                                                                     lane, controls);
   }
 
   void fill_level_ghosts_(std::size_t level_index, field_type& field, bool interpolate_parent) {
@@ -837,10 +845,10 @@ class CompositeFacPoisson {
     return boundary_contexts_[level];
   }
 
-  static void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
-                                            const char* message) {
+  void synchronize_boundary_failure_(FieldBoundaryExecutionContext<Dim>& context,
+                                     const char* message) {
     Kokkos::fence();
-    if (context.failure->synchronize_across_ranks())
+    if (context.failure->synchronize_across_ranks(*lane_))
       throw std::runtime_error(message);
   }
 
@@ -965,7 +973,7 @@ class CompositeFacPoisson {
                  nonlinear_hierarchy_type& output, int iteration) {
             apply_dynamic_linearized_(iterate, direction, output, iteration);
           },
-          [this](nonlinear_hierarchy_type& values) { apply_dynamic_gauge_(values); });
+          [this](nonlinear_hierarchy_type& values) { apply_dynamic_gauge_(values); }, *lane_);
     } catch (const FieldNullspaceIncompatibleRhs& error) {
       report.mark_failed(SolveStatus::kIncompatibleRhs, SolveAction::kFailRun, error.what());
     } catch (const FieldNullspaceInvalidEvaluation& error) {
@@ -996,20 +1004,22 @@ class CompositeFacPoisson {
   }
 
   Real global_norm_inf_(const field_type& field) const {
-    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field))));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(norm_inf(field)), *lane_));
   }
 
   Real composite_residual_norm_() const {
     Real result = Real(0);
     for (const auto& level : levels_)
       result = std::max(result, norm_inf(level->residual));
-    return static_cast<Real>(all_reduce_max(static_cast<double>(result)));
+    return static_cast<Real>(all_reduce_max(static_cast<double>(result), *lane_));
   }
 
   bool singular_() const noexcept {
     return detail::is_singular(levels_.front()->boundary, reaction_);
   }
 
+  const ExecutionLane* lane_ = nullptr;
+  ExecutionLane::ImmutableBorrow lane_borrow_;
   CompositeFacOptions options_{};
   Real reaction_ = Real(0);
   std::vector<std::unique_ptr<Level>> levels_{};

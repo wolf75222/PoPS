@@ -121,16 +121,17 @@ void expect_partitioned_tensor_fac() {
   using namespace pops::runtime::program;
 
   auto request = partitioned_request<Dim>();
-  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>();
+  const ExecutionLane lane = ExecutionLane::world("pops.test.nd-tensor-fac.partitioned-mpi");
+  const auto registry = make_default_hierarchy_tensor_solver_provider_registry<Dim>(lane);
   auto prepared = prepare_hierarchy_tensor_solver_collectively(
-      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(request));
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(request), lane);
   auto* exact = dynamic_cast<AmrTensorElliptic<Dim>*>(prepared.get());
   ASSERT_NE(exact, nullptr);
-  EXPECT_TRUE(exact->owns_execution_lane());
-  EXPECT_EQ(all_reduce_min(exact->has_remote_same_level_halo() ? 1L : 0L), 1L);
-  EXPECT_EQ(all_reduce_min(exact->has_remote_parent_gather() ? 1L : 0L), 1L);
-  EXPECT_EQ(all_reduce_min(exact->has_remote_fine_restriction() ? 1L : 0L), 1L);
-  EXPECT_EQ(all_reduce_min(exact->uses_replicated_parent_restriction() ? 1L : 0L), 1L);
+  EXPECT_TRUE(exact->borrows_execution_lane());
+  EXPECT_EQ(all_reduce_min(exact->has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(all_reduce_min(exact->has_remote_parent_gather() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(all_reduce_min(exact->has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(all_reduce_min(exact->uses_replicated_parent_restriction() ? 1L : 0L, lane), 1L);
 
   for (int level = 0; level < prepared->level_count(); ++level) {
     for (int row = 0; row < Dim; ++row)
@@ -141,12 +142,13 @@ void expect_partitioned_tensor_fac() {
     prepared->stage_initial_guess(level, nullptr);
   }
 
-  const SolveReport report = solve_prepared_hierarchy_tensor_collectively(
-                                 *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4})
-                                 .consume(SolveConsumption::kAccept);
+  const SolveReport report =
+      solve_prepared_hierarchy_tensor_collectively(
+          *prepared, HierarchyTensorSolveControls{Real(1e-10), Real(0), 4}, lane)
+          .consume(SolveConsumption::kAccept);
   EXPECT_TRUE(report.solved()) << report.reason;
-  EXPECT_EQ(all_reduce_min(static_cast<long>(report.iters)),
-            all_reduce_max(static_cast<long>(report.iters)));
+  EXPECT_EQ(all_reduce_min(static_cast<long>(report.iters), lane),
+            all_reduce_max(static_cast<long>(report.iters), lane));
 }
 
 int run_partitioned_tensor_fac(int argc, char** argv) {

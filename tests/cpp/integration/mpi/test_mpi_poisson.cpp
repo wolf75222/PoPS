@@ -18,11 +18,12 @@ using namespace pops;
 static int pops_run_test_mpi_poisson(int argc, char** argv) {
   comm_init(&argc, &argv);
   const int me = my_rank(), np = n_ranks();
+  const ExecutionLane lane = ExecutionLane::world("pops.test.mpi-poisson");
   constexpr double kPi = 3.14159265358979323846;
 
   const int Nx = 64, Ny = 64;  // puissances de 2, divisibles par np <= 64
   const double Lx = 1.0, Ly = 1.0;
-  PoissonFFT<2> solver({Nx, Ny}, {Lx, Ly}, "pops.mpi.raw-fft");
+  PoissonFFT<2> solver({Nx, Ny}, {Lx, Ly}, lane, "pops.mpi.raw-fft");
   const int nyl = solver.local_last_extent(), y0 = solver.local_last_begin();
 
   // RHS de moyenne nulle : produit de cosinus (somme nulle sur les periodes).
@@ -63,7 +64,7 @@ static int pops_run_test_mpi_poisson(int argc, char** argv) {
       local_error = std::max(
           local_error, std::fabs(phi_local[static_cast<std::size_t>(jl) * Nx + i] - expected));
     }
-  const double max_error = all_reduce_max(local_error);
+  const double max_error = all_reduce_max(local_error, lane);
   const long fails = max_error > 1e-10 ? 1 : 0;
   if (me == 0)
     std::printf("np=%d max|phi-phi_exact|=%.3e\n", np, max_error);

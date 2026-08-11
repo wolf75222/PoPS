@@ -154,7 +154,8 @@ void fill_manufactured_rhs(pops::MultiFab<Dim>& rhs, const pops::Geometry<Dim>& 
 }
 
 template <int Dim>
-pops::Real manufactured_error(const pops::PoissonFFTSolver<Dim>& solver) {
+pops::Real manufactured_error(const pops::PoissonFFTSolver<Dim>& solver,
+                              const pops::ExecutionLane& lane) {
   const pops::Real dx = solver.geom().spacing(Dim - 1);
   const pops::Real theta = pops::Real(2) * kPi / pops::Real(kCells);
   const pops::Real eigenvalue = pops::Real(2) * (pops::Real(1) - std::cos(theta)) / (dx * dx);
@@ -175,18 +176,20 @@ pops::Real manufactured_error(const pops::PoissonFFTSolver<Dim>& solver) {
           std::max(local_error, std::abs(host(storage_ordinal(storage, index)) - rhs / eigenvalue));
     }
   }
-  return pops::all_reduce_max(local_error);
+  return pops::all_reduce_max(local_error, lane);
 }
 
 template <int Dim>
 bool verify_exact_provider() {
+  const pops::ExecutionLane lane =
+      pops::ExecutionLane::world("pops.test.mpi-system-fft:" + std::to_string(Dim));
   auto request = fft_request<Dim>(true);
   const auto expected = pops::PoissonFFTSolver<Dim>::expected_operator_contract(request);
   pops::Real cell_measure = pops::Real(1);
   for (int axis = 0; axis < Dim; ++axis)
     cell_measure *= request.geometry.spacing(axis);
   pops::PoissonFFTSolver<Dim> solver = pops::make_elliptic_solver<pops::PoissonFFTSolver<Dim>>(
-      std::move(request), pops::PoissonFFTFactory<Dim>{});
+      std::move(request), pops::PoissonFFTFactory<Dim>{lane}, lane);
   solver.install_nullspace(pops::constant_mean_zero_nullspace<Dim>(
                                "periodic-mpi-fft", "test-mpi-system-fft", cell_measure),
                            pops::PreparedVectorDistribution<Dim>::distributed());
@@ -195,9 +198,9 @@ bool verify_exact_provider() {
 
   fill_manufactured_rhs(solver.rhs(), solver.geom());
   const pops::SolveReport first = solver.solve();
-  const pops::Real first_error = manufactured_error(solver);
+  const pops::Real first_error = manufactured_error(solver, lane);
   const pops::SolveReport second = solver.solve();
-  const pops::Real second_error = manufactured_error(solver);
+  const pops::Real second_error = manufactured_error(solver, lane);
   valid = valid && first.solved() && second.solved() && first.residual_norm < pops::Real(1e-9) &&
           second.residual_norm < pops::Real(1e-9) && first_error < pops::Real(1e-12) &&
           second_error < pops::Real(1e-12);
@@ -207,7 +210,7 @@ bool verify_exact_provider() {
     try {
       auto remap_request = fft_request<Dim>(false);
       auto forbidden = pops::make_elliptic_solver<pops::PoissonFFTSolver<Dim>>(
-          std::move(remap_request), pops::PoissonFFTFactory<Dim>{});
+          std::move(remap_request), pops::PoissonFFTFactory<Dim>{lane}, lane);
       (void)forbidden;
     } catch (const std::exception&) {
       rejected = true;

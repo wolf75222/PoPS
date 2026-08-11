@@ -164,7 +164,7 @@ CompositeFacBuildRequest<Dim> make_request(CompositeFacPreparationBudget prepara
 }
 
 template <int Dim>
-Real maximum_constant_error(const MultiFab<Dim>& field) {
+Real maximum_constant_error(const MultiFab<Dim>& field, const ExecutionLane& lane) {
   Real local_error = Real(0);
   for (std::size_t local = 0; local < field.local_size(); ++local) {
     const auto& fab = field.fab(local);
@@ -189,11 +189,13 @@ Real maximum_constant_error(const MultiFab<Dim>& field) {
       local_error = std::max(local_error, std::abs(host(offset) - Real(1)));
     }
   }
-  return static_cast<Real>(pops::all_reduce_max(static_cast<double>(local_error)));
+  return static_cast<Real>(pops::all_reduce_max(static_cast<double>(local_error), lane));
 }
 
 template <int Dim>
 void expect_partitioned_fac() {
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.partitioned:" + std::to_string(Dim));
   pops::CompositeFacOptions options;
   options.max_iters = 40;
   options.fine_sweeps = 4;
@@ -202,11 +204,11 @@ void expect_partitioned_fac() {
   options.coarse_rel_tol = Real(1e-4);
   options.coarse_abs_tol = Real(1e-10);
   options.coarse_cycles = 192;
-  CompositeFacPoisson<Dim> solver(make_request<Dim>(), options, Real(1));
-  EXPECT_TRUE(solver.owns_execution_lane());
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L), 1L);
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L), 1L);
-  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L), 1L);
+  CompositeFacPoisson<Dim> solver(make_request<Dim>(), lane, options, Real(1));
+  EXPECT_TRUE(solver.borrows_execution_lane(lane));
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_same_level_halo() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_parent_gather() ? 1L : 0L, lane), 1L);
+  EXPECT_EQ(pops::all_reduce_min(solver.has_remote_fine_restriction() ? 1L : 0L, lane), 1L);
   for (int level = 0; level < solver.n_levels(); ++level) {
     solver.rhs_level(level).set_val(Real(1));
     solver.phi_level(level).set_val(Real(0));
@@ -215,34 +217,38 @@ void expect_partitioned_fac() {
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm
                                << " reference=" << report.reference_residual_norm;
   EXPECT_LT(report.residual_norm, report.reference_residual_norm);
-  EXPECT_LT(maximum_constant_error(solver.phi_level(0)), Real(0.08));
-  EXPECT_LT(maximum_constant_error(solver.phi_level(1)), Real(0.08));
-  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report.iters)),
-            pops::all_reduce_max(static_cast<long>(report.iters)));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(0), lane), Real(0.08));
+  EXPECT_LT(maximum_constant_error(solver.phi_level(1), lane), Real(0.08));
+  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(report.iters), lane),
+            pops::all_reduce_max(static_cast<long>(report.iters), lane));
 }
 
 template <int Dim>
 void expect_exact_rank_ratio_prepares(const std::array<int, Dim>& ratio_components) {
-  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), {}, Real(1));
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.ratio:" + std::to_string(Dim));
+  CompositeFacPoisson<Dim> solver(make_request_with_ratio<Dim>(ratio_components), lane, {},
+                                  Real(1));
   EXPECT_EQ(solver.n_levels(), 2);
 }
 
 void expect_collective_budget_failure() {
+  const ExecutionLane lane = ExecutionLane::world("pops.test.composite-fac.budget");
   CompositeFacPreparationBudget preparation = budget();
   if (pops::my_rank() == 0)
     preparation.local_scratch_cells = 0;
   bool rejected = false;
   std::string message;
   try {
-    CompositeFacPoisson<1> solver(make_request<1>(preparation), {}, Real(1));
+    CompositeFacPoisson<1> solver(make_request<1>(preparation), lane, {}, Real(1));
     (void)solver;
   } catch (const std::exception& error) {
     rejected = true;
     message = error.what();
   }
-  EXPECT_EQ(pops::all_reduce_min(rejected ? 1L : 0L), 1L);
+  EXPECT_EQ(pops::all_reduce_min(rejected ? 1L : 0L, lane), 1L);
   EXPECT_TRUE(pops::all_ranks_agree_exact_ordered_byte_pairs(
-      {{std::string_view("partitioned-fac-budget-failure"), std::string_view(message)}}));
+      {{std::string_view("partitioned-fac-budget-failure"), std::string_view(message)}}, lane));
 }
 
 int run_partitioned_fac_matrix(int argc, char** argv) {

@@ -157,8 +157,8 @@ class TestFieldNullspaceProvider final : public pops::FieldNullspaceProvider<Dim
       const pops::FieldNullspaceProviderRequest<Dim>&) const override {
     return "tests.field-nullspace.prepared@1";
   }
-  pops::PreparedFieldNullspace<Dim> prepare(
-      const pops::FieldNullspaceProviderRequest<Dim>&) const override {
+  pops::PreparedFieldNullspace<Dim> prepare(const pops::FieldNullspaceProviderRequest<Dim>&,
+                                            const pops::ExecutionLane&) const override {
     throw std::logic_error("test provider is registry-only");
   }
 };
