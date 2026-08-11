@@ -1,4 +1,6 @@
 #include <pops/core/state/state.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/physics/admissibility/admissibility.hpp>
 #include <pops/physics/inversion/inversion.hpp>
 
@@ -6,6 +8,7 @@
 
 #include <array>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -184,6 +187,31 @@ void exercise_dimension() {
   EXPECT_FALSE(projection.collective_contract().empty());
 }
 
+template <int Dim>
+void exercise_identity_model_recovery() {
+  using Model = pops::nd::ScalarAdvection<Dim>;
+  using Recovery = pops::PreparedModelVariableInversionRecovery<Model>;
+  static_assert(std::same_as<typename Recovery::Candidate, typename Model::State>);
+
+  pops::RealVector<Dim> velocity{};
+  Recovery recovery(Model::prepare(velocity));
+  const void* allocation = recovery.workspace_allocation_identity();
+
+  const pops::Real finite[1] = {pops::Real(2.5)};
+  const auto accepted = recovery.recover(finite);
+  EXPECT_EQ(accepted.outcome.status, pops::RecoveryStatus::kRecovered);
+  EXPECT_DOUBLE_EQ(accepted.outcome.value[0], finite[0]);
+  EXPECT_FALSE(accepted.projection_attempted);
+  EXPECT_EQ(recovery.workspace_allocation_identity(), allocation);
+
+  const pops::Real nonfinite[1] = {std::numeric_limits<pops::Real>::infinity()};
+  const auto rejected = recovery.recover(nonfinite);
+  EXPECT_EQ(rejected.outcome.status, pops::RecoveryStatus::kRejected);
+  EXPECT_EQ(rejected.outcome.cause, pops::RecoveryCause::kInadmissibleCandidate);
+  EXPECT_NE(rejected.outcome.reason_code, 0u);
+  EXPECT_EQ(recovery.workspace_allocation_identity(), allocation);
+}
+
 TEST(GenericInversionAdmissibility, ExactRankedClosedFormAndIterativeProviders) {
   exercise_dimension<1>();
   exercise_dimension<2>();
@@ -195,6 +223,12 @@ TEST(GenericInversionAdmissibility, ExactRankedClosedFormAndIterativeProviders) 
   pops::PreparedVariableInversion same(dim1, ClosedFormSource{});
   EXPECT_EQ(first.collective_contract(), same.collective_contract());
   EXPECT_NE(dim1.exact_contract(), dim2.exact_contract());
+}
+
+TEST(GenericInversionAdmissibility, IdentityModelUsesTypedStateCandidateInEveryDimension) {
+  exercise_identity_model_recovery<1>();
+  exercise_identity_model_recovery<2>();
+  exercise_identity_model_recovery<3>();
 }
 
 TEST(GenericInversionAdmissibility, DiagnosticAndScheduleCollisionsFailClosed) {
