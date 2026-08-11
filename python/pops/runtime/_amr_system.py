@@ -137,20 +137,17 @@ class AmrSystem(
     def step(self, dt: Any) -> None:
         """Advance one fixed step and synchronize exactly one temporal envelope."""
         from pops.runtime._native_step_target import native_step_target
-        from pops.runtime._step_strategy import run_control_payload, run_step_attempt
-        from pops.time import FixedDt
+        from pops.runtime._step_strategy import prepare_program_run
 
-        strategy = FixedDt(dt)
-        self._temporal_restart_state.begin_run(
-            run_control_payload(strategy),
+        prepared_run = prepare_program_run(self)
+        prepared_run.begin(
+            self._temporal_restart_state,
             time=self._s.time(),
             macro_step=self._s.macro_step(),
         )
-        run_step_attempt(
-            self,
+        prepared_run.run_step(
             native_step_target(self),
-            strategy,
-            t_end=float(self._s.time()) + strategy.dt,
+            t_end=float(self._s.time()) + float(dt),
         )
 
     def set_poisson(
@@ -179,33 +176,26 @@ class AmrSystem(
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
-        from pops.runtime._step_strategy import (
-            prepare_step_controller,
-            resolve_run_strategy,
-            run_control_payload,
-            run_step_attempt,
-        )
+        from pops.runtime._step_strategy import prepare_program_run
         from pops.runtime._native_step_target import native_step_target
 
-        strategy = resolve_run_strategy(self)
-        control_payload = run_control_payload(strategy, controls)
-        prepare_step_controller(self, strategy, controls)
-        self._temporal_restart_state.begin_run(
-            control_payload, time=self._s.time(), macro_step=self._s.macro_step()
+        prepared_run = prepare_program_run(self, controls)
+        prepared_run.begin(
+            self._temporal_restart_state, time=self._s.time(), macro_step=self._s.macro_step()
         )
         from pops.runtime._run_manifest import begin_run
 
         begin_run(
             self,
             t_end=t_end,
-            step_transaction=control_payload,
+            step_transaction=prepared_run.control_payload,
             max_steps=max_steps,
             output_dir=output_dir,
         )
         step_target = native_step_target(self)
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
-            run_step_attempt(self, step_target, strategy, t_end=float(t_end), controls=controls)
+            prepared_run.run_step(step_target, t_end=float(t_end))
             steps += 1
         return steps
 
