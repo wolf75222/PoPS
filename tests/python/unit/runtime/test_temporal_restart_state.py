@@ -18,9 +18,8 @@ from pops.runtime._program_cadence_checkpoint import (
     restore_program_cadence,
 )
 from pops.runtime._step_strategy import (
-    resolve_run_strategy,
+    prepare_program_run,
     run_control_payload,
-    run_step_attempt,
 )
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
@@ -57,9 +56,10 @@ class _Native:
 
 
 class _Engine:
-    def __init__(self, native, state):
+    def __init__(self, native, state, strategy):
         self._s = native
         self._temporal_restart_state = state
+        self._step_strategy = strategy
 
 
 def _bound_state(strategy=None):
@@ -496,7 +496,8 @@ def _typed_history_schedule():
 def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state():
     native = _Native()
     state = _bound_state()
-    run_step_attempt(_Engine(native, state), native, FixedDt(0.125), t_end=1.0)
+    strategy = FixedDt(0.125)
+    prepare_program_run(_Engine(native, state, strategy)).run_step(native, t_end=1.0)
 
     payload = state.checkpoint_json(time=native.time(), macro_step=native.macro_step())
     restored = TemporalRestartState.from_json(
@@ -655,7 +656,7 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     native = native_step_target(engine)
     initial = np.asarray(runtime.state_global("blk"), dtype=np.float64).copy()
     with pytest.raises(StepAttemptRejected):
-        run_step_attempt(engine, native, FixedDt(0.125), t_end=0.125)
+        prepare_program_run(engine).run_step(native, t_end=0.125)
 
     assert (runtime.time(), runtime.macro_step()) == (0.0, 0)
     assert np.array_equal(np.asarray(runtime.state_global("blk"), dtype=np.float64), initial), (
@@ -677,12 +678,8 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     retrying = _bound_uniform_runtime(native_cxx, attempt_policy="error_retry")
     retrying_engine = retrying._executor
     retrying_initial = np.asarray(retrying.state_global("blk"), dtype=np.float64).copy()
-    report = run_step_attempt(
-        retrying_engine,
-        native_step_target(retrying_engine),
-        resolve_run_strategy(retrying_engine),
-        t_end=0.125,
-    )
+    report = prepare_program_run(retrying_engine).run_step(
+        native_step_target(retrying_engine), t_end=0.125)
     assert report.status == "accepted"
     assert report.attempts == 2
     assert retrying.time() == pytest.approx(0.0625, rel=0.0, abs=1.0e-15)
@@ -1067,7 +1064,8 @@ def test_strict_controller_state_matches_the_accepted_macro_step():
 
     native = _Native()
     accepted = _bound_state()
-    run_step_attempt(_Engine(native, accepted), native, FixedDt(0.125), t_end=1.0)
+    strategy = FixedDt(0.125)
+    prepare_program_run(_Engine(native, accepted, strategy)).run_step(native, t_end=1.0)
     accepted_payload = json.loads(
         accepted.checkpoint_json(time=native.time(), macro_step=native.macro_step()))
     accepted_payload["controller_state"]["last_accepted_dt"] = None

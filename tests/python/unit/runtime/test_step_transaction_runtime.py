@@ -14,7 +14,7 @@ from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFi
 from pops.runtime._consumer_transaction import ConsumerTransactionReport
 from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
 from pops.runtime._runtime_instance import RuntimeInstance
-from pops.runtime._step_strategy import run_step_attempt
+from pops.runtime._step_strategy import prepare_program_run
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import (
     ALL_PROVISIONAL_STORES,
@@ -247,7 +247,9 @@ def test_success_commits_native_clock_cursors_and_attempt_counter_together():
 
 def test_passing_guard_does_not_report_an_unexecuted_projection():
     native = _Native()
+    strategy = FixedDt(0.125)
     native._step_transaction_plan = SimpleNamespace(
+        strategy=strategy,
         stores=ALL_PROVISIONAL_STORES,
         guards=(
             SimpleNamespace(
@@ -257,7 +259,8 @@ def test_passing_guard_does_not_report_an_unexecuted_projection():
         ),
     )
 
-    report = run_step_attempt(native, native, FixedDt(0.125), t_end=0.125)
+    native._step_strategy = strategy
+    report = prepare_program_run(native).run_step(native, t_end=0.125)
 
     assert report.projections == ()
     assert report.to_data()["projections"] == []
@@ -270,7 +273,9 @@ def test_controller_report_carries_only_the_executed_projection_identity():
             return super().step(dt)
 
     native = ProjectingNative()
+    strategy = FixedDt(0.125)
     native._step_transaction_plan = SimpleNamespace(
+        strategy=strategy,
         stores=ALL_PROVISIONAL_STORES,
         guards=(
             SimpleNamespace(
@@ -280,7 +285,8 @@ def test_controller_report_carries_only_the_executed_projection_identity():
         ),
     )
 
-    report = run_step_attempt(native, native, FixedDt(0.125), t_end=0.125)
+    native._step_strategy = strategy
+    report = prepare_program_run(native).run_step(native, t_end=0.125)
 
     assert report.projections == ("realizability",)
     assert report.to_data()["projections"] == ["realizability"]
@@ -634,7 +640,9 @@ def test_fault_injection_matrix_restores_every_available_store_and_reports_exact
         } else None,
         fail_commit=phase == "commit",
     )
+    strategy = FixedDt(0.25)
     native._step_transaction_plan = SimpleNamespace(
+        strategy=strategy,
         stores=ALL_PROVISIONAL_STORES,
         guards=(
             SimpleNamespace(
@@ -668,12 +676,8 @@ def test_fault_injection_matrix_restores_every_available_store_and_reports_exact
     accepted_attempt = runtime._attempt
 
     def advance():
-        report = run_step_attempt(
-            native,
-            native,
-            FixedDt(0.25),
-            t_end=0.25,
-        )
+        native._step_strategy = strategy
+        report = prepare_program_run(native).run_step(native, t_end=0.25)
         return report, report.attempts
 
     with pytest.raises(RuntimeError, match=diagnostic):
