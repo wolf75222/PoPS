@@ -597,6 +597,20 @@ class AmrProgramContext {
     count_kernel_();
   }
 
+  [[nodiscard]] SolveOutcome solve_source_default(int program_block, field_type& stage_state,
+                                                  Real dt, const NewtonOptions& options) const {
+    const int runtime_block = sys_block(program_block);
+    const auto point = boundary_evaluation_point(0);
+    SolveOutcome outcome = active_attempt_states_.empty()
+                               ? facade_->solve_prepared_amr_block_level_source_at(
+                                     runtime_block, point, stage_state, dt, options)
+                               : facade_->solve_prepared_amr_block_level_source_at(
+                                     runtime_block, point, stage_state, dt, options,
+                                     active_level_ - 1, staged_parent_for_block_(runtime_block));
+    count_kernel_();
+    return outcome;
+  }
+
   void require_cartesian_generated_operator(int program_block, const std::string& operation) const {
     (void)sys_block(program_block);
     if (operation.empty())

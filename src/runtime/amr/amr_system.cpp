@@ -3733,6 +3733,7 @@ struct AmrSystem<Dim>::Impl {
                     &*candidate->lane));
           GeneratedAmrLevelContext<Dim> context{
               .level = level,
+              .lane = &*candidate->lane,
               .state = &state,
               .geometry = Geometry<Dim>::from_bounds(level_domain, cfg.lower, cfg.upper),
               .topology = exact_topology,
@@ -6342,6 +6343,47 @@ void AmrSystem<Dim>::prepared_amr_block_level_source_into_at(
 }
 
 template <int Dim>
+SolveOutcome AmrSystem<Dim>::solve_prepared_amr_block_level_source_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state, Real dt, const NewtonOptions& options) {
+  p_->ensure_engine();
+  const ExecutionLane& lane = p_->multiblock_hierarchy->lane();
+  const auto communicator = lane.communicator();
+  std::exception_ptr local_error;
+  std::size_t block = 0;
+  std::size_t level = 0;
+  try {
+    if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+        point.level < 0 ||
+        static_cast<std::size_t>(point.level) >= p_->engine->hierarchy().num_levels())
+      throw std::out_of_range("prepared AMR implicit-source target is out of range");
+    if (!std::isfinite(static_cast<double>(dt)) || !(dt > Real(0)) ||
+        dt != static_cast<Real>(point.dt))
+      throw std::invalid_argument(
+          "prepared AMR implicit-source dt must match its finite positive evaluation point");
+    block = static_cast<std::size_t>(runtime_block);
+    level = static_cast<std::size_t>(point.level);
+    if (!same_field_contract(state, p_->block_state(block, level)))
+      throw std::invalid_argument(
+          "prepared AMR implicit-source state differs from its exact block/level carrier");
+  } catch (...) {
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_error ? 1L : 0L, communicator) != 0) {
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("prepared AMR implicit-source preflight failed collectively");
+  }
+  authenticate_generated_block_point<Dim>("implicit-source", runtime_block, p_->blocks[block].name,
+                                          point, p_->multiblock_hierarchy->collective_contract(),
+                                          communicator);
+  // The generated solver targets this detached Program candidate directly. Its returned
+  // lane-qualified SolveOutcome remains the sole owner of acceptance publication and consensus.
+  return p_->prepared_hierarchy->block_levels[block][level].solve_implicit_source(point, state, dt,
+                                                                                  options);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::prepare_generated_amr_level_state(
     const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state) {
   prepare_generated_amr_block_level_state(0, point, state);
@@ -6570,6 +6612,33 @@ void AmrSystem<Dim>::prepared_amr_block_level_source_into_at(
       p_->multiblock_hierarchy->collective_contract(), p_->prepared_hierarchy->lane->communicator(),
       p_->program_hierarchy_candidates[block],
       [&] { prepared_amr_block_level_source_into_at(runtime_block, point, state, rhs); });
+}
+
+template <int Dim>
+SolveOutcome AmrSystem<Dim>::solve_prepared_amr_block_level_source_at(
+    int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+    MultiFab<Dim>& state, Real dt, const NewtonOptions& options, int parent_level,
+    const MultiFab<Dim>* staged_parent) {
+  p_->ensure_engine();
+  if (point.level == 0) {
+    if (parent_level != -1 || staged_parent != nullptr)
+      throw std::invalid_argument("root AMR implicit-source call cannot bind a staged parent");
+    return solve_prepared_amr_block_level_source_at(runtime_block, point, state, dt, options);
+  }
+  if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size() ||
+      parent_level < 0 ||
+      static_cast<std::size_t>(parent_level) >= p_->engine->hierarchy().num_levels())
+    throw std::out_of_range("subcycled AMR implicit-source parent target is out of range");
+  if (p_->program_hierarchy_candidates.size() != p_->blocks.size())
+    p_->program_hierarchy_candidates.resize(p_->blocks.size(), nullptr);
+  const std::size_t block = static_cast<std::size_t>(runtime_block);
+  return invoke_with_staged_parent<Dim>(
+      runtime_block, p_->blocks[block].name, point.level, parent_level, staged_parent,
+      p_->block_state(block, static_cast<std::size_t>(parent_level)),
+      p_->multiblock_hierarchy->collective_contract(), p_->prepared_hierarchy->lane->communicator(),
+      p_->program_hierarchy_candidates[block], [&] {
+        return solve_prepared_amr_block_level_source_at(runtime_block, point, state, dt, options);
+      });
 }
 
 template <int Dim>
@@ -10283,6 +10352,9 @@ AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_flux_at(
 template void AmrSystem<kNativeDimension>::prepared_amr_block_level_source_into_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&);
+template SolveOutcome AmrSystem<kNativeDimension>::solve_prepared_amr_block_level_source_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, Real,
+    const NewtonOptions&);
 template void AmrSystem<kNativeDimension>::prepare_generated_amr_block_level_state(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, int,
     const MultiFab<kNativeDimension>*);
@@ -10297,6 +10369,9 @@ AmrSystem<kNativeDimension>::evaluate_prepared_amr_block_level_flux_at(
 template void AmrSystem<kNativeDimension>::prepared_amr_block_level_source_into_at(
     int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, int, const MultiFab<kNativeDimension>*);
+template SolveOutcome AmrSystem<kNativeDimension>::solve_prepared_amr_block_level_source_at(
+    int, const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab<kNativeDimension>&, Real,
+    const NewtonOptions&, int, const MultiFab<kNativeDimension>*);
 template const PreparedAmrLevelEvaluation<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_level_evaluation(int) const;
 template const PreparedAmrLevelEvaluation<kNativeDimension>*
