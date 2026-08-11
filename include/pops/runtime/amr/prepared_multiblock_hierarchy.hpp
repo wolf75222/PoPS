@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -74,12 +75,22 @@ class PreparedMultiBlockAmrHierarchy {
   static PreparedMultiBlockAmrHierarchy prepare_collectively(
       engine_type primary, std::string primary_identity, std::vector<AdditionalBlock> additional,
       std::string lane_identity) {
+    return prepare_collectively(std::make_shared<engine_type>(std::move(primary)),
+                                std::move(primary_identity), std::move(additional),
+                                std::move(lane_identity));
+  }
+
+  static PreparedMultiBlockAmrHierarchy prepare_collectively(
+      std::shared_ptr<engine_type> primary, std::string primary_identity,
+      std::vector<AdditionalBlock> additional, std::string lane_identity) {
     const ExecutionCommunicator parent = ExecutionCommunicator::world();
     std::exception_ptr local_error;
     std::string contract;
     std::string qualified_lane_identity;
     try {
-      validate_carriers_(primary, primary_identity, additional);
+      if (!primary)
+        throw std::invalid_argument("prepared multi-block AMR requires a topology runtime");
+      validate_carriers_(*primary, primary_identity, additional);
       if (lane_identity.empty())
         throw std::invalid_argument("prepared multi-block AMR lane identity must be non-empty");
       if (lane_identity.size() >
@@ -89,8 +100,8 @@ class PreparedMultiBlockAmrHierarchy {
       qualified_lane_identity.assign(parent.identity());
       qualified_lane_identity.push_back('/');
       qualified_lane_identity.append(lane_identity);
-      contract =
-          exact_hierarchy_contract_(primary, primary_identity, additional, qualified_lane_identity);
+      contract = exact_hierarchy_contract_(*primary, primary_identity, additional,
+                                           qualified_lane_identity);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -107,18 +118,18 @@ class PreparedMultiBlockAmrHierarchy {
     ExecutionLane lane = ExecutionLane::duplicate_collectively(parent, lane_identity);
     return PreparedMultiBlockAmrHierarchy(std::move(primary), std::move(primary_identity),
                                           std::move(additional), std::move(lane),
-                                          std::move(contract));
+                                          std::move(qualified_lane_identity), std::move(contract));
   }
 
   static constexpr int dimension = Dim;
 
   std::size_t block_count() const noexcept { return additional_.size() + 1; }
-  std::size_t level_count() const noexcept { return primary_.hierarchy().num_levels(); }
+  std::size_t level_count() const noexcept { return primary_->hierarchy().num_levels(); }
   std::uint64_t accepted_revision() const noexcept { return accepted_revision_; }
   std::string_view collective_contract() const noexcept { return collective_contract_; }
   const ExecutionLane& lane() const noexcept { return lane_; }
-  engine_type& topology_runtime() noexcept { return primary_; }
-  const engine_type& topology_runtime() const noexcept { return primary_; }
+  engine_type& topology_runtime() noexcept { return *primary_; }
+  const engine_type& topology_runtime() const noexcept { return *primary_; }
 
   const std::string& block_identity(std::size_t block) const {
     require_block_(block);
@@ -143,13 +154,13 @@ class PreparedMultiBlockAmrHierarchy {
   field_type& state(std::size_t block, std::size_t level) {
     require_level_(level);
     require_block_(block);
-    return block == 0 ? primary_.hierarchy().state(level) : additional_[block - 1].levels[level];
+    return block == 0 ? primary_->hierarchy().state(level) : additional_[block - 1].levels[level];
   }
 
   const field_type& state(std::size_t block, std::size_t level) const {
     require_level_(level);
     require_block_(block);
-    return block == 0 ? primary_.hierarchy().state(level) : additional_[block - 1].levels[level];
+    return block == 0 ? primary_->hierarchy().state(level) : additional_[block - 1].levels[level];
   }
 
   /// Resolve a Program order once.  It must be an exact permutation: every accepted carrier has one
@@ -197,6 +208,27 @@ class PreparedMultiBlockAmrHierarchy {
           !std::isfinite(view.frequency.constant_mu) || view.frequency.constant_mu < 0.0)
         throw std::invalid_argument(
             "prepared AMR coupling requires exact identity, executable, and finite frequency");
+      for (const auto& conservation : operation.conservation_groups()) {
+        if (conservation.members.empty())
+          throw std::invalid_argument(
+              "prepared AMR coupling conservation group has no exact state role");
+        const std::string_view exact_state_role = conservation.members.front().state_role;
+        for (const auto& role : conservation.members) {
+          if (role.canonical_block >= block_count())
+            throw std::out_of_range(
+                "prepared AMR coupling conservation block is outside the carrier registry");
+          if (role.owner != block_identity(role.canonical_block))
+            throw std::invalid_argument(
+                "prepared AMR coupling conservation owner differs from its canonical block");
+          if (role.component < 0 ||
+              role.component >= state(role.canonical_block, std::size_t{0}).ncomp())
+            throw std::out_of_range(
+                "prepared AMR coupling conservation component is outside its state carrier");
+          if (role.state_role.empty() || role.state_role != exact_state_role)
+            throw std::invalid_argument(
+                "prepared AMR coupling conservation group mixes non-exact state roles");
+        }
+      }
       ExactContractBuilder contract;
       contract.text("pops.prepared-multiblock-amr.coupling")
           .scalar(std::uint32_t{1})
@@ -209,6 +241,22 @@ class PreparedMultiBlockAmrHierarchy {
                     [](ExactContractBuilder& item, const std::string& role) { item.text(role); })
           .sequence(view.conservation.created_roles,
                     [](ExactContractBuilder& item, const std::string& role) { item.text(role); });
+      contract.sequence(operation.conservation_groups(),
+                        [](ExactContractBuilder& group,
+                           const runtime::system::PreparedCouplingConservationGroup& conservation) {
+                          group.text(conservation.identity)
+                              .scalar(conservation.absolute_tolerance)
+                              .scalar(conservation.relative_tolerance)
+                              .sequence(
+                                  conservation.members,
+                                  [](ExactContractBuilder& member,
+                                     const runtime::system::PreparedCouplingStateRole& role) {
+                                    member.text(role.owner)
+                                        .scalar(static_cast<std::uint64_t>(role.canonical_block))
+                                        .scalar(std::int32_t{role.component})
+                                        .text(role.state_role);
+                                  });
+                        });
       exact = std::move(contract).release();
       candidate = couplings_;
       candidate.operators.push_back(std::move(operation));
@@ -359,10 +407,10 @@ class PreparedMultiBlockAmrHierarchy {
       ::pops::amr::transfer::ComponentRange components = {}) {
     const field_type& source = state(block, source_level);
     field_type& destination = state(block, destination_level);
-    return primary_.template prepare_transfer<Center>(
+    return primary_->template prepare_transfer<Center>(
         source_level, destination_level,
-        primary_.hierarchy().level(source_level).spatial_contract(),
-        primary_.hierarchy().level(destination_level).spatial_contract(), kind,
+        primary_->hierarchy().level(source_level).spatial_contract(),
+        primary_->hierarchy().level(destination_level).spatial_contract(), kind,
         source.fab(source_local).view(), destination.fab(destination_local).view(),
         destination_region, mapping, components);
   }
@@ -381,7 +429,7 @@ class PreparedMultiBlockAmrHierarchy {
     std::string next_coupling_registry_contract;
     try {
       if (parent_level >= level_count() ||
-          prepared.source_level() != primary_.hierarchy().layout(parent_level).exact_identity())
+          prepared.source_level() != primary_->hierarchy().layout(parent_level).exact_identity())
         throw std::invalid_argument("multi-block AMR regrid source is stale");
       if (child_states.size() != block_count())
         throw std::invalid_argument("multi-block AMR regrid requires one child slot per block");
@@ -415,10 +463,10 @@ class PreparedMultiBlockAmrHierarchy {
         candidate_additional.push_back(std::move(candidate));
       }
       primary_publication.emplace(
-          primary_.prepare_regrid_publication(parent_level, prepared, std::move(child_states[0])));
+          primary_->prepare_regrid_publication(parent_level, prepared, std::move(child_states[0])));
       next_collective_contract = exact_hierarchy_contract_(
           primary_publication->hierarchy(), primary_publication->spatial_contract(),
-          primary_identity_, candidate_additional, lane_.identity());
+          primary_identity_, candidate_additional, lane_contract_identity_);
       next_program_contract = exact_canonical_program_contract_(
           next_collective_contract, primary_identity_, candidate_additional);
       if (couplings_sealed_)
@@ -437,7 +485,7 @@ class PreparedMultiBlockAmrHierarchy {
       throw std::invalid_argument("prepared multi-block AMR regrid differs between MPI ranks");
 
     const bool changes = primary_publication->changes_topology();
-    primary_.publish_prepared_regrid(std::move(*primary_publication));
+    primary_->publish_prepared_regrid(std::move(*primary_publication));
     if (!changes)
       return;
     additional_.swap(candidate_additional);
@@ -449,7 +497,7 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
   Snapshot snapshot() const {
-    return {primary_.snapshot(), additional_, accepted_revision_, collective_contract_};
+    return {primary_->snapshot(), additional_, accepted_revision_, collective_contract_};
   }
 
   /// Restore both the canonical topology and every secondary carrier.  A candidate copy is prepared
@@ -466,10 +514,10 @@ class PreparedMultiBlockAmrHierarchy {
     try {
       candidate = snapshot.additional;
       validate_snapshot_carriers_(snapshot.primary.hierarchy, candidate, additional_);
-      primary_publication.emplace(primary_.prepare_restore_publication(snapshot.primary));
+      primary_publication.emplace(primary_->prepare_restore_publication(snapshot.primary));
       next_collective_contract = exact_hierarchy_contract_(
           primary_publication->hierarchy(), primary_publication->spatial_contract(),
-          primary_identity_, candidate, lane_.identity());
+          primary_identity_, candidate, lane_contract_identity_);
       if (snapshot.exact_collective_contract != next_collective_contract) {
         const auto mismatch = std::mismatch(
             snapshot.exact_collective_contract.begin(), snapshot.exact_collective_contract.end(),
@@ -502,7 +550,7 @@ class PreparedMultiBlockAmrHierarchy {
             {{std::string_view("prepared-multiblock-amr-restore"), restore_contract}}, lane_))
       throw std::invalid_argument("prepared multi-block AMR restore differs between MPI ranks");
 
-    primary_.publish_prepared_restore(std::move(*primary_publication));
+    primary_->publish_prepared_restore(std::move(*primary_publication));
     additional_.swap(candidate);
     accepted_revision_ = snapshot.accepted_revision;
     collective_contract_.swap(next_collective_contract);
@@ -512,13 +560,15 @@ class PreparedMultiBlockAmrHierarchy {
   }
 
  private:
-  PreparedMultiBlockAmrHierarchy(engine_type primary, std::string primary_identity,
+  PreparedMultiBlockAmrHierarchy(std::shared_ptr<engine_type> primary, std::string primary_identity,
                                  std::vector<AdditionalBlock> additional, ExecutionLane lane,
+                                 std::string lane_contract_identity,
                                  std::string collective_contract)
       : primary_(std::move(primary)),
         primary_identity_(std::move(primary_identity)),
         additional_(std::move(additional)),
         lane_(std::move(lane)),
+        lane_contract_identity_(std::move(lane_contract_identity)),
         collective_contract_(std::move(collective_contract)) {
     canonical_program_contract_ = exact_canonical_program_contract_();
   }
@@ -527,9 +577,6 @@ class PreparedMultiBlockAmrHierarchy {
                                  const std::vector<AdditionalBlock>& additional) {
     if (primary_identity.empty())
       throw std::invalid_argument("prepared multi-block AMR primary identity must be non-empty");
-    if (additional.empty())
-      throw std::invalid_argument(
-          "PreparedMultiBlockAmrHierarchy requires at least two physical block carriers");
     std::vector<std::string_view> identities{primary_identity};
     for (const AdditionalBlock& block : additional) {
       if (block.identity.empty())
@@ -547,7 +594,7 @@ class PreparedMultiBlockAmrHierarchy {
   static void validate_snapshot_carriers_(const hierarchy_type& primary,
                                           const std::vector<AdditionalBlock>& additional,
                                           const std::vector<AdditionalBlock>& live_additional) {
-    if (additional.empty() || additional.size() != live_additional.size())
+    if (additional.size() != live_additional.size())
       throw std::invalid_argument("multi-block AMR snapshot lost its secondary carriers");
     for (std::size_t index = 0; index < additional.size(); ++index) {
       const AdditionalBlock& block = additional[index];
@@ -691,9 +738,11 @@ class PreparedMultiBlockAmrHierarchy {
       const ProgramBlockMap& map, std::size_t level, Real dt,
       std::span<field_type* const> program_candidates, bool require_dt_consensus = true,
       bool require_sealed_couplings = true) const {
-    std::exception_ptr local_error;
-    std::vector<field_type*> canonical(block_count(), nullptr);
-    std::string invocation_contract;
+    // Do not inspect a candidate field until the complete pointer pack has passed a collective
+    // preflight.  In particular, a null pointer on one rank must prevent other ranks from
+    // dereferencing their local candidates before the call has failed everywhere.
+    std::exception_ptr presence_error;
+    std::string presence_contract;
     try {
       require_map_(map);
       require_level_(level);
@@ -703,10 +752,38 @@ class PreparedMultiBlockAmrHierarchy {
         throw std::invalid_argument("AMR Program candidate pack does not match its block map");
       if (require_dt_consensus && (!std::isfinite(static_cast<double>(dt)) || dt < Real(0)))
         throw std::invalid_argument("AMR coupling dt must be finite and non-negative");
+      ExactContractBuilder presence;
+      presence.text("pops.prepared-multiblock-amr.candidate-pointer-pack")
+          .scalar(std::uint32_t{1})
+          .scalar(std::int32_t{Dim})
+          .bytes(map.exact_contract)
+          .scalar(static_cast<std::uint64_t>(level))
+          .scalar(static_cast<std::uint64_t>(program_candidates.size()));
+      for (field_type* candidate : program_candidates) {
+        if (candidate == nullptr)
+          throw std::invalid_argument("AMR Program candidate pack contains a null state");
+        presence.presence(true);
+      }
+      presence_contract = std::move(presence).release();
+    } catch (...) {
+      presence_error = std::current_exception();
+    }
+    collectively_rethrow_(presence_error,
+                          "AMR Program candidate pointer preflight failed collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{std::string_view("prepared-multiblock-amr-candidate-pointer-pack"),
+              presence_contract}},
+            lane_))
+      throw std::invalid_argument("AMR Program candidate pointer packs differ between MPI ranks");
+
+    std::exception_ptr local_error;
+    std::vector<field_type*> canonical(block_count(), nullptr);
+    std::string invocation_contract;
+    try {
       for (std::size_t program = 0; program < program_candidates.size(); ++program) {
         field_type* candidate = program_candidates[program];
         const std::size_t block = map.canonical_indices[program];
-        if (candidate == nullptr || !same_field_contract_(*candidate, state(block, level)))
+        if (!same_field_contract_(*candidate, state(block, level)))
           throw std::invalid_argument(
               "AMR Program candidate differs from its exact block/level carrier");
         for (std::size_t accepted_block = 0; accepted_block < block_count(); ++accepted_block)
@@ -839,12 +916,13 @@ class PreparedMultiBlockAmrHierarchy {
           "multi-block AMR child carrier differs from its block and prepared topology");
   }
 
-  engine_type primary_;
+  std::shared_ptr<engine_type> primary_;
   std::string primary_identity_;
   std::vector<AdditionalBlock> additional_;
   // Declared before all providers/registries so reverse member destruction releases their callbacks
   // first and frees the communicator last.
   ExecutionLane lane_;
+  std::string lane_contract_identity_;
   coupling_registry_type couplings_;
   std::string coupling_registry_contract_;
   bool couplings_sealed_ = false;

@@ -1,382 +1,355 @@
-// AMR MULTI-BLOCS SOURCES COUPLEES (capstone vi / ADC-700): un Program applique une source
-// inter-especes (DSL CoupledSource, bytecode P5) sur un pack complet de candidats prives, puis publie
-// atomiquement et restaure la couverture fine -> grossier.
-//
-// Ce que le test verrouille (cf. tache capstone vi) :
-//   (1) ECHANGE CONSERVATIF PAR CELLULE : deux blocs ("ions" + "neutrals") sur une hierarchie 2 niveaux,
-//       avec une source ionisation-like construite a la add_pair (+k*ni*ng sur un bloc, EXACTEMENT
-//       -k*ni*ng sur l'autre, MEME cellule). La source SEULE (coupled_source_step direct, sans transport)
-//       conserve n_ions + n_neutrals A LA CELLULE pres a ~machine ; l'etat reste FINI (rejet nan/inf
-//       AVANT toute tolerance).
-//   (2) ACTIVE : la source CHANGE l'etat (les deux blocs evoluent) vs un run sans source -> non no-op.
-//   (3) CONSERVATION GLOBALE sous K applications Program : la masse composite n_ions + n_neutrals
-//       (somme leaf-aware par bloc) est conservee globalement a ~machine.
-//   (4) COUVERTURE (#169) : apres la source, une cellule grossiere COUVERTE par le patch fin reste la
-//       moyenne 2x2 de ses enfants fins (la cascade average_down a tourne).
-//   (5) MULTIRATE : la conservation globale composite tient AUSSI avec un bloc stride=2 (la source doit
-//       rester conservative sous le hold-then-catch-up).
-//   (6) OPT-IN BIT-IDENTIQUE : un Program SANS source couplee est un no-op deterministe, tandis que
-//       le meme pack AVEC source change effectivement l'etat.
-//
-// On travaille au niveau du MOTEUR AmrRuntime + build_amr_block (les briques de cette PR), ou l'on
-// construit la hierarchie partagee et l'on accede aux densites/masses par bloc et au RHS Poisson.
-
 #include <gtest/gtest.h>
 
-#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/physics/bricks/bricks.hpp>
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
-#include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 
-#include "amr_transfer_test_authority.hpp"
-
+#include <array>
+#include <algorithm>
+#include <bit>
 #include <cmath>
-#include <cstdio>
+#include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+namespace {
+
+template <int Dim>
+struct ScalarModel {
+  using Law = pops::nd::ScalarAdvection<Dim>;
+  using Schema = typename Law::Schema;
+  using State = typename Law::State;
+  using Primitive = typename Law::Primitive;
+  static constexpr int dimension = Dim;
+  static constexpr int n_vars = Law::n_vars;
+
+  Law law{};
+
+  static pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.amr.multiblock-coupled-source.scalar", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    for (int axis = 0; axis < Dim; ++axis)
+      contract.scalar(law.velocity()[axis]);
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"amount"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"amount"}, 1, {pops::VariableRole::Scalar}};
+  }
+  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
+    return law.recover(state);
+  }
+  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
+    return law.make_conservative(primitive);
+  }
+  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
+    return law.admissibility(state);
+  }
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
+    return law.template max_wave_speed<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD void wave_speeds(const State& state, pops::Real& lower, pops::Real& upper) const {
+    law.template wave_speeds<Axis>(state, lower, upper);
+  }
+  POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
+  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
+};
+
+template <int Dim>
+ScalarModel<Dim> scalar_model() {
+  pops::RealVector<Dim> velocity{};
+  for (int axis = 0; axis < Dim; ++axis)
+    velocity[axis] = pops::Real(0.15) / pops::Real(axis + 1);
+  return {pops::nd::ScalarAdvection<Dim>::prepare(velocity)};
+}
+
+template <int Dim>
+std::size_t cell_count(const pops::Extent<Dim>& shape) {
+  std::size_t result = 1;
+  for (int axis = 0; axis < Dim; ++axis)
+    result *= static_cast<std::size_t>(shape[axis]);
+  return result;
+}
+
+template <int Dim>
+std::vector<double> smooth_state(const pops::Extent<Dim>& shape, double mean, double amplitude) {
+  std::vector<double> result(cell_count(shape), mean);
+  const double pi = std::acos(-1.0);
+  for (std::size_t linear = 0; linear < result.size(); ++linear) {
+    std::size_t quotient = linear;
+    double wave = amplitude;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int coordinate = static_cast<int>(quotient % static_cast<std::size_t>(shape[axis]));
+      quotient /= static_cast<std::size_t>(shape[axis]);
+      const double x = (static_cast<double>(coordinate) + 0.5) / static_cast<double>(shape[axis]);
+      wave *= std::sin(2.0 * pi * x);
+    }
+    result[linear] += wave;
+  }
+  return result;
+}
+
+template <int Dim>
+struct ConservativeExchange {
+  pops::FieldView<pops::Real, Dim> donor{};
+  pops::FieldView<pops::Real, Dim> receiver{};
+  pops::Real dt = pops::Real(0);
+
+  POPS_HD void operator()(const pops::Index<Dim>& cell) const {
+    const pops::Real amount = dt * pops::Real(0.25) * donor(cell, 0);
+    donor(cell, 0) -= amount;
+    receiver(cell, 0) += amount;
+  }
+};
+
+template <int Dim>
+bool byte_exact_equal(const pops::MultiFab<Dim>& left, const pops::MultiFab<Dim>& right) {
+  bool same = left.layout() == right.layout() && left.distribution() == right.distribution() &&
+              left.local_rank() == right.local_rank() && left.local_size() == right.local_size() &&
+              left.ncomp() == right.ncomp() && left.ghosts() == right.ghosts();
+  for (std::size_t local = 0; same && local < left.local_size(); ++local) {
+    const auto& left_fab = left.fab(local);
+    const auto& right_fab = right.fab(local);
+    auto left_host = left_fab.create_host_mirror();
+    auto right_host = right_fab.create_host_mirror();
+    left_fab.copy_to_host(left_host);
+    right_fab.copy_to_host(right_host);
+    if (left_host.size() != right_host.size())
+      same = false;
+    for (std::size_t entry = 0; same && entry < left_host.size(); ++entry)
+      same = std::bit_cast<std::array<std::byte, sizeof(pops::Real)>>(left_host(entry)) ==
+             std::bit_cast<std::array<std::byte, sizeof(pops::Real)>>(right_host(entry));
+  }
+  return pops::all_reduce_max(same ? 0L : 1L) == 0;
+}
+
+template <int Dim>
+using BlockLevelSnapshot = std::array<std::vector<pops::MultiFab<Dim>>, 2>;
+
+template <int Dim>
+BlockLevelSnapshot<Dim> snapshot_block_levels(pops::AmrSystem<Dim>& system) {
+  BlockLevelSnapshot<Dim> result;
+  for (int runtime_block = 0; runtime_block < 2; ++runtime_block) {
+    auto& levels = result[static_cast<std::size_t>(runtime_block)];
+    levels.reserve(static_cast<std::size_t>(system.n_levels()));
+    for (int level = 0; level < system.n_levels(); ++level)
+      levels.emplace_back(system.prepared_amr_block_state(runtime_block, level));
+  }
+  return result;
+}
+
+template <int Dim>
+bool byte_exact_block_levels(const BlockLevelSnapshot<Dim>& expected,
+                             pops::AmrSystem<Dim>& actual) {
+  bool same = true;
+  for (int runtime_block = 0; runtime_block < 2; ++runtime_block)
+    for (int level = 0; level < actual.n_levels(); ++level)
+      same = same &&
+             byte_exact_equal(
+                 expected[static_cast<std::size_t>(runtime_block)][static_cast<std::size_t>(level)],
+                 actual.prepared_amr_block_state(runtime_block, level));
+  return same;
+}
+
+template <int Dim>
+struct CoupledFixture {
+  pops::AmrSystem<Dim> system;
+  std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
+  std::shared_ptr<bool> fail_on_rank_zero = std::make_shared<bool>(false);
+  std::shared_ptr<bool> violate_conservation_on_rank_zero = std::make_shared<bool>(false);
+
+  CoupledFixture() : system(config()) {
+    system.install_block_state_route("donor", "state/donor");
+    system.install_block_state_route("receiver", "state/receiver");
+    pops::add_compiled_model<Dim>(system, "donor", scalar_model<Dim>(), "minmod", "rusanov",
+                                  "conservative", "explicit",
+                                  static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {},
+                                  0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                  "test.amr.multiblock-coupled-source/donor-flux");
+    pops::add_compiled_model<Dim>(system, "receiver", scalar_model<Dim>(), "minmod", "rusanov",
+                                  "conservative", "explicit",
+                                  static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {},
+                                  0.0, static_cast<double>(pops::kWenoEpsilon), false,
+                                  "test.amr.multiblock-coupled-source/receiver-flux");
+    system.set_temporal_relations({2}, {1}, {"integral_only"});
+    system.set_conservative_state("donor", smooth_state(config().shape, 2.0, 0.2));
+    system.set_conservative_state("receiver", smooth_state(config().shape, 5.0, 0.1));
+
+    pops::CouplingOperatorView view;
+    view.label = "owner-qualified-conservative-exchange";
+    std::vector<pops::runtime::system::PreparedCouplingConservationGroup> conservation{
+        {"donor-receiver.scalar", {{"donor", 0, 0, "scalar"}, {"receiver", 1, 0, "scalar"}}}};
+    system.install_prepared_amr_coupling_operator(
+        "test.amr.multiblock-coupled-source/exchange@1", std::move(view),
+        pops::runtime::system::PreparedCouplingOperator<Dim>(
+            [fail = fail_on_rank_zero, violate = violate_conservation_on_rank_zero](
+                pops::Real dt, const std::vector<pops::MultiFab<Dim>*>& canonical_states) {
+              if (canonical_states.size() != 2)
+                throw std::runtime_error("coupled source lost its complete canonical state pack");
+              auto& donor = *canonical_states[0];
+              auto& receiver = *canonical_states[1];
+              for (std::size_t local = 0; local < donor.local_size(); ++local)
+                pops::for_each_cell(donor.box(local),
+                                    ConservativeExchange<Dim>{donor.fab(local).view(),
+                                                              receiver.fab(local).view(), dt});
+              Kokkos::fence();
+              if (*violate && pops::my_rank() == 0 && donor.local_size() != 0) {
+                const auto values = donor.fab(0).view();
+                const pops::Index<Dim> cell = donor.box(0).lo;
+                pops::for_each_cell(pops::Box<Dim>{cell, cell},
+                                    [=] POPS_HD(const pops::Index<Dim>& index) {
+                                      values(index, 0) += pops::Real(1);
+                                    });
+                Kokkos::fence();
+              }
+              if (*fail && pops::my_rank() == 0)
+                throw std::runtime_error("injected rank-local coupled-source failure");
+            },
+            std::move(conservation)));
+
+    pops::Index<Dim> fine_lower{};
+    pops::Index<Dim> fine_upper{};
+    pops::Extent<Dim> fine_shape{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      fine_lower[axis] = config().shape[axis] / 2;
+      fine_upper[axis] = 3 * config().shape[axis] / 2 - 1;
+      fine_shape[axis] = 2 * config().shape[axis];
+    }
+    system.rebuild_hierarchy({pops::AmrPatch<Dim>{1, {fine_lower, fine_upper}}}, {0});
+    system.set_block_level_state("donor", 1, smooth_state(fine_shape, 2.0, 0.2));
+    system.set_block_level_state("receiver", 1, smooth_state(fine_shape, 5.0, 0.1));
+
+    context = pops::runtime::program::make_program_execution_provider(&system);
+    context->configure_primary_clock("test.clock.macro");
+    context->install(
+        [context = context](double macro_dt) {
+          context->advance_hierarchy(macro_dt, [context](double level_dt) {
+            std::array<pops::MultiFab<Dim>*, 2> accepted{};
+            std::array<pops::MultiFab<Dim>*, 2> candidates{};
+            for (int program_block = 0; program_block < 2; ++program_block) {
+              accepted[static_cast<std::size_t>(program_block)] = &context->state(program_block);
+              auto& stage =
+                  context->scratch_state(1000 + program_block, 0, *accepted[program_block]);
+              auto& rate_zero =
+                  context->rhs_scratch(2000 + program_block, 0, *accepted[program_block]);
+              auto& rate_one =
+                  context->rhs_scratch(3000 + program_block, 0, *accepted[program_block]);
+              auto& candidate =
+                  context->scratch_state(4000 + program_block, 0, *accepted[program_block]);
+
+              context->set_stage_time(0, 1);
+              context->neg_div_flux_default_into(program_block, *accepted[program_block], rate_zero,
+                                                 5000 + 2 * program_block);
+              context->lincomb(stage, pops::Real(1), *accepted[program_block], pops::Real(0),
+                               *accepted[program_block], pops::Real(level_dt), {{0, 1, 1}},
+                               {{0, 0, 1}});
+              context->axpy(stage, pops::Real(level_dt), rate_zero, pops::Real(level_dt),
+                            {{1, 1, 1}});
+
+              context->set_stage_time(1, 1);
+              context->neg_div_flux_default_into(program_block, stage, rate_one,
+                                                 5001 + 2 * program_block);
+              context->lincomb(candidate, pops::Real(0.5), *accepted[program_block],
+                               pops::Real(0.5), stage, pops::Real(level_dt), {{0, 1, 2}},
+                               {{0, 1, 2}});
+              context->axpy(candidate, pops::Real(0.5 * level_dt), rate_one, pops::Real(level_dt),
+                            {{1, 1, 2}});
+
+              candidates[static_cast<std::size_t>(program_block)] = &candidate;
+            }
+            context->apply_coupling_operators(pops::Real(level_dt),
+                                              {{0, candidates[0]}, {1, candidates[1]}});
+            context->commit_many({{accepted[0], candidates[0]}, {accepted[1], candidates[1]}});
+          });
+        },
+        context);
+    // Program order is intentionally the reverse of canonical runtime ownership.  The prepared
+    // ProgramBlockMap must route candidates by block identity; the provider never sees this order.
+    system.set_program_block_map({1, 0});
+    using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
+    system.install_prepared_amr_program_flux_expression_budget(
+        "test.amr.multiblock-coupled-source/program-ssprk2-imex-v1",
+        std::vector<FluxBudget>{{2, 1}, {2, 1}});
+  }
+
+  static pops::AmrSystemConfig<Dim> config() {
+    pops::AmrSystemConfig<Dim> result;
+    result.level_count = 2;
+    result.regrid_every = 0;
+    result.distribute_coarse = true;
+    result.transition_ratios.resize(1);
+    result.transition_buffers.resize(1);
+    result.transition_lookaheads.resize(1);
+    for (int axis = 0; axis < Dim; ++axis) {
+      result.shape[axis] = 8;
+      result.lower[axis] = pops::Real(0);
+      result.upper[axis] = pops::Real(1);
+      result.periodicity[axis] = true;
+      result.coarse_max_grid[axis] = 4;
+      result.transition_ratios[0][axis] = 2;
+      result.transition_buffers[0][axis] = 1;
+      result.transition_lookaheads[0][axis] = 1;
+    }
+    return result;
+  }
+};
+
+template <int Dim>
+void prove_conservative_execution_rollback_and_retry() {
+  CoupledFixture<Dim> fixture;
+  ASSERT_EQ(fixture.system.n_levels(), 2);
+  const BlockLevelSnapshot<Dim> initial = snapshot_block_levels(fixture.system);
+  const double total_before = fixture.system.mass("donor") + fixture.system.mass("receiver");
+
+  fixture.system.step(0.4);
+  for (int level = 0; level < fixture.system.n_levels(); ++level) {
+    EXPECT_LT(pops::reduce_max(fixture.system.prepared_amr_block_state(0, level)),
+              pops::reduce_max(initial[0][static_cast<std::size_t>(level)]));
+    EXPECT_GT(pops::reduce_min(fixture.system.prepared_amr_block_state(1, level)),
+              pops::reduce_min(initial[1][static_cast<std::size_t>(level)]));
+  }
+  EXPECT_NEAR(fixture.system.mass("donor") + fixture.system.mass("receiver"), total_before,
+              2.0e-11);
+
+  const BlockLevelSnapshot<Dim> rollback = snapshot_block_levels(fixture.system);
+  *fixture.violate_conservation_on_rank_zero = true;
+  EXPECT_THROW(fixture.system.step(0.2), std::runtime_error);
+  EXPECT_TRUE(byte_exact_block_levels(rollback, fixture.system));
+
+  *fixture.violate_conservation_on_rank_zero = false;
+  *fixture.fail_on_rank_zero = true;
+  EXPECT_THROW(fixture.system.step(0.2), std::runtime_error);
+  EXPECT_TRUE(byte_exact_block_levels(rollback, fixture.system));
+
+  *fixture.fail_on_rank_zero = false;
+  EXPECT_NO_THROW(fixture.system.step(0.2));
+  EXPECT_FALSE(byte_exact_block_levels(rollback, fixture.system));
+  EXPECT_NEAR(fixture.system.mass("donor") + fixture.system.mass("receiver"), total_before,
+              2.0e-11);
+}
+
+}  // namespace
+
+TEST(test_amr_multiblock_coupled_source, ConservativeExecutionRollbackAndRetry) {
 #if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
+  std::unique_ptr<Kokkos::ScopeGuard> kokkos;
+  if (!Kokkos::is_initialized()) {
+    int argc = 0;
+    char** argv = nullptr;
+    kokkos = std::make_unique<Kokkos::ScopeGuard>(argc, argv);
+  }
 #endif
-
-using namespace pops;
-
-constexpr double kIonFieldCharge = 0.0;
-constexpr double kNeutralFieldCharge = 0.0;
-
-// Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi (le couplage Poisson lit q*n).
-// q=0 -> bloc neutre (ne contribue PAS au Poisson), advecte par le MEME phi que les autres.
-using ExBModel = CompositeModel<CartesianExBDrift, NoSource, ChargeDensity>;
-static ExBModel exb_charge(double q, double) {
-  return ExBModel{CartesianExBDrift{}, NoSource{}, ChargeDensity{Real(q)}};
-}
-
-// densite a moyenne nulle (solvable en periodique) : un creneau centre +/- amplitude, n*n row-major.
-static std::vector<double> bump(int n, double base, double amp) {
-  std::vector<double> r(static_cast<std::size_t>(n) * n, base);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const bool in = (i >= n / 4 && i < 3 * n / 4 && j >= n / 4 && j < 3 * n / 4);
-      r[static_cast<std::size_t>(j) * n + i] = base + (in ? amp : -amp / 3.0);
-    }
-  return r;
-}
-
-static double mean_of(const std::vector<double>& values) {
-  double sum = 0.0;
-  for (double value : values)
-    sum += value;
-  return sum / static_cast<double>(values.size());
-}
-
-static double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
-                                const std::vector<double>& rho1) {
-  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
-}
-
-// tout fini (ni nan ni inf) : garde AVANT toute comparaison de tolerance (un nan passerait une borne).
-static bool all_finite(const std::vector<double>& v) {
-  for (double x : v)
-    if (!std::isfinite(x))
-      return false;
-  return true;
-}
-
-// ecart L-inf entre deux champs n*n (pour "A change" ou "X inchange").
-static double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
-  double d = 0;
-  const std::size_t nn = a.size() < b.size() ? a.size() : b.size();
-  for (std::size_t i = 0; i < nn; ++i)
-    d = std::max(d, std::fabs(a[i] - b[i]));
-  return d;
-}
-
-// max sur les cellules de |a[c] + b[c] - (a0[c] + b0[c])| : ecart de la SOMME des deux blocs (par
-// cellule) entre l'etat courant et un etat de reference. ~0 <=> echange conservatif par cellule.
-static double dmax_pair_sum(const std::vector<double>& a, const std::vector<double>& b,
-                            const std::vector<double>& a0, const std::vector<double>& b0) {
-  double d = 0;
-  const std::size_t nn = a.size();
-  for (std::size_t i = 0; i < nn; ++i)
-    d = std::max(d, std::fabs((a[i] + b[i]) - (a0[i] + b0[i])));
-  return d;
-}
-
-// Build two field-neutral ExB blocks on the shared hierarchy. This isolates the coupled-source
-// contract and keeps the periodic field RHS exactly compatible while mass moves between blocks.
-static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<double>& rho_ions,
-                                 const std::vector<double>& rho_neut, int stride_ions,
-                                 int stride_neut) {
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = N;
-  bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};   // periodique
-  const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
-  std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(kIonFieldCharge, B0), "minmod", "rusanov",
-                                              S, "ions", rho_ions,
-                                              /*has_density=*/true, 1.4, 1, false, stride_ions));
-  blocks.push_back(detail::dispatch_amr_block(exb_charge(kNeutralFieldCharge, B0), "minmod",
-                                              "rusanov", S, "neutrals", rho_neut,
-                                              /*has_density=*/true, 1.4, 1, false, stride_neut));
-  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                     S.replicated_coarse, S.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 2);
-  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
-      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
-  return runtime;
-}
-
-// Enregistre une source ionisation-like CONSERVATIVE entre "ions" (gagne) et "neutrals" (perd) sur le
-// role density, terme S = k * n_ions * n_neutrals. Bytecode postfixe construit A LA MAIN, EXACTEMENT
-// comme l'emettrait pops.dsl.CoupledSource.add_pair (gain = +S ; perte = Neg(gain) = -S, MEME programme
-// + un Neg) -> les deux contributions par cellule sont opposees au signe pres (echange conservatif).
-//   registres : r0 = n_ions (entree), r1 = n_neutrals (entree), r2 = k (constante)
-//   gain  : PushReg 0, PushReg 1, Mul, PushReg 2, Mul        -> k * n_ions * n_neutrals
-//   perte : <gain> puis Neg                                  -> -(k * n_ions * n_neutrals)
-static void register_ionization(AmrRuntime& rt, double k) {
-  const std::vector<std::string> in_blocks = {"ions", "neutrals"};
-  const std::vector<std::string> in_roles = {"density", "density"};
-  const std::vector<double> consts = {k};
-  const std::vector<std::string> out_blocks = {"ions", "neutrals"};
-  const std::vector<std::string> out_roles = {"density", "density"};
-  // programme du gain (5 opcodes) puis du gain+Neg (6 opcodes), concatenes.
-  const int P = static_cast<int>(CsOp::PushReg), MUL = static_cast<int>(CsOp::Mul),
-            NEG = static_cast<int>(CsOp::Neg);
-  std::vector<int> prog_ops = {P, P, MUL, P, MUL,        // gain : k*ni*ng
-                               P, P, MUL, P, MUL, NEG};  // perte : -(k*ni*ng)
-  std::vector<int> prog_args = {0, 1, 0, 2, 0, 0, 1, 0, 2, 0, 0};
-  std::vector<int> prog_lens = {5, 6};
-  rt.add_coupled_source(in_blocks, in_roles, consts, out_blocks, out_roles, prog_ops, prog_args,
-                        prog_lens);
-}
-
-// Minimal native-Program harness for this direct AmrRuntime test: every level gets one complete
-// private candidate pack, then the group is published and the ordinary fine-to-coarse coverage
-// invariant is restored.  The production ProgramContext owns the same ordering; this helper only
-// keeps the low-level primitive test independent of the Python facade.
-static void apply_candidate_source_step(AmrRuntime& rt, Real dt) {
-  for (int level = 0; level < rt.nlev(); ++level) {
-    std::vector<MultiFab> candidates;
-    std::vector<MultiFab*> candidate_pack;
-    candidates.reserve(rt.n_blocks());
-    candidate_pack.reserve(rt.n_blocks());
-    for (std::size_t block = 0; block < rt.n_blocks(); ++block) {
-      MultiFab& accepted = rt.level_state(block, level);
-      candidates.emplace_back(accepted.box_array(), accepted.dmap(), accepted.ncomp(),
-                              accepted.n_grow());
-      lincomb(candidates.back(), Real(1), accepted, Real(0), accepted);
-      candidate_pack.push_back(&candidates.back());
-    }
-    rt.apply_coupling_operators_at_level(level, dt, candidate_pack);
-    for (std::size_t block = 0; block < rt.n_blocks(); ++block) {
-      MultiFab& accepted = rt.level_state(block, level);
-      lincomb(accepted, Real(0), accepted, Real(1), candidates[block]);
-    }
-  }
-  for (int level = rt.nlev() - 1; level >= 1; --level)
-    for (std::size_t block = 0; block < rt.n_blocks(); ++block)
-      rt.average_down_level(block, level);
-}
-
-TEST(test_amr_multiblock_coupled_source, Runs) {
-#if defined(POPS_HAS_KOKKOS)
-  int argc = 0;
-  char** argv = nullptr;
-  Kokkos::ScopeGuard guard(argc, argv);
-#endif
-
-  const int N = 32;
-  const double L = 1.0, B0 = 1.0, k = 0.5;
-  const std::vector<double> rho_ions = bump(N, 1.0, 0.40);
-  const std::vector<double> rho_neut = bump(N, 1.0, 0.20);
-  ASSERT_EQ(periodic_rhs_mean(kIonFieldCharge, rho_ions, kNeutralFieldCharge, rho_neut), 0.0)
-      << "field-neutral coupled-source fixtures must have zero periodic RHS mean before solve";
-  const Real dt = Real(0.01);
-  const int K = 6;  // macro-pas
-
-  // ============================================================================================
-  // (0) PRIMITIVE PROGRAM : le couplage agit sur deux candidats simultanes et ne publie rien dans
-  //     les etats acceptes. Le Program peut donc projeter puis commit_many sans qu'un operateur voie
-  //     un groupe partiellement commite.
-  // ============================================================================================
-  {
-    AmrRuntime rt =
-        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
-    register_ionization(rt, k);
-    MultiFab& live_ions = rt.level_state(0, 0);
-    MultiFab& live_neutrals = rt.level_state(1, 0);
-    MultiFab candidate_ions(live_ions.box_array(), live_ions.dmap(), live_ions.ncomp(),
-                            live_ions.n_grow());
-    MultiFab candidate_neutrals(live_neutrals.box_array(), live_neutrals.dmap(),
-                                live_neutrals.ncomp(), live_neutrals.n_grow());
-    lincomb(candidate_ions, Real(1), live_ions, Real(0), live_ions);
-    lincomb(candidate_neutrals, Real(1), live_neutrals, Real(0), live_neutrals);
-    const std::vector<double> accepted_ions = rt.density(0);
-    const std::vector<double> accepted_neutrals = rt.density(1);
-
-    EXPECT_THROW(rt.apply_coupling_operators_at_level(
-                     0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
-                 std::invalid_argument)
-        << "accepted hierarchy states are never a hidden Program coupling workspace";
-    EXPECT_THROW(
-        rt.apply_coupling_operators_at_level(0, dt, std::vector<MultiFab*>{&candidate_ions}),
-        std::invalid_argument)
-        << "a Program coupling group must contain every block";
-    EXPECT_THROW(rt.apply_coupling_operators_at_level(
-                     0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_ions}),
-                 std::invalid_argument)
-        << "two Program block identities cannot alias one candidate";
-    EXPECT_EQ(rt.apply_coupling_operators_at_level(
-                  0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_neutrals}),
-              1U)
-        << "one Program coupling operator applied";
-    EXPECT_EQ(rt.density(0), accepted_ions) << "accepted ions remain unpublished";
-    EXPECT_EQ(rt.density(1), accepted_neutrals) << "accepted neutrals remain unpublished";
-
-    const ConstArray4 ions_before = live_ions.fab(0).const_array();
-    const ConstArray4 neutrals_before = live_neutrals.fab(0).const_array();
-    const ConstArray4 ions_after = candidate_ions.fab(0).const_array();
-    const ConstArray4 neutrals_after = candidate_neutrals.fab(0).const_array();
-    const Box2D cells = candidate_ions.box(0);
-    double pair_error = 0.0;
-    double active_change = 0.0;
-    for (int j = cells.lo[1]; j <= cells.hi[1]; ++j)
-      for (int i = cells.lo[0]; i <= cells.hi[0]; ++i) {
-        pair_error =
-            std::max(pair_error, std::fabs((ions_after(i, j, 0) + neutrals_after(i, j, 0)) -
-                                           (ions_before(i, j, 0) + neutrals_before(i, j, 0))));
-        active_change =
-            std::max(active_change, std::fabs(ions_after(i, j, 0) - ions_before(i, j, 0)));
-      }
-    EXPECT_TRUE(pair_error < 1e-12) << "candidate pair remains conservative";
-    EXPECT_TRUE(active_change > 1e-9) << "candidate coupling is active";
-  }
-
-  // ============================================================================================
-  // (1) ECHANGE CONSERVATIF PAR CELLULE : la SOURCE SEULE (sans transport) conserve n_ions + n_neutrals
-  //     a la cellule pres. Le harness de Program applique la source aux candidats (sans transport) :
-  //     la somme des deux blocs ne doit PAS bouger, cellule par cellule. (2) ACTIVE : chaque bloc,
-  //     lui, CHANGE (la source n'est pas un no-op).
-  // ============================================================================================
-  {
-    AmrRuntime rt =
-        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
-    register_ionization(rt, k);
-    const std::vector<double> ni0 = rt.density(0);  // ions, grossier
-    const std::vector<double> ng0 = rt.density(1);  // neutrals, grossier
-    apply_candidate_source_step(rt, dt);            // SOURCE SEULE (pas de transport)
-    const std::vector<double> ni1 = rt.density(0);
-    const std::vector<double> ng1 = rt.density(1);
-
-    EXPECT_TRUE(all_finite(ni1) && all_finite(ng1))
-        << "cell_state_finite";  // AVANT toute tolerance
-    // echange conservatif : (n_ions + n_neutrals) inchange PAR CELLULE (+S sur l'un, -S sur l'autre).
-    EXPECT_TRUE(dmax_pair_sum(ni1, ng1, ni0, ng0) < 1e-12) << "cell_pair_sum_conserved";
-    // ACTIVE : ions GAGNENT (+k ni ng > 0), neutrals PERDENT -> les deux changent (non no-op).
-    EXPECT_TRUE(dmax_field(ni1, ni0) > 1e-9) << "source_active_ions_change";
-    EXPECT_TRUE(dmax_field(ng1, ng0) > 1e-9) << "source_active_neutrals_change";
-  }
-
-  // ============================================================================================
-  // (3) CONSERVATION GLOBALE sous K applications Program de la source : la masse composite (somme
-  //     leaf-aware par bloc) n_ions + n_neutrals est conservee globalement a ~machine. Chaque masse
-  //     de bloc, elle, DERIVE (la source transfere entre blocs).
-  // ============================================================================================
-  {
-    AmrRuntime rt =
-        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
-    register_ionization(rt, k);
-    const Real tot0 = rt.mass(0) + rt.mass(1);
-    const Real mi0 = rt.mass(0);
-    for (int s = 0; s < K; ++s)
-      apply_candidate_source_step(rt, dt);
-    const std::vector<double> ni = rt.density(0);
-    const std::vector<double> ng = rt.density(1);
-    const Real tot1 = rt.mass(0) + rt.mass(1);
-    EXPECT_TRUE(all_finite(ni) && all_finite(ng)) << "global_state_finite";
-    EXPECT_TRUE(std::fabs(tot1 - tot0) < 1e-9) << "global_composite_mass_conserved";
-    // la source TRANSFERE vraiment entre blocs : la masse des ions a sensiblement augmente.
-    EXPECT_TRUE(rt.mass(0) > mi0 + Real(1e-6)) << "global_source_transfers_to_ions";
-  }
-
-  // ============================================================================================
-  // (4) COUVERTURE (#169) : apres la source, une cellule grossiere COUVERTE par le patch fin reste la
-  //     moyenne 2x2 de ses enfants fins. On lit le niveau 0 (grossier) et le niveau 1 (patch fin) du
-  //     bloc ions, et on verifie l'invariant average_down sur les cellules couvertes. Le patch fin
-  //     central couvre les cellules grossieres [N/4 .. 3N/4-1]^2 (cf. make_shared_amr_layout).
-  // ============================================================================================
-  {
-    AmrRuntime rt =
-        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
-    register_ionization(rt, k);
-    apply_candidate_source_step(
-        rt, dt);  // SOURCE SEULE -> l'invariant de couverture vient de la cascade post-source
-    const MultiFab& Uc = rt.levels(0)[0].U;  // grossier (ions)
-    const MultiFab& Uf = rt.levels(0)[1].U;  // patch fin (ions)
-    // moyenne 2x2 des enfants fins vs valeur grossiere couverte, sur la box fine (mono-box replique).
-    const Box2D vf = Uf.box(0);
-    const ConstArray4 uf = Uf.fab(0).const_array();
-    // grossier : trouver le fab couvrant la cellule grossiere ic,jc. Mono-box replique -> fab(0).
-    const ConstArray4 uc = Uc.fab(0).const_array();
-    double dmax_cover = 0.0;
-    bool covered_seen = false;
-    for (int jf = vf.lo[1]; jf <= vf.hi[1]; jf += 2)
-      for (int if_ = vf.lo[0]; if_ <= vf.hi[0]; if_ += 2) {
-        const int ic = if_ / 2, jc = jf / 2;  // cellule grossiere parente (ratio 2)
-        const double avg = 0.25 * (uf(if_, jf, 0) + uf(if_ + 1, jf, 0) + uf(if_, jf + 1, 0) +
-                                   uf(if_ + 1, jf + 1, 0));
-        dmax_cover = std::max(dmax_cover, std::fabs(uc(ic, jc, 0) - avg));
-        covered_seen = true;
-      }
-    EXPECT_TRUE(covered_seen) << "cover_has_fine_patch";
-    EXPECT_TRUE(dmax_cover < 1e-12) << "cover_coarse_is_avg_of_fine_after_source";
-  }
-
-  // ============================================================================================
-  // (5) MULTIRATE : la source reste conservative GLOBALEMENT avec un bloc neutrals stride=2. Le
-  //     Program de splitting est applique au clock macro, independamment du stride de transport ;
-  //     l'echange +S/-S par cellule conserve la somme composite globale.
-  // ============================================================================================
-  {
-    AmrRuntime rt =
-        make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/2);
-    register_ionization(rt, k);
-    const Real tot0 = rt.mass(0) + rt.mass(1);
-    for (int s = 0; s < K; ++s)
-      apply_candidate_source_step(rt, dt);
-    EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1))) << "multirate_state_finite";
-    EXPECT_TRUE(std::fabs((rt.mass(0) + rt.mass(1)) - tot0) < 1e-9)
-        << "multirate_composite_mass_conserved";
-  }
-
-  // ============================================================================================
-  // (6) OPT-IN BIT-IDENTIQUE : un run multi-blocs SANS source couplee est INCHANGE. Deux runs sans
-  //     source coincident au bit pres (determinisme), et un run AVEC source DIFFERE d'un run sans
-  //     source -> la feature est strictement opt-in (aucun effet tant qu'aucune source n'est ajoutee).
-  // ============================================================================================
-  {
-    auto run_no_source = [&]() {
-      AmrRuntime rt = make_two_block(N, L, B0, rho_ions, rho_neut, 1, 1);
-      for (int s = 0; s < K; ++s)
-        apply_candidate_source_step(rt, dt);
-      return rt.density(0);
-    };
-    const std::vector<double> a = run_no_source();
-    const std::vector<double> b = run_no_source();
-    EXPECT_EQ(dmax_field(a, b), 0.0) << "no_source_bit_identical";
-
-    AmrRuntime rt_src = make_two_block(N, L, B0, rho_ions, rho_neut, 1, 1);
-    register_ionization(rt_src, k);
-    for (int s = 0; s < K; ++s)
-      apply_candidate_source_step(rt_src, dt);
-    EXPECT_TRUE(dmax_field(rt_src.density(0), a) > 1e-9) << "source_differs_from_no_source";
-    EXPECT_EQ(rt_src.n_coupled_sources(), 1) << "one_coupled_source_registered";
-  }
+  prove_conservative_execution_rollback_and_retry<pops::kNativeDimension>();
 }

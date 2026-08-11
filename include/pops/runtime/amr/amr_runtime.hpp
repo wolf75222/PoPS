@@ -427,8 +427,22 @@ class AmrRuntime {
       const ::pops::amr::reflux::CoarseFaceRefluxKey<Dim>& key, std::string_view state_identity,
       const ::pops::amr::reflux::FaceRefinementMapping<Dim>& mapping,
       const ::pops::amr::reflux::MetricRefluxBudget& budget, Axpy&& axpy) const {
-    if (state_identity.empty() || key.owner != spatial_identity_ || key.state != state_identity ||
-        key.levels.coarse < 0 ||
+    return reconcile_reflux_for_owner(ledger, key, spatial_identity_, state_identity, mapping,
+                                      budget, std::forward<Axpy>(axpy));
+  }
+
+  /// Reconcile one block-qualified carrier on this runtime's canonical spatial hierarchy.
+  /// The ordinary overload retains the topology identity as owner; multi-block transactions name
+  /// the physical block explicitly while still authenticating the same adjacent live levels.
+  template <class Payload, class Axpy>
+  ::pops::amr::reflux::MetricFaceReflux<Payload> reconcile_reflux_for_owner(
+      const ::pops::amr::reflux::TransactionalFaceFluxLedger<Dim, Payload>& ledger,
+      const ::pops::amr::reflux::CoarseFaceRefluxKey<Dim>& key, std::string_view owner_identity,
+      std::string_view state_identity,
+      const ::pops::amr::reflux::FaceRefinementMapping<Dim>& mapping,
+      const ::pops::amr::reflux::MetricRefluxBudget& budget, Axpy&& axpy) const {
+    if (owner_identity.empty() || state_identity.empty() || key.owner != owner_identity ||
+        key.state != state_identity || key.levels.coarse < 0 ||
         static_cast<std::size_t>(key.levels.fine) >= hierarchy_.num_levels() ||
         key.levels.fine != key.levels.coarse + 1)
       throw std::invalid_argument(
