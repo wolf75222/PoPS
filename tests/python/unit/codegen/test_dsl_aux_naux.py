@@ -57,7 +57,7 @@ def test_native_package_registers_routes_without_sealing_the_global_registry() -
     model = _model()
     source = model.__pops_native_loader_source__(name="GenericAux", target="system")
 
-    assert "pops_register_auxiliary_routes" in source
+    assert "pops_register_provider_routes" in source
     assert "install_prepared_auxiliary_provider" in source
     assert "install_auxiliary_consumer_plan" in source
     assert "seal_auxiliary_providers" not in source
@@ -86,5 +86,5 @@ def test_native_package_accepts_an_empty_provider_pack() -> None:
     source = model.__pops_native_loader_source__(name="NoAux", target="system")
 
     assert "static constexpr int n_aux" not in source
-    assert "pops_register_auxiliary_routes" in source
+    assert "pops_register_provider_routes" in source
     assert "install_auxiliary_consumer_plan" in source
