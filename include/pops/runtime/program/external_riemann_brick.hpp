@@ -567,10 +567,13 @@ class ExternalBrickHandle {
       nvars_ = nvars_fn();
       provider_count_ = provider_count_fn();
       register_system_routes_symbol_ = dynlib::sym(handle_, "pops_register_provider_routes");
-      if (provider_count_ > 0 && register_system_routes_symbol_ == nullptr)
+      register_amr_routes_symbol_ = dynlib::sym(handle_, "pops_register_provider_routes_amr");
+      if (provider_count_ > 0 &&
+          (register_system_routes_symbol_ == nullptr || register_amr_routes_symbol_ == nullptr))
         throw std::runtime_error(
             "external riemann brick '" + id_ +
-            "' consumes providers but does not export pops_register_provider_routes");
+            "' consumes providers but does not export pops_register_provider_routes and "
+            "pops_register_provider_routes_amr");
       const char* model_identity = model_identity_fn();
       if (model_identity == nullptr || *model_identity == '\0')
         throw std::runtime_error("external riemann brick '" + id_ +
@@ -578,7 +581,7 @@ class ExternalBrickHandle {
       if (nvars_ != expected_nvars || provider_count_ != expected_provider_count)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' model shape disagrees with the compiled model descriptor");
-      if (!expected_model_identity.empty() && model_identity != expected_model_identity)
+      if (model_identity != expected_model_identity)
         throw std::runtime_error("external riemann brick '" + id_ +
                                  "' targets a different compiled model identity");
       const char* brick_backend = kokkos_backend_fn();
@@ -643,6 +646,15 @@ class ExternalBrickHandle {
       return;
     using RegisterSystemRoutesFn = void (*)(System<Dim>*);
     reinterpret_cast<RegisterSystemRoutesFn>(register_system_routes_symbol_)(&system);
+  }
+
+  template <int Dim>
+  void register_amr_routes(AmrSystem<Dim>& system) const {
+    static_assert(Dim == kNativeDimension);
+    if (register_amr_routes_symbol_ == nullptr)
+      return;
+    using RegisterAmrRoutesFn = void (*)(AmrSystem<Dim>*);
+    reinterpret_cast<RegisterAmrRoutesFn>(register_amr_routes_symbol_)(&system);
   }
 
  private:
@@ -774,6 +786,7 @@ class ExternalBrickHandle {
   int provider_count_ = -1;
   int dimension_ = 0;
   void* register_system_routes_symbol_ = nullptr;
+  void* register_amr_routes_symbol_ = nullptr;
   std::string id_;
   std::string requirements_;
 };

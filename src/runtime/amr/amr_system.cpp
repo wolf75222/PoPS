@@ -33,6 +33,7 @@
 #include <pops/runtime/named_field_publication.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/profiler.hpp>
@@ -813,10 +814,6 @@ bool finite_valid_field_local(const MultiFab<Dim>& field) {
   }
   return true;
 }
-
-template <int Dim>
-void write_field(MultiFab<Dim>& field, const Box<Dim>& domain, const std::vector<double>& values,
-
 
 template <int Dim>
 void write_field(MultiFab<Dim>& field, const Box<Dim>& domain, const std::vector<double>& values,
@@ -1889,6 +1886,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<double> density;
     bool has_state = false;
     std::vector<double> state;
+    bool has_analytic_state = false;
+    std::vector<analytic::AnalyticProgram> analytic_state;
   };
 
   struct GlobalDtBound {
@@ -2170,6 +2169,7 @@ struct AmrSystem<Dim>::Impl {
 
   // Declared before every package-owned closure carrier so it is destroyed last.  The generated
   // DSO remains loaded until all prepared block, auxiliary and elliptic closures are gone.
+  std::vector<std::shared_ptr<void>> external_package_lifetimes;
   std::vector<std::shared_ptr<pops::dynlib::handle>> native_package_lifetimes;
   AmrSystemConfig<Dim> cfg;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance;
@@ -5406,7 +5406,7 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
 
     const NativeAmrPackageMetadata metadata = inspect_native_amr_package(handle, params);
     register_auxiliary = reinterpret_cast<register_auxiliary_type>(
-        pops::dynlib::sym(handle, "pops_register_auxiliary_routes_amr"));
+        pops::dynlib::sym(handle, "pops_register_provider_routes_amr"));
     install = reinterpret_cast<install_type>(pops::dynlib::sym(handle, "pops_install_native_amr"));
     if (install == nullptr)
       throw std::runtime_error(
@@ -5500,7 +5500,6 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
         "AmrSystem native auxiliary registration failed on at least one MPI rank");
   }
 
-  std::optional<PreparedAmrProgramFluxExpressionBudget> prepared_flux_expression_budget;
   std::exception_ptr installation_error;
   try {
     install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
@@ -5529,6 +5528,150 @@ void AmrSystem<Dim>::add_native_block(const std::string& name, const std::string
     throw std::runtime_error("AmrSystem native package installation failed collectively");
   }
   p_->native_package_lifetimes.push_back(std::move(package_lifetime));
+}
+
+template <int Dim>
+void AmrSystem<Dim>::register_external_riemann_package(
+    const std::string& name, const std::string& so_path, const std::string& brick_id,
+    const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
+    const std::string& expected_model_identity, const std::string& provider_consumer_qid,
+    const std::string& limiter, const std::string& recon, const std::string& time, double gamma,
+    int substeps, int stride, double positivity_floor, double weno_epsilon) {
+  std::shared_ptr<runtime::program::ExternalBrickHandle> authority;
+  std::optional<typename Impl::auxiliary_registry_type> provider_registry_snapshot;
+  std::optional<typename Impl::boundary_registry_type> boundary_snapshot;
+  std::vector<typename Impl::BlockSpec> blocks_snapshot;
+  std::vector<typename Impl::prepared_block_type> prepared_blocks_snapshot;
+  bool provider_consensus_snapshot = false;
+  std::string preflight_contract;
+  std::exception_ptr preflight_error;
+
+  try {
+    require_amr_assembling(p_->lifecycle, "register_external_riemann_package");
+    runtime::program::detail::validate_external_install(name, limiter, recon, time,
+                                                        provider_consumer_qid, gamma, substeps,
+                                                        stride, positivity_floor, weno_epsilon);
+    if (p_->engine || p_->prepared_hierarchy)
+      throw std::logic_error(
+          "AMR external Riemann packages must be installed before materialization");
+    if (so_path.empty() || brick_id.empty() || expected_nvars < 1 || expected_provider_count < 0 ||
+        expected_model_identity.empty())
+      throw std::invalid_argument(
+          "AMR external Riemann package requires complete artifact and model authority");
+    if (std::any_of(p_->blocks.begin(), p_->blocks.end(),
+                    [&](const auto& block) { return block.name == name; }))
+      throw std::logic_error("AMR external Riemann block identities must be unique");
+    if (expected_sha256.size() != 64 ||
+        !std::all_of(expected_sha256.begin(), expected_sha256.end(), [](char value) {
+          return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+        }))
+      throw std::invalid_argument(
+          "AMR external Riemann package requires one lowercase SHA-256 digest");
+
+    authority = std::make_shared<runtime::program::ExternalBrickHandle>(
+        so_path, brick_id, expected_nvars, expected_provider_count, expected_model_identity,
+        expected_sha256);
+
+    provider_registry_snapshot.emplace(p_->auxiliary_registry);
+    boundary_snapshot.emplace(p_->boundary_registry);
+    blocks_snapshot = p_->blocks;
+    prepared_blocks_snapshot = p_->prepared_blocks;
+    provider_consensus_snapshot = p_->auxiliary_registry_consensus_verified;
+    p_->external_package_lifetimes.reserve(p_->external_package_lifetimes.size() + 1);
+
+    ExactContractBuilder exact;
+    exact.text("pops.external-riemann.amr-package")
+        .scalar(std::uint32_t{4})
+        .scalar(std::int32_t{Dim})
+        .text(name)
+        .text(brick_id)
+        .text(expected_sha256)
+        .scalar(std::int32_t{expected_nvars})
+        .scalar(std::int32_t{expected_provider_count})
+        .text(expected_model_identity)
+        .text(provider_consumer_qid)
+        .text(limiter)
+        .text(recon)
+        .text(time)
+        .scalar(gamma)
+        .scalar(std::int32_t{substeps})
+        .scalar(std::int32_t{stride})
+        .scalar(positivity_floor)
+        .scalar(weno_epsilon);
+    preflight_contract = std::move(exact).release();
+  } catch (...) {
+    preflight_error = std::current_exception();
+  }
+
+  if (all_reduce_max(preflight_error ? 1L : 0L) != 0) {
+    if (n_ranks() == 1 && preflight_error)
+      std::rethrow_exception(preflight_error);
+    throw std::runtime_error(
+        "AMR external Riemann package preflight failed on at least one MPI rank");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view("amr-external-riemann-package"),
+                                                  std::string_view(preflight_contract)}}))
+    throw std::invalid_argument("AMR external Riemann package contracts differ between MPI ranks");
+
+  const auto rollback = [&] {
+    p_->auxiliary_registry = *provider_registry_snapshot;
+    p_->auxiliary_registry_consensus_verified = provider_consensus_snapshot;
+    p_->boundary_registry = *boundary_snapshot;
+    p_->blocks = blocks_snapshot;
+    p_->prepared_blocks = prepared_blocks_snapshot;
+  };
+
+  std::exception_ptr registration_error;
+  try {
+    authority->register_amr_routes(*this);
+  } catch (...) {
+    registration_error = std::current_exception();
+  }
+  if (all_reduce_max(registration_error ? 1L : 0L) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      rollback();
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
+      p_->external_package_lifetimes.push_back(authority);
+      throw std::runtime_error("AMR external Riemann provider-route rollback failed collectively");
+    }
+    if (n_ranks() == 1 && registration_error)
+      std::rethrow_exception(registration_error);
+    throw std::runtime_error(
+        "AMR external Riemann provider-route registration failed collectively");
+  }
+
+  std::exception_ptr installation_error;
+  try {
+    authority->install_amr(this, name, provider_consumer_qid, limiter, recon, time, gamma, substeps,
+                           stride, positivity_floor, weno_epsilon);
+    if (p_->blocks.size() != blocks_snapshot.size() + 1 ||
+        p_->prepared_blocks.size() != prepared_blocks_snapshot.size() + 1 ||
+        p_->blocks.back().name != name || p_->prepared_blocks.back().name != name)
+      throw std::logic_error(
+          "AMR external Riemann package did not publish one complete prepared block");
+  } catch (...) {
+    installation_error = std::current_exception();
+  }
+  if (all_reduce_max(installation_error ? 1L : 0L) != 0) {
+    std::exception_ptr rollback_error;
+    try {
+      rollback();
+    } catch (...) {
+      rollback_error = std::current_exception();
+    }
+    if (all_reduce_max(rollback_error ? 1L : 0L) != 0) {
+      p_->external_package_lifetimes.push_back(authority);
+      throw std::runtime_error("AMR external Riemann package rollback failed collectively");
+    }
+    if (n_ranks() == 1 && installation_error)
+      std::rethrow_exception(installation_error);
+    throw std::runtime_error("AMR external Riemann package installation failed collectively");
+  }
+  p_->external_package_lifetimes.push_back(std::move(authority));
 }
 
 template <int Dim>
@@ -6002,6 +6145,7 @@ void AmrSystem<Dim>::refresh_prepared_amr_levels() {
   p_->ensure_engine();
 }
 
+template <int Dim>
 const MultiFab<Dim>& AmrSystem<Dim>::prepared_amr_block_state(int runtime_block, int level) const {
   p_->ensure_engine();
   if (runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->blocks.size())
@@ -8784,6 +8928,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     throw std::runtime_error("AmrSystem::install_program rollback snapshot failed collectively");
   }
 
+  std::optional<PreparedAmrProgramFluxExpressionBudget> prepared_flux_expression_budget;
   std::exception_ptr installation_error;
   try {
     p_->program.reset_artifact_candidate_state();
@@ -10371,6 +10516,10 @@ template void AmrSystem<kNativeDimension>::add_native_block(const std::string&, 
                                                             const std::string&, const std::string&,
                                                             double, int, const std::vector<double>&,
                                                             double, double, bool);
+template void AmrSystem<kNativeDimension>::register_external_riemann_package(
+    const std::string&, const std::string&, const std::string&, const std::string&, int, int,
+    const std::string&, const std::string&, const std::string&, const std::string&,
+    const std::string&, double, int, int, double, double);
 template void AmrSystem<kNativeDimension>::install_prepared_amr_block(
     PreparedAmrSystemBlock<kNativeDimension>);
 template const MultiFab<kNativeDimension>& AmrSystem<kNativeDimension>::prepared_amr_block_state(

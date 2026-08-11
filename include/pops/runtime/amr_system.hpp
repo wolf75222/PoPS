@@ -495,6 +495,18 @@ class AmrSystem {
                         double weno_epsilon = static_cast<double>(kWenoEpsilon),
                         bool wave_speed_cache = false);
 
+  /// Authenticate and install one exact-ranked external Riemann package through the ordinary
+  /// prepared AMR block path. Provider routes are registered before hierarchy materialization;
+  /// the authenticated DSO authority remains alive until every package-owned closure is destroyed.
+  void register_external_riemann_package(
+      const std::string& name, const std::string& so_path, const std::string& brick_id,
+      const std::string& expected_sha256, int expected_nvars, int expected_provider_count,
+      const std::string& expected_model_identity, const std::string& provider_consumer_qid,
+      const std::string& limiter = "minmod", const std::string& recon = "conservative",
+      const std::string& time = "explicit",
+      double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1, int stride = 1,
+      double positivity_floor = 0.0, double weno_epsilon = static_cast<double>(kWenoEpsilon));
+
   /// Install the exact prepared AMRTagging program resolved from the layout authority.
   /// This is the only tagging installation seam: the runtime never synthesizes a scalar
   /// threshold, component-zero default, or shared-potential fallback. The native tagger owns
