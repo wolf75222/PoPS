@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
@@ -51,6 +52,9 @@ struct GeneratedAmrLevelContext {
                 "GeneratedAmrLevelContext only supports dimensions 1, 2, and 3");
 
   std::size_t level = 0;
+  /// Borrowed exact execution authority for every implicit-source collective. The prepared
+  /// hierarchy owns this lane for longer than every generated level block.
+  const ExecutionLane* lane = nullptr;
   /// Exact block-owned state carrier for this level. The AMR runtime remains the topology and
   /// synchronization authority, but generated multi-block packages must not alias every block to
   /// the hierarchy's primary state storage.
@@ -166,6 +170,8 @@ void require_level_context(const runtime::amr::AmrRuntime<Dim, MemorySpace>& run
     throw std::out_of_range("generated AMR block level lies outside the live hierarchy");
   if (context.state_identity.empty() || context.provider_storage_identity.empty())
     throw std::invalid_argument("generated AMR block requires exact state and provider identities");
+  if (context.lane == nullptr || !context.lane->active())
+    throw std::invalid_argument("generated AMR block requires one active prepared execution lane");
   if (context.geometry.domain() != runtime.hierarchy().layout(context.level).domain())
     throw std::invalid_argument(
         "generated AMR level geometry differs from the live hierarchy domain");
@@ -448,6 +454,8 @@ class PreparedGeneratedAmrLevelBlock {
   using StatePreparation = std::function<void(const point_type&, field_type&)>;
   using Evaluator = std::function<evaluation_type(const point_type&, field_type&)>;
   using SourceEvaluator = std::function<void(const point_type&, field_type&, field_type&)>;
+  using ImplicitSourceSolver =
+      std::function<SolveOutcome(const point_type&, field_type&, Real, const NewtonOptions&)>;
   using Speed = std::function<Real(const field_type&)>;
   using PoissonRhs = std::function<void(const field_type&, field_type&)>;
 
@@ -455,7 +463,8 @@ class PreparedGeneratedAmrLevelBlock {
                                  std::string state_identity, std::string provider_identity,
                                  std::string collective_contract, StatePreparation prepare_state,
                                  Evaluator evaluator, Evaluator flux_evaluator,
-                                 SourceEvaluator source_evaluator, Speed maximum_speed,
+                                 SourceEvaluator source_evaluator,
+                                 ImplicitSourceSolver implicit_source_solver, Speed maximum_speed,
                                  PoissonRhs poisson_rhs, Speed source_frequency, Speed stability_dt)
       : runtime_(&runtime),
         level_(level),
@@ -467,6 +476,7 @@ class PreparedGeneratedAmrLevelBlock {
         evaluator_(std::move(evaluator)),
         flux_evaluator_(std::move(flux_evaluator)),
         source_evaluator_(std::move(source_evaluator)),
+        implicit_source_solver_(std::move(implicit_source_solver)),
         maximum_speed_(std::move(maximum_speed)),
         poisson_rhs_(std::move(poisson_rhs)),
         source_frequency_(std::move(source_frequency)),
@@ -476,7 +486,7 @@ class PreparedGeneratedAmrLevelBlock {
     if (level_ >= runtime.hierarchy().num_levels() || state_ == nullptr ||
         state_identity_.empty() || provider_identity_.empty() || collective_contract_.empty() ||
         !prepare_state_ || !evaluator_ || !flux_evaluator_ || !source_evaluator_ ||
-        !maximum_speed_ || !poisson_rhs_)
+        !implicit_source_solver_ || !maximum_speed_ || !poisson_rhs_)
       throw std::invalid_argument("generated AMR level block preparation is incomplete");
   }
 
@@ -533,6 +543,21 @@ class PreparedGeneratedAmrLevelBlock {
 
   void source_into(const point_type& point, field_type& result) const {
     source_into(point, *state_, result);
+  }
+
+  /// Solve directly on the caller's detached Program candidate. The facade authenticates the
+  /// block/level route before entry; retaining the candidate as the inner SolveOutcome target lets
+  /// that lane-qualified outcome remain the sole publication transaction.
+  [[nodiscard]] SolveOutcome solve_implicit_source(const point_type& point, field_type& state,
+                                                   Real dt, const NewtonOptions& options) const {
+    require_live_();
+    require_state_(point, state);
+    return implicit_source_solver_(point, state, dt, options);
+  }
+
+  [[nodiscard]] SolveOutcome solve_implicit_source(const point_type& point, Real dt,
+                                                   const NewtonOptions& options) const {
+    return solve_implicit_source(point, *state_, dt, options);
   }
 
   Real maximum_speed(const field_type& state) const {
@@ -609,6 +634,7 @@ class PreparedGeneratedAmrLevelBlock {
   Evaluator evaluator_;
   Evaluator flux_evaluator_;
   SourceEvaluator source_evaluator_;
+  ImplicitSourceSolver implicit_source_solver_;
   Speed maximum_speed_;
   PoissonRhs poisson_rhs_;
   Speed source_frequency_;
@@ -893,6 +919,30 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
               : materialize_source<Dim>(model, state, provider_storage, provider_plan);
       generated_system_detail::copy_valid(source, result);
     };
+    const ExecutionLane& lane = *context.lane;
+    auto implicit_source_solver = [model, provider_storage, provider_plan, prepare_state,
+                                   embedded_boundary, &lane](
+                                      const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                      MultiFab<Dim>& state, Real dt, const NewtonOptions& options) {
+      prepare_state(point, state);
+      const auto provider_at = [provider_storage, provider_plan](std::size_t local) {
+        if constexpr (provider_count == 0)
+          return ProviderStorageView<Dim, 0>{};
+        else
+          return runtime::system::bind_provider_storage_view<Dim, provider_count>(
+              provider_plan, provider_storage, local);
+      };
+      const MultiFab<Dim>* active_cells = nullptr;
+      if (embedded_boundary &&
+          embedded_boundary->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+        active_cells = &embedded_boundary->active_mask();
+      if constexpr (generated_system_detail::GeneratedSourceModel<Dim, Model>) {
+        return backward_euler_source(model, provider_at, state, dt, options, lane, {}, nullptr,
+                                     active_cells);
+      } else {
+        return SolveOutcome::collective_lane(SolveReport::capability_failure(), lane);
+      }
+    };
     auto evaluator = [flux_evaluator, model, provider_storage, provider_plan, embedded_boundary](
                          const runtime::multiblock::BoundaryEvaluationPoint& point,
                          MultiFab<Dim>& state) mutable {
@@ -936,27 +986,27 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     return PreparedGeneratedAmrLevelBlock<Dim>(
         runtime, level, *bound_state, std::move(context.state_identity), provider_identity,
         std::move(contract), std::move(prepare_state), std::move(evaluator),
-        std::move(flux_evaluator), std::move(source_evaluator), std::move(speed),
-        std::move(poisson_rhs), std::move(source_frequency_bound), std::move(stability_dt_bound));
+        std::move(flux_evaluator), std::move(source_evaluator), std::move(implicit_source_solver),
+        std::move(speed), std::move(poisson_rhs), std::move(source_frequency_bound),
+        std::move(stability_dt_bound));
   };
 
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
-  const auto recovery_plan = prepare_model_variable_recovery(model);
-  result.conservative_to_primitive = [recovery_plan](const double* conservative,
-                                                     double* primitive) {
+  auto recovery = std::make_shared<PreparedModelVariableInversionRecovery<Model>>(model);
+  result.conservative_to_primitive = [recovery](const double* conservative, double* primitive) {
     Real input[Model::n_vars]{};
-    Real initial[Model::n_vars]{};
     for (int component = 0; component < Model::n_vars; ++component)
       input[component] = static_cast<Real>(conservative[component]);
-    const auto outcome = recover_prepared_variable(recovery_plan, input, initial);
+    const auto prepared = recovery->recover(input);
+    const RecoveryOutcome<Model::n_vars>& outcome = prepared.outcome;
     if (outcome.publication_permitted())
       for (int component = 0; component < Model::n_vars; ++component)
         primitive[component] = static_cast<double>(outcome.value[component]);
     return recovery_report(outcome);
   };
-  result.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
+  result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
   return result;
 }
 

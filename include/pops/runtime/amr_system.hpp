@@ -396,6 +396,9 @@ class AmrSystem {
   POPS_EXPORT void prepared_amr_block_level_source_into_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, MultiFab<Dim>& rhs);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_prepared_amr_block_level_source_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, Real dt, const NewtonOptions& options);
   POPS_EXPORT const PreparedLevelEvaluation& prepared_amr_level_evaluation(int level) const;
   POPS_EXPORT const PreparedLevelEvaluation* prepared_amr_level_evaluation_if_present(
       int level) const noexcept;
@@ -1142,6 +1145,10 @@ class AmrSystem {
   POPS_EXPORT void prepared_amr_block_level_source_into_at(
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, MultiFab<Dim>& rhs, int parent_level,
+      const MultiFab<Dim>* staged_parent);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_prepared_amr_block_level_source_at(
+      int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab<Dim>& state, Real dt, const NewtonOptions& options, int parent_level,
       const MultiFab<Dim>* staged_parent);
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
   /// private to AmrProgramContext and is deliberately absent from Python bindings.
