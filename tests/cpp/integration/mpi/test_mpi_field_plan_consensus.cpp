@@ -18,6 +18,7 @@
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
@@ -1221,6 +1222,7 @@ int run_field_plan_consensus(int argc, char** argv) {
 #endif
   const int rank = my_rank();
   const int ranks = n_ranks();
+  const ExecutionLane lane = ExecutionLane::world("pops.test.mpi-field-plan-consensus");
   long failures = ranks == 2 ? 0 : 1;
   const auto require = [&failures](bool condition) {
     if (!condition)
@@ -1257,7 +1259,7 @@ int run_field_plan_consensus(int argc, char** argv) {
 
     int priority = static_cast<int>(reduce_max(statistics, 10));
     LocalNonlinearFailureLocation location =
-        collective_first_local_nonlinear_failure(statistics, priority, 10, 8);
+        collective_first_local_nonlinear_failure(statistics, priority, 10, 8, lane);
     require(priority == fatal);
     require(location.found && location.priority == fatal);
     require(location.i == 1000000000 && location.j == 700000000 && location.component == 3);
@@ -1271,7 +1273,7 @@ int run_field_plan_consensus(int argc, char** argv) {
       });
     }
     priority = static_cast<int>(reduce_max(statistics, 10));
-    location = collective_first_local_nonlinear_failure(statistics, priority, 10, 8);
+    location = collective_first_local_nonlinear_failure(statistics, priority, 10, 8, lane);
     require(location.found && location.priority == fatal);
     require(location.i == -1000000000 && location.j == -700000000 && location.component == 7);
   }
@@ -1401,7 +1403,7 @@ int run_field_plan_consensus(int argc, char** argv) {
       };
       SolveOutcome outcome =
           backward_euler_source(RankLocalFallibleSource{failure.status, reason}, provider_at, state,
-                                Real(0.1), NewtonOptions{}, {}, &diagnostics);
+                                Real(0.1), NewtonOptions{}, lane, {}, &diagnostics);
       require(outcome.report().status == SolveStatus::kInvalidEvaluation);
       require(outcome.report().action == failure.action);
       require(outcome.report().reason.find(failure.reason_fragment) != std::string::npos);
